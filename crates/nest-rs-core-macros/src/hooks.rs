@@ -87,6 +87,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let method_lit = method_name.unraw().to_string();
         let run_fn = format_ident!("__nestrs_hook_{}_{}", base, method_name);
         let cfgs = cfg_attrs(&method.attrs);
+        let declaration_index = submissions.len();
 
         // Called by its path, never as `__provider.method()`: method lookup tries
         // the `Arc` first, so a trait method of that name on `Arc<T>` would win.
@@ -127,6 +128,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     phase: ::nest_rs_core::LifecyclePhase::#phase_variant,
                     provider: #provider_lit,
                     method: #method_lit,
+                    declaration_index: #declaration_index,
                     origin: ::core::module_path!(),
                     provider_type_id: ::std::any::TypeId::of::<#self_ty>,
                     present: |__container| ::std::option::Option::is_some(

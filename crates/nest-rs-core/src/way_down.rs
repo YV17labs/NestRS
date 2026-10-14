@@ -48,6 +48,7 @@ enum Step {
         phase: LifecyclePhase,
         provider: &'static str,
         method: &'static str,
+        origin: &'static str,
     },
     /// [`App::run`](crate::App::run) has returned; what remains is `main`'s
     /// locals dropping and the runtime's teardown.
@@ -71,11 +72,17 @@ pub(crate) fn transports(running: Vec<&'static str>) {
     set(Step::Transports(running));
 }
 
-pub(crate) fn hook(phase: LifecyclePhase, provider: &'static str, method: &'static str) {
+pub(crate) fn hook(
+    phase: LifecyclePhase,
+    provider: &'static str,
+    method: &'static str,
+    origin: &'static str,
+) {
     set(Step::Hook {
         phase,
         provider,
         method,
+        origin,
     });
 }
 
@@ -126,7 +133,8 @@ fn exit_at_once(signal: Received) -> ! {
                 phase,
                 provider,
                 method,
-            } => abandoning!(step = "shutdown hooks", ?phase, provider, method),
+                origin,
+            } => abandoning!(step = "shutdown hooks", ?phase, provider, method, origin),
             Step::Exit => abandoning!(step = "exit"),
         }
     }

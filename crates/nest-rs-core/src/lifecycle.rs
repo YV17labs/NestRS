@@ -1,12 +1,17 @@
 //! Lifecycle hooks: `#[hooks]` submits methods to a link-time `inventory`
-//! registry that [`crate::App::run`] drains per phase, in `(provider, method)` order.
+//! registry that [`crate::App::run`] drains per phase, dependencies first at
+//! init and in reverse at shutdown.
 
+use std::any::TypeId;
+use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
 use tokio::time::Instant;
 
+use crate::access::positions;
 use crate::app::BootStep;
 use crate::app_lifecycle::AppLifecycle;
 use crate::container::Container;
@@ -58,6 +63,17 @@ pub enum LifecyclePhase {
     OnApplicationShutdown,
 }
 
+impl LifecyclePhase {
+    fn shuts_down(self) -> bool {
+        match self {
+            Self::OnModuleInit | Self::OnApplicationBootstrap => false,
+            Self::OnModuleDestroy
+            | Self::BeforeApplicationShutdown
+            | Self::OnApplicationShutdown => true,
+        }
+    }
+}
+
 type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
 pub(crate) use self::__private::LifecycleHook;
@@ -74,14 +90,18 @@ pub(crate) mod __private {
     pub struct LifecycleHook {
         /// The phase this hook runs in.
         pub phase: LifecyclePhase,
-        /// The host provider's name, the primary key of the run order.
+        /// The host provider's name, for the lines naming the hook.
         pub provider: &'static str,
-        /// The hook method's name, the run order's tiebreaker.
+        /// The hook method's name, for the lines naming the hook.
         pub method: &'static str,
+        /// The method's position among its `impl`'s hooks, the order a host's
+        /// own hooks run in.
+        pub declaration_index: usize,
         /// `module_path!()` at the `#[hooks]` site, read by
         /// [`inert_host`](crate::inert_host).
         pub origin: &'static str,
-        /// The host provider's type, read by [`inert_host`](crate::inert_host).
+        /// The host provider's type, which ranks the hook in the run order
+        /// and is read by [`inert_host`](crate::inert_host).
         pub provider_type_id: fn() -> TypeId,
         /// Whether this hook's provider is resolvable in the assembled container;
         /// a hook that self-gates inside `run` passes `|_| true`.
@@ -93,12 +113,74 @@ pub(crate) mod __private {
 
 inventory::collect!(LifecycleHook);
 
-fn hooks_for(phase: LifecyclePhase) -> Vec<&'static LifecycleHook> {
+/// Each provider's rank, by its own type, dependencies first: what `seal`
+/// computes from the module descriptors, and the hook runners read.
+pub(crate) struct HookOrder(HashMap<TypeId, usize>);
+
+impl HookOrder {
+    /// Rank each provider by its position in `order`.
+    pub(crate) fn new(order: impl IntoIterator<Item = TypeId>) -> Self {
+        Self(positions(order))
+    }
+
+    fn rank(&self, provider: TypeId) -> Option<usize> {
+        self.0.get(&provider).copied()
+    }
+}
+
+fn hooks_for(phase: LifecyclePhase, container: &Container) -> Vec<&'static LifecycleHook> {
     let mut hooks: Vec<&'static LifecycleHook> = inventory::iter::<LifecycleHook>()
         .filter(|hook| hook.phase == phase)
         .collect();
-    hooks.sort_by_key(|hook| (hook.provider, hook.method));
+    sort_hooks(&mut hooks, phase, container.get::<HookOrder>().as_deref());
     hooks
+}
+
+/// Where a host runs among the others: one [`HookOrder`] does not rank goes
+/// before every ranked one, and among such hosts by name, then the first module
+/// its hooks sit in, then its type, so no two hosts' hooks interleave.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Host {
+    Unranked {
+        provider: &'static str,
+        origin: &'static str,
+        id: TypeId,
+    },
+    Ranked(usize),
+}
+
+/// Put `hooks` in `phase`'s run order: the hosts as [`Host`] orders them,
+/// reversed in a shutdown phase; a host's own hooks by the module of their
+/// `impl`, then as it declares them, then by method, in every phase.
+fn sort_hooks(
+    hooks: &mut [&'static LifecycleHook],
+    phase: LifecyclePhase,
+    order: Option<&HookOrder>,
+) {
+    let mut first_origin: HashMap<TypeId, &'static str> = HashMap::new();
+    for hook in hooks.iter() {
+        first_origin
+            .entry((hook.provider_type_id)())
+            .and_modify(|origin| *origin = (*origin).min(hook.origin))
+            .or_insert(hook.origin);
+    }
+    let host = |hook: &LifecycleHook| {
+        let id = (hook.provider_type_id)();
+        match order.and_then(|order| order.rank(id)) {
+            Some(rank) => Host::Ranked(rank),
+            None => Host::Unranked {
+                provider: hook.provider,
+                origin: first_origin[&id],
+                id,
+            },
+        }
+    };
+    let own = |hook: &LifecycleHook| (hook.origin, hook.declaration_index, hook.method);
+    if phase.shuts_down() {
+        hooks.sort_by_cached_key(|hook| (Reverse(host(hook)), own(hook)));
+    } else {
+        hooks.sort_by_cached_key(|hook| (host(hook), own(hook)));
+    }
 }
 
 /// Report a hook linked but whose host the booted container does not hold:
@@ -123,7 +205,7 @@ pub(crate) async fn run_phase(
     lifecycle: &AppLifecycle,
     phase: LifecyclePhase,
 ) -> anyhow::Result<()> {
-    for hook in hooks_for(phase) {
+    for hook in hooks_for(phase, container) {
         if !(hook.present)(container) {
             report_inert_hook(container, hook, phase);
             continue;
@@ -133,6 +215,7 @@ pub(crate) async fn run_phase(
             ?phase,
             provider = hook.provider,
             method = hook.method,
+            origin = hook.origin,
             "running lifecycle hook",
         );
         let step = BootStep::InitHook {
@@ -171,12 +254,12 @@ pub(crate) async fn run_phase_lenient(
     phase: LifecyclePhase,
     deadline: Instant,
 ) {
-    for hook in hooks_for(phase) {
+    for hook in hooks_for(phase, container) {
         if !(hook.present)(container) {
             report_inert_hook(container, hook, phase);
             continue;
         }
-        crate::way_down::hook(phase, hook.provider, hook.method);
+        crate::way_down::hook(phase, hook.provider, hook.method, hook.origin);
         let started = Instant::now();
         // `timeout_at` polls the hook before its timer, so past the deadline
         // it still runs once.
@@ -218,7 +301,6 @@ pub(crate) async fn run_phase_lenient(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::any::TypeId;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Probe {
@@ -247,6 +329,7 @@ mod tests {
             phase: LifecyclePhase::OnModuleInit,
             provider: "Probe",
             method: "touch",
+            declaration_index: 0,
             origin: module_path!(),
             provider_type_id: TypeId::of::<Probe>,
             present: |container| container.get::<Probe>().is_some(),
@@ -301,11 +384,128 @@ mod tests {
             phase: LifecyclePhase::BeforeApplicationShutdown,
             provider: "Unreachable",
             method: "never",
+            declaration_index: 0,
             origin: module_path!(),
             provider_type_id: TypeId::of::<Unreachable>,
             present: |_| false,
             run: run_unreachable,
         }
+    }
+
+    struct Described;
+    struct Seeded;
+
+    fn noop(_container: &Container) -> HookFuture<'_> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn hook(
+        provider: &'static str,
+        method: &'static str,
+        declaration_index: usize,
+        provider_type_id: fn() -> TypeId,
+    ) -> &'static LifecycleHook {
+        hook_in(
+            module_path!(),
+            provider,
+            method,
+            declaration_index,
+            provider_type_id,
+        )
+    }
+
+    fn hook_in(
+        origin: &'static str,
+        provider: &'static str,
+        method: &'static str,
+        declaration_index: usize,
+        provider_type_id: fn() -> TypeId,
+    ) -> &'static LifecycleHook {
+        Box::leak(Box::new(LifecycleHook {
+            phase: LifecyclePhase::OnModuleInit,
+            provider,
+            method,
+            declaration_index,
+            origin,
+            provider_type_id,
+            present: |_| true,
+            run: noop,
+        }))
+    }
+
+    fn ran(hooks: &[&'static LifecycleHook]) -> Vec<&'static str> {
+        hooks.iter().map(|hook| hook.method).collect()
+    }
+
+    #[test]
+    fn a_host_no_descriptor_ranks_runs_first_at_init_and_last_at_shutdown() {
+        let order = HookOrder::new([TypeId::of::<Described>()]);
+        let mut hooks = vec![
+            hook(
+                "Adescribed",
+                "zz_first_declared",
+                0,
+                TypeId::of::<Described>,
+            ),
+            hook(
+                "Adescribed",
+                "aa_second_declared",
+                1,
+                TypeId::of::<Described>,
+            ),
+            hook("Zseeded", "seeded", 0, TypeId::of::<Seeded>),
+        ];
+        sort_hooks(&mut hooks, LifecyclePhase::OnModuleInit, Some(&order));
+        assert_eq!(
+            ran(&hooks),
+            ["seeded", "zz_first_declared", "aa_second_declared"]
+        );
+        sort_hooks(&mut hooks, LifecyclePhase::OnModuleDestroy, Some(&order));
+        assert_eq!(
+            ran(&hooks),
+            ["zz_first_declared", "aa_second_declared", "seeded"],
+            "the hosts in reverse, each host's own hooks as its impl declares them",
+        );
+    }
+
+    struct Pool;
+    struct SeededTwin;
+
+    #[test]
+    fn a_host_whose_hooks_span_several_impls_keeps_them_together_in_one_order_both_ways() {
+        let order = HookOrder::new([TypeId::of::<Described>(), TypeId::of::<Pool>()]);
+        let mut hooks = vec![
+            hook_in("app::b", "Pool", "open", 0, TypeId::of::<Pool>),
+            hook_in("app::b", "Pool", "close", 1, TypeId::of::<Pool>),
+            hook_in("app::z", "Cache", "z_seeded", 0, TypeId::of::<Seeded>),
+            hook_in("app::a", "Pool", "migrate", 0, TypeId::of::<Pool>),
+            hook_in("app::m", "Cache", "m_twin", 0, TypeId::of::<SeededTwin>),
+            hook_in("app::a", "Pool", "report", 1, TypeId::of::<Pool>),
+            hook_in("app", "Pool", "warm", 0, TypeId::of::<Pool>),
+            hook_in("app::a", "Cache", "a_seeded", 0, TypeId::of::<Seeded>),
+            hook_in("app", "Pool", "check", 0, TypeId::of::<Pool>),
+            hook_in(
+                "app::x",
+                "Described",
+                "described",
+                0,
+                TypeId::of::<Described>,
+            ),
+        ];
+        let pool = ["check", "warm", "migrate", "report", "open", "close"];
+        sort_hooks(&mut hooks, LifecyclePhase::OnModuleInit, Some(&order));
+        assert_eq!(
+            ran(&hooks),
+            [&["a_seeded", "z_seeded", "m_twin", "described"][..], &pool].concat(),
+            "a host's impls by module path, each impl's hooks as declared, ties by method name; \
+             unlisted hosts by name, then the first module their hooks sit in",
+        );
+        sort_hooks(&mut hooks, LifecyclePhase::OnModuleDestroy, Some(&order));
+        assert_eq!(
+            ran(&hooks),
+            [&pool[..], &["described", "m_twin", "a_seeded", "z_seeded"]].concat(),
+            "the hosts in exact reverse, each host's own hooks in the same order as at init",
+        );
     }
 
     #[tokio::test]

@@ -11,9 +11,9 @@ use anyhow::{Result, anyhow};
 use tokio::task::JoinSet;
 
 use crate::access::{
-    Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, provider_order,
-    reachable_descriptors, reachable_provider_ids, scoped_cycle, singleton_cycle, unbuilt_cause,
-    validate_access_graph, validate_keyed_access_graph,
+    Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, dependency_order,
+    provider_order, reachable_descriptors, reachable_provider_ids, scoped_cycle, singleton_cycle,
+    unbuilt_cause, validate_access_graph, validate_keyed_access_graph,
 };
 use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::container::{AbsentOptional, ProviderKey, ProviderScope, Stall};
@@ -24,7 +24,7 @@ use crate::error::{
     LateFactoryError, LateOptionalDependencyError, UnbuiltProviderError, UnregisteredModuleError,
     UnresolvedFactoryError,
 };
-use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
+use crate::lifecycle::{HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
 use crate::net::check_budgets;
 use crate::transport::{Transport, TransportContribution};
@@ -85,8 +85,11 @@ impl std::fmt::Display for BootStep {
                 phase,
                 provider,
                 method,
-                ..
-            } => write!(f, "lifecycle hook {provider}::{method} ({phase:?})"),
+                origin,
+            } => write!(
+                f,
+                "lifecycle hook {origin}::{provider}::{method} ({phase:?})"
+            ),
         }
     }
 }
@@ -769,7 +772,8 @@ impl AppBuilder {
 /// what registered, then a cycle among request-scoped and transient
 /// providers, one among singletons across modules, every provider the register
 /// phase never built or built before an optional dependency arrived, every
-/// budget against the nets reaching it, and the seeds the transports read.
+/// budget against the nets reaching it, and the seeds the transports and the
+/// hook runners read.
 fn seal(
     builder: ContainerBuilder,
     descriptors: &[&ModuleDescriptor],
@@ -801,10 +805,12 @@ fn seal(
     let order = provider_order(descriptors, &ids);
     let reachable = ReachableProviders(reachable_provider_ids(&order, global));
     let composition = Composition::from_descriptors(descriptors, roots);
+    let hook_order = HookOrder::new(dependency_order(descriptors, &ids));
     Ok(builder
         .provide(reachable)
         .provide(ProviderOrder::new(order))
-        .provide(composition))
+        .provide(composition)
+        .provide(hook_order))
 }
 
 fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'static str> {

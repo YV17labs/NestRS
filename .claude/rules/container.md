@@ -329,8 +329,17 @@ edge's suite). Synchronous seams (`AbilityFactory`, the WS `Registry`,
 
 ## Lifecycle hooks and the way down
 
-`#[hooks]` submits phase-tagged methods; `App::run` drains each phase in a
-stable `(provider, method)` order. The init phases run once per `App`, whether
+`#[hooks]` submits phase-tagged methods, and **init hooks run dependencies
+first**: a host's hooks run after the hooks of every provider it injects, at
+any depth, and shutdown hooks run in the exact reverse, so nothing is torn down
+under a provider still using it. Ties follow module import order (imports
+first, as declared), then `providers` order; a host no module lists (a seed, a
+factory's output, a hand-written registration) runs before every listed one at
+init and after them at shutdown; a host's own hooks run in the order its `impl`
+declares them, the same both ways (across several `impl`s, by module path
+first); one hook at a time. A provider orders its hooks after another's
+by injecting it — the graph is the only order, never a name or a priority
+(held by `nest-rs-core`'s lifecycle suite). The init phases run once per `App`, whether
 `init` or `run` reaches them first; an init hook that fails or panics aborts the
 boot naming it, and the app refuses its init again (`InitFailedError`).
 The app's state and stop cause are `AppLifecycle`'s; the kernel alone moves

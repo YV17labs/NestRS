@@ -1362,7 +1362,8 @@ mod boot_refusal_tests {
         };
         assert_eq!(
             hook.to_string(),
-            "the boot was stopped by Terminate during lifecycle hook CacheWarmer::warm (OnModuleInit)"
+            "the boot was stopped by Terminate during lifecycle hook app::cache::CacheWarmer::warm \
+             (OnModuleInit)"
         );
     }
 

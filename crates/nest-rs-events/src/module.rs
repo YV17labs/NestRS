@@ -31,6 +31,7 @@ nest_rs_core::inventory::submit! {
         phase: LifecyclePhase::OnApplicationBootstrap,
         provider: "EventsModule",
         method: "report_missing_bus",
+        declaration_index: 0,
         origin: module_path!(),
         provider_type_id: std::any::TypeId::of::<EventsModule>,
         present: |_| true,

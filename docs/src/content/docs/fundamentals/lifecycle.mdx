@@ -123,19 +123,68 @@ async fn drain(&self) { /* ... */ }                                  // infallib
 ```
 
 A hook that needs another provider **injects it** — there is no
-attribute to declare "run after `OtherService`'s hook." Cross-provider
-init dependencies are expressed through the DI graph, not the lifecycle
-registry.
+attribute to declare "run after `OtherService`'s hook." The injection is
+the declaration: the DI graph orders the hooks, as the next section shows.
 
 ## Ordering and failure
 
-Within a phase, hooks run **sequentially** in `(provider, method)` name
-order — stable across builds, never parallel. The two halves of the
-lifecycle treat failure differently, and deliberately:
+Within a phase, hooks run **one at a time, dependencies first**: a
+provider's hooks run after the hooks of every provider it injects, at
+any depth. The three shutdown phases run in the **exact reverse**, so a
+repository flushes before the pool it writes through closes, and a
+client a service used at init is still connected while that service
+tears down.
+
+```rust title="crates/features/src/posts/service.rs"
+use std::sync::Arc;
+
+use nest_rs::core::{hooks, injectable};
+
+use crate::blog::BlogService;
+
+#[injectable]
+pub struct PostsService {
+    #[inject]
+    blog: Arc<BlogService>,
+}
+
+#[hooks]
+impl PostsService {
+    #[on_application_bootstrap]
+    async fn warm(&self) { /* ... */ }
+
+    #[on_application_shutdown]
+    async fn flush(&self) { /* ... */ }
+}
+```
+
+`PostsService` injects `BlogService`, so its `warm` runs once
+`BlogService::warm` has returned, and its `flush` runs before
+`BlogService::flush` starts.
+
+Hosts the graph does not order follow the composition, the same way in
+every build: an imported module's hosts run before the module importing
+it, imports in the order `imports = [...]` lists them, then each module's
+`providers = [...]` from left to right. A host no module lists — a value
+seeded with `provide`, a factory's output, a provider a hand-written
+`Module` registers — runs before every listed one at init and after them
+at shutdown, and those hosts run among themselves by type name, then
+module path. A host's own hooks run in the order its `impl` declares
+them; spread over several `impl` blocks, they follow the module each
+block sits in, then that order, then the method name, so keep them in
+one `impl` to choose. For every host a module lists, names never decide:
+renaming it moves nothing.
+
+A provider reached only through `Container::get` has no edge in the
+graph, so nothing orders its hooks against yours. Inject it to order it.
+
+The two halves of the lifecycle treat failure differently, and
+deliberately:
 
 - **Init is strict, and runs once.** `on_module_init` then
   `on_application_bootstrap` run one hook at a time; the **first error
-  aborts boot** with a message naming the provider, method, and phase.
+  aborts boot** with a message naming the hook's module, provider,
+  method, and phase.
   Nothing is listening yet, so a failed warm-up never leaves a
   half-started server accepting traffic. `App::init()` and `App::run()`
   share the phases: whichever comes second skips them, and after an init
@@ -161,7 +210,7 @@ is sized against their sum. A bound per hook could not hold a sum — four hooks
 that hang would spend twenty seconds — which is why it is a budget.
 
 ```text frame="terminal"
-Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migrations
+Error: lifecycle hook api::migrations::MigrationGuard::check (OnModuleInit) failed: pending migrations
 ```
 
 ## Where it sits in the run
@@ -366,7 +415,7 @@ after one `error` on `nest_rs::app` naming what it abandons (`step` is `boot`,
 `transports`, `shutdown hooks` or `exit`, beside what it waited on):
 
 ```text frame="terminal"
-ERROR nest_rs::app: shutdown signal received on the way down: exiting at once, abandoning what still runs signal="SIGINT" exit_code=130 step="shutdown hooks" phase=OnModuleDestroy provider="CacheService" method="flush"
+ERROR nest_rs::app: shutdown signal received on the way down: exiting at once, abandoning what still runs signal="SIGINT" exit_code=130 step="shutdown hooks" phase=OnModuleDestroy provider="CacheService" method="flush" origin="api::cache"
 ```
 
 Nothing runs after that line but the

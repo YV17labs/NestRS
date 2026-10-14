@@ -90,25 +90,48 @@ impl Module for ServesUntilStoppedModule {
     }
 }
 
-#[injectable]
-#[derive(Default)]
-struct HangsOnDestroy;
+/// A host whose name another module's host shares, so only its origin tells
+/// them apart.
+mod hangs {
+    use nest_rs_core::{hooks, injectable, module};
 
-#[hooks]
-impl HangsOnDestroy {
-    #[expect(
-        clippy::print_stdout,
-        reason = "the child's stdout is the protocol its parent test reads"
-    )]
-    #[on_module_destroy]
-    async fn release(&self) {
-        println!("{HOOK_STARTED}");
-        std::future::pending::<()>().await;
+    #[injectable]
+    #[derive(Default)]
+    pub(crate) struct Cache;
+
+    #[hooks]
+    impl Cache {
+        #[expect(
+            clippy::print_stdout,
+            reason = "the child's stdout is the protocol its parent test reads"
+        )]
+        #[on_module_destroy]
+        async fn release(&self) {
+            println!("{}", super::HOOK_STARTED);
+            std::future::pending::<()>().await;
+        }
     }
+
+    #[module(providers = [Cache])]
+    pub(crate) struct HangsOnDestroyModule;
 }
 
-#[module(providers = [HangsOnDestroy])]
-struct HangsOnDestroyModule;
+mod returns {
+    use nest_rs_core::{hooks, injectable, module};
+
+    #[injectable]
+    #[derive(Default)]
+    pub(crate) struct Cache;
+
+    #[hooks]
+    impl Cache {
+        #[on_module_destroy]
+        async fn release(&self) {}
+    }
+
+    #[module(providers = [Cache])]
+    pub(crate) struct ReturnsOnDestroyModule;
+}
 
 /// Long past every bound a test waits: a step still waiting then was never
 /// stopped.
@@ -279,7 +302,8 @@ async fn run_child(role: String) -> anyhow::Result<()> {
         "hook" => {
             App::builder()
                 .module::<ServesUntilStoppedModule>()
-                .module::<HangsOnDestroyModule>()
+                .module::<returns::ReturnsOnDestroyModule>()
+                .module::<hangs::HangsOnDestroyModule>()
                 .build()
                 .await?
                 .run()
@@ -331,7 +355,8 @@ fn a_second_signal_while_a_hook_hangs_exits_at_once_naming_the_hook() {
         .iter()
         .find(|line| line.contains(EXITING))
         .unwrap_or_else(|| panic!("the line naming what it abandons: {printed:#?}"));
-    assert!(line.contains("HangsOnDestroy"), "{line}");
+    assert!(line.contains("Cache"), "{line}");
+    assert!(line.contains("integration::way_down::hangs"), "{line}");
     assert!(line.contains("release"), "{line}");
     assert!(line.contains("SIGINT"), "{line}");
 }

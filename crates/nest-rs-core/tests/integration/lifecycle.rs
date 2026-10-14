@@ -1,5 +1,5 @@
-//! Covers `src/lifecycle.rs` — hook shapes, a host bound as `dyn Trait`, and
-//! shutdown hooks that fail, hang or panic.
+//! Covers `src/lifecycle.rs` — hook shapes, a host bound as `dyn Trait`, the
+//! order hosts run in, and shutdown hooks that fail, hang or panic.
 
 use nest_rs_core::target;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -198,9 +198,12 @@ const ABANDONED: &str = "shutdown hook abandoned: the shutdown hooks' budget was
 
 static TIDIED: AtomicUsize = AtomicUsize::new(0);
 
+/// Injects `TidyOnDestroy`, so its shutdown hook runs first.
 #[injectable]
-#[derive(Default)]
-struct StuckOnDestroy;
+struct StuckOnDestroy {
+    #[inject]
+    _tidy: std::sync::Arc<TidyOnDestroy>,
+}
 
 #[hooks]
 impl StuckOnDestroy {
@@ -210,7 +213,7 @@ impl StuckOnDestroy {
     }
 }
 
-/// Sorts after `StuckOnDestroy` in their shared phase, and has a hook in each
+/// Runs after `StuckOnDestroy` in their shared phase, and has a hook in each
 /// phase after it.
 #[injectable]
 #[derive(Default)]
@@ -360,25 +363,28 @@ async fn four_stuck_shutdown_hooks_share_one_budget_and_each_is_named() {
 
 static AFTER_PANIC: AtomicUsize = AtomicUsize::new(0);
 
+/// Injects `AfterPanic`, so its shutdown hook runs first.
 #[injectable]
-#[derive(Default)]
-struct AaPanicsOnDestroy;
+struct PanicsOnDestroy {
+    #[inject]
+    _after: std::sync::Arc<AfterPanic>,
+}
 
 #[hooks]
-impl AaPanicsOnDestroy {
+impl PanicsOnDestroy {
     #[on_module_destroy]
     async fn release(&self) {
         panic!("the pool was already closed");
     }
 }
 
-/// Sorts after `AaPanicsOnDestroy` in its phase, and has a hook in a later one.
+/// Runs after `PanicsOnDestroy` in its phase, and has a hook in a later one.
 #[injectable]
 #[derive(Default)]
-struct ZzAfterPanic;
+struct AfterPanic;
 
 #[hooks]
-impl ZzAfterPanic {
+impl AfterPanic {
     #[on_module_destroy]
     async fn release(&self) {
         AFTER_PANIC.fetch_add(1, Ordering::SeqCst);
@@ -390,7 +396,7 @@ impl ZzAfterPanic {
     }
 }
 
-#[module(providers = [AaPanicsOnDestroy, ZzAfterPanic])]
+#[module(providers = [AfterPanic, PanicsOnDestroy])]
 struct PanicOnDestroyModule;
 
 #[tokio::test]
@@ -421,7 +427,7 @@ async fn a_panicking_shutdown_hook_is_named_at_error_and_the_rest_still_run() {
     assert!(
         event
             .field("provider")
-            .is_some_and(|p| p.contains("AaPanicsOnDestroy")),
+            .is_some_and(|p| p.contains("PanicsOnDestroy")),
         "{:?}",
         event.fields,
     );
@@ -462,7 +468,7 @@ async fn a_panicking_init_hook_aborts_the_boot_with_an_error_naming_it() {
     let error = outcome.expect_err("an init hook that panicked aborts the boot");
     assert_eq!(
         error.to_string(),
-        "lifecycle hook PanicsOnInit::warm (OnModuleInit) panicked",
+        "lifecycle hook integration::lifecycle::PanicsOnInit::warm (OnModuleInit) panicked",
     );
     let event = logs.expect_one(
         target::LIFECYCLE,
@@ -598,5 +604,92 @@ async fn an_init_dropped_while_a_hook_waits_is_refused_again_without_a_hook_runn
         WARMED_BEFORE_THE_DROP.load(Ordering::SeqCst),
         1,
         "the hook that finished ran once"
+    );
+}
+
+static CACHES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+mod first {
+    use nest_rs_core::{hooks, injectable, module};
+
+    #[injectable]
+    #[derive(Default)]
+    pub(crate) struct Cache;
+
+    #[hooks]
+    impl Cache {
+        #[on_module_init]
+        async fn warm(&self) {
+            super::CACHES
+                .lock()
+                .expect("log mutex is not poisoned")
+                .push(module_path!());
+        }
+    }
+
+    #[module(providers = [Cache])]
+    pub(crate) struct FirstCacheModule;
+}
+
+mod second {
+    use nest_rs_core::{hooks, injectable, module};
+
+    #[injectable]
+    #[derive(Default)]
+    pub(crate) struct Cache;
+
+    #[hooks]
+    impl Cache {
+        #[on_module_init]
+        async fn warm(&self) {
+            super::CACHES
+                .lock()
+                .expect("log mutex is not poisoned")
+                .push(module_path!());
+        }
+    }
+
+    #[module(providers = [Cache])]
+    pub(crate) struct SecondCacheModule;
+}
+
+#[module(imports = [first::FirstCacheModule, second::SecondCacheModule])]
+struct FirstThenSecondModule;
+
+#[module(imports = [second::SecondCacheModule, first::FirstCacheModule])]
+struct SecondThenFirstModule;
+
+/// The order each build of the root ran its two `Cache` hosts in.
+async fn caches_warmed<M: nest_rs_core::Module + 'static>() -> Vec<&'static str> {
+    let mut builds = Vec::new();
+    for _ in 0..2 {
+        CACHES.lock().expect("log mutex is not poisoned").clear();
+        App::new::<M>()
+            .expect("the module boots")
+            .init()
+            .await
+            .expect("the init phases drain");
+        let warmed = CACHES.lock().expect("log mutex is not poisoned").clone();
+        builds.push(warmed);
+    }
+    assert_eq!(builds[0], builds[1], "two builds of one root ran one order");
+    builds.remove(0)
+}
+
+#[tokio::test]
+async fn two_hosts_of_one_name_run_in_their_modules_import_order_in_every_build() {
+    assert_eq!(
+        caches_warmed::<FirstThenSecondModule>().await,
+        [
+            "integration::lifecycle::first",
+            "integration::lifecycle::second"
+        ],
+    );
+    assert_eq!(
+        caches_warmed::<SecondThenFirstModule>().await,
+        [
+            "integration::lifecycle::second",
+            "integration::lifecycle::first"
+        ],
     );
 }

@@ -8,7 +8,8 @@
 //! an unchecked escape hatch.
 
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::container::{ProviderKey, ProviderScope};
 use crate::error::{
@@ -146,19 +147,22 @@ pub struct ProviderOrder(HashMap<TypeId, usize>);
 impl ProviderOrder {
     /// Index each provider by its position in `order`.
     pub fn new(order: impl IntoIterator<Item = TypeId>) -> Self {
-        Self(
-            order
-                .into_iter()
-                .enumerate()
-                .map(|(i, id)| (id, i))
-                .collect(),
-        )
+        Self(positions(order))
     }
 
     /// Rank of `provider` in declaration order; unreachable providers sort last.
     pub fn rank(&self, provider: TypeId) -> usize {
         self.0.get(&provider).copied().unwrap_or(usize::MAX)
     }
+}
+
+/// Each type of `order` by its position in it.
+pub(crate) fn positions(order: impl IntoIterator<Item = TypeId>) -> HashMap<TypeId, usize> {
+    order
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| (id, i))
+        .collect()
 }
 
 /// Validate the access graph: every provider's dependency must be reachable
@@ -617,6 +621,95 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
                 }
             }
         }
+    }
+    order
+}
+
+/// Every reachable provider by its own type, **dependencies first**: each
+/// after every provider it injects, optionally or not, at any depth. Providers
+/// the graph does not order follow the composition — imported modules before
+/// their importer, imports as declared, then each module's `providers = [...]`
+/// left to right — and the earliest of them always goes next.
+pub(crate) fn dependency_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
+    let graph = ProviderGraph::new(descriptors, roots, |_| true);
+    let by_id: HashMap<TypeId, &ModuleDescriptor> =
+        descriptors.iter().map(|d| ((d.module)(), *d)).collect();
+    let module_rank = positions(modules_imports_first(roots, &by_id));
+    let tie: Vec<(usize, usize)> = graph
+        .nodes
+        .iter()
+        .map(|(module, p)| {
+            let at = module_rank.get(&(module.module)()).copied();
+            let listed = module.providers.iter().position(|q| std::ptr::eq(q, *p));
+            (at.unwrap_or(usize::MAX), listed.unwrap_or_default())
+        })
+        .collect();
+
+    let nodes = graph.nodes.len();
+    let mut waits_on = vec![0usize; nodes];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); nodes];
+    for (node, mut deps) in graph.edges.into_iter().enumerate() {
+        deps.sort_unstable();
+        deps.dedup();
+        deps.retain(|dep| *dep != node);
+        waits_on[node] = deps.len();
+        for dep in deps {
+            dependents[dep].push(node);
+        }
+    }
+    let mut ready: BinaryHeap<Reverse<((usize, usize), usize)>> = (0..nodes)
+        .filter(|node| waits_on[*node] == 0)
+        .map(|node| Reverse((tie[node], node)))
+        .collect();
+    let mut placed = vec![false; nodes];
+    let mut order = Vec::with_capacity(nodes);
+    while order.len() < nodes {
+        // Only a cycle the seal already refused leaves nothing ready.
+        let node = match ready.pop() {
+            Some(Reverse((_, node))) => node,
+            None => (0..nodes)
+                .filter(|node| !placed[*node])
+                .min_by_key(|node| tie[*node])
+                .unwrap_or_default(),
+        };
+        placed[node] = true;
+        order.push((graph.nodes[node].1.provider)());
+        for dependent in &dependents[node] {
+            waits_on[*dependent] = waits_on[*dependent].saturating_sub(1);
+            if waits_on[*dependent] == 0 && !placed[*dependent] {
+                ready.push(Reverse((tie[*dependent], *dependent)));
+            }
+        }
+    }
+    order
+}
+
+/// The modules `roots` reach, each after every module it imports: imports in
+/// their declared order, depth-first, first occurrence winning.
+fn modules_imports_first(
+    roots: &[TypeId],
+    by_id: &HashMap<TypeId, &ModuleDescriptor>,
+) -> Vec<TypeId> {
+    fn visit(
+        id: TypeId,
+        by_id: &HashMap<TypeId, &ModuleDescriptor>,
+        seen: &mut HashSet<TypeId>,
+        order: &mut Vec<TypeId>,
+    ) {
+        if !seen.insert(id) {
+            return;
+        }
+        if let Some(desc) = by_id.get(&id) {
+            for import in desc.imports {
+                visit(import(), by_id, seen, order);
+            }
+        }
+        order.push(id);
+    }
+    let mut seen = HashSet::new();
+    let mut order = Vec::new();
+    for root in roots {
+        visit(*root, by_id, &mut seen, &mut order);
     }
     order
 }
@@ -1152,6 +1245,180 @@ mod tests {
         assert_eq!(
             injection_closure(&descriptors, TypeId::of::<OrgsResolver>()),
             HashSet::from([TypeId::of::<OrgsResolver>()])
+        );
+    }
+
+    // Named against the alphabet and declared against the dependencies.
+    struct Zdb;
+    struct Mrepo;
+    struct Aservice;
+
+    fn injects_zdb() -> Vec<TypeId> {
+        vec![TypeId::of::<Zdb>()]
+    }
+
+    fn injects_mrepo() -> Vec<TypeId> {
+        vec![TypeId::of::<Mrepo>()]
+    }
+
+    #[test]
+    fn a_provider_ranks_after_everything_it_injects_at_any_depth() {
+        let app = ModuleDescriptor {
+            module: || TypeId::of::<AppMod>(),
+            name: "AppModule",
+            imports: &[],
+            providers: &[
+                ProviderDescriptor {
+                    name: "Aservice",
+                    provides: || TypeId::of::<Aservice>(),
+                    provider: || TypeId::of::<Aservice>(),
+                    injects: injects_mrepo,
+                    inject_names: no_names,
+                    injects_optional: no_deps,
+                    inject_optional_names: no_names,
+                    injects_keyed: no_keyed_deps,
+                    also_provides: provides_only_itself,
+                },
+                ProviderDescriptor {
+                    name: "Mrepo",
+                    provides: || TypeId::of::<Mrepo>(),
+                    provider: || TypeId::of::<Mrepo>(),
+                    injects: no_deps,
+                    inject_names: no_names,
+                    injects_optional: injects_zdb,
+                    inject_optional_names: no_names,
+                    injects_keyed: no_keyed_deps,
+                    also_provides: provides_only_itself,
+                },
+                ProviderDescriptor {
+                    name: "Zdb",
+                    provides: || TypeId::of::<Zdb>(),
+                    provider: || TypeId::of::<Zdb>(),
+                    injects: no_deps,
+                    inject_names: no_names,
+                    injects_optional: no_deps,
+                    inject_optional_names: no_names,
+                    injects_keyed: no_keyed_deps,
+                    also_provides: provides_only_itself,
+                },
+            ],
+        };
+        assert_eq!(
+            dependency_order(&[&app], &[TypeId::of::<AppMod>()]),
+            [
+                TypeId::of::<Zdb>(),
+                TypeId::of::<Mrepo>(),
+                TypeId::of::<Aservice>()
+            ],
+        );
+    }
+
+    trait Port {}
+
+    fn injects_port() -> Vec<TypeId> {
+        vec![TypeId::of::<std::sync::Arc<dyn Port>>()]
+    }
+
+    fn also_its_own_type() -> Vec<(TypeId, &'static str)> {
+        vec![(TypeId::of::<Zdb>(), "Zdb")]
+    }
+
+    #[test]
+    fn a_provider_bound_as_dyn_ranks_under_its_own_type_before_what_injects_the_trait() {
+        let app = ModuleDescriptor {
+            module: || TypeId::of::<AppMod>(),
+            name: "AppModule",
+            imports: &[],
+            providers: &[
+                ProviderDescriptor {
+                    name: "Aservice",
+                    provides: || TypeId::of::<Aservice>(),
+                    provider: || TypeId::of::<Aservice>(),
+                    injects: injects_port,
+                    inject_names: no_names,
+                    injects_optional: no_deps,
+                    inject_optional_names: no_names,
+                    injects_keyed: no_keyed_deps,
+                    also_provides: provides_only_itself,
+                },
+                ProviderDescriptor {
+                    name: "dyn Port",
+                    provides: || TypeId::of::<std::sync::Arc<dyn Port>>(),
+                    provider: || TypeId::of::<Zdb>(),
+                    injects: no_deps,
+                    inject_names: no_names,
+                    injects_optional: no_deps,
+                    inject_optional_names: no_names,
+                    injects_keyed: no_keyed_deps,
+                    also_provides: also_its_own_type,
+                },
+            ],
+        };
+        assert_eq!(
+            dependency_order(&[&app], &[TypeId::of::<AppMod>()]),
+            [TypeId::of::<Zdb>(), TypeId::of::<Aservice>()],
+        );
+    }
+
+    struct CMod;
+
+    #[test]
+    fn unrelated_providers_rank_imports_first_as_declared_then_the_importer() {
+        let b = ModuleDescriptor {
+            module: || TypeId::of::<BillingMod>(),
+            name: "BModule",
+            imports: &[],
+            providers: &[ProviderDescriptor {
+                name: "Mrepo",
+                provides: || TypeId::of::<Mrepo>(),
+                provider: || TypeId::of::<Mrepo>(),
+                injects: no_deps,
+                inject_names: no_names,
+                injects_optional: no_deps,
+                inject_optional_names: no_names,
+                injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
+            }],
+        };
+        let c = ModuleDescriptor {
+            module: || TypeId::of::<CMod>(),
+            name: "CModule",
+            imports: &[],
+            providers: &[ProviderDescriptor {
+                name: "Zdb",
+                provides: || TypeId::of::<Zdb>(),
+                provider: || TypeId::of::<Zdb>(),
+                injects: no_deps,
+                inject_names: no_names,
+                injects_optional: no_deps,
+                inject_optional_names: no_names,
+                injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
+            }],
+        };
+        let a = ModuleDescriptor {
+            module: || TypeId::of::<AppMod>(),
+            name: "AModule",
+            imports: &[|| TypeId::of::<BillingMod>(), || TypeId::of::<CMod>()],
+            providers: &[ProviderDescriptor {
+                name: "Aservice",
+                provides: || TypeId::of::<Aservice>(),
+                provider: || TypeId::of::<Aservice>(),
+                injects: no_deps,
+                inject_names: no_names,
+                injects_optional: no_deps,
+                inject_optional_names: no_names,
+                injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
+            }],
+        };
+        assert_eq!(
+            dependency_order(&[&a, &c, &b], &[TypeId::of::<AppMod>()]),
+            [
+                TypeId::of::<Mrepo>(),
+                TypeId::of::<Zdb>(),
+                TypeId::of::<Aservice>()
+            ],
         );
     }
 }

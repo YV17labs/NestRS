@@ -1,5 +1,5 @@
-//! `#[hooks]` through the real macro: phase-tagged methods run in
-//! `(provider, method)` order within a phase, bare and `Result`-returning
+//! `#[hooks]` through the real macro: phase-tagged methods run dependencies
+//! first at init and in reverse at shutdown, bare and `Result`-returning
 //! alike, and a failing init hook aborts the boot; the harness runs them once
 //! and hands out the app's lifecycle.
 
@@ -44,16 +44,16 @@ impl Beta {
     }
 }
 
-#[module(providers = [Alpha, Beta])]
+#[module(providers = [Beta, Alpha])]
 struct HooksModule;
 
 #[tokio::test]
-async fn hooks_run_per_phase_in_provider_method_order() {
+async fn unrelated_hosts_run_per_phase_in_the_order_their_module_lists_them() {
     let app = App::new::<HooksModule>().expect("boots");
     app.init().await.expect("init phases succeed");
 
     let log = LOG.lock().expect("log mutex is not poisoned").clone();
-    assert_eq!(log, vec!["Alpha::a_init", "Beta::b_init", "Alpha::a_boot"]);
+    assert_eq!(log, vec!["Beta::b_init", "Alpha::a_init", "Alpha::a_boot"]);
 }
 
 // `FailingInit`'s hook shares the inventory with `Alpha`'s, but `#[hooks]` gates
@@ -141,5 +141,91 @@ async fn the_harness_runs_init_once_and_hands_out_the_lifecycle_its_providers_in
         HARNESS_INITS.load(Ordering::SeqCst),
         2,
         "each app ran its init hooks once: the TestApp's build, the HeadlessApp's first init"
+    );
+}
+
+static CHAIN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+fn chained(entry: &'static str) {
+    CHAIN.lock().expect("log mutex is not poisoned").push(entry);
+}
+
+#[injectable]
+struct Zdb;
+
+#[hooks]
+impl Zdb {
+    #[on_module_init]
+    async fn init(&self) {
+        chained("Zdb::init");
+    }
+
+    #[on_module_destroy]
+    async fn destroy(&self) {
+        chained("Zdb::destroy");
+    }
+}
+
+#[injectable]
+struct Mrepo {
+    #[inject]
+    _db: Arc<Zdb>,
+}
+
+#[hooks]
+impl Mrepo {
+    #[on_module_init]
+    async fn init(&self) {
+        chained("Mrepo::init");
+    }
+
+    #[on_module_destroy]
+    async fn destroy(&self) {
+        chained("Mrepo::destroy");
+    }
+}
+
+#[injectable]
+struct Aservice {
+    #[inject]
+    _repo: Arc<Mrepo>,
+}
+
+#[hooks]
+impl Aservice {
+    #[on_module_init]
+    async fn init(&self) {
+        chained("Aservice::init");
+    }
+
+    #[on_module_destroy]
+    async fn destroy(&self) {
+        chained("Aservice::destroy");
+    }
+}
+
+#[module(providers = [Aservice, Mrepo, Zdb])]
+struct ChainModule;
+
+#[tokio::test]
+async fn hooks_run_dependencies_first_at_init_and_in_exact_reverse_at_shutdown() {
+    App::new::<ChainModule>()
+        .expect("boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops at once");
+
+    let log = CHAIN.lock().expect("log mutex is not poisoned").clone();
+    assert_eq!(
+        log,
+        [
+            "Zdb::init",
+            "Mrepo::init",
+            "Aservice::init",
+            "Aservice::destroy",
+            "Mrepo::destroy",
+            "Zdb::destroy",
+        ],
+        "named against the alphabet and listed against the dependencies, the injections decide",
     );
 }

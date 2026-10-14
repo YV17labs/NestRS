@@ -61,6 +61,7 @@ impl Savepoint {
     }
 
     fn within(enclosing: Enclosing, depth: usize) -> Self {
+        enclosing.turn().enter();
         Self {
             enclosing,
             depth,
@@ -85,17 +86,14 @@ impl Savepoint {
         self.root().transport()
     }
 
-    /// This block's address, then that of every block it sits in.
-    pub(crate) fn lineage(&self) -> impl Iterator<Item = usize> + '_ {
+    /// Whether this block, or a block it is nested in, sits in the unit whose
+    /// turn is `turn`.
+    pub(crate) fn sits_in(&self, turn: &Turn) -> bool {
         std::iter::successors(Some(self), |block| match &block.enclosing {
             Enclosing::Block(enclosing) => Some(&**enclosing),
             Enclosing::Boundary(_) => None,
         })
-        .map(Self::address)
-    }
-
-    fn address(&self) -> usize {
-        std::ptr::from_ref(self).addr()
+        .any(|block| std::ptr::eq(block.enclosing.turn(), turn))
     }
 
     /// Keep `work` until the block settles, captured here for the commit that
@@ -151,7 +149,7 @@ impl Savepoint {
     /// whose transaction Postgres has just aborted.
     async fn send_savepoint(&self) -> Result<(), DbErr> {
         if !self.holds_turn.load(Ordering::Acquire) {
-            self.enclosing.turn().for_block(self.address()).await?;
+            self.enclosing.turn().for_block().await?;
             self.holds_turn.store(true, Ordering::Release);
         }
         let statement =
@@ -183,7 +181,7 @@ impl Savepoint {
     pub(crate) async fn settle(self: Arc<Self>, ok: bool) -> Result<(), AtomicError> {
         let transport = self.transport();
         // An escaped handle's statement in flight finishes first; none starts after.
-        let own_turn = self.turn.for_statement().await;
+        let own_turn = self.turn.for_settling().await;
         self.settled.store(true, Ordering::Release);
         let held = take_held(&self.after_commit);
         let escaped = Arc::strong_count(&self) > 1;
@@ -225,7 +223,8 @@ impl Savepoint {
             tracing::error!(
                 target: crate::target::ORM,
                 transport,
-                outcome = "rollback",
+                opened = self.opened.get().is_some(),
+                outcome = if ok { "rollback_and_fail" } else { "rollback" },
                 "atomic block's executor escaped into a task that outlived it",
             );
             return Err(AtomicError::Escaped);
@@ -256,6 +255,7 @@ impl Drop for Savepoint {
             report_abandoned(transport);
         }
         self.give_back_turn();
+        self.enclosing.turn().leave();
     }
 }
 
@@ -343,7 +343,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use nest_rs_database::{AtomicError, after_commit, atomic};
-    use sea_orm::DatabaseConnection;
+    use nest_rs_testing::LogCapture;
+    use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr};
 
     use crate::executor::{
         Executor, FinalizeOutcome, LazyTransaction, current_executor, with_request_executor,
@@ -516,24 +517,101 @@ mod tests {
         assert!(!ran.load(Ordering::SeqCst));
     }
 
-    #[tokio::test]
-    async fn a_block_whose_executor_escapes_answers_so_even_unopened() {
-        let unit = unreachable_unit();
+    const ESCAPED: &str = "atomic block's executor escaped into a task that outlived it";
+
+    /// Run a block on `unit` that leaks its executor and answers `answer`.
+    async fn escaping(
+        unit: &Arc<LazyTransaction>,
+        answer: Result<(), Failure>,
+    ) -> Result<(), Failure> {
         let escaped = std::sync::Mutex::new(None);
-        let outcome = with_request_executor(
-            Executor::Lazy(Arc::clone(&unit)),
+        with_request_executor(
+            Executor::Lazy(Arc::clone(unit)),
             atomic(async {
                 *escaped
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = current_executor();
-                Ok::<_, Failure>(())
+                answer
             }),
         )
-        .await;
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_block_whose_executor_escapes_answers_so_even_unopened() {
+        let logs = LogCapture::install();
+        let outcome = escaping(&unreachable_unit(), Ok(())).await;
 
         assert!(
             matches!(outcome, Err(Failure::Atomic(AtomicError::Escaped))),
             "{outcome:?}"
         );
+        let line = logs.expect_one(crate::target::ORM, ESCAPED);
+        assert_eq!(line.level, "error");
+        assert_eq!(line.field("outcome").as_deref(), Some("rollback_and_fail"));
+        assert_eq!(line.field("opened").as_deref(), Some("false"));
+        assert_eq!(line.field("transport").as_deref(), Some("test"));
+    }
+
+    #[tokio::test]
+    async fn a_failing_block_whose_executor_escapes_says_a_plain_rollback() {
+        let logs = LogCapture::install();
+        let outcome = escaping(&unreachable_unit(), Err(Failure::Refused)).await;
+
+        assert!(
+            matches!(outcome, Err(Failure::Atomic(AtomicError::Escaped))),
+            "{outcome:?}"
+        );
+        let line = logs.expect_one(crate::target::ORM, ESCAPED);
+        assert_eq!(line.field("outcome").as_deref(), Some("rollback"));
+    }
+
+    #[tokio::test]
+    async fn a_statement_on_the_unit_from_inside_its_block_is_refused_before_the_block_opens() {
+        let unit = unreachable_unit();
+        let outcome = with_request_executor(Executor::Lazy(Arc::clone(&unit)), async {
+            let enclosing = current_executor().expect("the unit's executor");
+            atomic(async {
+                let refused = enclosing.execute_unprepared("SELECT 1").await;
+                Ok::<_, Failure>(refused)
+            })
+            .await
+        })
+        .await;
+
+        let refused = outcome.expect("the block itself sent nothing");
+        assert!(
+            matches!(&refused, Err(DbErr::Custom(said)) if said.contains("atomic blocks")),
+            "refused on the turn, never sent to the database: {refused:?}"
+        );
+        assert!(!unit.is_opened(), "no BEGIN went out");
+    }
+
+    #[tokio::test]
+    async fn a_statement_from_inside_a_nested_block_is_refused_on_every_unit_it_sits_in() {
+        let unit = unreachable_unit();
+        let outcome = with_request_executor(Executor::Lazy(Arc::clone(&unit)), async {
+            let outermost = current_executor().expect("the unit's executor");
+            atomic(async {
+                let enclosing = current_executor().expect("the outer block's executor");
+                atomic(async {
+                    let on_unit = outermost.execute_unprepared("SELECT 1").await;
+                    let on_block = enclosing.execute_unprepared("SELECT 1").await;
+                    Ok::<_, Failure>((on_unit, on_block))
+                })
+                .await
+            })
+            .await
+        })
+        .await;
+
+        let (on_unit, on_block) = outcome.expect("the blocks themselves sent nothing");
+        for refused in [on_unit, on_block] {
+            assert!(
+                matches!(&refused, Err(DbErr::Custom(said)) if said.contains("atomic blocks")),
+                "{refused:?}"
+            );
+        }
+        assert!(!unit.is_opened(), "no BEGIN went out");
     }
 }

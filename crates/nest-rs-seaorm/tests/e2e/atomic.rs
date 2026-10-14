@@ -314,6 +314,42 @@ async fn a_statement_on_the_unit_from_inside_its_block_is_refused_rather_than_wa
 }
 
 #[tokio::test]
+async fn a_unit_statement_issued_while_its_block_waits_to_open_is_refused() {
+    let conn = db().await;
+    let (beside, inside, refused) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+
+    let lazy = boundary(&conn);
+    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+        let unit = current_executor().expect("the unit's executor");
+        let (parent, block) = tokio::join!(
+            insert(beside),
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                atomic(async {
+                    let (own, on_unit) = tokio::join!(insert(inside), insert_on(&unit, refused));
+                    own?;
+                    Ok::<_, Failure>(on_unit)
+                }),
+            ),
+        );
+        parent.expect("the unit's own write lands");
+        let on_unit = block
+            .expect("the block never waits for itself")
+            .expect("the block keeps its own write");
+        assert!(
+            matches!(&on_unit, Err(DbErr::Custom(said)) if said.contains("atomic blocks")),
+            "{on_unit:?}"
+        );
+    })
+    .await;
+    committed(lazy).await;
+
+    assert!(stored(&conn, beside).await);
+    assert!(stored(&conn, inside).await);
+    assert!(!stored(&conn, refused).await);
+}
+
+#[tokio::test]
 async fn a_block_whose_executor_escapes_keeps_nothing_and_refuses_the_late_write() {
     let conn = db().await;
     let (inside, late) = (Uuid::now_v7(), Uuid::now_v7());

@@ -120,8 +120,13 @@ The block's error type takes an `AtomicError` — `ServiceError` does, by the
 class of the database's refusal — so `?` works inside it. Read the block's
 executor through `Repo::conn()` inside it: the request waits while a block is
 open, since a statement of its own would land inside the savepoint, and a
-statement on an executor taken before the block is refused rather than left to
-wait for the block that holds it.
+statement issued from inside the block on an executor taken before it is
+refused, whether or not the block has opened yet, rather than left to wait for
+the block that holds it.
+
+A transaction you opened and installed yourself (`Executor::Txn`) is not held
+back that way: a statement you issue on it beside an open block lands inside
+the block and rolls back with it. Await the block before writing on.
 
 <Aside type="caution">
 A block dropped before it settles — cancelled by a timeout or a `select!` —

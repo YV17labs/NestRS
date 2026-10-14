@@ -52,9 +52,11 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod atomic;
+mod error;
 mod executor;
 
-pub use atomic::{AtomicBlock, AtomicError, atomic};
+pub use atomic::{AtomicBlock, atomic};
+pub use error::AtomicError;
 pub use executor::{
     Deferred, Executor, ExecutorScope, after_commit, current_executor, current_executor_scope,
     with_executor, with_job_executor, with_request_executor,

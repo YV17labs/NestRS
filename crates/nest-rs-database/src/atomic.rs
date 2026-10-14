@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::error::AtomicError;
 use crate::executor::{Executor, current_executor, with_executor};
 
 /// Run `work` atomically: inside a savepoint of the ambient transaction, or in
@@ -44,11 +45,14 @@ use crate::executor::{Executor, current_executor, with_executor};
 /// atomic block, it answers [`AtomicError::Unsupported`] without polling
 /// `work`.
 ///
-/// The enclosing unit waits for an open block: its own statements queue until
-/// the block settles, since a statement issued beside the block would land
-/// inside its savepoint and roll back with it. A block that awaits a statement
-/// on its enclosing unit would wait for itself, so the driver refuses that
-/// statement. A long block holds its unit for its whole length.
+/// A unit of work the framework opened waits for an open block: its own
+/// statements queue until the block settles, since a statement issued beside
+/// the block would land inside its savepoint and roll back with it. A
+/// statement issued from inside a block on an enclosing unit's executor would
+/// wait for itself, so the driver refuses it. A long block holds its unit for
+/// its whole length. A transaction the caller opened and installed itself is
+/// not held back: a statement the caller issues on it beside an open block
+/// lands inside the block and rolls back with it, so await the block first.
 ///
 /// A block dropped before it settles — cancelled by a timeout or a `select!` —
 /// rolls back; inside a unit of work it leaves that unit unable to commit, so
@@ -62,31 +66,6 @@ where
     // Not an `async fn`: its state would keep `work` beside the future built
     // from it, and nested blocks would weigh twice their size at every level.
     Atomic::Unopened(work)
-}
-
-/// Why an atomic block could not keep its promise.
-#[non_exhaustive]
-#[derive(Debug, thiserror::Error)]
-pub enum AtomicError {
-    /// No ambient executor, or one whose driver offers no atomic block: nothing
-    /// ran.
-    #[error("no ambient executor offers an atomic block")]
-    Unsupported,
-    /// The database refused `SAVEPOINT`, `RELEASE` or `ROLLBACK TO`; the
-    /// enclosing unit is poisoned and cannot commit.
-    #[error("the atomic block could not be settled")]
-    Database(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// The work returned `Ok` over a statement that failed inside it: nothing
-    /// it wrote stands.
-    #[error("a statement failed inside the atomic block; nothing it wrote stands")]
-    Poisoned {
-        /// Whether the failed statement failed on something a fresh attempt
-        /// could clear, read from the database's error.
-        retryable: bool,
-    },
-    /// A handle to the block's executor outlived it: nothing it wrote stands.
-    #[error("the atomic block's executor outlived it")]
-    Escaped,
 }
 
 /// The executor installed for an atomic block's duration, settled once by

@@ -602,7 +602,7 @@ fn presenting_the_development_certificate() -> nest_rs_config::ClientTls {
 }
 
 /// Run `body` while every data node requires a client certificate, then give
-/// each its own setting back, whatever `body` did.
+/// each its own setting back, whatever `body`, or switching a node, did.
 ///
 /// Each node is asked over a connection opened before, which keeps serving
 /// after: the setting governs the handshakes that follow it. Every other
@@ -625,25 +625,36 @@ async fn requiring_client_certificates(body: impl std::future::Future<Output = (
             .expect("CONFIG GET tls-auth-clients");
         nodes.push((connection, kept));
     }
-    for (connection, _) in &mut nodes {
-        let _: () = redis::cmd("CONFIG")
-            .arg("SET")
-            .arg("tls-auth-clients")
-            .arg("yes")
-            .query_async(connection)
-            .await
-            .expect("a data node requires a client certificate");
-    }
-    let ran = std::panic::AssertUnwindSafe(body).catch_unwind().await;
-    for (connection, kept) in &mut nodes {
-        let _: () = redis::cmd("CONFIG")
+    let ran = std::panic::AssertUnwindSafe(async {
+        for (connection, _) in &mut nodes {
+            let _: () = redis::cmd("CONFIG")
+                .arg("SET")
+                .arg("tls-auth-clients")
+                .arg("yes")
+                .query_async(connection)
+                .await
+                .expect("a data node requires a client certificate");
+        }
+        body.await;
+    })
+    .catch_unwind()
+    .await;
+    let mut kept_back = Vec::new();
+    for (node, (connection, kept)) in nodes.iter_mut().enumerate() {
+        let given: redis::RedisResult<()> = redis::cmd("CONFIG")
             .arg("SET")
             .arg("tls-auth-clients")
             .arg(kept.as_str())
             .query_async(connection)
-            .await
-            .expect("a data node takes its own setting back");
+            .await;
+        if let Err(error) = given {
+            kept_back.push(format!("data node {node}: {error}"));
+        }
     }
+    assert!(
+        kept_back.is_empty(),
+        "every data node takes its own setting back — set the rest by hand: {kept_back:#?}"
+    );
     if let Err(panicked) = ran {
         std::panic::resume_unwind(panicked);
     }

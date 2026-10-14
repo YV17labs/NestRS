@@ -22,7 +22,7 @@ const ARGON2_P_COST: u32 = 1;
 /// edited out of range.
 fn argon2() -> Result<Argon2<'static>, PasswordError> {
     let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
-        .map_err(|error| PasswordError::HashFailed(error.into()))?;
+        .map_err(|error| PasswordError::hash_failed(error.into()))?;
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
@@ -35,7 +35,7 @@ pub fn hash_password(password: &str) -> Result<String, PasswordError> {
     argon2()?
         .hash_password(password.as_bytes())
         .map(|hash| hash.to_string())
-        .map_err(PasswordError::HashFailed)
+        .map_err(PasswordError::hash_failed)
 }
 
 /// Returns `true` when `password` matches `encoded_hash`.
@@ -50,11 +50,11 @@ pub fn hash_password(password: &str) -> Result<String, PasswordError> {
 /// would lock its owner out with nothing in the logs to say why.
 pub fn verify_password(encoded_hash: &str, password: &str) -> Result<bool, PasswordError> {
     let parsed = PasswordHash::new(encoded_hash)
-        .map_err(|error| PasswordError::InvalidHash(error.into()))?;
+        .map_err(|error| PasswordError::invalid_hash(error.into()))?;
     match argon2()?.verify_password(password.as_bytes(), &parsed) {
         Ok(()) => Ok(true),
         Err(argon2::password_hash::Error::PasswordInvalid) => Ok(false),
-        Err(error) => Err(PasswordError::InvalidHash(error)),
+        Err(error) => Err(PasswordError::invalid_hash(error)),
     }
 }
 

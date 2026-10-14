@@ -1,5 +1,8 @@
 //! Covers `src/password.rs`.
 
+use std::error::Error;
+use std::sync::Arc;
+
 use nest_rs_authn::{PasswordError, burn_verify, hash_password, verify_password};
 
 #[test]
@@ -15,6 +18,38 @@ fn invalid_stored_hash_returns_error() {
         verify_password("not-a-phc-string", "password"),
         Err(PasswordError::InvalidHash(_))
     ));
+}
+
+/// The hasher's error is a boxed source, not a type of the hashing library:
+/// the chain says what is wrong with the record, never the record, and the
+/// source still downcasts to the library's error for a caller that needs it.
+#[test]
+fn an_unusable_record_says_why_through_a_boxed_source_without_the_record() {
+    let stored = "$argon2id$v=19$m=19456,t=2,p=1$not-base64!$not-base64!";
+    let error = verify_password(stored, "password").expect_err("the record is unusable");
+    let PasswordError::InvalidHash(source) = &error else {
+        panic!("an unusable record is InvalidHash: {error:?}")
+    };
+    let shared: Arc<dyn Error + Send + Sync> = Arc::clone(source);
+    assert!(
+        shared
+            .downcast_ref::<argon2::password_hash::Error>()
+            .is_some(),
+        "the boxed source is the hasher's error: {shared:?}",
+    );
+    assert!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<argon2::password_hash::Error>())
+            .is_some(),
+        "`source()` reaches the hasher's error itself",
+    );
+    let said = nest_rs_core::error_message(&error);
+    assert!(
+        said.starts_with("stored password hash is not usable: "),
+        "{said}"
+    );
+    assert!(!said.contains("not-base64"), "{said}");
 }
 
 /// A PHC string that parses but names a hash this hasher cannot run is an

@@ -5,6 +5,9 @@
 //! `nest-rs-oauth-server`'s: this crate resolves who is calling, and a grant
 //! refusal is not a credential verdict.
 
+use std::error::Error;
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use poem::error::ResponseError;
@@ -17,19 +20,51 @@ use nest_rs_http::challenge::NoBearerChallenge;
 /// [`verify_password`](crate::verify_password).
 ///
 /// Only [`InvalidHash`](Self::InvalidHash) means a *stored* record is unusable,
-/// which deserves its own `error` line rather than "wrong password".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+/// which deserves its own `error` line rather than "wrong password". Each
+/// variant carries the hasher's error as a shared source: read it through
+/// [`source`](Error::source), which downcasts to the hasher's own type.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum PasswordError {
     /// Argon2 refused to hash — rare, and an infrastructure signal (OOM, RNG
     /// failure) rather than anything about the password. The cause is kept:
     /// it is what tells an operator *which* of those it was.
-    #[error("password hashing failed")]
-    HashFailed(#[source] argon2::password_hash::Error),
+    HashFailed(Arc<dyn Error + Send + Sync>),
     /// The stored string is not a hash this hasher can run: it did not parse
     /// as PHC, or names an algorithm, version or parameters it refuses. The
     /// cause says which.
-    #[error("stored password hash is not usable")]
-    InvalidHash(#[source] argon2::password_hash::Error),
+    InvalidHash(Arc<dyn Error + Send + Sync>),
+}
+
+impl PasswordError {
+    /// The hasher's error, shared so the error stays `Clone`.
+    pub(crate) fn hash_failed(source: argon2::password_hash::Error) -> Self {
+        Self::HashFailed(Arc::from(nest_rs_core::boxed_error(source)))
+    }
+
+    /// The hasher's refusal of a stored record.
+    pub(crate) fn invalid_hash(source: argon2::password_hash::Error) -> Self {
+        Self::InvalidHash(Arc::from(nest_rs_core::boxed_error(source)))
+    }
+}
+
+impl fmt::Display for PasswordError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::HashFailed(_) => "password hashing failed",
+            Self::InvalidHash(_) => "stored password hash is not usable",
+        })
+    }
+}
+
+// Written out: thiserror's `#[source]` would hand back the `Arc` itself, which
+// no caller downcasts to the hasher's error through.
+impl Error for PasswordError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::HashFailed(source) | Self::InvalidHash(source) => Some(source.as_ref()),
+        }
+    }
 }
 
 /// A name that is not a JWS `alg` this verifier runs, refused by

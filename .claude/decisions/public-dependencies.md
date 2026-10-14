@@ -15,8 +15,14 @@ name it directly, at a requirement compatible with the framework's. **Every
 other library is a private dependency, and the framework wraps it**: no tier-1
 signature, field, error variant or re-export names one of its types, and no
 tier-1 type implements one of its traits, so its next major is a nestrs minor
-or patch. The words are Cargo's (RFC 1977 and RFC 3516), and the manifest marks
-each public dependency at its pin with `public`; Cargo's own `public = true` is
+or patch. A private dependency's error reaches a public error as a boxed
+source — `Arc<dyn Error + Send + Sync>` in an error that is `Clone`,
+`Box<dyn Error + Send + Sync>` otherwise, built with
+`nest_rs_core::boxed_error` — so its chain reads as before and `source()`
+still downcasts to the library's type — through a source the error hands out
+itself, since thiserror's `#[source]` on an `Arc` hands out the `Arc`. The
+words are Cargo's (RFC 1977 and RFC 3516), and the manifest marks each public
+dependency at its pin with `public`; Cargo's own `public = true` is
 still unstable in 1.97 (`-Zpublic-dependency`), so the marker is a comment
 until it stabilises.
 
@@ -38,7 +44,8 @@ until it stabilises.
 | poem | **Private**: 7.0 moves the HTTP edge onto the `http` crate's types and nestrs's own (`http-server.md`). Until that lands, the HTTP edge's public API runs on poem's types — the request, response and error that the filter, interceptor, authentication-strategy and GraphQL-context traits take (a guard reads `nest_rs::http::Request` through `HttpView` since 2026-10-12), authn's credential readers, the errors and replies implementing its `ResponseError` or `IntoResponse` — and re-exports poem whole at `nest_rs::http::poem` and `nest_rs::ws::poem`, besides `nest_rs::http::SseEvent`, `nest_rs::ws::CloseCode`, the prelude's `Json`, `Path` and `Query`, and `nest_rs::testing::TestClient` and its siblings. |
 | jsonwebtoken | **Private**: `nest_rs::authn::Algorithm`, which `AuthnConfig` and `JwtOptions` hold, is nestrs's own enum, spelled as RFC 7518 spells `alg`; a crate-private bridge maps it to the library's. |
 | opentelemetry (metrics API) | **Private**: an app records through `nest_rs::opentelemetry::Metrics` and its instruments — `Counter`, `UpDownCounter`, `Histogram`, `Gauge`, with `Attribute` and `Describe` — named by the OpenTelemetry Metrics API, and no public signature names an `opentelemetry` type. |
-| object_store, argon2 | **Private**: their errors become boxed sources of `StorageError` and `PasswordError`. |
+| argon2 | **Private**: its errors are boxed sources of `PasswordError`, shared behind an `Arc` so the error stays `Clone`. |
+| object_store | **Private**: its errors become boxed sources of `StorageError`. |
 | tracing-subscriber | **Private**: no public error carries one of its errors, since `nest_rs::core::logging::LogSettings` reads the console's settings into nestrs's own. Until its wrap lands, `nest_rs::core::logging::{TextFormat, JsonFormat}` implement its `FormatEvent`, for the OpenTelemetry crate alone, and `ConsoleWriter` its `MakeWriter`, which the CLI's migration template and an app's binaries without an `App` hand to `tracing_subscriber::fmt()`; the three leave tier 1 behind one installer of the console subscriber. The filter syntax `<PREFIX>_LOG` and `RUST_LOG` take is its `EnvFilter`'s, so a major that changes what parses is taken only with that syntax kept, or in a nestrs major. |
 | rustls, outside `nest-rs-testing` | **Private**: `nest_rs::config::crypto_provider`, which hands rustls's `CryptoProvider` to sibling crates, leaves tier 1. |
 | croner, jiff, jiff-tzdb | **Private**. The cron grammar and the zone names they read are `#[cron]`'s grammar, so a major of either that changes what parses is taken only with that grammar kept, or in a nestrs major. |

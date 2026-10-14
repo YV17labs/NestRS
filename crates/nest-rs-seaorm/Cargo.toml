@@ -55,7 +55,8 @@ nest-rs-seaorm-macros.workspace = true
 nest-rs-database.workspace = true
 # `SeaOrmModule` owns the crate's one `#[config]`, `SeaOrmConfig` (namespace
 # `seaorm`), loaded from `NESTRS_SEAORM__*`; `validator` backs its `#[validate]` rules.
-nest-rs-config.workspace = true
+# `tls`: the boot proof tells a refused TLS negotiation through `ClientTls`.
+nest-rs-config = { workspace = true, features = ["tls"] }
 # `validation_details` — the one redaction policy for `ValidationErrors` on a
 # wire. `ServiceError::Validation` must inherit it, not restate it: a raw
 # `to_value` echoes `params.value`, i.e. the rejected input.

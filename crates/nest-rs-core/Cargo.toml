@@ -64,6 +64,8 @@ tokio = { workspace = true, features = ["test-util"] }
 # A package's `#[hooks]` host this suite's apps do not import, said at `debug`
 # like any dependency's.
 nestrs-hooks-probe = { path = "tests/hooks-probe" }
+# A `log` logger set before the console, which keeps the `log` records.
+log.workspace = true
 
 [lints]
 workspace = true

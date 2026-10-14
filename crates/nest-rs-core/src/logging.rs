@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tracing::field::{Field, Visit};
-use tracing::{Event, Level, Subscriber};
+use tracing::{Dispatch, Event, Level, Subscriber};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::field::VisitOutput;
 use tracing_subscriber::filter::{LevelParseError, ParseError};
@@ -253,11 +253,15 @@ const BATCH_WINDOW: Duration = Duration::from_millis(2);
 /// is given back.
 const BATCH_BYTES_KEPT: usize = 1 << 20;
 
-/// The console's writer and line formats: the kernel's, reached by the
-/// framework's own subscribers through the crate's `__private`, and installed
-/// for anyone else by [`install_console`]. They implement `tracing_subscriber`'s
-/// traits, a private dependency's, so they are not API.
+/// The console's writer and line formats, and the one way a subscriber becomes
+/// the process's global one: the kernel's, reached by the framework's own
+/// subscribers through the crate's `__private`, and installed for anyone else
+/// by [`install_console`]. They speak `tracing_subscriber`'s traits, a private
+/// dependency's, so they are not API.
 pub(crate) mod __private {
+    use tracing::Dispatch;
+    use tracing_subscriber::util::SubscriberInitExt;
+
     /// The process's console, the writer every subscriber the framework ships
     /// writes its lines through.
     ///
@@ -306,6 +310,31 @@ pub(crate) mod __private {
     #[derive(Clone, Copy, Debug)]
     pub struct JsonFormat {
         pub(in crate::logging) source_location: bool,
+    }
+
+    /// Install `subscriber` as the process's global one and bridge `log`
+    /// records into it: `false` when the process already has a global
+    /// subscriber, which is kept. A `log` logger set before keeps the `log`
+    /// records, said once at `warn` through the subscriber just installed.
+    pub fn install_global_subscriber(subscriber: impl Into<Dispatch>) -> bool {
+        let subscriber = subscriber.into();
+        // `try_init` sets the global subscriber before the `log` bridge, and a
+        // global subscriber is leaked, never dropped: the weak handle outlives
+        // `subscriber` exactly when it was installed, whatever the bridge says.
+        let installed = subscriber.downgrade();
+        match subscriber.try_init() {
+            Ok(()) => true,
+            Err(error) if installed.upgrade().is_some() => {
+                tracing::warn!(
+                    target: crate::target::APP,
+                    error = %crate::error_message(&error),
+                    "a `log` logger was already set: `log` records keep it, and only `tracing` \
+                     events reach the subscriber installed",
+                );
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 
@@ -1104,6 +1133,8 @@ pub(crate) fn init_fallback() -> Result<()> {
 /// migration runner, a seed).
 ///
 /// `false` when the process already has a global subscriber, which is kept.
+/// `log` records reach the console too, unless a `log` logger was set before,
+/// which keeps them: the console then says so once, at `warn`.
 ///
 /// ```no_run
 /// use nest_rs_core::logging::{LogSettings, install_console};
@@ -1119,17 +1150,20 @@ pub fn install_console(settings: &LogSettings) -> bool {
     let builder = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(&settings.filter))
         .with_writer(ConsoleWriter::get());
-    match settings.format {
-        LogFormat::Text => builder
-            .event_format(TextFormat::new(settings.source_location))
-            .try_init(),
+    __private::install_global_subscriber(match settings.format {
+        LogFormat::Text => Dispatch::new(
+            builder
+                .event_format(TextFormat::new(settings.source_location))
+                .finish(),
+        ),
         // `.json()` sets the field formatter only; the envelope is `JsonFormat`'s.
-        LogFormat::Json => builder
-            .json()
-            .event_format(JsonFormat::new(settings.source_location))
-            .try_init(),
-    }
-    .is_ok()
+        LogFormat::Json => Dispatch::new(
+            builder
+                .json()
+                .event_format(JsonFormat::new(settings.source_location))
+                .finish(),
+        ),
+    })
 }
 
 #[cfg(test)]

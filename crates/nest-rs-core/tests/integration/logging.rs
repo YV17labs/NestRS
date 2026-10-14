@@ -70,6 +70,11 @@ fn logging_child_process() {
         Some("app-less") => {
             let _ = app_less_child();
         }
+        Some("app-less-log-logger") => {
+            log::set_logger(&STDERR_LOGGER).expect("the child's first `log` logger");
+            log::set_max_level(log::LevelFilter::Info);
+            let _ = app_less_child();
+        }
         _ => {}
     }
 }
@@ -113,6 +118,36 @@ const INSTALLED: &str = "APP-LESS-CHILD INSTALLED";
 /// The line an app-less child files through the console it installed.
 const APP_LESS_LINE: &str = "a line no app files";
 
+/// The record an app-less child files through the `log` facade.
+const LOG_LINE: &str = "a line through the log facade";
+
+/// What a `log` logger set before the console says on stderr, before each
+/// record it receives.
+const LOG_LOGGER: &str = "LOG-LOGGER";
+
+/// The event the console files when a `log` logger was set before it.
+const LOG_KEPT: &str = "a `log` logger was already set: `log` records keep it, and only `tracing` events reach the subscriber installed";
+
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+
+    #[expect(
+        clippy::print_stderr,
+        reason = "the child's stdout is the console under test; stderr is the protocol"
+    )]
+    fn log(&self, record: &log::Record<'_>) {
+        eprintln!("{LOG_LOGGER} {}", record.args());
+    }
+
+    fn flush(&self) {}
+}
+
+static STDERR_LOGGER: StderrLogger = StderrLogger;
+
 /// A binary that runs no `App` — a migration runner — installing the kernel's
 /// console from the settings, then trying a second time.
 #[nest_rs_core::main]
@@ -124,6 +159,7 @@ async fn app_less_child() -> anyhow::Result<()> {
     let settings = LogSettings::from_env()?;
     let first = install_console(&settings);
     tracing::info!(target: FIXTURE_TARGET, step = 1, "{APP_LESS_LINE}");
+    log::info!(target: FIXTURE_TARGET, "{LOG_LINE}");
     let second = install_console(&settings);
     eprintln!("{INSTALLED} first={first} second={second}");
     Ok(())
@@ -411,6 +447,45 @@ fn a_binary_with_no_app_installs_the_console_its_settings_describe() {
             .as_str()
             .is_some_and(|file| file.ends_with("tests/integration/logging.rs")),
         "the source location is on the line: {line}"
+    );
+    assert_eq!(
+        saying(&events, LOG_LINE),
+        1,
+        "a `log` record reaches the console: {events:#?}"
+    );
+}
+
+/// A `log` logger set before the console keeps the `log` records, and the
+/// console installed anyway is reported as installed, saying so once at `warn`.
+#[test]
+fn a_log_logger_set_before_the_console_keeps_its_records_and_the_console_is_installed() {
+    let env = settings(&[(var::FORMAT, "json")]);
+    let mut child = ChildProcess::spawn_with(CHILD_TEST, "app-less-log-logger", &env);
+
+    let said = child.expect_stderr_line(INSTALLED, Duration::from_secs(10));
+    assert!(said.ends_with("first=true second=false"), "{said}");
+    let (code, printed) = child.exit_within(Duration::from_secs(10));
+    assert_eq!(code, Some(0), "{printed:#?}");
+    let events = console_events(&printed);
+    assert_eq!(saying(&events, APP_LESS_LINE), 1, "{events:#?}");
+    assert_eq!(saying(&events, LOG_LINE), 0, "{events:#?}");
+    let kept = events
+        .iter()
+        .find(|event| event["fields"]["message"] == LOG_KEPT)
+        .unwrap_or_else(|| panic!("the console says the `log` logger kept: {events:#?}"));
+    assert_eq!(kept["level"], "WARN", "{kept}");
+    assert!(
+        kept["fields"]["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty()),
+        "{kept}"
+    );
+    let stderr = child.stderr();
+    assert!(
+        stderr
+            .iter()
+            .any(|line| line == &format!("{LOG_LOGGER} {LOG_LINE}")),
+        "the `log` record reached the logger set first: {stderr:#?}"
     );
 }
 

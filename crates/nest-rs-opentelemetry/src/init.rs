@@ -1,11 +1,10 @@
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::__private::{ConsoleWriter, JsonFormat, TextFormat};
+use nest_rs_core::__private::{ConsoleWriter, JsonFormat, TextFormat, install_global_subscriber};
 use nest_rs_core::logging::LogSettings;
 
 use crate::config::{LogFormat, OpenTelemetryConfig};
@@ -14,6 +13,8 @@ use crate::error::OpenTelemetryError;
 /// `OpenTelemetryModule` reads this to fail fast rather than register no-op providers
 /// when `OpenTelemetry::init` was forgotten.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+const ALREADY_INSTALLED: &str = "a global subscriber is already installed, and is kept";
 
 pub(crate) fn initialized() -> bool {
     INITIALIZED.load(Ordering::Relaxed)
@@ -76,13 +77,15 @@ impl OpenTelemetry {
                 None => None,
             };
 
-            Registry::default()
-                .with(filter)
-                .with(fmt_layer)
-                .with(otel_layer)
-                .with(appender_layer)
-                .try_init()
-                .map_err(|e| OpenTelemetryError::Init(e.to_string()))?;
+            if !install_global_subscriber(
+                Registry::default()
+                    .with(filter)
+                    .with(fmt_layer)
+                    .with(otel_layer)
+                    .with(appender_layer),
+            ) {
+                return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
+            }
             mark_initialized();
 
             for variable in exporters.ignored_timeouts {
@@ -116,11 +119,9 @@ impl OpenTelemetry {
 
         #[cfg(not(feature = "otlp"))]
         {
-            Registry::default()
-                .with(filter)
-                .with(fmt_layer)
-                .try_init()
-                .map_err(|e| OpenTelemetryError::Init(e.to_string()))?;
+            if !install_global_subscriber(Registry::default().with(filter).with(fmt_layer)) {
+                return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
+            }
             mark_initialized();
             tracing::info!(
                 target: crate::TARGET,
@@ -155,14 +156,12 @@ pub fn init_for_tests() {
     } else {
         TEST_FILTER.to_owned()
     };
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "an Err is a subscriber already installed, which a test run keeps"
-    )]
-    let _ = Registry::default()
-        .with(EnvFilter::new(filter))
-        .with(console_layer(LogFormat::Text, false))
-        .try_init();
+    // `false` is a subscriber already installed, which a test run keeps.
+    install_global_subscriber(
+        Registry::default()
+            .with(EnvFilter::new(filter))
+            .with(console_layer(LogFormat::Text, false)),
+    );
     mark_initialized();
 }
 

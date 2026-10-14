@@ -84,6 +84,8 @@ serde_json.workspace = true
 # A package declaring its own unit, whose exported span must carry the ids its
 # operation line carries.
 nestrs-unit-probe = { path = "tests/unit-probe" }
+# A `log` logger set before `init`, which keeps the `log` records.
+log.workspace = true
 
 [lints]
 workspace = true

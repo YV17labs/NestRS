@@ -21,6 +21,7 @@ tokio-util = { version = "0.7", features = ["rt", "io"] }  # public
 
 tracing = "0.1"  # public
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+log = "0.4"
 
 opentelemetry = "0.33"
 opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }

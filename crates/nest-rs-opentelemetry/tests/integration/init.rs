@@ -5,7 +5,7 @@
 use std::process::{Command, Output};
 
 use nest_rs_core::panic::FIELD;
-use nest_rs_opentelemetry::{LogFormat, OpenTelemetry, OpenTelemetryConfig};
+use nest_rs_opentelemetry::{LogFormat, OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
 
 const CHILD_TEST: &str = "init::init_child_process";
 
@@ -79,5 +79,36 @@ fn a_panic_inside_the_subscriber_s_own_dispatch_is_one_event_of_the_hook() {
         errors[0]["fields"][FIELD], "the field's text panicked",
         "{}",
         errors[0]
+    );
+}
+
+/// A `log` logger that keeps every record to itself.
+struct KeptLogger;
+
+impl log::Log for KeptLogger {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        false
+    }
+
+    fn log(&self, _: &log::Record<'_>) {}
+
+    fn flush(&self) {}
+}
+
+static KEPT_LOGGER: KeptLogger = KeptLogger;
+
+/// A `log` logger set before `init` keeps the `log` records, and `init`
+/// installs its subscriber all the same; a second `init` keeps the first's.
+#[test]
+fn init_installs_its_subscriber_beside_a_log_logger_set_before() {
+    log::set_logger(&KEPT_LOGGER).expect("the process's first `log` logger");
+
+    let first = OpenTelemetry::init_with(OpenTelemetryConfig::new("log-logger"));
+    assert!(first.is_ok(), "{:?}", first.err());
+    let second = OpenTelemetry::init_with(OpenTelemetryConfig::new("log-logger"));
+    assert!(
+        matches!(second, Err(OpenTelemetryError::Init(_))),
+        "{:?}",
+        second.err()
     );
 }

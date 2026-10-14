@@ -6,9 +6,9 @@ use nest_rs_config::{
     Bound, ClientTls, Config, ConfigService, DurationBounds, Floor, Namespaced, config,
 };
 
-use crate::algorithm::Family;
+use crate::algorithm::{Family, algorithms_of};
 use crate::error::AuthError;
-use crate::service::{algorithms_of, one_of};
+use crate::service::one_of;
 use crate::{Algorithm, JwtKey, JwtOptions};
 
 /// The token lifetime's range, the variable that sets it, and why.

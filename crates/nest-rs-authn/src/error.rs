@@ -39,12 +39,12 @@ pub enum PasswordError {
 impl PasswordError {
     /// The hasher's error, shared so the error stays `Clone`.
     pub(crate) fn hash_failed(source: argon2::password_hash::Error) -> Self {
-        Self::HashFailed(Arc::from(nest_rs_core::boxed_error(source)))
+        Self::HashFailed(Arc::new(source))
     }
 
     /// The hasher's refusal of a stored record.
     pub(crate) fn invalid_hash(source: argon2::password_hash::Error) -> Self {
-        Self::InvalidHash(Arc::from(nest_rs_core::boxed_error(source)))
+        Self::InvalidHash(Arc::new(source))
     }
 }
 

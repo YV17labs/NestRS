@@ -163,11 +163,9 @@ fn bind(jwk: &Jwk, accepted: &[Algorithm]) -> Option<BoundKey> {
     // A key naming an algorithm this verifier does not run (`RSA-OAEP`, a name
     // it does not know) is that algorithm's alone.
     let named = match common.key_algorithm {
-        Some(named) => Some(
-            jsonwebtoken::Algorithm::try_from(named)
-                .ok()
-                .and_then(Algorithm::from_jwt)?,
-        ),
+        Some(named) => Some(Algorithm::from_jwt(
+            jsonwebtoken::Algorithm::try_from(named).ok()?,
+        )?),
         None => None,
     };
     let algorithms: Vec<Algorithm> = of_its_type
@@ -193,7 +191,7 @@ mod tests {
 
     /// Every algorithm a JWK Set may verify.
     fn all() -> Vec<Algorithm> {
-        crate::service::algorithms_of(crate::service::JWKS_FAMILIES).collect()
+        crate::algorithm::algorithms_of(crate::service::JWKS_FAMILIES).collect()
     }
 
     /// Key material that decodes: selection never runs a signature.

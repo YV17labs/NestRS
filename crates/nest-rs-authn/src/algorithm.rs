@@ -129,10 +129,7 @@ impl FromStr for Algorithm {
     type Err = UnknownAlgorithmError;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
-        Family::ALL
-            .iter()
-            .flat_map(|family| family.algorithms())
-            .copied()
+        algorithms_of(Family::ALL)
             .find(|algorithm| algorithm.as_str() == name)
             .ok_or(UnknownAlgorithmError)
     }
@@ -177,6 +174,13 @@ impl Family {
             Self::Ed => &[Algorithm::EdDSA],
         }
     }
+}
+
+/// The algorithms of `families`, in their order.
+pub(crate) fn algorithms_of(families: &[Family]) -> impl Iterator<Item = Algorithm> + '_ {
+    families
+        .iter()
+        .flat_map(|family| family.algorithms().iter().copied())
 }
 
 #[cfg(test)]

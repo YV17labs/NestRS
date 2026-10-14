@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{PoisonError, RwLock};
 
-use opentelemetry::metrics::Meter;
+use opentelemetry::metrics::{InstrumentBuilder, Meter};
 
 use crate::{Counter, Gauge, Histogram, UpDownCounter};
 
@@ -130,10 +130,7 @@ impl Metrics {
     /// The counter named `name`, declaring `describe` if this call makes it.
     pub fn counter_with(&self, name: &'static str, describe: Describe) -> Counter {
         Counter::new(self.counters.get_or_make(name, || {
-            let mut builder = self.meter.u64_counter(name);
-            builder.unit = describe.unit.map(Cow::Borrowed);
-            builder.description = describe.description.map(Cow::Borrowed);
-            builder.build()
+            described(self.meter.u64_counter(name), describe).build()
         }))
     }
 
@@ -146,10 +143,7 @@ impl Metrics {
     /// makes it.
     pub fn up_down_counter_with(&self, name: &'static str, describe: Describe) -> UpDownCounter {
         UpDownCounter::new(self.up_down_counters.get_or_make(name, || {
-            let mut builder = self.meter.i64_up_down_counter(name);
-            builder.unit = describe.unit.map(Cow::Borrowed);
-            builder.description = describe.description.map(Cow::Borrowed);
-            builder.build()
+            described(self.meter.i64_up_down_counter(name), describe).build()
         }))
     }
 
@@ -194,12 +188,19 @@ impl Metrics {
     /// The gauge named `name`, declaring `describe` if this call makes it.
     pub fn gauge_with(&self, name: &'static str, describe: Describe) -> Gauge {
         Gauge::new(self.gauges.get_or_make(name, || {
-            let mut builder = self.meter.f64_gauge(name);
-            builder.unit = describe.unit.map(Cow::Borrowed);
-            builder.description = describe.description.map(Cow::Borrowed);
-            builder.build()
+            described(self.meter.f64_gauge(name), describe).build()
         }))
     }
+}
+
+/// `builder`, declaring what `describe` says.
+fn described<T>(
+    mut builder: InstrumentBuilder<'_, T>,
+    describe: Describe,
+) -> InstrumentBuilder<'_, T> {
+    builder.unit = describe.unit.map(Cow::Borrowed);
+    builder.description = describe.description.map(Cow::Borrowed);
+    builder
 }
 
 #[cfg(test)]

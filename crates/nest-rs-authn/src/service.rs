@@ -10,7 +10,7 @@ use nest_rs_config::{Namespaced, var_name};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::Algorithm;
-use crate::algorithm::Family;
+use crate::algorithm::{Family, algorithms_of};
 use crate::error::AuthError;
 use crate::jwks::Jwks;
 use nest_rs_config::ClientTls;
@@ -59,13 +59,6 @@ fn min_hmac_secret_bytes(algorithm: Algorithm) -> usize {
 /// every asymmetric one, never HMAC — a JWK Set is public, and an HMAC
 /// algorithm would verify with a key anyone reads.
 pub(crate) const JWKS_FAMILIES: &[Family] = &[Family::Rsa, Family::Ec, Family::Ed];
-
-/// The algorithms of `families`, in their order.
-pub(crate) fn algorithms_of(families: &[Family]) -> impl Iterator<Item = Algorithm> + '_ {
-    families
-        .iter()
-        .flat_map(|family| family.algorithms().iter().copied())
-}
 
 /// `algorithms` as a sentence names them: `HS256, HS384 or HS512`.
 pub(crate) fn one_of(algorithms: impl IntoIterator<Item = Algorithm>) -> String {

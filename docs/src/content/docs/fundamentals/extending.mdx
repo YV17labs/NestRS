@@ -69,7 +69,7 @@ backend, so swapping it is a composition-root edit rather than a change to your
 handlers. The port's own default is an *ordinary* factory, so a vendor binding
 supersedes it wherever it sits in `imports`; two vendor bindings contest, and
 the boot fails naming the port and the remedy. `ThrottlerStore`,
-`dyn JobProducer` (queue), `dyn OccurrenceLock` (schedule) and `dyn JobContext`
+`dyn JobProducer` (queue), `dyn OccurrenceLock` (schedule) and `dyn UnitOfWork`
 (database) each word that remedy once, as their crate's `BACKEND_REMEDY`.
 
 ```rust title="apps/api/src/module.rs"

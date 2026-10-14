@@ -84,11 +84,16 @@ let row = Posts::find().filter(Column::Title.eq(name)).one(&conn).await?;
 
 Three scopes coexist:
 
-| Scope    | Installed by                | What it carries                       |
-|----------|-----------------------------|---------------------------------------|
-| Request  | `DbContext` interceptor     | Pool on safe routes, txn on mutations |
-| Job      | `WorkerDbContext` (workers) | One transaction per attempt (or pool) |
-| Unscoped | nothing                     | `Repo::conn()` errors                 |
+| Scope    | Installed by                                          | What it carries                       |
+|----------|-------------------------------------------------------|---------------------------------------|
+| Request  | an HTTP request, a WS message or hook, an MCP operation | Pool on safe routes, txn otherwise    |
+| Job      | a queue attempt, a scheduled tick                     | One transaction per attempt (or pool) |
+| Unscoped | nothing                                               | `Repo::conn()` errors                 |
+
+Every edge installs it the same way: it runs each unit of work through
+`nest_rs::database::run_unit`, over the `SeaOrmUnitOfWork` that
+`SeaOrmDatabaseModule` binds as `dyn UnitOfWork`. Your modules list no data
+context of their own.
 
 `current_executor_scope()` distinguishes Request from Job — `Repo` uses it
 to fail closed when a request runs with no ambient ability, while a worker
@@ -104,8 +109,8 @@ filters by it like any other. Nothing here treats "no login" as "no filter"
 
 Some work a unit starts runs after the future that started it: a streaming
 body polled once the handler returned, a DataLoader batch on a task of its
-own, work held for the commit. Each runs on the **pool** the unit's executor
-was opened on, never on its transaction — a body is polled after the commit,
+own, work held for the commit. Each runs on the **pool** — a pool unit of the
+binding that opened it — never on the unit's transaction — a body is polled after the commit,
 a batch serves the whole request, held work runs once the transaction is
 gone — and under the caller's ability. A task you hand to `TaskContext`
 carries the ability but **no executor**: it may outlive the unit, so a write
@@ -113,9 +118,9 @@ in it has to open a unit of its own, and a `Repo` call there fails closed.
 
 ## The DbContext interceptor
 
-`DbContext` is auto-registered when you import `SeaOrmDatabaseModule`. It wraps
-every HTTP request *outside* the route's guards so guards and handlers
-resolve the same ambient executor through `Repo`:
+`DbContext` is auto-registered when you import `SeaOrmDatabaseModule`. It runs
+every HTTP request as one unit of work, *outside* the route's guards so guards
+and handlers resolve the same ambient executor through `Repo`:
 
 ```text
 HTTP request
@@ -146,7 +151,7 @@ each boundary sits.
 
 <Aside type="caution">
 **Fail-closed on escape.** If a handler `tokio::spawn`s a task that captures
-the executor, the interceptor's `Arc::try_unwrap` on the transaction handle
+the executor, the unit's `Arc::try_unwrap` on the transaction handle
 fails — it cannot commit a handle a spawned task still holds. An otherwise
 successful response is rejected as `500` (rolled back) rather than reported
 as committed while the spawned task races a stale snapshot. The lesson:
@@ -157,14 +162,13 @@ work after the request, enqueue a job.
 ## Workers — same Repo, one transaction per attempt
 
 Queue processors and cron jobs run outside any HTTP request — no method to
-classify, no response to inspect. `SeaOrmDatabaseModule` binds a
-`WorkerDbContext` to `dyn JobContext`, which the worker transport
-(`#[scheduled]`, `#[processor]`) runs around every job:
+classify, no response to inspect. The worker transport (`#[scheduled]`,
+`#[processor]`) runs every job as a unit of work through the same binding:
 
 ```text
 job
   ↓
-WorkerDbContext   ──→ installs Executor::Lazy, settled on the job's Ok/Err
+SeaOrmUnitOfWork  ──→ installs Executor::Lazy, settled on the job's Ok/Err
   ↓
 processor body
 ```

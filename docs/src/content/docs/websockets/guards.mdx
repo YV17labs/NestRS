@@ -67,11 +67,11 @@ the page — and the CORS layer's `403` files no `warn`
 ([CORS](/http/configuration/#cors)). A client that sends no `Origin` —
 anything but a browser — is not concerned.
 
-Because the `SocketContext` seam runs **after** connection-level
-guards and **captures the post-guard request state**, anything those
-guards attach (the principal, an ambient ability, the database
-executor) is re-installed around every message dispatch on the
-connection. Without that capture, a per-message guard like
+Because the connection is captured **after** connection-level guards,
+anything those guards attach (the principal, an ambient ability) is
+re-installed around every message dispatch and connection hook on the
+connection, and each runs as a unit of work of its own, on an executor the
+gateway opens for it. Without that capture, a per-message guard like
 `AuthzGuard` — whose `check` reads the ambient ability and fails closed —
 would see `None` once the upgrade request had unwound.
 
@@ -212,17 +212,16 @@ guard type. The gateway struct binds
 `#[use_guards(AuthnGuard, AuthzGuard)]`; both run once on the upgrade
 (an HTTP `GET`) and are access-graph-validated like any HTTP binding:
 omit `AuthzWsModule` and those guards are unreachable, so boot fails.
-Because the upgrade has returned before message handlers run,
-`WsDataContext` — the `SocketContext` bridge `AuthzWsModule` provides
-— installs the executor and ability around each message; every other
-value the upgrade carried crosses into the connection on its own. Binding
+Because the upgrade has returned before message handlers run, the
+connection carries the ability those guards attached — with every other value
+the upgrade carried — into each message, and the gateway opens each message's
+unit of work itself. Binding
 `AuthzGuard` beside a `#[subscribe_message]` adds a per-message check
 through `check`: it denies, fail-closed, when no ambient ability is present.
 
-See [Security](/security/) for the strategy + ability composition; the
-WS-specific bit — `WsDataContext` — lives in `nest_rs::seaorm` behind
-the `ws` feature (packaged by `AuthzWsModule`), alongside its HTTP and
-GraphQL sibling bridges.
+See [Security](/security/) for the strategy + ability composition, and
+[per-transport bridges](/security/authorization/per-transport-bridges/) for
+`AuthzWsModule` beside its GraphQL and MCP siblings.
 
 ## Reference
 

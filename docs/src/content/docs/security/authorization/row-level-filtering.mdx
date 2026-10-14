@@ -103,7 +103,8 @@ cooperate:
 - **GraphQL** — `GraphqlAbilityBridge::around` installs it for the
   duration of the operation. Resolvers see it, and so do the dataloader
   batches they trigger.
-- **WebSockets** — `WsDataContext` installs it per message. The
+- **WebSockets** — the gateway's upgrade guards attach it, and the
+  connection carries it into every message and connection hook. The
   message handler sees it.
 
 Outside any request (worker job, cron tick, shutdown hook),

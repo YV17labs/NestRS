@@ -139,9 +139,7 @@ registration order — no `#[use_interceptors]` needed anywhere.
 #[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
-    db: Arc<DatabaseConnection>,
-    #[inject]
-    config: Arc<SeaOrmConfig>,
+    unit: Arc<dyn UnitOfWork>,
 }
 
 impl Layer for DbContext {}
@@ -149,28 +147,30 @@ impl Layer for DbContext {}
 #[async_trait]
 impl Interceptor for DbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        if is_safe(req.method()) {
-            return with_request_executor(Executor::Pool((*self.db).clone()), next.run(req)).await;
-        }
-        let lazy = Arc::new(LazyTransaction::new((*self.db).clone(), "http"));
-        let result = with_request_executor(Executor::Lazy(lazy.clone()), next.run(req)).await;
-        match lazy.finalize(should_commit(&result)).await {
-            FinalizeOutcome::NoTransaction
-            | FinalizeOutcome::Committed
-            | FinalizeOutcome::RolledBack => result,
-            // An escaped handle, a poisoned transaction, a failed commit: a
-            // success that lost its writes answers 500.
-            // …
-        }
+        let policy = if is_safe(req.method()) {
+            TransactionPolicy::Pool
+        } else {
+            TransactionPolicy::PerUnit
+        };
+        let spec = UnitSpec::new(nest_rs_http::unit::REQUEST, ExecutorScope::Request, policy);
+        run_unit(
+            Some(&self.unit),
+            spec,
+            next.run(req),
+            should_commit,
+            |_| Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
+        )
+        .await
     }
 }
 ```
 
 That's the entire transactional boundary. Import `SeaOrmDatabaseModule`, the
-interceptor is auto-mounted, and every handler runs inside a transaction
-on a mutating verb — opened on its first query — and on the pool on a safe
-verb; `finalize` commits or rolls back, then dispatches the events the
-handler emitted, or drops them. No `#[use_interceptors]` on any controller.
+interceptor is auto-mounted, and every handler runs as one unit of work: inside
+a transaction on a mutating verb — opened on its first query — and on the pool
+on a safe verb; the unit commits or rolls back on the response, then
+dispatches the events the handler emitted, or drops them. No
+`#[use_interceptors]` on any controller.
 
 ## Where interceptors run in the chain
 

@@ -47,6 +47,19 @@ a typed 4xx body from a `thiserror`-derived error. See
 [Repo and executor](/database/repo-and-executor/) for the full sequence,
 including the escape-on-spawn case.
 
+Every other edge runs the same unit of work, through the same binding, and
+commits on its own outcome — you list nothing for it:
+
+| Unit | Commits when |
+|---|---|
+| WebSocket message | the reply is not an error frame |
+| WebSocket connect or disconnect hook | the hook ran to its end |
+| MCP operation | it answered `Ok`, with no `isError: true` in the tool's result |
+| Queue attempt, scheduled tick | the method returned `Ok` (or the pool, on `transactional = false`) |
+
+A read is a touch: a message or a tool that only reads still opens the
+transaction on its first query, and commits it.
+
 ## What waits for the commit
 
 An [event](/events/) emitted inside the transaction is dispatched **after**
@@ -165,7 +178,7 @@ SeaOrmModule::for_root(SeaOrmConfig {
 })
 ```
 
-With the flag on, the `DbContext` interceptor matches a commit-time
+With the flag on, the unit of work matches a request's commit-time
 conflict against the SQLSTATE markers below and logs it at `warn` with
 the conflict tag (target `nest_rs::orm`) so ops sees the failure mode
 distinctly from a generic commit error.

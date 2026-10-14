@@ -5,7 +5,8 @@ use std::fmt;
 use crate::Attribute;
 use crate::attribute::with_key_values;
 
-/// An instrument recording a sum that goes both ways — what is in flight: open connections, queued jobs (the OpenTelemetry Metrics API's UpDownCounter).
+/// An instrument recording a sum that goes both ways — what is in flight: open
+/// connections, queued jobs (the OpenTelemetry Metrics API's UpDownCounter).
 ///
 /// Made by [`Metrics`](crate::Metrics), once per name; a cheap `Clone`, so a
 /// service may keep one in a field.

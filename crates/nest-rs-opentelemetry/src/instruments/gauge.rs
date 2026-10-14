@@ -5,7 +5,9 @@ use std::fmt;
 use crate::Attribute;
 use crate::attribute::with_key_values;
 
-/// An instrument recording the last value measured — what is sampled, not summed: a pool's idle connections, a temperature (the OpenTelemetry Metrics API's Gauge).
+/// An instrument recording the last value measured — what is sampled, not
+/// summed: a pool's idle connections, a temperature (the OpenTelemetry Metrics
+/// API's Gauge).
 ///
 /// Made by [`Metrics`](crate::Metrics), once per name; a cheap `Clone`, so a
 /// service may keep one in a field.

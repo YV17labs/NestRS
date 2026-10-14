@@ -5,7 +5,8 @@ use std::fmt;
 use crate::Attribute;
 use crate::attribute::with_key_values;
 
-/// An instrument recording a distribution — what is measured per event: a latency, a payload's size (the OpenTelemetry Metrics API's Histogram).
+/// An instrument recording a distribution — what is measured per event: a
+/// latency, a payload's size (the OpenTelemetry Metrics API's Histogram).
 ///
 /// Made by [`Metrics`](crate::Metrics), once per name; a cheap `Clone`, so a
 /// service may keep one in a field.

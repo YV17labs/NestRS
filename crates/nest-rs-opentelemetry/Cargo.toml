@@ -79,6 +79,8 @@ figment = { workspace = true, features = ["test"] }
 # The SDK's in-memory span and metric exporters, which the ids and metrics
 # tests read what was exported from.
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+# A child process's JSON console lines, read back by its parent test.
+serde_json.workspace = true
 # A package declaring its own unit, whose exported span must carry the ids its
 # operation line carries.
 nestrs-unit-probe = { path = "tests/unit-probe" }

@@ -89,7 +89,7 @@ mod failover {
         .await;
 
         let before = crate::sentinel_primary().await;
-        crate::freeze(&before).await;
+        let frozen = crate::freeze(&before).await;
         // Forced, the failover skips the sentinels' election, which three
         // sentinels sharing one timing split often enough to stall a test; the
         // primary stays frozen through it, as a crashed one would.
@@ -134,6 +134,7 @@ mod failover {
             "the held job is cancelled"
         );
         replica.worker.shutdown().await.expect("clean shutdown");
+        frozen.thawed().await;
 
         assert!(
             score.is_some(),

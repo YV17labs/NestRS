@@ -122,3 +122,21 @@ from a copy of its own (`issue-certificates.sh`'s clients), installed from
 the kept certificate so adding it issues nothing. Refused: a node of each
 topology requiring a certificate from its start — a new hostname, so a new
 certificate, which reissues the authority under every running service.
+
+**2026-10-14, the Cluster suite soaked:** twenty Cluster runs in a row, the
+slot lock and the flush helper in place, ran
+`a_queue_runs_on_through_an_atomic_migration_of_its_slot` green each time,
+every job counted once, so the double count recorded above did not recur and
+its cause stays unfound. It is not the redelivery of a lapsed lease: the lease
+is thirty seconds, and the test stops its worker once every job has run,
+waiting twenty at most, so no delivery lapses inside it. Two paths can still
+run a job twice there: a push whose answer was lost, which the cluster client
+sends again (`redis` retries a command after a dropped or timed-out
+connection, and the script files a second entry for the same job), and a
+delivery the move loses on its way to the target, which would be Valkey's. The
+idempotent enqueue the queue port takes next closes the first, so the test
+keeps asserting once: a second run is a defect to find, never a redelivery to
+allow. The same pass showed a failover's freeze outliving its test: the frozen
+node slept past the Sentinel failover's return, and the `mutual_tls` test
+after it found that node unanswering. A test freezing a node now waits, within
+twice the freeze, until it answers again before returning.

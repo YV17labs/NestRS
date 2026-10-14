@@ -715,16 +715,47 @@ async fn a_client_certificate_is_required_at(url: String) {
     );
 }
 
-/// Freeze the node at `addr` for six seconds — longer than the suite's
-/// topologies take to fail it over — as a crashed primary stops answering,
-/// returning once it no longer answers.
-async fn freeze(addr: &str) {
+/// How long [`freeze`] holds a node: longer than the suite's topologies take
+/// to fail it over.
+const FROZEN_FOR: Duration = Duration::from_secs(6);
+
+/// A node [`freeze`] holds. A test that froze one awaits [`Frozen::thawed`]
+/// before it returns, so the next test finds every node it lists answering.
+#[must_use = "a test leaves the node it froze answering: await `thawed`"]
+struct Frozen {
+    addr: String,
+}
+
+impl Frozen {
+    /// Returns once the node answers a `PING` on a connection of its own,
+    /// failing the test past twice the freeze.
+    async fn thawed(self) {
+        let client = bare_client(&node_url(&self.addr));
+        wait_for(2 * FROZEN_FOR, || {
+            let client = client.clone();
+            async move {
+                let Ok(mut node) = client.get_multiplexed_async_connection().await else {
+                    return false;
+                };
+                redis::cmd("PING")
+                    .query_async::<()>(&mut node)
+                    .await
+                    .is_ok()
+            }
+        })
+        .await;
+    }
+}
+
+/// Freeze the node at `addr` for [`FROZEN_FOR`], as a crashed primary stops
+/// answering, returning once it no longer answers.
+async fn freeze(addr: &str) -> Frozen {
     let mut frozen = node(addr).await;
     let probe = node(addr).await;
     tokio::spawn(async move {
         let _: Result<(), _> = redis::cmd("DEBUG")
             .arg("SLEEP")
-            .arg(6)
+            .arg(FROZEN_FOR.as_secs())
             .query_async(&mut frozen)
             .await;
     });
@@ -741,6 +772,9 @@ async fn freeze(addr: &str) {
         }
     })
     .await;
+    Frozen {
+        addr: addr.to_owned(),
+    }
 }
 
 /// A proxy in front of the dev container's Valkey that can go dark: it then

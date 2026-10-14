@@ -447,7 +447,7 @@ mod failover {
 
         let slot = super::slot_of(FailoverQueue::NAME).await;
         let before = super::owner_of(slot).await;
-        crate::freeze(&before.addr).await;
+        let frozen = crate::freeze(&before.addr).await;
         crate::wait_for(Duration::from_secs(30), || async {
             crate::cluster_nodes()
                 .await
@@ -464,6 +464,7 @@ mod failover {
         })
         .await;
         replica.worker.shutdown().await.expect("clean shutdown");
+        frozen.thawed().await;
     }
 }
 

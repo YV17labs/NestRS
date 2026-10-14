@@ -338,7 +338,7 @@ fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
 
 // Over a real upgrade: the close is the socket's, and the in-process driver has none.
 
-use nest_rs_testing::ws::{WsApp, WsFrame, WsSocket, WsSocketBuilder};
+use nest_rs_testing::ws::{WsApp, WsFrame, WsRead, WsSocket, WsSocketBuilder};
 use poem::web::websocket::CloseCode;
 
 fn graphql_ws(app: &WsApp) -> WsSocketBuilder {
@@ -926,18 +926,23 @@ async fn a_frame_past_the_message_cap_closes_the_socket() {
 struct InitTimeoutApp;
 
 /// graphql-ws `PROTOCOL.md`, *ConnectionInit*: a socket that has not sent
-/// `connection_init` within the wait is closed `4408`.
+/// `connection_init` within the wait is closed `4408` — at the pinned second,
+/// neither before it nor at the 3 s default.
 #[tokio::test]
 async fn a_socket_that_sends_no_connection_init_is_closed_4408() {
     let (app, _) = ticks_app::<InitTimeoutApp>().await;
     let mut socket = graphql_ws(&app).connect().await;
 
-    // Paused time, while nothing reads: the Close waits buffered.
     tokio::time::pause();
-    tokio::time::sleep(Duration::from_secs(1) + Duration::from_millis(1)).await;
+    socket.expect_silence(Duration::from_millis(999)).await;
+    // A paused clock can jump past the close before the client's socket is
+    // polled: the close is read on the real clock, well inside the 3 s default.
     tokio::time::resume();
-    let (code, reason) = socket.expect_close().await;
+    let read = socket.read_within(Duration::from_secs(1)).await;
 
+    let WsRead::Frame(WsFrame::Close(Some((code, reason)))) = read else {
+        panic!("no Close just past the pinned wait: {read:?}");
+    };
     assert_eq!(u16::from(code), 4408);
     assert_eq!(reason, "Connection initialisation timeout");
     app.shutdown().await.expect("the transport stops cleanly");

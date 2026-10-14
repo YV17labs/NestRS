@@ -796,3 +796,81 @@ async fn an_operation_on_the_socket_reads_no_request_scope_off_its_upgrade() {
         "the upgrade ran with a request scope, and the socket carries none of it: {item}",
     );
 }
+
+/// A page on another site, which no CORS policy below lists.
+const ELSEWHERE: &str = "https://evil.example";
+
+/// The browser app a CORS policy lists.
+const LISTED: &str = "https://app.example";
+
+/// RFC 6455 §10.2: CORS never asks the browser about an upgrade, so a page on
+/// another site could open a socket under the visitor's cookies.
+#[tokio::test]
+async fn a_browser_upgrade_from_another_origin_is_refused_while_cors_is_off() {
+    let logs = LogCapture::install();
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+
+    let status = graphql_ws(&app)
+        .header("origin", ELSEWHERE)
+        .expect_refused()
+        .await;
+
+    assert_eq!(status, poem::http::StatusCode::FORBIDDEN);
+    let refused = logs.expect_one(nest_rs_graphql::TARGET, "browser origin refused");
+    assert_eq!(refused.level, "warn");
+    assert_eq!(refused.field("origin").as_deref(), Some(ELSEWHERE));
+    assert_eq!(
+        refused.field("expected"),
+        Some(format!("http://{}", app.addr()))
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[tokio::test]
+async fn an_upgrade_with_no_origin_or_its_own_is_served() {
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+
+    for origin in [None, Some(format!("http://{}", app.addr()))] {
+        let builder = graphql_ws(&app);
+        let builder = match origin {
+            Some(origin) => builder.header("origin", origin),
+            None => builder,
+        };
+        let mut socket = builder.connect().await;
+        socket.send_text(r#"{"type":"connection_init"}"#).await;
+        assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+    }
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(imports = [
+    nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+        cors: Some(nest_rs_http::HttpCors {
+            origins: vec![LISTED.to_owned()],
+            ..nest_rs_http::HttpCors::default()
+        }),
+        ..nest_rs_http::HttpConfig::default()
+    }),
+    GraphqlModule::for_root(None),
+    TickModule,
+])]
+struct ListedOriginApp;
+
+#[tokio::test]
+async fn an_upgrade_from_an_origin_the_cors_policy_lists_is_served() {
+    let (app, _) = ticks_app::<ListedOriginApp>().await;
+
+    let mut socket = graphql_ws(&app).header("origin", LISTED).connect().await;
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+    assert_eq!(
+        graphql_ws(&app)
+            .header("origin", ELSEWHERE)
+            .expect_refused()
+            .await,
+        poem::http::StatusCode::FORBIDDEN,
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}

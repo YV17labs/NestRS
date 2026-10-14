@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Correlation, current_request_scope};
+use nest_rs_http::__private::OriginPolicy;
+use nest_rs_http::__private::poem_bridge::response_to_poem;
 use nest_rs_http::DetachedWork;
+use nest_rs_http::ResponseError as _;
 use poem::endpoint::TowerCompatExt;
 use poem::{Endpoint, IntoEndpoint, Request, Response, Result, Route};
 use rmcp::ServerHandler;
@@ -46,10 +49,11 @@ pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGua
     }
 }
 
-/// Everything one `#[mcp]` mount needs beyond the handler itself: who gates an
-/// operation, what ambient state is re-installed around it, and how the
-/// streamable-HTTP server is configured.
+/// Everything one `#[mcp]` mount needs beyond the handler itself: which
+/// browser origins may reach it, who gates an operation, what ambient state is
+/// re-installed around it, and how the streamable-HTTP server is configured.
 pub struct McpMount {
+    origins: OriginPolicy,
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
     config: McpConfig,
@@ -65,6 +69,7 @@ impl McpMount {
     /// surface unauthenticated.
     pub fn deny_all() -> Self {
         Self {
+            origins: OriginPolicy::default(),
             guard: deny_all(),
             context: None,
             config: McpConfig::default(),
@@ -75,6 +80,8 @@ impl McpMount {
 
     /// Resolve the whole mount from the app's container:
     ///
+    /// * the browser origins the HTTP transport admits — its own, and what its
+    ///   CORS policy lists;
     /// * the operation guard, per [`resolve_operation_guard`];
     /// * the registered `dyn McpToolContext` (the ORM/authz bridge), if any —
     ///   without one a `Repo`-backed handler still fails **closed**;
@@ -110,6 +117,7 @@ impl McpMount {
         }
 
         Self {
+            origins: OriginPolicy::from_container(container),
             guard: resolve_operation_guard(container),
             context: container.get_dyn::<dyn McpToolContext>(),
             config,
@@ -143,6 +151,7 @@ where
     H: ServerHandler + Send + 'static,
 {
     let McpMount {
+        origins,
         guard,
         context,
         config,
@@ -176,6 +185,7 @@ where
     Route::new().at(
         "/",
         nest_rs_http::matched(GuardedEndpoint {
+            origins,
             guard,
             context,
             inner,
@@ -184,6 +194,7 @@ where
 }
 
 struct GuardedEndpoint<E> {
+    origins: OriginPolicy,
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
     inner: E,
@@ -196,6 +207,15 @@ where
     type Output = Response;
 
     async fn call(&self, mut req: Request) -> Result<Self::Output> {
+        if let Err(refused) = self.origins.allows(&req) {
+            tracing::warn!(
+                target: crate::TARGET,
+                origin = refused.origin(),
+                expected = refused.expected(),
+                "browser origin refused",
+            );
+            return Ok(response_to_poem(refused.as_response()));
+        }
         self.guard.before(&mut req).await?;
 
         // Post-guard, while the ambient executor and ability are reachable; rmcp

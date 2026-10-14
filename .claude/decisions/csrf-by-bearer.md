@@ -19,6 +19,16 @@ rides a cookie** — a session module: origin-based CSRF ships with it, through
 `Sec-Fetch-Site` and `Origin` (OWASP's Fetch Metadata defence), with no token
 to thread through forms.
 
+The `Origin` check on a WebSocket upgrade, a graphql-ws upgrade and `/mcp` is
+not this layer. It is the transport control those protocols name — RFC 6455
+§10.2 for an upgrade, which a browser opens without consulting CORS, and the
+MCP transport's requirement that a server validate `Origin` on every incoming
+connection — owed by their own edges, and it holds whatever the credential: a
+strategy reading a cookie or a query parameter on an upgrade is protected by
+it, not by a CSRF layer. It admits the request's own origin and the ones
+`<PREFIX>_HTTP__CORS_ORIGINS` lists, one origin list for both, as Spring's and
+Socket.IO's handshakes use theirs.
+
 **Refused:**
 
 - **Shipping `Sec-Fetch-Site` CSRF now**: it would guard a credential no
@@ -26,7 +36,9 @@ to thread through forms.
 - **A synchronizer token**: it needs server-side state or a second cookie,
   and Fetch Metadata answers the same threat from headers every current
   browser sends.
-
-The `Origin` check a WebSocket or MCP upgrade owes a browser client is not
-this: it is the transport control those protocols name, owed by their own
-edges.
+- **rmcp's `allowed_origins` for MCP alone**: it cannot say "the request's own
+  origin", and a second mechanism for one concern breaks one way to do a
+  thing: the three entry points share one `OriginPolicy`.
+- **Checking `Origin` only when CORS is configured**: with CORS off, the
+  default, every cross-site page could open a socket: the configured case was
+  sound, the unconfigured one was the hole.

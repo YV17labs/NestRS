@@ -164,7 +164,13 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 options.max_batch_size,
             ))
             .get(GetEndpoint::new(
-                SubscriptionEndpoint::new(schema, bridge, options.max_connection, mounted.clone()),
+                SubscriptionEndpoint::new(
+                    schema,
+                    bridge,
+                    options.max_connection,
+                    mounted.clone(),
+                    nest_rs_http::__private::OriginPolicy::from_container(container),
+                ),
                 options.playground.then(|| {
                     async_graphql::http::playground_source(
                         async_graphql::http::GraphQLPlaygroundConfig::new(options.path.as_str())

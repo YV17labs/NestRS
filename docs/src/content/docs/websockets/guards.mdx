@@ -56,6 +56,14 @@ the principal to the request. A failed check returns the same
 `Denial` shape an HTTP route would return (`401`, `403`, etc.) — the
 client receives the response, and no socket is ever opened.
 
+A browser sends a page's cookies with any upgrade that page asks for, and
+never consults CORS first, so the upgrade's `Origin` is checked before the
+socket opens (RFC 6455 §10.2): a page on the server's own origin, or on one
+`<PREFIX>_HTTP__CORS_ORIGINS` lists, gets its socket; any other is answered
+`403`, with a `warn` on `nest_rs::ws` naming the origin sent and the one the
+server took for its own. A client that sends no `Origin` — anything but a
+browser — is not concerned.
+
 Because the `SocketContext` seam runs **after** connection-level
 guards and **captures the post-guard request state**, anything those
 guards attach (the principal, an ambient ability, the database

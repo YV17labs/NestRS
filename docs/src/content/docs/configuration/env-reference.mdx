@@ -95,7 +95,7 @@ config survives adopting or dropping the observability stack.
 | `VERSIONING` | how a caller selects an API version — `uri` (default), `header`, `media_type` |
 | `VERSION_HEADER` | the header the `header` strategy reads — default `X-API-Version`; a value that is no HTTP header name fails the boot, set or pinned |
 | `DEFAULT_VERSION` | the version served to a caller that states none; unset ⇒ the unversioned routes |
-| `CORS_ORIGINS` | comma-separated allowed origins; unset ⇒ no CORS layer |
+| `CORS_ORIGINS` | comma-separated allowed origins; unset ⇒ no CORS layer. Also the browser origins, beside the server's own, that may open a WebSocket or GraphQL socket and call MCP |
 | `CORS_METHODS` | comma-separated allowed request methods |
 | `CORS_HEADERS` | comma-separated allowed request headers |
 | `CORS_EXPOSED` | comma-separated response headers exposed to the browser, beside `Link`, `Location` and `Retry-After`, always exposed |
@@ -105,7 +105,7 @@ config survives adopting or dropping the observability stack.
 | `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h); from `1` to `86400` (a day), or `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
 | `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`; from `1` to `3600`, or `0` ⇒ none sent |
 | `ACCESS_LOG` | emit one access-log event per request on `nest_rs::operation` — default `true`. Owned by the HTTP transport, so it needs no observability crate; `trace_id` joins the line only when one is mounted |
-| `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `Forwarded` (RFC 7239) / `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/) and the trace context; an unparseable entry aborts the boot |
+| `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `Forwarded` (RFC 7239) / `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/), the trace context and the browser-origin check, which reads `Forwarded` / `X-Forwarded-Proto` / `X-Forwarded-Host` for the origin the browser was on; an unparseable entry aborts the boot |
 
 ## `seaorm` — `<PREFIX>_SEAORM__*`
 

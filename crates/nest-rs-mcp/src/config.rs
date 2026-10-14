@@ -3,8 +3,10 @@
 //! [`allowed_hosts`](McpConfig::allowed_hosts) is a security control: rmcp checks
 //! the `Host` header against it to stop DNS rebinding, which reaches exactly the
 //! local server that configures nothing — hence the loopback default. The
-//! `Origin` half is the HTTP transport's CORS policy
-//! (`<PREFIX>_HTTP__CORS_ORIGINS`), so rmcp's `allowed_origins` stays empty.
+//! `Origin` half is checked by the endpoint itself, CORS on or off: a browser
+//! request is admitted from the request's own origin or one
+//! `<PREFIX>_HTTP__CORS_ORIGINS` lists. rmcp's `allowed_origins` stays empty,
+//! since it cannot say "the request's own origin".
 
 use std::time::Duration;
 
@@ -105,7 +107,7 @@ impl McpConfig {
             .with_legacy_session_mode(self.legacy_session_mode)
             .with_json_response(self.json_response)
             .with_allowed_hosts(self.allowed_hosts.clone())
-            // `allowed_origins` stays empty: `Origin` is the transport's CORS policy.
+            // `allowed_origins` stays empty: the endpoint checks `Origin` before rmcp.
             .with_max_request_body_bytes(self.max_request_body_bytes)
             .with_stateless_protocol_metadata_required(self.stateless_protocol_metadata_required)
     }

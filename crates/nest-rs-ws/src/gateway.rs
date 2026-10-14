@@ -8,7 +8,10 @@ use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{
     Container, Continuation, Correlation, RequestContinuation, RequestScope, operation_log,
 };
+use nest_rs_http::__private::OriginPolicy;
+use nest_rs_http::__private::poem_bridge::response_to_poem;
 use nest_rs_http::DetachedWork;
+use nest_rs_http::ResponseError as _;
 use nest_rs_pipes::GlobalPipe;
 use tracing::Instrument;
 
@@ -63,6 +66,7 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
         ctx: container.get_dyn::<dyn SocketContext>(),
         pipes: nest_rs_pipes::__private::resolve_global_pipes(container),
         sockets,
+        origins: OriginPolicy::from_container(container),
     }
 }
 
@@ -78,12 +82,23 @@ pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     /// Every socket this gateway serves: an upgraded socket outlives the HTTP
     /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
+    /// The browser origins that may open a socket, which CORS never asks about.
+    origins: OriginPolicy,
 }
 
 impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Response> {
+        if let Err(refused) = self.origins.allows(&req) {
+            tracing::warn!(
+                target: crate::TARGET,
+                origin = refused.origin(),
+                expected = refused.expected(),
+                "browser origin refused",
+            );
+            return Ok(response_to_poem(refused.as_response()));
+        }
         let (req, mut body) = req.split();
         let ws = WebSocket::from_request(&req, &mut body).await?;
         // The request does not survive into the connection task `on_upgrade` spawns.

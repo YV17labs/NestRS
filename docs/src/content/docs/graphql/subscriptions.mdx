@@ -128,6 +128,13 @@ The caller authenticates on the **upgrade** request, with the same
 serves the playground when it is enabled; the upgrade header is what
 selects the socket.
 
+A browser never consults CORS before it opens a socket, so the upgrade
+checks the `Origin` header itself (RFC 6455 §10.2): a browser page on the
+server's own origin, or on one `<PREFIX>_HTTP__CORS_ORIGINS` lists, gets its
+socket; any other gets `403`, and a `warn` on `nest_rs::graphql` names the
+origin sent and the one the server took for its own. A client that sends no
+`Origin` — anything but a browser — is not concerned.
+
 <Aside type="caution">
 A browser cannot set headers on a WebSocket handshake. Deployments that
 subscribe from a browser terminate the upgrade behind a proxy that adds

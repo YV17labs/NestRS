@@ -60,11 +60,13 @@ attack works. A refused `Host` is logged with the offending value; the
 effective allowlist is logged at `debug` when the endpoint mounts
 (`target: nest_rs::mcp`).
 
-The browser `Origin` half is **not** an MCP setting. It is the HTTP transport's
-CORS policy, `<PREFIX>_HTTP__CORS_ORIGINS`, and `/mcp` inherits it: the CORS layer
-wraps the whole route tree, and a disallowed `Origin` gets `403` on every
-method, not just the preflight. One knob, and it covers `/graphql` and `/ws`
-too.
+The browser `Origin` half is **not** an MCP setting. The MCP transport says a
+server validates `Origin` on every incoming connection, and `/mcp` does, CORS
+on or off: a browser request from the server's own origin, or from one
+`<PREFIX>_HTTP__CORS_ORIGINS` lists, is served; any other gets `403`, with a
+`warn` on `nest_rs::mcp` naming the origin sent and the one the server took for
+its own. One knob, and it covers the WebSocket and GraphQL sockets too — see
+[CORS](/http/configuration/#cors).
 
 ## Error handling
 

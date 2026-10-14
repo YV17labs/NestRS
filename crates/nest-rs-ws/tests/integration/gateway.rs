@@ -2245,3 +2245,95 @@ async fn every_unit_of_a_socket_reads_what_its_upgrade_carried() {
         "the connect hook reads it too",
     );
 }
+
+/// A page on another site, which no CORS policy below lists.
+const ELSEWHERE: &str = "https://evil.example";
+
+/// The browser app a CORS policy lists.
+const LISTED: &str = "https://app.example";
+
+async fn socket_app<M: nest_rs_core::Module + 'static>() -> nest_rs_testing::ws::WsApp {
+    nest_rs_testing::TestApp::builder()
+        .module::<M>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port")
+}
+
+/// RFC 6455 §10.2: CORS never asks the browser about an upgrade, so a page on
+/// another site could open a socket under the visitor's cookies.
+#[tokio::test]
+async fn a_browser_upgrade_from_another_origin_is_refused_while_cors_is_off() {
+    let logs = LogCapture::install();
+    let app = socket_app::<SocketModule>().await;
+
+    let status = app
+        .socket("/socket")
+        .header("origin", ELSEWHERE)
+        .expect_refused()
+        .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let refused = logs.expect_one("nest_rs::ws", "browser origin refused");
+    assert_eq!(refused.level, "warn");
+    assert_eq!(refused.field("origin").as_deref(), Some(ELSEWHERE));
+    assert_eq!(
+        refused.field("expected"),
+        Some(format!("http://{}", app.addr())),
+        "the operator is told which origin the server took for its own",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[tokio::test]
+async fn an_upgrade_with_no_origin_or_its_own_is_served() {
+    let app = socket_app::<SocketModule>().await;
+
+    app.socket("/socket").connect().await;
+    let mut socket = app
+        .socket("/socket")
+        .header("origin", format!("http://{}", app.addr()))
+        .connect()
+        .await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    assert_eq!(socket.next_envelope().await["data"], "hi");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(
+    imports = [
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+            cors: Some(nest_rs_http::HttpCors {
+                origins: vec![LISTED.to_owned()],
+                ..nest_rs_http::HttpCors::default()
+            }),
+            ..nest_rs_http::HttpConfig::default()
+        }),
+        WsModule,
+    ],
+    providers = [SocketGateway],
+)]
+struct ListedOriginModule;
+
+#[tokio::test]
+async fn an_upgrade_from_an_origin_the_cors_policy_lists_is_served() {
+    let app = socket_app::<ListedOriginModule>().await;
+
+    let mut socket = app
+        .socket("/socket")
+        .header("origin", LISTED)
+        .connect()
+        .await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    assert_eq!(socket.next_envelope().await["data"], "hi");
+    assert_eq!(
+        app.socket("/socket")
+            .header("origin", ELSEWHERE)
+            .expect_refused()
+            .await,
+        StatusCode::FORBIDDEN,
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}

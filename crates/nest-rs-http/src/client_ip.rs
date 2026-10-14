@@ -216,6 +216,14 @@ fn forwarded_hops(raw: &str) -> impl Iterator<Item = IpAddr> + '_ {
         .filter_map(|(_, value)| parse_forwarded_node(value))
 }
 
+/// The first `name=` parameter of an RFC 7239 `Forwarded` field value, unquoted:
+/// the one the hop facing the client wrote.
+pub(crate) fn forwarded_param<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
+    ForwardedPairs { rest: raw }
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value)
+}
+
 /// One `token "=" ( token / quoted-string )` pair of a `Forwarded` value, with
 /// the value's surrounding quotes removed (RFC 7239 §4).
 ///

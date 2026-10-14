@@ -119,3 +119,46 @@ async fn the_standalone_stream_ends_at_the_shutdown_signal() {
         Some(nest_rs_core::operation_log::CANCELLED),
     );
 }
+
+/// The MCP transport's Security Warning: a server validates `Origin` on every
+/// incoming connection, refusing an invalid one `403` — with CORS off as much
+/// as on.
+#[tokio::test]
+async fn a_browser_request_from_another_origin_is_refused_while_cors_is_off() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<ListeningModule>()
+        .await
+        .expect("boots");
+    let initialize = nest_rs_testing::mcp::initialize_request();
+
+    let refused = nest_rs_testing::mcp::post_message_with(
+        app.http(),
+        LISTENING,
+        None,
+        None,
+        &[("origin", "https://evil.example")],
+        &initialize,
+    )
+    .await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let event = logs.expect_one("nest_rs::mcp", "browser origin refused");
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("origin").as_deref(),
+        Some("https://evil.example")
+    );
+    assert_eq!(event.field("expected").as_deref(), Some("http://localhost"));
+
+    for origin in [&[][..], &[("origin", "http://localhost")][..]] {
+        nest_rs_testing::mcp::post_message_with(
+            app.http(),
+            LISTENING,
+            None,
+            None,
+            origin,
+            &initialize,
+        )
+        .await
+        .assert_status_is_ok();
+    }
+}

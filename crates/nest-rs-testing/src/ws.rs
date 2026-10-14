@@ -188,13 +188,27 @@ impl WsSocketBuilder {
     }
 
     /// Open the socket, panicking with the URL if the handshake never
-    /// succeeds. Use [`try_connect`](Self::try_connect) to assert that an
-    /// upgrade is *refused*.
+    /// succeeds. Use [`expect_refused`](Self::expect_refused) to assert that
+    /// an upgrade is *refused*.
     pub async fn connect(self) -> WsSocket {
         let url = self.url.clone();
         match self.try_connect().await {
             Ok(socket) => socket,
             Err(err) => panic!("could not open a websocket to {url}: {err:#}"),
+        }
+    }
+
+    /// Open the socket expecting the server to refuse the handshake, and return
+    /// the status it answered with; panics when the upgrade completes or ends
+    /// without an HTTP answer.
+    pub async fn expect_refused(self) -> nest_rs_http::StatusCode {
+        let url = self.url.clone();
+        match self.try_connect().await {
+            Ok(_) => panic!("the upgrade to {url} completed; it was to be refused"),
+            Err(err) => match err.downcast_ref::<ClientError>() {
+                Some(ClientError::Http(response)) => response.status(),
+                _ => panic!("the upgrade to {url} failed without an HTTP answer: {err:#}"),
+            },
         }
     }
 

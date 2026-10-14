@@ -23,7 +23,10 @@ use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketStream};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
+use nest_rs_http::__private::OriginPolicy;
+use nest_rs_http::__private::poem_bridge::response_to_poem;
 use nest_rs_http::DetachedWork;
+use nest_rs_http::ResponseError as _;
 use tracing::Instrument;
 
 use crate::config::GraphqlConfig;
@@ -175,6 +178,8 @@ pub(crate) struct SubscriptionEndpoint<E> {
     /// Every socket this mount serves: an upgraded socket outlives the HTTP
     /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
+    /// The browser origins that may open a socket, which CORS never asks about.
+    origins: OriginPolicy,
 }
 
 impl<E> SubscriptionEndpoint<E> {
@@ -183,12 +188,14 @@ impl<E> SubscriptionEndpoint<E> {
         bridge: Arc<OperationBridge>,
         max_connection: Option<Duration>,
         sockets: DetachedWork,
+        origins: OriginPolicy,
     ) -> Self {
         Self {
             executor,
             bridge,
             max_connection,
             sockets,
+            origins,
         }
     }
 }
@@ -197,6 +204,15 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
+        if let Err(refused) = self.origins.allows(&req) {
+            tracing::warn!(
+                target: crate::TARGET,
+                origin = refused.origin(),
+                expected = refused.expected(),
+                "browser origin refused",
+            );
+            return Ok(response_to_poem(refused.as_response()));
+        }
         let (mut req, mut body) = req.split();
         // A denial at the upgrade is an ordinary HTTP response: no socket opens.
         if let Some(guard) = &self.bridge.op_guard

@@ -183,8 +183,7 @@ impl<E: EntityTrait> Predicate<E> {
     /// Each column is read with [`ModelTrait::get`], which returns the same
     /// [`Value`] the SQL side compares against. A relation, or a comparison
     /// between two value types only the database can compare, is not decided
-    /// here and reads `false`; [`Ability::can`](crate::Ability::can) is the
-    /// instance check, which takes a grant's relation to hold.
+    /// here and reads `false`.
     pub fn matches(&self, model: &E::Model) -> bool {
         self.decide(model, &nothing_invented) == Truth::True
     }
@@ -193,28 +192,11 @@ impl<E: EntityTrait> Predicate<E> {
     /// columns. `invented` names the columns whose value the row was given
     /// rather than read, so a rule on one is undecided.
     pub(crate) fn decide(&self, model: &E::Model, invented: &dyn Fn(E::Column) -> bool) -> Truth {
-        self.judge(model, invented, Truth::Undecidable)
-    }
-
-    /// [`decide`](Self::decide) on a row read whole, with every relation taken
-    /// to hold: how the instance check reads a grant, leaving a relation to the
-    /// read that produced the row.
-    pub(crate) fn decide_holding_relations(&self, model: &E::Model) -> Truth {
-        self.judge(model, &nothing_invented, Truth::True)
-    }
-
-    /// The one walk behind both readings; `relation` is what a relation is.
-    fn judge(
-        &self,
-        model: &E::Model,
-        invented: &dyn Fn(E::Column) -> bool,
-        relation: Truth,
-    ) -> Truth {
         match self {
             Predicate::Always => Truth::True,
             // Fail-closed: a denied predicate accepts no row.
             Predicate::Deny => Truth::False,
-            Predicate::Related(_) => relation,
+            Predicate::Related(_) => Truth::Undecidable,
             Predicate::Eq(col, _)
             | Predicate::In(col, _)
             | Predicate::Cmp(col, _, _)
@@ -240,13 +222,9 @@ impl<E: EntityTrait> Predicate<E> {
                 CmpOp::Gte => value_ordering(a, b).map(Ordering::is_ge),
             }),
             Predicate::IsNull(col, want_null) => Truth::of(model.get(*col).is_some() != *want_null),
-            Predicate::And(parts) => {
-                Truth::all(parts.iter().map(|p| p.judge(model, invented, relation)))
-            }
-            Predicate::Or(parts) => {
-                Truth::any(parts.iter().map(|p| p.judge(model, invented, relation)))
-            }
-            Predicate::Not(inner) => inner.judge(model, invented, relation).not(),
+            Predicate::And(parts) => Truth::all(parts.iter().map(|p| p.decide(model, invented))),
+            Predicate::Or(parts) => Truth::any(parts.iter().map(|p| p.decide(model, invented))),
+            Predicate::Not(inner) => inner.decide(model, invented).not(),
         }
     }
 }
@@ -979,10 +957,10 @@ mod tests {
         }
     }
 
-    /// A grant read by the instance check takes its relation to hold, so a
-    /// negated relation grants nothing on a row that cannot show it.
+    /// A row cannot show a relation, nor its negation; its own columns still
+    /// decide what they can around one.
     #[test]
-    fn holding_relations_matches_a_relation_and_refuses_its_negation() {
+    fn a_relation_is_undecided_and_the_rows_columns_decide_around_it() {
         let p = || PredicateBuilder::<child::Entity>::new();
         let in_org = || {
             p().related::<parent::Entity, _>(child::Relation::Parent, |c| {
@@ -993,18 +971,17 @@ mod tests {
             id: 1,
             parent_id: 99,
         };
-        assert_eq!(in_org().decide_holding_relations(&row), Truth::True);
+        let decide = |p: Predicate<child::Entity>| p.decide(&row, &nothing_invented);
+        assert_eq!(decide(in_org()), Truth::Undecidable);
+        assert_eq!(decide(p().not(in_org())), Truth::Undecidable);
         assert_eq!(
-            p().not(in_org()).decide_holding_relations(&row),
+            decide(p().all([p().eq(child::Column::Id, 2), in_org()])),
             Truth::False
         );
         assert_eq!(
-            p().all([p().eq(child::Column::Id, 2), in_org()])
-                .decide_holding_relations(&row),
-            Truth::False,
-            "the row's own columns still decide what they can",
+            decide(p().any([p().eq(child::Column::Id, 1), in_org()])),
+            Truth::True
         );
-        assert_eq!(in_org().decide(&row, &nothing_invented), Truth::Undecidable);
     }
 
     #[test]

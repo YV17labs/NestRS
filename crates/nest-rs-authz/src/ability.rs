@@ -83,9 +83,8 @@ pub(crate) enum Provenance {
     Loaded,
     /// A model the caller holds and checks itself ([`Ability::can`]), read for
     /// this action or another, so no read is known to have applied this
-    /// action's rules. A grant's relation is taken to hold, as the instance
-    /// check always took it; a grant undecided otherwise grants nothing, and a
-    /// denial the row cannot decide denies.
+    /// action's rules: an undecidable grant grants nothing, an undecidable
+    /// denial denies, and no warn is filed — the caller hears `false`.
     Held,
     /// A subscription item or a `masked_reply` value, which no read filtered:
     /// an undecidable grant grants nothing, an undecidable denial denies.
@@ -257,11 +256,14 @@ impl Ability {
     }
 
     /// Layer ③ — instance check: at least one grant matches this model and no
-    /// denial does (a denial overrides).
+    /// denial does (a denial overrides), decided on the model alone, with no
+    /// query and no allocation.
     ///
-    /// The row cannot show a relation. A grant's relation is taken to hold, as
-    /// if the query that read the model had checked it — true only of a read
-    /// scoped to this same action — and a denial the row cannot decide denies.
+    /// The model cannot show a relation, nor compare two value types only the
+    /// database compares: a grant resting on one grants nothing here, and a
+    /// denial resting on one denies. Where such a rule decides, ask SQL with
+    /// `nest_rs::seaorm::Repo::can`, one indexed query under the action's own
+    /// condition.
     pub fn can<E: EntityTrait>(&self, action: Action, model: &E::Model) -> bool {
         self.evaluate::<E>(action, model, Provenance::Held, &nothing_invented)
             .allowed
@@ -297,12 +299,7 @@ impl Ability {
                 denied |= rule.inverted;
                 continue;
             };
-            let truth = if provenance == Provenance::Held && !rule.inverted {
-                predicate.decide_holding_relations(model)
-            } else {
-                predicate.decide(model, invented)
-            };
-            match (truth, rule.inverted) {
+            match (predicate.decide(model, invented), rule.inverted) {
                 // `NOT UNKNOWN` is `UNKNOWN`, so SQL's filter drops a row its
                 // denial cannot compare as surely as one it matches.
                 (Truth::True | Truth::Unknown, true) => denied = true,
@@ -593,7 +590,6 @@ mod tests {
             .fields([post::Column::Title, post::Column::OrgId]);
         let ability = b.build().unwrap();
 
-        assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
         assert_eq!(
             only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
             Some(vec!["title"]),
@@ -607,7 +603,12 @@ mod tests {
         b.can(Action::Read, post::Entity).when(in_org(7));
         let ability = b.build().unwrap();
 
-        assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
+        assert_eq!(
+            ability
+                .mask_many::<post::Entity>(Action::Read, [a_post()].iter())
+                .len(),
+            1,
+        );
         assert_eq!(
             only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
             None,
@@ -646,22 +647,48 @@ mod tests {
         assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
     }
 
-    /// A grant's relation is taken to hold, as the instance check always took
-    /// it, so its negation grants nothing.
+    /// A row read for `Read` says nothing of `Update`'s relation, so the instance
+    /// check grants nothing on it, nor on its negation.
     #[test]
-    fn the_instance_check_takes_a_grants_relation_to_hold() {
+    fn the_instance_check_grants_nothing_on_a_relation_it_cannot_see() {
         let mut b = crate::AbilityBuilder::new();
-        b.can(Action::Read, post::Entity).when(in_org(7));
-        b.can(Action::Update, post::Entity).when(|p| {
+        b.can(Action::Read, post::Entity);
+        b.can(Action::Update, post::Entity).when(in_org(7));
+        b.can(Action::Delete, post::Entity).when(|p| {
             p.not(p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, 9)))
         });
         let ability = b.build().unwrap();
+        let read_for_read = a_post();
 
-        assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
+        assert!(ability.can::<post::Entity>(Action::Read, &read_for_read));
         assert!(
-            !ability.can::<post::Entity>(Action::Update, &a_post()),
-            "\"not in org 9\" cannot be taken to hold on a row that does not show its org",
+            !ability.can::<post::Entity>(Action::Update, &read_for_read),
+            "the post may belong to any org for all the row shows",
         );
+        assert!(!ability.can::<post::Entity>(Action::Delete, &read_for_read));
+    }
+
+    /// A relation beside a column the row shows settles nothing that column
+    /// decides.
+    #[test]
+    fn the_instance_check_decides_what_the_row_shows_around_a_relation() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity).when(|p| {
+            p.any([
+                p.eq(post::Column::OrgId, 7),
+                p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, 8)),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert!(ability.can::<post::Entity>(Action::Update, &a_post()));
+        assert!(!ability.can::<post::Entity>(
+            Action::Update,
+            &post::Model {
+                org_id: 9,
+                ..a_post()
+            },
+        ));
     }
 
     /// An `i32` column against an `i64` bound is the database's to compare: a

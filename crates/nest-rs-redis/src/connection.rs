@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::{ClientTls, Namespaced};
-use nest_rs_core::{Backoff, Retries};
+use nest_rs_core::{Attempt, Backoff, Proving, Unproved, prove};
 use redis::AsyncConnectionConfig;
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster_routing::Slot;
@@ -328,91 +328,53 @@ impl ConnectionLike for RedisConnection {
     }
 }
 
-/// Why one attempt to open a link failed.
-pub(crate) enum Attempt<E> {
-    /// What every attempt would meet, which fails the boot at once.
-    Refused(RedisError),
-    /// What may clear, so the next attempt follows within the budget.
-    Failed(E),
+/// What the proof of a link on `endpoint` reports, said on `nest_rs::redis`:
+/// every failure that may clear, a budget cut, and a link opened after
+/// retrying.
+pub(crate) fn said<E: std::error::Error + 'static>(
+    endpoint: &str,
+    budget: Duration,
+) -> impl FnMut(Proving<'_, E>) + '_ {
+    move |proving| match proving {
+        Proving::Retrying { attempt, error } => tracing::warn!(
+            target: crate::TARGET,
+            endpoint = %endpoint,
+            attempt,
+            error = %nest_rs_core::error_message(error),
+            "redis unreachable — retrying within the connect budget",
+        ),
+        // One final warn, so a hung DNS or a black-holed port is said.
+        Proving::TimedOut { attempt } => tracing::warn!(
+            target: crate::TARGET,
+            endpoint = %endpoint,
+            attempt,
+            timeout_secs = budget.as_secs_f64(),
+            "redis connect timed out",
+        ),
+        Proving::Proved { attempts } if attempts > 1 => tracing::info!(
+            target: crate::TARGET,
+            endpoint = %endpoint,
+            attempts,
+            "connected to redis after retrying",
+        ),
+        _ => {}
+    }
 }
 
-/// How an attempt loop ended without a link.
-pub(crate) enum GaveUp<E> {
-    /// An attempt met what every attempt would.
-    Refused(RedisError),
-    /// The budget was spent on attempts that may have cleared.
-    Spent { attempts: u32, last: Option<E> },
-}
-
-/// Run `attempt` until it opens a link, meets a refusal, or `budget` is spent
-/// between failures that may clear, each announced on `nest_rs::redis` naming
-/// `endpoint`. Each attempt is handed what is left of the budget; the wait
-/// between two is [`RECONNECT`]'s, drawn from `seed`.
-pub(crate) async fn within_budget<T, E, F, Fut>(
+/// The proof of a link on `endpoint` within `budget`: [`prove`] over
+/// [`RECONNECT`]'s curve drawn from `seed`, each attempt [`said`].
+pub(crate) async fn proved<T, E, F, Fut>(
     budget: Duration,
     endpoint: &str,
     seed: u64,
-    mut attempt: F,
-) -> Result<T, GaveUp<E>>
+    attempt: F,
+) -> Result<T, Unproved<E, RedisError>>
 where
     F: FnMut(Duration) -> Fut,
-    Fut: Future<Output = Result<T, Attempt<E>>>,
+    Fut: Future<Output = Result<T, Attempt<E, RedisError>>>,
     E: std::error::Error + 'static,
 {
-    // The budget was held to its range, so an hour at most: no clock overflows
-    // adding it.
-    let deadline = tokio::time::Instant::now() + budget;
-    let mut retries = Retries::new(RECONNECT, seed);
-    let mut attempts = 0u32;
-    let mut last = None;
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        attempts += 1;
-        match tokio::time::timeout(remaining, attempt(remaining)).await {
-            Ok(Ok(opened)) => {
-                if attempts > 1 {
-                    tracing::info!(
-                        target: crate::TARGET,
-                        endpoint = %endpoint,
-                        attempts,
-                        "connected to redis after retrying",
-                    );
-                }
-                return Ok(opened);
-            }
-            // One final warn, so a hung DNS or a black-holed port is said.
-            Err(_elapsed) => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    endpoint = %endpoint,
-                    attempt = attempts,
-                    timeout_secs = budget.as_secs_f64(),
-                    "redis connect timed out",
-                );
-                break;
-            }
-            Ok(Err(Attempt::Refused(refusal))) => return Err(GaveUp::Refused(refusal)),
-            Ok(Err(Attempt::Failed(error))) => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    endpoint = %endpoint,
-                    attempt = attempts,
-                    error = %nest_rs_core::error_message(&error),
-                    "redis unreachable — retrying within the connect budget",
-                );
-                last = Some(error);
-            }
-        }
-        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if left.is_zero() {
-            break;
-        }
-        tokio::time::sleep(retries.next_wait().min(left)).await;
-    }
-    Err(GaveUp::Spent { attempts, last })
+    prove(budget, RECONNECT, seed, said(endpoint, budget), attempt).await
 }
 
 /// The boot error of a server that answered or failed on every attempt until
@@ -440,13 +402,15 @@ pub(crate) fn spent(
     }
 }
 
-impl GaveUp<redis::RedisError> {
-    /// The boot error a spent or refused attempt loop on `endpoint` ends in.
-    pub(crate) fn into_error(self, endpoint: &str, budget: Duration) -> RedisError {
-        match self {
-            Self::Refused(refusal) => refusal,
-            Self::Spent { attempts, last } => spent(endpoint.to_owned(), budget, attempts, last),
-        }
+/// The boot error a proof of `endpoint` that ended without its link ends in.
+pub(crate) fn unproved(
+    unproved: Unproved<redis::RedisError, RedisError>,
+    endpoint: &str,
+    budget: Duration,
+) -> RedisError {
+    match unproved {
+        Unproved::Refused(refusal) => refusal,
+        Unproved::Spent { attempts, last } => spent(endpoint.to_owned(), budget, attempts, last),
     }
 }
 
@@ -516,7 +480,7 @@ pub(crate) fn classify(
     source: redis::RedisError,
     endpoint: &str,
     database: i64,
-) -> Attempt<redis::RedisError> {
+) -> Attempt<redis::RedisError, RedisError> {
     if ClientTls::negotiation_failed(&source) {
         return Attempt::Refused(RedisError::TlsRefused {
             reason: tls::remedy(&source),
@@ -1129,7 +1093,7 @@ mod tests {
     async fn refused_dials(seed: u64, budget: Duration) -> (Vec<Duration>, RedisError) {
         let started = tokio::time::Instant::now();
         let mut made = Vec::new();
-        let gave_up = within_budget(budget, "127.0.0.1:9", seed, |_| {
+        let ended = proved(budget, "127.0.0.1:9", seed, |_| {
             made.push(started.elapsed());
             async {
                 Err::<(), _>(Attempt::Failed(redis::RedisError::from(
@@ -1139,7 +1103,7 @@ mod tests {
         })
         .await
         .expect_err("a dial refused every time never opens");
-        (made, gave_up.into_error("127.0.0.1:9", budget))
+        (made, unproved(ended, "127.0.0.1:9", budget))
     }
 
     #[tokio::test(start_paused = true)]

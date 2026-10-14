@@ -17,14 +17,13 @@ use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use nest_rs_config::ClientTls;
-use nest_rs_core::{Retries, process_seed};
+use nest_rs_core::{Attempt, Retries, Unproved, process_seed};
 use redis::aio::MultiplexedConnection;
 use redis::{Cmd, ErrorKind, Pipeline, RedisConnectionInfo, Value};
 use tokio::sync::Notify;
 
 use crate::connection::{
-    Attempt, GaveUp, RECONNECT, Replies, answered, classify, demoted, dial, node_client, spent,
-    within_budget,
+    RECONNECT, Replies, answered, classify, demoted, dial, node_client, proved, spent,
 };
 use crate::error::{RedisError, SentinelMiss};
 use crate::url::{NodeAddr, SentinelUrl, listed};
@@ -102,11 +101,11 @@ impl SentinelLink {
             said: AtomicBool::new(false),
         });
         let (connection, primary) =
-            within_budget(budget, &sentinels.listed, process_seed(), |remaining| {
+            proved(budget, &sentinels.listed, process_seed(), |remaining| {
                 sentinels.resolve(remaining)
             })
             .await
-            .map_err(|gave_up| sentinels.gave_up(gave_up))?;
+            .map_err(|ended| sentinels.unproved(ended))?;
         Ok(Self::opened(sentinels, connection, primary))
     }
 
@@ -289,7 +288,7 @@ impl Sentinels {
     async fn resolve(
         &self,
         within: Duration,
-    ) -> Result<(MultiplexedConnection, String), Attempt<SentinelMiss>> {
+    ) -> Result<(MultiplexedConnection, String), Attempt<SentinelMiss, RedisError>> {
         let deadline = Instant::now() + within;
         let count = self.sentinels.len();
         // Each sentinel gets an equal share of the round, so one that never
@@ -357,7 +356,7 @@ impl Sentinels {
         &self,
         primary: &NodeAddr,
         deadline: Instant,
-    ) -> Result<(MultiplexedConnection, String), Attempt<SentinelMiss>> {
+    ) -> Result<(MultiplexedConnection, String), Attempt<SentinelMiss, RedisError>> {
         let endpoint = primary.to_string();
         let database = self.primary_settings.db();
         let missed = |source| {
@@ -403,10 +402,10 @@ impl Sentinels {
     }
 
     /// The boot error a spent or refused round of attempts ends in.
-    fn gave_up(&self, gave_up: GaveUp<SentinelMiss>) -> RedisError {
-        let (attempts, last) = match gave_up {
-            GaveUp::Refused(refusal) => return refusal,
-            GaveUp::Spent { attempts, last } => (attempts, last),
+    fn unproved(&self, ended: Unproved<SentinelMiss, RedisError>) -> RedisError {
+        let (attempts, last) = match ended {
+            Unproved::Refused(refusal) => return refusal,
+            Unproved::Spent { attempts, last } => (attempts, last),
         };
         match last.unwrap_or(SentinelMiss::Unreachable(None)) {
             SentinelMiss::Unknown => RedisError::PrimaryUnknown {
@@ -429,7 +428,7 @@ impl Sentinels {
 
     /// Say a failure to find the primary again: once at `warn` until a
     /// connection opens, then at `debug`, so an outage writes one line.
-    fn say(&self, failure: &Attempt<SentinelMiss>) {
+    fn say(&self, failure: &Attempt<SentinelMiss, RedisError>) {
         let first = !self.said.swap(true, Ordering::Relaxed);
         let error = match failure {
             Attempt::Refused(refusal) => nest_rs_core::error_message(refusal),

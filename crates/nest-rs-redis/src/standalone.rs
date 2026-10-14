@@ -15,9 +15,11 @@ use nest_rs_core::{Retries, process_seed};
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, ConnectionAddr, ConnectionInfo, Pipeline, Value};
 
+use nest_rs_core::Attempt;
+
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT, RECONNECT_FACTOR, Replies,
-    answered, classify, demoted, dial, open_client, refused, within_budget,
+    FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT, RECONNECT_FACTOR, Replies, answered,
+    classify, demoted, dial, open_client, proved, refused, unproved,
 };
 use crate::error::RedisError;
 use crate::{RedisTopology, tls};
@@ -49,11 +51,11 @@ impl StandaloneLink {
         let endpoint = info.addr().to_string();
         let client = client(info, tls, &endpoint, budget)?;
         let database = client.get_connection_info().redis_settings().db();
-        let manager = within_budget(budget, &endpoint, process_seed(), |_| {
+        let manager = proved(budget, &endpoint, process_seed(), |_| {
             prove(&client, budget, &endpoint, database)
         })
         .await
-        .map_err(|gave_up| gave_up.into_error(&endpoint, budget))?;
+        .map_err(|ended| unproved(ended, &endpoint, budget))?;
         let refusals = matches!(
             client.get_connection_info().addr(),
             ConnectionAddr::TcpTls { .. }
@@ -278,7 +280,7 @@ async fn prove(
     budget: Duration,
     endpoint: &str,
     database: i64,
-) -> Result<ConnectionManager, Attempt<redis::RedisError>> {
+) -> Result<ConnectionManager, Attempt<redis::RedisError, RedisError>> {
     let classified = |source| classify(source, endpoint, database);
     let mut proof = dial(client, budget).await.map_err(classified)?;
     let hello = tls::hello(client, &mut proof, budget)
@@ -477,6 +479,8 @@ mod tests {
 
     /// The boot's first command meets the same refusal on a connection whose
     /// opening read nothing: it fails the boot on that attempt, retried by none.
+    /// The budget is the test's own, far past what one attempt takes under any
+    /// load, so only a retry could spend it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_client_certificate_refused_after_the_handshake_fails_the_boot_unretried() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -487,7 +491,7 @@ mod tests {
         };
 
         let outcome =
-            StandaloneLink::connect(info, &trusting_the_authority(), Duration::from_secs(5)).await;
+            StandaloneLink::connect(info, &trusting_the_authority(), Duration::from_secs(60)).await;
         serving.abort();
 
         let Err(error) = outcome else {
@@ -504,6 +508,26 @@ mod tests {
         );
     }
 
+    /// Waits until `accepted` reached `handshakes` and the diagnosis under way
+    /// ended — its handshake heard and the budget it holds passed — failing the
+    /// test past ten seconds.
+    async fn diagnosed(
+        refusals: &TlsRefusals,
+        accepted: &std::sync::atomic::AtomicUsize,
+        handshakes: usize,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while accepted.load(Ordering::SeqCst) < handshakes
+            || refusals.diagnosing.load(Ordering::Relaxed)
+        {
+            assert!(Instant::now() < deadline, "no diagnosis ended");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Every connection is counted, then dropped: a handshake against it fails
+    /// at once, so the diagnosis that sent it ends at its budget. The counts are
+    /// read once a diagnosis has ended, never after a window of their own.
     #[tokio::test]
     async fn a_failure_on_the_socket_sends_one_handshake_per_budget_and_an_answer_none() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -511,8 +535,15 @@ mod tests {
             .await
             .expect("bind a listener");
         let addr = listener.local_addr().expect("the listener's address");
-        let budget = Duration::from_millis(300);
-        let refusals = refusals_within(&format!("rediss://{addr}/"), budget);
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counting = Arc::clone(&accepted);
+        let serving = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                counting.fetch_add(1, Ordering::SeqCst);
+                drop(socket);
+            }
+        });
+        let refusals = refusals_within(&format!("rediss://{addr}/"), Duration::from_millis(300));
 
         refusals.observe(&Err::<(), _>(answer("ERR")));
         assert!(!refusals.diagnosing.load(Ordering::Relaxed), "an answer");
@@ -522,26 +553,24 @@ mod tests {
                 std::io::ErrorKind::TimedOut,
             )))
         };
-        let accepted = |listener: tokio::net::TcpListener| async move {
-            let mut count = 0;
-            while let Ok(Ok((socket, _))) =
-                tokio::time::timeout(Duration::from_millis(100), listener.accept()).await
-            {
-                drop(socket);
-                count += 1;
-            }
-            (count, listener)
-        };
         refusals.observe(&connection_dropped());
         refusals.observe(&timed_out());
         refusals.observe(&connection_dropped());
-        let (count, listener) = accepted(listener).await;
-        assert_eq!(count, 1, "one handshake for the three failures");
+        diagnosed(&refusals, &accepted, 1).await;
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1,
+            "one handshake for the three failures"
+        );
 
-        tokio::time::sleep(budget).await;
         refusals.observe(&timed_out());
-        let (count, _) = accepted(listener).await;
-        assert_eq!(count, 1, "and one more once the budget has passed");
+        diagnosed(&refusals, &accepted, 2).await;
+        serving.abort();
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            2,
+            "and one more once the budget has passed"
+        );
         assert!(logs.find(crate::TARGET, REFUSED).is_empty());
     }
 }

@@ -25,9 +25,11 @@ use redis::{
     ServerErrorKind, TlsMode, Value,
 };
 
+use nest_rs_core::Attempt;
+
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, answered, classify, dial, node_addr,
-    node_client, socket, within_budget,
+    FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, answered, classify, dial, node_addr, node_client,
+    proved, socket, unproved,
 };
 use crate::error::RedisError;
 use crate::script::RedisScript;
@@ -73,11 +75,11 @@ impl ClusterLink {
             endpoint: plan.listed.clone(),
             source,
         })?;
-        let connection = within_budget(budget, &plan.listed, process_seed(), |_| {
+        let connection = proved(budget, &plan.listed, process_seed(), |_| {
             plan.prove(&client)
         })
         .await
-        .map_err(|gave_up| gave_up.into_error(&plan.listed, budget))?;
+        .map_err(|ended| unproved(ended, &plan.listed, budget))?;
         Ok(Arc::new(Self { plan, connection }))
     }
 
@@ -217,7 +219,7 @@ impl Plan {
     async fn prove(
         &self,
         client: &ClusterClient,
-    ) -> Result<ClusterConnection<ClusterNode>, Attempt<redis::RedisError>> {
+    ) -> Result<ClusterConnection<ClusterNode>, Attempt<redis::RedisError, RedisError>> {
         self.prove_a_seed().await?;
         let connection = client
             .get_async_generic_connection::<ClusterNode>()
@@ -232,7 +234,7 @@ impl Plan {
 
     /// The first seed that answers decides; one that cannot be reached lets
     /// the next decide.
-    async fn prove_a_seed(&self) -> Result<(), Attempt<redis::RedisError>> {
+    async fn prove_a_seed(&self) -> Result<(), Attempt<redis::RedisError, RedisError>> {
         let mut last = None;
         for seed in &self.seeds {
             let endpoint = seed.to_string();

@@ -330,8 +330,9 @@ declares no net. **A resource the framework opens proves itself at boot through
 rest is retried within the resource's budget, and the resource's crate says
 each attempt on its own target, naming the endpoint, never a URL; a resource
 exempt from the proof says why in its `//!`. **A loop retrying a backend waits
-`nest_rs_core::Backoff`'s curve** — exponential, ±20 % jitter drawn from a seed, gRPC's connection
-backoff — never a doubling of its own: a reconnect loop seeds it with
+`nest_rs_core::Backoff`'s curve** — exponential, ±20 % jitter drawn from a
+seed, gRPC's connection backoff — never a doubling of its own: a reconnect loop
+seeds it with
 `process_seed()`, so replicas come back apart; a loop its library owns
 (redis's `ConnectionManager`, object_store) stays the library's.
 **An outbound client the framework

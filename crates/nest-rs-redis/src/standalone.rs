@@ -11,11 +11,9 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use nest_rs_config::ClientTls;
-use nest_rs_core::{Retries, process_seed};
+use nest_rs_core::{Attempt, Retries, process_seed};
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, ConnectionAddr, ConnectionInfo, Pipeline, Value};
-
-use nest_rs_core::Attempt;
 
 use crate::connection::{
     FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT, RECONNECT_FACTOR, Replies, answered,
@@ -333,13 +331,11 @@ fn manager_config(budget: Duration) -> ConnectionManagerConfig {
 mod tests {
     use super::*;
     use crate::testing::{
-        answer, config, mutual_tls_listener, tls_listener, trusting_the_authority,
+        REFUSED, answer, config, mutual_tls_listener, tls_listener, trusting_the_authority,
     };
     use crate::url::{RedisUrl, address};
 
     use std::time::Instant;
-
-    const REFUSED: &str = "redis refused a reopened tls connection";
 
     /// A refusal's record, over a client opened from `url` as the boot opens
     /// it — so rustls has its process-default provider when the record

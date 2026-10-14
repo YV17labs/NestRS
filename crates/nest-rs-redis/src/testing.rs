@@ -21,6 +21,9 @@ pub(crate) static SERVER: LazyLock<TestCertificate> =
 pub(crate) static CLIENT: LazyLock<TestCertificate> =
     LazyLock::new(|| AUTHORITY.client("nestrs-test-client"));
 
+/// The line a TLS refusal met after the boot is said in, once.
+pub(crate) const REFUSED: &str = "redis refused a reopened tls connection";
+
 /// `pem` as a value given inline.
 pub(crate) fn inline(pem: &str) -> Material {
     Material {

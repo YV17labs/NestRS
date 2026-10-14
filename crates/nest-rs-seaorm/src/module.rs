@@ -191,7 +191,7 @@ async fn connect(options: ConnectOptions) -> anyhow::Result<DatabaseConnection> 
         max_connections = ?options.get_max_connections(),
         "connecting to database"
     );
-    let opened = prove(
+    prove(
         budget,
         CONNECT_RETRY,
         process_seed(),
@@ -206,8 +206,8 @@ async fn connect(options: ConnectOptions) -> anyhow::Result<DatabaseConnection> 
             }
         },
     )
-    .await;
-    opened.map_err(|ended| unproved(ended, &endpoint, budget).into())
+    .await
+    .map_err(|ended| unproved(ended, &endpoint, budget).into())
 }
 
 /// What the proof of the pool on `endpoint` reports, said on `nest_rs::orm`.

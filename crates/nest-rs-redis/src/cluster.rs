@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ClientTls;
-use nest_rs_core::process_seed;
+use nest_rs_core::{Attempt, process_seed};
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster::{ClusterClient, ClusterClientBuilder};
 use redis::cluster_async::{ClusterConnection, Connect};
@@ -26,8 +26,6 @@ use redis::{
     AsyncConnectionConfig, Cmd, IntoConnectionInfo, Pipeline, RedisConnectionInfo, RedisFuture,
     ServerErrorKind, TlsMode, Value,
 };
-
-use nest_rs_core::Attempt;
 
 use crate::connection::{
     FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, answered, classify, dial, node_addr, node_client,
@@ -515,9 +513,7 @@ impl ConnectionLike for ClusterNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{dropping_then_refusing_listener, trusting_the_authority};
-
-    const REFUSED: &str = "redis refused a reopened tls connection";
+    use crate::testing::{REFUSED, dropping_then_refusing_listener, trusting_the_authority};
 
     /// The loopback node `addr` serves, and a plan reaching it over TLS that
     /// trusts the test authority and presents no certificate.

@@ -49,6 +49,15 @@ vendor is in the variable exactly when it is in the type. That is also why there
 is no `<PREFIX>_DATABASE__URL` — the universal convention, but a word that names
 neither the crate nor the type, so a reader could not find the code from it.
 
+**A named instance inserts its name after the vendor.** A module an app opens
+more than once reads one namespace per
+[instance](/fundamentals/providers/#instances--one-resource-opened-twice): the
+default reads the namespace above, and the instance `#[instance] struct Cache`
+reads it with `CACHE` after the vendor — `<PREFIX>_<VENDOR>__CACHE__*`, and a
+binding of it `<PREFIX>_<VENDOR>__CACHE__<PORT>__*`: vendor, instance, port, in
+that order. An instance whose namespace another config already declares fails the
+boot naming both.
+
 ## Logging — `<PREFIX>_LOG*`
 
 The baseline console logger is part of `nest-rs-core` — no module to

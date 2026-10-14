@@ -195,6 +195,18 @@ outrank the defaults. Passing the bare config still works — `McpConfig`
 converts into `McpOptions` — so a call site that declares no identity reads
 exactly like every other module's.
 
+A module an app can open more than once — one resource per
+[instance](/fundamentals/providers/#instances--one-resource-opened-twice) —
+takes the instance in the same value: the config alone for the default, the
+marker and the config for a named one. Each instance pins once, and reads its
+own variables (`<PREFIX>_<VENDOR>__CACHE__*`, see the
+[env-var reference](/configuration/env-reference/)):
+
+```rust title="apps/api/src/module.rs"
+BucketModule::for_root(None),            // the default instance
+BucketModule::for_root((Cache, None)),   // the `cache` instance
+```
+
 ## `ConfigService` API
 
 The reader handed to `from_env` is a thin wrapper around the namespace

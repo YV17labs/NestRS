@@ -101,3 +101,60 @@ generic over `I: Instance`, and every refusal and line names its instance.
 land with `feat/named-instances-kernel`, Redis with `feat/redis-named-instances`,
 the removal of string keys with `refactor/keyed-injection-out`; each appends an
 entry here where it departs from this one.
+
+## 2026-10-14 — the kernel and the config half landed; where they depart
+
+**The inference compiles.** `ForInstance`'s rustdoc example boots the four
+spellings inside `#[module(imports = [..])]` for a hand-written module generic
+over `I`, a typed import, a generic call site and `provide_feature(None::<C>,
+b)`. No fork went back to the owner.
+
+**A named instance whose namespace is taken is refused as
+`ConfigError::SharedInstance`, not `SharedNamespace`.** The two refusals carry
+different remedies: two `#[config]`s sharing a namespace each take their own,
+read off their paths, while an instance is renamed. One variant covers both
+ways an instance's namespace is taken — a linked config declaring it (`Lock` on
+a config whose binding declares `<vendor>__lock`), and another marker reading
+the same name — since the variables under it could not say what they
+configure either way. The refusal lives where the instance is first used, the
+config read, so its tests are `nest-rs-config`'s; the twin markers sit in that
+crate's integration suite beside the two configs sharing a namespace, read only
+by the test that resolves them, so they need no binary of their own.
+
+**`Unnamed::NAME` is empty.** The default inserts no segment, and its name is
+the absence of one; `instance_namespace` reads the empty name and needs no
+other case. `#[instance]` refuses `Unnamed`; `Primary` is an ordinary name.
+
+**A bare import of an instance-capable module reads its instance unpinned
+through `ForInstance::default()`**, the one way to write "nothing pinned" for
+any `I`, since `None` converts for the default instance alone.
+
+**The instance-aware read of a resolved config waits for its first caller.**
+`ConfigModule::resolved::<C>` cannot take an instance without breaking every
+turbofish call site: a function's type parameter has no default. A binding
+reading `I::Of<C>` shapes it with the Redis bindings.
+
+**`Instance` is sealed** behind a `__private` supertrait that `#[instance]`
+implements, and core for `Unnamed`: an open trait let a hand-written impl
+choose `NAME` and `Of`, reading a reserved word or holding a named config under
+the default's key, unseen by the twin check — the *chosen name* refused below,
+which only a seal holds, and sealing after 7.0 would be a break.
+
+**A marker is told from its twins by its type, not its path.** Its entry
+carries its `TypeId`: `module_path!()` leaves out a function a marker is
+declared in, so a path compare refused a marker inside a test or a doctest as
+its own twin.
+
+**The default instance resolves through `Config::resolve`**, as every config
+did before instances; a named one takes the same steps under its own
+namespace. An override of `resolve` therefore reaches the default instance
+alone; `Config::defaults` is the hook every instance reads.
+
+**`#[instance]`'s reserved words are a list in `nest-rs-codegen`**, a
+proc-macro being unable to read the rules file; a test in `nest-rs-cli` holds
+it to the fence that crate already scrapes, so the two cannot drift.
+
+**Status (2026-10-14):** the kernel (`Instance`, `Unnamed`, `Instanced`,
+`#[instance]`, the generic-module refusal) and the config half (`ForInstance`,
+`instance_namespace`, per-instance `provide_feature` and `setup`) landed with
+`feat/named-instances-kernel`; Redis and the removal of string keys follow.

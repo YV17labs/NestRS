@@ -324,22 +324,39 @@ prefer `#[inject]` so refactors stay checked at boot.
   `PostsHttpModule`, same as on the Modules page.
 </Aside>
 
-## Keyed providers — static roles
+## Instances — one resource opened twice
 
-When several instances of **one** type coexist and differ only by config
-— a primary and a replica `DatabaseConnection`, two cache pools — give
-each a compile-time key instead of a wrapper type. Register with
-`provide_keyed("primary", …)` and inject with `#[inject(key = "primary")]`;
-the access graph validates a keyed dependency exactly like a bare one, so
-a missing key fails boot naming the type and the key.
+A provider is found by its type, so one type is one value. When an app needs
+two of one resource — a queue's Valkey, which must never evict, beside a cache's,
+which lives by evicting — each instance is a type of its own: a marker you
+declare with `#[instance]`.
 
-Keyed injection is for **static, compile-time-known roles**. It is the
-opposite case from an **open, extensible set** discovered at runtime — a
-plugin registry, the social-login providers — where the members are not
-known in advance and each carries real per-member code. Those use the
-inventory-discovery seam (a public trait + `inventory::submit!`), not a
-key; see [social login](/security/authentication/social-login/) for the
-canonical example.
+```rust title="crates/features/src/catalog/cache.rs"
+use nest_rs::core::instance;
+
+#[instance]
+pub struct Cache;
+```
+
+The marker's name is its ident in snake case — `Cache` reads `cache`, read and
+never chosen — and the default instance, `Unnamed`, is the one an app gets
+without naming any. A module that can be opened once per instance takes the
+marker in its `for_root` value: `x` for the default, `(Cache, x)` for the named
+one. Its config then reads `<PREFIX>_<VENDOR>__CACHE__*` (the vendor first,
+then the instance), and its resource is injected as `Arc<Resource<Cache>>`
+beside the default's `Arc<Resource>`. Each instance pins its config once; two
+instances never contest. A module generic over the instance is written by
+hand (`impl<I: Instance> Module for …`), since `#[module]` is not generic:
+`ForInstance` in `nest_rs::config` shows one whole.
+
+Instances are for **resources an app opens more than once**, never a database:
+`Repo` holds one connection per binary, and a second database is a second
+project. An open, extensible set discovered at runtime — a plugin registry,
+the social-login providers — is the opposite case: its members are not known
+in advance and each carries real code, so it uses the inventory-discovery seam
+(a public trait + `inventory::submit!`); see
+[social login](/security/authentication/social-login/) for the canonical
+example.
 
 ## Going further
 

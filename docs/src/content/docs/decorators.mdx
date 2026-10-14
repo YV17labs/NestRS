@@ -24,6 +24,7 @@ whether you type it, not how the compiler resolves it.
 | `#[nest_rs::main]` | `main` function | Installs the panic hook and publishes the `.env` cascade before `main`, builds the runtime, and ends the process within the shutdown budget; written in full, never a bare `#[main]`, which `use tokio::main;` would make tokio's | [Lifecycle](/fundamentals/lifecycle/#the-way-down) |
 | `#[injectable]` | struct | Marks a provider built from the container, with optional `scope = request \| transient` | [Providers](/fundamentals/providers/) |
 | `#[inject]` | field | Resolves the field from the container at construction | [Providers](/fundamentals/providers/) |
+| `#[instance]` | unit struct | Declares a marker naming one instance of a resource the app opens more than once; its name is the ident in snake case | [Providers](/fundamentals/providers/#instances--one-resource-opened-twice) |
 | `#[hooks]` | impl block | Orchestrates lifecycle methods on a provider | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_module_init]` | method | Runs once after wiring, before serving | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_application_bootstrap]` | method | Runs once after every module init, before serving | [Lifecycle](/fundamentals/lifecycle/) |

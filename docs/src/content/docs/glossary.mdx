@@ -30,6 +30,10 @@ deep on each.
 - **[Dynamic module](/fundamentals/modules/)** — a module produced by a
   call like `OpenApiModule::for_root(opts)`; the same `#[module]` shape
   but parameterised at the import site.
+- **[Instance](/fundamentals/providers/#instances--one-resource-opened-twice)**
+  — one of several copies of a resource an app opens, told apart by a marker
+  type declared with `#[instance]`; the default one, `Unnamed`, needs no
+  marker, and a named one's variables carry its name after the vendor.
 
 ## Request layers
 

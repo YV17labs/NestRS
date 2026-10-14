@@ -130,6 +130,30 @@ async fn seed_item(conn: &DatabaseConnection, id: Uuid, container_id: Uuid, labe
     .expect("seed item");
 }
 
+struct TwoOrgs {
+    org_a: Uuid,
+    org_b: Uuid,
+    item_a: Uuid,
+    item_b: Uuid,
+}
+
+/// An item in a container in `org_a`, and one in a container in `org_b`.
+async fn seed_two_orgs(conn: &DatabaseConnection) -> TwoOrgs {
+    let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
+    let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
+    let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
+    seed_container(conn, cont_a, org_a).await;
+    seed_container(conn, cont_b, org_b).await;
+    seed_item(conn, item_a, cont_a, "in A").await;
+    seed_item(conn, item_b, cont_b, "in B").await;
+    TwoOrgs {
+        org_a,
+        org_b,
+        item_a,
+        item_b,
+    }
+}
+
 fn items_in_org(org: Uuid) -> Arc<Ability> {
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, item::Entity).when(move |p| {
@@ -160,13 +184,12 @@ async fn list_returns_only_items_whose_parent_is_in_the_callers_org() {
     let conn = crate::harness::connect().await;
     setup_tables(&conn).await;
 
-    let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
-    let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
-    let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
-    seed_container(&conn, cont_a, org_a).await;
-    seed_container(&conn, cont_b, org_b).await;
-    seed_item(&conn, item_a, cont_a, "in A").await;
-    seed_item(&conn, item_b, cont_b, "in B").await;
+    let TwoOrgs {
+        org_a,
+        item_a,
+        item_b,
+        ..
+    } = seed_two_orgs(&conn).await;
 
     with_request_executor(Executor::Pool(conn.clone()), async {
         with_ability(items_in_org(org_a), async {
@@ -188,13 +211,12 @@ async fn access_distinguishes_found_denied_and_missing() {
     let conn = crate::harness::connect().await;
     setup_tables(&conn).await;
 
-    let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
-    let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
-    let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
-    seed_container(&conn, cont_a, org_a).await;
-    seed_container(&conn, cont_b, org_b).await;
-    seed_item(&conn, item_a, cont_a, "in A").await;
-    seed_item(&conn, item_b, cont_b, "in B").await;
+    let TwoOrgs {
+        org_a,
+        item_a,
+        item_b,
+        ..
+    } = seed_two_orgs(&conn).await;
 
     let logs = nest_rs_testing::LogCapture::install();
     with_request_executor(Executor::Pool(conn.clone()), async {
@@ -253,13 +275,12 @@ async fn the_instance_check_in_sql_decides_the_relation_a_row_read_for_another_a
     let conn = crate::harness::connect().await;
     setup_tables(&conn).await;
 
-    let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
-    let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
-    let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
-    seed_container(&conn, cont_a, org_a).await;
-    seed_container(&conn, cont_b, org_b).await;
-    seed_item(&conn, item_a, cont_a, "in A").await;
-    seed_item(&conn, item_b, cont_b, "in B").await;
+    let TwoOrgs {
+        org_a,
+        item_a,
+        item_b,
+        ..
+    } = seed_two_orgs(&conn).await;
 
     let ability = reads_all_updates_in_org(org_a);
     with_request_executor(Executor::Pool(conn.clone()), async {
@@ -290,7 +311,8 @@ async fn the_instance_check_in_sql_decides_the_relation_a_row_read_for_another_a
                 "the relation does not hold: the item's container is in another org",
             );
 
-            conn.execute_unprepared(&format!("DELETE FROM rel_item WHERE id = '{item_a}'"))
+            item::Entity::delete_by_id(item_a)
+                .exec(&conn)
                 .await
                 .expect("remove item a");
             assert!(
@@ -310,13 +332,12 @@ async fn the_instance_check_in_sql_refuses_the_row_a_relational_denial_names() {
     let conn = crate::harness::connect().await;
     setup_tables(&conn).await;
 
-    let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
-    let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
-    let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
-    seed_container(&conn, cont_a, org_a).await;
-    seed_container(&conn, cont_b, org_b).await;
-    seed_item(&conn, item_a, cont_a, "in A").await;
-    seed_item(&conn, item_b, cont_b, "in B").await;
+    let TwoOrgs {
+        org_b,
+        item_a,
+        item_b,
+        ..
+    } = seed_two_orgs(&conn).await;
 
     let mut b = AbilityBuilder::new();
     b.can(Action::Manage, item::Entity);

@@ -12,7 +12,10 @@ use jiff::tz::TimeZone;
 use nest_rs_core::{
     Container, Correlation, Discovery, ReachableProviders, Transport, Unanswered, inventory, within,
 };
-use nest_rs_worker::{JobContext, JobTimedOut, JobTransaction, Unhonoured, run_in_job_context};
+use nest_rs_database::{
+    ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec, run_unit,
+};
+use nest_rs_worker::JobTimedOut;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep};
 use tokio_util::sync::CancellationToken;
@@ -70,7 +73,7 @@ enum Job {
 struct Task {
     run: RunFn,
     timeout: Duration,
-    transaction: JobTransaction,
+    transaction: TransactionPolicy,
     replicas: Replicas,
 }
 
@@ -429,7 +432,7 @@ impl Transport for Scheduler {
         }
 
         let runner = Runner {
-            ctx: container.get_dyn::<dyn JobContext>(),
+            unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
             container,
             lock: self.lock,
         };
@@ -575,12 +578,12 @@ fn millis(duration: Duration) -> u64 {
 }
 
 /// What every job's loop fires through: the container its method resolves
-/// from, the data context its tick runs inside, and the lock a job declared
+/// from, the binding its tick runs its unit of work through, and the lock a job declared
 /// `replicas = "one"` claims its occurrences with.
 #[derive(Clone)]
 struct Runner {
     container: Container,
-    ctx: Option<Arc<dyn JobContext>>,
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     lock: Option<Arc<dyn OccurrenceLock>>,
 }
 
@@ -1398,9 +1401,10 @@ impl Runner {
     async fn fire_inner(&self, id: JobId, task: Task, line: TickLine) {
         // A panic would otherwise end this job's schedule while the process
         // reports healthy; the run starts inside the catch too.
-        let run = nest_rs_core::panic::contain(run_in_job_context(
-            self.ctx.as_ref(),
-            task.transaction,
+        let spec = UnitSpec::new(crate::unit::TICK, ExecutorScope::Job, task.transaction);
+        let run = nest_rs_core::panic::contain(run_unit(
+            self.unit_of_work.as_ref(),
+            spec,
             async { (task.run)(&self.container).await },
             Result::is_ok,
             // A transaction that could not settle wrote nothing: a failed tick.
@@ -1568,7 +1572,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::new(PanicsAnswering)),
         };
         let id = JobId {
@@ -1636,7 +1640,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::new(Granting)),
         };
         let id = JobId {
@@ -1648,7 +1652,7 @@ mod tests {
         let task = Task {
             run,
             timeout: nest_rs_worker::JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
         let instant_ms = epoch_millis(wall_clock()) - 61_000;
@@ -1736,7 +1740,7 @@ mod tests {
             },
             run: idle,
             timeout: nest_rs_worker::JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::Each,
             key: None,
         })
@@ -1810,7 +1814,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::new(GrantingAfterAStall)),
         };
         let id = JobId {
@@ -1822,7 +1826,7 @@ mod tests {
         let task = Task {
             run,
             timeout: nest_rs_worker::JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
         // Late, but further from the hold's end than two clocks may disagree —
@@ -1941,7 +1945,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::new(PanicsWhenCalled)),
         };
         let id = JobId {
@@ -1953,7 +1957,7 @@ mod tests {
         let task = Task {
             run: idle,
             timeout: nest_rs_worker::JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
         let now_ms = epoch_millis(wall_clock());
@@ -2005,7 +2009,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),
@@ -2019,7 +2023,7 @@ mod tests {
         let task = Task {
             run,
             timeout: nest_rs_worker::JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
         let instant_ms = epoch_millis(wall_clock());
@@ -2057,7 +2061,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),
@@ -2107,7 +2111,7 @@ mod tests {
         });
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::clone(&lock) as Arc<dyn OccurrenceLock>),
         };
         let job = Job::Interval {
@@ -2121,7 +2125,7 @@ mod tests {
             task: Task {
                 run: idle,
                 timeout: nest_rs_worker::JOB_TIMEOUT,
-                transaction: JobTransaction::Pool,
+                transaction: TransactionPolicy::Pool,
                 replicas: Replicas::One,
             },
         };
@@ -2188,7 +2192,7 @@ mod tests {
         let shutdown = CancellationToken::new();
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::new(GrantingAtShutdown {
                 shutdown: shutdown.clone(),
             })),
@@ -2202,7 +2206,7 @@ mod tests {
         let task = Task {
             run,
             timeout: nest_rs_worker::JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
         let instant_ms = epoch_millis(wall_clock());
@@ -2236,7 +2240,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
             container: Container::builder().build(),
-            ctx: None,
+            unit_of_work: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),

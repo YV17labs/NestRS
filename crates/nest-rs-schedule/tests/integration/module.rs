@@ -105,12 +105,12 @@ declare_scheduled_settlement!(false);
 fn a_transactional_fragment_is_read_the_same_wherever_the_key_sits() {
     let entries = nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
         .filter(|m| (m.provider_type_id)() == std::any::TypeId::of::<FragmentTasks>())
-        .filter(|m| m.transaction == nest_rs_schedule::nest_rs_worker::JobTransaction::Pool)
+        .filter(|m| m.transaction == nest_rs_schedule::nest_rs_database::TransactionPolicy::Pool)
         .count();
     assert_eq!(
         entries, 2,
         "both fragment-declared triggers registered, and both read the fragment \
-         as the `false` it was — not as the `PerAttempt` default",
+         as the `false` it was — not as the `PerUnit` default",
     );
 }
 

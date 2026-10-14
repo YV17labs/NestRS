@@ -19,6 +19,9 @@ nest-rs-http.workspace = true
 nest-rs-config.workspace = true
 nest-rs-core.workspace = true
 nest-rs-mcp-macros.workspace = true
+# Each request operation is a unit of work the endpoint runs through the bound
+# `dyn UnitOfWork`, resolved once at mount.
+nest-rs-database.workspace = true
 # The edge runs its guards itself: the pool at the request, each operation's
 # chain; it renders a denial as a JSON-RPC error.
 nest-rs-guards.workspace = true

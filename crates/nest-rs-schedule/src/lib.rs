@@ -35,7 +35,9 @@ pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
 pub use occurrence::{BACKEND_REMEDY, LOCK_TIMEOUT, Occurrence, OccurrenceClaim, OccurrenceLock};
 pub use replicas::Replicas;
-// The path `#[every]` / `#[cron]` / `#[after]` emit their `JobTransaction` through.
+// The paths `#[every]` / `#[cron]` / `#[after]` emit their `TransactionPolicy`
+// and their default timeout through.
+pub use nest_rs_database;
 pub use nest_rs_worker;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};

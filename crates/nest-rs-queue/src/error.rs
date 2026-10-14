@@ -191,10 +191,10 @@ impl JobError {
         }
     }
 
-    /// The failure of a job that ran fine and whose data context could not
+    /// The failure of a job that ran fine and whose unit of work could not
     /// honour it — a transaction that could not be committed, or one whose
-    /// handle outlived the attempt — retryable only when the context says so.
-    pub fn unhonoured(unhonoured: nest_rs_worker::Unhonoured) -> Self {
+    /// handle outlived the attempt — retryable only when the driver says so.
+    pub fn unhonoured(unhonoured: nest_rs_database::Unhonoured) -> Self {
         Self {
             retryable: unhonoured.retryable,
             source: unhonoured.reason.into(),

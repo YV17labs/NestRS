@@ -9,11 +9,10 @@ use crate::gate::{Refusal, reason, transport};
 use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};
 
 /// Class-level gate: require action `A` on subject `S`, against the **ambient**
-/// ability the connection's `SocketContext` re-installed for this message.
+/// ability the connection carried into this message from its upgrade.
 ///
-/// A missing ability is a wiring failure (no data context registered) and fails
-/// **closed**: no guard makes the ability ambient at the upgrade yet, so a
-/// message reads the one its data context installs.
+/// A missing ability is a wiring failure (no `AbilityGuard` ran on the
+/// upgrade) and fails **closed**.
 pub fn authorize<A: ActionMarker, S: Subject>(event: &'static str) -> Result<(), WsError> {
     let Some(ability) = current_ability() else {
         // A wiring failure: said to the operator, terse to the client.
@@ -27,8 +26,7 @@ pub fn authorize<A: ActionMarker, S: Subject>(event: &'static str) -> Result<(),
             "authorization denied",
         );
         return Err(denial_to_ws_error(Denial::internal(
-            "missing ambient `Ability` — is the WS data context registered as \
-             `dyn SocketContext`?",
+            "missing ambient `Ability` — does the gateway's upgrade run an `AbilityGuard`?",
         )));
     };
 

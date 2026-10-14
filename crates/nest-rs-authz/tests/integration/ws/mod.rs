@@ -13,8 +13,8 @@ use nest_rs_ws::{Gateway, WsClient, WsReply};
 
 use crate::widget;
 
-/// Dispatch `event` on `gateway` with `ability` installed, exactly as
-/// `WsDataContext` would around a real message.
+/// Dispatch `event` on `gateway` with `ability` installed, as the connection
+/// carries it into a real message.
 pub(crate) async fn dispatch_with<G: Gateway>(
     gateway: &G,
     ability: Arc<Ability>,

@@ -8,13 +8,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nest_rs_core::Container;
+use nest_rs_database::{JobRef, UnitOfWork};
 
 use crate::checkpoint::CheckpointCell;
 use crate::{Capabilities, Capability, JobError, ProcessOptions};
 
 /// The type-erased handler `#[processor]` emits for each `#[process]` method:
 /// deserializes the job payload ([`decode`]), resolves the provider, runs the
-/// method inside the ambient `JobContext`.
+/// method as one unit of work through the bound `UnitOfWork`.
 ///
 /// The payload is borrowed from the stored record while another attempt may
 /// follow, and handed over on the last.
@@ -40,6 +41,11 @@ pub struct HandlerContext {
     pub container: Container,
     /// The delivery's checkpoint, when its backend keeps one.
     pub checkpoints: Option<Arc<CheckpointCell>>,
+    /// The binding the attempt runs its unit of work through, resolved once by
+    /// the worker; `None` runs it bare.
+    pub unit_of_work: Option<Arc<dyn UnitOfWork>>,
+    /// The job this attempt runs, as the unit of work names it.
+    pub job: JobRef,
 }
 
 /// A `#[process]` method, as its decorator declared it.

@@ -20,6 +20,7 @@ use crate::guard::McpOperationGuard;
 use crate::guards::{GlobalPoolMcpGuard, deny_all};
 use crate::propagate::PropagatingHandler;
 use crate::registry::ENDPOINT;
+use nest_rs_database::UnitOfWork;
 use nest_rs_guards::__private::global_guards_active;
 
 /// The operation guard an MCP mount runs: the global guard pool, with the
@@ -57,6 +58,7 @@ pub struct McpMount {
     origins: OriginPolicy,
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     config: McpConfig,
     session_store: Option<Arc<dyn SessionStore>>,
     /// Told and stopped by the HTTP transport; a hand-built [`endpoint`]'s is never
@@ -75,6 +77,7 @@ impl McpMount {
             origins: OriginPolicy::default(),
             guard: deny_all(),
             context: None,
+            unit_of_work: None,
             config: McpConfig::default(),
             session_store: None,
             detached: DetachedWork::new(),
@@ -87,8 +90,9 @@ impl McpMount {
     /// * the browser origins the HTTP transport admits — its own while no CORS
     ///   policy is set, what that policy lists once one is;
     /// * the operation guard, per [`resolve_operation_guard`];
-    /// * the registered `dyn McpToolContext` (the ORM/authz bridge), if any —
-    ///   without one a `Repo`-backed handler still fails **closed**;
+    /// * the registered `dyn McpToolContext`, if any;
+    /// * the bound `dyn UnitOfWork` each request operation runs its unit of work
+    ///   through — without one a `Repo`-backed handler fails **closed**;
     /// * [`McpConfig`], if `McpModule` was imported, else its defaults;
     /// * a registered `dyn SessionStore` (rmcp 3.x cross-instance session
     ///   recovery), if the app provides one.
@@ -124,6 +128,7 @@ impl McpMount {
             origins: OriginPolicy::from_container(container),
             guard: resolve_operation_guard(container),
             context: container.get_dyn::<dyn McpToolContext>(),
+            unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
             config,
             session_store: container.get_dyn::<dyn SessionStore>(),
             detached: DetachedWork::new(),
@@ -166,6 +171,7 @@ where
         origins,
         guard,
         context,
+        unit_of_work,
         config,
         session_store,
         detached,
@@ -188,6 +194,7 @@ where
                 factory(),
                 handler_guard.clone(),
                 handler_context.clone(),
+                unit_of_work.clone(),
                 detached.clone(),
             ))
         },

@@ -21,6 +21,11 @@ impl JobId {
         Self(Uuid::now_v7())
     }
 
+    /// The UUID this id is.
+    pub(crate) const fn uuid(&self) -> Uuid {
+        self.0
+    }
+
     /// An id read back — from a receipt kept in a database, or from an envelope.
     ///
     /// Refused with [`QueueError::InvalidJobId`] unless `raw` is a version-7

@@ -51,13 +51,13 @@ impl<E: EntityTrait> Repo<E> {
     pub fn conn() -> Result<Executor, DbErr> {
         current_executor().ok_or_else(|| {
             // Logged: on the wire it is the constant `"database error"`.
-            const HINT: &str = "a Repo query runs against the executor its transport installs: \
-                 HTTP through SeaOrmDatabaseModule's DbContext interceptor, a WS message through \
-                 `WsDataContext as dyn SocketContext`, an MCP tool through \
-                 `McpDataContext as dyn McpToolContext`, and worker/cron jobs through \
-                 SeaOrmDatabaseModule's JobContext; a dataloader batch, a streaming body and \
-                 after-commit work run on the pool of the unit they continue, and a task spawned \
-                 off a unit carries none, so it opens its own — no unit of work runs on this path";
+            const HINT: &str = "a Repo query runs against the executor of the unit of work its \
+                 edge runs it in — an HTTP request, a WS message or hook, an MCP operation, a \
+                 queue attempt, a scheduled tick — which each edge opens through the bound \
+                 `dyn UnitOfWork`, SeaOrmDatabaseModule's; a dataloader batch, a streaming body \
+                 and after-commit work run on the pool of the unit they continue, and a task \
+                 spawned off a unit carries none, so it opens its own — no unit of work runs on \
+                 this path";
             tracing::error!(
                 target: crate::target::ORM,
                 entity = std::any::type_name::<E>(),
@@ -312,8 +312,8 @@ mod tests {
         let detail = err.to_string();
         assert!(detail.contains("no ambient database executor"), "{detail}");
         assert!(
-            detail.contains("WsDataContext as dyn SocketContext"),
-            "the socket's binding is one of the ones named: {detail}",
+            detail.contains("SeaOrmDatabaseModule"),
+            "the binding every edge opens its units through is named: {detail}",
         );
 
         let event = logs.expect_one(crate::target::ORM, "no ambient database executor");
@@ -461,13 +461,13 @@ mod tests {
     }
 
     #[test]
-    fn repo_conn_outside_scope_names_the_interceptor() {
+    fn repo_conn_outside_scope_names_the_port() {
         let msg = match Repo::<widget::Entity>::conn() {
             Ok(_) => panic!("expected error outside the executor scope"),
             Err(err) => err.to_string(),
         };
         assert!(msg.contains("ambient"), "missing 'ambient': {msg}");
-        assert!(msg.contains("DbContext"), "missing 'DbContext': {msg}");
+        assert!(msg.contains("UnitOfWork"), "missing 'UnitOfWork': {msg}");
     }
 
     #[test]

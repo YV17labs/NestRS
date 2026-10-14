@@ -345,16 +345,19 @@ fn emit_method(
                     }
                 };
                 #checkpoint_open
-                let __job_context = ::nest_rs_core::Container::get_dyn::<
-                    dyn ::nest_rs_queue::__private::nest_rs_worker::JobContext,
-                >(&__context.container);
-                // The user `#[process]` method's `Err` is a transient fault —
-                // retryable within the budget. Mapped *inside* the context so the
-                // settling seam reads one error type and can report a commit it
-                // could not honour in it.
-                ::nest_rs_queue::__private::nest_rs_worker::run_in_job_context(
-                    __job_context.as_ref(),
+                let __unit = ::nest_rs_queue::__private::nest_rs_database::UnitSpec::new(
+                    ::nest_rs_queue::unit::JOB,
+                    ::nest_rs_queue::__private::nest_rs_database::ExecutorScope::Job,
                     #transaction_tokens,
+                )
+                .with_job(__context.job);
+                // The user `#[process]` method's `Err` is a transient fault —
+                // retryable within the budget. Mapped *inside* the unit so its
+                // settling reads one error type and can report a commit it could
+                // not honour in it.
+                ::nest_rs_queue::__private::nest_rs_database::run_unit(
+                    __context.unit_of_work.as_ref(),
+                    __unit,
                     async move {
                         #call.map_err(::nest_rs_queue::JobError::retry)
                     },
@@ -362,7 +365,7 @@ fn emit_method(
                     // A job that ran fine but whose transaction could not be
                     // settled has written nothing, so the attempt fails rather
                     // than reporting a success that lost its writes. Whether it is
-                    // *retried* is the context's call.
+                    // *retried* is the driver's call.
                     |__why| ::std::result::Result::Err(
                         ::nest_rs_queue::JobError::unhonoured(__why),
                     ),

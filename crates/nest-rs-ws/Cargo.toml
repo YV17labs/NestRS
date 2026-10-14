@@ -21,6 +21,9 @@ nest-rs-config.workspace = true
 # TLS — rather than opening a second server.
 nest-rs-http.workspace = true
 nest-rs-ws-macros.workspace = true
+# Each message and each connection hook is a unit of work the gateway runs
+# through the bound `dyn UnitOfWork`, resolved once at mount.
+nest-rs-database.workspace = true
 # `websocket` is a non-default poem feature; enabling it here turns it on for the
 # whole build (Cargo features are additive).
 poem = { workspace = true, features = ["websocket"] }

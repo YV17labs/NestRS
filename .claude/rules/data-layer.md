@@ -62,20 +62,27 @@ how far the value travels (`.claude/decisions/ambient-carry.md`).
 
 **A continuation that can outlive the transaction never holds it.** Where a
 unit continues after the future that accepted it, the executor steps down to
-the pool — a streaming body, a DataLoader batch, work held for the commit, an
-emitted event's listeners among it — and is dropped on a task handed to
+the pool — a `Pool` unit of the binding that opened it: a streaming body, a
+DataLoader batch, work held for the commit, an emitted event's listeners among
+it — and is dropped on a task handed to
 `TaskContext`, a connection's next message and a job's envelope, where a write
 opens a unit of its own. The ability crosses everywhere but a job's envelope.
 One exception is planned: a mutation operation's batches will run on the
 operation's own transaction, joined before the field's savepoint settles.
 
-**The executor** is installed by the `DbContext` interceptor, in the innermost
-transport band, so it covers controllers and self-mounted surfaces alike. A
-safe method runs on the pool; a mutating one gets a **lazy** transaction —
-`BEGIN` deferred to the first data-layer touch — committed on 2xx/3xx and
-rolled back otherwise, including on a `MappedError`-tagged response. Guards
-run inside it, so a denied mutation never touches the data layer and opens no
-transaction at all.
+**The executor** is installed by each edge running its unit of work through
+the one port, `nest_rs_database::run_unit`, over the `dyn UnitOfWork` the
+driver's binding provides — resolved once at mount or boot, never per unit;
+with none bound a unit runs bare and `Repo` fails closed. A driver implements
+that one trait and serves every edge; an app lists no data context. Each edge
+commits on its own unit's outcome: an HTTP request on 2xx/3xx without a
+`MappedError` (a safe method runs on the pool, the unit opened by the
+`DbContext` interceptor in the innermost band); a WS message unless it answers
+an error frame, a connection hook unless it unwound; an MCP operation on `Ok`
+with no tool error in band (`isError`); a queue attempt and a tick on `Ok`. A
+unit of its own gets a **lazy** transaction — `BEGIN` deferred to the first
+data-layer touch, **a read included**. Guards run inside the unit, so a denied
+unit never touches the data layer and opens no transaction at all.
 
 **The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
 rest of the unit once its guard stage passed. A route no response mask shapes,
@@ -89,9 +96,10 @@ scoped fails closed — and `nest-rs-http` knows nothing of authz or the ORM
 
 Only the unit of work holding the transaction knows whether its writes
 landed. `nest_rs_database::after_commit(work)` hands work to the ambient
-executor; every edge settles through `LazyTransaction::finalize`, which runs
-it once the transaction committed (or the boundary succeeded with nothing to
-roll back) and drops it on every other outcome. Held work runs under what its
+executor; every unit settles through its driver's `OpenUnit::settle` (SeaORM's
+`LazyTransaction::finalize`), which runs it once the transaction committed (or
+the unit succeeded with nothing to roll back) and drops it on every other
+outcome. Held work runs under what its
 unit carried into the commit: the pool, the scope, the ability and every
 value that crosses. A panic in it is contained
 and logged at `error` — the commit already stood, and an unwind would turn it
@@ -103,8 +111,8 @@ happened: a listener never pushes a job, notifies or calls out about a write
 that did not land, and a statement it fails never poisons its emitter's
 writes. With nothing to wait for it dispatches before `emit` returns.
 
-- **Waits:** every boundary that settles through `finalize` — a mutating HTTP
-  request and the GraphQL mutation riding it, a WS message, an MCP operation, a
+- **Waits:** every unit of its own — a mutating HTTP request and the GraphQL
+  mutation riding it, a WS message or connection hook, an MCP operation, a
   queue attempt, a scheduled tick.
 - **Runs at once:** a pool — a safe request, a read-only GraphQL batch, a
   subscription, `transactional = false`.
@@ -201,16 +209,13 @@ dependency cycle.** What they guarantee:
 
 - **The guard scopes the operation** on GraphQL and MCP: their bridges run the
   guard chain in-band (one authn→authz ordering) and install the caller's
-  ability, with or without a data context. WS has no bridge: a gateway's
-  upgrade already ran the chain, and only the ability is re-installed per
-  message.
+  ability. WS has no bridge: a gateway's upgrade already ran the chain, and the
+  ability it attached crosses the connection into each message and hook.
 - **A dataloader batch** runs off-task under what its request carries into a
   batch — the request's values, never one field's, and the pool — captured
   where a field asks the loader; nothing is bound for it.
-- **WS and MCP data contexts share one dispatch path**, so their
-  commit/rollback semantics cannot drift: a read-only message or tool opens
-  no transaction, a writing one commits on success and rolls back on the
-  transport's error shape.
+- **No edge has a data context of its own**: each runs its unit through the
+  port, so commit and rollback cannot drift between edges.
 
 ## Queue attempts and ticks
 

@@ -85,9 +85,6 @@ nest-rs-testing = { path = "../nest-rs-testing", features = ["queue", "tls"] }
 # Self dev-dependency: the suite runs with every binding on.
 nest-rs-redis = { path = ".", features = ["queue", "throttler", "schedule"] }
 nest-rs-core = { path = "../nest-rs-core" }
-# The `#[processor]` macro emits `::nest_rs_worker::*` paths and the test
-# implements `JobContext` directly.
-nest-rs-worker = { path = "../nest-rs-worker" }
 # Per-argument pipe on a `#[process]` job argument (`Piped<P, T>` / `Valid<T>`).
 nest-rs-pipes = { path = "../nest-rs-pipes" }
 # The suite drives the `RedisThrottler` store directly, and asks the guard to

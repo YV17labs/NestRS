@@ -93,8 +93,6 @@
 //!
 //! These read the *ambient* ability: rmcp dispatches an operation on its own
 //! task with no context value, so the operation guard installs it in its `around`.
-//!
-//! Data-coupled bindings live in `nest_rs_seaorm::mcp` (`McpDataContext`).
 
 mod authorize;
 mod bridge;

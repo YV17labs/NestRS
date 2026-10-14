@@ -590,9 +590,14 @@ fn generate_adapter_requires_existing_feature() {
 /// `g ws` and `g mcp` write the authz bridge their output and code name.
 #[test]
 fn generate_ws_and_mcp_write_the_authz_bridges_their_own_output_names() {
-    // (transport, bridge dir, module, a provider only that bridge registers)
+    // (transport, bridge dir, module, what only that bridge names)
     const CASES: [(&str, &str, &str, &str); 2] = [
-        ("ws", "ws", "AuthzWsModule", "dyn SocketContext"),
+        (
+            "ws",
+            "ws",
+            "AuthzWsModule",
+            "imports = [AuthzModule, WsModule]",
+        ),
         ("mcp", "mcp", "AuthzMcpModule", "dyn McpOperationGuard"),
     ];
 
@@ -610,7 +615,11 @@ fn generate_ws_and_mcp_write_the_authz_bridges_their_own_output_names() {
             .unwrap_or_else(|_| panic!("`g {transport}` writes authz/{bridge_dir}/module.rs"));
         assert!(
             bridge_module.contains(provider),
-            "the {transport} bridge registers {provider}: {bridge_module}"
+            "the {transport} bridge names {provider}: {bridge_module}"
+        );
+        assert!(
+            !bridge_module.contains("DataContext"),
+            "the edge opens its own units of work; no data context is listed: {bridge_module}"
         );
 
         // An unimported `AuthzMcpModule` leaves `/mcp` deny-all.

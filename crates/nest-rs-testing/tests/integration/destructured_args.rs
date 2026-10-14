@@ -218,7 +218,7 @@ async fn a_process_method_dispatches_to_a_destructured_job_argument() {
         QueueName::new(method.queue()).expect("the decorator checked the name"),
         serde_json::json!({ "v": nest_rs_queue::WIRE_FORMAT_VERSION, "payload": { "text": "queued" } }),
     );
-    let outcome = consume::attempt(method, &mut delivery, container).await;
+    let outcome = consume::attempt(method, &mut delivery, container, None).await;
     assert!(
         matches!(outcome, AttemptOutcome::Ok),
         "the job runs: {outcome:?}"

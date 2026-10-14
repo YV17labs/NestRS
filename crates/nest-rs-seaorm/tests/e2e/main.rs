@@ -21,14 +21,12 @@ mod graphql;
 mod interceptor;
 mod lazy;
 mod lifecycle_hooks;
-#[cfg(feature = "mcp")]
 mod mcp;
 mod module;
 mod public_visitor;
 mod relational_authz;
 mod scope;
 mod worker;
-#[cfg(feature = "ws")]
 mod ws;
 
 /// The principal the suite's authentication stand-ins attach: a caller with no

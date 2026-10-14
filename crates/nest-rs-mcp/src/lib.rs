@@ -38,9 +38,9 @@
 //!   provider;
 //! * the caller's ability, installed by the operation guard's
 //!   [`around`](McpOperationGuard::around);
-//! * a `Repo`-backed body reading through the ambient executor, row-filtered by
-//!   the caller's ability, once `nest_rs_seaorm::mcp::McpDataContext` is provided
-//!   `as dyn McpToolContext` (what `AuthzMcpModule` does).
+//! * a `Repo`-backed body reading through the ambient executor of the
+//!   operation's own unit of work, opened through the bound
+//!   `nest_rs_database::UnitOfWork`, row-filtered by the caller's ability.
 //!
 //! Notifications and `subscriptions/listen` are the exceptions, documented on
 //! [`McpToolContext::around`].
@@ -48,8 +48,8 @@
 //! The endpoint guard is what [`resolve_operation_guard`] mounts: the global
 //! guard pool with the app's registered [`McpOperationGuard`] in it, the
 //! registered guard alone when the pool is empty, else **deny-all**. Without a
-//! registered [`McpToolContext`] a `Repo`-backed body fails closed
-//! (`Repo::conn` errors; `scope_for` denies every row).
+//! bound unit of work a `Repo`-backed body fails closed (`Repo::conn` errors),
+//! and without an ability `scope_for` denies every row.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

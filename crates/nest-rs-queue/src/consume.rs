@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use nest_rs_core::{
     Container, Correlation, ReachableProviders, RequestScope, panic_message, with_request_scope,
 };
+use nest_rs_database::{JobRef, UnitOfWork};
 use serde_json::Value;
 use tracing::Instrument;
 
@@ -185,7 +186,7 @@ fn check_duplicate_queue_claims(methods: &[&ProcessMethod]) -> Result<(), String
 /// into its backend's.
 #[derive(Debug)]
 pub enum AttemptOutcome {
-    /// The handler returned `Ok`, and its data context settled. The job is done:
+    /// The handler returned `Ok`, and its unit of work settled. The job is done:
     /// acknowledge it.
     Ok,
     /// The handler failed in a way another attempt could clear, and the
@@ -371,10 +372,14 @@ impl Delivery {
 ///
 /// An attempt its driver drops still files its `queue.job` line, with
 /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
+///
+/// The attempt is one unit of work, run through `unit_of_work` — the binding the
+/// worker resolved once — or bare without one.
 pub async fn attempt(
     method: &'static ProcessMethod,
     delivery: &mut Delivery,
     container: Container,
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
 ) -> AttemptOutcome {
     let newer = envelope::newer_version(&delivery.message);
     if let Some(version) = newer
@@ -468,6 +473,8 @@ pub async fn attempt(
     let context = HandlerContext {
         container: container.clone(),
         checkpoints: checkpoints.clone(),
+        unit_of_work,
+        job: JobRef::new(delivery.queue.as_str(), delivery.id.uuid(), attempt),
     };
     let retry_after = backoff::retry_after(&delivery.id, attempt);
     // The ambient context too: a job the body pushes seals *this* trace, and
@@ -874,6 +881,8 @@ mod tests {
         HandlerContext {
             container: Container::builder().build(),
             checkpoints: None,
+            unit_of_work: None,
+            job: JobRef::new("audio", JobId::mint().uuid(), 1),
         }
     }
 

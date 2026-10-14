@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`Repo`, the ambient executor, the request layers); `#[expose]` and `#[wire_enum]` make an entity its wire DTO, inputs and GraphQL object. Transport extractors (`Bind`, `WsDataContext`, `McpDataContext`) live behind Cargo features."
+description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`SeaOrmUnitOfWork`, the unit of work every edge runs through, and `Repo` on its ambient executor); `#[expose]` and `#[wire_enum]` make an entity its wire DTO, inputs and GraphQL object. The HTTP route-model binder (`Bind`) lives behind the `http` feature."
 keywords = ["framework", "nestrs", "seaorm", "database", "orm"]
 categories = ["database"]
 
@@ -37,31 +37,21 @@ graphql = [
     "nest-rs-authz/graphql",
     "nest-rs-seaorm-macros/graphql",
 ]
-# WebSocket transport extractor: `WsDataContext` (the `SocketContext` that
-# re-installs the request executor + ability around each gateway message).
-ws = ["dep:nest-rs-ws"]
-# MCP transport extractor: `McpDataContext` (the `McpToolContext` that
-# re-installs the request executor + ability inside each tool dispatch).
-mcp = ["dep:nest-rs-mcp"]
 # Liveness/readiness pool ping (`SeaOrmHealthIndicator`) wired through
 # `nest-rs-health`'s `#[indicators]` registry. The connection's `ping`
 # round-trips a `SELECT 1`, so an unreachable DB drops the readiness probe
 # to `503`.
 health = ["dep:nest-rs-health"]
 # Convenience for tests and exemplars.
-full = ["http", "graphql", "ws", "mcp", "health"]
+full = ["http", "graphql", "health"]
 
 [dependencies]
 nest-rs-core.workspace = true
 # `#[expose]` and `#[wire_enum]`, re-exported at the root.
 nest-rs-seaorm-macros.workspace = true
-# `WorkerDbContext` bridges the framework's worker seam (`JobContext`) to install
-# the job executor around every scheduler tick / queue job. The trait lives in
-# `nest-rs-worker` so neither scheduler nor queue has to depend on the other.
-nest-rs-worker.workspace = true
-# The ORM-agnostic ambient executor + scope seam. SeaORM's `Executor` enum
-# in this crate implements `nest_rs_database::Executor`; the task-local plumbing
-# lives in `nest-rs-database` so a third-party ORM can reuse it.
+# The ORM-agnostic unit-of-work port: `SeaOrmUnitOfWork` implements
+# `nest_rs_database::UnitOfWork`, which every edge opens its units through, and
+# SeaORM's `Executor` enum implements `nest_rs_database::Executor`.
 nest-rs-database.workspace = true
 # `SeaOrmModule` owns the crate's one `#[config]`, `SeaOrmConfig` (namespace
 # `seaorm`), loaded from `NESTRS_SEAORM__*`; `validator` backs its `#[validate]` rules.
@@ -110,8 +100,6 @@ tokio.workspace = true
 # on GraphQL objects, so their scalar impls are this crate's requirement.
 async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono"] }
 nest-rs-graphql = { workspace = true, optional = true }
-nest-rs-ws = { workspace = true, optional = true }
-nest-rs-mcp = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -135,12 +123,18 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 # `cargo clippy --workspace --all-targets` never saw those 176 published
 # lines and only `demo/` (a separate workspace) built them. `tls` issues the
 # certificate of the Postgres double the pool must refuse to log in to.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["orm", "tls"] }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["orm", "tls", "ws"] }
 # The pool's default budget is pinned below the authentication guard's net.
 nest-rs-authn = { path = "../nest-rs-authn" }
 # The `executor` e2e emits under a caller's own transaction: the bus dispatches
 # through this crate's `after_commit`, and only a live `BEGIN` makes a `Txn`.
 nest-rs-events = { path = "../nest-rs-events" }
+# The `ws` and `mcp` e2e boot a gateway and a tool host over the binding, which
+# their edges open each message's and each operation's unit through.
+nest-rs-ws = { path = "../nest-rs-ws" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+# The pool's default statement budget is pinned below the job timeout.
+nest-rs-worker = { path = "../nest-rs-worker" }
 # `test-util` (not part of tokio's `full`) pauses time, so the instant each
 # conflicting call retries at is read off the clock its backoff sleeps on.
 tokio = { workspace = true, features = ["test-util"] }

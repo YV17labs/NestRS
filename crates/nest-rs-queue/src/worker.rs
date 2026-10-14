@@ -33,6 +33,7 @@ use nest_rs_core::{
     Backoff, Container, Retries, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered, error_message,
     process_seed, within,
 };
+use nest_rs_database::UnitOfWork;
 use serde_json::Value;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
@@ -265,6 +266,8 @@ struct Shared<C: JobConsumer> {
     /// backend's rather than a held permit's.
     delays: bool,
     container: Container,
+    /// The binding every attempt runs its unit of work through, resolved once.
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     /// How long one receive waits for a job.
     wait: Duration,
     /// Fired at the shutdown signal: no receive, no start, waits end.
@@ -296,6 +299,7 @@ async fn serve<C: JobConsumer>(consumer: Arc<C>, serving: Serving) {
             .capabilities()
             .contains(Capability::DelayedPush),
         consumer,
+        unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
         container,
         wait: RECEIVE_WAIT.min(window / 4),
         stop: CancellationToken::new(),
@@ -737,7 +741,12 @@ impl<C: JobConsumer> MethodRun<C> {
                 biased;
                 () = self.shared.interrupt.cancelled() => Ran::Cut,
                 () = lost.cancelled() => Ran::Lost,
-                outcome = consume::attempt(self.method, &mut state, self.shared.container.clone()) => {
+                outcome = consume::attempt(
+                    self.method,
+                    &mut state,
+                    self.shared.container.clone(),
+                    self.shared.unit_of_work.clone(),
+                ) => {
                     Ran::Answered(outcome)
                 }
             };

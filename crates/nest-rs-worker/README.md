@@ -1,6 +1,6 @@
 # nest-rs-worker
 
-Worker-execution primitives for NestRS — the ambient-context seam every transport that runs jobs off the request path (schedulers, queue workers, stream consumers) plugs into.
+Worker-execution bounds for NestRS: the timeout every job attempt and scheduled tick runs within, and the failure an attempt cut at it reports.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

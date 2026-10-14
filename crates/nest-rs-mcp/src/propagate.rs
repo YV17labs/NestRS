@@ -5,7 +5,7 @@
 //! the dispatch. A method it does not delegate silently reverts to rmcp's default,
 //! so the impl carries `#[deny(clippy::missing_trait_methods)]`.
 //!
-//! | Kind | Request span | Request scope | Guard ability | Data context | Files a line |
+//! | Kind | Request span | Request scope | Guard ability | Unit of work | Files a line |
 //! |---|---|---|---|---|---|
 //! | Requests (`tools/call`, `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`, `tasks/*`, lifecycle, custom) | yes | yes | yes | yes | yes |
 //! | `subscriptions/listen` | yes | yes | yes | no — it outlives any sane transaction | yes |
@@ -27,6 +27,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use nest_rs_core::{Correlation, RequestContinuation, operation_log};
+use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_http::DetachedWork;
 use rmcp::ServerHandler;
 use rmcp::model::{
@@ -58,13 +59,14 @@ use nest_rs_core::__private::install_pending;
 
 /// Wraps a tool host so each operation runs with the request scope, the
 /// operation guard's ambient state, and the registered [`McpToolContext`]'s
-/// state installed.
+/// state installed, as a unit of work of its own.
 ///
 /// Built by [`endpoint`](fn@crate::endpoint), never by hand.
 pub struct PropagatingHandler<H> {
     inner: H,
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     detached: DetachedWork,
 }
 
@@ -73,29 +75,35 @@ impl<H> PropagatingHandler<H> {
         inner: H,
         guard: Arc<dyn McpOperationGuard>,
         context: Option<Arc<dyn McpToolContext>>,
+        unit_of_work: Option<Arc<dyn UnitOfWork>>,
         detached: DetachedWork,
     ) -> Self {
         Self {
             inner,
             guard,
             context,
+            unit_of_work,
             detached,
         }
     }
 
-    /// The nesting every wrapped operation shares, outermost first: the data
-    /// context (the transaction), the guard's `around` (the ability), the request
-    /// scope, the dispatch — the GraphQL bridge's order.
+    /// The nesting every wrapped operation shares, outermost first: the
+    /// registered context, the guard's `around`, the request scope, the unit of
+    /// work (the transaction), what the request's guards attached (the
+    /// ability), the dispatch. The unit commits when the operation answers `Ok`
+    /// with no tool error in band.
     ///
     /// `method` is the JSON-RPC method, `addressed` the tool, prompt or resource
-    /// it named, `None` where the protocol names nothing. `stopped` resolves when
-    /// the operation is to end before it settles, with what the client is answered.
+    /// it named, `None` where the protocol names nothing. `wrapped` is `false`
+    /// for an operation that takes neither the registered context nor a unit of
+    /// work. `stopped` resolves when the operation is to end before it settles,
+    /// with what the client is answered.
     async fn dispatch<T, F, S>(
         &self,
         method: &str,
         addressed: Option<&str>,
         ambient: McpAmbient,
-        context: Option<&Arc<dyn McpToolContext>>,
+        wrapped: bool,
         stopped: S,
         inner: F,
     ) -> Result<T, McpError>
@@ -112,6 +120,11 @@ impl<H> PropagatingHandler<H> {
             span,
             correlation,
         } = ambient;
+        let (context, unit) = if wrapped {
+            (self.context.as_ref(), self.unit_of_work.as_ref())
+        } else {
+            (None, None)
+        };
 
         // Its own unit of work: one session request carries many operations.
         let correlation = correlation.child();
@@ -128,11 +141,31 @@ impl<H> PropagatingHandler<H> {
 
         // Inside the operation's own scope: rmcp's task carries no ambient
         // context for the attachments to extend.
-        let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(async move {
-            nest_rs_core::with_request_scope(scope, correlation, install_pending(attached, inner))
-                .await
-                .map(OperationValue::new)
-        });
+        let spec = UnitSpec::new(
+            crate::unit::OPERATION,
+            ExecutorScope::Request,
+            TransactionPolicy::PerUnit,
+        );
+        let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(nest_rs_core::with_request_scope(
+            scope,
+            correlation,
+            run_unit(
+                unit,
+                spec,
+                async move {
+                    install_pending(attached, inner)
+                        .await
+                        .map(OperationValue::new)
+                },
+                |outcome| outcome.as_ref().is_ok_and(|value| !value.reports_error()),
+                |_| {
+                    Err(McpError::internal_error(
+                        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+                        None,
+                    ))
+                },
+            ),
+        ));
 
         // Composed inside the instrumented block: an `around` opening a span of
         // its own does so when called, not when polled.
@@ -306,7 +339,7 @@ macro_rules! request_method {
                     &method,
                     addressed.as_deref(),
                     ambient,
-                    self.context.as_ref(),
+                    true,
                     async move {
                         cancelled.await;
                         Err(cancelled_before_completion())
@@ -463,8 +496,8 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         notification.method.clone(),
     );
 
-    /// No data context: a transaction would pin a pooled connection for the
-    /// subscription's life. At the shutdown signal it answers `Ok(())`, which rmcp
+    /// No context and no unit of work: a transaction would pin a pooled
+    /// connection for the subscription's life. At the shutdown signal it answers `Ok(())`, which rmcp
     /// sends as the schema's final result for a graceful teardown, and files `cancelled`.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         let ambient =
@@ -474,7 +507,7 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
             SubscriptionsListenRequestMethod::VALUE,
             None,
             ambient,
-            None,
+            false,
             async move {
                 going_away.await;
                 Ok(())
@@ -548,6 +581,7 @@ mod tests {
         let wrapper = PropagatingHandler::new(
             NegotiatingHost,
             Arc::new(AllowAllMcpGuard),
+            None,
             None,
             DetachedWork::new(),
         );

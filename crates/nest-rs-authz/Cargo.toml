@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Ability-based authorization for NestRS: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`, `WsDataContext`, `McpDataContext`) live in `nest-rs-seaorm` so the engine stays free of a data-layer dependency."
+description = "Ability-based authorization for NestRS: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`) live in `nest-rs-seaorm` so the engine stays free of a data-layer dependency."
 keywords = ["framework", "nestrs", "authorization", "permissions", "rbac"]
 categories = ["authentication", "web-programming"]
 
@@ -45,9 +45,8 @@ graphql = [
 ]
 # MCP surface: the operation-guard ability bridge (`McpAbilityBridge`), which
 # runs the guard chain and installs the ambient ability for the operation.
-# Masking inside a tool body is the transport-free `masked_output_ambient`. The
-# data context that makes `Repo` work inside a tool body is
-# `nest_rs_seaorm::McpDataContext`, behind that crate's `mcp` feature.
+# Masking inside a tool body is the transport-free `masked_output_ambient`; the
+# edge opens each operation's unit of work through the bound `UnitOfWork`.
 mcp = [
     "dep:nest-rs-mcp",
     # Same as GraphQL: the root guard's `check_http` is what `McpAbilityBridge`
@@ -60,8 +59,7 @@ mcp = [
 # (`ws::masked_value_for`) that `#[messages]` emits from an
 # `#[authorize(Action, Entity)]`. There is no bridge here and deliberately so —
 # a gateway's upgrade already ran the real HTTP chain, and what a message needs
-# re-established is the ambient ability, which the connection carries and
-# `nest_rs_seaorm::ws::WsDataContext` installs.
+# re-established is the ambient ability, which the connection carries.
 ws = [
     "dep:nest-rs-ws",
     # The root guard's `check_http` entry is what runs on the upgrade.

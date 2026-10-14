@@ -13,7 +13,7 @@ use nest_rs_core::__private::Pending;
 use nest_rs_core::RequestScope;
 use poem::Request;
 use poem::http::request::Parts;
-use rmcp::model::Extensions;
+use rmcp::model::{CallToolResponse, CallToolResult, Extensions};
 
 use crate::McpError;
 use crate::guard::BoxFuture;
@@ -24,17 +24,32 @@ pub type Captured = Arc<dyn Any + Send + Sync>;
 
 /// The success value of one MCP operation, type-erased so one `dyn` `around`
 /// wraps every capability; a wrapper inspects `Ok`/`Err`, never the value.
-pub struct OperationValue(Box<dyn Any + Send>);
+pub struct OperationValue {
+    value: Box<dyn Any + Send>,
+    reports_error: bool,
+}
 
 impl OperationValue {
+    /// `value`, read once for whether it reports a tool error in band.
     pub(crate) fn new<T: Send + 'static>(value: T) -> Self {
-        Self(Box::new(value))
+        let reports_error = reports_tool_error(&value);
+        Self {
+            value: Box::new(value),
+            reports_error,
+        }
+    }
+
+    /// Whether the operation answered with a tool's own error — a
+    /// `CallToolResult` with `isError: true`, how the MCP specification
+    /// reports a tool that failed — which its unit of work does not commit.
+    pub(crate) fn reports_error(&self) -> bool {
+        self.reports_error
     }
 
     /// Recover the concrete result; a miss (an `around` substituted another type)
     /// is an opaque internal error, never a panic on the dispatch path.
     pub(crate) fn take<T: Send + 'static>(self) -> Result<T, McpError> {
-        match self.0.downcast::<T>() {
+        match self.value.downcast::<T>() {
             Ok(value) => Ok(*value),
             Err(_) => {
                 tracing::error!(
@@ -47,6 +62,16 @@ impl OperationValue {
             }
         }
     }
+}
+
+/// Whether `value` is a tool call's result that reports the tool's error.
+fn reports_tool_error(value: &dyn Any) -> bool {
+    let result = match value.downcast_ref::<CallToolResponse>() {
+        Some(CallToolResponse::Complete(result)) => Some(result),
+        Some(_) => None,
+        None => value.downcast_ref::<CallToolResult>(),
+    };
+    result.is_some_and(|result| result.is_error == Some(true))
 }
 
 /// What one MCP operation resolves to — the unit a [`McpToolContext`] wraps.

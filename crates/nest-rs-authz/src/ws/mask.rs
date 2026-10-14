@@ -46,8 +46,7 @@ where
             event,
             action,
             mask_reason::NO_AMBIENT_ABILITY,
-            "no ambient ability — is the WS data context registered as \
-             `dyn SocketContext`?",
+            "no ambient ability — does the gateway's upgrade run an `AbilityGuard`?",
             None,
         ));
     };

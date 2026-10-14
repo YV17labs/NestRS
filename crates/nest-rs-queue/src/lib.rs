@@ -138,6 +138,7 @@ pub mod __private {
     };
     pub use crate::queue_name::is_valid_queue_name;
 
+    pub use nest_rs_database;
     pub use nest_rs_worker;
     pub use serde_json;
 }

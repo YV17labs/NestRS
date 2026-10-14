@@ -1,11 +1,12 @@
 use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use nest_rs_core::{AmbientValue, Continuation};
 
 use crate::atomic::AtomicBlock;
+use crate::unit::Bound;
 
 /// Work held until the ambient unit of work commits — what [`after_commit`]
 /// hands an [`Executor`] to keep.
@@ -46,20 +47,10 @@ pub trait Executor: Any + Send + Sync + 'static {
     /// unit carried where it was registered: the executor captures that here,
     /// for a [`Commit`](Continuation::Commit)
     /// ([`RequestContinuation::capture`](nest_rs_core::RequestContinuation::capture)),
-    /// and installs inside it its handle outside the transaction, under the
-    /// [`current_executor_scope`] read here — the capture carries no other
-    /// driver's executor, nor its scope.
+    /// and installs inside it its own handle outside the transaction, under the
+    /// [`current_executor_scope`] read here.
     fn after_commit(&self, work: Deferred) -> Option<Deferred> {
         Some(work)
-    }
-
-    /// A handle on the pool this executor draws from, outside any transaction:
-    /// what a continuation that can outlive the transaction runs on (a
-    /// streaming body, a DataLoader batch, after-commit work). `None` when there
-    /// is none to give, and the continuation then runs without an executor.
-    #[doc(hidden)]
-    fn __pool(&self) -> Option<Arc<dyn Executor>> {
-        None
     }
 
     /// Open an atomic block on this executor — a savepoint of its transaction,
@@ -119,25 +110,50 @@ pub enum ExecutorScope {
     Job,
 }
 
-/// The executor a unit runs on and the scope it was installed under, as one
-/// value of the ambient context.
+/// The executor a unit runs on, the scope it was installed under and the
+/// binding that opened it, as one value of the ambient context.
 struct AmbientExecutor {
-    executor: Arc<dyn Executor>,
+    executor: Handle,
     scope: Option<ExecutorScope>,
+    bound: Option<Bound>,
+}
+
+/// The executor itself, or the pool a continuation opens on its first touch.
+enum Handle {
+    Installed(Arc<dyn Executor>),
+    /// A continuation of a bound unit: a [`Pool`](crate::TransactionPolicy::Pool)
+    /// unit of the same binding, opened when something reads it, so carrying
+    /// one costs nothing until it is used.
+    Pool(OnceLock<Option<Arc<dyn Executor>>>),
+}
+
+impl AmbientExecutor {
+    fn executor(&self) -> Option<Arc<dyn Executor>> {
+        match &self.executor {
+            Handle::Installed(executor) => Some(Arc::clone(executor)),
+            Handle::Pool(pool) => pool
+                .get_or_init(|| {
+                    let bound = self.bound.as_ref()?;
+                    bound.pool(self.scope.unwrap_or(ExecutorScope::Request))
+                })
+                .clone(),
+        }
+    }
 }
 
 impl AmbientValue for AmbientExecutor {
-    /// A continuation that can outlive the transaction runs on the pool — a
-    /// body is polled after the commit, a batch serves every field, held work
-    /// runs once the transaction is gone; one that opens its own unit (a task,
-    /// a connection's next message, a job) gets none, so a detached write
-    /// cannot run outside a unit of work.
+    /// A continuation that can outlive the transaction runs on a pool unit of
+    /// the binding that opened it — a body is polled after the commit, a batch
+    /// serves every field, held work runs once the transaction is gone; one that
+    /// opens its own unit (a task, a connection's next message, a job) gets
+    /// none, so a detached write cannot run outside a unit of work.
     fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
         match into {
             Continuation::Body | Continuation::Batch | Continuation::Commit => {
                 Some(Arc::new(Self {
-                    executor: self.executor.__pool()?,
+                    executor: Handle::Pool(OnceLock::new()),
                     scope: self.scope,
+                    bound: self.bound.clone(),
                 }))
             }
             _ => None,
@@ -148,12 +164,17 @@ impl AmbientValue for AmbientExecutor {
 /// The installed ambient executor, or `None` outside any scope. An
 /// ORM-specific `Repo` calls this and downcasts via [`Executor::as_any`].
 pub fn current_executor() -> Option<Arc<dyn Executor>> {
-    nest_rs_core::ambient::<AmbientExecutor>().map(|ambient| Arc::clone(&ambient.executor))
+    nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.executor())
 }
 
 /// The installed ambient executor scope, or `None` outside any scope.
 pub fn current_executor_scope() -> Option<ExecutorScope> {
     nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.scope)
+}
+
+/// The binding that opened the running unit, carried with its executor.
+pub(crate) fn current_bound() -> Option<Bound> {
+    nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.bound.clone())
 }
 
 /// Install `executor` without tagging a scope: it keeps the scope installed
@@ -165,9 +186,11 @@ pub fn with_executor<F: Future>(
 ) -> impl Future<Output = F::Output> {
     nest_rs_core::__private::with_ambient_from(
         move || {
+            let running = nest_rs_core::ambient::<AmbientExecutor>();
             Arc::new(AmbientExecutor {
-                executor,
-                scope: current_executor_scope(),
+                executor: Handle::Installed(executor),
+                scope: running.as_ref().and_then(|ambient| ambient.scope),
+                bound: running.and_then(|ambient| ambient.bound.clone()),
             })
         },
         fut,
@@ -192,14 +215,36 @@ pub fn with_job_executor<F: Future>(
     install(executor, ExecutorScope::Job, fut)
 }
 
+/// Install `executor` under `scope`, keeping the binding of the unit it runs
+/// in.
 fn install<F: Future>(
     executor: Arc<dyn Executor>,
     scope: ExecutorScope,
     fut: F,
 ) -> impl Future<Output = F::Output> {
+    nest_rs_core::__private::with_ambient_from(
+        move || {
+            Arc::new(AmbientExecutor {
+                executor: Handle::Installed(executor),
+                scope: Some(scope),
+                bound: current_bound(),
+            })
+        },
+        fut,
+    )
+}
+
+/// Install a unit's `executor` under `scope`, with the binding that opened it.
+pub(crate) fn install_unit<F: Future>(
+    executor: Arc<dyn Executor>,
+    scope: ExecutorScope,
+    bound: Bound,
+    fut: F,
+) -> impl Future<Output = F::Output> {
     let ambient = AmbientExecutor {
-        executor,
+        executor: Handle::Installed(executor),
         scope: Some(scope),
+        bound: Some(bound),
     };
     nest_rs_core::with_ambient(Arc::new(ambient), fut)
 }
@@ -281,23 +326,20 @@ mod tests {
         .await;
     }
 
-    /// A transaction that knows the pool it was opened on.
+    /// Another handle than the stub, to tell an inner install from an outer.
     struct OnPool;
 
     impl Executor for OnPool {
         fn as_any(&self) -> &dyn Any {
             self
         }
-
-        fn __pool(&self) -> Option<Arc<dyn Executor>> {
-            Some(stub())
-        }
     }
 
     fn crossing(executor: Arc<dyn Executor>, into: Continuation) -> Option<Arc<AmbientExecutor>> {
         Arc::new(AmbientExecutor {
-            executor,
+            executor: Handle::Installed(executor),
             scope: Some(ExecutorScope::Request),
+            bound: None,
         })
         .carry(into)
     }
@@ -309,38 +351,27 @@ mod tests {
             Continuation::Connection,
             Continuation::Envelope,
         ] {
-            assert!(crossing(Arc::new(OnPool), into).is_none(), "{into:?}");
+            assert!(crossing(stub(), into).is_none(), "{into:?}");
         }
     }
 
     #[test]
-    fn a_continuation_that_can_outlive_the_transaction_steps_down_to_its_pool() {
+    fn a_continuation_that_can_outlive_the_transaction_never_holds_it() {
         for into in [
             Continuation::Body,
             Continuation::Batch,
             Continuation::Commit,
         ] {
-            let carried = crossing(Arc::new(OnPool), into).expect("the pool crosses");
+            let carried = crossing(stub(), into).expect("the scope crosses");
             assert!(
-                carried.executor.as_any().is::<StubExecutor>(),
-                "{into:?} runs on the pool, never the transaction",
+                carried.executor().is_none(),
+                "{into:?} runs on a pool its binding opens, and none is bound here",
             );
             assert_eq!(
                 carried.scope,
                 Some(ExecutorScope::Request),
                 "{into:?} keeps the tag"
             );
-        }
-    }
-
-    #[test]
-    fn an_executor_with_no_pool_to_give_crosses_nowhere() {
-        for into in [
-            Continuation::Body,
-            Continuation::Batch,
-            Continuation::Commit,
-        ] {
-            assert!(crossing(stub(), into).is_none(), "{into:?}");
         }
     }
 

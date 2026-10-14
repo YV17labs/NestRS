@@ -43,9 +43,10 @@ pub enum Executor {
     /// [`after_commit`](nest_rs_database::after_commit) inside it runs at once:
     /// the caller emits after its own `commit`.
     Txn(Arc<DatabaseTransaction>),
-    /// A transaction opened on **first data-layer touch**. Installed by the
-    /// HTTP `DbContext` for mutating methods, so a request a guard denies (or
-    /// one that never queries) costs no `BEGIN`/`ROLLBACK` round-trip at all.
+    /// A transaction opened on **first data-layer touch**: what
+    /// [`SeaOrmUnitOfWork`](crate::SeaOrmUnitOfWork) installs for a unit of
+    /// work of its own, so a unit a guard denies (or one that never queries)
+    /// costs no `BEGIN`/`ROLLBACK` round-trip at all.
     /// An [`atomic`](fn@nest_rs_database::atomic) block on the pool, or inside a
     /// caller's [`Txn`](Executor::Txn), runs on one of its own.
     Lazy(Arc<LazyTransaction>),
@@ -400,12 +401,17 @@ impl Drop for LazyTransaction {
 }
 
 /// `work`, wrapped to run under what its unit carries into a
-/// [`Commit`](Continuation::Commit), captured here where it is registered: the
-/// boundary's pool under the scope read here, the ability, every value that
-/// crosses. With nothing to capture it runs on `pool`, or bare without one.
+/// [`Commit`](Continuation::Commit), captured here where it is registered — the
+/// scope, the unit's binding, the ability, every value that crosses — with the
+/// boundary's own `pool` installed inside, outside the transaction it waited
+/// for; bare without one.
 pub(crate) fn held_for_commit(work: Deferred, pool: Option<&DatabaseConnection>) -> Deferred {
-    match (RequestContinuation::capture(Continuation::Commit), pool) {
-        (Some(carried), _) => Box::pin(carried.scope(work)),
+    let carried = RequestContinuation::capture(Continuation::Commit);
+    match (carried, pool) {
+        (Some(carried), Some(pool)) => {
+            Box::pin(carried.scope(with_executor(Executor::Pool(pool.clone()), work)))
+        }
+        (Some(carried), None) => Box::pin(carried.scope(work)),
         (None, Some(pool)) => Box::pin(with_executor(Executor::Pool(pool.clone()), work)),
         (None, None) => work,
     }
@@ -692,18 +698,6 @@ impl nest_rs_database::Executor for Executor {
         }
     }
 
-    /// A caller's own [`Txn`](Executor::Txn) names no pool, so a continuation
-    /// leaving it, or a block inside it, runs without an executor.
-    fn __pool(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
-        let pool = match self {
-            Executor::Pool(pool) => Some(pool),
-            Executor::Lazy(lazy) => lazy.pool(),
-            Executor::Savepoint(block) => block.root().pool(),
-            Executor::Txn(_) => None,
-        }?;
-        Some(Arc::new(Executor::Pool(pool.clone())))
-    }
-
     /// A block on the pool is a transaction of its own; inside a caller's
     /// [`Txn`](Executor::Txn), a savepoint sea-orm nests there; inside a lazy
     /// transaction or another block, a savepoint of its own sent on the same
@@ -791,19 +785,6 @@ mod tests {
         let handle = nest_rs_database::Executor::non_transactional(&lazy)
             .expect("an unopened lazy transaction can step out");
         assert!(matches!(as_seaorm(&handle), Executor::Pool(_)));
-    }
-
-    #[test]
-    fn a_continuation_leaves_a_transaction_for_the_pool_it_was_opened_on() {
-        let lazy = Executor::Lazy(Arc::new(LazyTransaction::new(
-            DatabaseConnection::default(),
-            "test",
-        )));
-        for handle in [lazy, pool()] {
-            let continued = nest_rs_database::Executor::__pool(&handle)
-                .expect("a pool or a lazy transaction names its pool");
-            assert!(matches!(as_seaorm(&continued), Executor::Pool(_)));
-        }
     }
 
     #[test]

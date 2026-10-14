@@ -1,6 +1,6 @@
 //! `#[queue]` + `#[processor]` + `#[process]`: the expansion reaches
-//! `nest-rs-worker`, `nest-rs-pipes` and `nest-rs-queue`, so the umbrella's
-//! `queue` feature must pull all three.
+//! `nest-rs-worker`, `nest-rs-database`, `nest-rs-pipes` and `nest-rs-queue`,
+//! so the umbrella's `queue` feature must pull all four.
 
 use nest_rs::core::{injectable, input};
 use nest_rs::pipes::Valid;
@@ -38,7 +38,7 @@ pub struct HygieneLimit(pub u32);
 #[meta(HygieneLimit(100))]
 impl HygieneProcessor {
     /// `Valid<T>` reaches `nest-rs-pipes`; `transactional = false` names
-    /// `JobTransaction` through `nest-rs-worker`.
+    /// `TransactionPolicy` through `nest-rs-database`.
     #[process(queue = HygieneQueue, retries = 1, transactional = false)]
     #[meta(HygieneLimit(10))]
     async fn transcode(&self, job: Valid<HygieneCommand>) -> nest_rs::core::anyhow::Result<()> {

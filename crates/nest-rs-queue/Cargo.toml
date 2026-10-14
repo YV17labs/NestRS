@@ -32,12 +32,15 @@ serde.workspace = true
 serde_json.workspace = true
 # The job span, the attempt's events and the operation line `consume` files.
 tracing.workspace = true
-# Re-exported for the same reason: `#[process]` runs each handler inside the
-# ambient `JobContext`, so the expansion names the worker seam. Routing it
-# through this crate keeps `nest_rs_queue` the single import a `#[processor]`
-# call site needs — a bare `::nest_rs_worker::` path would resolve against the
-# consumer's extern prelude and break any app that hasn't added the crate.
+# `JOB_TIMEOUT`, the bound an attempt runs within unless its decorator sets one,
+# and `JobTimedOut`, what an attempt cut there reports.
 nest-rs-worker.workspace = true
+# Re-exported for the same reason: `#[process]` runs each attempt as a unit of
+# work through `run_unit`, so the expansion names the port. Routing it through
+# this crate keeps `nest_rs_queue` the single import a `#[processor]` call site
+# needs — a bare `::nest_rs_database::` path would resolve against the
+# consumer's extern prelude and break any app that hasn't added the crate.
+nest-rs-database.workspace = true
 # `BoxFuture`, the future a backend hands the worker for one delivery and for
 # its upkeep.
 futures-util.workspace = true

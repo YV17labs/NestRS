@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -11,11 +12,13 @@ use features::posts::{
 use features::testing::RedisDatabase;
 use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs::core::module;
+use nest_rs::database::{
+    ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
+};
 use nest_rs::queue::{QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
-use nest_rs::worker::{JobContext, JobSettlement, JobTransaction};
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use uuid::Uuid;
 
@@ -100,29 +103,40 @@ async fn status(conn: &DatabaseConnection, id: Uuid) -> PostStatus {
 }
 
 async fn publish_in_an_attempt(
-    context: &dyn JobContext,
+    unit_of_work: &Arc<dyn UnitOfWork>,
     svc: &PostsService,
     conn: &DatabaseConnection,
     id: Uuid,
     actor_id: Uuid,
     attempt_succeeds: bool,
-) -> JobSettlement {
+) -> Settlement {
     let model = Posts::find_by_id(id)
         .one(conn)
         .await
         .expect("read the draft")
         .expect("the draft exists");
-    context
-        .scope(
-            JobTransaction::PerAttempt,
-            Box::pin(async move {
-                svc.publish(model, actor_id)
-                    .await
-                    .expect("the post publishes inside the attempt");
-                attempt_succeeds
-            }),
-        )
-        .await
+    let spec = UnitSpec::new(
+        nest_rs::queue::unit::JOB,
+        ExecutorScope::Job,
+        TransactionPolicy::PerUnit,
+    );
+    let ran = run_unit(
+        Some(unit_of_work),
+        spec,
+        async move {
+            svc.publish(model, actor_id)
+                .await
+                .expect("the post publishes inside the attempt");
+            if attempt_succeeds { Ok(()) } else { Err(None) }
+        },
+        Result::is_ok,
+        |why| Err(Some(why)),
+    )
+    .await;
+    match ran {
+        Err(Some(why)) => Settlement::Unhonoured(why),
+        Ok(()) | Err(None) => Settlement::Settled,
+    }
 }
 
 async fn notifications(conn: &DatabaseConnection) -> Vec<String> {
@@ -157,18 +171,18 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
         .container()
         .get::<PostsService>()
         .expect("PostsService is provided");
-    let context = app
+    let unit_of_work = app
         .container()
-        .get_dyn::<dyn JobContext>()
-        .expect("SeaOrmDatabaseModule binds the job context");
+        .get_dyn::<dyn UnitOfWork>()
+        .expect("SeaOrmDatabaseModule binds the unit of work");
 
     assert_eq!(
-        publish_in_an_attempt(&*context, &svc, &conn, rolled_back, author_id, false).await,
-        JobSettlement::Settled,
+        publish_in_an_attempt(&unit_of_work, &svc, &conn, rolled_back, author_id, false).await,
+        Settlement::Settled,
     );
     assert_eq!(
-        publish_in_an_attempt(&*context, &svc, &conn, committed, author_id, true).await,
-        JobSettlement::Settled,
+        publish_in_an_attempt(&unit_of_work, &svc, &conn, committed, author_id, true).await,
+        Settlement::Settled,
     );
     assert_eq!(status(&conn, rolled_back).await, PostStatus::Draft);
     assert_eq!(status(&conn, committed).await, PostStatus::Published);

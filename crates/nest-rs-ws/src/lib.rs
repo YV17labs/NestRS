@@ -121,15 +121,16 @@
 //! [`Global`]). `#[gateway(namespace = MyNs)]` mounts against its own
 //! `WsServer<MyNs>`, a separate registry also owned by [`WsModule`].
 //!
-//! # Ambient request data context
+//! # Ambient request state and units of work
 //!
 //! The connection loop runs after the upgrade completes, under what the
 //! upgrade carried into a [`Connection`](nest_rs_core::Continuation::Connection):
-//! its trace, its actor and every value that crosses reach each hook and
-//! message, never its scope or its transaction. Each message is a unit of its
-//! own, so what it needs per message — the executor, and the ability while no
-//! guard makes it ambient at the upgrade — the [`SocketContext`] seam captures
-//! from the post-guard upgrade request and re-installs around each dispatch.
+//! its trace, its actor, the ability its guards attached and every value that
+//! crosses reach each hook and message, never its scope or its transaction.
+//! Each message and each connection hook is a unit of work of its own, run
+//! through the bound `nest_rs_database::UnitOfWork`: a message commits unless it
+//! answers an error frame, a hook unless it unwound. The [`SocketContext`] seam
+//! captures from the post-guard upgrade request and wraps each message's unit.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

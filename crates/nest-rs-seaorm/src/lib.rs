@@ -3,10 +3,11 @@
 //!
 //! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
 //!   and opens the one `sea_orm::DatabaseConnection` every binding shares.
-//! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port: the
-//!   `DbContext` request interceptor, which binds each request to an ambient
-//!   [`Executor`] — the pool for a safe method, a transaction for a mutating
-//!   one — and the `WorkerDbContext` bridge for jobs.
+//! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port:
+//!   [`SeaOrmUnitOfWork`], which every edge — an HTTP request, a WS message, an
+//!   MCP operation, a queue attempt, a scheduled tick — runs its unit of work
+//!   through, on an ambient [`Executor`]: the pool, or a transaction opened on
+//!   the unit's first data-layer touch.
 //! - [`SeaOrmHealthModule`] (bare, feature `health`) binds a health indicator.
 //!
 //! Services query through [`Repo`]: every call runs on the ambient executor and
@@ -21,7 +22,7 @@
 //! # use nest_rs_seaorm::sea_orm::{ConnectOptions, Database};
 //! # use nest_rs_seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 //! # use nest_rs_testing::TestApp;
-//! # use nest_rs_worker::JobContext;
+//! # use nest_rs_database::UnitOfWork;
 //! # #[module(providers = [])]
 //! # pub struct UsersModule;
 //! #[module(imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule, UsersModule])]
@@ -33,7 +34,7 @@
 //! # let db = Database::connect(options).await?;
 //! # let app = TestApp::builder().provide(db).module::<AppModule>().build().await?;
 //!
-//! assert!(app.container().get_dyn::<dyn JobContext>().is_some());
+//! assert!(app.container().get_dyn::<dyn UnitOfWork>().is_some());
 //! # Ok(())
 //! # }
 //! ```
@@ -46,8 +47,6 @@
 mod atomic;
 mod config;
 mod database;
-#[cfg(any(feature = "ws", feature = "mcp"))]
-mod dispatch;
 mod error;
 mod executor;
 mod module;
@@ -61,7 +60,7 @@ mod soft_delete;
 pub mod target;
 mod time;
 mod turn;
-mod worker;
+mod unit;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;
@@ -69,10 +68,6 @@ pub mod graphql;
 mod health;
 #[cfg(feature = "http")]
 mod http;
-#[cfg(feature = "mcp")]
-pub mod mcp;
-#[cfg(feature = "ws")]
-pub mod ws;
 
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
@@ -94,7 +89,7 @@ pub use soft_delete::{
     SoftDeletable, SoftDeleteRegistration, audit_soft_delete_bindings, live_condition,
 };
 pub use time::now;
-pub use worker::WorkerDbContext;
+pub use unit::SeaOrmUnitOfWork;
 
 #[cfg(feature = "health")]
 pub use health::{SeaOrmHealthIndicator, SeaOrmHealthModule};

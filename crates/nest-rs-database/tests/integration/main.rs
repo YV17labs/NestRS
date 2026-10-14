@@ -1,5 +1,5 @@
-//! Integration suite for `nest-rs-worker`: the [`nest_rs_worker::JobContext`]
-//! contract through `run_in_job_context`.
+//! Integration suite for `nest-rs-database`: the unit-of-work port through
+//! `run_unit`, against bindings written here the way a driver writes one.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -8,4 +8,4 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
-mod context;
+mod unit;

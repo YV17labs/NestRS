@@ -119,7 +119,6 @@ ws = [
     "dep:nest-rs-ws",
     "http",
     "nest-rs-testing?/ws",
-    "nest-rs-seaorm?/ws",
     "nest-rs-authz?/http",
     "nest-rs-authz?/ws",
 ]
@@ -128,11 +127,10 @@ ws = [
 mcp = [
     "dep:nest-rs-mcp",
     "http",
-    "nest-rs-seaorm?/mcp",
     "nest-rs-authz?/mcp",
 ]
-# `#[processor]` folds pipes over the job payload and reaches the worker-context
-# seam; neither is a crate a `#[process]` method names.
+# `#[processor]` folds pipes over the job payload and names the default job
+# timeout; neither is a crate a `#[process]` method names.
 queue = ["dep:nest-rs-queue", "worker", "pipes"]
 # The one Redis connection (`RedisModule`, `RedisConnection`) and nothing else:
 # an app that sends its own commands, or a health check, compiles no port.

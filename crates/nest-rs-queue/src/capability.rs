@@ -14,7 +14,7 @@ use std::fmt;
 /// **Not a capability, and none the backend's to keep:** the retry budget and
 /// its backoff (`#[process(retries = N)]`) and per-method concurrency
 /// (`concurrency = N`) are the port's; one transaction per attempt
-/// (`transactional`) is the `JobContext`'s the container holds.
+/// (`transactional`) is the bound `UnitOfWork`'s.
 ///
 /// Not the umbrella's Cargo features, which are called capabilities too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -1,13 +1,15 @@
-//! `WorkerDbContext` installs a live executor around a job, so a
-//! `#[scheduled]`/`#[processor]` reaches `Repo`, and settles what the job wrote.
+//! `SeaOrmUnitOfWork` installs a live executor around a job's unit of work, so
+//! a `#[scheduled]`/`#[processor]` reaches `Repo`, and settles what the job
+//! wrote.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nest_rs_core::Container;
-use nest_rs_seaorm::{Executor, WorkerDbContext, current_executor};
-use nest_rs_worker::{JobContext, JobSettlement, JobTransaction};
+use nest_rs_database::{
+    ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
+};
+use nest_rs_seaorm::{Executor, SeaOrmConfig, SeaOrmUnitOfWork, current_executor};
 use sea_orm::{ConnectionTrait, Statement};
 
 /// A table recreated per test, so a rollback is observable as a row count.
@@ -34,9 +36,45 @@ async fn row_count(conn: &sea_orm::DatabaseConnection, name: &str) -> i64 {
     .expect("the count is an integer")
 }
 
-fn context(conn: Arc<sea_orm::DatabaseConnection>) -> Arc<dyn JobContext> {
-    let container = Container::builder().provide_arc(conn).build();
-    Arc::new(WorkerDbContext::from_container(&container))
+/// A queue attempt's unit of work, as the queue edge declares it.
+const JOB: nest_rs_core::operation_log::Unit = nest_rs_core::__private::declare_unit(
+    "nest-rs-queue",
+    "nest_rs::queue",
+    nest_rs_core::operation_log::Kind::Consumer,
+    "queue.job",
+);
+
+/// The binding, run the way the queue edge runs an attempt: the job's `bool`
+/// is its outcome, and the answer is how its unit settled.
+struct Attempts(Arc<dyn UnitOfWork>);
+
+impl Attempts {
+    async fn scope(
+        &self,
+        policy: TransactionPolicy,
+        job: Pin<Box<dyn Future<Output = bool> + Send + '_>>,
+    ) -> Settlement {
+        let spec = UnitSpec::new(JOB, ExecutorScope::Job, policy);
+        let ran = run_unit(
+            Some(&self.0),
+            spec,
+            async move { if job.await { Ok(()) } else { Err(None) } },
+            Result::is_ok,
+            |why| Err(Some(why)),
+        )
+        .await;
+        match ran {
+            Err(Some(why)) => Settlement::Unhonoured(why),
+            Ok(()) | Err(None) => Settlement::Settled,
+        }
+    }
+}
+
+fn context(conn: Arc<sea_orm::DatabaseConnection>) -> Attempts {
+    Attempts(Arc::new(SeaOrmUnitOfWork::new(
+        conn,
+        &SeaOrmConfig::default(),
+    )))
 }
 
 #[tokio::test]
@@ -63,8 +101,8 @@ async fn a_job_runs_in_a_transaction_by_default_and_its_writes_commit() {
         true
     });
     assert_eq!(
-        ctx.scope(JobTransaction::PerAttempt, job).await,
-        JobSettlement::Settled
+        ctx.scope(TransactionPolicy::PerUnit, job).await,
+        Settlement::Settled
     );
 
     assert_eq!(
@@ -93,8 +131,8 @@ async fn a_failed_job_leaves_nothing_for_the_retry_to_repeat() {
         false
     });
     assert_eq!(
-        ctx.scope(JobTransaction::PerAttempt, job).await,
-        JobSettlement::Settled
+        ctx.scope(TransactionPolicy::PerUnit, job).await,
+        Settlement::Settled
     );
 
     assert_eq!(
@@ -123,8 +161,8 @@ async fn the_opt_out_runs_on_the_pool_and_each_statement_stands_alone() {
         false
     });
     assert_eq!(
-        ctx.scope(JobTransaction::Pool, job).await,
-        JobSettlement::Settled
+        ctx.scope(TransactionPolicy::Pool, job).await,
+        Settlement::Settled
     );
 
     assert_eq!(
@@ -159,8 +197,8 @@ async fn a_job_that_swallows_a_db_error_and_returns_ok_is_not_reported_as_succee
         true
     });
 
-    let settlement = ctx.scope(JobTransaction::PerAttempt, job).await;
-    let JobSettlement::Unhonoured(why) = settlement else {
+    let settlement = ctx.scope(TransactionPolicy::PerUnit, job).await;
+    let Settlement::Unhonoured(why) = settlement else {
         panic!("a job whose transaction was aborted cannot be reported as having succeeded");
     };
     assert!(
@@ -203,7 +241,7 @@ async fn a_commit_the_next_attempt_would_lose_too_is_not_retried() {
         true
     });
 
-    let JobSettlement::Unhonoured(why) = ctx.scope(JobTransaction::PerAttempt, job).await else {
+    let Settlement::Unhonoured(why) = ctx.scope(TransactionPolicy::PerUnit, job).await else {
         panic!("a commit that failed cannot be reported as a successful attempt");
     };
     assert!(
@@ -267,7 +305,7 @@ async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
         true
     });
 
-    let JobSettlement::Unhonoured(why) = ctx.scope(JobTransaction::PerAttempt, job).await else {
+    let Settlement::Unhonoured(why) = ctx.scope(TransactionPolicy::PerUnit, job).await else {
         panic!("the losing transaction wrote nothing, so the attempt is a failure");
     };
     assert!(
@@ -296,8 +334,8 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
         true
     });
 
-    let settlement = ctx.scope(JobTransaction::PerAttempt, job).await;
-    let JobSettlement::Unhonoured(why) = settlement else {
+    let settlement = ctx.scope(TransactionPolicy::PerUnit, job).await;
+    let Settlement::Unhonoured(why) = settlement else {
         panic!("a job whose transaction never committed has not been settled");
     };
     assert!(
@@ -312,7 +350,7 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
         "and nothing was written",
     );
 
-    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "job transaction commit failed");
+    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "transaction commit failed");
     assert_eq!(event.level, "error");
     assert_eq!(
         event.field("retryable").as_deref(),
@@ -347,8 +385,8 @@ async fn work_held_for_the_commit_runs_once_the_attempt_committed() {
         true
     });
     assert_eq!(
-        ctx.scope(JobTransaction::PerAttempt, job).await,
-        JobSettlement::Settled
+        ctx.scope(TransactionPolicy::PerUnit, job).await,
+        Settlement::Settled
     );
     assert_eq!(
         sighted(&sightings),
@@ -376,8 +414,8 @@ async fn work_held_by_an_attempt_that_failed_never_runs() {
         false
     });
     assert_eq!(
-        ctx.scope(JobTransaction::PerAttempt, job).await,
-        JobSettlement::Settled
+        ctx.scope(TransactionPolicy::PerUnit, job).await,
+        Settlement::Settled
     );
     assert_eq!(committed_rows(&conn, TABLE).await, 0);
     assert!(sighted(&sightings).is_empty());

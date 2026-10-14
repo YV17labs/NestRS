@@ -3,12 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_util::FutureExt as _;
 use futures_util::future::Either;
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::__private::install_pending;
 use nest_rs_core::{
     Container, Continuation, Correlation, RequestContinuation, RequestScope, operation_log,
 };
+use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_http::__private::OriginPolicy;
 use nest_rs_http::__private::poem_bridge::response_to_poem;
 use nest_rs_http::DetachedWork;
@@ -65,6 +67,7 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
         server,
         guards: Arc::new(guards),
         ctx: container.get_dyn::<dyn SocketContext>(),
+        unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
         pipes: nest_rs_pipes::__private::resolve_global_pipes(container),
         sockets,
         origins: OriginPolicy::from_container(container),
@@ -78,6 +81,9 @@ pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     server: Arc<WsServer<N>>,
     guards: Arc<EventLayerTable>,
     ctx: Option<Arc<dyn SocketContext>>,
+    /// The binding each message and connection hook runs its unit of work
+    /// through; `None` runs them bare.
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     /// The global pipes folded over each message's `data`.
     pipes: Arc<[Arc<dyn GlobalPipe>]>,
     /// Every socket this gateway serves: an upgraded socket outlives the HTTP
@@ -130,6 +136,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         let carried = RequestContinuation::capture(Continuation::Connection);
         let wiring = DispatchWiring {
             ambient,
+            unit_of_work: self.unit_of_work.clone(),
             pipes: Arc::clone(&self.pipes),
             root_container,
             // The connection inherits the upgrade request's id and actor.
@@ -167,6 +174,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
 /// every message.
 struct DispatchWiring {
     ambient: Option<(Arc<dyn SocketContext>, Captured)>,
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     pipes: Arc<[Arc<dyn GlobalPipe>]>,
     root_container: Option<Container>,
     /// The upgrade that opened this socket, actor included: nothing
@@ -240,7 +248,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // Two short spans rather than one wrapping the loop: a parent open for the
     // socket's life would file every message under a span that never closes.
     let set_up = under_connection(
-        &wiring.connection,
+        &wiring,
         Unit::Connect,
         conn_id,
         nest_rs_core::operation_span!(
@@ -346,7 +354,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // The registry guard drops before the writer is awaited, releasing the
     // registry's `Sender` clone so the writer observes the channel close.
     under_connection(
-        &wiring.connection,
+        &wiring,
         Unit::Disconnect,
         conn_id,
         nest_rs_core::operation_span!(
@@ -538,34 +546,77 @@ fn refuse_binary(conn_id: ConnId, bytes: usize) -> String {
     )
 }
 
-/// Run one connection-lifecycle hook under the connection's identity, and say
-/// whether it ran to its end: `false` when it unwound (contained here, filed as
-/// `panic`).
+/// Run one connection-lifecycle hook under the connection's identity, as a
+/// unit of work of its own, and say whether it ran to its end: `false` when it
+/// unwound (contained here, filed as `panic`) or when what it wrote could not
+/// be committed.
 ///
 /// The span is passed in because `tracing` fixes a span's name at the macro.
-async fn under_connection<F: Future<Output = ()>>(
-    connection: &Correlation,
+async fn under_connection<F: Future<Output = ()> + Send>(
+    wiring: &DispatchWiring,
     unit: Unit<'_>,
     conn_id: ConnId,
     span: tracing::Span,
     hook: F,
 ) -> bool {
+    let connection = &wiring.connection;
     let line = UnitLine::open(unit, conn_id, connection.clone(), span.clone());
+    let spec = UnitSpec::new(
+        unit.declared(),
+        ExecutorScope::Request,
+        TransactionPolicy::PerUnit,
+    );
     let ran = nest_rs_core::with_request_scope(
         None,
         connection.clone(),
-        nest_rs_core::panic::contain(hook),
+        run_unit(
+            wiring.unit_of_work.as_ref(),
+            spec,
+            nest_rs_core::panic::contain(hook).map(HookEnd::from),
+            |end| matches!(end, HookEnd::Ran),
+            HookEnd::Unhonoured,
+        ),
     )
     .instrument(span)
     .await;
     match ran {
-        Ok(()) => {
+        HookEnd::Ran => {
             line.file(operation_log::OK);
             true
         }
-        Err(payload) => {
+        HookEnd::Unwound(payload) => {
             line.unwound(&*payload);
             false
+        }
+        HookEnd::Unhonoured(why) => {
+            line.file(operation_log::ERROR);
+            tracing::error!(
+                target: crate::TARGET,
+                conn_id,
+                retryable = why.retryable,
+                reason = why.reason,
+                "websocket connection hook ran, but what it wrote could not be committed",
+            );
+            false
+        }
+    }
+}
+
+/// How a connection hook's unit ended.
+enum HookEnd {
+    /// It ran to its end, and what it wrote stands.
+    Ran,
+    /// It unwound, with what it panicked with.
+    Unwound(Box<dyn std::any::Any + Send>),
+    /// It ran to its end, and its unit of work could not honour it.
+    Unhonoured(nest_rs_database::Unhonoured),
+}
+
+impl From<std::thread::Result<()>> for HookEnd {
+    fn from(ran: std::thread::Result<()>) -> Self {
+        match ran {
+            Ok(()) => Self::Ran,
+            Err(payload) => Self::Unwound(payload),
         }
     }
 }
@@ -579,6 +630,17 @@ enum Unit<'a> {
     Connect,
     /// The disconnect hook.
     Disconnect,
+}
+
+impl Unit<'_> {
+    /// The unit this edge declared for it.
+    const fn declared(self) -> nest_rs_core::operation_log::Unit {
+        match self {
+            Self::Message { .. } => crate::unit::MESSAGE,
+            Self::Connect => crate::unit::CONNECT,
+            Self::Disconnect => crate::unit::DISCONNECT,
+        }
+    }
 }
 
 /// One unit's line, filed exactly once — by the end the connection loop saw,
@@ -692,9 +754,10 @@ impl Drop for UnitLine<'_> {
     }
 }
 
-/// Decode, guard and dispatch one text message. Per-message guards run
-/// **inside** [`SocketContext::around`], so they see the ambient task-locals
-/// (`current_ability()`) the handler does.
+/// Decode, guard and dispatch one text message, as one unit of work. Per-message
+/// guards run **inside** [`SocketContext::around`] and the unit, so they see the
+/// ambient values (`current_ability()`) the handler does, and a denied message
+/// opens no transaction.
 async fn handle_text<G: Gateway>(
     gateway: &G,
     guards: &EventLayerTable,
@@ -728,6 +791,19 @@ async fn handle_text<G: Gateway>(
         }
         install_pending(attached, gateway.dispatch(client, &event_ref, data)).await
     });
+    // Inside the socket context, so what it installs is ambient for the unit.
+    let spec = UnitSpec::new(
+        crate::unit::MESSAGE,
+        ExecutorScope::Request,
+        TransactionPolicy::PerUnit,
+    );
+    let inner: BoxFuture<'_, WsReply> = Box::pin(run_unit(
+        wiring.unit_of_work.as_ref(),
+        spec,
+        inner,
+        |reply| !matches!(reply, WsReply::Error(_)),
+        |_| WsReply::error(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
+    ));
     let dispatch: BoxFuture<'_, WsReply> = match wiring.ambient.as_ref() {
         Some((ctx, captured)) => ctx.around(captured, inner),
         None => inner,
@@ -829,11 +905,12 @@ mod tests {
     #[tokio::test]
     async fn a_connection_hook_runs_under_the_connections_identity() {
         let logs = nest_rs_testing::LogCapture::install();
-        let connection = nest_rs_core::Correlation::minted(None);
+        let wiring = wiring();
+        let connection = wiring.connection.clone();
         let trace_id = connection.trace_id().to_hex();
 
         under_connection(
-            &connection,
+            &wiring,
             Unit::Connect,
             7,
             nest_rs_core::operation_span!(
@@ -956,6 +1033,7 @@ mod tests {
     fn wiring() -> DispatchWiring {
         DispatchWiring {
             ambient: None,
+            unit_of_work: None,
             pipes: Arc::new([]),
             root_container: None,
             connection: nest_rs_core::Correlation::minted(None),

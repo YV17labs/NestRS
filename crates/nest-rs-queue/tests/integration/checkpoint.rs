@@ -104,14 +104,14 @@ async fn a_retry_resumes_from_what_the_failed_attempt_saved() {
     assert!(import.options().checkpoint(), "the parameter declared it");
     let mut delivery = delivery("imports", &store);
 
-    let first = consume::attempt(import, &mut delivery, container.clone()).await;
+    let first = consume::attempt(import, &mut delivery, container.clone(), None).await;
     assert!(matches!(first, AttemptOutcome::Retry { .. }), "{first:?}");
     assert_eq!(
         store.saved(),
         Some(json!(5)),
         "the save reached the backend's store, where a redelivery would read it",
     );
-    let second = consume::attempt(import, &mut delivery, container).await;
+    let second = consume::attempt(import, &mut delivery, container, None).await;
     assert!(matches!(second, AttemptOutcome::Ok), "{second:?}");
 
     assert_eq!(
@@ -132,6 +132,7 @@ async fn a_checkpoint_that_does_not_decode_is_reported_without_its_value() {
         method("ImportProcessor::import_once"),
         &mut delivery,
         container,
+        None,
     )
     .await;
     let AttemptOutcome::DeadLetter(error) = outcome else {
@@ -202,6 +203,7 @@ async fn a_checkpoint_the_store_never_reads_or_saves_fails_the_attempt_retryably
             method("ImportProcessor::import"),
             &mut delivery,
             container,
+            None,
         ))
         .await;
         assert!(

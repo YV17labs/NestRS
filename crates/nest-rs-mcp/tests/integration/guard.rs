@@ -167,8 +167,7 @@ async fn an_operation_guards_around_installs_ambient_state_with_no_tool_context(
     assert!(
         body.contains("ambient") && !body.contains("bare"),
         "the guard's `around` must install its state across rmcp's spawn — \
-         without it the ambient ability only exists when `McpDataContext` is \
-         also registered. Body: {body}",
+         without it no ambient ability reaches the tool. Body: {body}",
     );
 }
 

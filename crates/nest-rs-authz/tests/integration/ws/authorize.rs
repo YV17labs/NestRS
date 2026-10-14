@@ -1,7 +1,7 @@
 //! The class-level gate `#[authorize(Action, Entity)]` desugars to on a message.
 //!
-//! Includes the WS-specific case: a gateway whose data context was never
-//! registered has no ambient ability when a message arrives, and fails closed.
+//! Includes the WS-specific case: a gateway whose upgrade attached no ability
+//! has none ambient when a message arrives, and fails closed.
 
 use nest_rs_authz::{AbilityBuilder, Action, Read, Update};
 use nest_rs_ws::{Gateway, WsClient, WsError, WsReply, gateway, messages};
@@ -82,7 +82,7 @@ async fn a_public_message_needs_no_ability_at_all() {
         .await;
     assert!(
         body(reply).contains("open"),
-        "`#[public]` emits no gate, so it does not depend on the data context",
+        "`#[public]` emits no gate, so it does not depend on an ambient ability",
     );
 }
 

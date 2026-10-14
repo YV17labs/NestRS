@@ -70,8 +70,8 @@
 //! ```
 //!
 //! There is no `WsAbilityBridge`: a gateway is `Gated`, so the HTTP guards run
-//! on the upgrade. Per message only the ambient ability is re-installed, by
-//! `nest_rs_seaorm::ws::WsDataContext` (`dyn SocketContext`).
+//! on the upgrade, and the ability they attach crosses the connection into
+//! each message.
 
 mod authorize;
 mod mask;

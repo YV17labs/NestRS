@@ -2700,9 +2700,11 @@ dependencies = [
 name = "nest-rs-database"
 version = "7.0.0"
 dependencies = [
+ "futures-util",
  "nest-rs-core",
  "thiserror 2.0.21",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2918,6 +2920,7 @@ dependencies = [
  "nest-rs-codegen",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-mcp-macros",
@@ -3071,6 +3074,7 @@ dependencies = [
  "nest-rs-codegen",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-http",
  "nest-rs-pipes",
  "nest-rs-queue-macros",
@@ -3113,7 +3117,6 @@ dependencies = [
  "nest-rs-schedule",
  "nest-rs-testing",
  "nest-rs-throttler",
- "nest-rs-worker",
  "redis",
  "rustls",
  "serde",
@@ -3140,6 +3143,7 @@ dependencies = [
  "libc",
  "nest-rs-codegen",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-schedule-macros",
  "nest-rs-testing",
  "nest-rs-worker",
@@ -3363,12 +3367,6 @@ dependencies = [
 [[package]]
 name = "nest-rs-worker"
 version = "7.0.0"
-dependencies = [
- "futures-util",
- "nest-rs-testing",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "nest-rs-ws"
@@ -3378,6 +3376,7 @@ dependencies = [
  "futures-util",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-interceptors",

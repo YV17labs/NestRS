@@ -12,7 +12,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use nest_rs_core::Container;
-use nest_rs_worker::JobTransaction;
+use nest_rs_database::TransactionPolicy;
 
 use crate::{Replicas, Trigger};
 
@@ -41,8 +41,8 @@ pub struct CronJobMeta {
     pub timeout: Duration,
     /// How this job's data-layer work is settled — from the `transactional`
     /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one
-    /// transaction per attempt.
-    pub transaction: JobTransaction,
+    /// transaction per run.
+    pub transaction: TransactionPolicy,
     /// How many replicas fire each occurrence — from the `replicas` key on its
     /// `#[every]` / `#[cron]`, defaulting to every replica.
     pub replicas: Replicas,
@@ -72,8 +72,8 @@ pub struct ScheduledMethod {
     pub timeout: Duration,
     /// How this job's data-layer work is settled — from the `transactional`
     /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one
-    /// transaction per attempt.
-    pub transaction: JobTransaction,
+    /// transaction per run.
+    pub transaction: TransactionPolicy,
     /// How many replicas fire each occurrence — from the `replicas` key on its
     /// `#[every]` / `#[cron]`, defaulting to every replica.
     pub replicas: Replicas,

@@ -346,8 +346,9 @@ pub struct AuthzGraphqlModule;
 forward_principal!(Claims);
 "#;
 
-// authz/ws/ — the `dyn SocketContext` carrying a gateway connection's data
-// scope (`nestrs g ws`); the upgrade reuses the HTTP guards.
+// authz/ws/ — what a gateway imports to serve rows (`nestrs g ws`): the
+// upgrade reuses the HTTP guards, and the ability they attach crosses the
+// connection into every message's unit of work.
 
 pub(crate) const AUTHZ_WS_MOD: &str = r#"mod module;
 
@@ -355,17 +356,11 @@ pub use module::AuthzWsModule;
 "#;
 
 pub(crate) const AUTHZ_WS_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::seaorm::ws::WsDataContext;
-use nest_rs::ws::{SocketContext, WsModule};
+use nest_rs::ws::WsModule;
 
 use crate::authz::AuthzModule;
 
-#[module(
-    imports = [AuthzModule, WsModule],
-    providers = [
-        WsDataContext as dyn SocketContext,
-    ],
-)]
+#[module(imports = [AuthzModule, WsModule])]
 pub struct AuthzWsModule;
 "#;
 
@@ -390,8 +385,7 @@ pub type AuthzMcpBridge = McpAbilityBridge<AuthnGuard, AuthzGuard>;
 "#;
 
 pub(crate) const AUTHZ_MCP_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::mcp::{McpOperationGuard, McpToolContext};
-use nest_rs::seaorm::mcp::McpDataContext;
+use nest_rs::mcp::McpOperationGuard;
 
 use super::bridge::AuthzMcpBridge;
 use crate::authz::AuthzModule;
@@ -400,7 +394,6 @@ use crate::authz::AuthzModule;
     imports = [AuthzModule],
     providers = [
         AuthzMcpBridge as dyn McpOperationGuard,
-        McpDataContext as dyn McpToolContext,
     ],
 )]
 pub struct AuthzMcpModule;

@@ -37,10 +37,6 @@ impl nest_rs_database::Executor for AtomicExecutor {
         nest_rs_database::Executor::after_commit(&self.0, work)
     }
 
-    fn __pool(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
-        self.0.__pool()
-    }
-
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
         self.0.atomic()
     }

@@ -411,8 +411,8 @@ static GRAPHQL_BRIDGE: AuthzBridge = AuthzBridge {
 };
 
 /// A WS upgrade is an HTTP GET, so a gateway reuses the HTTP guards rather than
-/// a bridge of its own — what it needs is the `dyn SocketContext` carrying the
-/// connection's data scope.
+/// a bridge of its own: the ability they attach crosses the connection into
+/// every message.
 static WS_BRIDGE: AuthzBridge = AuthzBridge {
     dir: "ws",
     module: "AuthzWsModule",
@@ -424,8 +424,8 @@ static WS_BRIDGE: AuthzBridge = AuthzBridge {
     ],
     rationale: &[
         "A gateway reuses the HTTP guards — bind #[use_guards(AuthnGuard, AuthzGuard)]",
-        "on the struct and import AuthzWsModule in the adapter's module.rs. It carries",
-        "the dyn SocketContext that scopes the connection's rows to the caller.",
+        "on the struct and import AuthzWsModule in the adapter's module.rs: the ability",
+        "the upgrade attaches scopes every message's rows to the caller.",
     ],
     deps: &[
         &super::cargo::AUTHZ,

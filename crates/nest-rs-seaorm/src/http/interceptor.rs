@@ -5,33 +5,34 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use sea_orm::DatabaseConnection;
 
-use crate::SeaOrmConfig;
-use crate::error::CommitError;
-use crate::executor::{Executor, FinalizeOutcome, LazyTransaction, with_request_executor};
+use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
-/// The request interceptor that installs the ambient [`Executor`] — the pool for
-/// a safe method, a **lazily opened** per-request transaction (committed on
-/// 2xx/3xx, rolled back otherwise; never opened when nothing touches the data
-/// layer) for a mutating one. Auto-mounted at band −10 by importing
+/// The request interceptor that runs each HTTP request as one unit of work
+/// through the bound [`UnitOfWork`]: the pool for a safe method, a **lazily
+/// opened** transaction (committed on 2xx/3xx, rolled back otherwise; never
+/// opened when nothing touches the data layer) for a mutating one.
+/// Auto-mounted at band −10 by importing
 /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule).
 #[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
-    db: Arc<DatabaseConnection>,
-    #[inject]
-    config: Arc<SeaOrmConfig>,
+    unit: Arc<dyn UnitOfWork>,
 }
 
 impl DbContext {
-    /// Construct the interceptor from a pool and config.
+    /// The interceptor over SeaORM's unit of work on `db`, configured by
+    /// `config`.
     pub fn new(db: Arc<DatabaseConnection>, config: Arc<SeaOrmConfig>) -> Self {
-        Self { db, config }
+        Self {
+            unit: Arc::new(SeaOrmUnitOfWork::new(db, &config)),
+        }
     }
 }
 
@@ -40,54 +41,19 @@ impl Layer for DbContext {}
 #[async_trait]
 impl Interceptor for DbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        if is_safe(req.method()) {
-            return with_request_executor(Executor::Pool((*self.db).clone()), next.run(req)).await;
-        }
-
-        let lazy = Arc::new(LazyTransaction::new((*self.db).clone(), "http"));
-
-        let result = with_request_executor(Executor::Lazy(lazy.clone()), next.run(req)).await;
-
-        let success = should_commit(&result);
-        match lazy.finalize(success).await {
-            FinalizeOutcome::NoTransaction
-            | FinalizeOutcome::Committed
-            | FinalizeOutcome::RolledBack => result,
-            // A success here would report writes that were never committed.
-            FinalizeOutcome::Escaped => {
-                if success {
-                    Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
-                } else {
-                    result
-                }
-            }
-            FinalizeOutcome::CommitFailed(err) => Err(commit_failure(
-                err,
-                self.config.observe_serialization_conflicts,
-            )),
-            // The handler answered 2xx over a failed statement: its writes are lost.
-            FinalizeOutcome::Poisoned { .. } => {
-                Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
-            }
-        }
+        let policy = if is_safe(req.method()) {
+            TransactionPolicy::Pool
+        } else {
+            TransactionPolicy::PerUnit
+        };
+        let spec = UnitSpec::new(nest_rs_http::unit::REQUEST, ExecutorScope::Request, policy);
+        // A success here would report writes that were never committed; the
+        // driver logged why.
+        run_unit(Some(&self.unit), spec, next.run(req), should_commit, |_| {
+            Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+        })
+        .await
     }
-}
-
-/// Never retried: `next.run` consumed the request, so the handler is not
-/// replayable here.
-fn commit_failure(err: CommitError, observe_conflicts: bool) -> Error {
-    if observe_conflicts && err.is_retryable_conflict() {
-        tracing::warn!(
-            target: crate::target::ORM,
-            error = %nest_rs_core::error_message(&err),
-            hint = "not retried here (handler is not replayable from the interceptor); \
-                    use `retry::retry_on_conflict` at a programmatic transaction boundary",
-            "serialization conflict at commit",
-        );
-    } else {
-        tracing::error!(target: crate::target::ORM, error = %nest_rs_core::error_message(&err), "transaction commit failed");
-    }
-    Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn is_safe(method: &Method) -> bool {

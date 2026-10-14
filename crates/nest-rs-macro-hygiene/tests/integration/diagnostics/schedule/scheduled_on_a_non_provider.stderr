@@ -16,7 +16,5 @@ help: the trait `ProviderResidency` is not implemented for `Plain`
              GraphqlAbilityBridge<A, G>
              HealthService
              McpAbilityBridge<A, G>
-             McpDataContext
              SeaOrmHealthIndicator
-             WorkerDbContext
-           and $N others
+             WsServer<N>

@@ -86,9 +86,10 @@ Review a new edge, or a change to one, against it:
    rejection is the edge's native error.
 8. **A named compile error for every layer family the edge does not bridge** —
    extend `reject_http_only_layers`, never add a second.
-9. **Request scope and a data context** — `Scoped<T>`, and the executor and
-   ability re-installed per dispatch through `nest_rs_seaorm`'s
-   `dispatch::with_data_context`, so commit and rollback cannot drift.
+9. **Request scope and a unit of work** — `Scoped<T>`, and each dispatch run
+   through `nest_rs_database::run_unit` over the `dyn UnitOfWork` resolved at
+   mount, committing on the edge's own outcome, so commit and rollback cannot
+   drift (`data-layer.md`).
 10. **A `#[config]` and its `for_root`** (`container.md`).
 11. **Error opacity** — an error that is neither the edge's own deliberate
     error, a `nest_rs_core::ToProblem` error where the edge reads one, nor
@@ -130,8 +131,8 @@ Review a new edge, or a change to one, against it:
     `demo/`; a use site in `nest-rs-macro-hygiene`; its `nestrs generate`
     adapter generator (`cli.md`).
 
-Argued, not gaps: a WS gateway owns its mount, and on WS the data context, not
-an operation guard, installs the ability (`data-layer.md`, *Extractors and
+Argued, not gaps: a WS gateway owns its mount, and on WS the connection, not
+an operation guard, carries the ability (`data-layer.md`, *Extractors and
 bridges*).
 
 ## The way down at an edge (`container.md` states the invariant)

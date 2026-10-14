@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use nest_rs_core::Container;
 use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
-use nest_rs_queue::__private::{HandlerContext, nest_rs_worker};
+use nest_rs_queue::__private::{HandlerContext, nest_rs_database};
 use nest_rs_queue::{
     JobError, JobId, NEWER_RELEASE_PATIENCE, NEWER_RELEASE_WAIT, ProcessMethod, ProcessOptions,
     QueueBackend, QueueName, Throttle, WIRE_FORMAT_VERSION, processor, queue,
@@ -44,6 +44,7 @@ async fn an_enveloped_job_reaches_its_method_through_an_attempt() {
         method("TranscodeProcessor::transcode"),
         &mut delivery,
         container,
+        None,
     )
     .await;
 
@@ -68,6 +69,7 @@ async fn an_unversioned_payload_runs_and_warns_naming_its_queue() {
         method("TranscodeProcessor::transcode"),
         &mut delivery,
         container,
+        None,
     )
     .await;
 
@@ -90,6 +92,7 @@ async fn an_unversioned_payload_runs_and_warns_naming_its_queue() {
         method("TranscodeProcessor::transcode"),
         &mut delivery,
         container,
+        None,
     )
     .await;
     assert_eq!(
@@ -109,6 +112,7 @@ async fn a_missing_provider_and_an_undecodable_payload_dead_letter_without_panic
         method("TranscodeProcessor::transcode"),
         &mut transcode_delivery("x.wav"),
         Container::builder().build(),
+        None,
     )
     .await;
     let AttemptOutcome::DeadLetter(error) = missing else {
@@ -128,6 +132,7 @@ async fn a_missing_provider_and_an_undecodable_payload_dead_letter_without_panic
         method("TranscodeProcessor::transcode"),
         &mut drifted,
         Container::builder().provide(TranscodeProcessor).build(),
+        None,
     )
     .await;
     let AttemptOutcome::DeadLetter(error) = undecodable else {
@@ -189,6 +194,7 @@ async fn an_undecodable_payload_is_dead_lettered_without_its_values() {
             method("ChargeProcessor::charge"),
             &mut delivery,
             Container::builder().provide(ChargeProcessor).build(),
+            None,
         )
         .await;
         let AttemptOutcome::DeadLetter(error) = outcome else {
@@ -273,6 +279,7 @@ async fn receipt_attempt(
         method(method_name),
         &mut delivery,
         Container::builder().provide(ReceiptProcessor).build(),
+        None,
     )
     .await;
     (outcome, logs)
@@ -364,6 +371,7 @@ async fn a_piped_job_argument_runs_its_pipe_before_the_handler() {
         method("TrimProcessor::trim"),
         &mut delivery,
         Container::builder().provide(TrimProcessor).build(),
+        None,
     )
     .await;
 
@@ -408,6 +416,7 @@ async fn a_list_a_pipe_refuses_is_dead_lettered_without_the_refused_item() {
         method("IdListProcessor::ids"),
         &mut delivery,
         Container::builder().provide(IdListProcessor).build(),
+        None,
     )
     .await;
 
@@ -472,9 +481,9 @@ async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_va
         json!({ "v": WIRE_FORMAT_VERSION, "payload": "sk_live_51HsecretTOKEN" }),
     );
 
-    let first = consume::attempt(sign_up, &mut delivery, container.clone()).await;
+    let first = consume::attempt(sign_up, &mut delivery, container.clone(), None).await;
     assert!(matches!(first, AttemptOutcome::Retry { .. }), "{first:?}");
-    let last = consume::attempt(sign_up, &mut delivery, container).await;
+    let last = consume::attempt(sign_up, &mut delivery, container, None).await;
 
     let AttemptOutcome::DeadLetter(error) = last else {
         panic!("the second attempt spends the budget: {last:?}");
@@ -495,39 +504,58 @@ async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_va
     assert_never_quoted(&logs, "sk_live");
 }
 
-/// A context that reports it could not honour the attempt, carrying the
-/// classification a `WorkerDbContext` reaches from the database's own error.
-struct Unsettleable(nest_rs_worker::Unhonoured);
+/// A unit of work that reports it could not honour the attempt, carrying the
+/// classification a driver reaches from the database's own error.
+struct Unsettleable(nest_rs_database::Unhonoured);
 
-impl nest_rs_worker::JobContext for Unsettleable {
-    fn scope<'a>(
-        &'a self,
-        _transaction: nest_rs_worker::JobTransaction,
-        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = nest_rs_worker::JobSettlement> + Send + 'a>> {
-        Box::pin(async move {
-            inner.await;
-            nest_rs_worker::JobSettlement::Unhonoured(self.0)
-        })
+struct UnsettleableUnit(nest_rs_database::Unhonoured);
+
+/// The handle an unsettleable unit installs.
+struct Nowhere;
+
+impl nest_rs_database::Executor for Nowhere {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
-async fn settle(why: nest_rs_worker::Unhonoured) -> AttemptOutcome {
-    let container = Container::builder()
-        .provide(TranscodeProcessor)
-        .provide_dyn::<dyn nest_rs_worker::JobContext>(Arc::new(Unsettleable(why)))
-        .build();
+impl nest_rs_database::UnitOfWork for Unsettleable {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(UnsettleableUnit(self.0)))
+    }
+}
+
+impl nest_rs_database::OpenUnit for UnsettleableUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(Nowhere)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        _ok: bool,
+    ) -> Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        let why = self.0;
+        Box::pin(async move { nest_rs_database::Settlement::Unhonoured(why) })
+    }
+}
+
+async fn settle(why: nest_rs_database::Unhonoured) -> AttemptOutcome {
+    let container = Container::builder().provide(TranscodeProcessor).build();
     consume::attempt(
         method("TranscodeProcessor::transcode"),
         &mut transcode_delivery("drained.wav"),
         container,
+        Some(Arc::new(Unsettleable(why))),
     )
     .await
 }
 
 #[tokio::test]
-async fn an_attempt_its_context_could_not_settle_carries_the_classification() {
-    let transient = settle(nest_rs_worker::Unhonoured::retryable(
+async fn an_attempt_its_unit_could_not_settle_carries_the_classification() {
+    let transient = settle(nest_rs_database::Unhonoured::retryable(
         "the job's transaction could not be committed",
     ))
     .await;
@@ -536,7 +564,7 @@ async fn an_attempt_its_context_could_not_settle_carries_the_classification() {
         "a serialization conflict is what the retry budget is for: {transient:?}",
     );
 
-    let deterministic = settle(nest_rs_worker::Unhonoured::deterministic(
+    let deterministic = settle(nest_rs_database::Unhonoured::deterministic(
         "the job's transaction could not be committed",
     ))
     .await;
@@ -546,7 +574,7 @@ async fn an_attempt_its_context_could_not_settle_carries_the_classification() {
     assert_eq!(
         error.to_string(),
         "the job's transaction could not be committed",
-        "the sentence the context wrote is what the dead-letter record carries",
+        "the sentence the driver wrote is what the dead-letter record carries",
     );
 }
 
@@ -577,7 +605,7 @@ async fn a_retryable_failure_runs_again_while_the_budget_lasts_then_dead_letters
     let mut attempts = Vec::new();
     for _ in 1..=3 {
         attempts.push(delivery.attempt());
-        outcomes.push(consume::attempt(flaky, &mut delivery, container.clone()).await);
+        outcomes.push(consume::attempt(flaky, &mut delivery, container.clone(), None).await);
     }
     assert_eq!(
         attempts,
@@ -630,7 +658,12 @@ async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace(
     let mut delivery = transcode_delivery("stuck.wav");
 
     {
-        let attempt = consume::attempt(method("StuckProcessor::stuck"), &mut delivery, container);
+        let attempt = consume::attempt(
+            method("StuckProcessor::stuck"),
+            &mut delivery,
+            container,
+            None,
+        );
         tokio::select! {
             outcome = attempt => panic!("the stuck method settled: {outcome:?}"),
             () = STUCK_STARTED.notified() => {}
@@ -692,7 +725,7 @@ async fn two_attempts(value: serde_json::Value) -> nest_rs_testing::LogCapture {
         value,
     );
     for _ in 1..=2 {
-        let outcome = consume::attempt(flaky, &mut delivery, container.clone()).await;
+        let outcome = consume::attempt(flaky, &mut delivery, container.clone(), None).await;
         assert!(
             matches!(outcome, AttemptOutcome::Retry { .. }),
             "{outcome:?}"
@@ -902,14 +935,14 @@ async fn two_refiled_attempts(
     let flaky = method("FlakyProcessor::flaky");
     let queue = || QueueName::new("transcode").expect("a valid name");
     let mut first = Delivery::new(&FULL, queue(), value);
-    let outcome = consume::attempt(flaky, &mut first, container.clone()).await;
+    let outcome = consume::attempt(flaky, &mut first, container.clone(), None).await;
     assert!(
         matches!(outcome, AttemptOutcome::Retry { .. }),
         "{outcome:?}"
     );
     let refiled = first.retry_envelope().into_json();
     let mut second = Delivery::new(&FULL, queue(), refiled.clone());
-    let outcome = consume::attempt(flaky, &mut second, container).await;
+    let outcome = consume::attempt(flaky, &mut second, container, None).await;
     assert!(
         matches!(outcome, AttemptOutcome::Retry { .. }),
         "{outcome:?}"
@@ -1026,7 +1059,7 @@ fn fresh_job_id() -> String {
 /// never reaches.
 async fn attempt_newer(delivery: &mut Delivery) -> AttemptOutcome {
     let container = Container::builder().provide(FlakyProcessor).build();
-    consume::attempt(method("FlakyProcessor::flaky"), delivery, container).await
+    consume::attempt(method("FlakyProcessor::flaky"), delivery, container, None).await
 }
 
 #[tokio::test]
@@ -1390,6 +1423,7 @@ async fn an_attempt_is_named_for_its_queue() {
         method("TranscodeProcessor::transcode"),
         &mut delivery,
         container,
+        None,
     )
     .await;
 
@@ -1460,6 +1494,7 @@ async fn the_job_id_is_the_envelopes_and_the_backends_own_id_rides_beside_it() {
         method("TranscodeProcessor::transcode"),
         &mut delivery,
         container,
+        None,
     )
     .await;
     assert!(matches!(outcome, AttemptOutcome::Ok), "{outcome:?}");
@@ -1485,7 +1520,13 @@ async fn a_record_naming_no_job_id_runs_under_one_minted_for_its_delivery() {
         "a v7, as a push mints"
     );
 
-    let outcome = consume::attempt(method("FlakyProcessor::flaky"), &mut delivery, container).await;
+    let outcome = consume::attempt(
+        method("FlakyProcessor::flaky"),
+        &mut delivery,
+        container,
+        None,
+    )
+    .await;
     assert!(
         matches!(outcome, AttemptOutcome::Retry { .. }),
         "{outcome:?}"
@@ -1504,7 +1545,7 @@ async fn a_retry_says_how_long_to_wait_before_the_next_attempt() {
     let mut waits = Vec::new();
     for _ in 1..=2 {
         let AttemptOutcome::Retry { after } =
-            consume::attempt(flaky, &mut delivery, container.clone()).await
+            consume::attempt(flaky, &mut delivery, container.clone(), None).await
         else {
             panic!("the budget holds two retries");
         };
@@ -1545,7 +1586,13 @@ async fn an_envelope_re_filed_for_a_later_attempt_spends_the_budget_from_there()
     );
     assert_eq!(delivery.attempt(), 3);
 
-    let outcome = consume::attempt(method("FlakyProcessor::flaky"), &mut delivery, container).await;
+    let outcome = consume::attempt(
+        method("FlakyProcessor::flaky"),
+        &mut delivery,
+        container,
+        None,
+    )
+    .await;
     assert!(
         matches!(outcome, AttemptOutcome::DeadLetter(_)),
         "{outcome:?}"
@@ -1576,7 +1623,7 @@ async fn the_record_re_filed_after_a_retry_is_delivered_as_the_next_attempt() {
             "traceparent": enqueue.traceparent().to_string(),
         }),
     );
-    let outcome = consume::attempt(flaky, &mut first, container.clone()).await;
+    let outcome = consume::attempt(flaky, &mut first, container.clone(), None).await;
     assert!(
         matches!(outcome, AttemptOutcome::Retry { .. }),
         "{outcome:?}"
@@ -1591,7 +1638,7 @@ async fn the_record_re_filed_after_a_retry_is_delivered_as_the_next_attempt() {
     );
     assert_eq!(second.attempt(), 2);
     assert_eq!(second.id().to_string(), JOB_ID);
-    consume::attempt(flaky, &mut second, container).await;
+    consume::attempt(flaky, &mut second, container, None).await;
 
     let spans = job_spans(&logs);
     assert_eq!(spans.len(), 2, "{spans:#?}");

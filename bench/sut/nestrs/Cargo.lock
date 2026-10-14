@@ -1706,8 +1706,11 @@ dependencies = [
 name = "nest-rs-database"
 version = "7.0.0"
 dependencies = [
+ "futures-util",
  "nest-rs-core",
  "thiserror",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1820,7 +1823,6 @@ dependencies = [
  "nest-rs-interceptors",
  "nest-rs-pipes",
  "nest-rs-seaorm-macros",
- "nest-rs-worker",
  "poem",
  "schemars",
  "sea-orm",
@@ -1842,13 +1844,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "nest-rs-worker"
-version = "7.0.0"
-dependencies = [
- "tracing",
 ]
 
 [[package]]

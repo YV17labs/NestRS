@@ -399,15 +399,17 @@ pub fn job_returns_a_result(member: JobDecorator) -> String {
     )
 }
 
-/// The `JobTransaction` variant a parsed value selects, rooted at the surface
-/// path re-exporting `nest_rs_worker` that the calling macro emits through
-/// (`::nest_rs_queue::__private`, `::nest_rs_schedule`).
+/// The `TransactionPolicy` variant a parsed value selects, rooted at the
+/// surface path re-exporting `nest_rs_database` that the calling macro emits
+/// through (`::nest_rs_queue::__private`, `::nest_rs_schedule`).
 ///
-/// `None` — the key was not written — is `PerAttempt`, spelled out.
+/// `None` — the key was not written — is `PerUnit`, spelled out.
 pub fn job_transaction(value: Option<bool>, surface: &TokenStream) -> TokenStream {
     match value {
-        Some(false) => quote! { #surface::nest_rs_worker::JobTransaction::Pool },
-        Some(true) | None => quote! { #surface::nest_rs_worker::JobTransaction::PerAttempt },
+        Some(false) => quote! { #surface::nest_rs_database::TransactionPolicy::Pool },
+        Some(true) | None => {
+            quote! { #surface::nest_rs_database::TransactionPolicy::PerUnit }
+        }
     }
 }
 

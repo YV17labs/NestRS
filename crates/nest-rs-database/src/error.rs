@@ -1,3 +1,54 @@
+/// A successful unit its driver could not honour: what went wrong, and whether
+/// running the same unit again could end differently.
+///
+/// A driver answers from what the database reported, never from a guess: a
+/// serialization failure or a deadlock is retryable; a constraint violation is
+/// not, nor a commit whose outcome is *unknown*, which may have landed.
+///
+/// It can grow within 7.x: read its fields, and build one through a
+/// constructor, never a literal:
+///
+/// ```compile_fail,E0639
+/// let why = nest_rs_database::Unhonoured {
+///     reason: "the unit's transaction could not be committed",
+///     retryable: false,
+/// };
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Unhonoured {
+    /// What the driver could not do, as the sentence the edge reports; the
+    /// database's own error is logged by the driver that saw it.
+    pub reason: &'static str,
+    /// Whether re-running the unit could produce a different outcome.
+    pub retryable: bool,
+}
+
+impl Unhonoured {
+    /// A failure whose retryability was read off what the backend said.
+    pub const fn new(reason: &'static str, retryable: bool) -> Self {
+        Self { reason, retryable }
+    }
+
+    /// A failure a retry could clear.
+    pub const fn retryable(reason: &'static str) -> Self {
+        Self::new(reason, true)
+    }
+
+    /// A failure a retry would only repeat.
+    pub const fn deterministic(reason: &'static str) -> Self {
+        Self::new(reason, false)
+    }
+}
+
+impl std::fmt::Display for Unhonoured {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason)
+    }
+}
+
+impl std::error::Error for Unhonoured {}
+
 /// Why an atomic block could not keep its promise.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]

@@ -8,13 +8,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::{Container, Transport};
-use nest_rs_schedule::nest_rs_worker::{JOB_TIMEOUT, JobSettlement, JobTransaction};
+use nest_rs_schedule::nest_rs_database::{
+    self, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
+};
+use nest_rs_schedule::nest_rs_worker::JOB_TIMEOUT;
 use nest_rs_schedule::{
     CronExpression, CronJobMeta, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError,
     Replicas, RunFn, Scheduler, Trigger,
 };
 use nest_rs_testing::LogCapture;
-use nest_rs_worker::{self, JobContext};
 use tokio_util::sync::CancellationToken;
 
 static INTERVAL_HITS: AtomicU64 = AtomicU64::new(0);
@@ -61,7 +63,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             trigger: Trigger::Interval(Duration::from_millis(200)),
             run: tick_interval,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -72,7 +74,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             trigger: Trigger::Timeout(Duration::from_millis(300)),
             run: tick_timeout,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -86,7 +88,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             },
             run: tick_cron,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -152,7 +154,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_panic,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -163,7 +165,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_survivor,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -231,7 +233,7 @@ async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancell
             trigger: Trigger::Timeout(Duration::from_millis(10)),
             run: tick_stuck,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -327,7 +329,7 @@ async fn invalid_cron_expression_fails_configure() {
             },
             run: tick_cron,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -358,7 +360,7 @@ async fn a_cron_jobs_boot_line_names_its_zone_and_the_database_release_it_read()
         },
         run: tick_cron,
         timeout: JOB_TIMEOUT,
-        transaction: JobTransaction::PerAttempt,
+        transaction: TransactionPolicy::PerUnit,
         replicas: Replicas::Each,
         key: None,
     };
@@ -391,31 +393,53 @@ async fn a_cron_jobs_boot_line_names_its_zone_and_the_database_release_it_read()
     assert_eq!(utc.field("tzdb"), None, "UTC is read from no database");
 }
 
-// A `JobContext` stub installing an ambient marker the job observes.
-tokio::task_local! {
-    static MARKER: u8;
+/// A unit of work whose executor is a marker the tick observes, recording the
+/// spec it was opened under and how it was settled; `answer` is what its settle
+/// says.
+struct Marking {
+    answer: Settlement,
+}
+
+/// The handle a marking unit installs.
+struct Marker;
+
+impl nest_rs_database::Executor for Marker {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+static OPENED_AS: std::sync::Mutex<Option<(&'static str, ExecutorScope, TransactionPolicy)>> =
+    std::sync::Mutex::new(None);
+
+struct MarkingUnit(Settlement);
+
+impl UnitOfWork for Marking {
+    fn open(&self, spec: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
+        *OPENED_AS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((spec.unit.name(), spec.scope, spec.policy));
+        Ok(Box::new(MarkingUnit(self.answer)))
+    }
+}
+
+impl OpenUnit for MarkingUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(Marker)
+    }
+
+    fn settle(self: Box<Self>, _ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
+        let answer = self.0;
+        Box::pin(async move { answer })
+    }
 }
 
 static OBSERVED_MARKER: AtomicBool = AtomicBool::new(false);
 
-struct MarkerContext;
-
-impl JobContext for MarkerContext {
-    fn scope<'a>(
-        &'a self,
-        _transaction: JobTransaction,
-        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
-        Box::pin(async move {
-            MARKER.scope(7, inner).await;
-            JobSettlement::Settled
-        })
-    }
-}
-
 fn tick_observe(_: &Container) -> RunFuture<'_> {
     Box::pin(async {
-        if MARKER.try_with(|m| *m) == Ok(7) {
+        if nest_rs_database::current_executor().is_some_and(|e| e.as_any().is::<Marker>()) {
             OBSERVED_MARKER.store(true, Ordering::SeqCst);
         }
         Ok(())
@@ -423,11 +447,13 @@ fn tick_observe(_: &Container) -> RunFuture<'_> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn jobs_run_inside_the_bound_job_context() {
+async fn a_tick_runs_as_a_unit_of_work_of_the_bound_binding() {
     struct ObserveHost;
 
     let container = crate::hermetic()
-        .provide_dyn::<dyn JobContext>(Arc::new(MarkerContext))
+        .provide_dyn::<dyn UnitOfWork>(Arc::new(Marking {
+            answer: Settlement::Settled,
+        }))
         .attach_meta::<ObserveHost, CronJobMeta>(CronJobMeta {
             origin: module_path!(),
             provider: "ObserveHost",
@@ -435,7 +461,7 @@ async fn jobs_run_inside_the_bound_job_context() {
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_observe,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -458,25 +484,19 @@ async fn jobs_run_inside_the_bound_job_context() {
 
     assert!(
         OBSERVED_MARKER.load(Ordering::SeqCst),
-        "the tick ran inside the bound JobContext, observing its ambient marker",
+        "the tick ran on the executor of the unit its binding opened",
     );
-}
-
-// A context that cannot honour what the job did — the shape a failed commit
-// takes.
-struct UnsettleableContext(nest_rs_worker::Unhonoured);
-
-impl JobContext for UnsettleableContext {
-    fn scope<'a>(
-        &'a self,
-        _transaction: JobTransaction,
-        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
-        Box::pin(async move {
-            inner.await;
-            JobSettlement::Unhonoured(self.0)
-        })
-    }
+    assert_eq!(
+        *OPENED_AS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some((
+            nest_rs_schedule::unit::TICK.name(),
+            ExecutorScope::Job,
+            TransactionPolicy::PerUnit
+        )),
+        "a tick is system work, in one transaction unless its decorator says otherwise",
+    );
 }
 
 fn tick_succeed(_: &Container) -> RunFuture<'_> {
@@ -504,7 +524,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_panic_naming_itself,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -581,7 +601,7 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_wrapped_failure,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::Each,
             key: None,
         })
@@ -646,7 +666,7 @@ async fn a_failed_tick_says_a_decode_failure_without_its_value() {
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_decode_failure,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::Each,
             key: None,
         })
@@ -686,16 +706,16 @@ async fn a_failed_tick_says_a_decode_failure_without_its_value() {
 /// Single-thread runtime: `LogCapture` is thread-local, and the scheduler's
 /// spawned task shares this thread here.
 #[tokio::test(start_paused = true)]
-async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
+async fn a_tick_its_unit_could_not_settle_is_reported_as_failed() {
     struct UnsettleableHost;
 
     let logs = nest_rs_testing::LogCapture::install();
     let container = crate::hermetic()
-        .provide_dyn::<dyn JobContext>(Arc::new(UnsettleableContext(
-            nest_rs_worker::Unhonoured::deterministic(
+        .provide_dyn::<dyn UnitOfWork>(Arc::new(Marking {
+            answer: Settlement::Unhonoured(Unhonoured::deterministic(
                 "the job's transaction could not be committed",
-            ),
-        )))
+            )),
+        }))
         .attach_meta::<UnsettleableHost, CronJobMeta>(CronJobMeta {
             origin: module_path!(),
             provider: "UnsettleableHost",
@@ -703,7 +723,7 @@ async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_succeed,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -774,7 +794,7 @@ async fn a_tick_past_its_timeout_is_cut_reported_and_the_schedule_goes_on() {
             trigger: Trigger::Interval(Duration::from_secs(2)),
             run: tick_hung,
             timeout: Duration::from_secs(1),
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::Each,
             key: None,
         })
@@ -843,7 +863,7 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
             },
             run: tick_never,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -957,7 +977,7 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
                 trigger: Trigger::Interval(PERIOD),
                 run: tick_once,
                 timeout: JOB_TIMEOUT,
-                transaction: JobTransaction::Pool,
+                transaction: TransactionPolicy::Pool,
                 replicas: Replicas::One,
                 key: None,
             })
@@ -1050,7 +1070,7 @@ async fn a_run_outlasting_its_period_leaves_the_next_occurrences_to_its_peers() 
                 trigger: Trigger::Interval(PERIOD),
                 run: tick_overlapping,
                 timeout: JOB_TIMEOUT,
-                transaction: JobTransaction::Pool,
+                transaction: TransactionPolicy::Pool,
                 replicas: Replicas::One,
                 key: None,
             })
@@ -1136,7 +1156,7 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
             },
             run: tick_cron_once,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1179,7 +1199,7 @@ async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
             trigger: Trigger::Interval(Duration::from_secs(5)),
             run: tick_once,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1211,7 +1231,7 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
             trigger: Trigger::Timeout(Duration::from_millis(10)),
             run: tick_once,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1238,7 +1258,7 @@ async fn a_zero_interval_fails_the_boot() {
             trigger: Trigger::Interval(Duration::ZERO),
             run: tick_once,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::Each,
             key: None,
         })
@@ -1266,7 +1286,7 @@ async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
                 trigger: Trigger::Interval(Duration::from_micros(500)),
                 run: tick_once,
                 timeout: JOB_TIMEOUT,
-                transaction: JobTransaction::Pool,
+                transaction: TransactionPolicy::Pool,
                 replicas,
                 key: None,
             })
@@ -1336,7 +1356,7 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_unclaimed,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1447,7 +1467,7 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
             trigger: Trigger::Interval(PERIOD),
             run: tick_slowly_claimed,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1528,7 +1548,7 @@ async fn two_jobs_sharing_one_name_fail_the_boot_naming_both() {
         trigger: Trigger::Interval(Duration::from_secs(1)),
         run: tick_noop,
         timeout: JOB_TIMEOUT,
-        transaction: JobTransaction::Pool,
+        transaction: TransactionPolicy::Pool,
         replicas: Replicas::One,
         key: None,
     };
@@ -1566,7 +1586,7 @@ async fn boot_pinning(key: &'static str, replicas: Replicas) -> Result<(), Strin
             trigger: Trigger::Interval(Duration::from_secs(1)),
             run: tick_noop,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas,
             key: Some(key),
         })
@@ -1648,7 +1668,7 @@ async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
             trigger: Trigger::Interval(Duration::from_secs(1)),
             run: tick_noop,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1659,7 +1679,7 @@ async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
             trigger: Trigger::Interval(Duration::from_secs(1)),
             run: tick_noop,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: Some(pinned),
         })
@@ -1691,7 +1711,7 @@ async fn a_job_firing_once_names_its_identity_at_boot() {
         trigger: Trigger::Interval(Duration::from_secs(1)),
         run: tick_noop,
         timeout: JOB_TIMEOUT,
-        transaction: JobTransaction::Pool,
+        transaction: TransactionPolicy::Pool,
         replicas,
         key,
     };
@@ -1767,7 +1787,7 @@ async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_
             trigger: Trigger::Interval(PERIOD),
             run: tick_noop,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1835,7 +1855,7 @@ async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_tha
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
             run: tick_a_little_longer_than_its_period,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1933,7 +1953,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
             run: tick_stalled_interval,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -1947,7 +1967,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
             },
             run: tick_stalled_cron,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -2026,7 +2046,7 @@ async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud
             trigger: Trigger::Interval(PERIOD),
             run: tick_longer_than_its_period,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::Each,
             key: None,
         })
@@ -2095,7 +2115,7 @@ async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_slightly_longer_than_its_period,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::Each,
             key: None,
         })
@@ -2197,7 +2217,7 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_noop,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -2255,7 +2275,7 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
             run: tick_noop,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -2349,7 +2369,7 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
             trigger: Trigger::Interval(Duration::from_millis(5)),
             run: tick_noop,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -2461,7 +2481,7 @@ async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_behind_a_panicking_lock,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -2527,7 +2547,7 @@ async fn a_run_panicking_before_its_future_keeps_its_schedule() {
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_panicking_before_its_future,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::PerAttempt,
+            transaction: TransactionPolicy::PerUnit,
             replicas: Replicas::Each,
             key: None,
         })
@@ -2603,7 +2623,7 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_behind_an_unwritable_lock,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -2657,7 +2677,7 @@ async fn serve_until_the_schedule_panicked(logs: &LogCapture) {
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_behind_an_unwritable_lock,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })
@@ -2759,7 +2779,7 @@ async fn shut_down_while_a_claim_hangs(
             trigger,
             run,
             timeout: JOB_TIMEOUT,
-            transaction: JobTransaction::Pool,
+            transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
             key: None,
         })

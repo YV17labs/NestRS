@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
 use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
-use nest_rs_worker::{BACKEND_REMEDY, JobContext};
+use nest_rs_database::{BACKEND_REMEDY, UnitOfWork};
 use sea_orm::DatabaseConnection;
 
-use crate::SeaOrmConfig;
 use crate::module::{BudgetReach, SUBSTRATE_REMEDY, budgets};
+use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
-/// Binds the ambient executor: the `DbContext` request interceptor for HTTP
-/// (feature `http`), the `WorkerDbContext as dyn JobContext` bridge for jobs,
-/// and the link-time audits this binding brings. A bare import beside
+/// Binds the `nest-rs-database` port: [`SeaOrmUnitOfWork`] as `dyn
+/// UnitOfWork`, which every edge opens its units of work through, the
+/// `DbContext` request interceptor for HTTP (feature `http`), and the
+/// link-time audits this binding brings. A bare import beside
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 pub struct SeaOrmDatabaseModule;
 
@@ -21,18 +22,17 @@ impl Module for SeaOrmDatabaseModule {
         // Queued after the pool's and config's factories, so a missing one is
         // named before any later factory dials.
         builder.provide_declared_factory_after::<
-            Arc<dyn JobContext>,
+            Arc<dyn UnitOfWork>,
             (DatabaseConnection, SeaOrmConfig),
             _,
             _,
         >(BACKEND_REMEDY, |container| async move {
-            substrate(&container)?;
-            Ok(Arc::new(crate::WorkerDbContext::from_container(&container)) as Arc<dyn JobContext>)
+            Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
         })
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        // A seeded `dyn JobContext` skips the factory above, and its check.
+        // A seeded `dyn UnitOfWork` skips the factory above, and its check.
         if let Err(missing) = substrate(&builder.snapshot()) {
             return builder.refuse(missing);
         }
@@ -42,14 +42,20 @@ impl Module for SeaOrmDatabaseModule {
     }
 }
 
-/// The pool and its config, checked present: `from_container` panics on either.
+/// The pool and its config, checked present: the binding is built over both.
 fn substrate(container: &Container) -> anyhow::Result<()> {
-    present::<DatabaseConnection>(container)?;
-    present::<SeaOrmConfig>(container)
+    unit_of_work(container).map(drop)
 }
 
-fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Result<()> {
-    container.get::<T>().map(drop).ok_or_else(|| {
+/// SeaORM's unit of work over the container's pool and config.
+fn unit_of_work(container: &Container) -> anyhow::Result<SeaOrmUnitOfWork> {
+    let db = present::<DatabaseConnection>(container)?;
+    let config = present::<SeaOrmConfig>(container)?;
+    Ok(SeaOrmUnitOfWork::new(db, &config))
+}
+
+fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Result<Arc<T>> {
+    container.get::<T>().ok_or_else(|| {
         anyhow::anyhow!(
             "SeaOrmDatabaseModule: no `{}` in the container — {SUBSTRATE_REMEDY}",
             nest_rs_core::__private::short_type_name::<T>()
@@ -59,60 +65,50 @@ fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Res
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-    use std::pin::Pin;
-
     use nest_rs_core::{App, ContestedDeclarationError, LateFactoryError};
-    use nest_rs_worker::{JobSettlement, JobTransaction};
+    use nest_rs_database::{OpenUnit, Unhonoured, UnitSpec};
 
     use super::*;
 
-    /// Another bridge's context, bound the way a driver binds a trait object.
+    /// Another driver's unit of work, bound the way a driver binds one.
     #[derive(Clone)]
-    struct BareContext;
+    struct BareUnitOfWork;
 
-    impl JobContext for BareContext {
-        fn scope<'a>(
-            &'a self,
-            _: JobTransaction,
-            inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
-        ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
-            Box::pin(async move {
-                inner.await;
-                JobSettlement::Settled
-            })
+    impl UnitOfWork for BareUnitOfWork {
+        fn open(&self, _: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
+            Err(Unhonoured::deterministic("never opened"))
         }
     }
 
-    struct BareContextModule;
+    struct BareUnitOfWorkModule;
 
-    impl Module for BareContextModule {
+    impl Module for BareUnitOfWorkModule {
         fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
             builder
         }
 
         fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-            builder.provide_factory_dyn::<BareContext, dyn JobContext, _, _>(
-                |_| async { Ok(BareContext) },
-                |context| Arc::new(context) as Arc<dyn JobContext>,
+            builder.provide_factory_dyn::<BareUnitOfWork, dyn UnitOfWork, _, _>(
+                |_| async { Ok(BareUnitOfWork) },
+                |binding| Arc::new(binding) as Arc<dyn UnitOfWork>,
             )
         }
     }
 
     #[tokio::test]
-    async fn a_second_job_context_binding_fails_the_boot_in_the_ports_words() {
+    async fn a_second_unit_of_work_binding_fails_the_boot_in_the_ports_words() {
         for seaorm_first in [true, false] {
             let app = if seaorm_first {
                 App::builder()
                     .module::<SeaOrmDatabaseModule>()
-                    .module::<BareContextModule>()
+                    .module::<BareUnitOfWorkModule>()
             } else {
                 App::builder()
-                    .module::<BareContextModule>()
+                    .module::<BareUnitOfWorkModule>()
                     .module::<SeaOrmDatabaseModule>()
             };
             let Err(refused) = app.build().await else {
-                panic!("one context would run every job, the other none");
+                panic!("one binding would run every unit, the other none");
             };
             let contested = refused
                 .downcast_ref::<ContestedDeclarationError>()
@@ -143,18 +139,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_job_context_seeded_without_the_config_fails_the_boot_naming_the_module() {
-        let pool = Container::builder()
-            .provide(DatabaseConnection::default())
-            .build();
+    async fn a_unit_of_work_seeded_without_the_config_fails_the_boot_naming_the_module() {
+        let seeded = SeaOrmUnitOfWork::new(
+            Arc::new(DatabaseConnection::default()),
+            &SeaOrmConfig::default(),
+        );
         let Err(refused) = App::builder()
             .provide(DatabaseConnection::default())
-            .provide_dyn::<dyn JobContext>(Arc::new(crate::WorkerDbContext::from_container(&pool)))
+            .provide_dyn::<dyn UnitOfWork>(Arc::new(seeded))
             .module::<SeaOrmDatabaseModule>()
             .build()
             .await
         else {
-            panic!("a seeded job context still leaves the interceptor its config to read");
+            panic!("a seeded unit of work still leaves the binding its substrate to read");
         };
         let refused = format!("{refused:#}");
         assert!(
@@ -173,7 +170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_binding_imported_in_a_register_alone_fails_the_boot_naming_its_context() {
+    async fn the_binding_imported_in_a_register_alone_fails_the_boot_naming_its_port() {
         let Err(refused) = App::builder()
             .provide(DatabaseConnection::default())
             .provide(SeaOrmConfig::default())
@@ -181,11 +178,11 @@ mod tests {
             .build()
             .await
         else {
-            panic!("every job would run bare, in silence");
+            panic!("every unit would run bare, in silence");
         };
         let late = refused
             .downcast_ref::<LateFactoryError>()
             .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
-        assert_eq!(late.type_name, std::any::type_name::<Arc<dyn JobContext>>());
+        assert_eq!(late.type_name, std::any::type_name::<Arc<dyn UnitOfWork>>());
     }
 }

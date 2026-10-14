@@ -1,6 +1,10 @@
 //! OTel SDK wiring: a local tracer and W3C propagator always, and batch OTLP
 //! exporters for traces, metrics and logs over HTTP/protobuf when an endpoint is
 //! set.
+//!
+//! **The collector is not proved at boot** (`nest_rs_core::prove`): telemetry
+//! must never stop the app it observes, so an unreachable collector costs
+//! exports, never the boot.
 
 use std::time::Duration;
 

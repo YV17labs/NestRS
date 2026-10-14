@@ -114,7 +114,8 @@ each as `redis-<port>`, read off its folder. Held by `just lint`'s per-feature
 build, over `redis` alone and `nest-rs-macro-hygiene`'s `redis-<port>`
 witnesses, and by review.
 
-- **The boot proves the connection with a `PING`**, and what fails the same way
+- **The boot proves the connection with a `PING`**, through
+  `nest_rs_core::prove` (`container.md`), and what fails the same way
   every time fails at once — a budget out of range, an unparsable URL, unusable
   TLS settings, a refusal naming the deployment's own settings. **That list is an
   allow-list; every other answer is retried** within the connect budget, then

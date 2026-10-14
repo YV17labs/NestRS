@@ -20,6 +20,10 @@
 //! [`SocialProvider::key`], **fails boot**. [`SocialProvider::authorize`] and
 //! [`SocialProvider::exchange`] default to the shared PKCE/CSRF flow, so a
 //! standard provider implements only [`SocialProvider::profile`].
+//!
+//! **No provider is proved at boot** (`nest_rs_core::prove`): each is a third
+//! party, reached once per login, and one briefly down must cost its logins,
+//! never the app's start.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

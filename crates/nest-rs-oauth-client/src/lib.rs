@@ -5,6 +5,10 @@
 //! `for_root` seam that wires one configured client ([`OAuthClientModule`]).
 //! Authenticating a client at *our* token endpoint lives in `nest-rs-authn`; social
 //! login (GitHub, Google, custom providers) in `nest-rs-social`, built on this client.
+//!
+//! **The authorization server is not proved at boot** (`nest_rs_core::prove`):
+//! it is a third party's, reached once per login, and one briefly down must cost
+//! those logins, never the app's start.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

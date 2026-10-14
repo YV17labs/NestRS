@@ -325,8 +325,12 @@ store, never the key; a push or cancel is an error to its caller, a
 checkpoint call fails the attempt as retryable and the worker retries its own
 calls; `Strategy::authenticate` denies at `warn`; an indicator reads down —
 its deadline is the orchestrator's probe, below every budget by design, so it
-declares no net. **A loop retrying a backend waits `nest_rs_core::Backoff`'s
-curve** — exponential, ±20 % jitter drawn from a seed, gRPC's connection
+declares no net. **A resource the framework opens proves itself at boot through
+`nest_rs_core::prove`**: what every attempt would meet refuses at once, the
+rest is retried within the resource's budget, and the resource's crate says
+each attempt on its own target, naming the endpoint, never a URL; a resource
+exempt from the proof says why in its `//!`. **A loop retrying a backend waits
+`nest_rs_core::Backoff`'s curve** — exponential, ±20 % jitter drawn from a seed, gRPC's connection
 backoff — never a doubling of its own: a reconnect loop seeds it with
 `process_seed()`, so replicas come back apart; a loop its library owns
 (redis's `ConnectionManager`, object_store) stays the library's.

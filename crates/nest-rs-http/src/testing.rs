@@ -1,6 +1,9 @@
 //! Test doubles: a real upgrade request, served by hyper over an in-memory pipe,
-//! so its `OnUpgrade` yields a socket once answered.
+//! so its `OnUpgrade` yields a socket once answered; and an allocator counting
+//! the bytes a thread holds on the heap.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -108,4 +111,75 @@ pub(crate) async fn read_exactly(socket: &mut (impl AsyncRead + Unpin), len: usi
         .expect("the bytes arrive")
         .unwrap();
     read
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+/// The system allocator, counting the bytes a thread holds while it is asked to.
+struct Counting;
+
+thread_local! {
+    /// The bytes this thread allocated and has not freed since counting began,
+    /// `None` while nothing counts.
+    static HELD: Cell<Option<isize>> = const { Cell::new(None) };
+}
+
+fn held_by(delta: isize) {
+    // Off a thread's storage, as it is torn down, nothing is being counted.
+    if let Ok(Some(held)) = HELD.try_with(Cell::get) {
+        HELD.set(Some(held + delta));
+    }
+}
+
+fn size(bytes: usize) -> isize {
+    isize::try_from(bytes).unwrap_or(isize::MAX)
+}
+
+#[expect(
+    unsafe_code,
+    reason = "an allocator is an unsafe trait; each call goes to the system allocator unchanged"
+)]
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        held_by(size(layout.size()));
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        held_by(size(layout.size()));
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        held_by(size(new_size) - size(layout.size()));
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        held_by(-size(layout.size()));
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+/// Counting on this thread, from its start until it is dropped.
+pub(crate) struct Held;
+
+impl Held {
+    /// Start counting what this thread holds.
+    pub(crate) fn count() -> Self {
+        HELD.set(Some(0));
+        Self
+    }
+
+    /// The bytes allocated since counting began and not freed yet.
+    pub(crate) fn bytes(&self) -> isize {
+        HELD.get().unwrap_or(0)
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        HELD.set(None);
+    }
 }

@@ -174,13 +174,7 @@ impl Server {
                 },
             };
             let accepted = Instant::now();
-            if let Err(error) = stream.set_nodelay(true) {
-                tracing::warn!(
-                    target: crate::target::HTTP,
-                    error = %nest_rs_core::error_message(&error),
-                    "TCP_NODELAY could not be set; the connection is served with Nagle's algorithm on",
-                );
-            }
+            without_nagle(&stream);
             let connection = Connection {
                 peer,
                 local: self.local,
@@ -207,6 +201,17 @@ impl Server {
             streams.cut.cancel();
         }
         join_all(&mut connections, &streams).await;
+    }
+}
+
+/// `stream` written without Nagle's delay, or served with it and said so.
+fn without_nagle(stream: &tokio::net::TcpStream) {
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::warn!(
+            target: crate::target::HTTP,
+            error = %nest_rs_core::error_message(&error),
+            "TCP_NODELAY could not be set; the connection is served with Nagle's algorithm on",
+        );
     }
 }
 
@@ -797,6 +802,66 @@ mod tests {
         assert_eq!(written, response, "every byte the peer read was recorded");
     }
 
+    /// After a 4 MiB body handed over as one frame, a kept-alive connection
+    /// holds its write buffer's bound — its 64 KiB cap and one piece — not the
+    /// body: each byte is copied once into a buffer the connection keeps.
+    #[tokio::test]
+    async fn a_kept_alive_http1_connection_holds_its_write_buffers_bound_after_a_large_body() {
+        const SIZE: usize = 4 * 1024 * 1024;
+        let body = Bytes::from(vec![b'x'; SIZE]);
+        let endpoint = endpoint_fn(move |_| {
+            let body = body.clone();
+            async move { Ok(Response::builder().body(body)) }
+        });
+        let deadlines = Deadlines::default();
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let socket = Arc::new(Drain::default()).socket(
+            server,
+            Arc::new(Semaphore::new(1))
+                .try_acquire_owned()
+                .expect("a free place"),
+            deadlines.send,
+        );
+        let connection = Connection {
+            peer: SocketAddr::from(([127, 0, 0, 1], 50_000)),
+            local: SocketAddr::from(([127, 0, 0, 1], 3_000)),
+            accepted: Instant::now(),
+            deadlines,
+            endpoint: BoxEndpoint::new(endpoint),
+            builder: Arc::new(builder(deadlines.send, Streams::default())),
+            shutdown: CancellationToken::new(),
+        };
+        let held = crate::testing::Held::count();
+        let served = tokio::spawn(connection.serve(socket, None));
+        client
+            .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n")
+            .await
+            .expect("the request is sent");
+        let mut chunk = [0_u8; 16 * 1024];
+        let mut head = Vec::with_capacity(256);
+        while !head.ends_with(b"\r\n\r\n") {
+            let byte = client.read_u8().await.expect("the head arrives");
+            head.push(byte);
+        }
+        let mut left = SIZE;
+        while left > 0 {
+            let read = client.read(&mut chunk).await.expect("the body arrives");
+            assert!(read > 0, "the body ended {left} bytes short");
+            left -= read;
+        }
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        let kept = held.bytes();
+        drop(held);
+        assert!(
+            kept < 512 * 1024,
+            "the idle connection holds {kept} bytes after a {SIZE}-byte body",
+        );
+        drop(client);
+        served.await.expect("the connection ends");
+    }
+
     /// A static file's shape: a body handed over as one frame, which hyper
     /// copies whole into a write buffer whose capacity the connection keeps.
     #[tokio::test]
@@ -1110,6 +1175,21 @@ mod tests {
             running.await.expect("the loop returns"),
             "the stream's handler was dropped by the time the loop returned",
         );
+    }
+
+    #[tokio::test]
+    async fn an_accepted_socket_is_written_without_nagles_delay() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("a loopback port");
+        let local = listener.local_addr().expect("an address");
+        let _client = tokio::net::TcpStream::connect(local)
+            .await
+            .expect("connects");
+        let (accepted, _) = listener.accept().await.expect("accepted");
+        assert!(!accepted.nodelay().expect("readable"), "off until set");
+        without_nagle(&accepted);
+        assert!(accepted.nodelay().expect("readable"));
     }
 
     /// The listener found empty with a place in hand ends the cap's episode;

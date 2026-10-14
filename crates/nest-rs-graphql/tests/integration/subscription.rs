@@ -358,12 +358,12 @@ async fn next_message(socket: &mut WsSocket) -> serde_json::Value {
 async fn subscribe(socket: &mut WsSocket, query: &str) {
     socket.send_text(r#"{"type":"connection_init"}"#).await;
     assert_eq!(next_message(socket).await["type"], "connection_ack");
-    socket
-        .send_text(
-            serde_json::json!({ "id": "1", "type": "subscribe", "payload": { "query": query } })
-                .to_string(),
-        )
-        .await;
+    socket.send_text(subscribe_message("1", query)).await;
+}
+
+/// The `subscribe` message for `query` as operation `id`.
+fn subscribe_message(id: &str, query: &str) -> String {
+    serde_json::json!({ "id": id, "type": "subscribe", "payload": { "query": query } }).to_string()
 }
 
 /// Wait until the `ticks` stream has subscribed to its source.
@@ -942,14 +942,7 @@ async fn a_reused_operation_id_closes_the_socket_4409_without_echoing_it() {
     running(&state).await;
 
     socket
-        .send_text(
-            serde_json::json!({
-                "id": "1",
-                "type": "subscribe",
-                "payload": { "query": "subscription { ticks { seq } }" },
-            })
-            .to_string(),
-        )
+        .send_text(subscribe_message("1", "subscription { ticks { seq } }"))
         .await;
     let (code, reason) = socket.expect_close().await;
 
@@ -975,14 +968,7 @@ async fn an_operation_past_the_socket_cap_is_answered_an_error_and_the_rest_keep
     assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
     for id in ["1", "2", "3"] {
         socket
-            .send_text(
-                serde_json::json!({
-                    "id": id,
-                    "type": "subscribe",
-                    "payload": { "query": "subscription { ticks { seq } }" },
-                })
-                .to_string(),
-            )
+            .send_text(subscribe_message(id, "subscription { ticks { seq } }"))
             .await;
     }
 
@@ -993,12 +979,7 @@ async fn an_operation_past_the_socket_cap_is_answered_an_error_and_the_rest_keep
         refused["payload"][0]["message"], "too many operations on this socket",
         "{refused}"
     );
-    for _ in 0..250 {
-        if state.tx.receiver_count() == 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    nest_rs_testing::wait_until(Duration::from_secs(5), || state.tx.receiver_count() == 2).await;
     state
         .tx
         .send(Tick { seq: 7 })

@@ -29,20 +29,21 @@ pub struct HttpCors {
 }
 
 /// The wildcard, as the four lists spell it.
-pub(crate) const WILDCARD: &str = "*";
+const WILDCARD: &str = "*";
 
 /// The response headers the framework sends on a route's behalf. None is
 /// CORS-safelisted, so a cross-origin client reads them only when exposed.
 const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
 
+/// Whether a list holds the wildcard, which admits every value.
+pub(crate) fn holds_wildcard(values: &[String]) -> bool {
+    values.iter().any(|value| value == WILDCARD)
+}
+
 /// The values a list admits one by one: none when it holds the wildcard, which
 /// admits them all.
 fn listed(values: &[String]) -> &[String] {
-    if values.iter().any(|value| value == WILDCARD) {
-        &[]
-    } else {
-        values
-    }
+    if holds_wildcard(values) { &[] } else { values }
 }
 
 /// A list a `*` may appear in, paired with the response header it renders into.
@@ -70,7 +71,7 @@ impl HttpCors {
             return Ok(());
         }
         for (field, header, values) in self.wildcard_lists() {
-            if values.iter().any(|value| value == WILDCARD) {
+            if holds_wildcard(values) {
                 anyhow::bail!(
                     "invalid CORS config: `{WILDCARD}` in `{field}` with `credentials` — for a \
                      request whose credentials mode is `include`, WHATWG Fetch reads \

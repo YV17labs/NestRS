@@ -293,7 +293,6 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         let data = self.bridge.connection_data(&req);
         let executor = self.executor.clone();
         let bounds = self.bounds;
-        let max_connection = bounds.max_connection;
         let socket_executor = socket_executor();
         // `around` wraps the **whole socket**: one upgrade, one principal.
         let guard = self.bridge.op_guard.clone();
@@ -316,12 +315,12 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // boundaries from this crate.
                 let span = nest_rs_core::operation_span!(crate::unit::SUBSCRIPTION, &correlation,);
                 let line = SubscriptionLine::new(correlation.clone(), span.clone());
-                let end = ends_at(sockets.going_away(), max_connection);
+                let end = ends_at(sockets.going_away(), bounds.max_connection);
                 // A local slot, since the guard scopes a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
                     let served = serve_socket(stream, executor, protocol.0, data, end, bounds);
-                    ended = Some(match max_connection {
+                    ended = Some(match bounds.max_connection {
                         // A peer that stopped reading cannot hold the socket past
                         // the ceiling plus the close grace.
                         Some(ttl) => tokio::time::timeout(

@@ -18,7 +18,7 @@ use nest_rs_core::{Container, Problem};
 
 use crate::HttpConfig;
 use crate::client_ip::forwarded_param;
-use crate::cors::WILDCARD;
+use crate::cors::holds_wildcard;
 use crate::error::ResponseError;
 use crate::response::Response;
 
@@ -94,7 +94,7 @@ impl OriginPolicy {
     pub(crate) fn from_config(config: &HttpConfig) -> Self {
         let listed = match &config.cors {
             None => Listed::default(),
-            Some(cors) if cors.origins.iter().any(|origin| origin == WILDCARD) => Listed::Every,
+            Some(cors) if holds_wildcard(&cors.origins) => Listed::Every,
             Some(cors) => Listed::Origins(
                 cors.origins
                     .iter()

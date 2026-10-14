@@ -1,6 +1,6 @@
 ---
 title: Metrics
-description: "Inject Arc<OpenTelemetryMeter> and build counters, histograms or gauges; readings batch on a PeriodicReader and export through the same OTLP endpoint."
+description: "Inject Arc<Metrics> and record on counters, histograms and gauges; readings batch on a PeriodicReader and export through the same OTLP endpoint."
 sidebar:
   order: 4
 ---
@@ -9,52 +9,85 @@ Metrics are the aggregate counterpart to [traces](/opentelemetry/traces/) —
 reach for them when you need a number over time (signups per minute, job
 duration percentiles, queue depth) rather than the story of one request.
 
-`OpenTelemetryModule` provides `Arc<OpenTelemetryMeter>` — the OTel global
-meter, wrapped so it flows through the DI graph. Inject it like any other
-dependency.
+`OpenTelemetryModule` provides `Arc<Metrics>`, the app's meter. Inject it like
+any other dependency.
 
 ## A first counter
 
-Inject the meter, then build the instrument from it. `Arc<OpenTelemetryMeter>`
-derefs to the inner `Meter`; the meter caches instruments by name, so building
-the counter at the call site is cheap and needs no extra field.
+Ask `Metrics` for the instrument by name, then record on it. The first call
+makes the instrument and every later one hands back the same, so asking at the
+call site costs a lookup and needs no extra field.
 
 ```rust title="crates/features/src/users/metrics.rs"
 use std::sync::Arc;
 
 use nest_rs::core::injectable;
-use nest_rs::opentelemetry::OpenTelemetryMeter;
+use nest_rs::opentelemetry::{Attribute, Metrics};
 
 #[injectable]
 pub struct SignupMetrics {
     #[inject]
-    meter: Arc<OpenTelemetryMeter>,
+    metrics: Arc<Metrics>,
 }
 
 impl SignupMetrics {
-    /// Call this after a successful signup.
-    pub fn record_signup(&self) {
-        self.meter.u64_counter("users.created").build().add(1, &[]);
+    pub fn record_signup(&self, source: &'static str) {
+        self.metrics
+            .counter("users.created")
+            .add(1, &[Attribute::new("source", source)]);
     }
 }
 ```
 
-Counters, histograms, gauges — anything the
-[`opentelemetry`](https://docs.rs/opentelemetry) meter exposes works. Inject
-`Arc<OpenTelemetryMeter>` into the service that owns the event and build the
-instrument lazily inside the method, as above.
+The instruments are the four synchronous kinds of the
+[OpenTelemetry Metrics API](https://opentelemetry.io/docs/specs/otel/metrics/api/),
+under their names:
+
+| Instrument | Asked for with | Records | For |
+|---|---|---|---|
+| `Counter` | `metrics.counter(name)` | `add(u64, …)` | what only grows — signups, failed jobs |
+| `UpDownCounter` | `metrics.up_down_counter(name)` | `add(i64, …)`, negative too | what is in flight — open sockets, queued jobs |
+| `Histogram` | `metrics.histogram(name)` | `record(f64, …)` | what is measured per event — a latency, a size |
+| `Gauge` | `metrics.gauge(name)` | `record(f64, …)` | what is sampled — a pool's idle connections |
+
+Each is a cheap `Clone`, so a service that records on every request may also
+keep one in a field.
+
+## Units, descriptions and buckets
+
+What an instrument declares — the unit its values are in, what it measures, a
+histogram's bucket boundaries — is declared once, by the `_with` call that
+makes it:
+
+```rust title="crates/features/src/posts/metrics.rs"
+use nest_rs::opentelemetry::Describe;
+
+let latency = self.metrics.histogram_with(
+    "posts.publish.latency",
+    Describe::default()
+        .with_unit("ms")
+        .with_description("time to publish a post"),
+    &[5.0, 25.0, 100.0, 500.0],
+);
+latency.record(elapsed_ms, &[]);
+```
+
+`counter_with`, `up_down_counter_with` and `gauge_with` take the same
+`Describe`. A later call by the same name returns the instrument already made,
+whatever it declares.
 
 ## Attributes
 
-The second argument to `.add(...)` / `.record(...)` is a slice of OTel
-attributes — the metric's labels at the OTel/Prometheus boundary.
+The second argument to `add` and `record` is a slice of `Attribute`s — the
+metric's labels at the OTel/Prometheus boundary. A value is a `bool`, an `i64`,
+an `f64` or a string:
 
 ```rust title="crates/features/src/users/metrics.rs"
-use opentelemetry::KeyValue;
+use nest_rs::opentelemetry::Attribute;
 
-self.meter.u64_counter("users.created").build().add(1, &[
-    KeyValue::new("org_id", org_id.to_string()),
-    KeyValue::new("source", "api"),
+self.metrics.counter("users.created").add(1, &[
+    Attribute::new("org_id", org_id.to_string()),
+    Attribute::new("source", "api"),
 ]);
 ```
 
@@ -76,7 +109,7 @@ here.
 
 **The interval is 60 seconds by default, and that will look broken.** Traces and
 logs reach a collector immediately; metrics wait for the reader's next flush. The
-natural first check — wire a meter, hit the route, look at the collector — shows
+natural first check — record on a counter, hit the route, look at the collector — shows
 spans and log records with **zero** metrics, for a full minute. Nothing is wrong;
 shorten the interval for a local run:
 

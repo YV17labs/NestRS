@@ -61,6 +61,9 @@ peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
   the log lines name one request by one value. It adds the remote parent link
   and the sampler's verdict, and owns neither the span, the operation line nor
   the trace context.
+- **An app records metrics through `nest_rs::opentelemetry::Metrics`**, whose
+  instruments the OpenTelemetry Metrics API names; no `opentelemetry` type
+  reaches its code.
 
 ## Propagation — task, process and response
 

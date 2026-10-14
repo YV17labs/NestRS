@@ -21,16 +21,17 @@ Three signal types ship in one crate, behind one import:
 
 - **[Traces](/opentelemetry/traces/)** — every request, job and scheduled tick
   opens a span, and so does every unit a package declares, exported under the
-  same trace and span ids its log lines carry; W3C `traceparent` propagation,
-  sampling, and the per-request HTTP interceptor stitch distributed traces
-  together.
+  same trace and span ids its log lines carry; W3C `traceparent` propagation
+  and sampling, seeded onto the framework's span constructor, stitch
+  distributed traces together.
 - **[Logs](/opentelemetry/logs/)** — `tracing::info!` and friends flow to the
   console **and** to OTel logs (via
   [`opentelemetry-appender-tracing`](https://crates.io/crates/opentelemetry-appender-tracing))
   with structured fields, configurable level per layer, and JSON for prod.
-- **[Metrics](/opentelemetry/metrics/)** — inject `Arc<OpenTelemetryMeter>` and
-  build counters / histograms / gauges; metrics batch on a `PeriodicReader`
-  and export through the same OTLP endpoint as the traces.
+- **[Metrics](/opentelemetry/metrics/)** — inject `Arc<Metrics>` and record on
+  counters / histograms / gauges, named as the OpenTelemetry Metrics API names
+  them; metrics batch on a `PeriodicReader` and export through the same OTLP
+  endpoint as the traces.
 
 ## Install
 
@@ -38,9 +39,9 @@ Three signal types ship in one crate, behind one import:
 cargo add nest-rs --features opentelemetry
 ```
 
-A headless binary (a queue worker) stops there; an app serving HTTP adds the
-`http` feature for the per-request interceptor — see [Feature
-flags](#feature-flags) below.
+A headless binary (a queue worker) and an app serving HTTP install the same
+line: what this crate adds hangs off the framework's span constructor, which
+every edge opens — see [Feature flags](#feature-flags) below.
 
 ## Wire it in
 
@@ -161,31 +162,25 @@ NESTRS_OPENTELEMETRY__TLS_CA_CERT_FILE=/run/secrets/collector-ca.pem \
 
 ## Feature flags
 
-`nest-rs-opentelemetry` ships two features of its own. You never name them: the
-umbrella's `opentelemetry` feature turns on `otlp`, and the umbrella's `http`
-feature turns on this crate's `http` — so the two lines below differ only in
-whether the binary serves HTTP at all.
+`nest-rs-opentelemetry` ships one feature of its own, which you never name: the
+umbrella's `opentelemetry` feature turns it on.
 
 - **`otlp`** (default) — pulls the `opentelemetry-*` crates, installs the OTLP
-  exporters for traces / metrics / logs, and bridges `tracing` events into OTel
-  logs. Without it, the subscriber stays a pure `tracing-subscriber` setup —
-  useful for a tiny binary that should not link the OTel SDK.
-- **`http`** — pulls `poem` + `nest-rs-http` + `nest-rs-interceptors` so the
-  per-request interceptor compiles: the remote parent link and the sampling
-  decision. A headless app (a queue worker) uses `otlp`
-  **without** `http` and stays free of the HTTP transport. Requires `otlp` — the
-  interceptor reads the trace id off the OTel context.
+  exporters for traces / metrics / logs, bridges `tracing` events into OTel
+  logs, seeds the remote parent link and the sampler's verdict onto the
+  framework's span constructor, and provides `Metrics`. Without it, the
+  subscriber stays a console-only `tracing` setup and `OpenTelemetryModule`
+  provides nothing — useful for a tiny binary that should not link the OTel SDK.
 
-  Without it you still get the request span, the access log and the whole W3C
-  trace context — `trace_id`, `span_id`, `traceparent` across a queue:
-  those are the transport's, and they do not wait on this crate.
+There is no `http` feature: the remote parent link and the sampling decision
+reach every edge through the span constructor, so a queue worker gets them as
+an HTTP app does, and nothing here compiles the HTTP transport. Without this
+crate you still get the request span, the access log and the whole W3C trace
+context — `trace_id`, `span_id`, `traceparent` across a queue: those are the
+transport's, and they do not wait on it.
 
-```toml title="Cargo.toml (headless binary)"
+```toml title="Cargo.toml"
 nest-rs = { workspace = true, features = ["opentelemetry"] }
-```
-
-```toml title="apps/auth/Cargo.toml"
-nest-rs = { workspace = true, features = ["http", "opentelemetry"] }
 ```
 
 ## Boot-time safety
@@ -233,8 +228,9 @@ A test that does **not** import `OpenTelemetryModule` does not need it.
 ## Reference
 
 - `crates/nest-rs-opentelemetry/` — `OpenTelemetry::init`,
-  `OpenTelemetryConfig`, `OpenTelemetryModule`, `OpenTelemetryMeter`,
-  `LogFormat`.
+  `OpenTelemetryConfig`, `OpenTelemetryModule`, `LogFormat`, and the metrics
+  vocabulary: `Metrics`, `Counter`, `UpDownCounter`, `Histogram`, `Gauge`,
+  `Attribute`, `AttributeValue`, `Describe`.
 - `crates/nest-rs-server-timing/` — the `Server-Timing` header middleware.
 
 ## Going further

@@ -100,6 +100,8 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     inject_optional_names:
                         <#p as ::nest_rs_core::Discoverable>::injected_optional_names,
                     injects_keyed: <#p as ::nest_rs_core::Discoverable>::injected_keyed,
+                    injects_per_request:
+                        <#p as ::nest_rs_core::Discoverable>::injected_per_request,
                 }
             }
         }
@@ -123,6 +125,8 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     inject_optional_names:
                         <#provider as ::nest_rs_core::Discoverable>::injected_optional_names,
                     injects_keyed: <#provider as ::nest_rs_core::Discoverable>::injected_keyed,
+                    injects_per_request:
+                        <#provider as ::nest_rs_core::Discoverable>::injected_per_request,
                 }
             }
         }

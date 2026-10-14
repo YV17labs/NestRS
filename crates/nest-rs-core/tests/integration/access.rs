@@ -2,11 +2,13 @@
 //! registry is shared across a test binary, so the graphs below use disjoint types.
 
 use std::any::TypeId;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use nest_rs_core::{
-    AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, ProviderCycleError,
-    ProviderScope, ReachableProviders, Registering, ScopeViolationError, injectable, module,
+    AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, MissingDependencyError,
+    ProviderCycleError, ProviderScope, ReachableProviders, Registering, ResolvesProvider,
+    ScopeViolationError, injectable, module,
 };
 
 use crate::refused_on_both_paths;
@@ -809,4 +811,117 @@ async fn a_cycle_through_a_dyn_binding_names_the_provider_bound() {
     let cycle = cycle_of::<CatalogModule>().await;
     assert_eq!(cycle.module, "PriceListModule");
     assert_eq!(cycle.chain, ["PriceList", "Catalog", "PriceList"]);
+}
+
+/// An extractor resolving `T` from the request's scope, as an edge's
+/// `Scoped<T>` does.
+struct Resolved<T>(PhantomData<T>);
+
+impl<T: 'static> ResolvesProvider for Resolved<T> {
+    fn provider() -> (TypeId, &'static str) {
+        (TypeId::of::<T>(), std::any::type_name::<T>())
+    }
+}
+
+/// A handler host as an edge's impl half declares it for a method taking
+/// `(Resolved<$resolved>, u32)`: each parameter probed by its type, and nothing
+/// held in the container.
+macro_rules! handler_host {
+    ($host:ident takes $resolved:ty) => {
+        struct $host;
+
+        impl Discoverable for $host {
+            fn injected_per_request() -> Vec<(TypeId, &'static str)> {
+                use nest_rs_core::__private::{
+                    ParamProbe, ParamProbeFallback as _, ParamProbeResolves as _,
+                };
+                [
+                    (&&ParamProbe::<Resolved<$resolved>>::new()).resolved_provider(),
+                    (&&ParamProbe::<u32>::new()).resolved_provider(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+
+            fn register(builder: ContainerBuilder) -> ContainerBuilder {
+                builder
+            }
+        }
+    };
+}
+
+#[injectable(scope = request)]
+struct AuditTrail;
+
+#[module(providers = [AuditTrail])]
+struct AuditTrailModule;
+
+handler_host!(StrayAuditHost takes AuditTrail);
+
+#[module(providers = [StrayAuditHost])]
+struct StrayAuditHostModule;
+
+#[module(imports = [AuditTrailModule, StrayAuditHostModule])]
+struct StrayAuditRoot;
+
+#[tokio::test]
+async fn a_handler_resolving_a_provider_its_module_does_not_import_fails_the_boot() {
+    for refused in refused_on_both_paths::<StrayAuditRoot>().await {
+        let leak = refused
+            .downcast::<AccessGraphError>()
+            .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+        assert_eq!(leak.consumer, "StrayAuditHost");
+        assert_eq!(leak.module, "StrayAuditHostModule");
+        assert_eq!(leak.owner, "AuditTrailModule");
+    }
+}
+
+struct Unprovided;
+
+handler_host!(UnprovidedHost takes Unprovided);
+
+#[module(providers = [UnprovidedHost])]
+struct UnprovidedHostModule;
+
+#[tokio::test]
+async fn a_handler_resolving_a_provider_no_module_offers_fails_the_boot_naming_it() {
+    for refused in refused_on_both_paths::<UnprovidedHostModule>().await {
+        let missing = refused
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+        assert_eq!(missing.consumer, "UnprovidedHost");
+        assert!(
+            missing.dependency.ends_with("::Unprovided"),
+            "{}",
+            missing.dependency
+        );
+    }
+}
+
+handler_host!(AuditHost takes AuditTrail);
+
+#[module(imports = [AuditTrailModule], providers = [AuditHost])]
+struct AuditHostModule;
+
+#[injectable(scope = request)]
+struct LocalTrail;
+
+handler_host!(LocalTrailHost takes LocalTrail);
+
+#[module(providers = [LocalTrail, LocalTrailHost])]
+struct LocalTrailModule;
+
+#[module(imports = [AuditHostModule, LocalTrailModule])]
+struct RequestScopedRoot;
+
+/// A request is the consumer, so resolving a request-scoped provider is the
+/// point of the parameter, never a scope violation.
+#[tokio::test]
+async fn a_handler_resolving_a_request_scoped_provider_it_reaches_boots() {
+    App::builder()
+        .module::<RequestScopedRoot>()
+        .build()
+        .await
+        .expect("a handler reaches request-scoped providers through its parameters");
 }

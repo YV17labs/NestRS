@@ -111,6 +111,7 @@ mod opaque;
 pub mod operation_log;
 mod outcome;
 pub mod panic;
+mod param;
 pub mod problem;
 mod process_start;
 mod proof;
@@ -165,6 +166,7 @@ pub use opaque::{OPAQUE_CLIENT_MESSAGE, UNAVAILABLE_CLIENT_MESSAGE};
 pub use operation_log::Edge;
 pub use outcome::{Failure, Outcome, Settled};
 pub use panic::panic_message;
+pub use param::ResolvesProvider;
 pub use problem::{Code, Problem, ToProblem};
 pub use proof::{Attempt, Proving, Unproved, prove};
 pub use request_scope::{
@@ -216,6 +218,7 @@ pub mod __private {
     pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
     pub use crate::outcome::__private::{caught_problem, settled};
     pub use crate::panic::__private::{Unwound, unwound};
+    pub use crate::param::{ParamProbe, ParamProbeFallback, ParamProbeResolves};
     pub use crate::problem::__private::withheld;
     pub use crate::process_start::ProcessStart;
     pub use crate::site::{

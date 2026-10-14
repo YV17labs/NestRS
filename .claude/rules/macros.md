@@ -130,7 +130,12 @@ decorator resolves no name, so a renamed `Result` or a type alias must behave
 as the literal does. Behaviour is decided through a type probe —
 `nest_rs_core::__private::Answer` at `#[routes]` and `#[operations]`,
 `nest_rs_mcp::__private::OperationAnswer` at `#[tools]`, `ReplyValue` at
-`#[messages]`.
+`#[messages]`. What a parameter resolves is read the same way: an extractor
+that resolves a provider implements `nest_rs_core::ResolvesProvider`, and the
+impl half asks `nest_rs_core::__private::ParamProbe` per parameter type —
+called on `&&ParamProbe<T>`, the autoref depth its unit tests pin — and hands
+what it answers to `Discoverable::injected_per_request`, so the access graph
+checks it.
 Spelling decides only what no value can tell a macro, and each such reading is
 stated in the decorator's rustdoc: the wrapper async-graphql's derive itself
 reads by name, the shape a masked MCP or WS operation unwraps, and what an

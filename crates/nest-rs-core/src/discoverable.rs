@@ -47,6 +47,15 @@ pub trait Discoverable {
         Vec::new()
     }
 
+    /// Each provider a handler of this host resolves through a parameter whose
+    /// type implements [`ResolvesProvider`](crate::ResolvesProvider), with its
+    /// label: checked by the access graph like
+    /// [`injected`](Discoverable::injected), never for scope — its consumer is
+    /// a request.
+    fn injected_per_request() -> Vec<(TypeId, &'static str)> {
+        Vec::new()
+    }
+
     /// [`ProviderKey`](crate::ProviderKey) of each **keyed** `#[inject(key = "…")]`
     /// dependency, validated against the global keyed set (seeds + factory
     /// outputs).
@@ -397,6 +406,10 @@ mod tests {
         fn no_keyed() -> Vec<KeyedDependency> {
             Vec::new()
         }
+        fn no_per_request() -> Vec<(TypeId, &'static str)> {
+            Vec::new()
+        }
+
         fn only_itself() -> Vec<(TypeId, &'static str)> {
             Vec::new()
         }
@@ -426,6 +439,7 @@ mod tests {
                         injects_optional: nothing,
                         inject_optional_names: no_names,
                         injects_keyed: no_keyed,
+                        injects_per_request: no_per_request,
                     }],
                 },
                 ModuleDescriptor {
@@ -442,6 +456,7 @@ mod tests {
                         injects_optional: nothing,
                         inject_optional_names: no_names,
                         injects_keyed: no_keyed,
+                        injects_per_request: no_per_request,
                     }],
                 },
             ];

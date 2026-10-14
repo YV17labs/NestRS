@@ -1,7 +1,8 @@
 //! Build-time validation of the module import graph (the access contract).
 //!
 //! A provider's `#[inject]` dependency (and its `#[use_guards]` /
-//! `#[use_filters]` / `#[use_interceptors]` layers) must be provided by its own
+//! `#[use_filters]` / `#[use_interceptors]` layers, and each provider its
+//! handlers resolve through a parameter) must be provided by its own
 //! module, a module in its transitive import closure, or global infrastructure
 //! (seeds + factory outputs); otherwise the boot fails with an
 //! [`AccessGraphError`]. Runtime [`Container::get`](crate::Container::get) is
@@ -61,6 +62,10 @@ pub(crate) mod __private {
         /// Each **keyed** `#[inject(key = "…")]` field, validated against the
         /// global keyed set.
         pub injects_keyed: fn() -> Vec<KeyedDependency>,
+        /// Each provider a handler resolves through a parameter, with its label
+        /// ([`Discoverable::injected_per_request`](crate::Discoverable::injected_per_request)):
+        /// checked like [`injects`](Self::injects), never for scope.
+        pub injects_per_request: fn() -> Vec<(TypeId, &'static str)>,
     }
 
     /// Per-module descriptor submitted to the link-time registry by `#[module]`.
@@ -229,7 +234,12 @@ pub(crate) fn validate_access_graph(
                 }
                 .into());
             }
-            for (dep, name, optional) in deps {
+            // Resolved per request, so out of the scope check above: a
+            // request-scoped provider is what a handler's parameter is for.
+            let per_request = (p.injects_per_request)()
+                .into_iter()
+                .map(|(dep, name)| (dep, name, false));
+            for (dep, name, optional) in deps.into_iter().chain(per_request) {
                 if global.contains(&dep) || closure_keys.contains(&dep) {
                     continue;
                 }
@@ -790,6 +800,10 @@ mod tests {
         Vec::new()
     }
 
+    fn no_per_request() -> Vec<(TypeId, &'static str)> {
+        Vec::new()
+    }
+
     fn provides_only_itself() -> Vec<(TypeId, &'static str)> {
         Vec::new()
     }
@@ -816,6 +830,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         }
@@ -861,6 +876,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
@@ -872,6 +888,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
             ],
@@ -902,6 +919,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -937,6 +955,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -982,6 +1001,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1021,6 +1041,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1067,6 +1088,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1093,6 +1115,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1119,6 +1142,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1174,6 +1198,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: github_dep,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         }
@@ -1230,6 +1255,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1277,6 +1303,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
@@ -1288,6 +1315,7 @@ mod tests {
                     injects_optional: injects_zdb,
                     inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
@@ -1299,6 +1327,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
             ],
@@ -1339,6 +1368,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
@@ -1350,6 +1380,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    injects_per_request: no_per_request,
                     also_provides: also_its_own_type,
                 },
             ],
@@ -1377,6 +1408,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1393,6 +1425,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1409,6 +1442,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
+                injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
         };

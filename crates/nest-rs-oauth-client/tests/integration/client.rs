@@ -657,9 +657,14 @@ async fn a_token_endpoint_behind_a_private_authority_is_trusted_only_with_its_au
     let Err(refused) = exchange(system_only).await else {
         panic!("a certificate no trusted authority signed must not be talked to");
     };
+    let sentence = unavailable_sentence_of(&refused, &[]);
     assert!(
-        unavailable_sentence_of(&refused, &[]).contains("could not be called"),
-        "{refused:?}"
+        sentence.starts_with(&format!(
+            "the OAuth provider's token endpoint (https://{}/token) could not be called: the \
+             OAuth provider's certificate does not chain to an authority this app trusts",
+            provider.addr
+        )) && sentence.contains(&var_name(OAuthClientConfig::NAMESPACE, "TLS_CA_CERT")),
+        "the refusal says what to set: {sentence}"
     );
     assert_eq!(
         provider.requests(),
@@ -702,9 +707,11 @@ async fn a_provider_requiring_a_client_certificate_is_handed_the_configured_one(
         .userinfo::<serde_json::Value>(ACCESS_TOKEN)
         .await
         .expect_err("a provider requiring a certificate refuses a client presenting none");
+    let sentence = unavailable_sentence_of(&error, &[]);
     assert!(
-        unavailable_sentence_of(&error, &[]).contains("could not be called"),
-        "{error:?}"
+        sentence.contains("could not be called: the OAuth provider refused the handshake")
+            && sentence.contains(&var_name(OAuthClientConfig::NAMESPACE, "TLS_CERT")),
+        "the refusal says what to set: {sentence}"
     );
     assert_eq!(
         provider.requests(),

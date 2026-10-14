@@ -107,6 +107,9 @@ const PROVIDER_ENDPOINT: &str = "endpoint";
 struct Endpoint<'a> {
     role: &'static str,
     url: &'a str,
+    /// The key of the variable naming `url`, which a refused handshake's
+    /// remedy names; `None` for a URL a provider's code built.
+    setting: Option<&'static str>,
 }
 
 impl fmt::Display for Endpoint<'_> {
@@ -132,6 +135,20 @@ fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
         format!(
             "{endpoint} did not answer within {:?}",
             OAuthClient::CALL_TIMEOUT
+        )
+    } else if let Some(setting) = endpoint
+        .setting
+        .filter(|_| ClientTls::negotiation_failed(&error))
+    {
+        format!(
+            "{endpoint} could not be called: {} ({})",
+            ClientTls::remedy(
+                &ConfigService::for_namespace(OAuthClientConfig::NAMESPACE),
+                "the OAuth provider",
+                setting,
+                &error,
+            ),
+            nest_rs_core::error_message(&error.without_url())
         )
     } else {
         format!(
@@ -512,6 +529,7 @@ impl OAuthClient {
         let endpoint = Endpoint {
             role: TOKEN_ENDPOINT,
             url: &self.config.token_url,
+            setting: Some("TOKEN_URL"),
         };
         // `oauth2` drops the answer's status, without which a provider's `503`
         // would read as the caller's failure.
@@ -551,6 +569,7 @@ impl OAuthClient {
         let endpoint = Endpoint {
             role: PROVIDER_ENDPOINT,
             url,
+            setting: None,
         };
         if !reqwest::Url::parse(url.trim()).is_ok_and(|url| url.scheme() == "https") {
             return Err(AuthError::Failed(format!(
@@ -566,6 +585,7 @@ impl OAuthClient {
         let endpoint = Endpoint {
             role: USERINFO_ENDPOINT,
             url: &self.config.userinfo_url,
+            setting: Some("USERINFO_URL"),
         };
         self.read(&endpoint, access_token).await
     }
@@ -829,6 +849,7 @@ mod tests {
                 &Endpoint {
                     role: PROVIDER_ENDPOINT,
                     url: &url,
+                    setting: None,
                 },
                 "never-sent",
             )

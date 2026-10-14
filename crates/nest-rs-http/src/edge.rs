@@ -307,8 +307,9 @@ impl<E: Endpoint> EdgeEndpoint<E> {
 impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
     async fn call(&self, mut req: Request) -> Result<Response> {
         // One instant for the budget and the line: a body that trickles counts
-        // against the request it belongs to.
-        let arrival = Instant::now();
+        // against the request it belongs to, and a request that waited before
+        // the edge ran it against its own.
+        let arrival = req.take_arrival().unwrap_or_else(Instant::now);
         // Resolved once so the context, the echoed header and the access line agree
         // on one id; the origin first, because the id's gate reads it.
         let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
@@ -732,6 +733,38 @@ mod tests {
         let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status_is_ok();
         resp.assert_text("made it").await;
+    }
+
+    /// The budget runs from the instant the accept loop handed the request
+    /// over, so a request that waited before the edge ran it has less left.
+    #[tokio::test(start_paused = true)]
+    async fn the_budget_counts_from_the_requests_arrival() {
+        let arrival = Instant::now();
+        tokio::time::advance(Duration::from_secs(4)).await;
+        let answers_in_two = crate::endpoint_fn(|_| async {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            Ok(Response::builder().body("late"))
+        });
+        let ep = edge(
+            answers_in_two,
+            Some(Duration::from_secs(5)),
+            None,
+            Vec::new(),
+        );
+        let (head, ()) = http::Request::new(()).into_parts();
+        let facts = crate::request::RequestFacts {
+            peer: None,
+            local: None,
+            scheme: http::uri::Scheme::HTTP,
+            original_uri: head.uri.clone(),
+            route: None,
+            arrival: Some(arrival),
+        };
+        let resp = ep
+            .call(Request::from_raw(head, Body::empty(), facts))
+            .await
+            .expect("the edge answers");
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

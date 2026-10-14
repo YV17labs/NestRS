@@ -381,6 +381,7 @@ fn arrived(
         scheme,
         original_uri: head.uri.clone(),
         route: None,
+        arrival: Some(Instant::now()),
     };
     let body = Body::from_boxed(BoxBody::new(body.map_err(io::Error::other)));
     Request::from_raw(head, body, facts)

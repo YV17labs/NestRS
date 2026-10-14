@@ -44,6 +44,9 @@ pub(crate) struct RequestFacts {
     pub(crate) scheme: Scheme,
     pub(crate) original_uri: Uri,
     pub(crate) route: Option<Routed>,
+    /// When the accept loop handed the request over, hyper having read its
+    /// head; `None` for a request built in process.
+    pub(crate) arrival: Option<tokio::time::Instant>,
 }
 
 impl RequestFacts {
@@ -55,6 +58,7 @@ impl RequestFacts {
             scheme: uri.scheme().cloned().unwrap_or(Scheme::HTTP),
             original_uri: uri.clone(),
             route: None,
+            arrival: None,
         }
     }
 }
@@ -410,6 +414,12 @@ impl Request {
     /// The parts, and the facts with them.
     pub(crate) fn into_raw(self) -> (RequestParts, Body, RequestFacts) {
         (self.head, self.body, self.facts)
+    }
+
+    /// When the accept loop handed the request over, if it came off a socket,
+    /// taken by the edge, its one reader, so no crossing after it carries it.
+    pub(crate) fn take_arrival(&mut self) -> Option<tokio::time::Instant> {
+        self.facts.arrival.take()
     }
 
     /// Records the route the router matched: its template, and each

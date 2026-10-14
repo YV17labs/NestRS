@@ -13,6 +13,7 @@ use http::StatusCode;
 use http_body_util::combinators::BoxBody;
 use hyper::upgrade::OnUpgrade;
 use poem::web::{LocalAddr, RemoteAddr};
+use tokio::time::Instant;
 
 use crate::body::Body;
 use crate::endpoint::{BoxEndpoint, Endpoint};
@@ -42,9 +43,14 @@ impl PoemState {
 #[derive(Clone)]
 struct CarriedUpgrade(OnUpgrade);
 
-/// The route nestrs's router matched, which a poem request has no place for.
+/// What a poem request has no place for: the route nestrs's router matched,
+/// and the instant the request arrived, which the edge counts its budget from
+/// after a layer still written on poem ran before it.
 #[derive(Clone)]
-struct CarriedRoute(Routed);
+struct Unplaced {
+    route: Option<Routed>,
+    arrival: Option<Instant>,
+}
 
 /// A poem request as nestrs's.
 pub fn request_from_poem(request: poem::Request) -> Request {
@@ -59,10 +65,10 @@ pub fn request_from_poem(request: poem::Request) -> Request {
     head.version = parts.version;
     head.headers = std::mem::take(&mut parts.headers);
     head.extensions = std::mem::take(&mut parts.extensions);
-    let route = head
-        .extensions
-        .remove::<CarriedRoute>()
-        .map(|CarriedRoute(route)| route);
+    let Unplaced { route, arrival } = head.extensions.remove::<Unplaced>().unwrap_or(Unplaced {
+        route: None,
+        arrival: None,
+    });
     if let Some(CarriedUpgrade(upgrade)) = head.extensions.remove::<CarriedUpgrade>() {
         head.extensions.insert(upgrade);
     }
@@ -73,6 +79,7 @@ pub fn request_from_poem(request: poem::Request) -> Request {
         scheme,
         original_uri,
         route,
+        arrival,
     };
     Request::from_raw(head, body_from_poem(body), facts)
 }
@@ -129,8 +136,11 @@ pub fn request_to_poem(request: Request) -> poem::Request {
             parts
         }
     };
-    if let Some(route) = facts.route {
-        parts.extensions.insert(CarriedRoute(route));
+    if facts.route.is_some() || facts.arrival.is_some() {
+        parts.extensions.insert(Unplaced {
+            route: facts.route,
+            arrival: facts.arrival,
+        });
     }
     poem::Request::from_parts(parts, body_to_poem(body))
 }

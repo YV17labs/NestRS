@@ -353,6 +353,47 @@ mod tests {
         .expect("a wildcard policy with no credentials is legal");
     }
 
+    /// The edge inside either layer counts its budget from the instant the
+    /// accept loop stamped, not from its own call after the crossing.
+    #[tokio::test]
+    async fn the_arrival_crosses_each_layer_to_the_edge() {
+        let arrival = tokio::time::Instant::now() - Duration::from_secs(3);
+        type Layer = (&'static str, fn() -> Option<CorsPolicy>, bool);
+        let layers: [Layer; 2] = [
+            (
+                "cors",
+                || PoemAdapter::cors_policy(&cfg(&["*"])).ok(),
+                false,
+            ),
+            ("compression", || None, true),
+        ];
+        for (layer, cors, compression) in layers {
+            let edge = crate::endpoint_fn(|mut req: crate::Request| async move {
+                let seen = req.take_arrival();
+                Ok(crate::Response::builder().body(format!("{seen:?}")))
+            });
+            let around = PoemAdapter::around(BoxEndpoint::new(edge), cors(), compression);
+            let (head, ()) = http::Request::new(()).into_parts();
+            let facts = crate::request::RequestFacts {
+                peer: None,
+                local: None,
+                scheme: http::uri::Scheme::HTTP,
+                original_uri: head.uri.clone(),
+                route: None,
+                arrival: Some(arrival),
+            };
+            let request = crate::Request::from_raw(head, crate::Body::empty(), facts);
+            let resp = crate::endpoint::Endpoint::call(&around, request)
+                .await
+                .expect("the layers answer");
+            assert_eq!(
+                resp.into_body().into_string().await.unwrap(),
+                format!("{:?}", Some(arrival)),
+                "{layer} loses the arrival"
+            );
+        }
+    }
+
     #[test]
     fn a_header_is_added_to_vary_once() {
         let mut headers = HeaderMap::new();

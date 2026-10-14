@@ -38,7 +38,7 @@ call site cannot open a door the configuration kept shut.
 |--------|--------------------------|-----------|
 | Postgres pool and `EphemeralDatabase` | `<PREFIX>_SEAORM__URL` | only with `sslmode=disable` written in the URL; any other mode short of `verify-full` is refused |
 | Redis, all three topologies | `<PREFIX>_REDIS__URL` | only a `redis://` URL; a `#insecure` fragment is refused |
-| Storage | `<PREFIX>_STORAGE__ENDPOINT` | only with `<PREFIX>_STORAGE__ALLOW_HTTP=true`, which the development profile alone turns on |
+| Storage | `<PREFIX>_STORAGE__ENDPOINT` | only with `<PREFIX>_STORAGE__ALLOW_HTTP=true`, which a declared development or test profile alone turns on |
 | JWK Set | `<PREFIX>_AUTHN__JWKS_URI` | refused when the module is built, and by the client on every fetch |
 | OAuth token and userinfo endpoints | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL`, `USERINFO_URL` | refused when the client is built (RFC 6749 §3.2), and by the client on every call |
 | `OAuthClient::fetch` | a provider's code, at run time | refused before the call (RFC 6750 §5.3), and by the client whatever path reaches it |

@@ -25,7 +25,7 @@ use hyper::body::Incoming;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
@@ -92,7 +92,7 @@ impl Default for Deadlines {
 
 /// The accept loop over one bound listener.
 pub(crate) struct Server {
-    listener: TcpListener,
+    listener: Listener,
     local: SocketAddr,
     tls: Option<ListenerTls>,
     endpoint: BoxEndpoint,
@@ -113,7 +113,7 @@ impl Server {
     ) -> io::Result<Self> {
         Ok(Self {
             local: listener.local_addr()?,
-            listener,
+            listener: Listener(listener),
             tls,
             endpoint,
             drain,
@@ -151,7 +151,7 @@ impl Server {
                         Some(place) => (place, None),
                         None => break,
                     },
-                    accepted = backoff.accept(|| self.listener.accept()) => {
+                    accepted = backoff.accept(|| self.listener.next()) => {
                         // Held unserved until a place frees, as the backlog holds the rest.
                         self.admission.held_back();
                         tokio::select! {
@@ -171,12 +171,11 @@ impl Server {
                     accepted = accept_holding_a_place(
                         &mut backoff,
                         &mut self.admission,
-                        || self.listener.accept(),
+                        || self.listener.next(),
                     ) => accepted,
                 },
             };
             let accepted = Instant::now();
-            without_nagle(&stream);
             let connection = Connection {
                 peer,
                 local: self.local,
@@ -221,14 +220,22 @@ impl Server {
     }
 }
 
-/// `stream` written without Nagle's delay, or served with it and said so.
-fn without_nagle(stream: &tokio::net::TcpStream) {
-    if let Err(error) = stream.set_nodelay(true) {
-        tracing::warn!(
-            target: crate::target::HTTP,
-            error = %nest_rs_core::error_message(&error),
-            "TCP_NODELAY could not be set; the connection is served with Nagle's algorithm on",
-        );
+/// The bound listener, every connection it yields written without Nagle's delay.
+struct Listener(TcpListener);
+
+impl Listener {
+    /// The next connection, its socket set `TCP_NODELAY`, or served with
+    /// Nagle's algorithm on and said so.
+    async fn next(&self) -> io::Result<(TcpStream, SocketAddr)> {
+        let (stream, peer) = self.0.accept().await?;
+        if let Err(error) = stream.set_nodelay(true) {
+            tracing::warn!(
+                target: crate::target::HTTP,
+                error = %nest_rs_core::error_message(&error),
+                "TCP_NODELAY could not be set; the connection is served with Nagle's algorithm on",
+            );
+        }
+        Ok((stream, peer))
     }
 }
 
@@ -1217,18 +1224,19 @@ mod tests {
         assert_eq!(line.field("streams").as_deref(), Some("1"));
     }
 
+    /// Every connection the loop's listener yields is written without Nagle's
+    /// delay: the setting is part of the accept, not a step beside it.
     #[tokio::test]
     async fn an_accepted_socket_is_written_without_nagles_delay() {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("a loopback port");
         let local = listener.local_addr().expect("an address");
+        let listener = Listener(listener);
         let _client = tokio::net::TcpStream::connect(local)
             .await
             .expect("connects");
-        let (accepted, _) = listener.accept().await.expect("accepted");
-        assert!(!accepted.nodelay().expect("readable"), "off until set");
-        without_nagle(&accepted);
+        let (accepted, _) = listener.next().await.expect("accepted");
         assert!(accepted.nodelay().expect("readable"));
     }
 

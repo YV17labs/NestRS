@@ -11,6 +11,8 @@ use poem::error::{ParseQueryError, ResponseError};
 use poem::{IntoResponse, Response};
 use serde::Serialize;
 
+use crate::HttpError;
+
 // Defined beside the 401 that carries it, so `ProblemDetails` reaches no
 // poem-typed file; `challenge` re-exports it as RFC 6750's grammar.
 /// The scheme name, matched case-insensitively per RFC 7235 §2.1.
@@ -330,7 +332,7 @@ fn is_raw_text(headers: &http::HeaderMap) -> bool {
 
 /// An `Err` as the response it renders, by one rule: an error that renders
 /// itself — a [`ResponseError`], a ready response, an
-/// [`HttpError`](crate::HttpError) — answers as it renders. Any other poem
+/// [`HttpError`] — answers as it renders. Any other poem
 /// renders as its own sentence, so it is read instead: a [`Problem`] its chain
 /// carries answers its document, and a `5xx` answers opaquely; what either
 /// answer withholds of the chain is filed once at `error`. A raw text body left
@@ -393,10 +395,7 @@ pub(crate) struct ResolvedErrors<E>(pub(crate) E);
 
 impl<E: crate::Endpoint> crate::Endpoint for ResolvedErrors<E> {
     async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
-        Ok(match self.0.call(req).await {
-            Ok(response) => response,
-            Err(error) => error.answer(),
-        })
+        Ok(self.0.call(req).await.unwrap_or_else(HttpError::answer))
     }
 }
 
@@ -406,10 +405,7 @@ pub(crate) struct Normalized<E>(pub(crate) E);
 
 impl<E: crate::Endpoint> crate::Endpoint for Normalized<E> {
     async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
-        let answer = match self.0.call(req).await {
-            Ok(response) => response,
-            Err(error) => error.answer(),
-        };
+        let answer = self.0.call(req).await.unwrap_or_else(HttpError::answer);
         Ok(normalize_error_response(answer).await)
     }
 }

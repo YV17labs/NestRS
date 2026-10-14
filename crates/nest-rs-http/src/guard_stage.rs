@@ -207,8 +207,9 @@ impl Endpoint for GuardedEndpoint {
         let (req, pending) = match run_stage(self.handler, erased(&self.chain), req).await {
             (req, Ok(pending)) => (req, pending),
             (_, Err((guard, denial))) => {
-                file_denial(guard, &denial);
-                return Ok(denial_answer(denial));
+                return Ok(crate::poem_bridge::response_from_poem(deny_http(
+                    guard, denial,
+                )));
             }
         };
         install_pending(marked(pending, false), self.inner.call(req)).await
@@ -219,11 +220,6 @@ impl Endpoint for GuardedEndpoint {
 pub fn deny_http(guard: &'static str, denial: Denial) -> Response {
     file_denial(guard, &denial);
     denial_to_http_response(denial)
-}
-
-/// [`denial_to_http_response`] on the vocabulary.
-fn denial_answer(denial: Denial) -> crate::Response {
-    crate::poem_bridge::response_from_poem(denial_to_http_response(denial))
 }
 
 /// The one `warn` that keeps every denial of an HTTP request visible whatever

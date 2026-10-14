@@ -254,11 +254,8 @@ where
         if self.drained || self.inner.is_end_stream() {
             return true;
         }
-        match Pin::new(&mut self.inner).poll_frame(cx) {
-            Poll::Ready(None) => {
-                self.drained = true;
-                true
-            }
+        match self.next(cx) {
+            Poll::Ready(None) => true,
             Poll::Ready(Some(frame)) => {
                 self.peeked = Some(frame);
                 false

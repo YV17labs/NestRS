@@ -882,9 +882,10 @@ struct UpgradeModule;
 async fn an_upgrade_request_keeps_its_on_upgrade_through_the_stack() {
     for banded in [false, true] {
         let builder = App::builder().module::<UpgradeModule>();
-        let builder = match banded {
-            true => builder.use_interceptors_global([interceptor::<Forwarding>()]),
-            false => builder,
+        let builder = if banded {
+            builder.use_interceptors_global([interceptor::<Forwarding>()])
+        } else {
+            builder
         };
         let serving = serve_app(builder, HttpConfig::default()).await;
         for leaf in ["/upgrade/poem", "/upgrade/nestrs"] {

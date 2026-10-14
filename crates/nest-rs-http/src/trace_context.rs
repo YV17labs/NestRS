@@ -216,18 +216,14 @@ mod tests {
     /// A request from `peer`, carrying `headers`.
     fn req_from(peer: &str, headers: &[(HeaderName, &str)]) -> Request {
         let socket: std::net::SocketAddr = format!("{peer}:40000").parse().expect("test literal");
-        headers
-            .iter()
-            .fold(
-                Request::builder().peer_addr(socket),
-                |built, (name, value)| {
-                    built.header(
-                        name.clone(),
-                        HeaderValue::from_str(value).expect("header value"),
-                    )
-                },
-            )
-            .finish()
+        let mut built = Request::builder().peer_addr(socket);
+        for (name, value) in headers {
+            built = built.header(
+                name.clone(),
+                HeaderValue::from_str(value).expect("header value"),
+            );
+        }
+        built.finish()
     }
 
     #[test]

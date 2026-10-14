@@ -22,8 +22,11 @@ tokio::task_local! {
 }
 
 /// Run `fut` with the edge's configured cap ambient.
-pub(crate) async fn with_body_limit<F: std::future::Future>(limit: usize, fut: F) -> F::Output {
-    BODY_LIMIT.scope(limit, fut).await
+pub(crate) fn with_body_limit<F: std::future::Future>(
+    limit: usize,
+    fut: F,
+) -> impl std::future::Future<Output = F::Output> {
+    BODY_LIMIT.scope(limit, fut)
 }
 
 /// The whole-body byte cap a reader — an extractor, a guard reading the body —

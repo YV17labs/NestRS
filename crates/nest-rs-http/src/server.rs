@@ -36,6 +36,7 @@ use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use crate::body::Body;
 use crate::drain::Drain;
 use crate::endpoint::{BoxEndpoint, Endpoint};
+use crate::error::HttpError;
 use crate::phase::{PhasedBody, PhasedIo, Phases};
 use crate::request::{Request, RequestFacts};
 use crate::tls::ListenerTls;
@@ -334,10 +335,10 @@ impl Connection {
             let endpoint = endpoint.clone();
             let request = arrived(request, peer, local, scheme.clone());
             async move {
-                let response = match endpoint.call(request).await {
-                    Ok(response) => response,
-                    Err(error) => error.into_response(),
-                };
+                let response = endpoint
+                    .call(request)
+                    .await
+                    .unwrap_or_else(HttpError::into_response);
                 // Read on the stream's own task, where hyper polls this future.
                 let window = if http2 { Window::current() } else { None };
                 Ok::<_, Infallible>(

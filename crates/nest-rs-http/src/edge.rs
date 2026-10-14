@@ -156,7 +156,7 @@ impl<E> EdgeEndpoint<E> {
     #[expect(
         clippy::too_many_arguments,
         reason = "one value per decision the transport hands its edge, each a field read once \
-                  per request; two call sites, both in `HttpTransport::configure`"
+                  per request; one call site, `HttpTransport::edge`"
     )]
     pub(crate) fn new(
         inner: E,

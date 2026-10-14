@@ -7,7 +7,7 @@
 use std::str::FromStr;
 
 use anyhow::Context;
-use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_RANGE, CONTENT_TYPE, VARY};
+use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_RANGE, CONTENT_TYPE, Entry, VARY};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use poem::middleware::{Compression, Cors};
 use poem::web::{Compress, CompressionAlgo};
@@ -15,7 +15,7 @@ use poem::{EndpointExt, IntoResponse};
 
 use crate::accept_encoding::{AcceptEncoding, Coding};
 use crate::cors::{FRAMEWORK_SENT, HttpCors, listed};
-use crate::endpoint::BoxEndpoint;
+use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::poem_bridge::{error_from_poem, from_poem, response_to_poem, to_poem};
 
 /// poem, as the transport uses it.
@@ -31,8 +31,8 @@ impl PoemAdapter {
     /// The route table poem assembled, answering nestrs's requests: a request
     /// no route claims answers poem's `404` as an `Err`, which the bands under
     /// [`ERROR_RESOLVE`](crate::interceptor::priority::ERROR_RESOLVE) still see.
-    pub(crate) fn router(route: impl poem::Endpoint + 'static) -> BoxEndpoint {
-        BoxEndpoint::new(from_poem(route))
+    pub(crate) fn router(route: impl poem::Endpoint + 'static) -> impl Endpoint {
+        from_poem(route)
     }
 
     /// The policy `cors` describes, or the boot's refusal naming the value it
@@ -86,7 +86,7 @@ impl PoemAdapter {
         let mut endpoint: PoemEndpoint = to_poem(inner).boxed();
         if compression {
             endpoint = Compressed {
-                decoding: Restored(endpoint).with(Compression::new()).boxed(),
+                decoding: Restored(endpoint).with(Compression::new()),
             }
             .boxed();
         }
@@ -106,26 +106,20 @@ struct Offered(Vec<HeaderValue>);
 /// Responses compressed with the coding `Accept-Encoding` weighs highest
 /// (RFC 9110 §12.5.3), an event stream left as written: a compressor holds an
 /// event back until its buffer fills.
-struct Compressed {
+struct Compressed<E> {
     /// poem's middleware, which decodes a request body its `Content-Encoding`
     /// names and, the request's `Accept-Encoding` set aside, compresses nothing.
-    decoding: PoemEndpoint,
+    decoding: E,
 }
 
-impl poem::Endpoint for Compressed {
+impl<E: poem::Endpoint<Output = poem::Response>> poem::Endpoint for Compressed<E> {
     type Output = poem::Response;
 
     async fn call(&self, mut req: poem::Request) -> poem::Result<poem::Response> {
         let coding = AcceptEncoding::of(req.headers()).and_then(|offered| offered.negotiate());
-        let offered: Vec<HeaderValue> = req
-            .headers()
-            .get_all(ACCEPT_ENCODING)
-            .iter()
-            .cloned()
-            .collect();
-        if !offered.is_empty() {
-            req.headers_mut().remove(ACCEPT_ENCODING);
-            req.extensions_mut().insert(Offered(offered));
+        if let Entry::Occupied(offered) = req.headers_mut().entry(ACCEPT_ENCODING) {
+            let offered = Offered(offered.remove_entry_mult().1.collect());
+            req.extensions_mut().insert(offered);
         }
         let mut resp = self.decoding.call(req).await?;
         if !compressible(&resp) {

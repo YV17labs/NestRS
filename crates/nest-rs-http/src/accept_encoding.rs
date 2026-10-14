@@ -85,13 +85,7 @@ impl AcceptEncoding {
             .into_iter()
             .enumerate()
             .map(|(index, coding)| (coding, self.coding(index)))
-            .fold(
-                None,
-                |best: Option<(Coding, Weight)>, (coding, weight)| match best {
-                    Some((_, kept)) if kept >= weight => best,
-                    _ => Some((coding, weight)),
-                },
-            )?;
+            .reduce(|kept, next| if next.1 > kept.1 { next } else { kept })?;
         (weight > 0 && self.identity.is_none_or(|identity| weight >= identity)).then_some(best)
     }
 

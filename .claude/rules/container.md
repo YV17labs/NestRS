@@ -313,9 +313,12 @@ HTTP surface (`CLAUDE.md`, hard "no"): its TLS is `ClientTls`; it speaks
 (OTLP's `http://`) or the deployment opts in (storage's `ALLOW_HTTP`), and TLS
 material beside a plaintext URL is refused; it follows no redirect, but where
 its library decides (object_store follows S3's); it carries its own connect and
-total bounds; and a sentence shows its URL only through `endpoint_shown`. A
-body it streams is a transfer, bounded by its stall rather than its total, so no
-size is cut (storage's `read_timeout` beside its `operation_timeout`).
+total bounds, and a cap on what it reads into memory, refused on the declared
+length and while streaming (the JWK Set's `JWKS_MAX_BYTES`, OAuth's
+`ANSWER_MAX_BYTES`); and a sentence shows its URL only through
+`endpoint_shown`. A body it streams is a transfer, bounded by its stall rather
+than its total, so no size is cut (storage's `read_timeout` beside its
+`operation_timeout`).
 
 A worker job — a queue attempt, a tick — is the one unit no edge deadline
 bounds, so its decorator's `timeout` key is its deadline, defaulting to

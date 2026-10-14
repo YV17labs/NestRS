@@ -140,15 +140,31 @@ fn provider_unavailable(
     })
 }
 
+/// An answer past [`OAuthClient::ANSWER_MAX_BYTES`], said without a byte of it.
+fn oversized(endpoint: &Endpoint<'_>) -> AuthError {
+    AuthError::Unavailable {
+        detail: format!(
+            "{endpoint} answered more than {} bytes, the most an OAuth answer is read to",
+            OAuthClient::ANSWER_MAX_BYTES
+        ),
+        retry_after: None,
+    }
+}
+
 fn exchange_failed(
     endpoint: &Endpoint<'_>,
     answered: Option<Answered>,
     error: RequestTokenError<HttpClientError<reqwest::Error>, BasicErrorResponse>,
 ) -> AuthError {
-    if let Some(unavailable) = answered.and_then(|answered| {
-        provider_unavailable(endpoint, answered.status, answered.retry_after.as_deref())
-    }) {
-        return unavailable;
+    if let Some(answered) = answered {
+        if answered.oversized {
+            return oversized(endpoint);
+        }
+        if let Some(unavailable) =
+            provider_unavailable(endpoint, answered.status, answered.retry_after.as_deref())
+        {
+            return unavailable;
+        }
     }
     match error {
         RequestTokenError::Request(HttpClientError::Reqwest(error)) => {
@@ -159,10 +175,45 @@ fn exchange_failed(
 }
 
 /// The status and the `Retry-After` of the token endpoint's answer, read off the
-/// response before `oauth2` turns it into an error that keeps neither.
+/// response before `oauth2` turns it into an error that keeps neither, and
+/// whether its body ran past [`OAuthClient::ANSWER_MAX_BYTES`].
 struct Answered {
     status: u16,
     retry_after: Option<Vec<u8>>,
+    oversized: bool,
+}
+
+/// What [`HttpClientError::Other`] carries when the body ran past the cap;
+/// [`Answered::oversized`] is what the exchange reads.
+const OVERSIZED: &str = "the answer ran past OAuthClient::ANSWER_MAX_BYTES";
+
+/// Why [`read_capped`] returned no body.
+enum Capped {
+    /// The answer runs past [`OAuthClient::ANSWER_MAX_BYTES`].
+    Oversized,
+    /// The body could not be read.
+    Call(reqwest::Error),
+}
+
+/// The body of `response`, refused past [`OAuthClient::ANSWER_MAX_BYTES`] on its
+/// `Content-Length` and while streaming — never read past the cap: reqwest
+/// bounds no body.
+async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, Capped> {
+    let cap = OAuthClient::ANSWER_MAX_BYTES;
+    if response
+        .content_length()
+        .is_some_and(|declared| declared > cap as u64)
+    {
+        return Err(Capped::Oversized);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(Capped::Call)? {
+        if body.len() + chunk.len() > cap {
+            return Err(Capped::Oversized);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// The client's HTTP backend, keeping the last answer's [`Answered`] — what the
@@ -184,21 +235,28 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
         Box::pin(async move {
             let request = reqwest::Request::try_from(request).map_err(Box::new)?;
             let response = self.http.execute(request).await.map_err(Box::new)?;
-            *self.answered.lock().unwrap_or_else(PoisonError::into_inner) = Some(Answered {
+            let mut answered = Answered {
                 status: response.status().as_u16(),
                 retry_after: response
                     .headers()
                     .get(reqwest::header::RETRY_AFTER)
                     .map(|value| value.as_bytes().to_vec()),
-            });
+                oversized: false,
+            };
             let mut answer = oauth2::http::Response::builder()
                 .status(response.status())
                 .version(response.version());
             for (name, value) in response.headers() {
                 answer = answer.header(name, value);
             }
-            let body = response.bytes().await.map_err(Box::new)?;
-            answer.body(body.to_vec()).map_err(HttpClientError::Http)
+            let body = read_capped(response).await;
+            answered.oversized = matches!(body, Err(Capped::Oversized));
+            *self.answered.lock().unwrap_or_else(PoisonError::into_inner) = Some(answered);
+            match body {
+                Ok(body) => answer.body(body).map_err(HttpClientError::Http),
+                Err(Capped::Oversized) => Err(HttpClientError::Other(OVERSIZED.to_owned())),
+                Err(Capped::Call(error)) => Err(HttpClientError::Reqwest(Box::new(error))),
+            }
         })
     }
 }
@@ -274,6 +332,12 @@ impl OAuthClient {
     /// [`AUTHENTICATE_TIMEOUT`](nest_rs_authn::AUTHENTICATE_TIMEOUT) (18 s) and the
     /// HTTP edge's request timeout, or a silent provider is reported by neither name.
     pub const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// The most a provider's answer is read to: RFC 6749 §5.1 token responses
+    /// and OpenID Connect userinfo documents are a few KiB, an id_token
+    /// included. A longer answer fails the call, naming the endpoint and this
+    /// bound.
+    pub const ANSWER_MAX_BYTES: usize = 64 * 1024;
 
     /// Builds a client from a validated `config`; its backend follows no redirect
     /// (an SSRF risk in a token exchange, per `oauth2`), bounds every call and
@@ -482,13 +546,15 @@ impl OAuthClient {
             )
             .unwrap_or_else(|| AuthError::Failed(format!("{endpoint} answered {status}"))));
         }
-        let body = response
-            .text()
+        let body = read_capped(response)
             .await
-            .map_err(|error| call_failed(endpoint, error))?;
+            .map_err(|refused| match refused {
+                Capped::Oversized => oversized(endpoint),
+                Capped::Call(error) => call_failed(endpoint, error),
+            })?;
         // Said without the value serde would quote: a provider's body carries
         // the profile, and may carry a token.
-        serde_json::from_str(&body).map_err(|error| {
+        serde_json::from_slice(&body).map_err(|error| {
             AuthError::Failed(format!(
                 "{endpoint} answered a body that does not parse: {}",
                 nest_rs_core::DecodeError::new(&error),

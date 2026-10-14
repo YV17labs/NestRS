@@ -213,6 +213,9 @@ enum Behaviour {
     Silent,
     /// Writes this raw HTTP/1.1 answer, then closes.
     Answer(String),
+    /// Streams a `200` of this many bytes, chunked and with no
+    /// `Content-Length`, counting the bytes the client took.
+    Chunked(usize),
 }
 
 /// An OAuth provider over TLS on loopback, one request per connection, every
@@ -220,6 +223,8 @@ enum Behaviour {
 struct Provider {
     addr: SocketAddr,
     requests: Arc<AtomicUsize>,
+    written: Arc<AtomicUsize>,
+    ended: Arc<AtomicBool>,
 }
 
 impl Provider {
@@ -234,14 +239,20 @@ impl Provider {
         let addr = listener.local_addr().expect("its address");
         let requests = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&requests);
+        let written = Arc::new(AtomicUsize::new(0));
+        let taken = Arc::clone(&written);
+        let ended = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&ended);
         let acceptor = CERTIFICATE.acceptor(clients);
         let paused = Arc::new(AtomicBool::new(false));
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (acceptor, behaviour, counted, paused) = (
+                let (acceptor, behaviour, counted, taken, stopped, paused) = (
                     acceptor.clone(),
                     behaviour.clone(),
                     Arc::clone(&counted),
+                    Arc::clone(&taken),
+                    Arc::clone(&stopped),
                     Arc::clone(&paused),
                 );
                 tokio::spawn(async move {
@@ -268,11 +279,20 @@ impl Provider {
                             let _ = tls.write_all(answer.as_bytes()).await;
                             let _ = tls.shutdown().await;
                         }
+                        Behaviour::Chunked(size) => {
+                            stream_chunked(&mut tls, size, &taken).await;
+                            stopped.store(true, Ordering::SeqCst);
+                        }
                     }
                 });
             }
         });
-        Self { addr, requests }
+        Self {
+            addr,
+            requests,
+            written,
+            ended,
+        }
     }
 
     /// A provider answering every request with `status_line`, `headers` and
@@ -293,6 +313,44 @@ impl Provider {
     fn requests(&self) -> usize {
         self.requests.load(Ordering::SeqCst)
     }
+
+    /// The body bytes a [`Behaviour::Chunked`] double got written.
+    fn written(&self) -> usize {
+        self.written.load(Ordering::SeqCst)
+    }
+
+    /// Whether a [`Behaviour::Chunked`] double stopped writing, the whole body
+    /// written or the connection gone.
+    fn ended(&self) -> bool {
+        self.ended.load(Ordering::SeqCst)
+    }
+}
+
+/// A `200` of `size` body bytes, chunked, each chunk counted in `taken` once
+/// written.
+async fn stream_chunked(
+    tls: &mut (impl tokio::io::AsyncWrite + Unpin),
+    size: usize,
+    taken: &AtomicUsize,
+) {
+    let head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                transfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+    if tls.write_all(head.as_bytes()).await.is_err() {
+        return;
+    }
+    let chunk = [b' '; 16 * 1024];
+    let mut left = size;
+    while left > 0 {
+        let part = &chunk[..left.min(chunk.len())];
+        let framed = [format!("{:x}\r\n", part.len()).as_bytes(), part, b"\r\n"].concat();
+        if tls.write_all(&framed).await.is_err() || tls.flush().await.is_err() {
+            return;
+        }
+        taken.fetch_add(part.len(), Ordering::SeqCst);
+        left -= part.len();
+    }
+    let _ = tls.write_all(b"0\r\n\r\n").await;
+    let _ = tls.shutdown().await;
 }
 
 /// A client whose every endpoint is on `addr`, each URL carrying
@@ -745,6 +803,118 @@ fn a_provider_endpoint_over_plain_http_is_refused_at_construction() {
             && sentence.contains("RFC 6749 §3.2"),
         "{sentence}"
     );
+}
+
+/// The refusal of an answer past [`OAuthClient::ANSWER_MAX_BYTES`] from the
+/// endpoint `shown`, its body quoted nowhere.
+fn assert_oversized(error: &AuthError, shown: &str) {
+    let sentence = unavailable_sentence_of(error, &["xxxx", "    "]);
+    assert_eq!(
+        sentence,
+        format!(
+            "{shown} answered more than {} bytes, the most an OAuth answer is read to",
+            OAuthClient::ANSWER_MAX_BYTES
+        ),
+    );
+    assert_eq!(error.retry_after_secs(), None, "no wait is invented");
+}
+
+/// An answer a byte past the cap, its `Content-Length` saying so.
+fn oversized_document() -> String {
+    format!(
+        r#"{{"name":"{}"}}"#,
+        "x".repeat(OAuthClient::ANSWER_MAX_BYTES)
+    )
+}
+
+#[tokio::test]
+async fn a_userinfo_answer_declared_past_the_cap_is_refused_unread() {
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        &oversized_document(),
+    )
+    .await;
+    let addr = provider.addr;
+
+    let error = client_for(addr)
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect_err("a profile past the cap is no profile");
+    assert_oversized(
+        &error,
+        &format!("the OAuth provider's userinfo endpoint (https://{addr}/userinfo)"),
+    );
+}
+
+/// With no `Content-Length`, the read stops at the cap: the double could not
+/// write the rest.
+#[tokio::test]
+async fn a_streamed_answer_is_cut_at_the_cap_and_never_read_whole() {
+    const STREAMED: usize = 32 * 1024 * 1024;
+    let provider = Provider::serving(Behaviour::Chunked(STREAMED)).await;
+    let addr = provider.addr;
+
+    let error = client_for(addr)
+        .fetch::<serde_json::Value>(&format!("https://{addr}/user/emails"), ACCESS_TOKEN)
+        .await
+        .expect_err("an endless answer is no answer");
+    assert_oversized(
+        &error,
+        &format!("the OAuth provider's endpoint (https://{addr}/user/emails)"),
+    );
+    nest_rs_testing::wait_until(std::time::Duration::from_secs(10), || provider.ended()).await;
+    assert!(
+        provider.written() < STREAMED / 4,
+        "the client stopped near the cap, not at the end: {} of {STREAMED} bytes written",
+        provider.written()
+    );
+}
+
+#[tokio::test]
+async fn a_token_answer_past_the_cap_fails_the_exchange_the_same_way() {
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        &oversized_document(),
+    )
+    .await;
+    let addr = provider.addr;
+    let client = client_for(addr);
+    let jwt = crate::jwt();
+    let auth = client.authorize(&jwt, "acme").expect("authorize");
+    let tx: Transaction = jwt
+        .verify_handshake("oauth-tx", &auth.transaction)
+        .expect("the transaction verifies");
+
+    let Err(error) = client
+        .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+        .await
+    else {
+        panic!("a token answer past the cap completes no exchange");
+    };
+    assert_oversized(
+        &error,
+        &format!("the OAuth provider's token endpoint (https://{addr}/token)"),
+    );
+}
+
+/// A profile of a few KiB, the size every standard document has, still reads.
+#[tokio::test]
+async fn a_userinfo_document_of_a_few_kib_reads() {
+    let bio = "b".repeat(2 * 1024);
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        &format!(r#"{{"bio":"{bio}"}}"#),
+    )
+    .await;
+
+    let profile = client_for(provider.addr)
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect("a document under the cap reads");
+    assert_eq!(profile["bio"], bio.as_str());
 }
 
 #[test]

@@ -230,12 +230,13 @@ principal type.
 
 A provider that stops answering does not hold your callback. Every call
 the client makes — the code exchange, `userinfo`, and any `fetch` —
-carries two bounds, constants on the client:
+carries three bounds, constants on the client:
 
 | Constant | Value | Covers |
 |---|---|---|
 | `OAuthClient::CONNECT_TIMEOUT` | 3 s | reaching the provider: the name lookup, the TCP and TLS handshakes |
 | `OAuthClient::CALL_TIMEOUT` | 5 s | the whole call, from connecting to the last byte of the answer |
+| `OAuthClient::ANSWER_MAX_BYTES` | 64 KiB | the most of an answer read |
 
 An identity provider answers each of these in well under a second, so a
 call past its bound is a provider that is not answering. That is the
@@ -246,6 +247,17 @@ provider's outage, not the caller's failed sign-in, so it fails as
 ```text
 authentication unavailable: the OAuth provider's token endpoint
 (https://github.com/login/oauth/access_token) did not answer within 5s
+```
+
+A token response or a userinfo document is a few KiB, an id_token
+included, so an answer past 64 KiB is refused the same way — on its
+`Content-Length`, or as soon as the streamed body passes the cap — and
+is never buffered whole:
+
+```text
+authentication unavailable: the OAuth provider's userinfo endpoint
+(https://api.github.com/user) answered more than 65536 bytes, the most
+an OAuth answer is read to
 ```
 
 A provider that answers it cannot answer now — a `5xx`, or `429` — is

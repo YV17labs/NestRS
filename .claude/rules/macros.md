@@ -37,7 +37,11 @@ the transports, `nest-rs-authz` and `nest-rs-seaorm` above them, and only
 `::nest_rs_<x>::__private::…`. What Rust cannot place in a module (a trait item,
 an exported macro) takes a `__` prefix and stays hidden; a hidden method becomes
 a free function in the type's own file; an item in a public module sits in that
-file's `pub(crate) mod __private`, so no other path reaches it. Everything else
+file's `pub(crate) mod __private`, so no other path reaches it. What an
+expansion emits on the developer's type and calls there — its constructors
+`__nestrs_from_container` and `__nestrs_from_scope`, the `__nestrs_injected*`
+helpers — is `#[doc(hidden)]` and `__nestrs_`-prefixed: the macro ABI, which
+no developer and no framework crate calls by hand. Everything else
 is API or `pub(crate)` (`decisions/visibility-tiers.md`). A public doc names
 no `__private` item, linked or in code, and says what it does in words: rustdoc
 renders a link into a hidden module dead without a warning, so review holds

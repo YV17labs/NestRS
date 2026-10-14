@@ -126,7 +126,7 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
                 let __snapshot = builder.snapshot();
-                let __value = Self::from_container(&__snapshot);
+                let __value = Self::__nestrs_from_container(&__snapshot);
                 let __arc: ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor> =
                     ::std::sync::Arc::new(__value);
                 builder.attach_meta::<Self, ::nest_rs_http::__private::HttpEndpointWrap>(

@@ -13,7 +13,7 @@ mod response;
 mod routes;
 
 /// Generates `pub const PATH`, `pub const VERSIONS` (empty when unversioned)
-/// and `from_container(&Container) -> Self`.
+/// and a hidden constructor the boot builds the controller with.
 ///
 /// Class-level `#[use_guards(...)]` / `#[use_filters(...)]` /
 /// `#[use_interceptors(...)]` placed *below* `#[controller]` apply to every
@@ -25,8 +25,8 @@ mod routes;
 ///
 /// # Expands to
 ///
-/// The item unchanged, plus an inherent `impl` carrying the consts,
-/// `from_container` and the `#[doc(hidden)]` helpers `#[routes]` reads.
+/// The item unchanged, plus an inherent `impl` carrying the consts, a hidden
+/// constructor and the `#[doc(hidden)]` helpers `#[routes]` reads.
 #[proc_macro_attribute]
 pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(controller::controller(args, input).into()).into()

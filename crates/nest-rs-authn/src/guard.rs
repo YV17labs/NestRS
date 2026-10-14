@@ -77,8 +77,8 @@ impl<S: Strategy> AuthnGuard<S> {
     }
 
     /// Construct this provider by resolving its strategy from the container —
-    /// what the register phase calls, not by hand.
-    pub fn from_container(container: &Container) -> Self {
+    /// what the register phase calls.
+    fn from_container(container: &Container) -> Self {
         #[expect(
             clippy::expect_used,
             reason = "the register phase builds a provider only once its `dependencies` are registered"

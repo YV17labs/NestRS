@@ -1430,7 +1430,7 @@ fn field_method(
     let rest = under_attached(quote! {
         let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
         #(#dep_bindings)*
-        let __resolver = <#self_ty>::from_container(__container);
+        let __resolver = <#self_ty>::__nestrs_from_container(__container);
         #call
     });
     let method = quote! {
@@ -1638,7 +1638,7 @@ fn root_object(
                 type_info: |__r| __r.#fake_type::<#obj>(),
                 build: |__c| ::nest_rs_graphql::__private::GraphqlRootMember::#member(
                     ::std::boxed::Box::new(
-                        #obj(::std::sync::Arc::new(<#self_ty>::from_container(__c)))
+                        #obj(::std::sync::Arc::new(<#self_ty>::__nestrs_from_container(__c)))
                     ),
                 ),
             }

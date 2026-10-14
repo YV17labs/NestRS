@@ -19,9 +19,9 @@ mod resolver;
 ///
 /// # Expands to
 ///
-/// The original struct, a private `from_container` constructor, the hidden
-/// helpers `#[operations]` reads the struct's injected keys and guards back
-/// through, and a resolver-membership descriptor: a resolver listed in no
+/// The original struct, a hidden constructor and the hidden helpers
+/// `#[operations]` reads the struct's injected keys and guards back through,
+/// and a resolver-membership descriptor: a resolver listed in no
 /// reachable module's `providers` is left out of the schema with a boot `warn`.
 #[proc_macro_attribute]
 pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {

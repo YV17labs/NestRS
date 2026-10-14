@@ -24,7 +24,7 @@ mod mcp_impl;
 ///
 /// # Expands to
 ///
-/// The struct unchanged, a `from_container` constructor, and an `impl
+/// The struct unchanged, a hidden constructor, and an `impl
 /// Discoverable` whose `register` hands the host to the MCP host registry —
 /// which resolves the path (the default when the host declared none), records
 /// the contribution, and (for the first host on a path) attaches the exempt

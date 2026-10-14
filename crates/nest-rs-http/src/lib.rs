@@ -282,7 +282,6 @@ pub use async_trait::async_trait;
 /// [`#[routes]`](macro@routes) on its impl block.
 ///
 /// ```
-/// # use nest_rs_core::Container;
 /// # use nest_rs_http::{controller, routes};
 /// #[controller(path = "/users", version = "1")]
 /// #[derive(Default)]
@@ -298,7 +297,6 @@ pub use async_trait::async_trait;
 ///
 /// assert_eq!(UsersController::PATH, "/users");
 /// assert_eq!(UsersController::VERSIONS, ["1"]);
-/// let _: fn(&Container) -> UsersController = UsersController::from_container;
 /// ```
 pub use nest_rs_http_macros::controller;
 

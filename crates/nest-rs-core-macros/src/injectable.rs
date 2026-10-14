@@ -75,7 +75,7 @@ pub(crate) fn provider(
                     builder: ::nest_rs_core::ContainerBuilder,
                 ) -> ::nest_rs_core::ContainerBuilder {
                     let __snapshot = builder.snapshot();
-                    let __value = Self::from_container(&__snapshot);
+                    let __value = Self::__nestrs_from_container(&__snapshot);
                     let builder = builder.provide(__value);
                     #then
                 }
@@ -91,7 +91,7 @@ pub(crate) fn provider(
                     builder: ::nest_rs_core::ContainerBuilder,
                 ) -> ::nest_rs_core::ContainerBuilder {
                     builder.provide_scoped::<Self, _>(|__scope| {
-                        Self::from_scope(__scope)
+                        Self::__nestrs_from_scope(__scope)
                     })
                 }
             },
@@ -106,7 +106,7 @@ pub(crate) fn provider(
                     builder: ::nest_rs_core::ContainerBuilder,
                 ) -> ::nest_rs_core::ContainerBuilder {
                     builder.provide_transient::<Self, _>(|__scope| {
-                        Self::from_scope(__scope)
+                        Self::__nestrs_from_scope(__scope)
                     })
                 }
             },

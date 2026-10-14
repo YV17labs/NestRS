@@ -5,7 +5,7 @@
 //! Metadata, not `inventory`: it is attached from `Discoverable::register`, so a
 //! host whose module the app does not import contributes nothing. The guard, the
 //! tool context, [`McpConfig`](crate::McpConfig) and the session store resolve
-//! once per path ([`McpMount::from_container`]).
+//! once per path, when its [`McpMount`] is built from the container.
 
 use std::any::TypeId;
 use std::borrow::Cow;

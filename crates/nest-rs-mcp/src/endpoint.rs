@@ -96,7 +96,7 @@ impl McpMount {
     /// * [`McpConfig`], if `McpModule` was imported, else its defaults;
     /// * a registered `dyn SessionStore` (rmcp 3.x cross-instance session
     ///   recovery), if the app provides one.
-    pub fn from_container(container: &Container) -> Self {
+    pub(crate) fn from_container(container: &Container) -> Self {
         let config = container
             .get::<McpConfig>()
             .map(|cfg| (*cfg).clone())

@@ -34,18 +34,20 @@ async fn mcp_tool_self_mounts_and_fails_closed_without_a_guard() {
 }
 
 /// An empty `allowed_hosts` turns off rmcp's DNS-rebinding defence, invisibly to
-/// a client: this warn, from `from_container`, is the whole control.
+/// a client: this warn, said when the boot mounts the path, is the whole control.
 #[tokio::test]
 async fn a_mount_with_no_allowlist_reports_that_host_validation_is_off() {
     let logs = nest_rs_testing::LogCapture::install();
     // The default allowlist is loopback; empty means `<PREFIX>_MCP__ALLOWED_HOSTS` was cleared.
-    let container = nest_rs_core::Container::builder()
+    let _app = TestApp::builder()
         .provide(nest_rs_mcp::McpConfig {
             allowed_hosts: Vec::new(),
             ..nest_rs_mcp::McpConfig::default()
         })
-        .build();
-    let _mount = nest_rs_mcp::McpMount::from_container(&container);
+        .module::<McpMountModule>()
+        .build()
+        .await
+        .expect("boots");
 
     let event = logs.expect_one(
         "nest_rs::mcp",

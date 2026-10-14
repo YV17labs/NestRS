@@ -146,7 +146,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                     #host_name,
                     ::nest_rs_mcp::__private::declared_identity(#identity_name, #identity_title),
                     |__c| -> ::std::sync::Arc<dyn ::nest_rs_mcp::McpHost> {
-                        ::std::sync::Arc::new(<Self>::from_container(__c))
+                        ::std::sync::Arc::new(<Self>::__nestrs_from_container(__c))
                     },
                     || {
                         // An inherent `tool_router` (the impl half's `pub(crate)` one,

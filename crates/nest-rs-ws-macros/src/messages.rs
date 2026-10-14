@@ -583,7 +583,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             let __path = <#self_ty>::__nestrs_mount_path();
                             #(#mounted_logs)*
                             let __gw = ::std::sync::Arc::new(
-                                <#self_ty>::from_container(__container),
+                                <#self_ty>::__nestrs_from_container(__container),
                             );
                             let __server = <#self_ty>::__nestrs_registry(__container);
                             let mut __chains = ::nest_rs_ws::__private::EventLayerTable::new();

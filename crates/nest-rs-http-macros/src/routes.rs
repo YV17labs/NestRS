@@ -910,7 +910,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 container: &::nest_rs_core::Container,
                 route: ::nest_rs_http::poem::Route,
             ) -> ::nest_rs_http::poem::Route {
-                let __ctrl = ::std::sync::Arc::new(<#self_ty>::from_container(container));
+                let __ctrl = ::std::sync::Arc::new(<#self_ty>::__nestrs_from_container(container));
                 #sse_resolve
                 let mut __route = route;
                 // `[None]` for an unversioned controller: an empty list would unmount it.

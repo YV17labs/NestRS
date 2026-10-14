@@ -176,7 +176,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                             .collect(),
                         quote! {
                             let __provider: ::std::sync::Arc<#provider> = ::std::sync::Arc::new(
-                                <#provider>::from_container(&builder.snapshot()),
+                                <#provider>::__nestrs_from_container(&builder.snapshot()),
                             );
                             builder = builder
                                 .provide_arc::<#provider>(::std::sync::Arc::clone(&__provider));

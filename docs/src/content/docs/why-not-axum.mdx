@@ -94,10 +94,8 @@ pub struct OrgsController {
 impl OrgsController {
     /// The controller's route prefix, from `#[controller(path = "…")]`.
     pub const PATH: &'static str = "/orgs";
-    /// Construct this provider by resolving its `#[inject]` fields from the
-    /// container. Emitted by the decorator; called by the register phase,
-    /// not by hand.
-    pub fn from_container(container: &::nest_rs::core::Container) -> Self {
+    #[doc(hidden)]
+    pub fn __nestrs_from_container(container: &::nest_rs::core::Container) -> Self {
 …
 ```
 

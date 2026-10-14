@@ -10,8 +10,8 @@ use proc_macro::TokenStream;
 mod gateway;
 mod messages;
 
-/// `#[gateway(path = "/ws")]` generates `from_container`, `pub const PATH` /
-/// `pub const VERSION`, and the inherent helpers `#[messages]` reads back.
+/// `#[gateway(path = "/ws")]` generates a hidden constructor, `pub const PATH`
+/// / `pub const VERSION`, and the inherent helpers `#[messages]` reads back.
 ///
 /// `version = "1"` mounts the gateway at `/v1/ws` instead of `/ws`, as
 /// `#[controller]` does. Two gateways may share a `path` under different
@@ -26,7 +26,7 @@ mod messages;
 ///
 /// # Expands to
 ///
-/// The struct unchanged, plus `PATH`, `VERSION`, a private `from_container`,
+/// The struct unchanged, plus `PATH`, `VERSION`, a hidden constructor,
 /// and the hidden helpers `#[messages]` reads. `#[messages]` emits the
 /// `Discoverable` impl.
 #[proc_macro_attribute]

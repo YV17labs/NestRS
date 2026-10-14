@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use nest_rs_authz::{Ability, AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
-use nest_rs_core::{AmbientValue, Container, Handler, Posture, with_ambient};
+use nest_rs_core::{AmbientValue, Container, Discoverable, Handler, Posture, with_ambient};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::{attached, check_request};
 use nest_rs_testing::LogCapture;
@@ -75,10 +75,13 @@ impl AbilityFactory for Malformed {
 }
 
 /// The guard takes its factory by injection, so a test builds it the way the
-/// boot does — through a container holding that factory.
-fn guard_over<F: AbilityFactory>(factory: F) -> AbilityGuard<F> {
-    let container = Container::builder().provide_arc(Arc::new(factory)).build();
-    AbilityGuard::from_container(&container)
+/// boot does — registered into a container holding that factory.
+fn guard_over<F: AbilityFactory>(factory: F) -> Arc<AbilityGuard<F>> {
+    let builder = Container::builder().provide_arc(Arc::new(factory));
+    <AbilityGuard<F> as Discoverable>::register(builder)
+        .build()
+        .get::<AbilityGuard<F>>()
+        .expect("the guard registers over its factory")
 }
 
 #[tokio::test]
@@ -89,7 +92,7 @@ async fn a_route_reached_with_no_actor_warns_that_no_authn_guard_ran() {
     // the developer bound the ability guard without an authn guard before it.
     let mut req = Request::builder().finish();
 
-    let denial = check(&guard, &GATED, &mut req)
+    let denial = check(&*guard, &GATED, &mut req)
         .await
         .expect_err("no actor on a non-public route is refused");
     assert!(matches!(denial, Denial::Internal(_)), "{denial:?}");
@@ -116,7 +119,7 @@ async fn an_in_band_request_with_no_actor_gets_the_visitor_ability() {
     let guard = guard_over(WellFormed);
     let mut req = Request::builder().finish();
 
-    check(&guard, &IN_BAND, &mut req)
+    check(&*guard, &IN_BAND, &mut req)
         .await
         .expect("an anonymous in-band request is left to its operations' gates");
     let ability = attached::<Ability>(&req).expect("the visitor ability is attached");
@@ -129,7 +132,7 @@ async fn a_malformed_rule_is_reported_at_error_before_the_request_is_denied() {
     let guard = guard_over(Malformed);
     let mut req = Request::builder().finish();
 
-    let denial = with_ambient(Arc::new(Actor), check(&guard, &GATED, &mut req))
+    let denial = with_ambient(Arc::new(Actor), check(&*guard, &GATED, &mut req))
         .await
         .expect_err("a malformed rule denies rather than installing a partial ability");
     assert!(matches!(denial, Denial::Internal(_)), "{denial:?}");

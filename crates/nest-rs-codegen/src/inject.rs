@@ -1,6 +1,6 @@
-//! `#[injectable]`-style construction: build a struct's `from_container`
-//! constructor from its `#[inject]` fields plus the `Discoverable` method
-//! bodies every decorator emits.
+//! `#[injectable]`-style construction: build a struct's hidden
+//! `__nestrs_from_container` constructor from its `#[inject]` fields, plus the
+//! `Discoverable` method bodies every decorator emits.
 
 use std::collections::HashSet;
 
@@ -37,7 +37,7 @@ pub struct InjectableBody {
 }
 
 /// Strip `#[inject]` attributes from `item`'s fields and build its
-/// `from_container` constructor. `Arc<dyn Trait>` resolves via `get_dyn`,
+/// `__nestrs_from_container` constructor. `Arc<dyn Trait>` resolves via `get_dyn`,
 /// `Arc<Concrete>` via `get`. `Option<Arc<…>>` is an optional dependency,
 /// reported apart from `dependencies`/`injected`. An `#[inject]` field
 /// that is neither errors; a non-`#[inject]` field falls back to
@@ -237,28 +237,26 @@ pub fn injected_keyed_method(keyed_dep_keys: &[TokenStream2]) -> TokenStream2 {
     }
 }
 
-/// The `from_container` constructor emitted by every decorator macro.
+/// The hidden `__nestrs_from_container` constructor emitted by every decorator
+/// macro: the macro ABI its own expansions call, never an API of the type.
 pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {
-        /// Construct this provider by resolving its `#[inject]` fields from the
-        /// container. Emitted by the decorator; called by the register phase,
-        /// not by hand.
-        pub fn from_container(container: &::nest_rs_core::Container) -> Self {
+        #[doc(hidden)]
+        pub fn __nestrs_from_container(container: &::nest_rs_core::Container) -> Self {
             let _ = container;
             #ctor
         }
     }
 }
 
-/// The scope-aware constructor emitted by `#[injectable(scope = request)]`:
+/// The hidden `__nestrs_from_scope` constructor emitted by
+/// `#[injectable(scope = request)]` and `(scope = transient)`:
 /// [`from_container_method`] over a `&RequestScope`, still bound as
 /// `container` so the shared `ctor` tokens compile unchanged.
 pub fn from_scope_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {
-        /// Construct this request-scoped provider from the per-request scope,
-        /// so request-scoped `#[inject]` deps share the request's instances.
-        /// Emitted by `#[injectable(scope = request)]`; called per request.
-        pub fn from_scope(container: &::nest_rs_core::RequestScope) -> Self {
+        #[doc(hidden)]
+        pub fn __nestrs_from_scope(container: &::nest_rs_core::RequestScope) -> Self {
             let _ = container;
             #ctor
         }

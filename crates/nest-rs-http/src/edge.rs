@@ -37,18 +37,13 @@ use crate::capped::{Capped, Overrun, Verdict};
 use crate::client_ip::ClientOrigin;
 use crate::drain::Drain;
 use crate::endpoint::Endpoint;
-use crate::error::{HttpError, ResponseError, Result};
+use crate::error::{ResponseError, Result};
 use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::{response_body, trace_context};
-
-/// `err` as the problem document it answers.
-async fn rendered(err: HttpError) -> Response {
-    crate::problem::normalize_error_response(err.answer()).await
-}
 
 /// What a request that outran its budget is answered with: `503`, not `504`, since
 /// RFC 9110 §15.6.5 scopes `504` to a gateway and this server is the origin (§15.6.4).
@@ -291,7 +286,7 @@ impl<E: Endpoint> EdgeEndpoint<E> {
         }
         let resp = match result {
             Ok(resp) => resp,
-            Err(err) => rendered(err).await,
+            Err(err) => crate::problem::normalize_error_response(err.answer()).await,
         };
         self.finish(resp)
     }
@@ -380,6 +375,7 @@ mod tests {
 
     use super::*;
     use crate::endpoint::BoxEndpoint;
+    use crate::error::HttpError;
     use crate::poem_bridge::{from_poem, to_poem};
 
     /// The gap bound the edges below hold a body to.

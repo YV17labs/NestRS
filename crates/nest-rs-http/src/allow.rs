@@ -45,14 +45,13 @@ impl<L> Methods<L> {
         if let Some((_, entry)) = self.entries.iter().find(|(m, _)| m == method) {
             return Chosen::Entry(entry);
         }
-        match *method == Method::HEAD {
-            true => self
-                .entries
-                .iter()
-                .find(|(m, _)| *m == Method::GET)
-                .map_or(Chosen::NotAllowed, |(_, entry)| Chosen::HeadOf(entry)),
-            false => Chosen::NotAllowed,
+        if *method != Method::HEAD {
+            return Chosen::NotAllowed;
         }
+        self.entries
+            .iter()
+            .find(|(m, _)| *m == Method::GET)
+            .map_or(Chosen::NotAllowed, |(_, entry)| Chosen::HeadOf(entry))
     }
 
     /// The `405` this address answers a method it does not serve: an `Ok`

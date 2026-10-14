@@ -46,7 +46,7 @@ struct CarriedUpgrade(OnUpgrade);
 /// What a poem request has no place for: the route nestrs's router matched,
 /// and the instant the request arrived, which the edge counts its budget from
 /// after a layer still written on poem ran before it.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Unplaced {
     route: Option<Routed>,
     arrival: Option<Instant>,
@@ -65,10 +65,7 @@ pub fn request_from_poem(request: poem::Request) -> Request {
     head.version = parts.version;
     head.headers = std::mem::take(&mut parts.headers);
     head.extensions = std::mem::take(&mut parts.extensions);
-    let Unplaced { route, arrival } = head.extensions.remove::<Unplaced>().unwrap_or(Unplaced {
-        route: None,
-        arrival: None,
-    });
+    let Unplaced { route, arrival } = head.extensions.remove::<Unplaced>().unwrap_or_default();
     if let Some(CarriedUpgrade(upgrade)) = head.extensions.remove::<CarriedUpgrade>() {
         head.extensions.insert(upgrade);
     }
@@ -106,15 +103,10 @@ pub fn request_from_poem_at(
 /// Note on a poem request the route the router matched, which a crossing into
 /// nestrs's vocabulary hands to [`Request::route`] and [`Request::path_param`].
 pub(crate) fn note_route(request: &mut poem::Request, routed: Routed) {
-    match request.extensions_mut().get_mut::<Unplaced>() {
-        Some(unplaced) => unplaced.route = Some(routed),
-        None => {
-            request.extensions_mut().insert(Unplaced {
-                route: Some(routed),
-                arrival: None,
-            });
-        }
-    }
+    request
+        .extensions_mut()
+        .get_or_insert_default::<Unplaced>()
+        .route = Some(routed);
 }
 
 /// A nestrs request as poem's.

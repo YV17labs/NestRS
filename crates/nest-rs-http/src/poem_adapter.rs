@@ -161,23 +161,9 @@ impl Endpoint for Router {
 }
 
 /// What answers at one address once poem's router matched it.
-enum Answer {
-    Endpoint(BoxEndpoint),
-    Poem(PoemEndpoint),
-}
-
-impl From<Leaf> for Answer {
-    fn from(leaf: Leaf) -> Self {
-        match leaf {
-            Leaf::Endpoint(endpoint) => Self::Endpoint(endpoint),
-            Leaf::Poem(PoemLeaf(endpoint)) => Self::Poem(endpoint),
-        }
-    }
-}
-
 enum Answers {
-    Any(Answer),
-    Methods(Methods<Answer>),
+    Any(Leaf),
+    Methods(Methods<Leaf>),
 }
 
 /// One address of the table, as poem's router reaches it: it records the
@@ -198,13 +184,8 @@ impl Matched {
             .map(Arc::from)
             .collect();
         let answers = match address.dispatch {
-            Dispatch::Any(leaf) => Answers::Any(leaf.into()),
-            Dispatch::Methods(entries) => Answers::Methods(Methods::new(
-                entries
-                    .into_iter()
-                    .map(|(method, leaf)| (method, leaf.into()))
-                    .collect(),
-            )),
+            Dispatch::Any(leaf) => Answers::Any(leaf),
+            Dispatch::Methods(entries) => Answers::Methods(Methods::new(entries)),
         };
         Self {
             template: Arc::from(address.template.as_str()),
@@ -241,30 +222,31 @@ impl poem::Endpoint for Matched {
             slot.note(&self.template);
         }
         let params = self.params(&req).map_err(error_to_poem)?;
-        let (answer, head) = match &self.answers {
-            Answers::Any(answer) => (answer, false),
+        let (leaf, head) = match &self.answers {
+            Answers::Any(leaf) => (leaf, false),
             Answers::Methods(methods) => match methods.choose(req.method()) {
-                Chosen::Entry(answer) => (answer, false),
-                Chosen::HeadOf(answer) => {
+                Chosen::Entry(leaf) => (leaf, false),
+                Chosen::HeadOf(leaf) => {
                     req.set_method(Method::GET);
-                    (answer, true)
+                    (leaf, true)
                 }
                 Chosen::NotAllowed => return Ok(response_to_poem(methods.not_allowed())),
             },
         };
-        match answer {
-            Answer::Endpoint(endpoint) => {
+        match leaf {
+            Leaf::Endpoint(endpoint) => {
                 let mut request = request_from_poem(req);
                 request.set_route(Arc::clone(&self.template), params);
                 let resp = endpoint.call(request).await.map_err(error_to_poem)?;
                 Ok(response_to_poem(if head { head_of(resp) } else { resp }))
             }
-            Answer::Poem(endpoint) => {
+            Leaf::Poem(PoemLeaf(endpoint)) => {
                 note_route(&mut req, Routed::new(Arc::clone(&self.template), params));
                 let resp = endpoint.call(req).await?;
-                Ok(match head {
-                    true => response_to_poem(head_of(response_from_poem(resp))),
-                    false => resp,
+                Ok(if head {
+                    response_to_poem(head_of(response_from_poem(resp)))
+                } else {
+                    resp
                 })
             }
         }

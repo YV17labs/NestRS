@@ -384,16 +384,13 @@ impl Transport for HttpTransport {
         }
         // Applied at registration, so every address the table holds is the one
         // a client calls.
-        let prefix = match self.global_prefix.take() {
-            Some(prefix) => {
-                RouteTemplate::literal(&prefix).map_err(|refused| RouteError::Prefix {
-                    owner: global_prefix_owner(),
-                    refused,
-                })?;
-                Some(prefix)
-            }
-            None => None,
-        };
+        let prefix = self.global_prefix.take();
+        if let Some(prefix) = &prefix {
+            RouteTemplate::literal(prefix).map_err(|refused| RouteError::Prefix {
+                owner: global_prefix_owner(),
+                refused,
+            })?;
+        }
         let mut routes = HttpRoutes::new(prefix.as_deref());
 
         let global_guards = nest_rs_guards::__private::global_guards_active(container);

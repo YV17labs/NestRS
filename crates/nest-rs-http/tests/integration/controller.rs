@@ -264,7 +264,7 @@ async fn a_parameter_in_the_controller_path_binds_before_the_route_s_own() {
 #[tokio::test]
 async fn a_route_identity_is_the_address_the_table_serves() {
     use nest_rs_codegen::RoutePath;
-    use nest_rs_http::{Method, Response, endpoint_fn};
+    use nest_rs_http::Method;
 
     /// A template and a request it serves.
     type Probe = (&'static str, &'static str);
@@ -291,13 +291,12 @@ async fn a_route_identity_is_the_address_the_table_serves() {
             "the macro's reading of `{a}` and `{b}`",
         );
 
-        let answering = |body: &'static str| {
-            endpoint_fn(move |_| async move { Ok(Response::builder().body(body)) })
-        };
         let mounted = crate::routes::table_under(None, move |routes| {
-            routes
-                .route(Method::GET, a, answering("a"))
-                .route(Method::GET, b, answering("b"));
+            routes.route(Method::GET, a, crate::answering("a")).route(
+                Method::GET,
+                b,
+                crate::answering("b"),
+            );
         })
         .await;
         let table_says_one = match mounted {

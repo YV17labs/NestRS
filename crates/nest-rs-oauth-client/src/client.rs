@@ -26,8 +26,29 @@ pub struct AuthorizationRedirect {
     /// The provider authorization URL to redirect the user agent to.
     pub url: String,
     /// Signed, short-lived token binding the CSRF state to the PKCE verifier.
-    /// Set as a cookie on the redirect; pass back to [`exchange`](OAuthClient::exchange).
+    /// Set as a cookie on the redirect through [`set_cookie`](Self::set_cookie);
+    /// read back with [`OAuthClient::transaction_from`] and passed to
+    /// [`exchange`](OAuthClient::exchange).
     pub transaction: String,
+}
+
+impl AuthorizationRedirect {
+    /// The `Set-Cookie` value carrying [`transaction`](Self::transaction) on the
+    /// redirect: `__Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure;
+    /// SameSite=Lax`.
+    ///
+    /// `SameSite=Lax`, not `Strict`: the callback is a top-level cross-site
+    /// navigation from the provider, which `Strict` would strip (RFC 6265bis
+    /// §5.6.7.1). `Max-Age` is the signed token's own lifetime,
+    /// [`OAuthClient::TRANSACTION_TTL_SECS`].
+    pub fn set_cookie(&self) -> String {
+        format!(
+            "{}={}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Lax",
+            OAuthClient::TRANSACTION_COOKIE,
+            self.transaction,
+            OAuthClient::TRANSACTION_TTL_SECS,
+        )
+    }
 }
 
 /// Outcome of the Authorization-Code exchange.
@@ -53,7 +74,7 @@ enum TransactionKind {
 }
 
 /// Carried as a [`JwtService`]-signed cookie so the client cannot forge it.
-/// `provider` binds it to the flow that minted it: apps keep one cookie name for
+/// `provider` binds it to the flow that minted it: one cookie name serves
 /// every provider, and PKCE alone would not stop a cross-provider replay.
 #[derive(Serialize, Deserialize)]
 struct Transaction {
@@ -384,6 +405,34 @@ impl OAuthClient {
 
     /// Lifetime of the signed transaction token and of its cookie's `Max-Age`.
     pub const TRANSACTION_TTL_SECS: u64 = 600;
+
+    /// The transaction cookie's name. The `__Host-` prefix (RFC 6265bis
+    /// §4.1.3.2) makes a browser refuse it unless it is `Secure`, `Path=/` and
+    /// has no `Domain`, so a sibling subdomain cannot plant or overwrite it.
+    pub const TRANSACTION_COOKIE: &'static str = "__Host-oauth_tx";
+
+    /// The transaction a callback carries, read from its `Cookie` field values —
+    /// HTTP/2 may split one cookie-string over several fields (RFC 9113
+    /// §8.2.3). `None` when absent or empty.
+    ///
+    /// ```
+    /// use nest_rs_oauth_client::OAuthClient;
+    ///
+    /// let fields = ["theme=dark", "__Host-oauth_tx=eyJ0eXAi; lang=en"];
+    /// assert_eq!(OAuthClient::transaction_from(fields), Some("eyJ0eXAi"));
+    /// ```
+    pub fn transaction_from<'a>(
+        cookie_fields: impl IntoIterator<Item = &'a str>,
+    ) -> Option<&'a str> {
+        cookie_fields
+            .into_iter()
+            .flat_map(|field| field.split(';'))
+            .find_map(|pair| {
+                let (name, value) = pair.trim().split_once('=')?;
+                (name == Self::TRANSACTION_COOKIE).then_some(value)
+            })
+            .filter(|value| !value.is_empty())
+    }
 
     /// Begin the flow: the provider redirect URL and the signed transaction token to
     /// set as a cookie, bound to `provider`.
@@ -800,6 +849,65 @@ mod tests {
             )),
             "{detail}"
         );
+    }
+
+    fn redirect() -> AuthorizationRedirect {
+        AuthorizationRedirect {
+            url: "https://provider.example/authorize".into(),
+            transaction: "tok".into(),
+        }
+    }
+
+    #[test]
+    fn the_transaction_cookie_is_host_prefixed_secure_and_lives_as_long_as_its_token() {
+        let cookie = redirect().set_cookie();
+        assert!(
+            cookie.starts_with(&format!("{}=tok;", OAuthClient::TRANSACTION_COOKIE)),
+            "{cookie}"
+        );
+        let attributes: Vec<&str> = cookie.split(';').skip(1).map(str::trim).collect();
+        for expected in [
+            "Path=/",
+            "HttpOnly",
+            "Secure",
+            "SameSite=Lax",
+            &format!("Max-Age={}", OAuthClient::TRANSACTION_TTL_SECS),
+        ] {
+            assert!(attributes.contains(&expected), "{expected}: {cookie}");
+        }
+        assert!(
+            !cookie.to_ascii_lowercase().contains("domain"),
+            "a __Host- cookie carries no Domain: {cookie}"
+        );
+        assert_eq!(OAuthClient::TRANSACTION_COOKIE, "__Host-oauth_tx");
+        assert_eq!(OAuthClient::TRANSACTION_TTL_SECS, 600);
+    }
+
+    #[test]
+    fn the_transaction_is_read_from_any_cookie_field_by_its_exact_name() {
+        assert_eq!(
+            OAuthClient::transaction_from(["a=1; __Host-oauth_tx=tok; b=2"]),
+            Some("tok")
+        );
+        assert_eq!(
+            OAuthClient::transaction_from(["a=1", "__Host-oauth_tx=tok"]),
+            Some("tok"),
+            "HTTP/2 splits one cookie-string over several fields"
+        );
+        assert_eq!(
+            OAuthClient::transaction_from(["__Host-oauth_tx=first", "__Host-oauth_tx=second"]),
+            Some("first")
+        );
+        for refused in [
+            ["__Host-oauth_tx_evil=x"],
+            ["oauth_tx=tok"],
+            ["__Host-oauth_tx="],
+            ["x__Host-oauth_tx=tok"],
+            [""],
+        ] {
+            assert_eq!(OAuthClient::transaction_from(refused), None, "{refused:?}");
+        }
+        assert_eq!(OAuthClient::transaction_from([]), None);
     }
 
     /// A name lookup that never answers.

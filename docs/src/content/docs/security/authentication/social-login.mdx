@@ -93,8 +93,10 @@ hard pin every other config uses.
 `nest-rs-social` ships **no routes**. A social provider is not a DI provider —
 it is reached only through `SocialRegistry`, which is what lets a third-party
 provider ship as two files with no module of its own. The flip side is that the
-two HTTP legs are **app code**: the path prefix, the throttle, the cookie name
-and what "resolve this profile to a local user" means are all yours.
+two HTTP legs are **app code**: the path prefix, the throttle and what "resolve
+this profile to a local user" means are all yours. The transaction cookie is
+not: `authorization.set_cookie()` writes it and `OAuthClient::transaction_from`
+reads it back, under the framework's one name.
 
 Two legs, both dispatched by a `:provider` path segment:
 
@@ -130,7 +132,11 @@ impl OAuthController {
             .authorize(&provider.into_inner())
             .ok_or_else(|| poem::Error::from_status(StatusCode::NOT_FOUND))?
             .map_err(poem::error::InternalServerError)?;
-        // … a 302 to `authorization.url`, the transaction in a short-lived cookie
+        Ok(Response::builder()
+            .status(StatusCode::FOUND)
+            .header(header::SET_COOKIE, authorization.set_cookie())
+            .header(header::LOCATION, authorization.url)
+            .finish())
     }
 
     #[get("/social/{provider}/callback")]

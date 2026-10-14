@@ -70,15 +70,8 @@ impl OAuthController {
         let auth = self.client.authorize(&self.jwt, "github")?;
         Ok(Response::builder()
             .status(StatusCode::FOUND)
+            .header(header::SET_COOKIE, auth.set_cookie())
             .header(header::LOCATION, auth.url)
-            .header(
-                header::SET_COOKIE,
-                format!(
-                    "nestrs_oauth_tx={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
-                    auth.transaction,
-                    OAuthClient::TRANSACTION_TTL_SECS,
-                ),
-            )
             .finish())
     }
 
@@ -172,8 +165,9 @@ transaction being replayed across providers.
 
 The transaction is a JSON Web Token signed by your app's
 `JwtService`, carrying the random CSRF `state`, the PKCE verifier,
-and `exp`. The browser stores it as a cookie; the callback leg
-verifies the signature before trusting any of it.
+and `exp`. The browser stores it as a cookie the framework names and
+writes — `auth.set_cookie()` is the whole `Set-Cookie` value — and the
+callback leg verifies the signature before trusting any of it.
 
 The framework generates a fresh PKCE pair per flow
 (`PkceCodeChallenge::new_random_sha256`) and a fresh CSRF token
@@ -182,15 +176,25 @@ The framework generates a fresh PKCE pair per flow
 ## The callback leg
 
 The provider redirects to `redirect_url` with `state` and `code`
-query parameters. `exchange` verifies the cookie's signature,
-compares its CSRF state to the query string, and only then trades
-the code for a `TokenSet`:
+query parameters. `OAuthClient::transaction_from` reads the transaction
+back from the request's `Cookie` fields — every one of them, since HTTP/2
+may split the cookies over several — by its exact name. `exchange` then
+verifies the cookie's signature, compares its CSRF state to the query
+string, and only then trades the code for a `TokenSet`:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
+let transaction_cookie = OAuthClient::transaction_from(
+    req.headers()
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|field| field.to_str().ok()),
+)
+.ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
+
 let tokens = self.client.exchange(
     &self.jwt,
     "github",              // the same provider the transaction was minted for
-    &transaction_cookie,
+    transaction_cookie,
     state_from_query,
     code_from_query,
 ).await?;
@@ -293,13 +297,20 @@ pub struct AuthorizationRedirect {
 ```
 
 - `url` — set `Location: <url>` and return `302`.
-- `transaction` — set as an `HttpOnly`, `Secure`, `SameSite=Lax`
-  cookie scoped to the callback path.
+- `transaction` — set as a cookie through `set_cookie()`:
+  `__Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax`.
 
-The transaction inherits the `JwtService`'s expiry, so a flow that
-takes longer than your `expires_in` to complete fails the verify
-step. Keep the JWT TTL aligned with how long a user typically takes
-to consent.
+The cookie's name is `OAuthClient::TRANSACTION_COOKIE`, the framework's
+rather than yours. Its `__Host-` prefix makes a browser refuse it unless
+it is `Secure`, on `Path=/` and without a `Domain`, so a sibling subdomain
+can neither plant nor overwrite it. `HttpOnly` keeps it from every
+script. `SameSite=Lax` lets it ride the provider's redirect back, a
+top-level cross-site navigation that `Strict` would strip.
+
+The transaction lives `OAuthClient::TRANSACTION_TTL_SECS` — ten minutes,
+the signed token's `exp` and the cookie's `Max-Age` alike — whatever your
+`JwtService`'s `expires_in`. A user who takes longer to consent starts
+the flow again.
 
 ## Token endpoint errors
 

@@ -4,15 +4,12 @@ use crate::oauth::{
     AuthenticatedClient, Caller, ClientAuthnGuard, LoginDto, OAuthGuard, OAuthService,
 };
 use nest_rs::http::{Ctx, Piped, Valid, controller, routes};
-use nest_rs::oauth::client::OAuthClient;
 use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse};
 use nest_rs::pipes::Lowercase;
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 use poem::http::{StatusCode, header};
 use poem::web::{Form, Json, Path};
 use poem::{Response, Result};
-
-pub(crate) const TRANSACTION_COOKIE: &str = "oauth_tx";
 
 #[controller(path = "/")]
 pub struct OAuthController {
@@ -57,15 +54,8 @@ impl OAuthController {
             .map_err(poem::error::InternalServerError)?;
         Ok(Response::builder()
             .status(StatusCode::FOUND)
+            .header(header::SET_COOKIE, authorization.set_cookie())
             .header(header::LOCATION, authorization.url)
-            .header(
-                header::SET_COOKIE,
-                format!(
-                    "{TRANSACTION_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}{COOKIE_SECURE}",
-                    authorization.transaction,
-                    OAuthClient::TRANSACTION_TTL_SECS,
-                ),
-            )
             .finish())
     }
 
@@ -100,5 +90,3 @@ impl OAuthController {
             .await?)
     }
 }
-
-const COOKIE_SECURE: &str = "; Secure";

@@ -41,7 +41,7 @@ cargo add nest-rs --features redis-queue
 
 One line in the feature crate's manifest: `redis-queue` implies `queue` and
 `redis` — the Redis connection and the queue's binding over it, the macros, the
-worker-context seam and the pipe fold `#[process]` expands to, together. `redis`
+job timeout and the pipe fold `#[process]` expands to, together. `redis`
 alone is the connection, and compiles no queue.
 
 A job payload declares `serde` itself; `anyhow` and `tracing` come through

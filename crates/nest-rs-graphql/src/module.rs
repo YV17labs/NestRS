@@ -174,6 +174,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                         &options,
                         mounted.clone(),
                         nest_rs_http::__private::OriginPolicy::from_container(container),
+                        container.get_dyn::<dyn nest_rs_database::UnitOfWork>(),
                     ),
                     options.playground.then(|| {
                         async_graphql::http::playground_source(

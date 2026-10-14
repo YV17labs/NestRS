@@ -159,8 +159,9 @@ whole request.
 
 The middle row is what makes a `Repo`-backed subscription work at all: the
 `101` is answered before the connection task starts, so the request
-boundary's handle is already gone. The socket takes a pool-bound one
-instead. Carrying the transaction would pin a pooled connection for hours
+boundary's handle is already gone. The socket runs as a pool unit of the
+app's unit-of-work binding instead, so a DataLoader batch under it reads
+through that pool too. Carrying the transaction would pin a pooled connection for hours
 and write through something nobody will commit.
 
 The second row's span covers the **connection**, not each item: async-graphql

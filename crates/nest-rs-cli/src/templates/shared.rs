@@ -382,7 +382,7 @@ writes that edge's module once auth exists, and `g http` / `g graphql` on a
 `g resource` port emit the wiring already done.
 
 Two edges answer differently, by design. A **scheduled** tick is system work:
-`SeaOrmDatabaseModule`'s job context installs the executor with no ability, so `Repo`
+its unit of work runs on `SeaOrmDatabaseModule`'s executor with no ability, so `Repo`
 runs unscoped and there is nothing to declare. **MCP** gates at the endpoint,
 through the global guard pool with the app's `dyn McpOperationGuard` added to
 it, either alone, else deny-all — so an `/mcp` endpoint with neither answers 401

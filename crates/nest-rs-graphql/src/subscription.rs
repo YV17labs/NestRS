@@ -77,8 +77,9 @@ pub fn keep_masked_item<T>(
     }
 }
 
-/// The data handle a socket runs on, taken from the **upgrade request**: poem
-/// answers the `101` before the connection task runs.
+/// The data handle a socket runs on when no unit-of-work binding is mounted,
+/// taken from the **upgrade request**: poem answers the `101` before the
+/// connection task runs.
 ///
 /// Always **non-transactional**: the request transaction is finalized with the
 /// `101`, and carrying it onto an hours-long socket would pin a pooled connection
@@ -86,6 +87,55 @@ pub fn keep_masked_item<T>(
 fn socket_executor() -> Option<Arc<dyn nest_rs_database::Executor>> {
     nest_rs_database::current_executor()
         .map(|executor| executor.non_transactional().unwrap_or(executor))
+}
+
+/// How a socket reaches the data layer, read off the **upgrade request**.
+enum SocketData {
+    /// The app's unit-of-work binding: the socket runs as a
+    /// [`Pool`](nest_rs_database::TransactionPolicy::Pool) unit of it, so a
+    /// DataLoader batch its operations continue into reaches that binding's
+    /// pool too.
+    Bound(Arc<dyn nest_rs_database::UnitOfWork>),
+    /// An executor the upgrade ran on outside any unit, stepped out of its
+    /// transaction ([`socket_executor`]).
+    Installed(Arc<dyn nest_rs_database::Executor>),
+}
+
+impl SocketData {
+    /// The mount's `binding`, else what the upgrade request ran on; `None`
+    /// without a data layer.
+    fn of_upgrade(binding: Option<&Arc<dyn nest_rs_database::UnitOfWork>>) -> Option<Self> {
+        match binding {
+            Some(binding) => Some(Self::Bound(Arc::clone(binding))),
+            None => socket_executor().map(Self::Installed),
+        }
+    }
+
+    /// `socket`, run on this data layer.
+    fn serve<'a>(self, socket: crate::BoxFuture<'a, ()>) -> crate::BoxFuture<'a, ()> {
+        match self {
+            Self::Bound(binding) => Box::pin(async move {
+                let unit = nest_rs_database::UnitSpec::new(
+                    crate::unit::SUBSCRIPTION,
+                    nest_rs_database::ExecutorScope::Request,
+                    nest_rs_database::TransactionPolicy::Pool,
+                );
+                nest_rs_database::run_unit(Some(&binding), unit, socket, |_| true, refused).await;
+            }),
+            Self::Installed(executor) => {
+                Box::pin(nest_rs_database::with_request_executor(executor, socket))
+            }
+        }
+    }
+}
+
+/// A binding that refused the socket its pool: the socket closes unserved.
+fn refused(why: nest_rs_database::Unhonoured) {
+    tracing::error!(
+        target: crate::TARGET,
+        error = %nest_rs_core::error_message(&why),
+        "subscription socket not served: the unit-of-work binding refused its pool",
+    );
 }
 
 /// The identity a socket runs under — id and actor — taken from the **upgrade
@@ -249,6 +299,8 @@ pub(crate) struct SubscriptionEndpoint<E> {
     sockets: DetachedWork,
     /// The browser origins that may open a socket, which CORS never asks about.
     origins: OriginPolicy,
+    /// The unit-of-work binding, resolved once at mount.
+    unit_of_work: Option<Arc<dyn nest_rs_database::UnitOfWork>>,
 }
 
 impl<E> SubscriptionEndpoint<E> {
@@ -258,6 +310,7 @@ impl<E> SubscriptionEndpoint<E> {
         config: &GraphqlConfig,
         sockets: DetachedWork,
         origins: OriginPolicy,
+        unit_of_work: Option<Arc<dyn nest_rs_database::UnitOfWork>>,
     ) -> Self {
         Self {
             executor,
@@ -265,6 +318,7 @@ impl<E> SubscriptionEndpoint<E> {
             bounds: SocketBounds::of(config),
             sockets,
             origins,
+            unit_of_work,
         }
     }
 }
@@ -302,7 +356,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         .await;
         let executor = self.executor.clone();
         let bounds = self.bounds;
-        let socket_executor = socket_executor();
+        let socket_data = SocketData::of_upgrade(self.unit_of_work.as_ref());
         // `around` wraps the **whole socket**: one upgrade, one principal.
         let bridge = Arc::clone(&self.bridge);
         // Read on the request task, before poem answers the `101`.
@@ -351,10 +405,8 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 });
                 let guarded: crate::BoxFuture<'_, ()> = bridge.around(&req, serving);
                 // Executor outermost, ability inside, as on the POST path.
-                let served: crate::BoxFuture<'_, ()> = match socket_executor {
-                    Some(executor) => {
-                        Box::pin(nest_rs_database::with_request_executor(executor, guarded))
-                    }
+                let served = match socket_data {
+                    Some(socket_data) => socket_data.serve(guarded),
                     None => guarded,
                 };
                 // Dropped at the window's close, which `line`'s `Drop` files `cancelled`.
@@ -1029,6 +1081,84 @@ mod tests {
     #[tokio::test]
     async fn a_socket_without_an_orm_carries_nothing() {
         assert!(socket_executor().is_none());
+        assert!(SocketData::of_upgrade(None).is_none());
+    }
+
+    /// A binding opening the request's transaction, or the pool.
+    struct Binding;
+    /// A unit [`Binding`] opened.
+    struct Opened(nest_rs_database::TransactionPolicy);
+
+    impl nest_rs_database::UnitOfWork for Binding {
+        fn open(
+            &self,
+            spec: &nest_rs_database::UnitSpec,
+        ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+            Ok(Box::new(Opened(spec.policy)))
+        }
+    }
+
+    impl nest_rs_database::OpenUnit for Opened {
+        fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+            match self.0 {
+                nest_rs_database::TransactionPolicy::Pool => Arc::new(Pool),
+                _ => Arc::new(Transaction),
+            }
+        }
+
+        fn settle(
+            self: Box<Self>,
+            _ok: bool,
+        ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+            Box::pin(std::future::ready(nest_rs_database::Settlement::Settled))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_batch_under_a_socket_runs_on_the_pool_of_the_upgrades_binding() {
+        let binding: Arc<dyn nest_rs_database::UnitOfWork> = Arc::new(Binding);
+        let upgrade = nest_rs_database::UnitSpec::new(
+            crate::unit::OPERATION,
+            nest_rs_database::ExecutorScope::Request,
+            nest_rs_database::TransactionPolicy::PerUnit,
+        );
+        let socket_data = nest_rs_database::run_unit(
+            Some(&binding),
+            upgrade,
+            async { SocketData::of_upgrade(Some(&binding)) },
+            |_| true,
+            |_| None,
+        )
+        .await
+        .expect("the upgrade runs inside its unit");
+
+        let mut socket_ran_on_the_pool = false;
+        let mut batch_ran_on = None;
+        let socket = socket_data.serve(Box::pin(async {
+            socket_ran_on_the_pool = nest_rs_database::current_executor()
+                .is_some_and(|executor| executor.as_any().is::<Pool>());
+            let batch = RequestContinuation::capture(Continuation::Batch)
+                .expect("a socket runs in a request scope");
+            batch_ran_on = Some(
+                batch
+                    .scope(async {
+                        nest_rs_database::current_executor()
+                            .is_some_and(|executor| executor.as_any().is::<Pool>())
+                    })
+                    .await,
+            );
+        }));
+        nest_rs_core::with_request_scope(None, Correlation::minted(None), socket).await;
+
+        assert!(
+            socket_ran_on_the_pool,
+            "the socket never carries the upgrade's transaction"
+        );
+        assert_eq!(
+            batch_ran_on,
+            Some(true),
+            "a DataLoader batch under the socket runs on the binding's pool",
+        );
     }
 
     /// Pins the opening [`completed_id`] reads against async-graphql's own

@@ -366,8 +366,9 @@ pub struct OrgsModule;
 pub struct OrgsHttpModule;
 ```
 
-The HTTP transport + the data context interceptor activate at the app
-root with `HttpModule::for_root(...)`, `SeaOrmModule::for_root(...)` and `SeaOrmDatabaseModule`.
+The HTTP transport + the interceptor running each request's unit of work
+activate at the app root with `HttpModule::for_root(...)`,
+`SeaOrmModule::for_root(...)` and `SeaOrmDatabaseModule`.
 Importing only `OrgsModule` (no HTTP module) gives a worker the same
 `OrgsService` without mounting the endpoints — that is the port + adapter
 split this framework is built around.

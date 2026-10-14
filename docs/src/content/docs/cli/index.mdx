@@ -264,8 +264,8 @@ nestrs g events posts      # event listener, with its event at the port
 under `crates/features/src/authz/` when the workspace has a policy to enforce,
 and wire it into the app. It is not optional wiring: `/graphql` and `/mcp` gate
 in band, per operation, so without the bridge `/mcp` denies every call and
-`/graphql` runs operations with no ability installed. A gateway's bridge carries
-the socket data context that scopes its rows.
+`/graphql` runs operations with no ability installed. A gateway's bridge brings
+the guards whose ability crosses the connection and scopes its rows.
 
 <Aside type="note">
 Generated entities default to wire-only `#[expose]` (no GraphQL tokens) — see

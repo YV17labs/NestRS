@@ -38,7 +38,7 @@ impl DynamicModule for OAuthClientSetup {
         builder.provide_factory_after::<OAuthClient, (OAuthClientConfig,), _, _>(
             |container| async move {
                 let config = ConfigModule::resolved::<OAuthClientConfig>(&container)?;
-                OAuthClient::new((*config).clone()).map_err(anyhow::Error::new)
+                OAuthClient::from_variables((*config).clone()).map_err(anyhow::Error::new)
             },
         )
     }

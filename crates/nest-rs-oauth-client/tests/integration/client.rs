@@ -8,7 +8,8 @@ use std::sync::{Arc, LazyLock};
 
 use nest_rs_authn::{AuthError, JwtOptions, JwtService};
 use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, var_name};
-use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, TARGET};
+use nest_rs_core::{App, module};
+use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, OAuthClientModule, TARGET, TokenSet};
 use nest_rs_testing::{LogCapture, TestAuthority, TestCertificate};
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -619,6 +620,35 @@ async fn a_read_whose_body_does_not_decode_quotes_none_of_it() {
     );
 }
 
+#[module(imports = [OAuthClientModule::for_root(None)])]
+struct OAuthClientHost;
+
+/// The client [`OAuthClientModule`] builds over `config`, seeded in place of
+/// the one `<PREFIX>_OAUTH__CLIENT__*` would resolve.
+async fn module_built(config: OAuthClientConfig) -> Arc<OAuthClient> {
+    let app = App::builder()
+        .provide(config)
+        .module::<OAuthClientHost>()
+        .build()
+        .await
+        .expect("the module boots over the seeded config");
+    app.container()
+        .get()
+        .expect("the module provides the client")
+}
+
+/// A full exchange through `client`, its transaction minted by `client` itself.
+async fn exchange(client: &OAuthClient) -> Result<TokenSet, AuthError> {
+    let jwt = crate::jwt();
+    let auth = client.authorize(&jwt, "acme").expect("authorize");
+    let tx: Transaction = jwt
+        .verify_handshake("oauth-tx", &auth.transaction)
+        .expect("the transaction verifies");
+    client
+        .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+        .await
+}
+
 /// A provider whose certificate a private authority signed is trusted only
 /// once `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names that authority; without it
 /// the handshake fails, and no request reaches the provider.
@@ -630,20 +660,9 @@ async fn a_token_endpoint_behind_a_private_authority_is_trusted_only_with_its_au
         r#"{"access_token":"issued","token_type":"bearer"}"#,
     )
     .await;
-    let exchange = |client: OAuthClient| async move {
-        let jwt = crate::jwt();
-        let auth = client.authorize(&jwt, "acme").expect("authorize");
-        let tx: Transaction = jwt
-            .verify_handshake("oauth-tx", &auth.transaction)
-            .expect("the transaction verifies");
-        client
-            .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
-            .await
-    };
 
-    let system_only =
-        OAuthClient::new(endpoints_on(provider.addr, ClientTls::default())).expect("client builds");
-    let Err(refused) = exchange(system_only).await else {
+    let system_only = module_built(endpoints_on(provider.addr, ClientTls::default())).await;
+    let Err(refused) = exchange(&system_only).await else {
         panic!("a certificate no trusted authority signed must not be talked to");
     };
     let sentence = unavailable_sentence_of(&refused, &[]);
@@ -668,7 +687,7 @@ async fn a_token_endpoint_behind_a_private_authority_is_trusted_only_with_its_au
     let configured =
         OAuthClientConfig::from_env(&env, endpoints_on(provider.addr, ClientTls::default()))
             .expect("the authority reads");
-    let Ok(tokens) = exchange(OAuthClient::new(configured).expect("client builds")).await else {
+    let Ok(tokens) = exchange(&OAuthClient::new(configured).expect("client builds")).await else {
         panic!("the authority the deployment named is trusted");
     };
     assert_eq!(tokens.access_token, "issued");
@@ -692,7 +711,8 @@ async fn a_provider_requiring_a_client_certificate_is_handed_the_configured_one(
     )
     .await;
 
-    let error = client_for(provider.addr)
+    let error = module_built(endpoints_on(provider.addr, AUTHORITY.client_tls()))
+        .await
         .userinfo::<serde_json::Value>(ACCESS_TOKEN)
         .await
         .expect_err("a provider requiring a certificate refuses a client presenting none");
@@ -725,6 +745,40 @@ async fn a_provider_requiring_a_client_certificate_is_handed_the_configured_one(
         .await
         .expect("the profile is read presenting the certificate");
     assert_eq!(provider.requests(), 1);
+}
+
+/// A client its caller composed — a social provider's, whose URLs are
+/// constants and whose TLS no variable sets — reads none of
+/// `<PREFIX>_OAUTH__CLIENT__*`: a refused handshake keeps rustls's reason and
+/// names none of them.
+#[tokio::test]
+async fn a_composed_client_refused_a_handshake_names_no_variable_it_never_reads() {
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        r#"{"access_token":"issued","token_type":"bearer"}"#,
+    )
+    .await;
+    let composed =
+        OAuthClient::new(endpoints_on(provider.addr, ClientTls::default())).expect("client builds");
+
+    let Err(refused) = exchange(&composed).await else {
+        panic!("a certificate no trusted authority signed must not be talked to");
+    };
+    let sentence = unavailable_sentence_of(&refused, &[]);
+    assert!(
+        sentence.starts_with(&format!(
+            "the OAuth provider's token endpoint (https://{}/token) could not be called: ",
+            provider.addr
+        )) && sentence.contains("UnknownIssuer")
+            && !sentence.contains(&var_name(OAuthClientConfig::NAMESPACE, "")),
+        "the refusal keeps rustls's reason and names no variable: {sentence}"
+    );
+    assert_eq!(
+        provider.requests(),
+        0,
+        "no request crossed the failed handshake"
+    );
 }
 
 /// A redirect is an answer, never followed: a provider's `3xx` could send the

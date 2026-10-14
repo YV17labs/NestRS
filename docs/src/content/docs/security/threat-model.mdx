@@ -72,8 +72,10 @@ before any request, login or credential crosses.
 | OTLP exporter | the system's store, for an `https://` endpoint | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` |
 
 A refused certificate fails the call or the boot — never a fallback to
-an unverified connection — and Redis, the JWK Set and the OAuth client
-say which setting fixes it.
+an unverified connection. Redis, the JWK Set and the client
+`OAuthClientModule` builds say which setting fixes it; a sign-in
+provider's client, whose URLs and trust no variable sets, keeps rustls's
+reason alone.
 
 ## What the framework does **not** do
 

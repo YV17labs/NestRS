@@ -107,9 +107,15 @@ const PROVIDER_ENDPOINT: &str = "endpoint";
 struct Endpoint<'a> {
     role: &'static str,
     url: &'a str,
-    /// The key of the variable naming `url`, which a refused handshake's
-    /// remedy names; `None` for a URL a provider's code built.
-    setting: Option<&'static str>,
+    /// The variable naming `url`, which a refused handshake's remedy names;
+    /// `None` for a URL a provider's code built, or a client no variable sets.
+    setting: Option<Setting<'a>>,
+}
+
+/// A variable among those an [`OAuthClient`]'s config was read under.
+struct Setting<'a> {
+    variables: &'a ConfigService,
+    key: &'static str,
 }
 
 impl fmt::Display for Endpoint<'_> {
@@ -138,16 +144,12 @@ fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
         )
     } else if let Some(setting) = endpoint
         .setting
+        .as_ref()
         .filter(|_| ClientTls::negotiation_failed(&error))
     {
         format!(
             "{endpoint} could not be called: {} ({})",
-            ClientTls::remedy(
-                &ConfigService::for_namespace(OAuthClientConfig::NAMESPACE),
-                "the OAuth provider",
-                setting,
-                &error,
-            ),
+            ClientTls::remedy(setting.variables, "the OAuth provider", setting.key, &error),
             nest_rs_core::error_message(&error.without_url())
         )
     } else {
@@ -339,6 +341,12 @@ fn verified(tls: &ClientTls) -> Result<reqwest::Client, AuthError> {
 pub struct OAuthClient {
     config: OAuthClientConfig,
     http: reqwest::Client,
+    /// The variables `config` was read under, which a refused handshake's
+    /// remedy names: `<PREFIX>_OAUTH__CLIENT__*` when
+    /// [`OAuthClientModule`](crate::OAuthClientModule) built the client, `None`
+    /// for a config its caller composed — a social provider's, whose URLs are
+    /// constants and whose TLS no variable sets.
+    variables: Option<ConfigService>,
 }
 
 impl OAuthClient {
@@ -364,12 +372,34 @@ impl OAuthClient {
     /// (an SSRF risk in a token exchange, per `oauth2`), bounds every call and
     /// trusts what `config.tls` names. A provider endpoint that is not `https`,
     /// a redirect that is neither `https` nor loopback `http`, and TLS material
-    /// no handshake could use are refused, naming the setting.
+    /// no handshake could use are refused, naming the setting. A handshake a
+    /// provider later refuses is said with rustls's reason alone: `config` may
+    /// be a sign-in provider's, read under none of this crate's variables.
     pub fn new(config: OAuthClientConfig) -> Result<Self, AuthError> {
         config.validate().map_err(invalid)?;
         config.refuse_plaintext()?;
         let http = verified(&config.tls)?;
-        Ok(Self { config, http })
+        Ok(Self {
+            config,
+            http,
+            variables: None,
+        })
+    }
+
+    /// [`new`](Self::new) over a config read under `<PREFIX>_OAUTH__CLIENT__*`,
+    /// whose variables a refused handshake's remedy then names.
+    pub(crate) fn from_variables(config: OAuthClientConfig) -> Result<Self, AuthError> {
+        Ok(Self {
+            variables: Some(ConfigService::for_namespace(OAuthClientConfig::NAMESPACE)),
+            ..Self::new(config)?
+        })
+    }
+
+    /// The variable `key` among this client's, when its config was read under any.
+    fn setting(&self, key: &'static str) -> Option<Setting<'_>> {
+        self.variables
+            .as_ref()
+            .map(|variables| Setting { variables, key })
     }
 
     /// Builds the `oauth2` client; URL syntax is checked here, not by `validate()`.
@@ -512,7 +542,7 @@ impl OAuthClient {
         let endpoint = Endpoint {
             role: TOKEN_ENDPOINT,
             url: &self.config.token_url,
-            setting: Some("TOKEN_URL"),
+            setting: self.setting("TOKEN_URL"),
         };
         // `oauth2` drops the answer's status, without which a provider's `503`
         // would read as the caller's failure.
@@ -568,7 +598,7 @@ impl OAuthClient {
         let endpoint = Endpoint {
             role: USERINFO_ENDPOINT,
             url: &self.config.userinfo_url,
-            setting: Some("USERINFO_URL"),
+            setting: self.setting("USERINFO_URL"),
         };
         self.read(&endpoint, access_token).await
     }
@@ -642,6 +672,7 @@ mod tests {
         OAuthClient {
             config,
             http: backend().build().expect("the backend builds"),
+            variables: None,
         }
     }
 
@@ -939,6 +970,7 @@ mod tests {
                 .dns_resolver(std::sync::Arc::new(NeverResolves))
                 .build()
                 .expect("the backend builds"),
+            variables: None,
         };
 
         // Twice the bound and no longer: a backend that stopped bounding its

@@ -14,8 +14,8 @@ JSON body, and form body. NestRS adds the framework-specific extractors:
 the validated `Valid<E>`, the typed header reader `Header<T>`, the
 raw-body reader `RawBody`, the spoofable but observation-grade
 `ClientIp`, the request-scoped DI resolver `Scoped<T>`, the
-guard-attached context reader `Ctx<T>`, and the route metadata reader
-`Reflector` paired with `#[meta(...)]`.
+guard-attached context reader `Ctx<T>`, and the route metadata a guard reads
+through `cx.reflector()`, declared with `#[meta(...)]`.
 
 This page is the reference: one extractor, one example, one rule. The
 [Guards](/fundamentals/guards/) for `Ctx<T>` and
@@ -271,8 +271,8 @@ another request-scoped one.
 ## `Ctx<T>` — read context a guard attached
 
 A guard runs before the handler, can short-circuit with a response, and
-can attach a typed value to the request. `Ctx<T>` is how the handler reads
-that value back:
+can attach a typed value for the rest of the request. `Ctx<T>` is how the
+handler reads that value back:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::Ctx;
@@ -290,18 +290,20 @@ async fn create(
 
 `Ctx<T>` rejects with `500` if `T` is absent — a missing context means
 the guard that should have set it never ran on this route (a wiring bug,
-not a client error). The value is cloned out of the request's
-extensions; store an `Arc<_>` if the value is large.
+not a client error). `T` implements `AmbientValue` and `Clone`; the value is
+cloned out of the ambient context, so a large one goes in a newtype holding an
+`Arc` (`struct Catalog(Arc<Entries>)`), which implements `AmbientValue` itself.
 
 The canonical use is the authenticated principal: `AuthnGuard` runs the
-strategy, then inserts a `Claims` (or whatever the resource server's
-principal is) into the request. Every authenticated handler reads it as
-`auth: Ctx<Claims>`.
+strategy, then attaches a `Claims` (or whatever the resource server's
+principal is). Every authenticated handler reads it as `auth: Ctx<Claims>`.
+On a `#[public]` route reached with a credential the strategy rejected,
+`Ctx<Claims>` answers the `401` that credential earned rather than a `500`.
 
 See [Guards](/fundamentals/guards/) for how to attach a value, and for
 the design rule (guards gate and attach; handlers read).
 
-## `Reflector` + `#[meta(EXPR)]` — typed route metadata
+## `#[meta(EXPR)]` — typed route metadata
 
 A route can carry typed metadata a guard reads at decision time —
 the cleanest case is a rate-limit guard reading the route's quota. The
@@ -329,11 +331,9 @@ handler only declares metadata; the guard reads it back at decision
 time:
 
 ```rust title="crates/features/src/authn/guard.rs"
-use nest_rs::http::Reflector;
-use nest_rs::http::poem::Request;
-
-async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-    let throttle = Reflector::new(req)
+async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    let throttle = cx
+        .reflector()
         .get::<Throttle>()
         .copied()
         .unwrap_or(self.default_throttle);
@@ -346,7 +346,7 @@ Three rules pin the contract:
 - The value type must be `Send + Sync + 'static`. The expression is
   evaluated once, the first time a layer reads the route's metadata, and
   every request reads that one value through a pointer — never cloned,
-  never shadowed by what a guard inserts into the request. The reader
+  never shadowed by what a guard attaches. The reader
   resolves by `TypeId`: wrap values of one underlying shape in distinct
   newtypes when they need to coexist, and declare each type once per
   level.
@@ -360,13 +360,14 @@ Three rules pin the contract:
 
 `#[meta]` is declared the same way on a resolver, a gateway, an MCP host and
 their operations, and on a processor's, scheduled tasks' or listeners' impl
-block and its methods. Each site keeps both levels in its one declaration;
-`Reflector` reads an HTTP route's.
+block and its methods. Each site keeps both levels in its one declaration, and
+a guard's `check` reads a resolver's, a message's or a tool's through
+`cx.reflector()` exactly as `check_http` reads a route's.
 
 ## `#[public]` — the only universal marker
 
 `#[public]` declares the route's posture, the framework's only universal
-route marker. Guards read it through `HandlerMetadata::posture()`, which
+route marker. Guards read it through `cx.reflector().posture()`, which
 answers `Posture::Public` for it, and decide whether to honor it. The framework itself does *not* act on the
 marker — `AuthnGuard`, for example, still runs the strategy on a `#[public]`
 route, but lets an anonymous request through instead of returning `401`.

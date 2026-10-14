@@ -13,8 +13,8 @@ endpoint's `dyn McpOperationGuard` (mirroring `AuthzModule`,
 `AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
 re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
 the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
-in the same order, from the same `run_ability_chain`, nothing re-implemented per
-transport.
+in the same order, through the same authenticate-then-authorize step, nothing
+re-implemented per transport.
 
 ```rust title="apps/api/src/module.rs"
 #[module(
@@ -99,8 +99,10 @@ declared at two scopes still checks the operation once:
     async fn transcode_status(&self, /* … */) -> Result<String, McpError> { /* … */ }
 ```
 
-One `Guard` impl serves both transports: `check_http` reads the ability off the
-request, `check_mcp` reads the ambient one the bridge installed.
+One `Guard` impl serves both transports: `check_http` reads the ability
+`AuthzGuard` attached earlier in the route's stage, `check` the one the
+bridge attached to the `/mcp` request — both through `cx.ambient::<Ability>()`,
+and the guard declares `GuardFor<HttpView>` and `GuardFor<McpView>`.
 
 Masking round-trips the value through the entity model, so it needs the full
 `#[expose]` shape to reconcile against — and MCP has no selection set to excuse

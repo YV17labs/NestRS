@@ -80,7 +80,7 @@ That's a guard. Gate the request, return `Err(Denial)` on rejection.
 
 ```rust title="apps/api/src/guard.rs"
 use nest_rs::guards::prelude::*;
-use nest_rs::http::poem::Request as HttpRequest;
+use nest_rs::http::HttpView;
 
 #[injectable]
 #[derive(Default)]
@@ -90,8 +90,8 @@ impl Layer for RequireApiKey {}
 
 #[async_trait]
 impl Guard for RequireApiKey {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        if req.headers().get("x-api-key").is_some() {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        if HttpView::of(cx)?.request().header("x-api-key").is_some() {
             Ok(())
         } else {
             Err(Denial::unauthorized("missing key"))
@@ -99,7 +99,7 @@ impl Guard for RequireApiKey {
     }
 }
 
-impl HttpGuard for RequireApiKey {}
+impl GuardFor<HttpView> for RequireApiKey {}
 ```
 
 Bind with `#[use_guards(RequireApiKey)]` per controller or per handler,
@@ -108,19 +108,21 @@ or globally via
 
 ### "I want to attach something to the request so the handler can read it."
 
-A guard does that too. The guard borrows the request mutably:
+A guard does that too: it attaches the value, which is ambient for the rest of
+the request once the guards passed:
 
 ```rust title="crates/features/src/authn/guard.rs"
 #[async_trait]
 impl Guard for AuthnGuard {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        let claims = verify_bearer(req).map_err(|_| Denial::unauthorized("invalid token"))?;
-        req.extensions_mut().insert(claims);
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let claims = verify_bearer(HttpView::of(cx)?.request())
+            .map_err(|_| Denial::unauthorized("invalid token"))?;
+        cx.attach(claims);
         Ok(())
     }
 }
 
-impl HttpGuard for AuthnGuard {}
+impl GuardFor<HttpView> for AuthnGuard {}
 
 // In the handler:
 async fn me(&self, auth: Ctx<Claims>) -> Json<User> { /* ... */ }

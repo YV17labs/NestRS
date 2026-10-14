@@ -80,10 +80,11 @@ async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
 }
 ```
 
-`Ctx<Claims>` is a typed lookup into the request's extensions; missing
-the guard means missing the type, and the framework returns `500` —
-the access graph would already have failed the boot if the controller's
-import tree did not provide `AuthnGuard`.
+`Ctx<Claims>` reads the `Claims` the guard attached, which are ambient
+for the rest of the request; a value something else put in the request's
+extensions is never read. Missing the guard means missing the value, and
+the framework returns `500` — the access graph would already have failed
+the boot if the controller's import tree did not provide `AuthnGuard`.
 
 ## Advanced: write your own strategy
 
@@ -96,7 +97,7 @@ so authentication stays a pure request → principal mapping.
 
 ```rust title="crates/features/src/authn/strategies/api_key.rs"
 use nest_rs::authn::{AuthError, PrincipalIdentity, Strategy};
-use nest_rs::core::{async_trait, injectable};
+use nest_rs::core::{AmbientValue, async_trait, injectable};
 use nest_rs::http::poem::Request;
 
 #[injectable]
@@ -117,6 +118,9 @@ impl Strategy for ApiKeyStrategy {
         }
     }
 }
+
+// The guard attaches the principal for the rest of the request.
+impl AmbientValue for ApiKey {}
 
 // Every principal declares its audit identity — the value the framework
 // records as `actor_id` on the request span, so denials are attributable.

@@ -73,6 +73,7 @@ You need a better-auth server reachable over `https`, and the API's
 
    ```rust title="crates/features/src/identity/claims.rs"
    use nest_rs::authn::PrincipalIdentity;
+   use nest_rs::core::AmbientValue;
    use serde::{Deserialize, Serialize};
 
    #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,6 +81,8 @@ You need a better-auth server reachable over `https`, and the API's
        pub sub: String,
        pub exp: u64,
    }
+
+   impl AmbientValue for Claims {}
 
    impl PrincipalIdentity for Claims {
        fn actor_id(&self) -> Option<String> {

@@ -32,8 +32,8 @@ cargo add nest-rs --features mcp
 ```
 
 The `mcp` feature pulls the HTTP transport the endpoint mounts on and the guard
-surface that gates it — including the runner that lets a registered global
-pool gate `/mcp` instead of the endpoint staying deny-all.
+surface that gates it: the endpoint runs a registered global pool itself, so
+`/mcp` is gated by it instead of staying deny-all.
 None of that is a line you write.
 
 `rmcp` is not a dependency either, and it is not an import: `#[tools]` emits

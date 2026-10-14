@@ -22,12 +22,12 @@ see:
 |---|---|
 | HTTP | the matched route's template as declared (`/users/{id}`, one bucket for every id) + the client's network: its address in IPv4, its `/64` in IPv6 |
 | GraphQL | the field name + the caller's actor — an operation carries no client address, but it runs inside the request's scope |
-| MCP | the tool or prompt + the caller's actor — the same, carried across the task rmcp spawns for the operation |
+| MCP | the tool's or prompt's name + the caller's actor — the same, carried across the task rmcp spawns for the operation; a tool and a prompt sharing a name share its budget |
 | WS | the event name + the connection — the peer that keyed the upgrade is gone by the time a message runs |
 
-That is not a nicety: `/graphql` and `/mcp` are `EdgePosture::Exempt` and a
+That is not a nicety: `/graphql` and `/mcp` run their guards in band, and a
 WS message runs after the upgrade's chain returned, so **none of the three
-is reachable from an HTTP-scope binding**. Bind the guard globally *as well*
+units is reachable from an HTTP-scope binding**. Bind the guard globally *as well*
 where those mounts are public, so the request carrying the document, the
 session or the upgrade is metered per address too.
 
@@ -38,9 +38,10 @@ operation's bucket; the guard reports that once per process, at `warn`, as
 `rate-limit keying degraded to a shared bucket`. The global binding is what
 meters that traffic per address.
 
-Only HTTP carries per-unit metadata, so `#[meta(Throttle::…)]` overrides the
-module default there and nowhere else; the other three count against
-`ThrottlerConfig`'s limit.
+`#[meta(Throttle::…)]` overrides the module default on every edge — beside a
+route, a `#[query]`, a `#[subscribe_message]` or a `#[tool]`, or on its host
+for all of them; a unit that pins none counts against `ThrottlerConfig`'s
+limit.
 
 Bind it **per route**, or per controller. `use_guards_global` works and reads
 the same `#[meta(Throttle::…)]` — the guard pool runs post-routing, see
@@ -127,7 +128,7 @@ impl PostsController {
 ```
 
 `#[meta]` attaches the limit to the route; the guard reads it back through
-the `Reflector` at request time. `create` is capped at 10/min; `list`
+`cx.reflector()` at request time. `create` is capped at 10/min; `list`
 inherits the module default. Forms:
 
 | Form                                | Meaning                          |

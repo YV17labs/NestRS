@@ -82,11 +82,12 @@ with `WWW-Authenticate: Bearer`.
 ## Claims — your shape, your business rules
 
 The framework's `JwtStrategy<C>` is generic. `C` is any
-`DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static` type —
-usually a struct with the standard `sub`, `exp`, plus whatever your app needs:
+`DeserializeOwned + PrincipalIdentity + AmbientValue + Clone` type — usually a
+struct with the standard `sub`, `exp`, plus whatever your app needs:
 
 ```rust title="crates/features/src/authn/claims.rs"
 use nest_rs::authn::PrincipalIdentity;
+use nest_rs::core::AmbientValue;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -98,6 +99,8 @@ pub struct Claims {
     pub exp: u64,
 }
 
+impl AmbientValue for Claims {}
+
 impl PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|id| id.to_string())
@@ -105,12 +108,14 @@ impl PrincipalIdentity for Claims {
 }
 ```
 
-`PrincipalIdentity` is the one required impl. On a successful authentication
-`AuthnGuard` records `actor_id` onto the request span, so every downstream
-event — denials included — is attributable without threading the identity
-through each call site. Return `None` for a principal that genuinely has no
-identity (a machine token scoped to an org, say). `nestrs g auth` writes both
-the struct and the impl.
+`AmbientValue` is what lets `AuthnGuard` attach the claims for the rest of the
+request — every guard after it, `Ctx<Claims>` in a handler and a resolver below
+`/graphql` read them there. `PrincipalIdentity` names the audit identity: on a
+successful authentication `AuthnGuard` records `actor_id` onto the request
+span, so every downstream event — denials included — is attributable without
+threading the identity through each call site. Return `None` for a principal
+that genuinely has no identity (a machine token scoped to an org, say).
+`nestrs g auth` writes the struct and both impls.
 
 The handler reads them back through `Ctx<Claims>`:
 

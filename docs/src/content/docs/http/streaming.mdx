@@ -37,11 +37,16 @@ object-storage client's [`get_stream`](/storage/) hands back the S3
 server without ever sitting whole in process memory.
 
 The stream is polled after the handler returned, and it runs under what the
-handler ran under: the request's trace and actor, the caller's ability, every
-ambient value a layer added. A service the stream calls reads on the **pool**,
-never on the route's transaction — that one has settled by the time the body
-is written — so a read in the stream of a `POST` sees what the route
-committed.
+handler ran under: the request's trace and actor, every ambient value a layer
+added, and the caller's ability on a route a response mask shapes. A service
+the stream calls reads on the **pool**, never on the route's transaction —
+that one has settled by the time the body is written — so a read in the stream
+of a `POST` sees what the route committed.
+
+A route no mask shapes withholds the ability, so a scoped read there fails
+closed rather than answering rows a mask would have narrowed. An `#[sse]`
+stream is one — it takes no shaper parameter — so what it emits comes from
+reads that need no scope.
 
 ## Server-Sent Events
 

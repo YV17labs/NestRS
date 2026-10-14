@@ -122,7 +122,8 @@ existed: an anonymous caller on a `#[public]` route gets an ability with
 no rules, and the class gate answers `403`.
 
 **One correction covers HTTP, GraphQL and WebSockets.** The GraphQL
-bridge and the WS upgrade both run `AbilityGuard::check_http`, so the
+bridge and the WS upgrade both run `AbilityGuard::check_http` on their
+request, so the
 visitor branch reaches a `#[public]` query and a guest socket the same
 way. On WebSockets the visitor ability is captured at the upgrade and
 frozen for the connection, like any other.

@@ -60,13 +60,13 @@ deep on each.
   macro emits when a route declares `#[authorize(A, S)]` or takes that type
   as a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside
   the handler. [Layer order](/fundamentals/guards/#where-guards-run-in-the-chain).
-- **RouteShaper** — the per-route orchestrator inside `nest-rs-guards`;
+- **RouteShaper** — the per-route orchestrator inside `nest-rs-http`;
   runs guards, the `#[authorize]` class gate and body pipes on the way in. The response-side families
   wrap the endpoint outside it, not within. Documented on
   [Guards](/fundamentals/guards/).
-- **[Reflector](/http/extractors/)** — the request-time reader that
-  pulls back the values a handler or its host declared with
-  `#[meta(EXPR)]`; how a guard inspects per-route metadata.
+- **Reflector** — the reader that pulls back the values a handler or its
+  host declared with `#[meta(EXPR)]`, and its posture; a guard reaches it
+  through `cx.reflector()` on every edge.
 
 ## Data
 
@@ -157,8 +157,9 @@ deep on each.
 - **[Self-mount](/websockets/)** — an edge that mounts onto
   `HttpTransport` instead of being its own transport, inheriting its
   port, CORS, and TLS: the WS `#[gateway]`, `/graphql`, MCP, and
-  OpenAPI all self-mount, each declaring an `EdgePosture` (`Guarded`
-  or `Exempt`) that decides how the global guard chain reaches it.
+  OpenAPI all self-mount, each declaring a `Handler` whose posture
+  (`Gated`, `InBand`, `Public`) decides how the global guard chain reaches
+  it.
 - **[Controller (HTTP)](/http/controllers/)** — a struct marked with
   `#[controller(path = "...")]` that owns route methods declared in a
   `#[routes] impl` block.

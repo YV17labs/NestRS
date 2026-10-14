@@ -28,7 +28,10 @@ A guard runs *before* the handler. It sees the request first and either
 lets it through (`Ok(())`) or short-circuits with a typed `Denial` the
 framework maps to 401 / 403 / 429 — or 503, `Denial::unavailable`, when
 something the guard depends on did not answer and the caller did nothing
-wrong. One trait, four transports — the same
+wrong. `Denial::unavailable_because` keeps what failed as well: every edge
+files the denial at `warn`, and that line carries the whole chain as its
+`error` field, while the caller reads the condition alone. One trait, four
+transports — the same
 `#[injectable]` impl is reachable from HTTP, GraphQL, WS and MCP through the
 [the request lifecycle](/fundamentals/request-lifecycle/).
 
@@ -41,7 +44,7 @@ so guards plug into dedup-by-`TypeId` and declaration-order chaining.
 
 ```rust title="crates/features/src/posts/guard.rs"
 use nest_rs::guards::prelude::*;
-use nest_rs::http::poem::Request as HttpRequest;
+use nest_rs::http::HttpView;
 
 #[injectable]
 #[derive(Default)]
@@ -51,18 +54,18 @@ impl Layer for RateLimitGuard {}
 
 #[async_trait]
 impl Guard for RateLimitGuard {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        if over_quota(req) {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        if over_quota(HttpView::of(cx)?.request()) {
             return Err(Denial::rate_limited(60, "rate limited"));
         }
         Ok(())
     }
 }
 
-impl HttpGuard for RateLimitGuard {}
+impl GuardFor<HttpView> for RateLimitGuard {}
 ```
 
-That last line attests the edge you implemented — see
+That last line declares the units your guard checks — see
 [A guard must declare the transports it checks](#a-guard-must-declare-the-transports-it-checks)
 below. Without it, binding this guard on a route is a compile error.
 
@@ -72,27 +75,30 @@ A guard is an `#[injectable]` provider listed in some module's
 ensures every controller / resolver / gateway that references it imports
 a module that builds it.
 
-The trait carries one method per transport. Unimplemented transports
-inherit `Ok(())` — that means "doesn't apply here", not "skip security".
-Other guards on the same route still run.
+The trait carries two entries, both over the unit being dispatched. One you
+do not override admits — that means "doesn't apply here", not "skip
+security". Other guards on the same route still run.
 
-| Method | Transport | Request shape |
-|--------|-----------|---------------|
-| `check_http` | HTTP | `&mut HttpRequest` — gate and mutate (attach context in extensions) |
-| `check_graphql` | GraphQL | `&GraphqlOperationContext` — read-only; seed context upstream |
-| `check_ws_message` | WS | per inbound message, after the upgrade |
-| `check_mcp` | MCP | per operation, inside rmcp's dispatch — the ability is ambient |
+| Entry | Runs on | Reads it through |
+|-------|---------|------------------|
+| `check_http` | an HTTP request: a route, a WS upgrade, the `/graphql` and `/mcp` requests | `HttpView::of(cx)` — the request, head and body, and the route it matched |
+| `check` | every other edge's unit: a GraphQL field, a WS message, an MCP operation | `cx.switch_to::<GraphqlView>()`, `WsView`, `McpView` |
 
 ```rust title="nest_rs::guards::Guard"
 #[async_trait]
 pub trait Guard: Layer {
-    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> { Ok(()) }
-    async fn check_graphql(&self, _op: &GraphqlOperationContext<'_>) -> Result<(), Denial> { Ok(()) }
-    async fn check_ws_message(&self, _client: &WsClient, _event: &str, _data: &Value)
-        -> Result<(), Denial> { Ok(()) }
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> { Ok(()) }
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }
 }
 ```
+
+Whatever the edge, the context answers the same questions:
+`cx.reflector()` reads what the site declared (`#[meta]`, its posture),
+`cx.ambient::<T>()` what an earlier guard attached, `cx.attach(value)` hands
+a value to everything after the guard, and `cx.edge()` and `cx.handler()`
+say which unit this is. `cx.peer()` names the connection a WebSocket message
+came on; the other edges leave it empty. An entry you do not
+override costs nothing: it is answered without an allocation.
 
 ## Secure the post API
 
@@ -175,10 +181,10 @@ pub struct AuthzModule;
 ```
 
 `AuthzGuard` is provided here rather than under `authz/http/` because
-`AbilityGuard` answers every transport — it implements `check_http`,
-`check_graphql`, `check_ws_message` and `check_mcp`. A resolver, a gateway and
-an MCP host bind the same type, so none of them imports an HTTP adapter to
-reach it.
+`AbilityGuard` answers every transport — its `check_http` attaches the
+caller's `Ability`, its `check` refuses a unit no ability reaches, and it
+declares `GuardFor` for all four views. A resolver, a gateway and an MCP host
+bind the same type, so none of them imports an HTTP adapter to reach it.
 
 ```mermaid
 flowchart TB
@@ -188,8 +194,8 @@ flowchart TB
   AD -->|delete only| ADG[AdminGuard]
   AD -->|other routes| H[PostsController handler]
   ADG --> H
-  AG -. "insert Claims" .-> H
-  AZ -. "install Ability" .-> H
+  AG -. "attach Claims" .-> H
+  AZ -. "attach Ability" .-> H
 ```
 
 Solid arrows are the guard chain on `GET /posts/{id}`. `DELETE` adds
@@ -242,34 +248,52 @@ Guards are pooled by `TypeId` and execute **once per request**, post-routing at 
 Guards often do more than gate — they produce values the handler needs.
 Attach on the way in; read with `Ctx<T>`:
 
-```rust title="the guard writes, the handler reads"
+```rust title="the guard attaches, the handler reads"
+#[derive(Clone)]
+pub struct Tenant(pub String);
+
+impl AmbientValue for Tenant {}
+
 #[async_trait]
-impl Guard for AuthnGuard<MyStrategy> {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        let claims = self.strategy.authenticate(req).await?;
-        req.extensions_mut().insert(claims);
+impl Guard for TenantGuard {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let tenant = HttpView::of(cx)?
+            .request()
+            .header("x-tenant")
+            .ok_or_else(|| Denial::unauthorized("a tenant is required"))?
+            .to_owned();
+        cx.attach(Tenant(tenant));
         Ok(())
     }
 }
 
-impl HttpGuard for AuthnGuard<MyStrategy> {}
+impl GuardFor<HttpView> for TenantGuard {}
 
 #[get("/me")]
-async fn me(&self, auth: Ctx<Claims>) -> Json<Post> {
-    Json(self.svc.find_by_author(auth.sub).await?)
+async fn me(&self, tenant: Ctx<Tenant>) -> Json<Post> {
+    Json(self.svc.find_by_tenant(&tenant.0).await?)
 }
 ```
 
+What a guard attaches is ambient for the rest of the unit once every guard of
+its stage passed: the handler reads it with `Ctx<T>`, a guard after it with
+`cx.ambient::<T>()`, and a resolver or a tool the request carries with
+`nest_rs::core::ambient::<T>()`. Its type implements `AmbientValue` — a
+principal type too, since `AuthnGuard` attaches it — and `Clone` for
+`Ctx<T>`. The request is borrowed through `HttpView::of(cx)` until you let it
+go, so take what you need into an owned value before `cx.attach`, as above.
+
 `Ctx<T>` rejects with 500 if the value is absent — a missing context
-means the guard that should have set it never ran. Store an `Arc<_>` if
-the value is large.
+means the guard that should have set it never ran. A large value goes in a
+newtype holding an `Arc` (`struct Catalog(Arc<Entries>)`), which clones for
+the price of a count; the newtype is what implements `AmbientValue`.
 
 `AuthzGuard` reads `Claims` left by `AuthnGuard` to build the ambient
 `Ability`. That is why order matters:
 `#[use_guards(AuthnGuard, AuthzGuard)]`, not the reverse.
 
 For per-route policy — required roles, rate-limit quotas — `#[meta(...)]`
-declares a typed value; `Reflector` reads it inside the guard. Declare it on
+declares a typed value; `cx.reflector()` reads it inside the guard. Declare it on
 the method, or on the controller for every route it serves; the method's
 value of a type wins over the controller's:
 
@@ -289,8 +313,7 @@ impl AdminController {
 
 The value is built once, the first time a layer reads it, and every request
 reads that one copy — so it is `Send + Sync + 'static`, never cloned, and a
-guard inserting a value of the same type into the request does not shadow
-it. Because the global pool runs post-routing at the `RouteShaper` (above), a
+guard attaching a value of the same type does not shadow it. Because the global pool runs post-routing at the `RouteShaper` (above), a
 global guard reads `#[meta(...)]` too — the route's declaration is carried
 before the chain runs, and it holds `#[public]` below as well.
 
@@ -306,12 +329,11 @@ admits both:
 
 ```rust title="crates/features/src/posts/guard.rs"
 use nest_rs::guards::prelude::*;
-use nest_rs::http::Reflector;
 
 #[async_trait]
 impl Guard for ApiKeyGuard {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        if matches!(Reflector::new(req).posture(), Posture::Public | Posture::InBand) {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) {
             return Ok(());
         }
         // ...standard policy...
@@ -337,7 +359,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nest_rs::guards::prelude::*;
-use nest_rs::http::{RawBody, current_body_limit};
+use nest_rs::http::{HttpView, RawBody, current_body_limit};
 
 use crate::upstream::UpstreamConfig;
 
@@ -351,15 +373,15 @@ impl Layer for WebhookSignature {}
 
 #[async_trait]
 impl Guard for WebhookSignature {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if self.config.webhook_secret.is_empty() {
             return Err(Denial::internal("no webhook secret is configured"));
         }
-        let header = |name| req.headers().get(name).and_then(|v| v.to_str().ok());
+        let req = HttpView::of(cx)?.request_mut();
         let (Some(id), Some(sent_at), Some(signatures)) = (
-            header("webhook-id"),
-            header("webhook-timestamp").and_then(|t| t.parse::<u64>().ok()),
-            header("webhook-signature"),
+            req.header("webhook-id"),
+            req.header("webhook-timestamp").and_then(|t| t.parse::<u64>().ok()),
+            req.header("webhook-signature"),
         ) else {
             return Err(Denial::unauthorized("an unsigned webhook"));
         };
@@ -392,7 +414,7 @@ impl Guard for WebhookSignature {
     }
 }
 
-impl HttpGuard for WebhookSignature {}
+impl GuardFor<HttpView> for WebhookSignature {}
 ```
 
 `hmac::verify` compares in constant time, and the guard fails closed without a
@@ -486,27 +508,27 @@ flowchart TB
 
 ## One trait, four transports
 
-A guard implements the `check_*` methods that apply to it, and the framework
-runs each at its own seam:
+A guard overrides the entries that apply to it, and the framework runs each at
+its own seam:
 
-| Method | Runs | Bound by |
+| Entry | Runs | Bound by |
 |---|---|---|
-| `check_http` | post-routing on `&mut HttpRequest`, before the handler | `#[controller]` / `#[routes]`, and the `#[gateway]` struct |
-| `check_graphql` | in the resolver's per-operation chain, and in front of the federation root fields | `#[resolver]` / `#[operations]` |
-| `check_ws_message` | once per inbound envelope, after the upgrade | beside a `#[subscribe_message]` |
-| `check_mcp` | once per `#[tool]` / `#[prompt]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
+| `check_http` | post-routing on the request, before the handler; on a WS upgrade; on the `/graphql` and `/mcp` requests | `#[controller]` / `#[routes]`, and the `#[gateway]` struct |
+| `check` | per GraphQL field, and in front of the federation root fields | `#[resolver]` / `#[operations]` |
+| `check` | once per inbound envelope, after the upgrade | beside a `#[subscribe_message]` |
+| `check` | once per `#[tool]` / `#[prompt]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
 
-`use_guards_global([...])` reaches every transport at every method it
-implements. `/graphql` and `/mcp` are `Exempt` at the HTTP edge and gate
-**in-band** instead, so a global `ThrottlerGuard` still rate-limits a tool call
-through `check_http`, and a global guard written against `check_mcp` still
-refuses one.
+`use_guards_global([...])` reaches every transport at every entry it
+implements. `/graphql` and `/mcp` run the pool **in band**: `check_http` once
+on their request, `check` once per operation it carries — so a global
+`ThrottlerGuard` rate-limits the `/mcp` request and each tool call, and a
+global guard overriding only `check` still refuses one.
 
 The three multiplexed transports need one thing on top: a **bridge** above the
-resolver, the gateway and the tool, because their per-operation context does
-not carry the poem request. The bridge re-runs the HTTP chain once and
-re-installs the ambient `Ability` for the operation; below it you bind ordinary
-guards as usual. On `/graphql` and `/mcp` the bridge joins the global pool
+resolver, the gateway and the tool, because a unit below the request does not
+see the request. The bridge runs the HTTP chain once on it, and what that
+chain attached — the caller's `Ability` — is ambient for every operation the
+request carries; below it you bind ordinary guards as usual. On `/graphql` and `/mcp` the bridge joins the global pool
 rather than replacing it: every pooled guard still runs, and one the bridge
 runs itself runs once. That wiring — `AuthzGraphqlModule`, `AuthzWsModule`,
 `AuthzMcpModule`, `forward_principal!`, and what each one gates — lives on
@@ -516,52 +538,56 @@ with the connection-vs-message split on
 
 ## A guard must declare the transports it checks
 
-Every `check_*` above defaults to `Ok(())` — right as "this guard does not
-apply to that transport", and the reason a guard bound where it has no
-entry used to compile and pass everything. Four marker traits close that:
+Both entries admit by default — right as "this guard does not apply to that
+transport", and the reason a guard bound where it has no check would compile
+and pass everything. `GuardFor<V>`, `V` the view of the units a site
+dispatches, closes that:
 
 | Bound at | Requires | Because it runs |
 |---|---|---|
-| `#[controller]` / `#[routes]`, `#[gateway]` struct | `HttpGuard` | `check_http` |
-| `#[resolver]` / `#[operations]` | `GraphqlGuard` | `check_graphql` |
-| beside a `#[subscribe_message]` | `WsGuard` | `check_ws_message` |
-| `#[mcp]` host / `#[tools]` operation | `McpGuard` | `check_mcp` |
+| `#[controller]` / `#[routes]`, `#[gateway]` struct | `GuardFor<HttpView>` | `check_http` |
+| `#[resolver]` / `#[operations]` | `GuardFor<GraphqlView>` | `check` |
+| beside a `#[subscribe_message]` | `GuardFor<WsView>` | `check` |
+| `#[mcp]` host / `#[tools]` operation | `GuardFor<McpView>` | `check` |
 
-Declare the marker next to the `check_*` it attests — `impl GraphqlGuard
-for RequireAdmin {}` — and the binding compiles. Bind a guard that lacks
-one and it does not, with a diagnostic naming the missing method and the
-two ways out. `AuthnGuard` is the guard it catches most often: it checks
-HTTP requests only, which is why a resolver binds `AuthzGuard` alone and
-leaves authentication to the per-operation bridge. Bound on one anyway:
+Declare it next to the entry it covers — `impl GuardFor<GraphqlView> for
+RequireAdmin {}` — and the binding compiles. Bind a guard that lacks it and it
+does not, with a diagnostic naming the view and the way out. `AuthnGuard` is
+the guard it catches most often: it checks HTTP requests only, which is why a
+resolver binds `AuthzGuard` alone and leaves authentication to the
+per-operation bridge. Bound on one anyway:
 
 ```text frame="terminal"
 $ cargo check -p features
-error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not check GraphQL operations
+error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not declare that it checks `GraphqlView` units
    --> crates/features/src/users/graphql/resolver.rs:14:14
     |
  14 | #[use_guards(AuthnGuard, AuthzGuard)]
-    |              ^^^^^^^^^^ this guard has no `check_graphql`
+    |              ^^^^^^^^^^ bound at a site whose units are `GraphqlView`
     |
-    = note: override `check_graphql`, then declare `impl GraphqlGuard for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`;
-            or bind this guard on an HTTP `#[controller]` / `#[routes]` instead
+    = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
+    = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<GraphqlView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
 ```
 
-The marker never proves the *method* exists — the `Ok(())` default gives
-every guard all four. It proves you **declared** that this guard checks
-this edge. An empty `impl Guard for X {}` satisfies the compiler and
-passes every request; the marker is what turns that into an error at the
-`#[use_guards]` line rather than a chain entry that guards nothing.
+The declaration never proves the *entry* is overridden — the default gives
+every guard both. It proves you **declared** that this guard checks this
+edge's units. An empty `impl Guard for X {}` satisfies the compiler and
+passes every request; `GuardFor` is what turns that into an error at the
+`#[use_guards]` line rather than a chain entry that guards nothing. A guard
+whose one `check` is the same on every edge declares it once for all of them,
+`impl<V: UnitView> GuardFor<V> for X {}` — `ThrottlerGuard` does.
 
-A guard bound **globally** takes no marker, and that is a deliberate hole
+A guard bound **globally** takes no `GuardFor`, and that is a deliberate hole
 rather than an oversight. A global guard serves whichever edges it
-implements — its `check_http` on the request, its `check_graphql` /
-`check_mcp` on the operation. Requiring `HttpGuard` there would refuse a
-GraphQL-only guard, and the alternative is four global lists where the
-developer wrote one. So an empty guard registered globally still passes everything: the
-markers bind `#[use_guards]` sites, not the pool.
+implements — its `check_http` on the request, its `check` on every unit.
+Requiring `GuardFor<HttpView>` there would refuse a GraphQL-only guard, and
+the alternative is four global lists where the developer wrote one. So an
+empty guard registered globally still passes everything: `GuardFor` binds
+`#[use_guards]` sites, not the pool.
 
-A guard on the `#[gateway]` **struct** attests `HttpGuard`, not `WsGuard` —
-the upgrade is an HTTP `GET`, and `WsGuard` belongs to the per-message scope.
+A guard on the `#[gateway]` **struct** declares `GuardFor<HttpView>`, not
+`GuardFor<WsView>` — the upgrade is an HTTP `GET`, and `WsView` belongs to the
+per-message scope.
 
 See [Security / per-transport bridges](/security/authorization/per-transport-bridges/)
 for the full HTTP / GraphQL / WS wiring, and

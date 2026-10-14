@@ -90,15 +90,16 @@ controller guard.
 `#[public]` and `#[meta(EXPR)]` are not layers — they are **declarations** a
 layer reads. `#[public]` marks a route as anonymous-admissible (the guard admits
 it through); `#[meta]` declares typed data on a route or its controller, which a
-guard reads via `nest_rs::http::Reflector`. Each route keeps one declaration for
+guard reads through `cx.reflector()`. Each route keeps one declaration for
 the process, its values built on first read; its layers read it through a
 pointer, so nothing is copied per request. A denial is an `Ok(4xx)` response,
 never an `Err` — filters never see it; global interceptors do.
 
-Only an HTTP route's `#[meta]` is read. A resolver, gateway, MCP host,
-processor, scheduled tasks or listeners, and each of their methods, take
-`#[meta]` and keep it with their site, but no guard on those edges reads it: a
-value declared there changes nothing.
+Every guarded site's `#[meta]` is read the same way: a resolver, a gateway, an
+MCP host and each of their methods keep theirs with their site, and a guard's
+`check` reads it through `cx.reflector()` as `check_http` does on a route. A
+processor, scheduled tasks and listeners take `#[meta]` too, but run no guard,
+so a value declared there is read by nothing yet.
 
 ## What fails at boot
 

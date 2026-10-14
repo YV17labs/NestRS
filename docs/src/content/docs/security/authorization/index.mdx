@@ -31,8 +31,8 @@ cargo add nest-rs --features authz
 
 `AbilityFactory` is a tiny trait you implement once. The framework
 calls `define` per request, after the authn guard attached the
-principal. The resulting `Ability` lives in request extensions and in
-the request's ambient context for the data layer.
+principal. The guard attaches the resulting `Ability`, so it is ambient
+for the rest of the request, where the data layer reads it.
 
 A minimal policy is one statement — "members read their org's users":
 

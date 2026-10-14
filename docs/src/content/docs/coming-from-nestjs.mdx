@@ -44,7 +44,7 @@ resolver — carries across intact.
 | `@Controller('users')` | `#[controller(path = "/users")]` |
 | `@Get()` / `@Post()` methods | `#[get("/")]` / `#[post("/")]` in a `#[routes] impl` |
 | `@Get(':id')`, `@Get('files/*path')` | `#[get("/{id}")]`, `#[get("/files/{*path}")]` — OpenAPI's [path templating](/http/controllers/#route-templates), the spelling the document prints |
-| `CanActivate` guard | `Guard` trait (`check_http`) + `#[use_guards(...)]` |
+| `CanActivate` guard | `Guard` trait (`check_http`, `check`) + `#[use_guards(...)]`; `ExecutionContext` is the `UnitContext` both entries take |
 | DTO + `class-validator` | entity `#[expose]` + `validate(...)` (the `validator` crate) |
 | `@Param('id')` / `@Query()` / `@Body()` | the parameter type: `Path<Uuid>`, `Query<F>`, `Json<T>` |
 | `@ApiProperty()` / `@Field()` per property | one `#[expose]` on the column, schemas derived |

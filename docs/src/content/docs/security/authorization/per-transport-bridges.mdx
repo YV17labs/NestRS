@@ -81,17 +81,20 @@ pub struct UsersController { /* ... */ }
 ```
 
 `AbilityGuard` reads the `Claims` an `AuthnGuard` attached, calls
-`AuthzAbility::define(&actor, &mut builder)`, and inserts
-`Arc<Ability>` into request extensions. The `Authorize` shaper later
-makes that ability ambient via `with_ability` so `Repo::scoped` sees it,
-in the handler and in any streaming body it returns.
+`AuthzAbility::define(&actor, &mut builder)`, and attaches the `Ability`
+with `cx.attach`. Once the guards pass it is ambient for the rest of the
+request, so `Repo::scoped` sees it in the handler and in a streaming body
+the route returns — on a route a response mask shapes. A route no mask
+shapes, every `#[sse]` stream included, reads nothing scoped: the ability
+is withheld there, so a read fails closed rather than answering what a
+mask would have narrowed.
 
-## GraphQL — marker guards over a shared dispatch
+## GraphQL — in-band guards over a shared dispatch
 
 A GraphQL `POST /graphql` is one HTTP request that multiplexes many
 operations, so per-operation auth cannot run as plain HTTP guards. What
-you write is unchanged in spirit: import `AuthzGraphqlModule`, bind the
-**marker** on the resolver, and declare each operation's posture:
+you write is unchanged in spirit: import `AuthzGraphqlModule`, bind
+`AuthzGuard` on the resolver, and declare each operation's posture:
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 #[resolver]
@@ -103,10 +106,11 @@ impl UsersResolver { /* #[authorize(Action, Entity)] or #[public] per op */ }
 ```
 
 `AuthzGuard` is the app's `AbilityGuard<AuthzAbility>` alias, and it is what
-`#[use_guards]` binds: it has a `check_graphql`, so it satisfies the
-`GraphqlGuard` bound `#[resolver]` emits. An `AuthnGuard` does **not** belong
-in that list — it has no `check_graphql`, so on a resolver it would run
-nothing; the bridge below already authenticated the request in band.
+`#[use_guards]` binds: its `check` refuses an operation no ability reaches,
+and it declares `GuardFor<GraphqlView>`, the bound `#[resolver]` emits. An
+`AuthnGuard` does **not** belong in that list — it checks HTTP requests only,
+so on a resolver it would run nothing; the bridge below already authenticated
+the request in band.
 
 The module those three providers live in is app code, like the rest of
 `authz/`: **`nestrs g graphql <feature>` writes it** into
@@ -116,17 +120,17 @@ four files are the ones sketched below —
 [`demo/crates/features/src/authz/graphql/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/authz/graphql)
 is the same thing under version control.
 
-That's the whole resolver-side surface. HTTP guards run on `&mut Request`
-*before* the handler; they *are* the auth chain. GraphQL instead runs
+That's the whole resolver-side surface. HTTP guards run `check_http` on
+the request *before* the handler; they *are* the auth chain. GraphQL instead runs
 authn/ability **in-band** per operation, seeds the ability into per-operation
 context, and forwards the principal with `forward_principal!(Claims)`.
 
 That forward binds nothing and gates on nothing, because it cannot fire without
-the chain that feeds it: it copies `Claims` off the request only when the authn
-guard has attached them, and that guard is reachable only through the module
+the chain that feeds it: it copies `Claims` from the ambient context only when
+the authn guard has attached them, and that guard is reachable only through the module
 that declares it. Omit the authz module and the chain never runs, so there is
 nothing to copy — the schema is anonymous because it was never authenticated,
-not because a marker was missing.
+not because a guard was left out of a list.
 
 ### Under the hood: the operation bridge
 
@@ -142,7 +146,6 @@ pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
 
 impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> { /* ... */ }
-    fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> { /* ... */ }
     fn covers(&self) -> &[TypeId] { /* A and G */ }
 }
 ```
@@ -155,8 +158,8 @@ caller with no credential is admitted here and takes the ability guard's
 `401 invalid_token`. The line is held one step later, by the operation's own
 posture: `#[authorize(...)]` refuses an ability with no principal behind it
 (`UNAUTHENTICATED`), whatever `define_visitor` granted, and only `#[public]`
-operations read those grants. `around` installs the resulting ability via
-`with_ability` for the duration of the operation.
+operations read those grants. What the chain attached — the principal and the
+resulting ability — is ambient for every operation the request carries.
 
 **The bridge joins the global guard pool, never replaces it.** The endpoint runs
 every guard the app lists in `use_guards_global(...)` at the request, bridge or
@@ -191,9 +194,8 @@ executor and the ambient `Ability` for every message — no per-message
 transaction (mutations are explicit in your service), no shared state
 across messages.
 
-Unlike GraphQL, WS has **no marker type** and **no bridge** — a gateway is
-`EdgePosture::Guarded`, so its upgrade already carried the real chain and there
-is nothing to re-run in band. It reuses the HTTP `Guard` trait directly. The gateway struct binds the real guards; because the
+Unlike GraphQL, WS has **no bridge** — a gateway's upgrade is `Gated`, so it
+already carried the real chain and there is nothing to re-run in band. It reuses the HTTP `Guard` trait directly. The gateway struct binds the real guards; because the
 upgrade is an HTTP `GET`, they run once on it, and the access graph
 validates them like any HTTP binding (omit `AuthzWsModule` ⇒ the
 guards are unreachable ⇒ boot fails). An optional per-message check
@@ -215,9 +217,9 @@ impl ChatGateway {
 ```
 
 `AuthnGuard` + `AuthzGuard` run at the upgrade — those are real HTTP
-guards on a real `GET`, so they attest `HttpGuard`, not `WsGuard`;
-`#[gateway]` emits that bound, and `WsGuard` is what a guard bound beside
-a `#[subscribe_message]` owes instead. The upgrade has
+guards on a real `GET`, so they declare `GuardFor<HttpView>`, not
+`GuardFor<WsView>`; `#[gateway]` emits that bound, and `GuardFor<WsView>` is
+what a guard bound beside a `#[subscribe_message]` owes instead. The upgrade has
 returned before any message handler runs, so `WsDataContext` installs the
 executor and ability around each message.
 
@@ -236,16 +238,17 @@ because an envelope promises no schema. See
 [WebSockets / Messages](/websockets/messages/) for the full contract.
 
 An optional per-message `#[use_guards(...)]` still adds event-level
-checks; such a guard runs `Guard::check_ws_message` and must declare
-`WsGuard` — see [WebSockets / Guards](/websockets/guards/).
+checks; such a guard runs `Guard::check` and must declare
+`GuardFor<WsView>` — see [WebSockets / Guards](/websockets/guards/).
 
 ## MCP — same shape as HTTP
 
 `AuthzMcpModule` registers `AuthzMcpBridge`
 (`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, plus
 `McpDataContext` as `dyn McpToolContext` — on each MCP HTTP request it runs the same `A` then `G` chain
-controllers use (`run_ability_chain`, the same function the GraphQL bridge
-calls), then installs the caller's ambient `Ability` for the tool call. Either
+controllers use (the same authenticate-then-authorize step the GraphQL
+bridge runs), and what it attached — the caller's `Ability` — is ambient for the tool
+call. Either
 leg's denial is returned **as raised**, so a `401`, a `403` and a throttler's
 `429` + `Retry-After` all reach the client intact. Import `AuthzMcpModule`
 beside the feature module, the same shape as the other transports.
@@ -258,42 +261,12 @@ pub struct McpAbilityBridge<A: Guard, G: Guard> {
 }
 ```
 
-The ability is installed by the guard's `around`, which runs *inside* rmcp's
-spawned dispatch — the same seam `GraphqlOperationGuard` uses, so "who scopes
-the operation" has one answer on both transports. A tool body is therefore
-scoped whether or not the app also registered `McpDataContext` (the data context
-adds the executor and the per-operation transaction; it is not what installs the
-ability). Any custom `McpOperationGuard` can wrap the dispatch the same way —
-the default impl is a pass-through:
-
-```rust title="nest_rs::authz::mcp::McpAbilityBridge"
-// Snapshot on the request, while it still exists…
-fn capture(&self, req: &Request) -> Option<Captured> {
-    req.extensions()
-        .get::<Arc<Ability>>()
-        .cloned()
-        .map(|ability| ability as Captured)
-}
-
-// …install it inside rmcp's dispatch, where the request is long gone.
-fn around<'a>(
-    &'a self,
-    captured: &'a Captured,
-    inner: BoxFuture<'a, OperationOutcome>,
-) -> BoxFuture<'a, OperationOutcome> {
-    Box::pin(async move {
-        match captured.clone().downcast::<Ability>() {
-            Ok(ability) => with_ability(ability, inner).await,
-            Err(_) => inner.await,
-        }
-    })
-}
-```
-
-Both default to "install nothing" (`capture` returns `None`, `around` is a
-pass-through), so an existing guard is unaffected. The split is the same one
-`McpToolContext` uses — capture on the request, install inside the dispatch — so
-the two seams in the crate have one shape.
+What the request's guards attached is captured with the request and installed
+*inside* rmcp's spawned dispatch, where the request is long gone — the same
+rule as on `/graphql`, so "who scopes the operation" has one answer on both
+transports. A tool body is therefore scoped whether or not the app also
+registered `McpDataContext` (the data context adds the executor and the
+per-operation transaction; it is not what installs the ability).
 
 **The global guard pool always runs** at the request (`use_guards_global(...)`),
 the bridge inside it exactly as on `/graphql` — so a global `ThrottlerGuard`
@@ -303,16 +276,14 @@ bridge runs alone; with neither, `/mcp` stays deny-all. `/mcp` carries no
 refuses an anonymous tool call.
 
 What that endpoint runs is `check_http` — it holds a request, not an operation.
-A pooled guard's `check_mcp` runs in the **per-operation chain**, which folds
-the pool too, so a global guard written against MCP gates every tool call even
+A pooled guard's `check` runs in the **per-operation chain**, which folds
+the pool too, so a global guard overriding `check` gates every tool call even
 when the bridge already authenticated the caller who sent it.
 
-The pool's runner is compiled in by `nest-rs-guards`' **`mcp` feature**, which
-`nestrs g mcp` turns on. Without it the pool never reaches `/mcp`: the bridge
-runs alone, or with none the boot line stays `no operation guard registered —
-mcp endpoint is deny-all mode="deny_all"`. Fail-closed either way — check the
-boot line for `mode="global_guard_pool"` when the pool is what you meant to gate
-with.
+The pool's runner is the MCP edge's own, so it reaches `/mcp` in every app that
+serves it: the boot line reads `mode="global_guard_pool"` when a pool gates the
+endpoint, and `no operation guard registered — mcp endpoint is deny-all
+mode="deny_all"` with neither pool nor bridge — fail-closed.
 
 ## Public handlers — opt out per transport
 

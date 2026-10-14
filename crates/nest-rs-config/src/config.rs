@@ -5,6 +5,9 @@
 //! `ConfigModule::for_feature::<T>()` loads once at boot and registers
 //! `Arc<T>`, injected directly by any provider.
 
+use std::borrow::Cow;
+
+use nest_rs_core::Instance;
 use validator::Validate;
 
 use crate::Result;
@@ -41,6 +44,34 @@ pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
     let value = value?;
     claim?;
     Ok(value)
+}
+
+/// Resolve `C` for the instance `I` and hold it as the container keys that
+/// instance's `C`: the default instance through [`Config::resolve`], a named
+/// one the same way under the namespace its name derives — every sentence
+/// names the namespace read.
+pub(crate) fn resolve_instance<C: Config, I: Instance>(pinned: Option<C>) -> Result<I::Of<C>> {
+    if I::NAME.is_empty() {
+        return C::resolve(pinned).map(Into::into);
+    }
+    let namespace = crate::namespace::instance_namespace::<I>(C::NAMESPACE);
+    crate::namespace::sole_instance::<I>(&namespace)?;
+    resolve_under(namespace, pinned).map(Into::into)
+}
+
+/// The environment of `namespace` overlaid on `pinned`, or on `C::defaults()`,
+/// then validated.
+fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> Result<C> {
+    let env = ConfigService::for_namespace(&namespace);
+    let (env, base) = match pinned {
+        Some(pinned) => (env.over_pinned(), pinned),
+        None => (env, C::defaults()),
+    };
+    let config = read(&env, base)?;
+    config
+        .validate()
+        .map_err(|errors| crate::ConfigError::validation(namespace, errors))?;
+    Ok(config)
 }
 
 /// A namespaced configuration type.
@@ -83,17 +114,12 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     /// when the call site supplied one, on [`defaults`](Self::defaults)
     /// otherwise, then validated. A pinned base is outranked by the deployment
     /// tier alone, an unpinned one by the `.env` cascade too.
+    ///
+    /// The boot resolves the default instance through it; a named instance
+    /// takes the same steps under its own namespace, so an override reaches
+    /// the default instance alone, and [`defaults`](Self::defaults) every one.
     fn resolve(pinned: Option<Self>) -> Result<Self> {
-        let env = ConfigService::for_namespace(Self::NAMESPACE);
-        let (env, base) = match pinned {
-            Some(pinned) => (env.over_pinned(), pinned),
-            None => (env, Self::defaults()),
-        };
-        let config = read(&env, base)?;
-        config
-            .validate()
-            .map_err(|errors| crate::ConfigError::validation(Self::NAMESPACE, errors))?;
-        Ok(config)
+        resolve_under(Cow::Borrowed(Self::NAMESPACE), pinned)
     }
 
     /// Read from the environment for this type's namespace with nothing pinned,

@@ -24,7 +24,7 @@ impl HealthModule {
     /// `None` ⇒ load [`HealthConfig`] from `<PREFIX>_HEALTH__*` over its defaults;
     /// `Some(cfg)` makes `cfg` the base those variables overlay.
     pub fn for_root(config: impl Into<Option<HealthConfig>>) -> HealthSetup {
-        ConfigModule::setup(config)
+        ConfigModule::setup(config.into())
     }
 }
 

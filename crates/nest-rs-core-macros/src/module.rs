@@ -1,4 +1,4 @@
-use nest_rs_codegen::last_segment_ident;
+use nest_rs_codegen::path_label;
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
@@ -9,6 +9,16 @@ use syn::{Expr, ItemStruct, Path, Token, Type, bracketed, parse_macro_input};
 pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as ModuleArgs);
     let item = parse_macro_input!(input as ItemStruct);
+    if !item.generics.params.is_empty() {
+        let refusal = syn::Error::new_spanned(
+            &item.generics,
+            "a #[module] is not generic: it submits one static descriptor for the access graph. \
+             A module generic over an `Instance` is written by hand — \
+             `impl<I: Instance> Module for RedisQueueModule<I>` — as adapter bindings are",
+        )
+        .to_compile_error();
+        return quote! { #item #refusal }.into();
+    }
     let name = item.ident.clone();
     let name_str = name.to_string();
     let groups = match group_providers(&args.providers) {
@@ -77,7 +87,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     });
     let provider_descriptors = args.providers.iter().map(|binding| match binding {
         ProviderBinding::Concrete(p) => {
-            let name_lit = path_tail(p);
+            let name_lit = path_label(p);
             quote! {
                 ::nest_rs_core::__private::ProviderDescriptor {
                     name: #name_lit,
@@ -95,7 +105,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
         ProviderBinding::Dyn { provider, trait_ty } => {
             let name_lit = format!("dyn {}", path_tail_of_type(trait_ty));
-            let provider_lit = path_tail(provider);
+            let provider_lit = path_label(provider);
             quote! {
                 ::nest_rs_core::__private::ProviderDescriptor {
                     name: #name_lit,
@@ -179,7 +189,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                         },
                     ),
                 };
-                let name_lit = path_tail(provider);
+                let name_lit = path_label(provider);
                 let step = quote! {
                     if !__done[#idx] {
                         // An optional dep waits only while a pending provider supplies it.
@@ -328,10 +338,6 @@ fn import_label(import: &Expr) -> String {
         },
         _ => "an import expression".to_owned(),
     }
-}
-
-fn path_tail(p: &Path) -> String {
-    last_segment_ident(p).to_string()
 }
 
 fn path_tail_of_type(ty: &Type) -> String {

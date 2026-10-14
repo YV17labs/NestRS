@@ -25,7 +25,7 @@ impl RedisQueueModule {
     /// `None` loads [`RedisQueueConfig`] from `<PREFIX>_REDIS__QUEUE__*`;
     /// `Some(cfg)` pins the base those variables overlay, field by field.
     pub fn for_root(config: impl Into<Option<RedisQueueConfig>>) -> RedisQueueSetup {
-        ConfigModule::setup(config)
+        ConfigModule::setup(config.into())
     }
 
     /// The producer and the consumer, each bound under the port's type and

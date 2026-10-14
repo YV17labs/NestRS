@@ -177,6 +177,19 @@ sentence twice. The attribute wins; an operation with neither, or a blank one,
 is a compile error; no other decorator falls back — `#[api]` takes its argument
 or nothing. `demo/` and the templates always write the argument (`demo.md`).
 
+**`#[instance]` is a decorator before its third use** because a hand-written
+impl would choose what must be read: a marker's name is a namespace segment,
+so it is its ident in snake case — read like a `#[config]`'s namespace, refused
+at expansion where a namespace could not carry it (`Unnamed`, a `__`, a
+reserved word) — and the `Instance` impl's associated type is the decorator's
+to write; `Instance` is sealed behind the `__private` supertrait the
+decorator implements, so no hand-written impl reaches the boot. Its reserved
+words are `nest_rs_codegen`'s list, held to `architecture.md`'s by a test in
+`nest-rs-cli`. It has no use site in `demo/`, where no app opens a resource
+twice: its runnable rustdoc example and `nest-rs-config`'s integration suite
+exercise it until a demo app needs a second instance, and the use site lands
+with that need.
+
 ## When (not) to write a decorator
 
 Write one when the pattern appears in three places, the boilerplate is

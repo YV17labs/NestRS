@@ -1,0 +1,5 @@
+error: a #[module] is not generic: it submits one static descriptor for the access graph. A module generic over an `Instance` is written by hand — `impl<I: Instance> Module for RedisQueueModule<I>` — as adapter bindings are
+ --> tests/integration/diagnostics/core/module_on_a_generic_struct.rs:8:23
+  |
+8 | pub struct CacheModule<I: Instance>(std::marker::PhantomData<I>);
+  |                       ^^^^^^^^^^^^^

@@ -29,7 +29,7 @@ impl ServerTimingModule {
     /// over its profile's defaults; `Some(cfg)` makes `cfg` the base those
     /// variables overlay.
     pub fn for_root(config: impl Into<Option<ServerTimingConfig>>) -> ServerTimingSetup {
-        ConfigModule::setup(config)
+        ConfigModule::setup(config.into())
     }
 }
 

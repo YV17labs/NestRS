@@ -17,7 +17,7 @@ impl QueueModule {
     /// `None` loads [`QueueConfig`] from `<PREFIX>_QUEUE__*`; `Some(cfg)` pins
     /// the base those variables overlay, field by field.
     pub fn for_root(config: impl Into<Option<QueueConfig>>) -> QueueSetup {
-        ConfigModule::setup(config)
+        ConfigModule::setup(config.into())
     }
 }
 

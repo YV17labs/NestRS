@@ -97,6 +97,7 @@ mod exception_filter;
 mod factory_inputs;
 mod handler;
 mod identifier;
+mod instance;
 mod interceptor;
 pub mod layer;
 pub mod layer_chain;
@@ -152,6 +153,7 @@ pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, 
 pub use factory_inputs::FactoryInputs;
 pub use handler::{Handler, Posture, Reflector};
 pub use identifier::UUID_V7_REQUIRED;
+pub use instance::{Instance, Instanced, Unnamed};
 pub use interceptor::{Interceptor, InterceptorSpec, Next, interceptor};
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
@@ -194,6 +196,7 @@ pub mod __private {
     pub use crate::error_message::__private::find_in_chain;
     pub use crate::exception_filter::__private::ErasedExceptionFilter;
     pub use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
+    pub use crate::instance::{InstanceDeclaration, InstanceSeal};
     pub use crate::interceptor::__private::{
         InterceptorRegistration, InterceptorStage, register_interceptor,
     };
@@ -386,6 +389,30 @@ pub use nest_rs_core_macros::module;
 /// }
 /// ```
 pub use nest_rs_core_macros::injectable;
+
+/// Declare a unit struct as an [`Instance`] marker, named by its ident in snake
+/// case — read, never chosen.
+///
+/// ```
+/// use nest_rs_core::{Instance, Instanced, instance};
+///
+/// #[instance]
+/// pub struct ReadReplica;
+///
+/// assert_eq!(<ReadReplica as Instance>::NAME, "read_replica");
+/// let held: <ReadReplica as Instance>::Of<u16> = 5432.into();
+/// let _: Instanced<ReadReplica, u16> = held;
+/// ```
+///
+/// It takes no argument, and refuses a struct with fields or generics, the
+/// default's own name `Unnamed`, a name holding `__` or a word the layout
+/// reserves (`queue`, `http`, `service`, …):
+///
+/// ```compile_fail
+/// #[nest_rs_core::instance]
+/// pub struct Queue;
+/// ```
+pub use nest_rs_core_macros::instance;
 
 /// The wire-DTO shorthand: carries `Serialize`/`Deserialize`/`Validate`/
 /// `JsonSchema` and routes each back here, so a DTO crossing any transport

@@ -122,16 +122,12 @@ pub fn last_segment_ident(path: &syn::Path) -> &Ident {
         .ident
 }
 
-/// Short label for a dependency type in diagnostics: last path segment, or
-/// `dyn Trait` for a trait object, or the token rendering otherwise.
+/// Short label for a dependency type in diagnostics: the last path segment
+/// with its type arguments, each read the same way, or `dyn Trait` for a trait
+/// object, or the token rendering otherwise.
 pub fn type_label(ty: &Type) -> String {
     match ty {
-        Type::Path(tp) => tp
-            .path
-            .segments
-            .last()
-            .map(|seg| seg.ident.to_string())
-            .unwrap_or_else(|| quote!(#ty).to_string()),
+        Type::Path(tp) => path_label(&tp.path),
         Type::TraitObject(to) => {
             let trait_name = to.bounds.iter().find_map(|b| match b {
                 TypeParamBound::Trait(t) => t.path.segments.last().map(|seg| seg.ident.to_string()),
@@ -143,6 +139,32 @@ pub fn type_label(ty: &Type) -> String {
             }
         }
         _ => quote!(#ty).to_string(),
+    }
+}
+
+/// The last segment of `path` with its type arguments, each shortened by
+/// [`type_label`] — `a::RedisConnection<b::Cache>` reads `RedisConnection<Cache>`,
+/// so two instances of one generic type are told apart in a sentence.
+pub fn path_label(path: &syn::Path) -> String {
+    let Some(segment) = path.segments.last() else {
+        return quote!(#path).to_string();
+    };
+    let ident = segment.ident.to_string();
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return ident;
+    };
+    let types: Vec<String> = arguments
+        .args
+        .iter()
+        .filter_map(|argument| match argument {
+            GenericArgument::Type(ty) => Some(type_label(ty)),
+            _ => None,
+        })
+        .collect();
+    if types.is_empty() {
+        ident
+    } else {
+        format!("{ident}<{}>", types.join(", "))
     }
 }
 
@@ -524,6 +546,19 @@ mod tests {
             receiver_answer(&raw, parse_quote!(r#Raw)).is_err(),
             "a raw host is its name"
         );
+    }
+
+    #[test]
+    fn a_label_keeps_each_type_argument_by_its_leaf() {
+        let field: Type = parse_quote!(std::sync::Arc<nest_rs::redis::RedisConnection<app::Cache>>);
+        let inner = arc_inner(&field).expect("an Arc");
+        assert_eq!(type_label(inner), "RedisConnection<Cache>");
+        assert_eq!(
+            type_label(&parse_quote!(a::Pair<'static, b::Left, Vec<c::Right>>)),
+            "Pair<Left, Vec<Right>>"
+        );
+        assert_eq!(type_label(&parse_quote!(app::Plain)), "Plain");
+        assert_eq!(type_label(&parse_quote!(dyn app::Store<u8>)), "dyn Store");
     }
 
     #[test]

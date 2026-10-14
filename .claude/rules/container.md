@@ -86,7 +86,7 @@ factory makes of the config, are public for third-party drivers. A seam one fram
 crate needs from another lives in its crate's `__private` (`macros.md`); one
 only its own crate needs stays private.
 
-`x` has two shapes and only two:
+`x` has three shapes and only three:
 
 - **`impl Into<Option<C>>`**, `C` the module's `#[config]` — the default.
   `None` is the environment over `C::defaults()`; `Some(c)` is the environment
@@ -96,10 +96,16 @@ only its own crate needs stays private.
   environment twin** (MCP's identity). It keeps `From<C>` and `From<Option<C>>`
   so the config-only call reads like every other module's, and the `Option` is
   load-bearing: flattening it demotes the `.env` cascade below the pin.
+- **`impl Into<ForInstance<I, C>>`** — only for a module whose resource an app
+  may open more than once: the default instance takes `x`, a named one
+  `(Marker, x)`. A value names the instance because Rust applies no default
+  type parameter while inferring an expression; a typed import, where it
+  does, keeps the turbofish (`RedisThrottlerModule::<Cache>`).
 
-A setup that only pins its config is `ConfigSetup<M, C>` behind a named alias,
-built by `ConfigModule::setup`; a hand-written setup is for one whose `collect`
-queues more than the config or whose `register` does more than recurse.
+A setup that only pins its config is `ConfigSetup<M, C>` (`ConfigSetup<M, C,
+I>` per instance) behind a named alias, built by `ConfigModule::setup`; a
+hand-written setup is for one whose `collect` queues more than the config or
+whose `register` does more than recurse.
 
 - **A bare import is a dependency declaration**, not a second seam. A module
   that must not be imported bare hides its `#[module]` behind a private host
@@ -165,7 +171,8 @@ variables or tiers.
   (the algorithm is `unclaimed.rs`'s `//!`); a diagnostic that fires on correct
   configuration teaches operators to filter its target out. *One namespace, one
   type* (`architecture.md`) is refused at the read as
-  `ConfigError::SharedNamespace`.
+  `ConfigError::SharedNamespace`, and a named instance whose namespace a linked
+  config or another marker holds as `ConfigError::SharedInstance`.
 - **`nestrs doctor` links no framework crate**, so its reading of a variable is a
   second implementation of the loader's, held to it by a differential test in
   `nest-rs-cli`'s suite; it does not run the unclaimed report.
@@ -255,6 +262,20 @@ namespace if and only if its contract requires the integrator to honour a
 config** (the throttler's does); otherwise the adapter's config takes the
 namespace its path gives it (`architecture.md`) —
 `.claude/decisions/port-config-namespace.md`.
+
+**A resource an app may open more than once is generic over its instance**
+(`.claude/decisions/named-instances.md`), one step per piece:
+
+- the marker is `#[instance] pub struct Cache;`, named by its ident;
+- the resource, its setup and each binding take `I: Instance = Unnamed`, so
+  one instance is the app's spelling unchanged; a binding is a hand-written
+  `impl<I: Instance> Module`, since `#[module]` is not generic;
+- `for_root` takes `impl Into<ForInstance<I, C>>`, and
+  `ConfigModule::provide_feature` reads `C` under the instance's namespace and
+  holds it as `I::Of<C>`;
+- a helper called in expression position takes `I` from its caller's own type
+  parameter, never from a default;
+- every refusal and every line names its instance's variables.
 
 **An open-ended library is a public behavioural contract plus inventory
 discovery**, and `nest-rs-social` is the template. `SocialProvider` owns the

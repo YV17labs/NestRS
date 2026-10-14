@@ -488,6 +488,18 @@ mod tests {
         assert!(validate_not_reserved("programs").is_ok());
     }
 
+    /// `#[instance]` cannot read the rules file, so it refuses from a list of
+    /// its own: the same words, or an instance takes one a module may not.
+    #[test]
+    fn the_instance_decorator_refuses_the_vocabulary_the_rules_reserve() {
+        let scraped: std::collections::BTreeSet<&str> = RESERVED.keys().copied().collect();
+        let refused: std::collections::BTreeSet<&str> = nest_rs_codegen::RESERVED_VOCABULARY
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(refused, scraped);
+    }
+
     #[test]
     fn rejects_path_traversal_feature_names() {
         assert!(validate_feature_name("/tmp/pwn").is_err());

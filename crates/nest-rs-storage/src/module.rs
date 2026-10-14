@@ -18,7 +18,7 @@ impl StorageModule {
     /// `None` ⇒ load [`StorageConfig`] from `<PREFIX>_STORAGE__*` over its
     /// defaults; `Some(cfg)` makes `cfg` the base those variables overlay.
     pub fn for_root(config: impl Into<Option<StorageConfig>>) -> StorageSetup {
-        ConfigModule::setup(config)
+        ConfigModule::setup(config.into())
     }
 }
 

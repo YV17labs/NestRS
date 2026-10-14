@@ -123,9 +123,10 @@ a `for_root` only once an app must pin it from outside. The one homonym,
 `ConfigModule::for_root()`, is the `.env` cascade, first in the root's imports.
 **`for_root` configures; `for_feature` registers**, taking no value, so a
 library module writes both: `for_feature` in `imports`, and `for_root(c: impl
-Into<Option<C>>)` returning `ConfigModule::setup(c)` as a `ConfigSetup<M, C>`
-alias (a hand-rolled `*Setup` only to queue more). **A module owning no config
-gets no `for_root`** (`SocialModule` discovers providers that carry their own).
+Into<Option<C>>)` returning `ConfigModule::setup(c.into())` as a
+`ConfigSetup<M, C>` alias (a hand-rolled `*Setup` only to queue more). **A
+module owning no config gets no `for_root`** (`SocialModule` discovers
+providers that carry their own).
 
 **A `#[config]`'s namespace is its stem, read and never chosen**, minus plural
 role folders and a product's container: `redis/src/queue/config.rs` →
@@ -136,6 +137,16 @@ namespace, one type; `Config` names a `#[config]` only (a nested struct is
 vocabulary, `HttpTls`); seeding (`App::builder().provide`) is for hermetic
 tests. A pinned base supersedes a bare import; two fail the boot
 (`ContestedDeclarationError`), as does a config `App::new` cannot resolve.
+
+**A named instance inserts its name after the vendor** —
+`<PREFIX>_<VENDOR>__<INSTANCE>__<PORT>__*`, `<PREFIX>_REDIS__CACHE__URL` for
+`#[instance] struct Cache` — read off the marker's ident like a namespace off
+its path; the default instance, `Unnamed`, inserts nothing. A resource opened
+more than once takes the instance in its `for_root` value: `x` for the default,
+`(Cache, x)` for a named one; a typed import names it as a type argument
+(`<Vendor><Port>Module::<Cache>`). Each instance pins once; two instances never
+contest. A database is never opened twice: `Repo` holds one connection per
+binary, and a second database is a second project.
 
 ## Providers — three questions, in order
 

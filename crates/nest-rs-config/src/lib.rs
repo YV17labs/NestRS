@@ -10,6 +10,11 @@
 //! on its variables sets `NESTRS_ENV_PREFIX=ACME` on the process, and every name
 //! here follows, `ACME_SEAORM__URL` through `ACME_ENV`.
 //!
+//! A resource an app opens more than once reads one namespace per instance:
+//! `ConfigModule::provide_feature` takes a [`ForInstance`], and a named
+//! instance's variables carry its name after the vendor
+//! (`<PREFIX>_REDIS__CACHE__URL`, [`instance_namespace`]).
+//!
 //! A variable set under the prefix that no config reads is reported rather than
 //! ignored — a misspelled key, or a near miss of a namespace the binary links:
 //! other separators, another case, one misspelled segment ([`unclaimed`]).
@@ -27,6 +32,7 @@ mod dotenv;
 mod endpoint;
 mod environment;
 mod error;
+mod for_instance;
 mod material;
 mod module;
 mod namespace;
@@ -46,8 +52,10 @@ pub use dotenv::load_cascade;
 pub use endpoint::endpoint_shown;
 pub use environment::Environment;
 pub use error::{ConfigError, ConfigNotResolvedError, Result};
+pub use for_instance::ForInstance;
 pub use material::{Material, read_material};
 pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
+pub use namespace::instance_namespace;
 pub use service::{ConfigService, spellings, var_name};
 pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};

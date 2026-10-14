@@ -15,6 +15,7 @@ use std::process::Command;
 mod dotenv;
 mod env_prefix;
 mod environment;
+mod for_instance;
 mod module;
 mod namespace;
 mod service;

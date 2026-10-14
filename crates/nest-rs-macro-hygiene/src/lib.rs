@@ -31,6 +31,7 @@ pub mod entry;
 pub mod gateway;
 #[cfg(feature = "health")]
 pub mod indicators;
+pub mod instance;
 #[cfg(feature = "http")]
 pub mod interceptor;
 pub mod lifecycle;

@@ -4,11 +4,14 @@ use std::any::TypeId;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use nest_rs_core::{Collecting, Container, ContainerBuilder, DynamicModule, Module, Registering};
+use nest_rs_core::{
+    Collecting, Container, ContainerBuilder, DynamicModule, Instance, Module, Registering, Unnamed,
+};
 
-use crate::config::Config;
+use crate::config::{Config, resolve_instance};
 use crate::environment::Environment;
 use crate::error::ConfigNotResolvedError;
+use crate::for_instance::ForInstance;
 
 /// Sole owner of config loading: [`for_feature`](Self::for_feature) declares a
 /// config, [`setup`](Self::setup) backs a module's `for_root`, and
@@ -37,31 +40,40 @@ impl ConfigModule {
         ConfigFeatureSetup(PhantomData)
     }
 
-    /// Queue the factory that resolves `C` for the boot. `None` loads from the
-    /// environment over `C::defaults()`; `Some(cfg)` makes `cfg` the **base**
-    /// the environment overlays — what an app passes to
+    /// Queue the factory that resolves `C` for the boot, for one instance. `None`
+    /// loads from the environment over `C::defaults()`; `Some(cfg)` makes `cfg`
+    /// the **base** the environment overlays — what an app passes to
     /// `Module::for_root(config)`. Every configurable module's `for_root` routes
     /// through this.
     ///
-    /// Both arms resolve through [`Config::resolve`], so the override is per
-    /// field. A pinned base is a declaration
+    /// The default instance takes `x` and is held as `C`; a named one takes
+    /// `(Marker, x)`, reads `C` under the namespace its name derives
+    /// ([`instance_namespace`](crate::instance_namespace)) and is held as
+    /// `Instanced<Marker, C>` ([`ForInstance`]).
+    ///
+    /// The default instance resolves through [`Config::resolve`], a named one
+    /// takes its steps under its own namespace, so the override is per field. A pinned base is a declaration
     /// ([`provide_declared_factory`](ContainerBuilder::provide_declared_factory)):
     /// it supersedes the environment-only factory a bare import of the same
     /// module queues, wherever the two fall in `imports = [..]`, and two pinned
-    /// bases fail the boot
+    /// bases for one instance fail the boot
     /// ([`ContestedDeclarationError`](nest_rs_core::ContestedDeclarationError)).
-    pub fn provide_feature<C: Config>(
-        pinned: Option<C>,
+    pub fn provide_feature<I: Instance, C: Config>(
+        config: impl Into<ForInstance<I, C>>,
         builder: ContainerBuilder,
     ) -> ContainerBuilder {
-        match pinned {
-            Some(base) => builder.provide_declared_factory::<C, _, _>(
+        match config.into().into_pinned() {
+            Some(base) => builder.provide_declared_factory::<I::Of<C>, _, _>(
                 "A config has one seam — pin it once, on the `for_root` of the module that owns \
                  it, and let every other import of that module stay bare.",
-                |_| async move { C::resolve(Some(base)).map_err(anyhow::Error::from) },
+                |_| async move {
+                    resolve_instance::<C, I>(Some(base))
+                        .map_err(anyhow::Error::from)
+                },
             ),
-            None => builder.provide_factory::<C, _, _>(|_| async move {
-                C::resolve(None).map_err(anyhow::Error::from)
+            None => builder.provide_factory::<I::Of<C>, _, _>(|_| async move {
+                resolve_instance::<C, I>(None)
+                    .map_err(anyhow::Error::from)
             }),
         }
     }
@@ -141,7 +153,7 @@ impl ConfigModule {
     ///
     /// impl WsModule {
     ///     pub fn for_root(config: impl Into<Option<WsConfig>>) -> WsSetup {
-    ///         ConfigModule::setup(config)
+    ///         ConfigModule::setup(config.into())
     ///     }
     /// }
     /// # #[module(imports = [WsModule::for_root(WsConfig { max_message_bytes: 42 })])]
@@ -154,30 +166,35 @@ impl ConfigModule {
     /// #     Ok(())
     /// # }
     /// ```
-    pub fn setup<M: Module, C: Config>(pinned: impl Into<Option<C>>) -> ConfigSetup<M, C> {
+    ///
+    /// An instance-capable module's `for_root` takes `impl Into<ForInstance<I,
+    /// C>>` and hands it over as it is ([`ForInstance`] shows one).
+    pub fn setup<M: Module, C: Config, I: Instance>(
+        config: impl Into<ForInstance<I, C>>,
+    ) -> ConfigSetup<M, C, I> {
         ConfigSetup {
-            pinned: pinned.into(),
+            config: config.into(),
             module: PhantomData,
         }
     }
 }
 
 /// The [`DynamicModule`] behind a `for_root` that only pins a config: resolves
-/// `C` (environment over the pinned base, per field) in the factory phase, and
-/// imports `M`, its ordinary wiring, in both phases. Built by
-/// [`ConfigModule::setup`].
-pub struct ConfigSetup<M, C> {
-    pinned: Option<C>,
+/// `C` for the instance `I` (environment over the pinned base, per field) in
+/// the factory phase, and imports `M`, its ordinary wiring, in both phases.
+/// Built by [`ConfigModule::setup`].
+pub struct ConfigSetup<M, C, I = Unnamed> {
+    config: ForInstance<I, C>,
     module: PhantomData<fn() -> M>,
 }
 
-impl<M: Module + 'static, C: Config> DynamicModule for ConfigSetup<M, C> {
+impl<M: Module + 'static, C: Config, I: Instance> DynamicModule for ConfigSetup<M, C, I> {
     fn module() -> TypeId {
         TypeId::of::<M>()
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder.import::<M>())
+        ConfigModule::provide_feature(self.config.clone(), builder.import::<M>())
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
@@ -195,7 +212,7 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature::<C>(None, builder)
+        ConfigModule::provide_feature(None::<C>, builder)
     }
 }
 
@@ -264,7 +281,7 @@ mod tests {
                 builder
             }
             fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-                ConfigModule::provide_feature::<SeamConfig>(None, builder)
+                ConfigModule::provide_feature(None::<SeamConfig>, builder)
             }
         }
 
@@ -376,7 +393,7 @@ mod tests {
         #[module(imports = [ConfigModule::for_feature::<SeamConfig>(), OpensModule])]
         struct OpeningOwner;
 
-        #[module(imports = [ConfigModule::setup::<OpeningOwner, SeamConfig>(SeamConfig {
+        #[module(imports = [ConfigModule::setup::<OpeningOwner, SeamConfig, Unnamed>(SeamConfig {
             bucket: "pinned".into(),
         })])]
         struct OnlyThePin;

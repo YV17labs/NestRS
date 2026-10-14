@@ -1,5 +1,6 @@
 //! Configuration failures.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use nest_rs_core::DecodeError;
@@ -54,8 +55,9 @@ pub enum ConfigError {
         render(errors)
     )]
     Validation {
-        /// The `#[config(namespace = "…")]` of the config that failed.
-        namespace: &'static str,
+        /// The namespace the config was read under: its `#[config(namespace = "…")]`,
+        /// with a named instance's name inserted after the vendor.
+        namespace: Cow<'static, str>,
         /// The field-level failures. Not `#[source]`: a `Display` chain would
         /// print `validator`'s raw payload, submitted value included.
         errors: ValidationErrors,
@@ -91,6 +93,25 @@ pub enum ConfigError {
         /// Every type declaring it, sorted.
         declarations: Vec<&'static str>,
     },
+    /// A named instance whose namespace another declaration holds: a linked
+    /// `#[config]` declaring it, or another marker reading the instance's name.
+    #[error(
+        "the instance `{instance}` reads the namespace `{namespace}`, which {} also claim{}: \
+         an instance's namespace is its config's with the instance's name inserted after the \
+         vendor, and a namespace belongs to one declaration, so that a variable under it names \
+         what it configures. Rename the instance.",
+        claims.iter().map(|c| format!("`{c}`")).collect::<Vec<_>>().join(" and "),
+        if claims.len() == 1 { "s" } else { "" },
+    )]
+    SharedInstance {
+        /// The marker of the instance being read, by its module path and ident.
+        instance: &'static str,
+        /// The namespace that instance reads.
+        namespace: String,
+        /// Every other declaration holding it, sorted: a `#[config]` type, or a
+        /// marker reading the same name.
+        claims: Vec<&'static str>,
+    },
     /// A `<KEY>_FILE` variable names a file that could not be read.
     ///
     /// The variable's value is never carried: it may be key material pasted
@@ -118,8 +139,11 @@ impl ConfigError {
     }
 
     /// Build a [`Validation`](Self::Validation) error for `namespace`.
-    pub fn validation(namespace: &'static str, errors: ValidationErrors) -> Self {
-        Self::Validation { namespace, errors }
+    pub fn validation(namespace: impl Into<Cow<'static, str>>, errors: ValidationErrors) -> Self {
+        Self::Validation {
+            namespace: namespace.into(),
+            errors,
+        }
     }
 
     /// Build a [`Parse`](Self::Parse) error for `key` of `namespace`, a value no

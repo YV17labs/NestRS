@@ -1,6 +1,6 @@
 //! Surface-agnostic nestrs decorators (`#[injectable]`, `#[interceptor]`,
-//! `#[module]`, `#[hooks]`, `#[input]`, `#[main]`), re-exported by
-//! `nest-rs-core`.
+//! `#[module]`, `#[hooks]`, `#[input]`, `#[instance]`, `#[main]`), re-exported
+//! by `nest-rs-core`.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -10,6 +10,7 @@ mod entry;
 mod hooks;
 mod injectable;
 mod input;
+mod instance;
 mod interceptor;
 mod module;
 
@@ -108,6 +109,20 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(input::input(args, item).into()).into()
+}
+
+/// Declares a unit struct as an `Instance` marker: one instance of a resource
+/// an app opens more than once, told apart by this type.
+///
+/// Its name is the ident in snake case (`ReadReplica` reads `read_replica`),
+/// inserted after its config's vendor (`<PREFIX>_REDIS__READ_REPLICA__*`).
+/// Takes no argument; refuses a struct with fields or generics, `Unnamed`, a
+/// name holding `__` and the layout's reserved words. Emits the `Instance`
+/// impl and a link-time declaration, so two markers reading one name are
+/// refused at first use.
+#[proc_macro_attribute]
+pub fn instance(args: TokenStream, input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(instance::instance(args.into(), input.into())).into()
 }
 
 /// The binary's entry point, on an `async fn`: runs the body on tokio's

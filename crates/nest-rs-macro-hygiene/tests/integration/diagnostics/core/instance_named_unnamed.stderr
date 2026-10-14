@@ -1,0 +1,5 @@
+error: #[instance]: `Unnamed` is the default instance's marker, which adds no segment to a namespace — name this one for what it holds, e.g. `Cache`
+ --> tests/integration/diagnostics/core/instance_named_unnamed.rs:7:12
+  |
+7 | pub struct Unnamed;
+  |            ^^^^^^^

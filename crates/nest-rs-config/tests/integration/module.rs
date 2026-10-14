@@ -1,8 +1,9 @@
 //! `ConfigModule::for_root()` registers the active environment, and says once
-//! when the process declared none.
+//! when the process declared none; the default instance's config resolves
+//! through its `Config::resolve`.
 
-use nest_rs_config::{ConfigModule, Environment};
-use nest_rs_core::{App, module};
+use nest_rs_config::{Config, ConfigModule, ConfigService, Environment, Result, config};
+use nest_rs_core::{App, Module, Unnamed, module};
 use nest_rs_testing::LogCapture;
 
 const UNDECLARED: &str = "no environment declared; running as production";
@@ -53,4 +54,51 @@ fn a_declared_environment_boots_silently() {
         assert_eq!(environment.as_str(), declared);
         logs.expect_none(nest_rs_config::TARGET, UNDECLARED);
     }
+}
+
+#[config(namespace = "kiln")]
+#[derive(Clone, Debug, Default)]
+struct KilnConfig {
+    heat: Option<u16>,
+}
+
+impl Config for KilnConfig {
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        Ok(Self {
+            heat: env.parse("HEAT")?.or(base.heat),
+        })
+    }
+
+    fn resolve(pinned: Option<Self>) -> Result<Self> {
+        let pinned = pinned.and_then(|pinned| pinned.heat).unwrap_or_default();
+        Ok(Self {
+            heat: Some(1000 + pinned),
+        })
+    }
+}
+
+#[module]
+struct Kilns;
+
+#[module(imports = [ConfigModule::for_feature::<KilnConfig>()])]
+struct KilnRead;
+
+#[module(imports = [ConfigModule::setup::<Kilns, KilnConfig, Unnamed>(KilnConfig { heat: Some(7) })])]
+struct KilnPinned;
+
+fn heat<M: Module + 'static>() -> Option<u16> {
+    let app = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(async { App::builder().module::<M>().build().await })
+        .expect("the kiln boots");
+    app.container()
+        .get::<KilnConfig>()
+        .and_then(|kiln| kiln.heat)
+}
+
+#[test]
+fn the_boot_resolves_the_default_instance_through_its_config_s_resolve() {
+    assert_eq!(heat::<KilnRead>(), Some(1000));
+    assert_eq!(heat::<KilnPinned>(), Some(1007));
 }

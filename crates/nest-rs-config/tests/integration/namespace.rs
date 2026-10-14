@@ -1,6 +1,8 @@
 //! Covers `src/namespace.rs` — a namespace belongs to one type.
 
-use nest_rs_config::{Config, ConfigError, ConfigService, Namespaced, Result, config};
+use nest_rs_config::{
+    Config, ConfigError, ConfigModule, ConfigService, Namespaced, Result, config,
+};
 
 #[config(namespace = "shared_namespace")]
 #[derive(Clone, Debug, Default)]
@@ -129,4 +131,112 @@ fn a_namespace_one_struct_declares_is_read() {
     )
     .expect("one declaration reads");
     assert_eq!(read.token.as_deref(), Some("t"));
+}
+
+#[config(namespace = "drawer")]
+#[derive(Clone, Debug, Default)]
+struct DrawerConfig {
+    label: Option<String>,
+}
+
+impl Config for DrawerConfig {
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        Ok(Self {
+            label: env.get("LABEL")?.or(base.label),
+        })
+    }
+}
+
+/// What a package's binding of `drawer` to its own lock port would declare.
+#[config(namespace = "drawer__lock")]
+#[derive(Clone, Debug, Default)]
+struct DrawerLockConfig {
+    lease: Option<u16>,
+}
+
+impl Config for DrawerLockConfig {
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        Ok(Self {
+            lease: env.parse("LEASE")?.or(base.lease),
+        })
+    }
+}
+
+#[nest_rs_core::instance]
+struct Lock;
+
+mod left {
+    #[nest_rs_core::instance]
+    pub(super) struct Twin;
+}
+
+mod right {
+    #[nest_rs_core::instance]
+    pub(super) struct Twin;
+}
+
+#[nest_rs_core::module]
+struct Drawers;
+
+#[nest_rs_core::module(imports = [ConfigModule::setup::<Drawers, _, _>((Lock, None::<DrawerConfig>))])]
+struct LockDrawer;
+
+#[nest_rs_core::module(imports = [
+    ConfigModule::setup::<Drawers, _, _>((left::Twin, None::<DrawerConfig>)),
+])]
+struct TwinDrawer;
+
+/// The boot of `M` refused as a shared instance: its marker, its namespace and
+/// the claims beside it, then the sentence.
+fn shared_instance<M: nest_rs_core::Module + 'static>()
+-> (&'static str, String, Vec<&'static str>, String) {
+    let booted = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(nest_rs_core::App::builder().module::<M>().build());
+    let Err(error) = booted else {
+        panic!("an instance sharing its namespace must not boot");
+    };
+    match error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ConfigError>())
+    {
+        Some(
+            refused @ ConfigError::SharedInstance {
+                instance,
+                namespace,
+                claims,
+            },
+        ) => (
+            instance,
+            namespace.clone(),
+            claims.clone(),
+            refused.to_string(),
+        ),
+        _ => panic!("expected a shared-instance refusal, got {error:#}"),
+    }
+}
+
+/// A package binding `drawer` to its own lock port declares `drawer__lock`, a
+/// word no reserved list can know: the instance `Lock` would read its variables.
+#[test]
+fn an_instance_whose_namespace_a_linked_config_declares_is_refused() {
+    let (instance, namespace, claims, rendered) = shared_instance::<LockDrawer>();
+    assert!(instance.ends_with("::Lock"), "{rendered}");
+    assert_eq!(namespace, "drawer__lock");
+    assert_eq!(claims.len(), 1, "{rendered}");
+    assert!(claims[0].ends_with("::DrawerLockConfig"), "{rendered}");
+    assert!(rendered.ends_with("Rename the instance."), "{rendered}");
+    DrawerLockConfig::load().expect("the config keeps its own namespace");
+}
+
+/// Two crates each declaring `Twin` read one name: the variables under
+/// `drawer__twin` could not say which they configure.
+#[test]
+fn two_markers_reading_one_name_are_refused_at_first_use() {
+    let (instance, namespace, claims, rendered) = shared_instance::<TwinDrawer>();
+    assert!(instance.ends_with("left::Twin"), "{rendered}");
+    assert_eq!(namespace, "drawer__twin");
+    assert_eq!(claims.len(), 1, "{rendered}");
+    assert!(claims[0].ends_with("right::Twin"), "{rendered}");
 }

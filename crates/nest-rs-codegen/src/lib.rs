@@ -20,6 +20,7 @@ mod entry;
 mod grammar;
 mod identity;
 mod inject;
+mod instance;
 mod job;
 mod mcp;
 mod meta;
@@ -66,6 +67,7 @@ pub use inject::{
     mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
     optional_dependency_names_method,
 };
+pub use instance::{DEFAULT_INSTANCE, INSTANCE, RESERVED_VOCABULARY, instance_name};
 pub use job::{
     JobDecorator, JobKey, TIMEOUT, TRANSACTIONAL, job_argument_needs_a_value, job_key, job_keys,
     job_returns_a_result, job_timeout, job_transaction, timeout_value, transactional_value,
@@ -90,7 +92,7 @@ pub use specs::{force_guard_typeids, scoped_specs};
 pub use time_zone::invalid_time_zone;
 pub use ty::{
     HostBorrow, PipeWrapper, await_if_async, concrete_signature, generic_args, impl_self_ident,
-    last_segment_ident, nth_generic_type, payload_arg_type, pipe_wrapper, returns_unit,
+    last_segment_ident, nth_generic_type, path_label, payload_arg_type, pipe_wrapper, returns_unit,
     shared_receiver, type_label,
 };
 pub use ungrouped::ungrouped_expr;

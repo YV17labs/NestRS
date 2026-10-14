@@ -18,7 +18,7 @@ impl WsModule {
     /// `None` ⇒ load [`WsConfig`] from `<PREFIX>_WS__*` over its defaults;
     /// `Some(cfg)` makes `cfg` the base those variables overlay.
     pub fn for_root(config: impl Into<Option<WsConfig>>) -> WsSetup {
-        ConfigModule::setup(config)
+        ConfigModule::setup(config.into())
     }
 }
 

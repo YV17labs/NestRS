@@ -17,7 +17,6 @@ rust-version = "1.97"
 anyhow = "1.0"
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }
 nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm", "testing"] }

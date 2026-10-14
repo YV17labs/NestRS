@@ -120,8 +120,10 @@ and declaring a field nothing fills is the same defect with the opposite sign.
 
 **Every log line carries the trace context of the unit that emitted it** —
 `trace_id`, `span_id`, `actor_id` — **and no span state**: no span's attributes,
-no span's name. The formatters (`nest_rs_core::logging::{TextFormat,
-JsonFormat}`) are the same two whichever subscriber is mounted, and read the
+no span's name. The formatters (the kernel's text and JSON formats, in
+`crates/nest-rs-core/src/logging.rs`) are the same two whichever subscriber is
+mounted — an app's, OpenTelemetry's, or a binary's with no `App` through
+`nest_rs::core::logging::install_console` — and read the
 ambient correlation rather than the span scope: a span's fields belong to the
 span, `tracing` would render a whole scope (one `trace_id` per nested level), and
 the context outlives the span where a streaming body runs. **Never write those

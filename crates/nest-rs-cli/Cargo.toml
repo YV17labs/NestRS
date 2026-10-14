@@ -46,6 +46,8 @@ nest-rs-core = { path = "../nest-rs-core" }
 # `#[instance]` refuses the reserved vocabulary from a list of its own, which
 # a test holds to the one this crate scrapes from `architecture.md`.
 nest-rs-codegen = { path = "../nest-rs-codegen" }
+# A generated binary's console lines, read back as the JSON they are.
+serde_json.workspace = true
 # `figment::Jail` sets and restores the working directory and the environment
 # the loader reads, as `nest-rs-config`'s own suite does.
 figment = { workspace = true, features = ["test"] }

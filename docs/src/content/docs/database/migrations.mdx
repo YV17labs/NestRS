@@ -138,6 +138,23 @@ outside the DI container, which resolves `<PREFIX>_SEAORM__*` through the same
 in a tool of your own works only when the variable is really in the process
 environment; `connect_from_env` works either way.
 
+The binary runs no `App`, so it installs the console an app would have — the
+same filter, format and source location, from `<PREFIX>_LOG`,
+`<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION` — with one line at the
+top of `main`. A tool of your own does the same:
+
+```rust title="crates/migrations/src/bin/migrate.rs (from the demo, abridged)"
+use nest_rs::core::logging::{LogSettings, install_console};
+
+#[nest_rs::main]
+async fn main() -> Result<()> {
+    install_console(&LogSettings::from_env()?);
+
+    let conn = nest_rs::seaorm::connect_from_env().await?;
+    // …
+}
+```
+
 ## Going further
 
 - [Seeding](/database/seeding/) — load demo data once the schema is in place.

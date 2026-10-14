@@ -2482,7 +2482,6 @@ dependencies = [
  "nest-rs",
  "sea-orm",
  "sea-orm-migration",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -4669,7 +4668,6 @@ dependencies = [
  "sea-orm",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 

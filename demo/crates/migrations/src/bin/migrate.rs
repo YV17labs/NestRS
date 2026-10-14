@@ -1,16 +1,11 @@
 use anyhow::{Context, Result, bail};
 use migrations::Migrator;
-use nest_rs::core::logging::{ConsoleWriter, LogSettings};
+use nest_rs::core::logging::{LogSettings, install_console};
 use sea_orm_migration::MigratorTrait;
-use tracing_subscriber::EnvFilter;
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
-    let log = LogSettings::from_env()?;
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(&log.filter))
-        .with_writer(ConsoleWriter::get())
-        .init();
+    install_console(&LogSettings::from_env()?);
 
     let conn = nest_rs::seaorm::connect_from_env().await?;
     match std::env::args().nth(1).as_deref() {

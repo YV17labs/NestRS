@@ -93,11 +93,6 @@ const SEA_ORM_MIGRATION: Dep = Dep {
     workspace_value: "{ version = \"2.0\", features = [\"sqlx-postgres\", \"runtime-tokio\"] }",
     features: &[],
 };
-const TRACING_SUBSCRIBER: Dep = Dep {
-    name: "tracing-subscriber",
-    workspace_value: "{ version = \"0.3\", features = [\"env-filter\"] }",
-    features: &[],
-};
 
 /// The crates a resource port (DB-backed CRUD + HTTP) needs; `authz` because
 /// `#[crud]` declares its posture through `Authorize<…>`.
@@ -120,13 +115,7 @@ pub(super) fn auth_deps() -> Vec<&'static Dep> {
 /// what `templates::migration`'s two manifests declare `workspace = true`; keep
 /// the two in step. No `async-trait`: `sea_orm_migration::prelude` re-exports it.
 pub(super) fn migrations_deps() -> Vec<&'static Dep> {
-    vec![
-        &SEAORM,
-        &SEA_ORM,
-        &SEA_ORM_MIGRATION,
-        &ANYHOW,
-        &TRACING_SUBSCRIBER,
-    ]
+    vec![&SEAORM, &SEA_ORM, &SEA_ORM_MIGRATION, &ANYHOW]
 }
 
 /// The crates an adapter for `transport` needs on top of the port.

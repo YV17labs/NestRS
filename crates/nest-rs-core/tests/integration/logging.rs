@@ -4,7 +4,9 @@
 
 use std::time::Duration;
 
-use nest_rs_core::logging::{CONSOLE_FLUSH_TIMEOUT, CONSOLE_QUEUE_LINES, var};
+use nest_rs_core::logging::{
+    CONSOLE_FLUSH_TIMEOUT, CONSOLE_QUEUE_LINES, LogSettings, install_console, var,
+};
 use nest_rs_core::{App, EnvPrefix, module};
 
 use crate::ChildProcess;
@@ -65,6 +67,9 @@ fn logging_child_process() {
         Some(role @ ("stalled" | "queued-exit" | "queued-signal")) => {
             let _ = console_child(role.to_owned());
         }
+        Some("app-less") => {
+            let _ = app_less_child();
+        }
         _ => {}
     }
 }
@@ -100,6 +105,28 @@ fn file_lines_the_exit_writes() {
         tracing::info!(target: FIXTURE_TARGET, line, "a line the exit writes");
     }
     eprintln!("{LOGGED}");
+}
+
+/// What an app-less child says on stderr once it installed the console twice.
+const INSTALLED: &str = "APP-LESS-CHILD INSTALLED";
+
+/// The line an app-less child files through the console it installed.
+const APP_LESS_LINE: &str = "a line no app files";
+
+/// A binary that runs no `App` — a migration runner — installing the kernel's
+/// console from the settings, then trying a second time.
+#[nest_rs_core::main]
+#[expect(
+    clippy::print_stderr,
+    reason = "the child's stdout is the console under test; stderr is the protocol"
+)]
+async fn app_less_child() -> anyhow::Result<()> {
+    let settings = LogSettings::from_env()?;
+    let first = install_console(&settings);
+    tracing::info!(target: FIXTURE_TARGET, step = 1, "{APP_LESS_LINE}");
+    let second = install_console(&settings);
+    eprintln!("{INSTALLED} first={first} second={second}");
+    Ok(())
 }
 
 /// File [`LINES`] from tokio tasks, then answer a trivial future, and say on
@@ -357,5 +384,48 @@ fn lines_dropped_while_stdout_stalled_are_counted_once_it_reads_again() {
         usize::try_from(dropped).unwrap_or(usize::MAX) + written,
         LINES,
         "every line filed was written or counted"
+    );
+}
+
+/// A binary with no `App` installs the kernel's console from its settings —
+/// their format and source location honoured, not only their filter — and a
+/// second install keeps the first.
+#[test]
+fn a_binary_with_no_app_installs_the_console_its_settings_describe() {
+    let env = settings(&[(var::FORMAT, "json"), (var::SOURCE_LOCATION, "true")]);
+    let mut child = ChildProcess::spawn_with(CHILD_TEST, "app-less", &env);
+
+    let said = child.expect_stderr_line(INSTALLED, Duration::from_secs(10));
+    assert!(said.ends_with("first=true second=false"), "{said}");
+    let (code, printed) = child.exit_within(Duration::from_secs(10));
+    assert_eq!(code, Some(0), "{printed:#?}");
+    let events = console_events(&printed);
+    let line = events
+        .iter()
+        .find(|event| event["fields"]["message"] == APP_LESS_LINE)
+        .unwrap_or_else(|| panic!("the line reached the console as JSON: {events:#?}"));
+    assert_eq!(line["target"], FIXTURE_TARGET, "{line}");
+    assert_eq!(line["fields"]["step"], 1, "{line}");
+    assert!(
+        line["filename"]
+            .as_str()
+            .is_some_and(|file| file.ends_with("tests/integration/logging.rs")),
+        "the source location is on the line: {line}"
+    );
+}
+
+/// A filter the settings hold is the one the installed console applies.
+#[test]
+fn the_installed_console_applies_the_settings_filter() {
+    let env = settings(&[(var::FORMAT, "json"), (var::FILTER, "warn")]);
+    let mut child = ChildProcess::spawn_with(CHILD_TEST, "app-less", &env);
+
+    child.expect_stderr_line(INSTALLED, Duration::from_secs(10));
+    let (code, printed) = child.exit_within(Duration::from_secs(10));
+    assert_eq!(code, Some(0), "{printed:#?}");
+    assert_eq!(
+        saying(&console_events(&printed), APP_LESS_LINE),
+        0,
+        "an `info` line under `warn`: {printed:#?}"
     );
 }

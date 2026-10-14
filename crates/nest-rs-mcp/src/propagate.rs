@@ -218,7 +218,7 @@ impl<H> PropagatingHandler<H> {
         }
         .instrument(operation)
         // For the exported OTel tree only; it must add nothing to a log line
-        // (`nest_rs_core::logging::TextFormat`).
+        // (the kernel's formats, `crates/nest-rs-core/src/logging.rs`).
         .instrument(span)
         .await
     }

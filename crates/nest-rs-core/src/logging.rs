@@ -253,21 +253,63 @@ const BATCH_WINDOW: Duration = Duration::from_millis(2);
 /// is given back.
 const BATCH_BYTES_KEPT: usize = 1 << 20;
 
-/// The process's console, the writer every subscriber the framework ships
-/// writes its lines through.
-///
-/// Under `#[nest_rs::main]` it is stdout written in batches by one thread of
-/// its own (`nestrs-log`) through a queue of [`CONSOLE_QUEUE_LINES`]: a line
-/// that finds the queue full — a stdout nobody drains — is dropped and counted,
-/// never waited for, so no task stalls on the console. Once a second, while lines
-/// were dropped, one `warn` on [`APP`](crate::target::APP) says how many since
-/// the process started (`dropped`), and every exit `#[nest_rs::main]` controls
-/// waits until each line queued before it is written, within
-/// [`CONSOLE_FLUSH_TIMEOUT`]. Elsewhere — a test binary, a process that runs an
-/// `App` without it — it is stdout, written synchronously, so nothing queued is
-/// lost at an exit the kernel does not see.
-#[derive(Clone)]
-pub struct ConsoleWriter(Option<&'static Queue>);
+/// The console's writer and line formats: the kernel's, reached by the
+/// framework's own subscribers through the crate's `__private`, and installed
+/// for anyone else by [`install_console`]. They implement `tracing_subscriber`'s
+/// traits, a private dependency's, so they are not API.
+pub(crate) mod __private {
+    /// The process's console, the writer every subscriber the framework ships
+    /// writes its lines through.
+    ///
+    /// Under `#[nest_rs::main]` it is stdout written in batches by one thread
+    /// of its own (`nestrs-log`) through a queue of
+    /// [`CONSOLE_QUEUE_LINES`](crate::logging::CONSOLE_QUEUE_LINES): a line that
+    /// finds the queue full — a stdout nobody drains — is dropped and counted,
+    /// never waited for, so no task stalls on the console. Once a second, while
+    /// lines were dropped, one `warn` on [`APP`](crate::target::APP) says how
+    /// many since the process started (`dropped`), and every exit
+    /// `#[nest_rs::main]` controls waits until each line queued before it is
+    /// written, within
+    /// [`CONSOLE_FLUSH_TIMEOUT`](crate::logging::CONSOLE_FLUSH_TIMEOUT).
+    /// Elsewhere — a test binary, a process that runs an `App` without it — it
+    /// is stdout, written synchronously, so nothing queued is lost at an exit
+    /// the kernel does not see.
+    #[derive(Clone)]
+    pub struct ConsoleWriter(pub(in crate::logging) Option<&'static super::Queue>);
+
+    /// The console format for **text** output.
+    ///
+    /// A line is `timestamp level target: message fields`, then the **W3C Trace
+    /// Context of the unit of work it belongs to** — `trace_id`, `span_id`, and
+    /// `actor_id` once a guard resolved a principal:
+    ///
+    /// ```text
+    /// 2026-08-18T14:49:16.529159Z DEBUG fixture::lane: creating post title="hello" trace_id=01a014ec214e7163844619af2aeaeca4 span_id=b0c095c368ba3d72
+    /// ```
+    ///
+    /// The ids are read from the ambient context, and a line carries no span
+    /// attributes or names.
+    ///
+    /// The builder's `with_file`, `with_line_number`, `with_timer`, `with_target`,
+    /// `with_level` and `with_thread_ids` do not reach the output: `file:line` is
+    /// [`source_location`](Self::new), and ANSI follows the writer.
+    #[derive(Clone, Copy, Debug)]
+    pub struct TextFormat {
+        pub(in crate::logging) source_location: bool,
+    }
+
+    /// The console format for **JSON** output — [`TextFormat`]'s rule, serialized.
+    ///
+    /// `trace_id`, `span_id`, `trace_flags` and `actor_id` are top-level keys; the
+    /// others are `tracing-subscriber`'s own — `timestamp`, `level`, `fields`,
+    /// `target`, `filename`, `line_number`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct JsonFormat {
+        pub(in crate::logging) source_location: bool,
+    }
+}
+
+use __private::{ConsoleWriter, JsonFormat, TextFormat};
 
 /// The process's console queue, opened on first use; `None` writes stdout
 /// directly.
@@ -564,15 +606,28 @@ fn open() -> Option<Arc<Queue>> {
     if !crate::way_down::under_main() {
         return None;
     }
+    started(
+        |writer| {
+            std::thread::Builder::new()
+                .name("nestrs-log".to_owned())
+                .spawn(move || writer.write_out(io::stdout()))
+                .map(drop)
+        },
+        write_stderr_line,
+    )
+}
+
+/// The console's queue, once `spawn` started the thread writing it out; or
+/// `None` — stdout written directly — when it could not, which `say` reports.
+fn started(
+    spawn: impl FnOnce(Arc<Queue>) -> io::Result<()>,
+    say: impl FnOnce(fmt::Arguments<'_>),
+) -> Option<Arc<Queue>> {
     let queue = Arc::new(Queue::new(CONSOLE_QUEUE_LINES, BATCH_WINDOW));
-    let writer = Arc::clone(&queue);
-    let spawned = std::thread::Builder::new()
-        .name("nestrs-log".to_owned())
-        .spawn(move || writer.write_out(io::stdout()));
-    match spawned {
-        Ok(_) => Some(queue),
+    match spawn(Arc::clone(&queue)) {
+        Ok(()) => Some(queue),
         Err(error) => {
-            write_stderr_line(format_args!(
+            say(format_args!(
                 "nestrs: the console queue could not start, so stdout is written directly: {}",
                 LineSafe(&crate::error_message(&error))
             ));
@@ -686,27 +741,6 @@ impl Visit for FixedWidthDurations<'_> {
     }
 }
 
-/// The console format for **text** output.
-///
-/// A line is `timestamp level target: message fields`, then the **W3C Trace
-/// Context of the unit of work it belongs to** — `trace_id`, `span_id`, and
-/// `actor_id` once a guard resolved a principal:
-///
-/// ```text
-/// 2026-08-18T14:49:16.529159Z DEBUG fixture::lane: creating post title="hello" trace_id=01a014ec214e7163844619af2aeaeca4 span_id=b0c095c368ba3d72
-/// ```
-///
-/// The ids are read from the ambient context, and a line carries no span
-/// attributes or names.
-///
-/// The builder's `with_file`, `with_line_number`, `with_timer`, `with_target`,
-/// `with_level` and `with_thread_ids` do not reach the output: `file:line` is
-/// [`source_location`](Self::new), and ANSI follows the writer.
-#[derive(Clone, Copy, Debug)]
-pub struct TextFormat {
-    source_location: bool,
-}
-
 impl TextFormat {
     /// `source_location` appends the emitting `file:line`, as
     /// `<PREFIX>_LOG_SOURCE_LOCATION` does.
@@ -788,16 +822,6 @@ fn write_text_value(writer: &mut Writer<'_>, value: &str) -> fmt::Result {
     } else {
         write!(writer, "{value:?}")
     }
-}
-
-/// The console format for **JSON** output — [`TextFormat`]'s rule, serialized.
-///
-/// `trace_id`, `span_id`, `trace_flags` and `actor_id` are top-level keys; the
-/// others are `tracing-subscriber`'s own — `timestamp`, `level`, `fields`,
-/// `target`, `filename`, `line_number`.
-#[derive(Clone, Copy, Debug)]
-pub struct JsonFormat {
-    source_location: bool,
 }
 
 impl JsonFormat {
@@ -1069,15 +1093,33 @@ pub(crate) fn init_fallback() -> Result<()> {
     if crate::process_start::subscriber_set() {
         return Ok(());
     }
-    let settings = LogSettings::from_env()?;
+    install_console(&LogSettings::from_env()?);
+    Ok(())
+}
+
+/// Install the kernel's console subscriber as the process's global one, as
+/// `settings` describe it — their filter, their format and their source
+/// location — writing through the process's console: the subscriber an `App`
+/// installs when `main` installed none, for a binary that runs no `App` (a
+/// migration runner, a seed).
+///
+/// `false` when the process already has a global subscriber, which is kept.
+///
+/// ```no_run
+/// use nest_rs_core::logging::{LogSettings, install_console};
+///
+/// #[nest_rs_core::main]
+/// async fn main() -> anyhow::Result<()> {
+///     install_console(&LogSettings::from_env()?);
+///     tracing::info!("migrating");
+///     Ok(())
+/// }
+/// ```
+pub fn install_console(settings: &LogSettings) -> bool {
     let builder = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(&settings.filter))
         .with_writer(ConsoleWriter::get());
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "an Err is a subscriber already installed, which the fallback steps aside for"
-    )]
-    let _ = match settings.format {
+    match settings.format {
         LogFormat::Text => builder
             .event_format(TextFormat::new(settings.source_location))
             .try_init(),
@@ -1086,8 +1128,8 @@ pub(crate) fn init_fallback() -> Result<()> {
             .json()
             .event_format(JsonFormat::new(settings.source_location))
             .try_init(),
-    };
-    Ok(())
+    }
+    .is_ok()
 }
 
 #[cfg(test)]
@@ -1800,6 +1842,33 @@ mod tests {
         let writer = Arc::clone(&queue);
         std::thread::spawn(move || writer.write_out(out));
         queue
+    }
+
+    #[test]
+    fn a_writer_thread_that_cannot_start_leaves_stdout_written_directly_and_says_so() {
+        let mut said = String::new();
+        let queue = started(
+            |_| Err(io::Error::other("no thread\nforged=line")),
+            |line| said = line.to_string(),
+        );
+        assert!(queue.is_none(), "the console falls back to a direct stdout");
+        assert!(
+            said.starts_with(
+                "nestrs: the console queue could not start, so stdout is written directly: "
+            ),
+            "{said}"
+        );
+        assert!(!said.contains('\n'), "one line, escaped: {said:?}");
+
+        let mut asked = false;
+        let queue = started(
+            |_| {
+                asked = true;
+                Ok(())
+            },
+            |_| panic!("nothing to say"),
+        );
+        assert!(queue.is_some() && asked, "a started writer keeps the queue");
     }
 
     #[test]

@@ -18,7 +18,6 @@ nest-rs = { path = "../crates/nest-rs", features = ["http", "config", "database"
 
 tokio = { version = "1.53", features = ["full"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2.0"
 anyhow = "1.0"
 base64 = "0.23"

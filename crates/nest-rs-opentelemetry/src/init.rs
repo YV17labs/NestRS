@@ -5,7 +5,8 @@ use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::logging::{ConsoleWriter, JsonFormat, LogSettings, TextFormat};
+use nest_rs_core::__private::{ConsoleWriter, JsonFormat, TextFormat};
+use nest_rs_core::logging::LogSettings;
 
 use crate::config::{LogFormat, OpenTelemetryConfig};
 use crate::error::OpenTelemetryError;
@@ -195,7 +196,7 @@ where
     match format {
         // The kernel's formatters, the ones the fallback subscriber installs: a line
         // cannot change shape because the app adopted an exporter. See
-        // `nest_rs_core::logging::TextFormat` for why `with_file` / `with_line_number`
+        // `nest_rs_core::__private::TextFormat` for why `with_file` / `with_line_number`
         // are absent here.
         LogFormat::Text => tracing_subscriber::fmt::layer()
             .event_format(TextFormat::new(source_location))

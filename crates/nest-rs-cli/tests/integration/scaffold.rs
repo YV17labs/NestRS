@@ -1,8 +1,11 @@
 //! Covers `src/templates/` and `src/commands/generate/` — by compiling what
-//! they wrote.
+//! they wrote, and running a generated binary where its output is the contract.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
+
+use nest_rs_core::EnvPrefix;
+use nest_rs_core::logging::var;
 
 /// The repository root, from this crate's manifest directory.
 fn repo() -> PathBuf {
@@ -48,8 +51,7 @@ fn patch_to_working_tree(workspace: &Path) {
     std::fs::write(&manifest, raw).expect("the manifest is writable");
 }
 
-/// `cargo clippy --workspace --all-targets --all-features -- -D warnings` over the generated
-/// tree — **the gate the generated project sets for itself**.
+/// `cargo <args>` over the generated tree, with `env` on its process.
 ///
 /// Every scaffold builds into one shared target directory; nextest runs each
 /// test in its own process, so a file lock takes them one at a time.
@@ -57,15 +59,28 @@ fn patch_to_working_tree(workspace: &Path) {
     clippy::disallowed_methods,
     reason = "CARGO is the cargo that runs the suite, set by cargo itself"
 )]
-fn cargo_check(workspace: &Path) -> Result<(), String> {
+fn cargo(workspace: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<Output, String> {
     let target = repo().join("target/scaffold-check");
     std::fs::create_dir_all(&target).map_err(|err| format!("no target dir: {err}"))?;
     let lock = std::fs::File::create(target.join("scaffold.lock"))
         .map_err(|err| format!("no lock file: {err}"))?;
     lock.lock()
         .map_err(|err| format!("the lock is not taken: {err}"))?;
-    let output = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args([
+    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args(args)
+        .current_dir(workspace)
+        .env("CARGO_TARGET_DIR", &target)
+        .envs(env.iter().copied())
+        .output()
+        .map_err(|err| format!("cargo did not run: {err}"))
+}
+
+/// `cargo clippy --workspace --all-targets --all-features -- -D warnings` over the generated
+/// tree — **the gate the generated project sets for itself**.
+fn cargo_check(workspace: &Path) -> Result<(), String> {
+    let output = cargo(
+        workspace,
+        &[
             "clippy",
             "--workspace",
             "--all-targets",
@@ -73,11 +88,9 @@ fn cargo_check(workspace: &Path) -> Result<(), String> {
             "--",
             "-D",
             "warnings",
-        ])
-        .current_dir(workspace)
-        .env("CARGO_TARGET_DIR", &target)
-        .output()
-        .map_err(|err| format!("cargo did not run: {err}"))?;
+        ],
+        &[],
+    )?;
     if output.status.success() {
         return Ok(());
     }
@@ -411,4 +424,60 @@ fn every_adapter_over_a_resource_port_compiles() {
         &generate,
         "every adapter over a resource port, and its migration",
     );
+}
+
+/// The generated `migrate` binary runs no `App`, so it installs the console
+/// itself: under `<PREFIX>_LOG_FORMAT=json` its lines are JSON, as an app's
+/// are. Its database is unreachable, and the line it files before connecting
+/// is the one read.
+#[test]
+fn the_generated_migration_binary_writes_the_console_its_log_settings_describe() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    nestrs(dir.path(), &["new", "acme"], &[]);
+    let workspace = dir.path().join("acme");
+    patch_to_working_tree(&workspace);
+
+    let filter = EnvPrefix::var(var::FILTER);
+    let format = EnvPrefix::var(var::FORMAT);
+    let url = nest_rs_config::var_name("seaorm", "URL");
+    let budget = nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS");
+    let output = cargo(
+        &workspace,
+        &[
+            "run",
+            "-q",
+            "-p",
+            "migrations",
+            "--bin",
+            "migrate",
+            "--",
+            "status",
+        ],
+        &[
+            (filter.as_str(), "info"),
+            (format.as_str(), "json"),
+            (
+                url.as_str(),
+                "postgres://acme@127.0.0.1:1/acme?sslmode=verify-full",
+            ),
+            (budget.as_str(), "1"),
+        ],
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "nothing listens on the database's port: {stdout}"
+    );
+    let connecting = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["fields"]["message"] == "connecting to database")
+        .unwrap_or_else(|| {
+            panic!(
+                "the binary's console wrote its line as JSON:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+    assert_eq!(connecting["level"], "INFO", "{connecting}");
 }

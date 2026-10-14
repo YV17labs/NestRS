@@ -163,9 +163,9 @@ if let Some(ab) = current_ability() {
 }
 ```
 
-`can` decides on the model alone: synchronous, no query, no
-allocation. What the model cannot show — a relation (`p.related(…)`)
-above all — grants nothing there, and a denial resting on it refuses.
+`can` decides on the model alone: synchronous, no query. What the
+model cannot show — a relation (`p.related(…)`) above all — grants
+nothing there, and a denial resting on it refuses.
 So a relation-gated `Update` grant answers `false` on a row you read for
 `Read`. When such a rule decides, ask SQL: `Repo::can` re-checks the
 row's primary key under the action's own condition, one indexed query.

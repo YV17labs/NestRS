@@ -45,10 +45,10 @@ A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
 the primary key, so a caller cannot mutate a row outside its scope even
 with a leaked id. `can` asks the same question without writing: one
 query on the primary key under the action's condition, which decides a
-relational rule the model alone cannot show. The macro-generated `CrudService::access(action, id)`
-loads unscoped so a denied-but-existing row surfaces as `Access::Denied`
-(distinct from `Access::Missing`) — the gateway route-model binding goes
-through.
+relational rule the model alone cannot show. The macro-generated
+`CrudService::access(action, id)` loads unscoped so a denied-but-existing
+row surfaces as `Access::Denied` (distinct from `Access::Missing`) — the
+gateway route-model binding goes through.
 
 ## Under the hood: the ambient executor
 

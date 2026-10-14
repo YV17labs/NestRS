@@ -257,7 +257,7 @@ impl Ability {
 
     /// Layer ③ — instance check: at least one grant matches this model and no
     /// denial does (a denial overrides), decided on the model alone, with no
-    /// query and no allocation.
+    /// query.
     ///
     /// The model cannot show a relation, nor compare two value types only the
     /// database compares: a grant resting on one grants nothing here, and a
@@ -303,15 +303,20 @@ impl Ability {
                 // `NOT UNKNOWN` is `UNKNOWN`, so SQL's filter drops a row its
                 // denial cannot compare as surely as one it matches.
                 (Truth::True | Truth::Unknown, true) => denied = true,
+                // Only `Loaded` reads the undecided grants' fields, and `can`
+                // (`Held`) reads no field at all: neither builds a set it drops.
                 (Truth::True, false) => {
                     granted = true;
-                    fields.widen(&rule.fields);
+                    if provenance != Provenance::Held {
+                        fields.widen(&rule.fields);
+                    }
                 }
                 (Truth::Undecidable, true) => undecided_denial = true,
                 (Truth::Undecidable, false) => {
-                    undecided_grants
-                        .get_or_insert(FieldSet::All)
-                        .narrow(&rule.fields);
+                    let shared = undecided_grants.get_or_insert(FieldSet::All);
+                    if provenance == Provenance::Loaded {
+                        shared.narrow(&rule.fields);
+                    }
                 }
                 (Truth::False, _) | (Truth::Unknown, false) => {}
             }

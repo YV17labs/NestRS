@@ -77,7 +77,7 @@ not safe by default.
 
 - **`Held` now reads a rule as `Pushed` does**: an undecidable grant grants
   nothing and an undecidable denial denies; it files no warn, since its caller
-  hears `false`. `can` stays synchronous and allocation-free. `Loaded` (the
+  hears `false`. `can` stays synchronous and queries nothing. `Loaded` (the
   masks) is unchanged.
 - **`Repo::can(action, &model)` is the instance check SQL decides**: one query
   on the model's primary key under `condition_for(action)`, on the ambient

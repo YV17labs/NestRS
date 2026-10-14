@@ -627,20 +627,13 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "the test tears down its temp dir best-effort"
-    )]
     fn a_value_from_a_file_is_refused_under_its_file_spelling() {
-        let dir =
-            std::env::temp_dir().join(format!("nest-rs-config-bounds-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("scratch");
-        let path = dir.join("window");
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let path = scratch.path().join("window");
         std::fs::write(&path, "0\n").expect("write");
         let path = path.to_string_lossy().into_owned();
         let text =
             refused(RANGE.read(&env(&[("WINDOW_SECS_FILE", &path)]), Duration::from_secs(5)));
-        let _ = std::fs::remove_dir_all(&dir);
         assert!(
             text.contains(&var_name("fixture", "WINDOW_SECS_FILE")),
             "{text}"

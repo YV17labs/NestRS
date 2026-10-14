@@ -74,7 +74,7 @@ pub fn read_material(path: &Path) -> io::Result<Vec<u8>> {
 #[cfg(all(test, unix))]
 #[expect(
     clippy::let_underscore_must_use,
-    reason = "the tests tear down temp files and a watchdog thread best-effort"
+    reason = "the swapper and the watchdog are best-effort threads"
 )]
 mod tests {
     use std::sync::Arc;
@@ -89,9 +89,8 @@ mod tests {
     /// failure instead of a stuck suite.
     #[test]
     fn a_path_swapped_to_a_fifo_never_blocks_the_read() {
-        let dir = std::env::temp_dir().join(format!("nest-rs-config-swap-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let dir = scratch.path().to_path_buf();
         let regular = dir.join("regular.pem");
         std::fs::write(&regular, "material").expect("write");
         let fifo = dir.join("pipe");
@@ -132,7 +131,6 @@ mod tests {
         let outcome = rx.recv_timeout(Duration::from_secs(20));
         stop.store(true, Ordering::Relaxed);
         let _ = swapper.join();
-        let _ = std::fs::remove_dir_all(&dir);
         outcome.expect("every read returns while the path is swapped to a FIFO");
     }
 }

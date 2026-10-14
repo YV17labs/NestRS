@@ -888,11 +888,11 @@ mod tests {
     #[test]
     #[expect(
         clippy::let_underscore_must_use,
-        reason = "the test tears down its FIFO best-effort, and the watchdog's receiver may be gone"
+        reason = "the watchdog's receiver may be gone"
     )]
     fn material_refuses_a_path_that_is_not_a_regular_file_without_blocking() {
-        let fifo = std::env::temp_dir().join(format!("nest-rs-config-fifo-{}", std::process::id()));
-        let _ = std::fs::remove_file(&fifo);
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let fifo = scratch.path().join("pipe");
         let made = std::process::Command::new("mkfifo")
             .arg(&fifo)
             .status()
@@ -907,19 +907,14 @@ mod tests {
             let _ = tx.send(read.map_err(|e| e.to_string()));
         });
         let outcome = rx.recv_timeout(Duration::from_secs(5));
-        let _ = std::fs::remove_file(&fifo);
         let refused = outcome.expect("returns instead of blocking on the pipe");
         assert!(refused.is_err(), "a FIFO is not material: {refused:?}");
     }
 
     #[test]
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "the test tears down its temp dir best-effort"
-    )]
     fn material_reads_at_most_a_mebibyte() {
-        let dir = std::env::temp_dir().join(format!("nest-rs-config-size-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let dir = scratch.path();
         let limit = usize::try_from(crate::material::MAX_MATERIAL_BYTES).expect("fits");
         let at = dir.join("at.pem");
         let over = dir.join("over.pem");
@@ -931,7 +926,6 @@ mod tests {
         };
         let at_limit = read(&at);
         let over_limit = read(&over);
-        let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(
             at_limit

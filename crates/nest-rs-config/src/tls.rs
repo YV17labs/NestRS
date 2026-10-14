@@ -640,15 +640,9 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "the test tears down its temp file best-effort"
-    )]
     fn half_a_client_certificate_is_refused_naming_what_was_set_and_what_is_missing() {
-        let path = std::env::temp_dir().join(format!(
-            "nest-rs-config-tls-half-{}.pem",
-            std::process::id()
-        ));
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let path = scratch.path().join("half.pem");
         std::fs::write(&path, CLIENT.cert.as_bytes()).expect("write the certificate");
         let file = path.to_str().expect("a UTF-8 temporary path");
         let read = [
@@ -663,7 +657,6 @@ mod tests {
             );
             (outcome, named, missing)
         });
-        let _ = std::fs::remove_file(&path);
 
         for (outcome, named, missing) in read {
             let err = outcome.expect_err("half a pair is refused");

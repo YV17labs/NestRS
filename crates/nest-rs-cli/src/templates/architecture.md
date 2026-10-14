@@ -81,7 +81,10 @@ and the next word is read off its vocabulary — RFC 6749 §1.1:
 
 Membership is a test an outsider can answer (*does the standard name this?*,
 never *is this about auth?*); no crate carries the prefix alone, and a theme is
-not a family — `authn` and `authz` are two crates, not two families.
+not a family — `authn` and `authz` are two crates, not two families. The
+`nestrs-` prefix marks a community package, not a family: every surface a
+package owns — path, span target, unit, namespace, key — is rooted at its own
+crate name.
 
 ## The product's own — what the product decides, and nothing else
 

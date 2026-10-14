@@ -34,10 +34,12 @@ A driver implements the seam rather than consuming it, so it takes `database` wi
 - A `SafeLink` that says your store's errors without the values its server
   quotes.
 
-A driver lives in a `nest-rs-<technology>` crate that depends on
-`nest-rs-core`, `nest-rs-database`, `nest-rs-http`, `nest-rs-interceptors`,
-`nest-rs-worker`, plus whatever your store needs. The app picks a driver by importing its module instead of
-`nest-rs-seaorm`.
+A driver lives in a crate of your own, `nestrs-<technology>`, depending on
+`nest-rs` with `default-features = false` and the features it binds —
+`database`, `http`, `interceptors`, `worker` — plus whatever your store needs.
+The [naming rule](/semver/#naming-a-package) roots every name your driver owns
+at that crate. The app picks a driver by importing its module instead of
+`nest-rs-seaorm`'s.
 
 ## Step 1 — The Executor enum
 

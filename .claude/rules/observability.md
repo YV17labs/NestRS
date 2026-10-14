@@ -206,6 +206,7 @@ A target is dotted, lowercase, and rooted at the crate that emits it:
 | a `nest-rs-*` framework crate | `nest_rs::<concern>` — `nest_rs::http`; a family member roots at its family, `nest_rs::oauth::client` |
 | the shared feature library | `features::<feature>` — each emitting feature declares `pub const TARGET` at its root (`features.md`) |
 | an app crate, or a single-crate project | `<app>::<concern>` |
+| a community package, `nestrs-<subject>` | `nestrs_<subject>` or `nestrs_<subject>::<concern>` — its crate, never `nest_rs::` (`decisions/community-naming.md`) |
 
 **Every string the framework interprets is a constant.** A literal target is a
 typo away from an event no filter selects. **The crate that owns the concern

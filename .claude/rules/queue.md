@@ -183,6 +183,10 @@ derivation: crate, span target, `<PREFIX>_<CONCERN>__*`, key.
 - **The leading segment is `nestrs`, fixed.** `NESTRS_ENV_PREFIX` renames the
   developer's variables; a key is the framework's machinery, and deployments
   sharing a Redis are separated by the logical database in the URL.
+- **A community package roots its keys at its crate**:
+  `nestrs_<subject>:<structure>[:<member>]`, never `nestrs:` — `SCAN nestrs:*`
+  is the framework's, and the two differ before the first colon
+  (`decisions/community-naming.md`).
 
 Held by each binding's unit test over its key constants; a chart, a script or a
 page that spells a key follows the constant by review. The table of a queue's

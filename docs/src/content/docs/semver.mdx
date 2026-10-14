@@ -132,6 +132,32 @@ nest-rs = { version = "7.2", default-features = false, features = ["http", "test
   public paths only: your package, built against 7.2, runs in an app on a later
   7.x, where `__private` may differ.
 
+### Naming a package
+
+`nest-rs-*` is the framework's: the crates the umbrella re-exports, and no
+other. A package you publish is `nestrs-<subject>` — NestJS's split, where
+official packages are `@nestjs/*` and community ones `nestjs-*` — and every
+name it owns is rooted at its own crate:
+
+| Surface | The framework's | Your package's |
+|---|---|---|
+| crate | `nest-rs-<concern>` | `nestrs-<subject>` |
+| path | `nest_rs::<concern>` | `nestrs_<subject>::…` |
+| span target | `nest_rs::<concern>` | `nestrs_<subject>` or `nestrs_<subject>::<concern>` |
+| unit of work | `<edge>.<unit>` | `nestrs_<subject>.<unit>` |
+| configuration | `<PREFIX>_<CONCERN>__*` | `<PREFIX>_<SUBJECT>__*` |
+| datastore key | `nestrs:<concern>:…` | `nestrs_<subject>:…` |
+| crates.io keyword | `nestrs` | `nestrs` |
+
+The two spellings part at their fifth character, so `nest_rs=off` never
+silences your package's events and `SCAN nestrs:*` never matches its keys. Two
+packages whose names prefix each other — `nestrs_kafka` and
+`nestrs_kafka_streams` — do share a log filter, as `tokio` and `tokio_util`
+do. A namespace two crates both read fails the boot, naming the pair.
+
+No prefix proves who published a crate: crates.io has no namespaces, so check
+a package's publisher before you add it.
+
 ## Going further
 
 - [Upgrading from 6.x](/upgrading/) — the last major's breaks, in the order to

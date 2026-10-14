@@ -13,9 +13,11 @@ retry budget and backoff, the trace, each method's permits, the lease's
 renewal, the drain. Its `QueueWorker` runs all of it on every backend, so a
 driver only moves records and keeps leases. At the end of this page your
 backend runs every `#[process]` method an app declares, and the port's
-behaviour kit proves it keeps the contract. You need a crate,
-`nest-rs-<storage>`, depending on `nest-rs-queue`, with `nest-rs-testing` and
-its `queue` feature as a dev-dependency.
+behaviour kit proves it keeps the contract. You need a crate of your own,
+`nestrs-<storage>`, depending on `nest-rs` with `default-features = false` and
+the `queue` feature, with `nest-rs-testing` and its `queue` feature as a
+dev-dependency. The [naming rule](/semver/#naming-a-package) roots every name
+your driver owns at that crate.
 
 Every excerpt below is lifted from `nest-rs-queue`'s in-memory test backend or
 from the Redis binding, so each compiles and runs in the framework's suite.

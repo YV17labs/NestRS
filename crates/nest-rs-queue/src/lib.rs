@@ -10,15 +10,17 @@
 //!
 //! An application reaches all of it through the umbrella — `nest_rs::queue` —
 //! and a backend's own types through that backend's module: `nest_rs::redis` for
-//! the first-party Redis backend. A third-party backend depends on this crate.
+//! the first-party Redis backend. A third-party backend reaches it the same way.
 //!
 //! # Extension contract
 //!
-//! A backend is a `nest-rs-<storage>` crate that implements the two seams below
-//! and binds both in one module, `<Vendor>QueueModule`, beside the
-//! `<Vendor>Module::for_root` opening its connection. The worker is the port's:
-//! an app runs jobs by importing [`QueueModule`], which attaches the
-//! [`QueueWorker`] to whichever backend is bound.
+//! A third-party backend is a crate of its own, `nestrs-<storage>`, depending on
+//! `nest-rs` with `default-features = false` and the `queue` feature. It
+//! implements the two seams below and binds both in one module,
+//! `<Vendor>QueueModule`, beside the `<Vendor>Module::for_root` opening its
+//! connection. The worker is the port's: an app runs jobs by importing
+//! [`QueueModule`], which attaches the [`QueueWorker`] to whichever backend is
+//! bound.
 //!
 //! 1. **Declare the backend once**: a `const` [`QueueBackend`] carrying the
 //!    backend's name (its `messaging.system`) and the [`Capabilities`] it honours.

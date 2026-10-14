@@ -116,7 +116,9 @@ The queue's does too: its worker is the port's, so the drain window,
 A delegated port's contract requires nothing of you, so it owns no
 namespace. Your own settings take their namespace from where they are
 declared — **read off the path, exactly as a type name is**: your crate's
-word, then the binding folder's when the config sits in one, joined by `__`. The resource your crate opens is its own subject, so its config sits at the
+word (a package's subject, `nestrs-kafka` → `<PREFIX>_KAFKA__*`, by the
+[naming rule](/semver/#naming-a-package)), then the binding folder's when the
+config sits in one, joined by `__`. The resource your crate opens is its own subject, so its config sits at the
 crate root and wears your crate's word: `nest-rs-redis/src/config.rs` →
 `RedisConfig` → `<PREFIX>_REDIS__*`, and `nest-rs-seaorm/src/config.rs` →
 `SeaOrmConfig` → `<PREFIX>_SEAORM__*`. A setting one binding owns sits in that

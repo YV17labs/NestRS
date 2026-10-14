@@ -39,22 +39,15 @@ use crate::drain::Drain;
 use crate::endpoint::Endpoint;
 use crate::error::{HttpError, ResponseError, Result};
 use crate::location::CallerUri;
-use crate::matched::{self, MatchedRoute, Stamp};
+use crate::matched::MatchedRoute;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::{response_body, trace_context};
 
-/// `err` as the problem document it answers, keeping the template the router
-/// matched, which rendering would otherwise drop and the span is named for.
+/// `err` as the problem document it answers.
 async fn rendered(err: HttpError) -> Response {
-    let resp = err.answer();
-    let stamp = Stamp::of(&resp);
-    let mut resp = crate::problem::normalize_error_response(resp).await;
-    if let Some(stamp) = stamp {
-        stamp.onto(&mut resp);
-    }
-    resp
+    crate::problem::normalize_error_response(err.answer()).await
 }
 
 /// What a request that outran its budget is answered with: `503`, not `504`, since
@@ -322,7 +315,7 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         let log = self
             .access_log
             .then(|| AccessLog::open(&req, user_agent, arrival.into_std()));
-        // Filled by the router's endpoint, for a request dropped before it answers.
+        // Filled by the table's entry the router matched.
         let matched = MatchedRoute::default();
         req.extensions_mut().insert(matched.clone());
 
@@ -346,20 +339,13 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
             ),
         )
         .await;
+        trace_context::name_route(&span, &method, matched.route().as_deref());
         let (resp, outcome) = match answer {
-            Ok(resp) => {
-                // Before the normalizer, which builds a fresh response without the
-                // matched template.
-                trace_context::name_route(&span, &method, matched::answered(&resp).as_deref());
-                (resp, None)
-            }
-            Err(payload) => {
-                trace_context::name_route(&span, &method, matched.route().as_deref());
-                (
-                    self.unwound(payload.as_ref(), &continuation, &span),
-                    Some(nest_rs_core::operation_log::PANIC),
-                )
-            }
+            Ok(resp) => (resp, None),
+            Err(payload) => (
+                self.unwound(payload.as_ref(), &continuation, &span),
+                Some(nest_rs_core::operation_log::PANIC),
+            ),
         };
         let mut resp = match self.normalize {
             true => crate::problem::normalize_error_response(resp).await,

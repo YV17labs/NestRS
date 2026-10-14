@@ -81,8 +81,8 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Expands to
 ///
 /// The impl block (verb/layer/response attrs stripped), one `#[poem::handler]`
-/// wrapper per route, `impl nest_rs_http::Controller` (builds the sub-`Route`
-/// with each route's guard/pipe/filter/interceptor pools), and
+/// wrapper per route, `impl nest_rs_http::Controller` (registers each route on
+/// the transport's `HttpRoutes` with its guard/pipe/filter/interceptor pools), and
 /// `impl nest_rs_core::Discoverable` attaching the `HttpControllerMeta` route
 /// table the transport mounts.
 #[proc_macro_attribute]

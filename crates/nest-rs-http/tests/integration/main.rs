@@ -26,6 +26,7 @@ mod problem;
 mod response_body;
 mod route_decorators;
 mod route_shaper;
+mod routes;
 mod security_headers;
 mod server;
 mod sse;
@@ -101,6 +102,13 @@ where
             .take_endpoint()
             .expect("configure populates the endpoint"),
     )
+}
+
+/// An endpoint answering every request with `body`.
+pub(crate) fn answering(body: &'static str) -> nest_rs_http::BoxEndpoint {
+    nest_rs_http::BoxEndpoint::new(nest_rs_http::endpoint_fn(move |_| async move {
+        Ok(nest_rs_http::Response::builder().body(body))
+    }))
 }
 
 /// poem's client over the transport's endpoint.

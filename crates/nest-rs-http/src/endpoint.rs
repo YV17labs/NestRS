@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use nest_rs_core::{Container, Handler, Posture};
-use poem::Route;
 
 use crate::detached::DetachedWork;
 use crate::error::Result;
 use crate::request::Request;
 use crate::response::Response;
+use crate::routes::HttpRoutes;
 
 /// Anything that answers a request: a route, a self-mounted surface, a layer
 /// around another endpoint.
@@ -158,11 +158,14 @@ impl<E: Endpoint, T: Clone + Send + Sync + 'static> Endpoint for WithData<E, T> 
     }
 }
 
-type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
+type MountFn = dyn Fn(&Container, &mut HttpRoutes) + Send + Sync;
 
 /// Discovery metadata for a self-mounting HTTP endpoint owned by another
 /// surface (a GraphQL schema, an MCP streamable-HTTP service). The closure
-/// nests one opaque sub-endpoint at its own path.
+/// registers its entries on the transport's [`HttpRoutes`], at its path, below
+/// it, or at what [`also_mounts`](Self::also_mounts) declares: a registration
+/// anywhere else fails the boot naming both. Each entry sees the request's
+/// full URI, the global prefix included.
 ///
 /// Its [`Handler`] declares who may call it. The transport runs the global
 /// guard pool at the edge of a [`Gated`](Posture::Gated) one before the
@@ -193,7 +196,7 @@ impl HttpEndpointMeta {
         mount: F,
     ) -> Self
     where
-        F: Fn(&Container, Route) -> Route + Send + Sync + 'static,
+        F: Fn(&Container, &mut HttpRoutes) + Send + Sync + 'static,
     {
         Self {
             // Canonical before anything compares it, so two spellings of one
@@ -210,12 +213,13 @@ impl HttpEndpointMeta {
         }
     }
 
-    /// Every **other** path this surface's mount closure registers, such as
-    /// `OpenApiModule`'s `/api-json` beside `/api`.
+    /// Every path this surface's mount closure registers **outside** its own
+    /// path, such as `OpenApiModule`'s `/api-json` beside `/api`.
     ///
     /// Entries are route templates, which the transport reads at boot: a
-    /// surface owning a subtree declares it (`/.well-known/thing/{*rest}`);
-    /// none is assumed.
+    /// surface owning another subtree declares it (`/.well-known/thing/{*rest}`);
+    /// none is assumed, and a registration neither the path nor any of them
+    /// covers fails the boot.
     pub fn also_mounts<I, P>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = P>,
@@ -303,10 +307,10 @@ impl HttpEndpointMeta {
         !global_guards && !self.self_guarded && self.guarded_at_the_edge()
     }
 
-    /// Mount this surface onto `route`, resolving its dependencies from
-    /// `container`.
-    pub fn mount(&self, container: &Container, route: Route) -> Route {
-        (self.mount)(container, route)
+    /// Register this surface's entries on `routes`, resolving its
+    /// dependencies from `container`.
+    pub fn mount(&self, container: &Container, routes: &mut HttpRoutes) {
+        (self.mount)(container, routes);
     }
 }
 
@@ -386,7 +390,7 @@ mod tests {
 
     #[test]
     fn a_gated_edge_is_implicit_only_without_a_global_pool() {
-        let m = HttpEndpointMeta::new(&UPGRADE, "/ws", "ws", |_c, r| r);
+        let m = HttpEndpointMeta::new(&UPGRADE, "/ws", "ws", |_c, _r| {});
         assert!(m.guarded_at_the_edge());
         assert!(m.edge_access_is_implicit(false));
         assert!(!m.edge_access_is_implicit(true));
@@ -398,10 +402,10 @@ mod tests {
 
     #[test]
     fn a_public_or_in_band_edge_is_never_implicit() {
-        let public = HttpEndpointMeta::new(&DOCUMENT, "/api", "openapi", |_c, r| r);
+        let public = HttpEndpointMeta::new(&DOCUMENT, "/api", "openapi", |_c, _r| {});
         assert!(!public.guarded_at_the_edge());
         assert!(!public.edge_access_is_implicit(false));
-        let in_band = guards_in_band(HttpEndpointMeta::new(&UPGRADE, "/mcp", "mcp", |_c, r| r));
+        let in_band = guards_in_band(HttpEndpointMeta::new(&UPGRADE, "/mcp", "mcp", |_c, _r| {}));
         assert!(!in_band.guarded_at_the_edge());
         assert!(!in_band.edge_access_is_implicit(false));
     }

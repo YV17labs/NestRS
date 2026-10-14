@@ -80,3 +80,11 @@ public API with the transport's builder: the transport is built from
 `HttpConfig` alone, and a surface beyond the route table is a self-mount that
 declares its posture. The literal rule above stands for every path that
 remains on that list.
+
+**2026-10-14 — the table records the template; nothing reads poem's back.**
+Every registration lands in `HttpRoutes`, and the entry the router reaches
+records the template it was registered under, in this grammar, with each
+parameter percent-decoded once: the span, the access line and the throttler's
+bucket read it from the request, a self-mount's included. poem's spelling is
+now one translation, one way, inside `poem_adapter.rs`; the read-back of
+poem's `PathPattern` and its per-request translation are gone.

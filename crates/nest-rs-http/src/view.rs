@@ -1,6 +1,5 @@
 //! [`HttpView`], the HTTP edge's view of the request it dispatches.
 
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex, PoisonError};
 
@@ -8,7 +7,6 @@ use nest_rs_core::{UnitContext, UnitView};
 use nest_rs_guards::Denial;
 
 use crate::request::Request;
-use crate::route_template::declared;
 
 /// The HTTP edge's view of one request: what a guard reads through
 /// [`HttpView::of`] — the request, head and body — and the route it matched.
@@ -79,16 +77,10 @@ impl HttpView {
         &mut self.request
     }
 
-    /// The template the router matched, as declared (`/users/{id}`), or `None`
-    /// on a request no route matched.
-    pub fn route(&self) -> Option<Cow<'_, str>> {
-        if let Some(route) = self.request.route() {
-            return Some(Cow::Borrowed(route));
-        }
-        self.request
-            .extensions()
-            .get::<poem::PathPattern>()
-            .map(|poem::PathPattern(pattern)| declared(pattern))
+    /// The template the router matched, as registered (`/users/{id}`), or
+    /// `None` on a request no route matched.
+    pub fn route(&self) -> Option<&str> {
+        self.request.route()
     }
 }
 

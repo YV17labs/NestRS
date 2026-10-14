@@ -1861,7 +1861,7 @@ mod tests {
         versions: &'static [&'static str],
         routes: Vec<HttpRouteMeta>,
     ) -> HttpControllerMeta {
-        HttpControllerMeta::new(name, token, path, versions, routes, |_, route| route)
+        HttpControllerMeta::new(name, token, path, versions, routes, |_, _| {})
     }
 
     fn crud_routes() -> Vec<HttpRouteMeta> {

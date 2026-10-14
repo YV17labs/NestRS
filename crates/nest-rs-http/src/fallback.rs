@@ -10,14 +10,16 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use nest_rs_core::Container;
-use poem::endpoint::BoxEndpoint;
-use poem::{Endpoint, Request, Response, Result, Route};
 
+use crate::endpoint::{BoxEndpoint, Endpoint};
+use crate::error::Result;
+use crate::request::Request;
+use crate::response::Response;
 use crate::route_template::{segment_parameter, unescape};
 use crate::transport::normalize_mount_path;
 use crate::versioning::route_matches;
 
-type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
+type BuildFn = dyn Fn(&Container) -> BoxEndpoint + Send + Sync;
 
 /// Discovery metadata for the router's fallback: a surface answering, at its
 /// path and outside the global prefix, every request no route and no
@@ -25,28 +27,37 @@ type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
 ///
 /// It is public by construction: no guard runs at its edge, so registering
 /// one is the visible opening. A transport holds one; two fail the boot.
+///
+/// ```
+/// use nest_rs_http::{BoxEndpoint, HttpFallbackMeta, Response, endpoint_fn};
+///
+/// let fallback = HttpFallbackMeta::new("/", "SpaHost", |_container| {
+///     BoxEndpoint::new(endpoint_fn(|_req| async { Ok(Response::builder().body("<app/>")) }))
+/// });
+/// assert_eq!(fallback.path(), "/");
+/// ```
 pub struct HttpFallbackMeta {
     path: Cow<'static, str>,
     owner: Cow<'static, str>,
-    mount: Arc<MountFn>,
+    build: Arc<BuildFn>,
 }
 
 impl HttpFallbackMeta {
     /// Declare the fallback at `path`, owned by `owner` (the type a boot error
-    /// names); `mount` registers its routes on a router of its own. `path` is
-    /// one literal address: a template fails the boot.
+    /// names); `build` makes the endpoint handed every request it answers,
+    /// whole. `path` is one literal address: a template fails the boot.
     pub fn new<F>(
         path: impl Into<Cow<'static, str>>,
         owner: impl Into<Cow<'static, str>>,
-        mount: F,
+        build: F,
     ) -> Self
     where
-        F: Fn(&Container, Route) -> Route + Send + Sync + 'static,
+        F: Fn(&Container) -> BoxEndpoint + Send + Sync + 'static,
     {
         Self {
             path: normalize_mount_path(&path.into()).into(),
             owner: owner.into(),
-            mount: Arc::new(mount),
+            build: Arc::new(build),
         }
     }
 
@@ -60,8 +71,8 @@ impl HttpFallbackMeta {
         &self.owner
     }
 
-    pub(crate) fn mount(&self, container: &Container) -> Route {
-        (self.mount)(container, Route::new())
+    pub(crate) fn build(&self, container: &Container) -> BoxEndpoint {
+        (self.build)(container)
     }
 }
 
@@ -110,15 +121,11 @@ impl Claims {
 pub(crate) struct Fallback {
     path: String,
     claims: Claims,
-    endpoint: BoxEndpoint<'static, Response>,
+    endpoint: BoxEndpoint,
 }
 
 impl Fallback {
-    pub(crate) fn new(
-        path: String,
-        claims: Claims,
-        endpoint: BoxEndpoint<'static, Response>,
-    ) -> Self {
+    pub(crate) fn new(path: String, claims: Claims, endpoint: BoxEndpoint) -> Self {
         // A route claimed under a prefix also claimed adds nothing per request.
         let Claims { prefixes, routes } = claims;
         let routes = routes
@@ -149,9 +156,7 @@ impl<E> WithFallback<E> {
     }
 }
 
-impl<E: Endpoint<Output = Response>> Endpoint for WithFallback<E> {
-    type Output = Response;
-
+impl<E: Endpoint> Endpoint for WithFallback<E> {
     async fn call(&self, req: Request) -> Result<Response> {
         match &self.fallback {
             Some(fallback) if fallback.answers(req.uri().path()) => {
@@ -183,8 +188,6 @@ pub(crate) fn literal_prefix(pattern: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use poem::EndpointExt;
-
     use super::*;
 
     #[test]
@@ -213,9 +216,9 @@ mod tests {
         Fallback::new(
             path.to_owned(),
             claims,
-            poem::endpoint::make_sync(|_| "fallback")
-                .map_to_response()
-                .boxed(),
+            BoxEndpoint::new(crate::endpoint_fn(|_| async {
+                Ok(Response::builder().body("fallback"))
+            })),
         )
     }
 

@@ -152,3 +152,12 @@ send buffer (`max_send_buf_size`), which the correction proposed — it caps wha
 h2 grants as capacity, not the frame hyper hands on one byte of it, so the tail
 stays; and holding back a byte of every streamed chunk, which would double the
 frames of an event stream.
+
+**2026-10-14 — the router is compiled from nestrs's table.** Every controller
+and surface registers on `HttpRoutes`; the adapter compiles the table into
+poem's router and does nothing else per request but match the path. The
+method dispatch (`405` with `Allow`, `HEAD` served by `GET`), the parameters'
+decoding, the template each entry records, the version rewrite, the global
+prefix (applied at registration) and the fallback are nestrs's own, pinned by
+`tests/integration/routes.rs` and its siblings, so the next adapter brings a
+path matcher and nothing more.

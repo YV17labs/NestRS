@@ -833,9 +833,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    // Built inside the per-version loop; a path is claimed only if a verb survived,
-    // since an empty method table answers `405`. A `MethodTable` records the verb
-    // set a `405`'s `Allow` owes (RFC 9110 §15.5.6).
+    // Registered inside the per-version loop, one entry per verb that serves the
+    // version: the table owns the method dispatch, `Allow` and `HEAD`.
     let route_entries: Vec<TokenStream2> = routes_by_path
         .iter()
         .map(|group| {
@@ -846,7 +845,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 .map(|handler| {
                     let label = format!("{} {}", handler.verb, path.value());
                     let ep = guarded_handler(handler, &label, &self_ty);
-                    let verb = &handler.verb;
+                    let method = syn::Ident::new(
+                        &handler.verb.to_string().to_uppercase(),
+                        handler.verb.span(),
+                    );
                     let versions = &handler.versions;
                     let cfgs = &handler.cfgs;
                     let serves = if versions.is_empty() {
@@ -866,24 +868,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     quote! {
                         #(#cfgs)*
                         let () = if #serves {
-                            __method = __method.#verb(#ep);
+                            __routes.route_poem(::nest_rs_http::Method::#method, &__path, #ep);
                         };
                     }
                 })
                 .collect();
             quote! {
                 {
-                    #[allow(unused_mut)]
-                    let mut __method = ::nest_rs_http::MethodTable::new();
+                    #[allow(unused_variables)]
+                    let __path = ::nest_rs_http::join_path(&__prefix, #path);
                     #(#arms)*
-                    if !__method.is_empty() {
-                        __route = __route.at(
-                            ::nest_rs_http::__private::poem_pattern(
-                                &::nest_rs_http::join_path(&__prefix, #path),
-                            ),
-                            __method.into_endpoint(),
-                        );
-                    }
                 }
             }
         })
@@ -905,14 +899,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         #(#wrappers)*
 
         impl ::nest_rs_http::Controller for #self_ty {
-            // Mounted flat: poem's `nest` re-slices and re-routes on every request.
             fn mount(
                 container: &::nest_rs_core::Container,
-                route: ::nest_rs_http::poem::Route,
-            ) -> ::nest_rs_http::poem::Route {
+                __routes: &mut ::nest_rs_http::HttpRoutes,
+            ) {
                 let __ctrl = ::std::sync::Arc::new(<#self_ty>::__nestrs_from_container(container));
                 #sse_resolve
-                let mut __route = route;
                 // `[None]` for an unversioned controller: an empty list would unmount it.
                 let __versions: ::std::vec::Vec<::core::option::Option<&'static str>> =
                     if <#self_ty>::VERSIONS.is_empty() {
@@ -928,7 +920,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         ::nest_rs_http::version_path(__version, <#self_ty>::PATH);
                     #(#route_entries)*
                 }
-                __route
             }
         }
 

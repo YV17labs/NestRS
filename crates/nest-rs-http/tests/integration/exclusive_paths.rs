@@ -1,9 +1,8 @@
 //! A mount path is its owner's exclusive namespace: `configure` fails boot
-//! naming both owners before poem would panic on the duplicate path.
+//! naming both owners.
 
 use nest_rs_core::{App, Container, ContainerBuilder, Transport, module};
-use nest_rs_http::{HttpConfig, HttpEndpointMeta, controller, routes};
-use poem::Route;
+use nest_rs_http::{HttpConfig, HttpEndpointMeta, Method, controller, routes};
 
 #[controller(path = "/users")]
 struct UsersController;
@@ -38,8 +37,8 @@ struct SecondEndpoint;
 impl nest_rs_core::Discoverable for FirstEndpoint {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<FirstEndpoint, HttpEndpointMeta>(
-            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, r: Route| {
-                r.at("/tools", poem::endpoint::make_sync(|_| "first"))
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, routes| {
+                routes.route(Method::POST, "/tools", crate::answering("first"));
             })
             .owned_by("FirstTools"),
         )
@@ -49,8 +48,8 @@ impl nest_rs_core::Discoverable for FirstEndpoint {
 impl nest_rs_core::Discoverable for SecondEndpoint {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<SecondEndpoint, HttpEndpointMeta>(
-            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, r: Route| {
-                r.at("/tools", poem::endpoint::make_sync(|_| "second"))
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, routes| {
+                routes.route(Method::POST, "/tools", crate::answering("second"));
             })
             .owned_by("SecondTools"),
         )
@@ -65,8 +64,8 @@ struct ChatSocket;
 impl nest_rs_core::Discoverable for ChatSocket {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<ChatSocket, HttpEndpointMeta>(
-            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/users", "ws", |_c, r: Route| {
-                r.at("/users", poem::endpoint::make_sync(|_| "socket"))
+            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/users", "ws", |_c, routes| {
+                routes.route(Method::GET, "/users", crate::answering("socket"));
             })
             .owned_by("ChatGateway"),
         )
@@ -153,12 +152,12 @@ async fn a_self_mount_collision_names_the_owners_not_just_the_kind() {
     );
 }
 
-// `Route::nest` appends a `/`, so `/x` and `/x/` are one key inside poem and
-// panic as duplicates unless canonical before the boot check compares them.
+// `/x` and `/x/` are one address: canonical before the boot check compares them.
 #[test]
 fn a_mount_path_is_canonical_before_anything_compares_it() {
-    let mount =
-        |path: &'static str| HttpEndpointMeta::new(&crate::GATED_MOUNT, path, "probe", |_c, r| r);
+    let mount = |path: &'static str| {
+        HttpEndpointMeta::new(&crate::GATED_MOUNT, path, "probe", |_c, _routes| {})
+    };
 
     assert_eq!(
         mount("/x/").path(),
@@ -220,7 +219,7 @@ struct TemplatedSocket;
 impl nest_rs_core::Discoverable for TemplatedSocket {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<TemplatedSocket, HttpEndpointMeta>(
-            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/rooms/:room", "ws", |_c, r: Route| r)
+            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/rooms/:room", "ws", |_c, _routes| {})
                 .owned_by("RoomsGateway"),
         )
     }
@@ -249,7 +248,7 @@ struct DocsInThe6xSpelling;
 impl nest_rs_core::Discoverable for DocsInThe6xSpelling {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<DocsInThe6xSpelling, HttpEndpointMeta>(
-            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/docs", "docs", |_c, r: Route| r)
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/docs", "docs", |_c, _routes| {})
                 .also_mounts(["/docs-json/*rest"])
                 .owned_by("DocsHost"),
         )

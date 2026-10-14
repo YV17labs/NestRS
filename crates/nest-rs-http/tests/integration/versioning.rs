@@ -2,7 +2,9 @@
 //! one file, with the same handler name.
 
 use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, controller, routes};
+use nest_rs_http::{
+    ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpEndpointMeta, Method, controller, routes,
+};
 use poem::Response;
 use poem::endpoint::BoxEndpoint;
 use poem::http::{StatusCode, header};
@@ -628,6 +630,67 @@ async fn a_default_version_does_not_let_a_root_catch_all_swallow_the_app() {
     resp.assert_text("root-catchall").await;
 }
 
+/// A self-mount registering an entry below its path, which it need not
+/// declare: `/docs/assets/{*file}` under `/docs`.
+struct DocsHost;
+
+impl nest_rs_core::Discoverable for DocsHost {
+    fn register(builder: nest_rs_core::ContainerBuilder) -> nest_rs_core::ContainerBuilder {
+        builder.attach_meta::<Self, HttpEndpointMeta>(
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/docs", "docs", |_c, routes| {
+                routes
+                    .route(Method::GET, "/docs", crate::answering("docs"))
+                    .route(
+                        Method::GET,
+                        "/docs/assets/{*file}",
+                        crate::answering("asset"),
+                    );
+            })
+            .owned_by("DocsHost"),
+        )
+    }
+}
+
+#[module(providers = [RootCatchAllController, DocsHost])]
+struct SelfMountBelowModule;
+
+#[tokio::test]
+async fn a_versioned_catch_all_never_takes_an_entry_registered_below_a_self_mount() {
+    for prefix in [None, Some("/api")] {
+        let app = App::builder()
+            .module::<SelfMountBelowModule>()
+            .build()
+            .await
+            .expect("boots");
+        let mut transport = crate::built(&HttpConfig {
+            global_prefix: prefix.map(Into::into),
+            ..versioned(ApiVersioning::Header, Some("1".to_owned()))
+        });
+        transport
+            .configure(app.container())
+            .await
+            .expect("configures");
+        let client = crate::client(transport.take_endpoint().expect("an endpoint"));
+        let at = |path: &str| format!("{}{path}", prefix.unwrap_or_default());
+
+        for (path, stated, body) in [
+            ("/docs", None, "docs"),
+            ("/docs/assets/app.js", None, "asset"),
+            ("/docs/assets/app.js", Some("1"), "asset"),
+            ("/docs/assets/app.js", Some("../x"), "asset"),
+            ("/elsewhere", None, "root-catchall"),
+        ] {
+            let mut request = client.get(at(path));
+            if let Some(stated) = stated {
+                request = request.header(DEFAULT_VERSION_HEADER, stated);
+            }
+            let resp = request.send().await;
+            resp.assert_status_is_ok();
+            resp.assert_text(body).await;
+        }
+    }
+}
+
 /// A version header carrying a byte that is legal on the wire but is not text
 /// (`0x80..=0xFF`, which `HeaderValue::to_str` refuses).
 #[tokio::test]
@@ -698,7 +761,10 @@ async fn a_version_header_that_is_text_but_malformed_is_rejected_and_reported() 
     resp.assert_status(StatusCode::BAD_REQUEST);
 
     let event = logs.expect_one("nest_rs::http", "rejected a malformed API version");
-    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.level, "debug",
+        "a client-driven line, the access line already records the 400"
+    );
     assert_eq!(event.field("length").as_deref(), Some("16"));
     assert!(
         event.field("strategy").is_some(),

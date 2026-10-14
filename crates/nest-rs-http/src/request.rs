@@ -70,6 +70,13 @@ pub(crate) struct Routed {
     params: Vec<(Arc<str>, String)>,
 }
 
+impl Routed {
+    /// `template`, matched with each parameter's decoded value by name.
+    pub(crate) fn new(template: Arc<str>, params: Vec<(Arc<str>, String)>) -> Self {
+        Self { template, params }
+    }
+}
+
 /// The facts riding a request's extensions while a library that speaks `http`
 /// holds it.
 #[derive(Clone)]
@@ -425,7 +432,7 @@ impl Request {
     /// Records the route the router matched: its template, and each
     /// parameter's decoded value by name.
     pub(crate) fn set_route(&mut self, template: Arc<str>, params: Vec<(Arc<str>, String)>) {
-        self.facts.route = Some(Routed { template, params });
+        self.facts.route = Some(Routed::new(template, params));
     }
 }
 

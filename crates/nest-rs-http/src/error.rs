@@ -588,6 +588,131 @@ pub(crate) enum TemplateRefusal {
     NotLiteral,
 }
 
+/// What the route table refuses at boot, each refusal naming who registered
+/// what: the transport's `configure` fails with it.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RouteError {
+    /// A path outside the route grammar, or a template where one literal
+    /// address is due.
+    #[error("{owner} mounts {refused}")]
+    Template {
+        owner: String,
+        refused: RouteTemplateError,
+    },
+    /// The global prefix outside the grammar.
+    #[error("{owner} {refused}")]
+    Prefix {
+        owner: String,
+        refused: RouteTemplateError,
+    },
+    /// Two owners of one exclusive namespace.
+    #[error(
+        "duplicate {kind} {template:?}: {first} and {owner} both mount there — a {kind} is its \
+         exclusive namespace; {remedy}"
+    )]
+    Exclusive {
+        kind: &'static str,
+        template: String,
+        first: String,
+        owner: String,
+        remedy: String,
+    },
+    /// Two spellings of one address.
+    #[error(
+        "duplicate route path: {first} mounts {first_template:?} and {second} mounts \
+         {second_template:?}, one address — an address is mounted once and each parameter \
+         binds by its name; give each controller route a distinct full path"
+    )]
+    OneAddress {
+        first: String,
+        first_template: String,
+        second: String,
+        second_template: String,
+    },
+    /// A self-mount's path a controller already holds.
+    #[error(
+        "duplicate mount path {path:?}: controller {controller} and {label} endpoint {owner} both \
+         mount there — a mount path is its owner's exclusive namespace; give each one a distinct \
+         path"
+    )]
+    MountPath {
+        path: String,
+        controller: String,
+        label: String,
+        owner: String,
+    },
+    /// One address claimed by two registrants.
+    #[error(
+        "{second} registers {template:?}, which {first} already answers — an address is mounted \
+         once, by one owner; give each one a distinct path"
+    )]
+    SharedAddress {
+        template: String,
+        first: String,
+        second: String,
+    },
+    /// One method, or every method, registered twice at one address.
+    #[error(
+        "{owner} registers {template:?} twice for {method} — an address answers each method \
+         once, and an address answering every method answers no other registration"
+    )]
+    Twice {
+        owner: String,
+        method: String,
+        template: String,
+    },
+    /// A self-mount registering a path it did not declare.
+    #[error(
+        "{owner} registers {template:?}, which it does not declare — a self-mount answers at its \
+         path, below it, and at what `also_mounts` declares ({declared}); declare the path with \
+         `also_mounts`"
+    )]
+    Undeclared {
+        owner: String,
+        template: String,
+        declared: String,
+    },
+    /// The fallback's path outside the grammar.
+    #[error("the router fallback {owner} answers at {refused}")]
+    FallbackPath {
+        owner: String,
+        refused: RouteTemplateError,
+    },
+    /// The fallback under a prefix someone owns.
+    #[error(
+        "the router fallback {owner} answers at {path:?}, under {prefix:?}, which {prefix_owner} \
+         owns: the route table claims everything there, so the fallback would answer nothing — \
+         give it a path outside {prefix:?}"
+    )]
+    FallbackUnder {
+        owner: String,
+        path: String,
+        prefix: String,
+        prefix_owner: String,
+    },
+    /// Two fallbacks.
+    #[error(
+        "two router fallbacks: {first} and {second} — the router has one fallback, which answers \
+         whatever nothing else claims; import one of them"
+    )]
+    TwoFallbacks { first: String, second: String },
+    /// A template the router library refused although the grammar read it.
+    #[error("the router cannot mount {template:?} for {owner}: {reason}")]
+    Router {
+        template: String,
+        owner: String,
+        reason: String,
+    },
+}
+
+/// A path parameter whose percent-decoded bytes are not UTF-8: said with its
+/// name, never its value.
+#[derive(Debug, thiserror::Error)]
+#[error("the path parameter `{name}` is not UTF-8 once percent-decoded")]
+pub(crate) struct PathParameterError {
+    pub(crate) name: std::sync::Arc<str>,
+}
+
 /// What an [`OriginRefused`] says, to the client and in its error: never the
 /// origin sent.
 pub(crate) const ORIGIN_REFUSED: &str =

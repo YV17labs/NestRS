@@ -5,10 +5,6 @@
 //! `#[routes]` reads its literals with `nest_rs_codegen::RoutePath`, which this
 //! crate cannot depend on (it pulls `syn`), so the grammar is written twice and
 //! pinned once, by `codegen_and_runtime_parse_one_corpus_alike` below.
-//!
-//! While poem routes, a template is handed to it in poem's spelling
-//! ([`poem_pattern`]), and the pattern poem's router matched is read back in
-//! the declared one ([`declared`]) for the span and the throttler.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -320,90 +316,6 @@ pub(crate) fn strip_literal<'a>(text: &'a str, literal: &str) -> Option<&'a str>
     text.get(at..)
 }
 
-/// A template [`RouteTemplate::parse`] accepted, in poem's spelling: `{name}`
-/// is `:name`, `{*name}` is `*name`, `{{` is `{`.
-///
-/// A translation, not a check: what is not a template comes out as mechanical
-/// as it went in, so it is handed only what the grammar read.
-pub fn poem_pattern(template: &str) -> String {
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some(at) = rest.find(['{', '}']) {
-        out.push_str(&rest[..at]);
-        let brace = rest.as_bytes()[at];
-        let after = &rest[at + 1..];
-        if after.as_bytes().first() == Some(&brace) {
-            out.push(char::from(brace));
-            rest = &after[1..];
-            continue;
-        }
-        if brace == b'}' {
-            out.push('}');
-            rest = after;
-            continue;
-        }
-        let close = after.find('}').unwrap_or(after.len());
-        match after[..close].strip_prefix('*') {
-            Some(name) => {
-                out.push('*');
-                out.push_str(name);
-            }
-            None => {
-                out.push(':');
-                out.push_str(&after[..close]);
-            }
-        }
-        rest = after.get(close + 1..).unwrap_or_default();
-    }
-    out.push_str(rest);
-    out
-}
-
-/// The pattern poem's router matched, in the spelling it was declared in:
-/// `/users/:id` is `/users/{id}`. A pattern with nothing to translate is
-/// handed back as it is. A pattern poem's grammar alone spells (a
-/// regular-expression capture a hand-built self-mount routes on) keeps its
-/// expression's text.
-pub(crate) fn declared(pattern: &str) -> Cow<'_, str> {
-    if !pattern.contains([':', '*', '{', '}']) {
-        return Cow::Borrowed(pattern);
-    }
-    let mut out = String::with_capacity(pattern.len() + 8);
-    let mut rest = pattern;
-    while let Some(at) = rest.find([':', '*', '{', '}']) {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
-        match rest.as_bytes()[at] {
-            b':' => {
-                let len = after.find(['/', '<', '*']).unwrap_or(after.len());
-                out.push('{');
-                out.push_str(&after[..len]);
-                out.push('}');
-                rest = &after[len..];
-                // A capture's expression has no spelling here: the name stands for it.
-                if let Some(expression) = rest.strip_prefix('<') {
-                    rest = expression
-                        .find('>')
-                        .map_or("", |close| &expression[close + 1..]);
-                }
-            }
-            b'*' => {
-                out.push_str("{*");
-                out.push_str(after);
-                out.push('}');
-                rest = "";
-            }
-            brace => {
-                out.push(char::from(brace));
-                out.push(char::from(brace));
-                rest = after;
-            }
-        }
-    }
-    out.push_str(rest);
-    Cow::Owned(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,34 +403,6 @@ mod tests {
 
     fn template(written: &str) -> RouteTemplate {
         RouteTemplate::parse(written).unwrap_or_else(|why| panic!("{why}"))
-    }
-
-    #[test]
-    fn the_poem_spelling_round_trips() {
-        for (ours, poems) in [
-            ("/{id}", "/:id"),
-            ("/@{handle}", "/@:handle"),
-            ("/{*rest}", "/*rest"),
-            ("/users/{id}/posts/{post_id}", "/users/:id/posts/:post_id"),
-            ("/files/x{*rest}", "/files/x*rest"),
-            ("/b/{{x}}", "/b/{x}"),
-            ("/plain", "/plain"),
-            ("/", "/"),
-        ] {
-            assert_eq!(poem_pattern(template(ours).as_str()), poems, "{ours}");
-            assert_eq!(declared(poems), ours, "{poems}");
-        }
-    }
-
-    #[test]
-    fn a_pattern_with_nothing_to_translate_is_handed_back() {
-        assert!(matches!(declared("/users/me"), Cow::Borrowed("/users/me")));
-    }
-
-    #[test]
-    fn a_capture_only_poem_spells_keeps_its_name() {
-        assert_eq!(declared("/n/:id<\\d+>/x"), "/n/{id}/x");
-        assert_eq!(declared("/f/*"), "/f/{*}");
     }
 
     #[test]

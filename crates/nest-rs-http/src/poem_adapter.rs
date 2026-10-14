@@ -1,22 +1,34 @@
 //! The HTTP library the transport adapts, poem, behind one crate-private type:
-//! the router it routes with, and the CORS and compression answered around the
-//! edge. What those do on the wire is pinned by black-box suites
-//! (`tests/integration/{cors,compression}.rs`), so a later library replaces
-//! this file and passes them unchanged (`.claude/decisions/http-server.md`).
+//! the router the route table compiles into, and the CORS and compression
+//! answered around the edge. What those do on the wire is pinned by black-box
+//! suites (`tests/integration/{routes,cors,compression}.rs`), so a later
+//! library replaces this file and passes them unchanged
+//! (`.claude/decisions/http-server.md`).
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_RANGE, CONTENT_TYPE, Entry, VARY};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use poem::error::NotFoundError;
 use poem::middleware::{Compression, Cors};
 use poem::web::{Compress, CompressionAlgo};
-use poem::{EndpointExt, IntoResponse};
+use poem::{EndpointExt, IntoResponse, PathPattern};
 
 use crate::accept_encoding::{AcceptEncoding, Coding};
+use crate::allow::{Chosen, Methods, head_of};
 use crate::cors::{FRAMEWORK_SENT, HttpCors, listed};
 use crate::endpoint::{BoxEndpoint, Endpoint};
-use crate::poem_bridge::{error_from_poem, from_poem, response_to_poem, to_poem};
+use crate::error::{HttpError, PathParameterError, Result, RouteError};
+use crate::matched::MatchedRoute;
+use crate::poem_bridge::{
+    error_from_poem, error_to_poem, from_poem, note_route, request_from_poem, request_to_poem,
+    response_from_poem, response_to_poem, to_poem,
+};
+use crate::request::{Request, Routed};
+use crate::response::Response;
+use crate::routes::{Address, Dispatch, Leaf};
 
 /// poem, as the transport uses it.
 pub(crate) struct PoemAdapter;
@@ -28,11 +40,25 @@ pub(crate) struct CorsPolicy(Cors);
 type PoemEndpoint = poem::endpoint::BoxEndpoint<'static, poem::Response>;
 
 impl PoemAdapter {
-    /// The route table poem assembled, answering nestrs's requests: a request
-    /// no route claims answers poem's `404` as an `Err`, which the bands under
+    /// The route table, compiled into poem's router, answering nestrs's
+    /// requests: a request no address claims answers `404` as an `Err`, which
+    /// the bands under
     /// [`ERROR_RESOLVE`](crate::interceptor::priority::ERROR_RESOLVE) still see.
-    pub(crate) fn router(route: impl poem::Endpoint + 'static) -> impl Endpoint {
-        from_poem(route)
+    pub(crate) fn router(table: Vec<Address>) -> std::result::Result<BoxEndpoint, RouteError> {
+        let mut route = poem::Route::new();
+        for address in table {
+            let pattern = poem_pattern(address.template.as_str());
+            let template = address.template.as_str().to_owned();
+            let owner = address.owner.to_string();
+            route = route
+                .try_at(pattern, Matched::new(address))
+                .map_err(|refused| RouteError::Router {
+                    template,
+                    owner,
+                    reason: refused.to_string(),
+                })?;
+        }
+        Ok(BoxEndpoint::new(Router(route)))
     }
 
     /// The policy `cors` describes, or the boot's refusal naming the value it
@@ -95,6 +121,193 @@ impl PoemAdapter {
         }
         BoxEndpoint::new(from_poem(endpoint))
     }
+}
+
+/// An endpoint still written on poem, registered through the hidden
+/// `route_poem`: it reads poem's own route parameters.
+pub(crate) struct PoemLeaf(PoemEndpoint);
+
+impl PoemLeaf {
+    pub(crate) fn new<E>(endpoint: E) -> Self
+    where
+        E: poem::IntoEndpoint,
+        E::Endpoint: 'static,
+    {
+        Self(endpoint.into_endpoint().map_to_response().boxed())
+    }
+
+    /// The leaf as a nestrs endpoint: the request crosses back into poem with
+    /// what poem matched.
+    pub(crate) fn into_endpoint(self) -> BoxEndpoint {
+        BoxEndpoint::new(from_poem(self.0))
+    }
+}
+
+/// poem's router answering nestrs's requests.
+struct Router(poem::Route);
+
+impl Endpoint for Router {
+    async fn call(&self, req: Request) -> Result<Response> {
+        match poem::Endpoint::call(&self.0, request_to_poem(req)).await {
+            Ok(resp) => Ok(response_from_poem(resp)),
+            // An entry's own `404` carries the pattern poem stamps on it; the
+            // router's carries none.
+            Err(err) if err.is::<NotFoundError>() && err.data::<PathPattern>().is_none() => {
+                Err(HttpError::from_status(StatusCode::NOT_FOUND))
+            }
+            Err(err) => Err(error_from_poem(err)),
+        }
+    }
+}
+
+/// What answers at one address once poem's router matched it.
+enum Answer {
+    Endpoint(BoxEndpoint),
+    Poem(PoemEndpoint),
+}
+
+impl From<Leaf> for Answer {
+    fn from(leaf: Leaf) -> Self {
+        match leaf {
+            Leaf::Endpoint(endpoint) => Self::Endpoint(endpoint),
+            Leaf::Poem(PoemLeaf(endpoint)) => Self::Poem(endpoint),
+        }
+    }
+}
+
+enum Answers {
+    Any(Answer),
+    Methods(Methods<Answer>),
+}
+
+/// One address of the table, as poem's router reaches it: it records the
+/// template it was registered under, in nestrs's spelling, and each parameter
+/// percent-decoded once, then dispatches on the method.
+struct Matched {
+    template: Arc<str>,
+    names: Box<[Arc<str>]>,
+    answers: Answers,
+}
+
+impl Matched {
+    fn new(address: Address) -> Self {
+        let names = address
+            .template
+            .parameters()
+            .chain(address.template.catch_all())
+            .map(Arc::from)
+            .collect();
+        let answers = match address.dispatch {
+            Dispatch::Any(leaf) => Answers::Any(leaf.into()),
+            Dispatch::Methods(entries) => Answers::Methods(Methods::new(
+                entries
+                    .into_iter()
+                    .map(|(method, leaf)| (method, leaf.into()))
+                    .collect(),
+            )),
+        };
+        Self {
+            template: Arc::from(address.template.as_str()),
+            names,
+            answers,
+        }
+    }
+
+    /// Each parameter poem matched, by name, percent-decoded once by poem's
+    /// router — `%2F` is a `/` inside the value. poem drops a parameter whose
+    /// decoded bytes are not UTF-8: the client's `400`.
+    fn params(&self, req: &poem::Request) -> Result<Vec<(Arc<str>, String)>> {
+        let mut params = Vec::with_capacity(self.names.len());
+        for name in &self.names {
+            let value = req.raw_path_param(name).ok_or_else(|| {
+                HttpError::new(
+                    PathParameterError {
+                        name: Arc::clone(name),
+                    },
+                    StatusCode::BAD_REQUEST,
+                )
+            })?;
+            params.push((Arc::clone(name), value.to_owned()));
+        }
+        Ok(params)
+    }
+}
+
+impl poem::Endpoint for Matched {
+    type Output = poem::Response;
+
+    async fn call(&self, mut req: poem::Request) -> poem::Result<poem::Response> {
+        if let Some(slot) = req.extensions().get::<MatchedRoute>() {
+            slot.note(&self.template);
+        }
+        let params = self.params(&req).map_err(error_to_poem)?;
+        let (answer, head) = match &self.answers {
+            Answers::Any(answer) => (answer, false),
+            Answers::Methods(methods) => match methods.choose(req.method()) {
+                Chosen::Entry(answer) => (answer, false),
+                Chosen::HeadOf(answer) => {
+                    req.set_method(Method::GET);
+                    (answer, true)
+                }
+                Chosen::NotAllowed => return Ok(response_to_poem(methods.not_allowed())),
+            },
+        };
+        match answer {
+            Answer::Endpoint(endpoint) => {
+                let mut request = request_from_poem(req);
+                request.set_route(Arc::clone(&self.template), params);
+                let resp = endpoint.call(request).await.map_err(error_to_poem)?;
+                Ok(response_to_poem(if head { head_of(resp) } else { resp }))
+            }
+            Answer::Poem(endpoint) => {
+                note_route(&mut req, Routed::new(Arc::clone(&self.template), params));
+                let resp = endpoint.call(req).await?;
+                Ok(match head {
+                    true => response_to_poem(head_of(response_from_poem(resp))),
+                    false => resp,
+                })
+            }
+        }
+    }
+}
+
+/// A template [`RouteTemplate::parse`](crate::RouteTemplate::parse) accepted, in poem's spelling: `{name}`
+/// is `:name`, `{*name}` is `*name`, `{{` is `{`.
+///
+/// A translation, not a check: what is not a template comes out as mechanical
+/// as it went in, so it is handed only what the grammar read.
+fn poem_pattern(template: &str) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(at) = rest.find(['{', '}']) {
+        out.push_str(&rest[..at]);
+        let brace = rest.as_bytes()[at];
+        let after = &rest[at + 1..];
+        if after.as_bytes().first() == Some(&brace) {
+            out.push(char::from(brace));
+            rest = &after[1..];
+            continue;
+        }
+        if brace == b'}' {
+            out.push('}');
+            rest = after;
+            continue;
+        }
+        let close = after.find('}').unwrap_or(after.len());
+        match after[..close].strip_prefix('*') {
+            Some(name) => {
+                out.push('*');
+                out.push_str(name);
+            }
+            None => {
+                out.push(':');
+                out.push_str(&after[..close]);
+            }
+        }
+        rest = after.get(close + 1..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The request's `Accept-Encoding`, set aside while poem's middleware decodes
@@ -224,6 +437,69 @@ mod tests {
         HttpCors {
             origins: origins.iter().map(|s| (*s).to_owned()).collect(),
             ..Default::default()
+        }
+    }
+
+    /// The entry the router reaches records its template in nestrs's spelling,
+    /// never poem's, each parameter by name, and notes the template for the
+    /// edge; a path no entry claims is the router's own `404`.
+    #[tokio::test]
+    async fn an_entry_records_the_template_it_was_registered_under() {
+        let echo = crate::endpoint_fn(|req: Request| async move {
+            Ok(Response::builder().body(format!(
+                "{} {} {}",
+                req.route().unwrap_or("-"),
+                req.path_param("org").unwrap_or("-"),
+                req.path_param("rest").unwrap_or("-"),
+            )))
+        });
+        let router = PoemAdapter::router(vec![Address {
+            template: crate::RouteTemplate::parse("/orgs/@{org}/files/{*rest}").unwrap(),
+            owner: Arc::from("FilesController"),
+            dispatch: Dispatch::Methods(vec![(
+                Method::GET,
+                Leaf::Endpoint(BoxEndpoint::new(echo)),
+            )]),
+        }])
+        .unwrap();
+
+        let slot = MatchedRoute::default();
+        let request = Request::builder()
+            .uri("/orgs/@acme/files/a%20b/c".parse().unwrap())
+            .extension(slot.clone())
+            .finish();
+        let resp = router.call(request).await.unwrap();
+        assert_eq!(
+            resp.into_body().into_string().await.unwrap(),
+            "/orgs/@{org}/files/{*rest} acme a b/c"
+        );
+        assert_eq!(slot.route().as_deref(), Some("/orgs/@{org}/files/{*rest}"));
+
+        let missed = router
+            .call(
+                Request::builder()
+                    .uri("/elsewhere".parse().unwrap())
+                    .finish(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(missed.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn a_template_is_handed_to_poem_in_its_spelling() {
+        for (ours, poems) in [
+            ("/{id}", "/:id"),
+            ("/@{handle}", "/@:handle"),
+            ("/{*rest}", "/*rest"),
+            ("/users/{id}/posts/{post_id}", "/users/:id/posts/:post_id"),
+            ("/files/x{*rest}", "/files/x*rest"),
+            ("/b/{{x}}", "/b/{x}"),
+            ("/plain", "/plain"),
+            ("/", "/"),
+        ] {
+            let template = crate::RouteTemplate::parse(ours).unwrap();
+            assert_eq!(poem_pattern(template.as_str()), poems, "{ours}");
         }
     }
 

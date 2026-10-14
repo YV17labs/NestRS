@@ -972,3 +972,77 @@ mod ws {
         assert_the_store_failure_was_said(&logs, "ws");
     }
 }
+
+/// A self-mount the pool gates at its edge, keyed like a route: on the template
+/// its registration declared, never on the path a caller addressed.
+mod self_mount {
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+    use nest_rs_core::{ContainerBuilder, Discoverable, Handler, Posture, module};
+    use nest_rs_guards::guard;
+    use nest_rs_http::{HttpEndpointMeta, Method, Response, endpoint_fn};
+    use nest_rs_testing::{LogCapture, TestApp};
+    use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
+    use poem::http::StatusCode;
+
+    struct Files;
+
+    static FILES: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: std::any::TypeId::of::<Files>(),
+        host_name: "Files",
+        method: "",
+        address: "/files",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    impl Discoverable for Files {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.attach_meta::<Self, HttpEndpointMeta>(
+                HttpEndpointMeta::new(&FILES, "/files", "files", |_c, routes| {
+                    routes.route(
+                        Method::GET,
+                        "/files/{*name}",
+                        endpoint_fn(|_| async { Ok(Response::builder().body("file")) }),
+                    );
+                })
+                .owned_by("Files"),
+            )
+        }
+    }
+
+    #[module(
+        imports = [
+            ThrottlerModule::for_root(ThrottlerConfig {
+                limit: Some(2),
+                window_secs: Some(60),
+                pseudonym_key: None,
+            }),
+        ],
+        providers = [Files],
+    )]
+    struct FilesModule;
+
+    #[tokio::test]
+    async fn the_throttler_buckets_a_self_mount_by_its_template() {
+        let logs = LogCapture::install();
+        let app = TestApp::builder()
+            .module::<FilesModule>()
+            .use_guards_global([guard::<ThrottlerGuard>()])
+            .build()
+            .await
+            .expect("boots");
+
+        for file in ["/files/a.txt", "/files/b.txt"] {
+            app.http().get(file).send().await.assert_status_is_ok();
+        }
+        app.http()
+            .get("/files/c.txt")
+            .send()
+            .await
+            .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+        let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+        assert_eq!(event.field("route").as_deref(), Some("/files/{*name}"));
+    }
+}

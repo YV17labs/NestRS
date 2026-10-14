@@ -103,6 +103,20 @@ pub fn request_from_poem_at(
     request
 }
 
+/// Note on a poem request the route the router matched, which a crossing into
+/// nestrs's vocabulary hands to [`Request::route`] and [`Request::path_param`].
+pub(crate) fn note_route(request: &mut poem::Request, routed: Routed) {
+    match request.extensions_mut().get_mut::<Unplaced>() {
+        Some(unplaced) => unplaced.route = Some(routed),
+        None => {
+            request.extensions_mut().insert(Unplaced {
+                route: Some(routed),
+                arrival: None,
+            });
+        }
+    }
+}
+
 /// A nestrs request as poem's.
 pub fn request_to_poem(request: Request) -> poem::Request {
     let (mut head, body, facts) = request.into_raw();

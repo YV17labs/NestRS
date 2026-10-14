@@ -7,7 +7,6 @@ use std::sync::Arc;
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering};
 use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta};
-use poem::Route;
 
 use crate::config::GraphqlConfig;
 use crate::context::{ENDPOINT, OperationBridge};
@@ -136,61 +135,54 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
     let carried = DetachedWork::new();
     let mounted = carried.clone();
     builder.provide_meta(
-        HttpEndpointMeta::new(
-            &ENDPOINT,
-            log_path,
-            "graphql",
-            move |container, route: Route| {
-                let schema = build_schema(container.clone(), &options, &mounted);
-                if options.emit_sdl {
-                    let dest = &options.schema_path;
-                    let sdl = crate::resolver::render_sdl(&schema, &options);
-                    match std::fs::write(dest, &sdl) {
-                        Ok(()) => tracing::info!(
-                            target: crate::TARGET,
-                            path = %dest.display(),
-                            bytes = sdl.len(),
-                            "wrote GraphQL SDL"
-                        ),
-                        Err(err) => tracing::warn!(
-                            target: crate::TARGET,
-                            path = %dest.display(),
-                            error = %nest_rs_core::error_message(&err),
-                            "failed to write GraphQL SDL"
-                        ),
-                    }
-                }
-                let bridge = Arc::new(OperationBridge::new(container.clone()));
-                let schema = crate::redact::Redacted(schema);
-                let method = poem::post(crate::context::ContextEndpoint::new(
-                    schema.clone(),
-                    Arc::clone(&bridge),
-                    options.max_batch_size,
-                ))
-                .get(GetEndpoint::new(
-                    SubscriptionEndpoint::new(
-                        schema,
-                        bridge,
-                        &options,
-                        mounted.clone(),
-                        nest_rs_http::__private::OriginPolicy::from_container(container),
-                        container.get_dyn::<dyn nest_rs_database::UnitOfWork>(),
+        HttpEndpointMeta::new(&ENDPOINT, log_path, "graphql", move |container, routes| {
+            let schema = build_schema(container.clone(), &options, &mounted);
+            if options.emit_sdl {
+                let dest = &options.schema_path;
+                let sdl = crate::resolver::render_sdl(&schema, &options);
+                match std::fs::write(dest, &sdl) {
+                    Ok(()) => tracing::info!(
+                        target: crate::TARGET,
+                        path = %dest.display(),
+                        bytes = sdl.len(),
+                        "wrote GraphQL SDL"
                     ),
-                    options.playground.then(|| {
-                        async_graphql::http::playground_source(
-                            async_graphql::http::GraphQLPlaygroundConfig::new(
-                                options.path.as_str(),
-                            )
+                    Err(err) => tracing::warn!(
+                        target: crate::TARGET,
+                        path = %dest.display(),
+                        error = %nest_rs_core::error_message(&err),
+                        "failed to write GraphQL SDL"
+                    ),
+                }
+            }
+            let bridge = Arc::new(OperationBridge::new(container.clone()));
+            let schema = crate::redact::Redacted(schema);
+            let method = poem::post(crate::context::ContextEndpoint::new(
+                schema.clone(),
+                Arc::clone(&bridge),
+                options.max_batch_size,
+            ))
+            .get(GetEndpoint::new(
+                SubscriptionEndpoint::new(
+                    schema,
+                    bridge,
+                    &options,
+                    mounted.clone(),
+                    nest_rs_http::__private::OriginPolicy::from_container(container),
+                    container.get_dyn::<dyn nest_rs_database::UnitOfWork>(),
+                ),
+                options.playground.then(|| {
+                    async_graphql::http::playground_source(
+                        async_graphql::http::GraphQLPlaygroundConfig::new(options.path.as_str())
                             .subscription_endpoint(options.path.as_str()),
-                        )
-                    }),
-                ));
-                // Guards run in band, never at the HTTP edge: the endpoint's
-                // `InBand` posture lets `AuthnGuard` admit an anonymous request to the
-                // operations' own gates while a presented bearer is still verified.
-                route.nest(options.path.as_str(), ::nest_rs_http::matched(method))
-            },
-        )
+                    )
+                }),
+            ));
+            // Guards run in band, never at the HTTP edge: the endpoint's
+            // `InBand` posture lets `AuthnGuard` admit an anonymous request to the
+            // operations' own gates while a presented bearer is still verified.
+            routes.route_any_poem(options.path.as_str(), method);
+        })
         .runs_detached(carried),
     )
 }

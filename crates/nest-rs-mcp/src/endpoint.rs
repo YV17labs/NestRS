@@ -10,7 +10,7 @@ use nest_rs_http::__private::{OriginPolicy, attached_pending};
 use nest_rs_http::ResponseError as _;
 use nest_rs_http::{DetachedWork, Method, Request};
 use poem::endpoint::TowerCompatExt;
-use poem::{Endpoint, IntoEndpoint, Response, Result, Route};
+use poem::{Endpoint, IntoEndpoint, Response, Result};
 use rmcp::ServerHandler;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -204,16 +204,13 @@ where
         server_config,
     );
     let inner = service.compat();
-    Route::new().at(
-        "/",
-        nest_rs_http::matched(GuardedEndpoint {
-            origins,
-            guard,
-            context,
-            site: EndpointSite(site),
-            inner,
-        }),
-    )
+    GuardedEndpoint {
+        origins,
+        guard,
+        context,
+        site: EndpointSite(site),
+        inner,
+    }
 }
 
 struct GuardedEndpoint<E> {

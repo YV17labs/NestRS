@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use nest_rs_core::Container;
-use poem::Route;
 
-/// Mounts a controller's routes onto a parent [`Route`]; implemented by `#[routes]`.
+use crate::routes::HttpRoutes;
+
+/// Registers a controller's routes on the transport's table; implemented by
+/// `#[routes]`.
 pub trait Controller: 'static {
-    /// Attach this controller's routes (under its `PATH`) onto `route`,
+    /// Register this controller's routes (under its `PATH`) on `routes`,
     /// resolving handler dependencies from `container`.
-    fn mount(container: &Container, route: Route) -> Route;
+    fn mount(container: &Container, routes: &mut HttpRoutes);
 }
 
 /// The HTTP method a route answers.
@@ -178,7 +180,7 @@ impl HttpRouteMeta {
     }
 }
 
-type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
+type MountFn = dyn Fn(&Container, &mut HttpRoutes) + Send + Sync;
 
 /// Discovery metadata attached to every `#[controller]` + `#[routes]` type,
 /// iterated by [`crate::HttpTransport`] at boot via
@@ -215,7 +217,7 @@ impl HttpControllerMeta {
         mount: F,
     ) -> Self
     where
-        F: Fn(&Container, Route) -> Route + Send + Sync + 'static,
+        F: Fn(&Container, &mut HttpRoutes) + Send + Sync + 'static,
     {
         Self {
             controller,
@@ -254,10 +256,10 @@ impl HttpControllerMeta {
         }
     }
 
-    /// Mount this controller's routes onto `route`, resolving handler
+    /// Register this controller's routes on `routes`, resolving handler
     /// dependencies from `container`.
-    pub fn mount(&self, container: &Container, route: Route) -> Route {
-        (self.mount)(container, route)
+    pub fn mount(&self, container: &Container, routes: &mut HttpRoutes) {
+        (self.mount)(container, routes);
     }
 }
 
@@ -317,7 +319,7 @@ mod tests {
             "/users",
             &[],
             Vec::new(),
-            |_c, r| r,
+            |_c, _r| {},
         );
         let mounted: Vec<_> = meta.mounted_versions().collect();
         assert_eq!(mounted, vec![None]);
@@ -332,7 +334,7 @@ mod tests {
             "/users",
             &["1", "2"],
             Vec::new(),
-            |_c, r| r,
+            |_c, _r| {},
         );
         let prefixes: Vec<_> = meta
             .mounted_versions()
@@ -408,7 +410,7 @@ mod tests {
             "/users",
             &["2"],
             vec![route_meta()],
-            |_c, r| r,
+            |_c, _r| {},
         );
         assert_eq!(meta.path, "/users");
         assert_eq!(meta.versions, &["2"]);
@@ -418,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn mount_invokes_the_closure_with_the_container_and_route() {
+    fn mount_invokes_the_closure_with_the_container_and_routes() {
         static CALLS: AtomicUsize = AtomicUsize::new(0);
         let meta = HttpControllerMeta::new(
             "HealthController",
@@ -426,17 +428,16 @@ mod tests {
             "/health",
             &[],
             Vec::new(),
-            |_c, r| {
+            |_c, _r| {
                 CALLS.fetch_add(1, Ordering::SeqCst);
-                r
             },
         );
         let container = Container::builder().build();
-        let route = Route::new();
+        let mut routes = HttpRoutes::new(None);
 
-        let _routed = meta.mount(&container, route);
+        meta.mount(&container, &mut routes);
         assert_eq!(CALLS.load(Ordering::SeqCst), 1);
-        let _ = meta.mount(&container, Route::new());
+        meta.mount(&container, &mut routes);
         assert_eq!(CALLS.load(Ordering::SeqCst), 2);
     }
 

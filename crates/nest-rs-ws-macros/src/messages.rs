@@ -579,7 +579,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         <#self_ty>::__NESTRS_UPGRADE,
                         <#self_ty>::__nestrs_mount_path(),
                         "ws",
-                        move |__container, __route| {
+                        move |__container, __routes| {
                             let __path = <#self_ty>::__nestrs_mount_path();
                             #(#mounted_logs)*
                             let __gw = ::std::sync::Arc::new(
@@ -600,7 +600,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                 __ep,
                                 <#self_ty>::__NESTRS_UPGRADE,
                             );
-                            __route.at(__path, ::nest_rs_ws::nest_rs_http::matched(__ep))
+                            __routes.route_any_poem(&__path, __ep);
                         },
                     )
                     .owned_by(#gateway_name)

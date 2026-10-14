@@ -4,12 +4,12 @@
 
 use nest_rs_core::{App, ContainerBuilder, Discoverable, Transport, module};
 use nest_rs_http::{
-    ApiVersioning, HttpConfig, HttpEndpointMeta, HttpFallbackMeta, controller, routes,
+    ApiVersioning, BoxEndpoint, HttpConfig, HttpEndpointMeta, HttpFallbackMeta, Method, Request,
+    Response, controller, endpoint_fn, routes,
 };
 use nest_rs_testing::LogCapture;
 use poem::http::StatusCode;
 use poem::test::TestClient;
-use poem::{Request, Route, handler};
 
 #[controller(path = "/")]
 struct HomeController;
@@ -39,22 +39,21 @@ impl PostsController {
 }
 
 /// Echoes what the fallback was handed: the request line, a header, the body.
-#[handler]
-fn echo(req: &Request, body: String) -> String {
-    format!(
-        "fallback {} {} {} {body}",
-        req.method(),
-        req.uri().path(),
-        req.header("x-probe").unwrap_or("-"),
-    )
+fn echo() -> BoxEndpoint {
+    BoxEndpoint::new(endpoint_fn(|req: Request| async move {
+        let line = format!(
+            "fallback {} {} {}",
+            req.method(),
+            req.uri().path(),
+            req.header("x-probe").unwrap_or("-"),
+        );
+        let body = req.into_body().into_string().await?;
+        Ok(Response::builder().body(format!("{line} {body}")))
+    }))
 }
 
 fn fallback_at(path: &'static str, owner: &'static str) -> HttpFallbackMeta {
-    HttpFallbackMeta::new(path, owner, move |_, route: Route| {
-        route
-            .at(path, echo)
-            .at(nest_rs_http::join_path(path, "*rest"), echo)
-    })
+    HttpFallbackMeta::new(path, owner, |_| echo())
 }
 
 struct RootFallback;
@@ -79,8 +78,8 @@ struct DocsMount;
 impl Discoverable for DocsMount {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<Self, HttpEndpointMeta>(
-            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/docs", "docs", |_, route: Route| {
-                route.at("/docs", poem::endpoint::make_sync(|_| "docs"))
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/docs", "docs", |_, routes| {
+                routes.route(Method::GET, "/docs", crate::answering("docs"));
             })
             .owned_by("DocsHost"),
         )

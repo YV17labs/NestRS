@@ -8,13 +8,13 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{App, ContainerBuilder, Layer, Transport, injectable, module};
 use nest_rs_http::{
-    DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, SseStream, async_trait, controller,
-    routes,
+    DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, Method, SseStream, async_trait,
+    controller, routes,
 };
 use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
 use nest_rs_testing::LogCapture;
 use poem::web::websocket::{Message as Frame, WebSocket};
-use poem::{Body, IntoResponse, Route, handler};
+use poem::{Body, IntoResponse, handler};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Notify;
@@ -126,7 +126,9 @@ impl nest_rs_core::Discoverable for EchoSocket {
                 &crate::PUBLIC_MOUNT,
                 "/socket",
                 "echo",
-                |_container, route: Route| route.at("/socket", poem::get(echo)),
+                |_container, routes| {
+                    routes.route_poem(Method::GET, "/socket", echo);
+                },
             )
             .owned_by("EchoSocket"),
         )
@@ -605,20 +607,20 @@ fn stuck_mount(path: &'static str, owner: &'static str) -> HttpEndpointMeta {
         &crate::PUBLIC_MOUNT,
         path,
         "probe",
-        move |_container, route: Route| {
+        move |_container, routes| {
             let work = carried.clone();
-            route.at(
+            routes.route_any(
                 path,
-                poem::endpoint::make(move |_| {
+                nest_rs_http::endpoint_fn(move |_| {
                     let work = work.clone();
                     async move {
                         let mut unit = Box::pin(work.run(std::future::pending::<()>()));
                         assert!(futures_util::poll!(unit.as_mut()).is_pending());
                         std::mem::forget(unit);
-                        "started"
+                        Ok(nest_rs_http::Response::builder().body("started"))
                     }
                 }),
-            )
+            );
         },
     )
     .owned_by(owner)
@@ -857,13 +859,14 @@ impl nest_rs_core::Discoverable for Upgrades {
                 &crate::PUBLIC_MOUNT,
                 "/upgrade/poem",
                 "upgrade",
-                |_container, route: Route| {
-                    route.at("/upgrade/poem", poem::get(poem_side)).at(
-                        "/upgrade/nestrs",
-                        poem::get(nest_rs_http::__private::poem_bridge::to_poem(
+                |_container, routes| {
+                    routes
+                        .route_poem(Method::GET, "/upgrade/poem", poem_side)
+                        .route(
+                            Method::GET,
+                            "/upgrade/nestrs",
                             nest_rs_http::endpoint_fn(nestrs_side),
-                        )),
-                    )
+                        );
                 },
             )
             .also_mounts(["/upgrade/nestrs"])
@@ -876,10 +879,10 @@ impl nest_rs_core::Discoverable for Upgrades {
 struct UpgradeModule;
 
 /// An upgrade request crosses the edge, the bands when one is registered and the
-/// router with its socket still reachable, and a leaf on either side of the
-/// bridge switches it.
+/// router with its socket still reachable: a nestrs entry and a poem leaf on
+/// one table each switch it.
 #[tokio::test]
-async fn an_upgrade_request_keeps_its_on_upgrade_through_the_stack() {
+async fn a_converter_leaf_and_a_poem_leaf_both_upgrade() {
     for banded in [false, true] {
         let builder = App::builder().module::<UpgradeModule>();
         let builder = if banded {

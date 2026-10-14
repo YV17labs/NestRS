@@ -113,8 +113,8 @@ and declaring a field nothing fills is the same defect with the opposite sign.
   the outcome on the unit's span, so anything but `ok` exports as `error.type`
   with the same word and an `Error` status (an HTTP `5xx` records its status code
   instead, as the HTTP conventions ask). A request cut before it answered is
-  named for the route its router matched (`nest_rs_http::matched`), never
-  exported anonymous.
+  named for the template its route table entry recorded, never exported
+  anonymous.
 
 ## What a log line carries
 

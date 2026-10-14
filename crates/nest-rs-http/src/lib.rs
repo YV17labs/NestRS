@@ -1,9 +1,10 @@
 //! HTTP transport for nestrs — a [`nest_rs_core::Transport`] routed by poem and
 //! served by its own accept loop on hyper.
 //!
-//! [`HttpTransport`], built from the app's [`HttpConfig`] alone, mounts every
-//! `#[routes]` controller and every self-mounting endpoint another surface
-//! declares (a GraphQL schema, an MCP service — each via [`HttpEndpointMeta`]).
+//! [`HttpTransport`], built from the app's [`HttpConfig`] alone, assembles one
+//! route table, [`HttpRoutes`], from every `#[routes]` controller and every
+//! self-mounting endpoint another surface declares (a GraphQL schema, an MCP
+//! service — each via [`HttpEndpointMeta`]).
 //!
 //! Its vocabulary names no server library: the `http` crate's head types,
 //! re-exported here as their one path, and nestrs's own [`Request`],
@@ -52,6 +53,7 @@ mod response;
 mod response_body;
 mod route_shaper;
 mod route_template;
+mod routes;
 mod scope;
 mod security_headers;
 mod server;
@@ -184,7 +186,6 @@ pub use http::response::Parts as ResponseParts;
 /// ```
 pub use http::uri::Scheme;
 
-pub use allow::{AllowedMethods, MethodTable};
 pub use body::Body;
 pub use boot_check::HttpBootCheck;
 pub use client_ip::{ClientIp, ClientOrigin};
@@ -204,7 +205,6 @@ pub use headers::Header;
 pub use link::set_next_link;
 pub use location::{caller_path, set_created_location};
 pub use mapped::MappedError;
-pub use matched::{Matched, matched};
 pub use module::{HttpModule, HttpSetup};
 pub use multipart::{PartExt, PartStream};
 pub use nest_rs_core::input;
@@ -217,6 +217,7 @@ pub use request::{FromRequest, Request, RequestBody, RequestBuilder};
 pub use response::{IntoResponse, Response, ResponseBuilder};
 pub use response_body::OpenEndedBody;
 pub use route_template::RouteTemplate;
+pub use routes::HttpRoutes;
 pub use scope::Scoped;
 pub use security_headers::HttpSecurityHeaders;
 pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};
@@ -246,11 +247,9 @@ pub mod __private {
         denial_to_http_error, denial_to_http_response, deny_http, install_attached,
     };
     pub use crate::interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
-    pub use crate::matched::matched_template;
     pub use crate::origin::{OriginFacts, OriginPolicy};
     pub use crate::response::IntoResult;
     pub use crate::route_shaper::{RouteShaper, ShapedRoute, refused_route, wrap_route_shaper};
-    pub use crate::route_template::poem_pattern;
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
     pub use crate::view::{put_poem, take_poem};
     pub use nest_rs_guards::__private::global_guards_active;

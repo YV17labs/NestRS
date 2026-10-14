@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::header::{HeaderName, HeaderValue, SERVER};
 use nest_rs_core::{Container, Discovery, Transport};
-use poem::{EndpointExt, Route};
 use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::HttpBootCheck;
@@ -16,13 +15,14 @@ use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::edge::EdgeEndpoint;
 use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta};
+use crate::error::RouteError;
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
 use crate::guard_stage::GuardedEndpoint;
 use crate::interceptor::HttpEndpointWrap;
 use crate::poem_adapter::{CorsPolicy, PoemAdapter};
-use crate::poem_bridge::to_poem;
 use crate::problem::{Normalized, ResolvedErrors};
 use crate::route_template::RouteTemplate;
+use crate::routes::{HttpRoutes, Wrap};
 use crate::server::Server;
 use crate::tls::HttpTls;
 use crate::versioning::VersionedEndpoint;
@@ -177,22 +177,23 @@ pub fn literal_mount_path(raw: &str) -> Option<String> {
 }
 
 /// Claim the address `template` names for `owner`, or fail boot naming both
-/// claimants — before poem panics in route assembly (`duplicate path:
-/// <prefix>/*--poem-rest`). Keyed by the address, so two spellings of one
-/// (`/x/{a}`, `/x/{b}`) are one claim.
+/// claimants. Keyed by the address, so two spellings of one (`/x/{a}`,
+/// `/x/{b}`) are one claim.
 fn claim_exclusive_path(
     owners: &mut HashMap<String, String>,
-    kind: &str,
+    kind: &'static str,
     template: &RouteTemplate,
     owner: String,
     remedy: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), RouteError> {
     if let Some(first) = owners.insert(template.identity().to_owned(), owner.clone()) {
-        anyhow::bail!(
-            "duplicate {kind} {:?}: {first} and {owner} both mount there — a {kind} is its \
-             exclusive namespace; {remedy}",
-            template.as_str(),
-        );
+        return Err(RouteError::Exclusive {
+            kind,
+            template: template.as_str().to_owned(),
+            first,
+            owner,
+            remedy: remedy.to_owned(),
+        });
     }
     Ok(())
 }
@@ -205,14 +206,13 @@ struct RouteClaim {
 }
 
 /// Claim `template`'s address for one controller's route, or fail boot naming
-/// both handlers: poem mounts two spellings of one address apart, and one of
-/// them never runs. Several verbs of one controller share an address.
+/// both handlers. Several verbs of one controller share an address.
 fn claim_route(
     owners: &mut HashMap<String, RouteClaim>,
     template: &RouteTemplate,
     controller: &'static str,
     handler: &'static str,
-) -> anyhow::Result<()> {
+) -> Result<(), RouteError> {
     match owners.entry(template.identity().to_owned()) {
         Entry::Vacant(slot) => {
             slot.insert(RouteClaim {
@@ -224,15 +224,12 @@ fn claim_route(
         Entry::Occupied(first) if first.get().controller == controller => {}
         Entry::Occupied(first) => {
             let first = first.get();
-            anyhow::bail!(
-                "duplicate route path: {}::{} mounts {:?} and {controller}::{handler} mounts \
-                 {:?}, one address — an address is mounted once and each parameter binds by \
-                 its name; give each controller route a distinct full path",
-                first.controller,
-                first.handler,
-                first.template,
-                template.as_str(),
-            );
+            return Err(RouteError::OneAddress {
+                first: format!("{}::{}", first.controller, first.handler),
+                first_template: first.template.clone(),
+                second: format!("{controller}::{handler}"),
+                second_template: template.as_str().to_owned(),
+            });
         }
     }
     Ok(())
@@ -245,18 +242,18 @@ fn mount_fallback(
     meta: &HttpFallbackMeta,
     claims: Claims,
     get_routes: &[(String, &'static str)],
-) -> anyhow::Result<Fallback> {
-    RouteTemplate::literal(meta.path()).map_err(|refused| {
-        anyhow::anyhow!("the router fallback {} answers at {refused}", meta.owner())
+) -> Result<Fallback, RouteError> {
+    RouteTemplate::literal(meta.path()).map_err(|refused| RouteError::FallbackPath {
+        owner: meta.owner().to_owned(),
+        refused,
     })?;
     if let Some((prefix, owner)) = claims.owner_of(meta.path()) {
-        anyhow::bail!(
-            "the router fallback {} answers at {:?}, under {prefix:?}, which {owner} owns: \
-             the route table claims everything there, so the fallback would answer nothing — \
-             give it a path outside {prefix:?}",
-            meta.owner(),
-            meta.path(),
-        );
+        return Err(RouteError::FallbackUnder {
+            owner: meta.owner().to_owned(),
+            path: meta.path().to_owned(),
+            prefix: prefix.to_owned(),
+            prefix_owner: owner.to_owned(),
+        });
     }
     if let Some((_, controller)) = get_routes.iter().find(|(path, _)| path == meta.path()) {
         tracing::warn!(
@@ -277,14 +274,25 @@ fn mount_fallback(
     Ok(Fallback::new(
         meta.path().to_owned(),
         claims,
-        meta.mount(container).boxed(),
+        meta.build(container),
     ))
 }
 
 /// `path`, a controller's prefix or one of its routes, read as a template; the
 /// macros read both halves, so a refusal here is a hand-built controller's.
-fn template_of(path: &str, controller: &str) -> anyhow::Result<RouteTemplate> {
-    RouteTemplate::parse(path).map_err(|refused| anyhow::anyhow!("{controller} mounts {refused}"))
+fn template_of(path: &str, controller: &str) -> Result<RouteTemplate, RouteError> {
+    RouteTemplate::parse(path).map_err(|refused| RouteError::Template {
+        owner: controller.to_owned(),
+        refused,
+    })
+}
+
+/// Who owns the global prefix, as a refusal names it.
+fn global_prefix_owner() -> String {
+    format!(
+        "the global prefix ({})",
+        nest_rs_config::var_name("http", "GLOBAL_PREFIX"),
+    )
 }
 
 /// What to do about two controllers claiming one mount prefix.
@@ -374,7 +382,19 @@ impl Transport for HttpTransport {
         for d in discovery.meta::<HttpBootCheck>() {
             d.meta.run(container).map_err(|msg| anyhow::anyhow!(msg))?;
         }
-        let mut route = Route::new();
+        // Applied at registration, so every address the table holds is the one
+        // a client calls.
+        let prefix = match self.global_prefix.take() {
+            Some(prefix) => {
+                RouteTemplate::literal(&prefix).map_err(|refused| RouteError::Prefix {
+                    owner: global_prefix_owner(),
+                    refused,
+                })?;
+                Some(prefix)
+            }
+            None => None,
+        };
+        let mut routes = HttpRoutes::new(prefix.as_deref());
 
         let global_guards = nest_rs_guards::__private::global_guards_active(container);
         let mut unguarded: Vec<String> = Vec::new();
@@ -386,9 +406,9 @@ impl Transport for HttpTransport {
         // Full routes, not prefixes, for the non-URI rewrite: a `/` prefix matches
         // nothing segment-wise, and `/posts` would claim another controller's `/posts/drafts`.
         let mut versioned_routes: Vec<String> = Vec::new();
-        // Kept apart because they yield differently: a self-mount is neutral against
-        // anything, an unversioned controller route only against a *default* version.
-        let mut self_mounts: Vec<String> = Vec::new();
+        // Kept apart from the self-mounts' because they yield differently: a
+        // self-mount is neutral against anything, an unversioned controller route
+        // only against a *default* version.
         let mut unversioned_routes: Vec<String> = Vec::new();
         // What the router's fallback never answers. A controller's prefix is its
         // namespace although its routes mount flat; one at `/` owns its routes alone.
@@ -456,7 +476,9 @@ impl Transport for HttpTransport {
                     }
                 }
             }
-            route = d.meta.mount(container, route);
+            routes.for_controller(d.meta.controller);
+            d.meta.mount(container, &mut routes);
+            routes.settle()?;
         }
 
         // Unchecked, an undeclared default would silently send every caller that
@@ -509,30 +531,28 @@ impl Transport for HttpTransport {
                     0 => RouteTemplate::literal(path),
                     _ => RouteTemplate::parse(path),
                 };
-                templates
-                    .push(read.map_err(|refused| anyhow::anyhow!("the {owner} mounts {refused}"))?);
+                templates.push(read.map_err(|refused| RouteError::Template {
+                    owner: format!("the {owner}"),
+                    refused,
+                })?);
             }
             let identity = templates[0].identity();
-            // A self-mount nests its whole subtree, so a controller on that path
-            // is the same poem panic.
+            // A self-mount owns what lies below its path too, so a controller there
+            // would split its subtree.
             if let Some(first) = prefix_owner
                 .get(identity)
                 .map(String::as_str)
                 .or_else(|| route_owner.get(identity).map(|claim| claim.controller))
             {
-                anyhow::bail!(
-                    "duplicate mount path {:?}: controller {first} and {} endpoint {} both mount \
-                     there — a mount path is its owner's exclusive namespace; give each one a \
-                     distinct path",
-                    d.meta.path(),
-                    d.meta.label(),
-                    d.meta.owner(),
-                );
+                return Err(RouteError::MountPath {
+                    path: d.meta.path().to_owned(),
+                    controller: first.to_owned(),
+                    label: d.meta.label().to_owned(),
+                    owner: d.meta.owner().to_owned(),
+                }
+                .into());
             }
-            // Recorded unversioned so a versioned catch-all cannot swallow them;
-            // exactly the declared paths — a surface owning a subtree says so via `also_mounts`.
             for template in &templates {
-                self_mounts.push(template.as_str().to_owned());
                 claims.prefix(template.as_str(), owner.clone());
                 claim_exclusive_path(
                     &mut endpoint_owner,
@@ -554,17 +574,18 @@ impl Transport for HttpTransport {
             if d.meta.edge_access_is_implicit(global_guards) {
                 unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
             }
-            if d.meta.guarded_at_the_edge() && !edge_pool.is_empty() {
-                // `nest_no_strip`: the isolated sub-route matches its own full path.
-                let isolated =
-                    BoxEndpoint::new(PoemAdapter::router(d.meta.mount(container, Route::new())));
-                let guarded = GuardedEndpoint::new(d.meta.handler(), edge_pool.clone(), isolated);
-                route = route.nest_no_strip(d.meta.path(), to_poem(guarded));
-            } else {
-                // Gated in band (GraphQL, MCP), public by design (OpenAPI), or
-                // no pool to run.
-                route = d.meta.mount(container, route);
-            }
+            // Each entry runs the pool once routed, so a guard reads the template it
+            // matched; gated in band (GraphQL, MCP), public by design (OpenAPI), or
+            // with no pool to run, an entry is registered as it is.
+            let wrap = (d.meta.guarded_at_the_edge() && !edge_pool.is_empty()).then(|| {
+                let (handler, pool) = (d.meta.handler(), edge_pool.clone());
+                Arc::new(move |inner| {
+                    BoxEndpoint::new(GuardedEndpoint::new(handler, pool.clone(), inner))
+                }) as Wrap
+            });
+            routes.for_self_mount(format!("the {owner}"), templates, wrap);
+            d.meta.mount(container, &mut routes);
+            routes.settle()?;
         }
         if !unguarded_edges.is_empty() {
             tracing::warn!(
@@ -575,44 +596,46 @@ impl Transport for HttpTransport {
                 "unguarded self-mount edges detected",
             );
         }
-        // Inside the global prefix, so it rewrites the path controllers mount at.
-        // `rewrites()`, not `Some`: wrapping the URI strategy would refuse every `/v{n}/…`.
+        // What the self-mounts registered, not what they declared: an entry below
+        // a mount's path needs no declaration, and a versioned catch-all must not
+        // swallow it.
+        let self_mounts = routes.take_self_mounted();
+        let mut router = PoemAdapter::router(routes.into_addresses())?;
+        // In front of routing, after the global prefix: it rewrites the path a
+        // controller's route is registered at. `rewrites()`, not `Some`: wrapping
+        // the URI strategy would refuse every `/v{n}/…`.
         if let Some(selector) = self.version_selector.take().filter(|s| s.rewrites()) {
-            let selector = selector.with_routes(
-                versioned_routes,
-                self_mounts,
-                unversioned_routes,
-                crate::declared_versions(container),
-            );
-            // An inert selector changes nothing and costs a routing layer (+57% on the hot path).
+            let selector = selector
+                .with_routes(
+                    versioned_routes,
+                    self_mounts,
+                    unversioned_routes,
+                    crate::declared_versions(container),
+                )
+                .under(prefix.as_deref());
+            // An inert selector changes nothing and costs a layer on the hot path.
             if !selector.is_inert() {
-                route = Route::new().nest_no_strip("/", VersionedEndpoint::new(route, selector));
+                router = BoxEndpoint::new(VersionedEndpoint::new(router, selector));
             }
         }
 
-        if let Some(prefix) = self.global_prefix.take() {
-            let owner = format!(
-                "the global prefix ({})",
-                nest_rs_config::var_name("http", "GLOBAL_PREFIX"),
-            );
-            RouteTemplate::literal(&prefix)
-                .map_err(|refused| anyhow::anyhow!("{owner} {refused}"))?;
-            claims.only(prefix.clone(), owner);
+        if let Some(prefix) = prefix {
+            claims.only(prefix, global_prefix_owner());
             // Every route answers under the prefix, never at a path of its own.
             get_routes.clear();
-            route = Route::new().nest(prefix, route);
         }
         let fallback = match discovery.meta::<HttpFallbackMeta>().as_slice() {
             [] => None,
             [only] => Some(mount_fallback(container, &only.meta, claims, &get_routes)?),
-            [first, second, ..] => anyhow::bail!(
-                "two router fallbacks: {} and {} — the router has one fallback, which answers \
-                 whatever nothing else claims; import one of them",
-                first.meta.owner(),
-                second.meta.owner(),
-            ),
+            [first, second, ..] => {
+                return Err(RouteError::TwoFallbacks {
+                    first: first.meta.owner().to_owned(),
+                    second: second.meta.owner().to_owned(),
+                }
+                .into());
+            }
         };
-        let router = PoemAdapter::router(WithFallback::new(route, fallback));
+        let router = WithFallback::new(router, fallback);
 
         // Ascending priority, whatever the registration order; the stable sort
         // keeps insertion order within a band.

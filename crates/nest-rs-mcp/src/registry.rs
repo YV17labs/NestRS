@@ -15,8 +15,9 @@ use std::sync::Arc;
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{Container, ContainerBuilder, Discovery, Handler, Posture};
 use nest_rs_http::__private::guards_in_band;
-use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta, normalize_mount_path};
-use poem::Route;
+use nest_rs_http::{
+    DetachedWork, HttpBootCheck, HttpEndpointMeta, HttpRoutes, normalize_mount_path,
+};
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerConfig, Tool};
 
 use crate::composite::{CompositeHandler, common_protocol_versions};
@@ -170,8 +171,8 @@ pub fn register_host<P: 'static>(
     let mount_work = detached.clone();
     builder
         .attach_meta::<P, HttpEndpointMeta>(guards_in_band(
-            HttpEndpointMeta::new(site, path, MCP_LABEL, move |container, route: Route| {
-                mount(container, route, &mount_path, site, &mount_work)
+            HttpEndpointMeta::new(site, path, MCP_LABEL, move |container, routes| {
+                mount(container, routes, &mount_path, site, &mount_work);
             })
             .runs_detached(detached)
             .owned_by(host),
@@ -273,11 +274,11 @@ fn declared_names(meta: &McpHostMeta) -> impl Iterator<Item = Cow<'static, str>>
 
 fn mount(
     container: &Container,
-    route: Route,
+    routes: &mut HttpRoutes,
     path: &str,
     site: &'static Handler,
     detached: &DetachedWork,
-) -> Route {
+) {
     let hosts = hosts_on(container, path);
 
     // Built once: rmcp's `#[tool_handler]` rebuilds the whole `ToolRouter` on every `get_tool`.
@@ -306,7 +307,7 @@ fn mount(
     let tools = Arc::new(tools);
     let shared_path: Arc<str> = Arc::from(path);
     let container = container.clone();
-    route.nest(
+    routes.route_any_poem(
         path,
         endpoint(mount, move || {
             CompositeHandler::build(
@@ -317,7 +318,7 @@ fn mount(
                 identity.clone(),
             )
         }),
-    )
+    );
 }
 
 /// Tool name → position in the path's host list.

@@ -14,12 +14,15 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use http::uri::PathAndQuery;
+use http::{HeaderName, StatusCode, Uri, header};
 use nest_rs_core::{Container, Discovery};
 
-use poem::http::uri::PathAndQuery;
-use poem::http::{HeaderName, StatusCode, Uri, header};
-use poem::{Endpoint, Error, IntoResponse, Request, Response, Result};
-
+use crate::endpoint::Endpoint;
+use crate::error::{HttpError, Result};
+use crate::problem::ProblemDetails;
+use crate::request::Request;
+use crate::response::{IntoResponse, Response};
 use crate::route_template::{segment_parameter, strip_literal};
 use crate::version_path;
 
@@ -84,8 +87,9 @@ pub(crate) struct VersionSelector {
     /// Every **route** a versioned controller mounts, as mounted
     /// (`/v1/posts`, `/v1/posts/{id}`).
     versioned_routes: Arc<[String]>,
-    /// The paths self-mounted endpoints own (`/graphql`, `/mcp`, a gateway),
-    /// served as sent whatever version a caller states.
+    /// The templates self-mounted endpoints registered (`/graphql`, `/mcp`, a
+    /// gateway, an entry below one), served as sent whatever version a caller
+    /// states.
     self_mounts: Arc<[String]>,
     /// The routes unversioned controllers mount: neutral against a default
     /// version, not against a stated one.
@@ -93,6 +97,9 @@ pub(crate) struct VersionSelector {
     /// The versions the app declares, to answer `404` when a stated version
     /// does not serve an address another version does.
     versions: Arc<[String]>,
+    /// The global prefix every address is registered under, which the version
+    /// follows: `/api/users` resolves to `/api/v2/users`.
+    prefix: Option<Arc<str>>,
 }
 
 impl VersionSelector {
@@ -114,12 +121,13 @@ impl VersionSelector {
             self_mounts: Arc::from(Vec::new()),
             unversioned_routes: Arc::from(Vec::new()),
             versions: Arc::from(Vec::new()),
+            prefix: None,
         }
     }
 
     /// Teach the selector the app's shape: the routes that carry a version as
     /// mounted (`/v1/posts/{id}`), every address answered without one, and the
-    /// versions declared.
+    /// versions declared — each address without the global prefix.
     pub(crate) fn with_routes(
         mut self,
         versioned: Vec<String>,
@@ -131,6 +139,13 @@ impl VersionSelector {
         self.self_mounts = Arc::from(self_mounts);
         self.unversioned_routes = Arc::from(unversioned);
         self.versions = Arc::from(versions);
+        self
+    }
+
+    /// The selector for addresses registered under the global `prefix`, a
+    /// canonical literal path.
+    pub(crate) fn under(mut self, prefix: Option<&str>) -> Self {
+        self.prefix = prefix.map(Arc::from);
         self
     }
 
@@ -292,8 +307,12 @@ fn accept_version(req: &Request) -> Requested<'_> {
 }
 
 /// One refusal for both checks, so a caller cannot tell which one refused it.
-fn malformed_version() -> Error {
-    Error::from_string("malformed API version", StatusCode::BAD_REQUEST)
+fn malformed_version() -> HttpError {
+    HttpError::from_response(
+        ProblemDetails::bad_request()
+            .with_detail("malformed API version")
+            .into_response(),
+    )
 }
 
 /// A version token is spliced into a URL path: bare alphanumerics, `.` and `-`,
@@ -324,7 +343,16 @@ impl<E> VersionedEndpoint<E> {
     /// The path this request should be routed at, or `None` to route it as
     /// sent; `Err` is the `404` or `400` refusal.
     fn resolve(&self, req: &Request) -> Result<Option<String>> {
-        let path = req.uri().path();
+        let sent = req.uri().path();
+        // Every address sits under the global prefix, and the version follows it.
+        let (prefix, path) = match self.selector.prefix.as_deref() {
+            None => ("", sent),
+            Some(prefix) => match sent.strip_prefix(prefix) {
+                Some("") => (prefix, "/"),
+                Some(rest) if rest.starts_with('/') => (prefix, rest),
+                _ => return Ok(None),
+            },
+        };
         // Before the URI-form refusal: `#[gateway(version = "1")]` self-mounts
         // at `/v1/ws`.
         if self.selector.is_self_mount(path) {
@@ -339,13 +367,15 @@ impl<E> VersionedEndpoint<E> {
                 strategy = self.selector.strategy.as_str(),
                 "refused a URI-versioned path under a non-URI versioning strategy",
             );
-            return Err(Error::from_status(StatusCode::NOT_FOUND));
+            return Err(HttpError::from_status(StatusCode::NOT_FOUND));
         }
 
+        // `debug`: a client's own line, which the access line already records as
+        // its `400`.
         let (version, stated) = match self.selector.requested(req) {
             Requested::Stated(raw) if is_valid_version(raw) => (Some(raw), true),
             Requested::Stated(raw) => {
-                tracing::warn!(
+                tracing::debug!(
                     target: crate::target::HTTP,
                     strategy = self.selector.strategy.as_str(),
                     length = raw.len(),
@@ -354,7 +384,7 @@ impl<E> VersionedEndpoint<E> {
                 return Err(malformed_version());
             }
             Requested::Malformed => {
-                tracing::warn!(
+                tracing::debug!(
                     target: crate::target::HTTP,
                     strategy = self.selector.strategy.as_str(),
                     reason = "not valid text",
@@ -375,7 +405,10 @@ impl<E> VersionedEndpoint<E> {
         };
         let candidate = version_path(Some(version), path);
         if self.selector.is_versioned(&candidate) {
-            return Ok(Some(candidate));
+            return Ok(Some(match prefix {
+                "" => candidate,
+                prefix => format!("{prefix}{candidate}"),
+            }));
         }
         if stated && self.selector.has_any_version(path) {
             // Falling through would answer with another version's body.
@@ -384,25 +417,19 @@ impl<E> VersionedEndpoint<E> {
                 path = path,
                 "no route serves the requested API version",
             );
-            return Err(Error::from_status(StatusCode::NOT_FOUND));
+            return Err(HttpError::from_status(StatusCode::NOT_FOUND));
         }
         Ok(None)
     }
 }
 
-impl<E> Endpoint for VersionedEndpoint<E>
-where
-    E: Endpoint + Send + Sync,
-    E::Output: IntoResponse,
-{
-    type Output = Response;
-
+impl<E: Endpoint> Endpoint for VersionedEndpoint<E> {
     async fn call(&self, mut req: Request) -> Result<Response> {
         // In front of every request: only a rewrite may allocate.
         if let Some(path) = self.resolve(&req)? {
             rewrite_path(&mut req, &path)?;
         }
-        self.inner.call(req).await.map(IntoResponse::into_response)
+        self.inner.call(req).await
     }
 }
 
@@ -424,11 +451,15 @@ fn rewrite_path(req: &mut Request, path: &str) -> Result<()> {
     parts.path_and_query = Some(PathAndQuery::try_from(format!("{path}{query}")).map_err(
         |_| {
             // Unreachable: a router-parsed path plus a validated version.
-            Error::from_status(StatusCode::BAD_REQUEST)
+            HttpError::from_status(StatusCode::BAD_REQUEST)
         },
     )?);
     *req.uri_mut() = Uri::from_parts(parts).map_err(|_| {
-        Error::from_string("could not resolve the API version", StatusCode::BAD_REQUEST)
+        HttpError::from_response(
+            ProblemDetails::bad_request()
+                .with_detail("could not resolve the API version")
+                .into_response(),
+        )
     })?;
     Ok(())
 }
@@ -436,31 +467,60 @@ fn rewrite_path(req: &mut Request, path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
 
-    use poem::test::TestClient;
-    use poem::{Route, get, handler};
+    use http::HeaderValue;
 
     use super::*;
+    use crate::endpoint::{BoxEndpoint, endpoint_fn};
 
-    #[handler]
-    fn v1() -> &'static str {
-        "one"
+    /// An endpoint answering each path in `routes` with its body, `404`
+    /// elsewhere, and echoing the query under `?`.
+    fn table(routes: &'static [(&'static str, &'static str)]) -> BoxEndpoint {
+        BoxEndpoint::new(endpoint_fn(move |req: Request| async move {
+            let path = req.uri().path();
+            match routes.iter().find(|(at, _)| *at == path) {
+                Some((_, "?")) => {
+                    Ok(Response::builder().body(req.uri().query().unwrap_or_default().to_owned()))
+                }
+                Some((_, body)) => Ok(Response::builder().body(*body)),
+                None => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
+            }
+        }))
     }
 
-    #[handler]
-    fn v2() -> &'static str {
-        "two"
+    /// `path` asked of `endpoint`, with `name: value` when given: the status
+    /// and the body.
+    async fn ask(
+        endpoint: &impl Endpoint,
+        path: &str,
+        header: Option<(HeaderName, &str)>,
+    ) -> (StatusCode, String) {
+        let mut req = Request::builder().uri(path.parse().unwrap());
+        if let Some((name, value)) = header {
+            req = req.header(name, HeaderValue::from_str(value).unwrap());
+        }
+        match endpoint.call(req.finish()).await {
+            Ok(resp) => (resp.status(), resp.into_body().into_string().await.unwrap()),
+            Err(err) => (err.status(), String::new()),
+        }
     }
 
-    #[handler]
-    fn unversioned() -> &'static str {
-        "none"
+    fn version(value: &str) -> Option<(HeaderName, &str)> {
+        Some((HeaderName::from_static(DEFAULT_VERSION_HEADER), value))
     }
 
-    fn app(strategy: ApiVersioning, default_version: Option<&str>) -> VersionedEndpoint<Route> {
-        let route = Route::new()
-            .at("/v1/users", get(v1))
-            .at("/v2/users", get(v2))
-            .at("/users", get(unversioned));
+    fn accept(value: &str) -> Option<(HeaderName, &str)> {
+        Some((header::ACCEPT, value))
+    }
+
+    fn app(
+        strategy: ApiVersioning,
+        default_version: Option<&str>,
+    ) -> VersionedEndpoint<BoxEndpoint> {
+        let route = table(&[
+            ("/v1/users", "one"),
+            ("/v2/users", "two"),
+            ("/users", "none"),
+        ]);
         VersionedEndpoint::new(
             route,
             VersionSelector::new(
@@ -555,68 +615,57 @@ mod tests {
 
     #[tokio::test]
     async fn a_header_selects_the_version() {
-        let client = TestClient::new(app(ApiVersioning::Header, None));
-        let resp = client
-            .get("/users")
-            .header(DEFAULT_VERSION_HEADER, "2")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("two").await;
+        let ep = app(ApiVersioning::Header, None);
+        assert_eq!(
+            ask(&ep, "/users", version("2")).await,
+            (StatusCode::OK, "two".into())
+        );
     }
 
     #[tokio::test]
     async fn a_media_type_parameter_selects_the_version() {
-        let client = TestClient::new(app(ApiVersioning::MediaType, None));
-        let resp = client
-            .get("/users")
-            .header(header::ACCEPT, "application/json; version=1")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("one").await;
+        let ep = app(ApiVersioning::MediaType, None);
+        assert_eq!(
+            ask(&ep, "/users", accept("application/json; version=1")).await,
+            (StatusCode::OK, "one".into())
+        );
     }
 
     #[tokio::test]
     async fn a_quoted_media_type_parameter_is_read_the_same() {
-        let client = TestClient::new(app(ApiVersioning::MediaType, None));
-        let resp = client
-            .get("/users")
-            .header(header::ACCEPT, "text/html, application/json;version=\"2\"")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("two").await;
+        let ep = app(ApiVersioning::MediaType, None);
+        assert_eq!(
+            ask(
+                &ep,
+                "/users",
+                accept("text/html, application/json;version=\"2\"")
+            )
+            .await,
+            (StatusCode::OK, "two".into())
+        );
     }
 
     #[tokio::test]
     async fn a_default_never_moves_an_address_that_already_answers_without_one() {
         for default in [Some("1"), None] {
-            let client = TestClient::new(app(ApiVersioning::Header, default));
-            let resp = client.get("/users").send().await;
-            resp.assert_status_is_ok();
-            resp.assert_text("none").await;
+            let ep = app(ApiVersioning::Header, default);
+            assert_eq!(
+                ask(&ep, "/users", None).await,
+                (StatusCode::OK, "none".into())
+            );
         }
 
-        let client = TestClient::new(app(ApiVersioning::Header, Some("1")));
-        let resp = client
-            .get("/users")
-            .header(DEFAULT_VERSION_HEADER, "2")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("two").await;
+        let ep = app(ApiVersioning::Header, Some("1"));
+        assert_eq!(
+            ask(&ep, "/users", version("2")).await,
+            (StatusCode::OK, "two".into())
+        );
     }
 
     #[tokio::test]
     async fn the_query_string_survives_the_rewrite() {
-        #[handler]
-        fn echo(req: &Request) -> String {
-            req.uri().query().unwrap_or("").to_owned()
-        }
-
         let ep = VersionedEndpoint::new(
-            Route::new().at("/v2/users", get(echo)),
+            table(&[("/v2/users", "?")]),
             VersionSelector::new(
                 ApiVersioning::Header,
                 HeaderName::from_static(DEFAULT_VERSION_HEADER),
@@ -624,18 +673,15 @@ mod tests {
             )
             .with_routes(vec!["/v2/users".into()], vec![], vec![], vec!["2".into()]),
         );
-        let resp = TestClient::new(ep)
-            .get("/users?first=10&after=abc")
-            .header(DEFAULT_VERSION_HEADER, "2")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("first=10&after=abc").await;
+        assert_eq!(
+            ask(&ep, "/users?first=10&after=abc", version("2")).await,
+            (StatusCode::OK, "first=10&after=abc".into())
+        );
     }
 
     #[tokio::test]
     async fn a_version_that_could_reach_another_path_is_refused() {
-        let client = TestClient::new(app(ApiVersioning::Header, None));
+        let ep = app(ApiVersioning::Header, None);
         for probe in [
             "../admin",
             "1/../../etc",
@@ -643,13 +689,8 @@ mod tests {
             "",
             "a".repeat(64).as_str(),
         ] {
-            let resp = client
-                .get("/users")
-                .header(DEFAULT_VERSION_HEADER, probe)
-                .send()
-                .await;
             assert_eq!(
-                resp.0.status(),
+                ask(&ep, "/users", version(probe)).await.0,
                 StatusCode::BAD_REQUEST,
                 "version {probe:?} must be refused",
             );
@@ -658,16 +699,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_uri_versioned_path_is_not_a_second_address_under_another_strategy() {
-        let client = TestClient::new(app(ApiVersioning::Header, None));
-        let resp = client.get("/v2/users").send().await;
-        resp.assert_status(StatusCode::NOT_FOUND);
+        let ep = app(ApiVersioning::Header, None);
+        assert_eq!(ask(&ep, "/v2/users", None).await.0, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn the_uri_form_is_refused_whatever_the_version_is_spelled_like() {
-        let route = Route::new().at("/v2024-08-11/users", get(v2));
         let ep = VersionedEndpoint::new(
-            route,
+            table(&[("/v2024-08-11/users", "two")]),
             VersionSelector::new(
                 ApiVersioning::Header,
                 HeaderName::from_static(DEFAULT_VERSION_HEADER),
@@ -680,26 +719,20 @@ mod tests {
                 vec!["2024-08-11".into()],
             ),
         );
-        let client = TestClient::new(ep);
-        client
-            .get("/v2024-08-11/users")
-            .send()
-            .await
-            .assert_status(StatusCode::NOT_FOUND);
-
-        let resp = client
-            .get("/users")
-            .header(DEFAULT_VERSION_HEADER, "2024-08-11")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("two").await;
+        assert_eq!(
+            ask(&ep, "/v2024-08-11/users", None).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            ask(&ep, "/users", version("2024-08-11")).await,
+            (StatusCode::OK, "two".into())
+        );
     }
 
     #[tokio::test]
     async fn a_path_that_merely_starts_with_v_is_left_alone() {
         let ep = VersionedEndpoint::new(
-            Route::new().at("/vendors", get(unversioned)),
+            table(&[("/vendors", "none")]),
             VersionSelector::new(
                 ApiVersioning::Header,
                 HeaderName::from_static(DEFAULT_VERSION_HEADER),
@@ -712,31 +745,64 @@ mod tests {
                 vec!["1".into()],
             ),
         );
-        let resp = TestClient::new(ep).get("/vendors").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_text("none").await;
+        assert_eq!(
+            ask(&ep, "/vendors", None).await,
+            (StatusCode::OK, "none".into())
+        );
     }
 
-    /// Pins the poem behaviour the transport relies on to keep its route tree a
-    /// monomorphized `Route`.
+    /// The prefix is registered with every address, so the version follows it
+    /// and a path outside it is routed as sent.
     #[tokio::test]
-    async fn a_root_nest_no_strip_routes_the_full_path() {
-        let wrapped = VersionedEndpoint::new(
-            Route::new().at("/v2/users", get(v2)),
+    async fn under_a_global_prefix_the_version_follows_the_prefix() {
+        let ep = VersionedEndpoint::new(
+            table(&[
+                ("/api/v1/users", "one"),
+                ("/api/v2/users", "two"),
+                ("/api/v1", "root one"),
+                ("/users", "outside"),
+            ]),
             VersionSelector::new(
                 ApiVersioning::Header,
                 HeaderName::from_static(DEFAULT_VERSION_HEADER),
-                None,
+                Some("1".into()),
             )
-            .with_routes(vec!["/v2/users".into()], vec![], vec![], vec!["2".into()]),
+            .with_routes(
+                vec!["/v1/users".into(), "/v2/users".into(), "/v1".into()],
+                vec![],
+                vec![],
+                vec!["1".into(), "2".into()],
+            )
+            .under(Some("/api")),
         );
-        let resp = TestClient::new(Route::new().nest_no_strip("/", wrapped))
-            .get("/users")
-            .header(DEFAULT_VERSION_HEADER, "2")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("two").await;
+        assert_eq!(
+            ask(&ep, "/api/users", version("2")).await,
+            (StatusCode::OK, "two".into())
+        );
+        assert_eq!(
+            ask(&ep, "/api/users", None).await,
+            (StatusCode::OK, "one".into()),
+            "the default follows the prefix too"
+        );
+        assert_eq!(
+            ask(&ep, "/api", None).await,
+            (StatusCode::OK, "root one".into())
+        );
+        assert_eq!(
+            ask(&ep, "/api/v2/users", None).await.0,
+            StatusCode::NOT_FOUND,
+            "the URI form under the prefix is no second address"
+        );
+        assert_eq!(
+            ask(&ep, "/users", version("2")).await,
+            (StatusCode::OK, "outside".into()),
+            "a path outside the prefix is routed as sent"
+        );
+        assert_eq!(
+            ask(&ep, "/apiary/users", version("2")).await.0,
+            StatusCode::NOT_FOUND,
+            "a shared spelling is not the prefix's segment"
+        );
     }
 
     /// Holds `is_valid_version` equal to `nest_rs_codegen`'s, which this crate

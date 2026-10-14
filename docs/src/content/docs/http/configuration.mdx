@@ -235,9 +235,12 @@ pub struct ApiModule;
 ```
 
 The prefix is normalized (`"api"`, `"/api"`, `"/api/"` all yield
-`Some("/api")`; empty / `"/"` collapse to no-op), then prepended to every
-route at mount time — `#[get("/users")]` ends up at `GET /api/users`. The
-boot log and the OpenAPI document reflect the prefix. It is one literal
+`Some("/api")`; empty / `"/"` collapse to no-op), then applied as the route
+table is built, to every route and every surface that mounts beside them —
+`#[get("/users")]` is registered at `GET /api/users`, `/graphql` at
+`/api/graphql`. What answers sees the path the client sent, prefix included:
+a handler's `uri()`, the template the span and the access line name
+(`/api/users/{id}`), and the boot log and the OpenAPI document. It is one literal
 path: a [route template](/http/controllers/#route-templates)'s braces, or a
 `:`, `*` or `<` the router would read as a parameter, fail the boot naming
 the variable.

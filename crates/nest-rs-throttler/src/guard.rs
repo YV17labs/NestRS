@@ -180,9 +180,7 @@ impl Guard for ThrottlerGuard {
         let ip = ClientId::from(ClientOrigin::of(view.request()));
         // The declared template, so dynamic segments don't fragment the bucket;
         // a request the router matched nothing for falls back to its raw path.
-        let route = view
-            .route()
-            .unwrap_or_else(|| Cow::Borrowed(view.request().uri().path()));
+        let route = view.route().unwrap_or_else(|| view.request().uri().path());
         let key = bucket_key(&[&transport::HTTP, &route, &ip]);
 
         let decision = self.count(transport::HTTP, &key, limit).await?;

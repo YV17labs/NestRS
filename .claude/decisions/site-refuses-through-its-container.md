@@ -38,3 +38,10 @@ scope.
 - **Reading the refusal in the transport's own `configure`**: the one place
   every caller passes, but the transport is HTTP's, and a site of any edge may
   refuse; the kernel reads it once for all of them.
+
+**2026-10-14 — the mount registers on a table.** `Controller::mount` and the
+self-mount closure now register on the transport's `HttpRoutes` and still
+return nothing. The table's own refusals — a template, a second owner of an
+address, a path a self-mount did not declare — are recorded on it and read by
+`configure` as each mount returns, naming the registrant; a layer a site
+declares still refuses through its container, as above.

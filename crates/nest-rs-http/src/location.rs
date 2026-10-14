@@ -17,12 +17,12 @@ pub(crate) struct CallerUri(pub(crate) Uri);
 
 /// The path the caller addressed — the collection a `#[crud]` create posted to.
 ///
-/// Read from the edge's capture: `Route::nest` strips a global prefix off
-/// `uri()` before the handler runs.
+/// Read from the edge's capture: a header or media-type version selector
+/// rewrites `uri()` before the handler runs.
 pub fn caller_path(req: &Request) -> &str {
     match req.extensions().get::<CallerUri>() {
         Some(CallerUri(uri)) => uri.path(),
-        // No edge: a bare `Route` in a unit test, which applied no global prefix either.
+        // No edge: a unit test calling the endpoint bare, with no selector in front.
         None => req.uri().path(),
     }
 }

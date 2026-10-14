@@ -259,13 +259,12 @@ async fn a_parameter_in_the_controller_path_binds_before_the_route_s_own() {
     }
 }
 
-// A poem upgrade that reads a path differently from `RoutePath::identity`, or
-// a template the transport hands it in poem's spelling, fails here.
+// A router that reads a path differently from `RoutePath::identity` fails here:
+// one address is refused as two shapes of it, two addresses each answer.
 #[tokio::test]
-async fn a_route_identity_is_the_address_poem_serves() {
+async fn a_route_identity_is_the_address_the_table_serves() {
     use nest_rs_codegen::RoutePath;
-    use nest_rs_http::__private::poem_pattern;
-    use poem::{Route, endpoint::make_sync};
+    use nest_rs_http::{Method, Response, endpoint_fn};
 
     /// A template and a request it serves.
     type Probe = (&'static str, &'static str);
@@ -284,24 +283,29 @@ async fn a_route_identity_is_the_address_poem_serves() {
         (("/c/{*rest}", "/c/x/y"), ("/c/{id}", "/c/x"), false),
     ];
 
-    for ((a, probe_a), (b, probe_b), same) in pairs {
+    for &((a, probe_a), (b, probe_b), same) in pairs {
         let parsed = |path: &str| RoutePath::parse(path).unwrap_or_else(|why| panic!("{why}"));
         assert_eq!(
             parsed(a).identity() == parsed(b).identity(),
-            *same,
+            same,
             "the macro's reading of `{a}` and `{b}`",
         );
 
-        let mounted = Route::new()
-            .try_at(poem_pattern(parsed(a).template()), make_sync(|_| "a"))
-            .and_then(|route| route.try_at(poem_pattern(parsed(b).template()), make_sync(|_| "b")));
-        let poem_says_one = match mounted {
+        let answering = |body: &'static str| {
+            endpoint_fn(move |_| async move { Ok(Response::builder().body(body)) })
+        };
+        let mounted = crate::routes::table_under(None, move |routes| {
+            routes
+                .route(Method::GET, a, answering("a"))
+                .route(Method::GET, b, answering("b"));
+        })
+        .await;
+        let table_says_one = match mounted {
             Err(_) => true,
-            Ok(route) => {
-                let client = TestClient::new(route);
+            Ok(client) => {
                 let mut answers = Vec::new();
                 for probe in [probe_a, probe_b] {
-                    // The edge trims a trailing slash before poem routes.
+                    // The edge trims a trailing slash before routing.
                     let trimmed = match probe.trim_end_matches('/') {
                         "" => "/",
                         trimmed => trimmed,
@@ -313,6 +317,9 @@ async fn a_route_identity_is_the_address_poem_serves() {
                 answers[0] == answers[1]
             }
         };
-        assert_eq!(poem_says_one, *same, "poem's reading of `{a}` and `{b}`");
+        assert_eq!(
+            table_says_one, same,
+            "the table's reading of `{a}` and `{b}`"
+        );
     }
 }

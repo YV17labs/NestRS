@@ -8,8 +8,7 @@ use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{
     Collecting, Container, ContainerBuilder, DynamicModule, Handler, Posture, Registering,
 };
-use nest_rs_http::{HttpEndpointMeta, join_path, matched, version_path};
-use poem::{Route, get};
+use nest_rs_http::{HttpEndpointMeta, Method, join_path, version_path};
 
 use crate::config::OpenApiConfig;
 use crate::document::{Reported, build_document, versioned_documents};
@@ -77,51 +76,46 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
         return builder;
     }
     builder.provide_meta(
-        HttpEndpointMeta::new(
-            &DOCUMENT,
-            DOCS_PATH,
-            "openapi",
-            move |container, route: Route| {
-                // One ledger for every document, so a route collision is reported once.
-                let mut reported = Reported::default();
-                let default = spec(container, &options, None, &mut reported);
-                if options.emit_document {
-                    let dest = options.document_path.clone();
-                    let contents = format!("{default}\n");
-                    tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
-                        Ok(()) => tracing::info!(
-                            target: crate::TARGET,
-                            path = %dest.display(),
-                            bytes = contents.len(),
-                            "wrote OpenAPI document",
-                        ),
-                        Err(err) => tracing::warn!(
-                            target: crate::TARGET,
-                            path = %dest.display(),
-                            error = %nest_rs_core::error_message(&err),
-                            "failed to write OpenAPI document",
-                        ),
-                    });
-                }
-                let mut route = route
-                    .at(SPEC_PATH, matched(get(ui::spec_endpoint(default))))
-                    .at(DOCS_PATH, matched(get(ui::swagger_index)))
-                    .at(CSS_PATH, matched(get(ui::swagger_css)))
-                    .at(BUNDLE_PATH, matched(get(ui::swagger_bundle)))
-                    .at(PRESET_PATH, matched(get(ui::swagger_preset)))
-                    .at(INITIALIZER_PATH, matched(get(ui::swagger_initializer)));
-                // OpenAPI keys operations by path, so a version the path does not
-                // carry needs a document of its own.
-                for version in versioned_documents(container) {
-                    let spec = spec(container, &options, Some(&version), &mut reported);
-                    route = route.at(
-                        document_path(&version),
-                        matched(get(ui::spec_endpoint(spec))),
-                    );
-                }
-                route
-            },
-        )
+        HttpEndpointMeta::new(&DOCUMENT, DOCS_PATH, "openapi", move |container, routes| {
+            // One ledger for every document, so a route collision is reported once.
+            let mut reported = Reported::default();
+            let default = spec(container, &options, None, &mut reported);
+            if options.emit_document {
+                let dest = options.document_path.clone();
+                let contents = format!("{default}\n");
+                tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
+                    Ok(()) => tracing::info!(
+                        target: crate::TARGET,
+                        path = %dest.display(),
+                        bytes = contents.len(),
+                        "wrote OpenAPI document",
+                    ),
+                    Err(err) => tracing::warn!(
+                        target: crate::TARGET,
+                        path = %dest.display(),
+                        error = %nest_rs_core::error_message(&err),
+                        "failed to write OpenAPI document",
+                    ),
+                });
+            }
+            routes
+                .route_poem(Method::GET, SPEC_PATH, ui::spec_endpoint(default))
+                .route_poem(Method::GET, DOCS_PATH, ui::swagger_index)
+                .route_poem(Method::GET, CSS_PATH, ui::swagger_css)
+                .route_poem(Method::GET, BUNDLE_PATH, ui::swagger_bundle)
+                .route_poem(Method::GET, PRESET_PATH, ui::swagger_preset)
+                .route_poem(Method::GET, INITIALIZER_PATH, ui::swagger_initializer);
+            // OpenAPI keys operations by path, so a version the path does not
+            // carry needs a document of its own.
+            for version in versioned_documents(container) {
+                let spec = spec(container, &options, Some(&version), &mut reported);
+                routes.route_poem(
+                    Method::GET,
+                    &document_path(&version),
+                    ui::spec_endpoint(spec),
+                );
+            }
+        })
         // Every path the closure registers beyond `DOCS_PATH`, or a versioned
         // catch-all controller answers `/api-json`, a sibling outside its subtree.
         .also_mounts([
@@ -230,7 +224,7 @@ mod tests {
                 "/posts",
                 versions,
                 Vec::new(),
-                |_, route| route,
+                |_, _| {},
             ))
             .build()
     }

@@ -160,9 +160,16 @@ carries.** It is declared once, by the crate that owns the edge, as
 then read three times: by the span, by the log record's event name (what an
 OTLP exporter reports as `event.name`), and by the message a console prints. The *grammar* is
 `nest_rs_core::operation_log`'s, and so is the closed list of edges; the names
-are not, for the same reason a span target is not — a unit name says which edge
-did the work, and only the crate that owns that edge declares it: `unit!`
-refuses any other. There used to be
+are not, for the same reason a span target is not — a unit name says who did
+the work, and only the crate it names declares it: `unit!` refuses any other.
+
+A package's units follow the same rule under its own name: `nestrs-kafka`
+declares `nestrs_kafka.message`, opens its span with the framework's
+`operation_span!` on its own target, and files its line on
+`nest_rs::operation` beside every edge's — so `nest_rs::operation=off` silences
+it too. The edge words, and the kernel's `lifecycle`, stay the framework's, and
+the [naming rule](/semver/#naming-a-package) roots everything else a package
+names at its crate. There used to be
 two vocabularies for these units — the spans said `http.request` while
 the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.

@@ -12,8 +12,8 @@ note: inside `nest_rs::nest_rs_core::__private::declare_unit`
   |
  ::: $WORKSPACE/crates/nest-rs-core/src/operation_log.rs
   |
-  |             panic!("a unit is emitted on its edge's target, `nest_rs::<edge>`");
-  |             ------------------------------------------------------------------- in this macro invocation
+  |                 panic!("a unit is emitted on its edge's target, `nest_rs::<edge>`");
+  |                 ------------------------------------------------------------------- in this macro invocation
 
 note: erroneous constant encountered
  --> tests/integration/diagnostics/core/unit_target_not_the_edges.rs:3:19

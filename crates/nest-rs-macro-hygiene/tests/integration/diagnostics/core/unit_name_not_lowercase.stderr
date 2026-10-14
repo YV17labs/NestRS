@@ -1,4 +1,4 @@
-error[E0080]: evaluation panicked: a unit name is lowercase ASCII words, `<edge>.<unit>`
+error[E0080]: evaluation panicked: a unit name is lowercase ASCII words, `<edge|crate>.<unit>`, with digits only in the crate's segment
  --> tests/integration/diagnostics/core/unit_name_not_lowercase.rs:3:19
   |
 3 | const JOB: Unit = nest_rs::core::unit!("Queue.Job", target: "nest_rs::queue", kind: Consumer);
@@ -7,13 +7,17 @@ error[E0080]: evaluation panicked: a unit name is lowercase ASCII words, `<edge>
 note: inside `nest_rs::nest_rs_core::__private::declare_unit`
  --> $RUST/core/src/panic.rs
   |
-  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
-  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
   |
  ::: $WORKSPACE/crates/nest-rs-core/src/operation_log.rs
   |
-  |                 _ => panic!("a unit name is lowercase ASCII words, `<edge>.<unit>`"),
-  |                      --------------------------------------------------------------- in this macro invocation
+  |                   _ => panic!(
+  |  ______________________-
+  | |                     "a unit name is lowercase ASCII words, `<edge|crate>.<unit>`, with digits \
+  | |                      only in the crate's segment"
+  | |                 ),
+  | |_________________- in this macro invocation
 
 note: erroneous constant encountered
  --> tests/integration/diagnostics/core/unit_name_not_lowercase.rs:3:19

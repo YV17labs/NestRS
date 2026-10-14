@@ -46,10 +46,9 @@ impl Strategy for OAuthStrategy {
                 .iter()
                 .filter_map(|field| field.to_str().ok()),
         )
-        .ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?
-        .to_owned();
+        .ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
         self.svc
-            .resolve_caller(&provider, &transaction, &state, &code)
+            .resolve_caller(&provider, transaction, &state, &code)
             .await
     }
 }

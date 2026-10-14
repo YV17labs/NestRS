@@ -585,7 +585,7 @@ pub struct ObjectEntry {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
 
@@ -705,7 +705,7 @@ mod tests {
     /// counting every request it reads and answering each `404`.
     async fn store_presenting(
         authority: &nest_rs_testing::TestAuthority,
-    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    ) -> (String, Arc<AtomicUsize>) {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -713,7 +713,7 @@ mod tests {
             .expect("a port");
         let addr = listener.local_addr().expect("its address");
         let acceptor = authority.server(&["127.0.0.1"]).acceptor(None);
-        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requests = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&requests);
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -730,7 +730,7 @@ mod tests {
                             Ok(read) => head.extend_from_slice(&buf[..read]),
                         }
                     }
-                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    counted.fetch_add(1, Ordering::SeqCst);
                     let answer =
                         b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
                     if tls.write_all(answer).await.is_ok() {
@@ -766,7 +766,7 @@ mod tests {
             .expect_err("a certificate no trusted authority signed is not talked to");
         let rendered = nest_rs_core::error_message(&refused);
         assert_eq!(
-            requests.load(std::sync::atomic::Ordering::SeqCst),
+            requests.load(Ordering::SeqCst),
             0,
             "no request crossed the failed handshake: {rendered}"
         );
@@ -780,7 +780,7 @@ mod tests {
             .await
             .expect("the authority the deployment named is trusted");
         assert!(found.is_none(), "the double answers 404");
-        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
 
     fn client(endpoint: &str, allow_http: bool) -> Storage {

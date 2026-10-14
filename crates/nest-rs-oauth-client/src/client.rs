@@ -238,13 +238,11 @@ enum Capped {
 /// bounds no body.
 async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, Capped> {
     let cap = OAuthClient::ANSWER_MAX_BYTES;
-    if response
-        .content_length()
-        .is_some_and(|declared| declared > cap as u64)
-    {
+    let declared = response.content_length();
+    if declared.is_some_and(|declared| declared > cap as u64) {
         return Err(Capped::Oversized);
     }
-    let mut body = Vec::new();
+    let mut body = Vec::with_capacity(declared.map_or(0, |declared| declared as usize));
     while let Some(chunk) = response.chunk().await.map_err(Capped::Call)? {
         if body.len() + chunk.len() > cap {
             return Err(Capped::Oversized);
@@ -273,14 +271,11 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
         Box::pin(async move {
             let request = reqwest::Request::try_from(request).map_err(Box::new)?;
             let response = self.http.execute(request).await.map_err(Box::new)?;
-            let mut answered = Answered {
-                status: response.status().as_u16(),
-                retry_after: response
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .map(|value| value.as_bytes().to_vec()),
-                oversized: false,
-            };
+            let status = response.status().as_u16();
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .map(|value| value.as_bytes().to_vec());
             let mut answer = oauth2::http::Response::builder()
                 .status(response.status())
                 .version(response.version());
@@ -288,8 +283,11 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
                 answer = answer.header(name, value);
             }
             let body = read_capped(response).await;
-            answered.oversized = matches!(body, Err(Capped::Oversized));
-            *self.answered.lock().unwrap_or_else(PoisonError::into_inner) = Some(answered);
+            *self.answered.lock().unwrap_or_else(PoisonError::into_inner) = Some(Answered {
+                status,
+                retry_after,
+                oversized: matches!(body, Err(Capped::Oversized)),
+            });
             match body {
                 Ok(body) => answer.body(body).map_err(HttpClientError::Http),
                 Err(Capped::Oversized) => Err(HttpClientError::Other(OVERSIZED.to_owned())),
@@ -619,6 +617,9 @@ impl OAuthClient {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use nest_rs_authn::JwtOptions;
 
@@ -819,11 +820,11 @@ mod tests {
             .await
             .expect("a port");
         let addr = listener.local_addr().expect("its address");
-        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = std::sync::Arc::clone(&accepted);
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&accepted);
         tokio::spawn(async move {
             while let Ok(_dropped) = listener.accept().await {
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                counted.fetch_add(1, Ordering::SeqCst);
             }
         });
         let url = format!("http://{addr}/user/emails");
@@ -845,7 +846,7 @@ mod tests {
 
         tokio::task::yield_now().await;
         assert_eq!(
-            accepted.load(std::sync::atomic::Ordering::SeqCst),
+            accepted.load(Ordering::SeqCst),
             0,
             "nothing was dialled: {detail}"
         );

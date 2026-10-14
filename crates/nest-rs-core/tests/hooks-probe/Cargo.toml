@@ -1,0 +1,20 @@
+[package]
+name = "nestrs-hooks-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Test fixture for nest-rs-core: a package's `#[hooks]` host, which an app that does not import its module never runs."
+# A fixture crate, not a suite (the two-suite rule governs `tests/<suite>/`):
+# a dev-dependency of nest-rs-core, so a workspace member by Cargo's rule for
+# path dependencies, and never published.
+publish = false
+
+[dependencies]
+# Shaped as a package is: the umbrella, with only the features it binds.
+nest-rs = { path = "../../../nest-rs", default-features = false }
+
+[lints]
+workspace = true

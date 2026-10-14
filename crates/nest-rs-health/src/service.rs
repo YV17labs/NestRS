@@ -190,7 +190,7 @@ fn report_unreachable_indicators(container: &Container) {
 }
 
 /// Report an inert indicator at the level its owner earns: `debug` for a
-/// framework capability the app never opted into, `warn` for its own code.
+/// dependency's host the app does not import, `warn` for its own code.
 fn report_inert_indicator(container: &Container, entry: &HealthIndicator) {
     ::nest_rs_core::report_inert_host!(
         target: crate::TARGET,
@@ -281,12 +281,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_framework_owned_indicator_reports_at_debug() {
+    #[nest_rs_core::module]
+    struct NoIndicatorModule;
+
+    /// The framework's indicator is read off the composition like any
+    /// dependency's, never off its crate's name.
+    #[tokio::test]
+    async fn a_dependencys_indicator_this_app_does_not_import_reports_at_debug() {
         let logs = nest_rs_testing::LogCapture::install();
+        let app = nest_rs_core::App::builder()
+            .module::<NoIndicatorModule>()
+            .build()
+            .await
+            .expect("an empty module boots");
         // Not submitted: `inventory` is process-wide.
         report_inert_indicator(
-            &Container::builder().build(),
+            app.container(),
             &HealthIndicator {
                 origin: "nest_rs_seaorm::health::indicator",
                 name: "db",
@@ -300,7 +310,7 @@ mod tests {
         assert_eq!(skipped.len(), 1, "one line: {:#?}", logs.events());
         assert_eq!(skipped[0].level, "debug");
         assert_eq!(skipped[0].field("indicator").as_deref(), Some("db"));
-        assert_eq!(skipped[0].field("cause").as_deref(), Some("framework"));
+        assert_eq!(skipped[0].field("cause").as_deref(), Some("dependency"));
     }
 
     #[tokio::test]

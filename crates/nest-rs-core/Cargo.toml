@@ -61,6 +61,9 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # `test-util` (not part of tokio's `full`) pauses time, so a shutdown hook that
 # never returns is abandoned at its bound without the suite waiting it out.
 tokio = { workspace = true, features = ["test-util"] }
+# A package's `#[hooks]` host this suite's apps do not import, said at `debug`
+# like any dependency's.
+nestrs-hooks-probe = { path = "tests/hooks-probe" }
 
 [lints]
 workspace = true

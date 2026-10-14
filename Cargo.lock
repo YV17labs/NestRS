@@ -2668,6 +2668,7 @@ dependencies = [
  "inventory",
  "nest-rs-core-macros",
  "nest-rs-testing",
+ "nestrs-hooks-probe",
  "parking_lot",
  "pin-project-lite",
  "schemars",
@@ -3398,6 +3399,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "nestrs-hooks-probe"
+version = "7.0.0"
+dependencies = [
+ "nest-rs",
 ]
 
 [[package]]

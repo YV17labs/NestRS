@@ -14,6 +14,7 @@ mod access;
 mod app;
 mod app_lifecycle;
 mod container;
+mod discoverable;
 mod error_message;
 mod exception_filter;
 mod interceptor;

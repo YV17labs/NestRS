@@ -19,7 +19,7 @@ or `#[processor]` applies here.
 | Provider state                                                          | Indicator behavior |
 |-------------------------------------------------------------------------|---------------------|
 | Provider lives in a module **imported** by `AppModule` (directly or transitively) | Runs on every matching probe |
-| Provider linked into the binary but in **no reachable module**          | Skipped; named **once at boot** on `nest_rs::health` — a `warn` when it is your app's own code, `debug` when it is another binary's in a shared crate |
+| Provider linked into the binary but in **no reachable module**          | Skipped; named **once at boot** on `nest_rs::health` — a `warn` when it is your app's own code, `debug` when it is a dependency's |
 
 Linking a crate without importing its module keeps every provider in
 that crate inert — present in the binary, not mounted on any
@@ -59,13 +59,14 @@ discovery seam honours (`nest_rs::queue`, `nest_rs::events`):
 ```
 
 `warn` for **your** indicator, so it shows at any production filter, and once —
-a wiring notice repeated on every probe is log volume, not a signal. Two kinds
-report at `debug` instead, because they are not your mistake here: an indicator
-a `nest-rs-*` crate ships and this app never opted into, so a DB-less app is not
-told twice per boot to go bind `nest_rs_seaorm`'s; and an indicator in a shared
-library crate — a `features` crate several binaries link — whose module this app
-does not import, which is another binary's (`cause="another_app"`). Probing then
-skips in silence. When a shared crate's indicator does not appear, read
+a wiring notice repeated on every probe is log volume, not a signal. A
+dependency's indicator reports at `debug` instead, because it is not your
+mistake here: one that a crate your app depends on ships — the framework, a
+package, a shared `features` crate several binaries link — and whose module this
+app does not import (`cause="dependency"`, with that module in the `hint`). A
+DB-less app is not told twice per boot to go bind `nest_rs_seaorm`'s, nor a
+binary about another binary's. The boot reads which modules your app imports,
+never a crate's name. Probing then skips in silence. When a shared crate's indicator does not appear, read
 `nest_rs::health` at `debug`: the usual cause is a missing `<Feature>HealthModule`
 import in `AppModule` — the feature's data module imports the service, not the
 health adapter.

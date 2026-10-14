@@ -157,10 +157,10 @@ skipped, and said once, at the level its cause earns. Your app's own code is a
       or delete the methods"
 ```
 
-A handler in a shared library crate — a `features` crate several binaries link —
-whose module this app does not import is another binary's, and is said at
-`debug`: `skipped #[process] method: not this app's to run`, with
-`cause="another_app"` and the module it belongs to. In a workspace of several
+A handler in a crate this app depends on — a `features` crate several binaries
+link, a package — whose module this app does not import is that dependency's,
+and is said at `debug`: `skipped #[process] method: not this app's to run`, with
+`cause="dependency"` and the module it belongs to. In a workspace of several
 apps each binary links every other one's handlers, and a `warn` for each on every
 boot of a correct deployment would teach the reader to ignore the target. So when
 a handler in a shared crate does not run, read that target at `debug`

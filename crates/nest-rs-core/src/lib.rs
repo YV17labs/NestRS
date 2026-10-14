@@ -135,8 +135,7 @@ pub use container::{
     Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey, ProviderScope,
 };
 pub use discoverable::{
-    Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, is_framework_owned,
-    unresolved_host,
+    Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, unresolved_host,
 };
 pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;

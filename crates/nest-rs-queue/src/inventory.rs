@@ -58,9 +58,8 @@ pub struct ProcessMethod {
 
 impl ProcessMethod {
     /// `module_path!()` of the crate that declared the method — read by
-    /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick a
-    /// report level, and emitted as a field so a skip line names a type the
-    /// developer can find.
+    /// [`inert_host`](::nest_rs_core::inert_host) to pick a report level, and
+    /// emitted as a field so a skip line names a type the developer can find.
     pub(crate) const fn origin(&self) -> &'static str {
         self.origin
     }

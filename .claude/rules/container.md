@@ -208,10 +208,11 @@ boot there; one that fails ends it with `WiringFailedError` naming the registry.
 the cause (`InertHost`, from the module descriptors and the app's
 `Composition`). The app's own code — a host in its roots' crates that no
 imported module lists, one registered outside every imported module — is a
-`warn` with `cause` and a `hint` naming that cause's remedy. A framework
-capability the app never opted into, and a library crate's host the app
-neither imports nor registers, is another binary's, at `debug`. Three
-disciplines bind every boot diagnostic:
+`warn` with `cause` and a `hint` naming that cause's remedy. A dependency's
+host the app neither imports nor registers — the framework's, a package's, a
+shared library crate's — is said at `debug` (`cause = "dependency"`). The cause
+is read off the composition, never off a crate's name: a prefix is no evidence
+of who wrote a crate. Three disciplines bind every boot diagnostic:
 
 - **Escalate no further than the fact supports** — a shape correct in another
   composition warns or says less; a boot error there refuses working code.
@@ -220,7 +221,7 @@ disciplines bind every boot diagnostic:
   prescribes none.
 - **A `warn` whose sentence is wrong is worse than none**, so one shared
   sentence serves every site, and the level is one shared predicate
-  (`is_framework_owned`).
+  (`InertHost::is_the_apps`).
 
 ## A swappable concern ships an extension contract
 

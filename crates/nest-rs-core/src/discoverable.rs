@@ -148,16 +148,16 @@ pub const INERT_HOST_HINT: &str = concat!(
 /// boot says it at and the remedy it names. Read by
 /// [`report_inert_host!`](crate::report_inert_host!), from [`inert_host`].
 ///
-/// A host a library crate holds and this app does not import is another app's,
-/// said at `debug`; the app's own is said at `warn`.
+/// The cause is read off the app's composition, never off a crate's name: a
+/// dependency's host this app does not import — the framework's, a
+/// package's, the workspace's library — is said at `debug`; the app's own is
+/// said at `warn`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InertHost {
-    /// A `nest-rs-*` capability the app never opted into — see
-    /// [`is_framework_owned`]. Said at `debug`.
-    Framework,
-    /// A library crate's host this app neither imports the module of nor
-    /// registers: another binary's, or nobody's. Said at `debug`.
-    AnotherApps {
+    /// A dependency's host this app neither imports the module of nor
+    /// registers — a capability it does not use, another binary's, or
+    /// nobody's. Said at `debug`.
+    Dependency {
         /// A module listing it, which this app does not import — `None` when no
         /// `#[module]` lists it, so only a hand-written registration in another
         /// binary could run it.
@@ -185,14 +185,13 @@ impl InertHost {
     /// Whether the developer of this app can act on it — said at `warn` when
     /// so, at `debug` otherwise.
     pub fn is_the_apps(self) -> bool {
-        !matches!(self, Self::Framework | Self::AnotherApps { .. })
+        !matches!(self, Self::Dependency { .. })
     }
 
     /// A low-cardinality name for the cause, the `cause` field of the line.
     pub fn cause(self) -> &'static str {
         match self {
-            Self::Framework => "framework",
-            Self::AnotherApps { .. } => "another_app",
+            Self::Dependency { .. } => "dependency",
             Self::ModuleNotImported { .. } => "module_not_imported",
             Self::NotListed => "not_listed",
             Self::RegisteredOutsideModules => "registered_outside_modules",
@@ -204,16 +203,13 @@ impl InertHost {
     /// is unknown.
     pub fn hint(self) -> Cow<'static, str> {
         match self {
-            Self::Framework => Cow::Borrowed("a capability of the framework this app does not use"),
-            Self::AnotherApps {
+            Self::Dependency {
                 module: Some(module),
             } => Cow::Owned(format!(
-                "a library crate's host whose module `{module}` this app does not import: another \
-                 binary's to run"
+                "a host of a dependency whose module `{module}` this app does not import"
             )),
-            Self::AnotherApps { module: None } => Cow::Borrowed(
-                "a library crate's host that no `#[module]` lists and this app does not register: \
-                 another binary's to register by hand, or nobody's",
+            Self::Dependency { module: None } => Cow::Borrowed(
+                "a host of a dependency that no `#[module]` lists and this app does not register",
             ),
             Self::ModuleNotImported { module } => Cow::Owned(format!(
                 "its module `{module}` is not imported by this app: import it, or delete the methods"
@@ -240,9 +236,6 @@ impl InertHost {
 /// Without a [`Composition`] — a container built by hand in a test — the cause
 /// is [`Unknown`](InertHost::Unknown).
 pub fn inert_host(container: &Container, origin: &str, host: TypeId) -> InertHost {
-    if is_framework_owned(origin) {
-        return InertHost::Framework;
-    }
     let Some(composition) = container.get::<Composition>() else {
         return InertHost::Unknown;
     };
@@ -257,8 +250,8 @@ pub fn inert_host(container: &Container, origin: &str, host: TypeId) -> InertHos
     )
 }
 
-/// [`inert_host`] over `descriptors`, for a host the framework does not own,
-/// which the app's container holds under its own type when `held`.
+/// [`inert_host`] over `descriptors`, for a host the app's container holds
+/// under its own type when `held`.
 fn classify(
     descriptors: &[&ModuleDescriptor],
     composition: &Composition,
@@ -279,7 +272,7 @@ fn classify(
         return InertHost::RegisteredOutsideModules;
     }
     if !composition.is_the_apps_own(origin) {
-        return InertHost::AnotherApps { module: unreached };
+        return InertHost::Dependency { module: unreached };
     }
     match unreached {
         Some(module) => InertHost::ModuleNotImported { module },
@@ -297,19 +290,6 @@ pub fn unresolved_host(host: &str) -> anyhow::Error {
     anyhow::Error::msg(format!(
         "host `{host}` could not be resolved: {INERT_HOST_HINT}"
     ))
-}
-
-/// Whether an inert operation belongs to the **framework** rather than to the
-/// app, read from the `module_path!()` its decorator recorded.
-///
-/// A `nest-rs-*` crate's opt-in providers are inert whenever the app did not
-/// import their module, which is no mistake, so they report at `debug`.
-///
-/// **Known limit:** any crate named `nest_rs_…`, a third-party plugin
-/// included, reads as the framework's.
-pub fn is_framework_owned(origin: &str) -> bool {
-    let krate = origin.split("::").next().unwrap_or(origin);
-    krate == "nest_rs" || krate.starts_with("nest_rs_")
 }
 
 /// Report a discovered operation whose host the booted container does not hold,
@@ -368,31 +348,6 @@ macro_rules! report_inert_host {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_framework_owned_origin_is_not_the_developers_problem() {
-        for origin in [
-            "nest_rs_oauth_resource::module",
-            "nest_rs_events::module",
-            "nest_rs",
-            "nest_rs::authn",
-        ] {
-            assert!(is_framework_owned(origin), "{origin}");
-        }
-        for origin in [
-            "features::users::service",
-            "api::module",
-            "my_nest_rs_helpers::hooks",
-        ] {
-            assert!(!is_framework_owned(origin), "{origin}");
-        }
-    }
-
-    /// Pins the known limit of [`is_framework_owned`].
-    #[test]
-    fn a_third_party_crate_taking_the_prefix_is_read_as_the_frameworks() {
-        assert!(is_framework_owned("nest_rs_audit_probe"));
-    }
 
     /// Guards the shape, not one wording: the forbidden remedy cannot be written
     /// without naming a `providers` list or an imperative.
@@ -508,21 +463,32 @@ mod tests {
             classify(&refs, &composition, origin, host, held)
         }
 
+        /// Read off the composition, never off the crate's name: the
+        /// framework's, a community package's and the workspace's library
+        /// alike.
         #[test]
-        fn a_library_hosts_module_this_app_does_not_import_is_another_apps() {
-            let inert = classified("features::tasks", TypeId::of::<Tasks>());
-            assert_eq!(
-                inert,
-                InertHost::AnotherApps {
-                    module: Some("WorkerTasksModule")
-                }
-            );
-            assert!(!inert.is_the_apps(), "said at debug");
-            assert!(
-                inert.hint().contains("`WorkerTasksModule`"),
-                "{}",
-                inert.hint()
-            );
+        fn a_dependencys_host_whose_module_this_app_does_not_import_is_the_dependencys() {
+            for origin in [
+                "nest_rs_events::bus",
+                "nestrs_kafka::consumer",
+                "features::tasks",
+            ] {
+                let inert = classified(origin, TypeId::of::<Tasks>());
+                assert_eq!(
+                    inert,
+                    InertHost::Dependency {
+                        module: Some("WorkerTasksModule")
+                    },
+                    "{origin}"
+                );
+                assert!(!inert.is_the_apps(), "said at debug: {origin}");
+                assert_eq!(inert.cause(), "dependency");
+                assert!(
+                    inert.hint().contains("`WorkerTasksModule`"),
+                    "{}",
+                    inert.hint()
+                );
+            }
         }
 
         #[test]
@@ -565,7 +531,7 @@ mod tests {
                 own.hint()
             );
             let library = classified("features::unlisted", TypeId::of::<Unlisted>());
-            assert_eq!(library, InertHost::AnotherApps { module: None });
+            assert_eq!(library, InertHost::Dependency { module: None });
             assert!(!library.is_the_apps());
             assert!(
                 library.hint().contains("no `#[module]` lists"),
@@ -579,6 +545,8 @@ mod tests {
             for (origin, host) in [
                 ("features::unlisted", TypeId::of::<Unlisted>()),
                 ("features::tasks", TypeId::of::<Tasks>()),
+                ("nest_rs_events::bus", TypeId::of::<Tasks>()),
+                ("nestrs_kafka::consumer", TypeId::of::<Tasks>()),
                 ("api::unlisted", TypeId::of::<Unlisted>()),
             ] {
                 let inert = held_or_not(origin, host, true);
@@ -586,6 +554,66 @@ mod tests {
                 assert!(inert.is_the_apps(), "{origin}");
                 assert!(inert.hint().contains("instead of"), "{}", inert.hint());
             }
+        }
+    }
+
+    /// A root written in a `nest_rs_*` crate — this one — owns the hosts its
+    /// crate declares: the boot reads the cause off the composition, never off
+    /// the crate's name.
+    mod booted {
+        use std::any::TypeId;
+
+        use nest_rs_testing::LogCapture;
+
+        use crate::{App, ContainerBuilder, Module, Registering, target};
+
+        struct OwnModule;
+        impl Module for OwnModule {
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+                builder
+            }
+        }
+        struct Unlisted;
+        struct HeldByHand;
+
+        const SKIPPED: &str =
+            "skipped lifecycle hook: no instance of the provider in this app's container";
+
+        #[tokio::test]
+        async fn a_framework_named_crates_own_host_is_said_at_warn_with_its_cause() {
+            let logs = LogCapture::install();
+            let app = App::builder()
+                .provide(HeldByHand)
+                .module::<OwnModule>()
+                .build()
+                .await
+                .expect("a module with no provider boots");
+            let origin = module_path!();
+            assert!(origin.starts_with("nest_rs_"), "{origin}");
+
+            for host in [TypeId::of::<Unlisted>(), TypeId::of::<HeldByHand>()] {
+                crate::report_inert_host!(
+                    target: target::LIFECYCLE,
+                    what: "lifecycle hook",
+                    origin: origin,
+                    host: host,
+                    container: app.container(),
+                );
+            }
+
+            let lines = logs.find(target::LIFECYCLE, SKIPPED);
+            let said: Vec<_> = lines
+                .iter()
+                .map(|line| (line.level.as_str(), line.field("cause")))
+                .collect();
+            assert_eq!(
+                said,
+                [
+                    ("warn", Some("not_listed".to_owned())),
+                    ("warn", Some("registered_outside_modules".to_owned())),
+                ],
+                "{lines:#?}"
+            );
         }
     }
 }

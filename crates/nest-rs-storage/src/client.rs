@@ -701,6 +701,88 @@ mod tests {
         );
     }
 
+    /// An S3 store on loopback presenting a certificate `authority` issued,
+    /// counting every request it reads and answering each `404`.
+    async fn store_presenting(
+        authority: &nest_rs_testing::TestAuthority,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        let acceptor = authority.server(&["127.0.0.1"]).acceptor(None);
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&requests);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (acceptor, counted) = (acceptor.clone(), Arc::clone(&counted));
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let mut head = Vec::new();
+                    let mut buf = [0_u8; 4096];
+                    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match tls.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => head.extend_from_slice(&buf[..read]),
+                        }
+                    }
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let answer =
+                        b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+                    if tls.write_all(answer).await.is_ok() {
+                        tls.shutdown().await.ok();
+                    }
+                });
+            }
+        });
+        (format!("https://{addr}"), requests)
+    }
+
+    /// The double's certificate chains to an authority the system does not
+    /// hold, so a client trusting the system's sends it nothing; trusting
+    /// that authority, the same call reaches it.
+    #[tokio::test]
+    async fn a_store_whose_certificate_no_trusted_authority_signed_is_sent_nothing() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let (endpoint, requests) = store_presenting(&authority).await;
+        let storage = |tls| {
+            Storage::new(Arc::new(StorageConfig {
+                endpoint: endpoint.clone(),
+                access_key: "AKIATEST".into(),
+                secret_key: "test-secret".into(),
+                operation_timeout: Duration::from_secs(1),
+                tls,
+                ..Default::default()
+            }))
+        };
+
+        let refused = storage(nest_rs_config::ClientTls::default())
+            .head("k")
+            .await
+            .expect_err("a certificate no trusted authority signed is not talked to");
+        let rendered = nest_rs_core::error_message(&refused);
+        assert_eq!(
+            requests.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no request crossed the failed handshake: {rendered}"
+        );
+        assert!(
+            rendered.contains("UnknownIssuer"),
+            "refused for the certificate, not another reason: {rendered}"
+        );
+
+        let found = storage(authority.client_tls())
+            .head("k")
+            .await
+            .expect("the authority the deployment named is trusted");
+        assert!(found.is_none(), "the double answers 404");
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
     fn client(endpoint: &str, allow_http: bool) -> Storage {
         Storage::new(Arc::new(StorageConfig {
             endpoint: endpoint.into(),

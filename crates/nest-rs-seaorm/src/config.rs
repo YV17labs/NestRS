@@ -233,6 +233,10 @@ impl SeaOrmConfig {
         let mut opts = ConnectOptions::new(self.url.clone());
         let system = self.trusts_the_system();
         opts.map_sqlx_postgres_opts(move |options| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the one call: `mode` is `tls_mode`'s, verified or explicitly off"
+            )]
             let options = options.ssl_mode(mode);
             if system {
                 options.ssl_root_cert_from_pem(nest_rs_config::system_authorities().to_vec())

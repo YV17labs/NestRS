@@ -133,8 +133,9 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 # `EphemeralDatabase` — the fixture that migrates against *this* crate.
 # Without it nothing in the root workspace enables `nest-rs-testing/orm`, so
 # `cargo clippy --workspace --all-targets` never saw those 176 published
-# lines and only `demo/` (a separate workspace) built them.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["orm"] }
+# lines and only `demo/` (a separate workspace) built them. `tls` issues the
+# certificate of the Postgres double the pool must refuse to log in to.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["orm", "tls"] }
 # The pool's default budget is pinned below the authentication guard's net.
 nest-rs-authn = { path = "../nest-rs-authn" }
 # The `executor` e2e emits under a caller's own transaction: the bus dispatches

@@ -50,6 +50,31 @@ A provider package building a URL at run time inherits the same rule: the
 OAuth client speaks `https` alone, so a URL that slipped past every check
 still never leaves the process in plaintext with a token on it.
 
+## Every client the framework opens verifies TLS
+
+An encrypted connection the framework opens checks the server's
+certificate, every time: it chains to an authority the system's store
+holds, or to the ones a `TLS_CA_CERT` setting names in place of them,
+and it names the host dialled. No setting, URL parameter or code path
+turns the check off — the framework's lints refuse the libraries' own
+switches in its code — and each client below has a test that dials a
+server whose certificate a private authority signed and sees it refused
+before any request, login or credential crosses.
+
+| Client | Trusts | Private authority |
+|--------|--------|-------------------|
+| Postgres pool, `connect_from_env`, `EphemeralDatabase` | the system's store, `verify-full` by default | the file `sslrootcert` names in `<PREFIX>_SEAORM__URL` |
+| Redis, all three topologies | the system's store, for a `rediss://` URL | `<PREFIX>_REDIS__TLS_CA_CERT` |
+| Storage | the system's store, for an `https://` endpoint | `<PREFIX>_STORAGE__TLS_CA_CERT` |
+| JWK Set | the system's store | `<PREFIX>_AUTHN__TLS_CA_CERT` |
+| OAuth client | the system's store | `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` |
+| GitHub and Google sign-in | the system's store | none: both serve publicly trusted certificates |
+| OTLP exporter | the system's store, for an `https://` endpoint | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` |
+
+A refused certificate fails the call or the boot — never a fallback to
+an unverified connection — and Redis, the JWK Set and the OAuth client
+say which setting fixes it.
+
 ## What the framework does **not** do
 
 These are out of scope on purpose. They matter, they belong in your

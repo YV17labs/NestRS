@@ -15,7 +15,7 @@ mod providers;
 mod registry;
 
 use nest_rs_core::AppBuilder;
-use nest_rs_social::{GithubSocialConfig, SocialProviderEntry, SocialRegistry};
+use nest_rs_social::{GithubSocialConfig, GoogleSocialConfig, SocialProviderEntry, SocialRegistry};
 
 fn linked_keys() -> Vec<&'static str> {
     nest_rs_core::inventory::iter::<SocialProviderEntry>()
@@ -28,6 +28,15 @@ fn seeded_github_config() -> GithubSocialConfig {
         client_id: "seeded-client".into(),
         client_secret: "seeded-secret".into(),
         redirect_url: "https://acme.example.com/auth/github/callback".into(),
+        scopes: Vec::new(),
+    }
+}
+
+fn seeded_google_config() -> GoogleSocialConfig {
+    GoogleSocialConfig {
+        client_id: "seeded-client".into(),
+        client_secret: "seeded-secret".into(),
+        redirect_url: "https://acme.example.com/auth/google/callback".into(),
         scopes: Vec::new(),
     }
 }

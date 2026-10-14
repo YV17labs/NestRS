@@ -9,22 +9,24 @@ redis_url := env_var_or_default("NESTRS_REDIS__URL", "rediss://valkey-standalone
 # redis_url := "rediss-sentinel://valkey-sentinel-1:26379?node=valkey-sentinel-2:26379&node=valkey-sentinel-3:26379&sentinelServiceName=nestrs"
 # redis_url := "rediss-cluster://valkey-cluster-1:6379?node=valkey-cluster-2:6379&node=valkey-cluster-3:6379"
 
-# Its tests that hold on one topology alone sit in a module named for it, and a
-# failover in a `failover` module.
+# Its tests that hold on one topology alone sit in a module named for it; a
+# failover in a `failover` module, and every node requiring a client certificate
+# in a `mutual_tls` one.
 topology := if redis_url =~ '^rediss?-sentinel://' { "sentinel" } else if redis_url =~ '^rediss?-cluster://' { "cluster" } else { "standalone" }
 redis := "binary_id(nest-rs-redis::e2e)"
 elsewhere := redis + " and test(/(^|::)(standalone|sentinel|cluster)::/) and not test(/(^|::)" + topology + "::/)"
-failovers := redis + " and test(/(^|::)" + topology + "::failover::/)"
+alone := redis + " and test(/(^|::)" + topology + "::(failover|mutual_tls)::/)"
 
 # Every test: unit, integration, e2e and the doc examples
 all: && doc
     #!/usr/bin/env bash
     set -euo pipefail
     export NESTRS_REDIS__URL='{{redis_url}}'
-    {{nextest}} -E 'not ({{elsewhere}}) and not ({{failovers}})'
-    # A failover moves the primaries every other test runs on: last, one at a time.
+    {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}})'
+    # A failover moves the primaries every other test runs on, and a node
+    # requiring a client certificate refuses their connections: last, one at a time.
     if [ "{{topology}}" != standalone ]; then
-        {{nextest}} --test-threads 1 -E '{{failovers}}'
+        {{nextest}} --test-threads 1 -E '{{alone}}'
     fi
 
 # The `#[cfg(test)]` modules in each crate's `src/`
@@ -40,9 +42,9 @@ e2e:
     #!/usr/bin/env bash
     set -euo pipefail
     export NESTRS_REDIS__URL='{{redis_url}}'
-    {{nextest}} -E 'binary(e2e) and not ({{elsewhere}}) and not ({{failovers}})'
+    {{nextest}} -E 'binary(e2e) and not ({{elsewhere}}) and not ({{alone}})'
     if [ "{{topology}}" != standalone ]; then
-        {{nextest}} --test-threads 1 -E '{{failovers}}'
+        {{nextest}} --test-threads 1 -E '{{alone}}'
     fi
 
 # Coverage of the nextest suite, per file; doctests count on nightly only

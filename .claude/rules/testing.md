@@ -114,7 +114,9 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   (`.claude/decisions/one-server-per-backend.md`). A test that holds on
   one topology alone sits in a module named for it (`standalone`, `sentinel`,
   `cluster`), and each run leaves the others out; a failover moves what every
-  other test runs on, so it sits in a `failover` module, run last and alone.
+  other test runs on, and a node asked for a client certificate refuses every
+  other test's connection, so each sits in a module of its own (`failover`,
+  `mutual_tls`), run last and alone, and gives back what it changed.
   An administration command reaches every node it concerns — `CLIENT KILL` ids
   and `ACL` users are per server — never one the client picks.
 

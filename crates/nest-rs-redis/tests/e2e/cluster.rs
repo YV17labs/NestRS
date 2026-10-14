@@ -1,7 +1,8 @@
 //! What holds on a Cluster alone, against the suite's nodes: a queue whose
 //! slot moves under it, run by the users the pages prescribe — an `ASK` while
 //! the slot moves, a `MOVED` once it has — and, one at a time, a real failover
-//! of the node serving a running queue.
+//! of the node serving a running queue and nodes requiring a client
+//! certificate.
 
 use std::time::Duration;
 
@@ -463,5 +464,21 @@ mod failover {
         })
         .await;
         replica.worker.shutdown().await.expect("clean shutdown");
+    }
+}
+
+/// Every node requires a client certificate, which would refuse every other
+/// test's connection, so this runs one at a time, once every other test of the
+/// run is done.
+mod mutual_tls {
+    /// Presenting the certificate, the Cluster boots and every primary takes a
+    /// write, each node's connection handed it; without it, the boot fails at
+    /// once at the seed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nodes_requiring_a_client_certificate_are_handed_it_and_refuse_its_absence_at_once() {
+        crate::requiring_client_certificates(crate::a_client_certificate_is_required_at(
+            crate::redis_url(),
+        ))
+        .await;
     }
 }

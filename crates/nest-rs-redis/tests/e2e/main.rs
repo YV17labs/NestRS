@@ -8,6 +8,8 @@
 //! queue backend runs included — [`correlation`] for the
 //! trace context that crosses the producer/consumer boundary, and [`schedule`]
 //! for the occurrence lock a job firing once across replicas claims through.
+//! Under Sentinel and on a Cluster, a `mutual_tls` module asks every data node
+//! for a client certificate, one test at a time once every other is done.
 //!
 //! Valkey is reached over TLS alone, at `<PREFIX>_REDIS__URL` or the dev
 //! container's `rediss://valkey-standalone:6379`, by name on every topology,
@@ -573,6 +575,144 @@ async fn drop_every_connection_on(db: u8) -> usize {
     }))
     .await;
     closed.into_iter().sum()
+}
+
+/// Where the dev container holds its copy of the development services'
+/// certificate, issued for client authentication too
+/// (`.devcontainer/scripts/issue-certificates.sh`, its clients).
+const DEVELOPMENT_CLIENT: &str = "/certs/dev";
+
+/// The development services' certificate and key, presented as the client's
+/// — what a Valkey requiring a client certificate is handed — over the
+/// system's authorities.
+fn presenting_the_development_certificate() -> nest_rs_config::ClientTls {
+    let cert = format!("{DEVELOPMENT_CLIENT}/client.pem");
+    let key = format!("{DEVELOPMENT_CLIENT}/client.key");
+    nest_rs_config::ClientTls::from_env(
+        &nest_rs_config::ConfigService::with_vars(
+            "redis",
+            [
+                ("TLS_CERT_FILE", cert.as_str()),
+                ("TLS_KEY_FILE", key.as_str()),
+            ],
+        ),
+        nest_rs_config::ClientTls::default(),
+    )
+    .expect("the dev container's copy of the client certificate")
+}
+
+/// Run `body` while every data node requires a client certificate, then give
+/// each its own setting back, whatever `body` did.
+///
+/// Each node is asked over a connection opened before, which keeps serving
+/// after: the setting governs the handshakes that follow it. Every other
+/// test's connection would be refused meanwhile, so a test calling this runs
+/// in a module the suite runs last, one test at a time (`test.just`).
+async fn requiring_client_certificates(body: impl std::future::Future<Output = ()>) {
+    use futures_util::FutureExt as _;
+
+    let mut nodes = Vec::new();
+    for node in data_nodes().await {
+        let mut connection = node
+            .get_multiplexed_async_connection()
+            .await
+            .expect("every data node answers");
+        let (_, kept): (String, String) = redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("tls-auth-clients")
+            .query_async(&mut connection)
+            .await
+            .expect("CONFIG GET tls-auth-clients");
+        nodes.push((connection, kept));
+    }
+    for (connection, _) in &mut nodes {
+        let _: () = redis::cmd("CONFIG")
+            .arg("SET")
+            .arg("tls-auth-clients")
+            .arg("yes")
+            .query_async(connection)
+            .await
+            .expect("a data node requires a client certificate");
+    }
+    let ran = std::panic::AssertUnwindSafe(body).catch_unwind().await;
+    for (connection, kept) in &mut nodes {
+        let _: () = redis::cmd("CONFIG")
+            .arg("SET")
+            .arg("tls-auth-clients")
+            .arg(kept.as_str())
+            .query_async(connection)
+            .await
+            .expect("a data node takes its own setting back");
+    }
+    if let Err(panicked) = ran {
+        std::panic::resume_unwind(panicked);
+    }
+}
+
+/// Asserts `url` boots presenting the development certificate and answers,
+/// and that without it the boot fails at once, naming the refusal and the
+/// certificate's settings, retrying nothing.
+async fn a_client_certificate_is_required_at(url: String) {
+    let logs = nest_rs_testing::LogCapture::install();
+    let presenting = RedisConfig {
+        url: url.clone(),
+        tls: presenting_the_development_certificate(),
+        ..redis_config()
+    };
+    let mut conn = RedisConnection::connect(&presenting)
+        .await
+        .unwrap_or_else(|error| panic!("{url}: presenting the certificate boots: {error}"));
+    let _: () = redis::cmd("PING")
+        .query_async(&mut conn)
+        .await
+        .expect("and answers");
+    // Hash tags spread over the slots, so on a Cluster every primary is
+    // reached, each over a connection presenting the certificate.
+    for tag in ["a", "b", "c", "d", "e", "f"] {
+        let key = format!("{{{tag}}}{}", unique_key("mutual-tls"));
+        let _: () = redis::cmd("SET")
+            .arg(&key)
+            .arg(1)
+            .arg("EX")
+            .arg(60)
+            .query_async(&mut conn)
+            .await
+            .expect("a write reaches the node serving its key");
+        let _: () = redis::cmd("DEL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .expect("and is removed");
+    }
+
+    let absent = RedisConfig {
+        url: url.clone(),
+        connect_timeout: Duration::from_secs(30),
+        ..redis_config()
+    };
+    let started = Instant::now();
+    let Err(error) = RedisConnection::connect(&absent).await else {
+        panic!("{url}: a client presenting no certificate must be refused");
+    };
+    let took = started.elapsed();
+    assert!(
+        took < harness::AT_ONCE,
+        "{url}: refused at once, never after the budget, took {took:?}"
+    );
+    assert!(
+        matches!(error, nest_rs_redis::RedisError::TlsRefused { .. }),
+        "{url}: {error}"
+    );
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("requires a client certificate")
+            && rendered.contains(&nest_rs_config::var_name("redis", "TLS_CERT")),
+        "{url}: the refusal sends the operator to the certificate: {rendered}"
+    );
+    logs.expect_none(
+        nest_rs_redis::TARGET,
+        "redis unreachable — retrying within the connect budget",
+    );
 }
 
 /// Freeze the node at `addr` for six seconds — longer than the suite's

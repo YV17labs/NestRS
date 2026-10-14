@@ -1,7 +1,7 @@
 //! What holds under Sentinel alone, against the suite's sentinels: the
 //! sentinels' own users as the page prescribes them, a service they do not
 //! know, a URL declaring the wrong topology — and, one at a time, a real
-//! failover under a running queue.
+//! failover under a running queue and servers requiring a client certificate.
 
 use std::time::Duration;
 
@@ -150,5 +150,23 @@ mod failover {
             "the connection says it follows {after}: {:#?}",
             logs.events(),
         );
+    }
+}
+
+/// Every server requires a client certificate, which would refuse every
+/// other test's connection, so these run one at a time, once every other test
+/// of the run is done.
+mod mutual_tls {
+    /// The primary reached as one server, then through the sentinels naming
+    /// it: presenting the certificate boots both, and without it each boot
+    /// fails at once — at the server, and at the primary the sentinels name.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn servers_requiring_a_client_certificate_are_handed_it_and_refuse_its_absence_at_once() {
+        crate::requiring_client_certificates(async {
+            let primary = crate::sentinel_primary().await;
+            crate::a_client_certificate_is_required_at(crate::node_url(&primary)).await;
+            crate::a_client_certificate_is_required_at(crate::redis_url()).await;
+        })
+        .await;
     }
 }

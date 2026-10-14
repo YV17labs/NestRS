@@ -102,3 +102,23 @@ was refused: each later flush would reach it again. The other failure
 recorded above, a job counted twice in CI, is not one this race produces —
 a collision ends in a refusal or a migration that failed whole, never a
 second delivery — and stays as recorded.
+
+**2026-10-14, a client certificate proved live on every shape:** every
+Valkey of the dev container runs `tls-auth-clients no`, so the refusal of a
+client presenting no certificate was proved against in-process doubles
+only. A test of a `mutual_tls` module now asks every data node of the
+Sentinel and Cluster environments for one (`CONFIG SET tls-auth-clients
+yes`) over a connection opened before, which keeps serving, and gives each
+node its own setting back whatever the test did; the suite runs the module
+last and alone, beside the failovers, since every other test's connection
+would be refused meanwhile. Presenting the certificate boots and reaches
+every primary; without it the boot fails at once, at the Cluster's seed, at
+the primary the sentinels name, and at that primary reached as one server —
+the standalone proof, run in the Sentinel environment because CI's one
+server is shared by every test of its run. A sentinel takes no `CONFIG
+SET`, so the sentinels' own refusal stays proved in process. The dev
+container presents the services' certificate, which carries `clientAuth`,
+from a copy of its own (`issue-certificates.sh`'s clients), installed from
+the kept certificate so adding it issues nothing. Refused: a node of each
+topology requiring a certificate from its start — a new hostname, so a new
+certificate, which reissues the authority under every running service.

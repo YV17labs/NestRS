@@ -7,6 +7,8 @@
 #   DIR/ca.pem              the authority every client trusts
 #   DIR/<service>/<files>   one folder per service: the certificate and its
 #                           key, under the names and the owner it reads
+#   DIR/<client>/<files>    one folder per client presenting the same
+#                           certificate to a server requiring one
 #
 # The certificate is kept while it has a month left, every service has its copy
 # and it serves client authentication too — a Valkey Cluster's nodes present it
@@ -15,7 +17,9 @@
 # root, to give each service the owner it needs.
 #
 # Adding a service: one row below. Its name is its hostname on the compose
-# network, and joins the certificate's names on its own.
+# network, and joins the certificate's names on its own. A client is not a
+# host, so its copy is no name of the certificate's: it is installed from the
+# kept certificate as from a new one, and adding one issues nothing.
 set -eu
 
 # service                 uid    certificate      key              how the service reads them
@@ -34,6 +38,11 @@ valkey-cluster-4          999    server.pem       server.key       valkey-server
 valkey-cluster-5          999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
 valkey-cluster-6          999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
 rustfs                    10001  rustfs_cert.pem  rustfs_key.pem   RUSTFS_TLS_PATH, which fixes the two names
+'
+
+# client                  uid    certificate      key              who presents them
+CLIENTS='
+dev                       1000   client.pem       client.key       the dev container, to a Valkey asked for a client certificate
 '
 
 dir=${1:?usage: issue-certificates.sh DIR}
@@ -57,6 +66,27 @@ fresh() {
     done
 }
 
+clients() {
+    echo "$CLIENTS" | while read -r client uid cert key _; do
+        if [ -n "$client" ]; then
+            echo "$client $uid $cert $key"
+        fi
+    done
+}
+
+# Each client's copy of the certificate every service holds, from the first
+# service's.
+install_clients() {
+    services | head -n 1 | {
+        read -r source _ source_cert source_key
+        clients | while read -r client uid cert key; do
+            install -d -m 0755 "$dir/$client"
+            install -m 0644 -o "$uid" -g "$uid" "$dir/$source/$source_cert" "$dir/$client/$cert"
+            install -m 0600 -o "$uid" -g "$uid" "$dir/$source/$source_key" "$dir/$client/$key"
+        done
+    }
+}
+
 # One line per service: what became of its copy, and until when it holds.
 report() {
     services | while read -r service _ cert _; do
@@ -66,6 +96,7 @@ report() {
 }
 
 if fresh; then
+    install_clients
     report kept
     exit 0
 fi
@@ -112,4 +143,5 @@ services | while read -r service uid cert key; do
     install -m 0644 -o "$uid" -g "$uid" "$work/cert.pem" "$dir/$service/$cert"
     install -m 0600 -o "$uid" -g "$uid" "$work/key.pem" "$dir/$service/$key"
 done
+install_clients
 report issued

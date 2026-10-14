@@ -51,11 +51,23 @@ mod tests {
         storage: Arc<Storage>,
     }
 
+    /// The principal the strategy would attach: a caller with no identity.
+    #[derive(Clone)]
+    struct Anyone;
+
+    impl nest_rs_core::AmbientValue for Anyone {}
+
+    impl nest_rs_authn::PrincipalIdentity for Anyone {
+        fn actor_id(&self) -> Option<String> {
+            None
+        }
+    }
+
     #[async_trait]
     impl Strategy for StorageStrategy {
-        type Principal = ();
+        type Principal = Anyone;
 
-        async fn authenticate(&self, _req: &mut Request) -> Result<(), AuthError> {
+        async fn authenticate(&self, _req: &mut Request) -> Result<Anyone, AuthError> {
             Err(AuthError::MissingCredentials)
         }
     }

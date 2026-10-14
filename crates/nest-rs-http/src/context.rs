@@ -1,10 +1,11 @@
-//! Request-scoped context: the typed value a guard or interceptor attaches to
-//! a request for the handler to read back (e.g. the authenticated principal
-//! attached by an auth guard).
+//! Request-scoped context: the typed value a guard attaches to the request's
+//! unit for the handler to read back (e.g. the authenticated principal an
+//! authentication guard attaches).
 
 use std::any::TypeId;
 use std::ops::Deref;
 
+use nest_rs_core::AmbientValue;
 use poem::http::StatusCode;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
 
@@ -28,12 +29,13 @@ pub struct RejectedCredential {
     pub bearer_error: Option<&'static str>,
 }
 
-/// Extracts a request-scoped value of type `T` an upstream guard or
-/// interceptor attached.
+/// Extracts a value of type `T` a guard attached to the request with
+/// `UnitContext::attach` — ambient for the rest of the request once the guards
+/// passed.
 ///
-/// Rejects with `500` if absent — the guard that should have set it never ran
-/// on this route. `T` is cloned out of the request; store an `Arc<_>` for a
-/// large value.
+/// Rejects with `500` if absent — the guard that should have attached it never
+/// ran on this route. `T` is cloned out of the ambient context; attach a value
+/// that is cheap to clone.
 ///
 /// One exception: when an authentication guard rejected a presented credential
 /// on a `#[public]` route, the deferred `401` ([`RejectedCredential`]) answers.
@@ -53,10 +55,10 @@ impl<T> Deref for Ctx<T> {
     }
 }
 
-impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
+impl<'a, T: AmbientValue + Clone> FromRequest<'a> for Ctx<T> {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        if let Some(value) = req.extensions().get::<T>() {
-            return Ok(Ctx(value.clone()));
+        if let Some(value) = nest_rs_core::ambient::<T>() {
+            return Ok(Ctx(T::clone(&value)));
         }
         if let Some(rejected) = req
             .extensions()
@@ -80,7 +82,7 @@ impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
         tracing::error!(
             target: crate::target::HTTP,
             context_type = std::any::type_name::<T>(),
-            "missing request context — the guard or interceptor that sets it did not run on this route",
+            "missing request context — the guard that attaches it did not run on this route",
         );
         Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
@@ -93,6 +95,8 @@ mod tests {
     #[derive(Clone)]
     struct Principal(&'static str);
 
+    impl AmbientValue for Principal {}
+
     async fn extract(req: Request) -> Result<Ctx<Principal>> {
         let (req, mut body) = req.split();
         Ctx::<Principal>::from_request(&req, &mut body).await
@@ -100,9 +104,20 @@ mod tests {
 
     #[tokio::test]
     async fn an_attached_principal_extracts() {
+        let extracted = nest_rs_core::with_ambient(
+            std::sync::Arc::new(Principal("ada")),
+            extract(Request::default()),
+        )
+        .await;
+        assert_eq!(extracted.expect("attached").0.0, "ada");
+    }
+
+    #[tokio::test]
+    async fn a_value_in_the_requests_extensions_is_not_an_attachment() {
         let mut req = Request::default();
-        req.extensions_mut().insert(Principal("ada"));
-        assert_eq!(extract(req).await.expect("attached").0.0, "ada");
+        req.extensions_mut().insert(Principal("mallory"));
+        let err = extract(req).await.err().expect("nothing was attached");
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
@@ -116,7 +131,7 @@ mod tests {
 
         let event = logs.expect_one(
             "nest_rs::http",
-            "missing request context — the guard or interceptor that sets it did not run on this route",
+            "missing request context — the guard that attaches it did not run on this route",
         );
         assert_eq!(event.level, "error");
         assert!(
@@ -180,6 +195,8 @@ mod tests {
     async fn a_rejected_credential_does_not_mask_an_unrelated_missing_context() {
         #[derive(Clone)]
         struct SomethingElse;
+
+        impl AmbientValue for SomethingElse {}
 
         let mut req = Request::default();
         req.extensions_mut().insert(RejectedCredential {

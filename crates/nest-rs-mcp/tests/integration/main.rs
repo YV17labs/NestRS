@@ -22,12 +22,56 @@ mod unit;
 use std::net::TcpListener as StdTcpListener;
 use std::time::Duration;
 
-use nest_rs_core::{App, Module, Transport};
+use nest_rs_core::{App, Layer, Module, Transport, UnitContext, injectable};
+use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_http::{HttpConfig, HttpTransport};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+/// What a store refusing the connection reports: the cause a guard keeps.
+#[derive(Debug)]
+struct ConnectionRefused;
+
+impl std::fmt::Display for ConnectionRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the identity store refused the connection")
+    }
+}
+
+impl std::error::Error for ConnectionRefused {}
+
+/// The `error` field a [`StoreDown`] denial files: its reason, then its cause.
+const STORE_DOWN_CHAIN: &str =
+    "the identity store did not answer: the identity store refused the connection";
+
+/// Cannot evaluate a request or an operation: its identity store is down.
+#[injectable]
+#[derive(Default)]
+struct StoreDown;
+
+impl StoreDown {
+    fn denial() -> Denial {
+        Denial::unavailable_because(None, "the identity store did not answer", ConnectionRefused)
+    }
+}
+
+impl Layer for StoreDown {}
+
+#[async_trait]
+impl Guard for StoreDown {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Self::denial())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Self::denial())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for StoreDown {}
+impl GuardFor<nest_rs_mcp::McpView> for StoreDown {}
 
 /// `M` served on a free loopback port by the transport `HttpModule` would build,
 /// with `window` as its shutdown window.

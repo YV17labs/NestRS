@@ -38,9 +38,11 @@ tracing.workspace = true
 # what separates it from the mount-table unit tests in `src/module.rs`.
 nest-rs-testing = { path = "../nest-rs-testing" }
 tokio = { workspace = true, features = ["macros", "rt"] }
-# A global deny-all guard, to prove the documentation edges are `Exempt` — the
+# A global deny-all guard, to prove the documentation edges are public — the
 # exposure that makes `enabled = false` the production posture.
 nest-rs-guards = { path = "../nest-rs-guards" }
+# The suite's `#[routes]` wrap each route's response layers.
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `figment::Jail` isolates `NESTRS_ENV` for the one config branch that reads the
 # *process* environment rather than a `ConfigService`.
 figment = { workspace = true, features = ["test"] }

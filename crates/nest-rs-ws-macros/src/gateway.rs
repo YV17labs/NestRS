@@ -67,10 +67,12 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let has_edge_guards = !guards.is_empty();
     let edge_guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
-    // The upgrade is an HTTP `GET`: a gateway-scope guard attests `HttpGuard`,
-    // not the `WsGuard` per-event ones owe.
-    let capability_bounds =
-        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::HttpGuard));
+    // The upgrade is an HTTP `GET`: a gateway-scope guard declares
+    // `GuardFor<HttpView>`, not the `GuardFor<WsView>` per-event ones owe.
+    let capability_bounds = guard_capability_bounds(
+        guards.iter(),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_ws::nest_rs_http::HttpView>),
+    );
 
     let ns_ty = match &namespace {
         Some(path) => quote! { #path },
@@ -140,7 +142,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             /// The upgrade-scope guards, as the specs the boot check reads.
             #[doc(hidden)]
             pub fn __nestrs_edge_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
             {
                 #edge_guard_specs
             }
@@ -180,17 +182,19 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             pub fn __nestrs_gateway_layers<__E>(
                 __container: &::nest_rs_core::Container,
                 __ep: __E,
+                __upgrade: &'static ::nest_rs_core::Handler,
             ) -> ::nest_rs_ws::poem::endpoint::BoxEndpoint<'static, ::nest_rs_ws::poem::Response>
             where
                 __E: ::nest_rs_ws::poem::Endpoint + 'static,
             {
-                ::nest_rs_guards::__private::guard_ws_upgrade(
+                ::nest_rs_ws::__private::guard_ws_upgrade(
                     __container,
                     ::nest_rs_ws::poem::EndpointExt::boxed(
                         ::nest_rs_ws::poem::EndpointExt::map_to_response(__ep),
                     ),
                     &Self::__nestrs_edge_guard_specs(),
                     &Self::__nestrs_mount_path(),
+                    __upgrade,
                 )
             }
         }

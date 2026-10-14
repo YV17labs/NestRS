@@ -7,6 +7,7 @@ use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, quote_spanned};
+use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
@@ -278,15 +279,17 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let method_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
         let force_typeids = force_guard_typeids(&force_guards);
+        let message_handler = nest_rs_codegen::handler_ref(&self_ty, &method.sig.ident);
         chain_inserts.push(quote! {
             #(#cfgs)*
             __chains.insert(
                 #event,
-                ::nest_rs_guards::__private::ws_event_chain(
+                ::nest_rs_ws::__private::ws_event_chain(
                     __container,
                     &#method_specs,
                     &#force_typeids,
                     #event,
+                    #message_handler,
                 ),
             );
         });
@@ -484,15 +487,18 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         arms.push(quote! { #(#cfgs)* #event => { #arm_body } });
     }
 
-    // `Guard::check_ws_message` defaults to `Ok(())`, so each per-message guard
-    // must attest `WsGuard`. Gateway-scope guards run on the HTTP upgrade instead.
+    // `Guard::check` admits by default, so each per-message guard must declare
+    // `GuardFor<WsView>`. Gateway-scope guards run on the HTTP upgrade instead.
     let conditional = || {
         all_message_layers
             .iter()
             .map(|(cfgs, item)| Conditional { cfgs, item })
     };
-    let capability_bounds =
-        guard_capability_bounds(conditional(), quote!(::nest_rs_guards::WsGuard));
+    let capability_bounds = guard_capability_bounds(
+        conditional(),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_ws::WsView>),
+    );
+    let host_name = host.unraw().to_string();
     let message_layers = layer_deps(conditional());
     let injected_methods = injected_methods_with_layers(&self_ty, &message_layers);
     let markers = declared.markers(&self_ty, &item.generics);
@@ -502,6 +508,34 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #self_ty {
             #(#handler_consts)*
+
+            /// The upgrade's metadata: the gateway's own, read by its guards.
+            #[doc(hidden)]
+            fn __nestrs_upgrade_meta() -> ::nest_rs_core::__private::MetaLevels {
+                ::nest_rs_core::__private::MetaLevels {
+                    host: <#self_ty>::__nestrs_host_meta(),
+                    method: ::std::vec::Vec::new(),
+                }
+            }
+
+            /// The site the gateway's upgrade runs as: an HTTP `GET` the gateway's
+            /// guards gate, before any message.
+            #[doc(hidden)]
+            pub const __NESTRS_UPGRADE: &'static ::nest_rs_core::Handler = {
+                static __NESTRS_HANDLER: ::nest_rs_core::Handler =
+                    ::nest_rs_core::__private::declare_handler(
+                        ::nest_rs_core::__private::HandlerDeclaration {
+                            unit: ::nest_rs_ws::nest_rs_http::unit::REQUEST,
+                            host: ::core::any::TypeId::of::<#self_ty>(),
+                            host_name: #host_name,
+                            method: "",
+                            address: <#self_ty>::PATH,
+                            posture: ::nest_rs_core::Posture::Gated,
+                            meta: <#self_ty>::__nestrs_upgrade_meta,
+                        },
+                    );
+                &__NESTRS_HANDLER
+            };
         }
 
         #capability_bounds
@@ -542,6 +576,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 let __carried = __sockets.clone();
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
                     ::nest_rs_ws::nest_rs_http::HttpEndpointMeta::new(
+                        <#self_ty>::__NESTRS_UPGRADE,
                         <#self_ty>::__nestrs_mount_path(),
                         "ws",
                         move |__container, __route| {
@@ -551,16 +586,20 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                 <#self_ty>::from_container(__container),
                             );
                             let __server = <#self_ty>::__nestrs_registry(__container);
-                            let mut __chains = ::nest_rs_ws::EventLayerTable::new();
+                            let mut __chains = ::nest_rs_ws::__private::EventLayerTable::new();
                             #(#chain_inserts)*
-                            let __ep = ::nest_rs_ws::gateway_endpoint(
+                            let __ep = ::nest_rs_ws::__private::gateway_endpoint(
                                 __gw,
                                 __server,
                                 __chains,
                                 __container,
                                 ::core::clone::Clone::clone(&__carried),
                             );
-                            let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
+                            let __ep = <#self_ty>::__nestrs_gateway_layers(
+                                __container,
+                                __ep,
+                                <#self_ty>::__NESTRS_UPGRADE,
+                            );
                             __route.at(__path, ::nest_rs_ws::nest_rs_http::matched(__ep))
                         },
                     )
@@ -575,10 +614,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     ::nest_rs_ws::nest_rs_http::HttpBootCheck::new(|__container| {
                         let mut __events: ::std::vec::Vec<(
                             &'static str,
-                            ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>,
+                            ::std::vec::Vec<::nest_rs_guards::GuardSpec>,
                         )> = ::std::vec::Vec::new();
                         #(#event_checks)*
-                        ::nest_rs_guards::__private::check_ws_gateway(
+                        ::nest_rs_ws::__private::check_ws_gateway(
                             __container,
                             &<#self_ty>::__nestrs_mount_path(),
                             &<#self_ty>::__nestrs_edge_guard_specs(),

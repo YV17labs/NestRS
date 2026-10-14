@@ -12,3 +12,12 @@ It reads as a relaxation and is not one: the condition that activates the
 forwarder — the value is present — is strictly narrower than a provider
 registration, since a registered marker would fire the forwarder whether or not
 anyone authenticated.
+
+## 2026-10-12 — the forwarder copies from the ambient context
+
+A guard no longer writes into the request's extensions: it attaches
+(`cx.attach`), and what it attached is ambient for the rest of the unit once
+its stage passed. `forward_principal!` copies the principal from there into
+the GraphQL context. The gate argument is unchanged: the value is present only
+if a module-gated guard attached it, so the forwarder still activates on a
+condition narrower than a provider registration.

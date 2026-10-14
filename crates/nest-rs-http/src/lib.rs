@@ -29,12 +29,13 @@ mod edge;
 mod endpoint;
 mod error;
 mod fallback;
+mod guard_stage;
 mod headers;
 mod interceptor;
 mod link;
 mod location;
+mod mapped;
 mod matched;
-mod metadata;
 mod module;
 mod multipart;
 mod opaque;
@@ -44,10 +45,10 @@ mod pipe;
 mod poem_bridge;
 mod problem;
 mod raw_body;
-mod reflector;
 mod request;
 mod response;
 mod response_body;
+mod route_shaper;
 mod route_template;
 mod scope;
 mod security_headers;
@@ -63,6 +64,7 @@ mod trace_context;
 mod transport;
 pub mod unit;
 mod versioning;
+mod view;
 mod window;
 
 /// A cheaply cloned, shared slice of bytes.
@@ -182,7 +184,7 @@ pub use http::uri::Scheme;
 
 pub use allow::{AllowedMethods, MethodTable};
 pub use body::Body;
-pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
+pub use boot_check::HttpBootCheck;
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::{
     HttpConfig, MAX_CONNECTION_CEILING, MAX_CONNECTION_FLOOR, SSE_KEEP_ALIVE_CEILING,
@@ -193,14 +195,14 @@ pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, Re
 pub use cors::HttpCors;
 pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
-pub use endpoint::{BoxEndpoint, EdgePosture, Endpoint, HttpEndpointMeta, endpoint_fn};
+pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, endpoint_fn};
 pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError};
 pub use fallback::HttpFallbackMeta;
 pub use headers::Header;
 pub use link::set_next_link;
 pub use location::{caller_path, set_created_location};
+pub use mapped::MappedError;
 pub use matched::{Matched, matched};
-pub use metadata::{HandlerMetadata, MappedError, Public};
 pub use module::{HttpModule, HttpSetup};
 pub use multipart::{PartExt, PartStream};
 pub use nest_rs_core::input;
@@ -209,7 +211,6 @@ pub use opaque::Opaque;
 pub use pipe::{IntoInner, Piped, Valid};
 pub use problem::{ProblemDetails, normalize_error_response};
 pub use raw_body::{RawBody, current_body_limit};
-pub use reflector::Reflector;
 pub use request::{FromRequest, Request, RequestBody, RequestBuilder};
 pub use response::{IntoResponse, Response, ResponseBuilder};
 pub use response_body::OpenEndedBody;
@@ -227,6 +228,7 @@ pub use transport::{
     versions_declare,
 };
 pub use versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, declared_versions};
+pub use view::HttpView;
 
 #[doc(hidden)]
 pub mod __private {
@@ -235,15 +237,22 @@ pub mod __private {
 
     pub use crate::controller::{SchemaFn, schema_of};
     pub use crate::deprecation::deprecated_route;
-    pub use crate::endpoint::{SelfMountGuardWrap, with_data};
+    pub use crate::endpoint::{guards_in_band, with_data};
     pub use crate::error::OriginRefused;
+    pub use crate::guard_stage::{
+        GuardedEndpoint, attached, attached_pending, check_request, check_request_chain,
+        denial_to_http_error, denial_to_http_response, deny_http, install_attached,
+    };
     pub use crate::interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
     pub use crate::matched::matched_template;
-    pub use crate::metadata::HandlerRef;
     pub use crate::origin::{OriginFacts, OriginPolicy};
     pub use crate::response::IntoResult;
+    pub use crate::route_shaper::{RouteShaper, ShapedRoute, refused_route, wrap_route_shaper};
     pub use crate::route_template::poem_pattern;
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
+    pub use crate::view::{put_poem, take_poem};
+    pub use nest_rs_guards::__private::global_guards_active;
+    pub use nest_rs_pipes::PipeSpec;
 
     pub use serde;
     pub use validator;

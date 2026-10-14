@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use nest_rs_core::AmbientValue;
 use poem::Request;
 
 use crate::PrincipalIdentity;
@@ -38,8 +39,10 @@ pub const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(18);
 pub trait Strategy: Send + Sync + 'static {
     /// The authenticated identity. Its [`PrincipalIdentity`] bound is what
     /// lets the framework record `actor_id` on the request span on success
-    /// — every principal must say who it is for audit (or `None`).
-    type Principal: PrincipalIdentity + Clone + Send + Sync + 'static;
+    /// — every principal must say who it is for audit (or `None`) — and its
+    /// [`AmbientValue`] one is what lets the guard attach it for the rest of
+    /// the request (`impl AmbientValue for Claims {}`).
+    type Principal: PrincipalIdentity + AmbientValue + Clone;
 
     /// Map the request to a principal, or return why authentication failed.
     /// Must not issue a transport response — a pure request → principal step.

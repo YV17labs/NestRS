@@ -7,8 +7,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::{App, module};
+use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+use nest_rs_core::{App, Handler, Posture, module};
 use nest_rs_guards::Guard;
+use nest_rs_http::__private::check_request;
 use nest_rs_redis::{RedisConfig, RedisModule, RedisThrottler, RedisThrottlerModule};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule, ThrottlerSetup};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -87,6 +89,19 @@ fn policy() -> ThrottlerSetup {
 #[module(imports = [RedisThrottlerModule, policy(), RedisModule::for_root(None)])]
 struct RedisThrottlerHost;
 
+struct Routes;
+
+/// The route the request below reaches.
+static RATED: Handler = declare_handler(HandlerDeclaration {
+    unit: nest_rs_http::unit::REQUEST,
+    host: std::any::TypeId::of::<Routes>(),
+    host_name: "Routes",
+    method: "rated",
+    address: "/rated",
+    posture: Posture::Public,
+    meta: MetaLevels::default,
+});
+
 /// The line the guard files for a store that could not count.
 const FAILED: &str = "throttler store failed; denying (fail-closed)";
 
@@ -114,10 +129,13 @@ async fn a_redis_that_stops_denies_with_one_line_from_the_guard_and_none_from_th
     let mut request = nest_rs_http::poem::Request::builder()
         .uri_str("/rated")
         .finish();
-    let refused = guard
-        .check_http(&mut request)
-        .await
-        .expect_err("a store that cannot count refuses the request");
+    let refused = check_request(
+        &RATED,
+        [("ThrottlerGuard", &*guard as &dyn Guard)],
+        &mut request,
+    )
+    .await
+    .expect_err("a store that cannot count refuses the request");
 
     assert_eq!(refused.http_status(), 429);
     let said = logs.expect_one(nest_rs_throttler::TARGET, FAILED);

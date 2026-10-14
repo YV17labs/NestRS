@@ -4,10 +4,10 @@
 //! paths resolved at the call site; this file names no `rmcp`, so it stops
 //! compiling if `#[tools]` ever stops carrying that import itself.
 
-use nest_rs::core::Layer;
-use nest_rs::guards::{Denial, Guard, McpGuard, async_trait};
+use nest_rs::core::{Layer, UnitContext};
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Role};
-use nest_rs::mcp::{McpError, McpOperationContext, Parameters, Valid, input, mcp, tools};
+use nest_rs::mcp::{McpError, McpView, Parameters, Valid, input, mcp, tools};
 
 /// The typed input a tool takes, validated through `Valid<HygieneArgs>`.
 #[input]
@@ -24,12 +24,12 @@ impl Layer for HygieneGuard {}
 
 #[async_trait]
 impl Guard for HygieneGuard {
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl McpGuard for HygieneGuard {}
+impl GuardFor<McpView> for HygieneGuard {}
 
 const STAMP: &str = "Answer with this sentence.";
 

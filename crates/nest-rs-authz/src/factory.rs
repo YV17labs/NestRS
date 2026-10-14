@@ -1,6 +1,8 @@
 //! Turn an authenticated actor into an [`Ability`](crate::Ability) — the
 //! per-actor capability set that the authorization layers consume.
 
+use nest_rs_core::AmbientValue;
+
 use crate::builder::AbilityBuilder;
 
 /// Implemented once per app for its actor type. All three authorization layers
@@ -25,6 +27,7 @@ use crate::builder::AbilityBuilder;
 /// # struct AuthUser {
 /// #     org_id: i32,
 /// # }
+/// # impl nest_rs_core::AmbientValue for AuthUser {}
 /// # struct AuthzAbility;
 /// impl AbilityFactory for AuthzAbility {
 ///     type Actor = AuthUser;
@@ -43,8 +46,9 @@ use crate::builder::AbilityBuilder;
 /// ```
 pub trait AbilityFactory: Send + Sync + 'static {
     /// The app's authenticated-actor type — the principal whose claims the
-    /// rules are written against.
-    type Actor: Clone + Send + Sync + 'static;
+    /// rules are written against, read off what the authentication guard
+    /// attached.
+    type Actor: AmbientValue + Clone;
 
     /// Populate `ability` with this actor's rules, called once per request the
     /// actor makes.
@@ -77,10 +81,13 @@ pub trait AbilityFactory: Send + Sync + 'static {
     /// #     impl ActiveModelBehavior for ActiveModel {}
     /// # }
     /// # use post::PostStatus;
+    /// # #[derive(Clone)]
+    /// # struct AuthUser;
+    /// # impl nest_rs_core::AmbientValue for AuthUser {}
     /// # struct AuthzAbility;
     /// # impl AbilityFactory for AuthzAbility {
-    /// #     type Actor = ();
-    /// #     fn define(&self, _actor: &(), _ab: &mut AbilityBuilder) {}
+    /// #     type Actor = AuthUser;
+    /// #     fn define(&self, _actor: &AuthUser, _ab: &mut AbilityBuilder) {}
     /// fn define_visitor(&self, ab: &mut AbilityBuilder) {
     ///     ab.can(Action::Read, post::Entity)
     ///         .when(|p| p.eq(post::Column::Status, PostStatus::Published));

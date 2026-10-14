@@ -24,9 +24,9 @@ struct PoolStrategy {
 
 #[async_trait]
 impl Strategy for PoolStrategy {
-    type Principal = ();
+    type Principal = crate::Anyone;
 
-    async fn authenticate(&self, _req: &mut Request) -> Result<(), AuthError> {
+    async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
         Err(AuthError::MissingCredentials)
     }
 }
@@ -45,9 +45,9 @@ struct LocalStrategy;
 
 #[async_trait]
 impl Strategy for LocalStrategy {
-    type Principal = ();
+    type Principal = crate::Anyone;
 
-    async fn authenticate(&self, _req: &mut Request) -> Result<(), AuthError> {
+    async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
         Err(AuthError::MissingCredentials)
     }
 }

@@ -1,16 +1,18 @@
 //! Guard registration — the typed specs the builder seeds the global guard
-//! chain with. Each transport's shaper resolves them against the live
-//! container at configure time.
+//! chain with, and the scoped specs a decorator declares at its site. Each edge
+//! resolves them against the live container when it composes a site.
 
 use std::any::TypeId;
 use std::sync::Arc;
 
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, resolve_global_layers};
 use nest_rs_core::{Container, LayerSpec};
 
 use crate::Guard;
 
-/// One entry in the `use_guards_global` list. Created by [`guard::<T>()`](guard);
-/// resolved against the live container at configure time.
+/// One guard declaration: an entry in the `use_guards_global` list, created by
+/// [`guard::<T>()`](guard), or one a decorator emits for its `#[use_guards]`;
+/// resolved against the live container when a site is composed.
 pub type GuardSpec = LayerSpec<dyn Guard>;
 
 /// Construct a [`GuardSpec`] for the given guard type.
@@ -49,8 +51,8 @@ pub fn guard<G: Guard + 'static>() -> GuardSpec {
 }
 
 /// The unresolved `Vec<GuardSpec>` seeded into the container by
-/// `AppBuilder::use_guards_global(...)`. Each transport reads it at
-/// configure time and resolves against the live container.
+/// `AppBuilder::use_guards_global(...)`. Each edge reads it when it composes a
+/// site and resolves it against the live container.
 pub struct GuardSpecs(pub Vec<GuardSpec>);
 
 impl nest_rs_core::layer_chain::GlobalSpecs for GuardSpecs {
@@ -60,18 +62,28 @@ impl nest_rs_core::layer_chain::GlobalSpecs for GuardSpecs {
     }
 }
 
-impl GuardSpecs {
-    /// Resolve every spec into the composed global chain — deduped and
-    /// priority-ordered through the same `compose_chain` as every other
-    /// Layer System site — for the single-site consumers that run the global
-    /// pool on their own (the self-mount edge wrap, the pool runners on
-    /// `/graphql` and `/mcp`).
-    pub fn resolve_chain(
-        &self,
-        container: &Container,
-        label: &str,
-    ) -> Vec<nest_rs_core::__private::ResolvedLayer<dyn Guard>> {
-        let global = nest_rs_core::__private::resolve_global_layers::<Self>(container);
-        nest_rs_core::__private::compose_chain(global, Vec::new(), Vec::new(), &[], label)
-    }
+/// Whether the app lists a global guard pool at all.
+pub fn global_guards_active(container: &Container) -> bool {
+    container
+        .get::<GuardSpecs>()
+        .is_some_and(|specs| !specs.0.is_empty())
+}
+
+/// The global guard pool resolved into `LayerSite::Global` entries — the one
+/// resolution every site composes from, so their dedup inputs cannot drift.
+pub fn resolve_global_guards(container: &Container) -> Vec<ResolvedLayer<dyn Guard>> {
+    resolve_global_layers::<GuardSpecs>(container)
+}
+
+/// The global pool composed on its own — deduped and priority-ordered through
+/// the same `compose_chain` as every other site — for the endpoints that run it
+/// at their request (a self-mount's edge, `/graphql`, `/mcp`).
+pub fn resolve_global_chain(container: &Container, label: &str) -> Vec<ResolvedLayer<dyn Guard>> {
+    compose_chain(
+        resolve_global_guards(container),
+        Vec::new(),
+        Vec::new(),
+        &[],
+        label,
+    )
 }

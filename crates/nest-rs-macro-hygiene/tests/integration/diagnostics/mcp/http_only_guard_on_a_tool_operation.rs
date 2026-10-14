@@ -1,18 +1,18 @@
 //! The **operation** scope of the same rule, and the sibling of
 //! `http_only_guard_on_a_tool`.
 //!
-//! `#[mcp]` and `#[tools]` are two decorators emitting the same `McpGuard`
-//! bound at two scopes, and each edge owes a trybuild snapshot binding a guard
+//! `#[mcp]` and `#[tools]` are two decorators emitting the same
+//! `GuardFor<McpView>` bound at two scopes, and each edge owes a trybuild snapshot binding a guard
 //! that does not check it at that edge's site — with HTTP's three emitters as
 //! the worked example, each underlining the decorator the guard was written
 //! under, with a snapshot of its own. The host scope had one and the operation
 //! scope did not, so deleting either half of `#[tools]`' bound left the pair
 //! proved by the other's snapshot.
 
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, async_trait};
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::http::HttpView;
 use nest_rs::mcp::{McpError, mcp, tools};
-use poem::Request;
 
 #[injectable]
 #[derive(Default)]
@@ -22,10 +22,12 @@ impl Layer for HttpOnlyGuard {}
 
 #[async_trait]
 impl Guard for HttpOnlyGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
+
+impl GuardFor<HttpView> for HttpOnlyGuard {}
 
 #[mcp]
 #[derive(Clone, Default)]

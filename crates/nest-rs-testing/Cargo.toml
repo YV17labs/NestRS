@@ -106,19 +106,12 @@ sea-orm-migration = { workspace = true, optional = true }
 [dev-dependencies]
 # Self dev-dependency: the suite proves the fixture against a TLS double, so it
 # runs with `EphemeralDatabase` and `TestAuthority` on whatever features a
-# caller builds with.
-nest-rs-testing = { path = ".", features = ["orm", "tls"] }
-# `transport_parity` boots one module serving both `Exempt`-edge transports to
-# pin that they answer one app wiring identically. That is cross-crate wiring
-# (guards' pool runners × graphql × mcp), so it lives here rather than in any
-# single surface crate — and dev-deps let it enable the two runners' features
-# without them reaching a consumer of the harness.
-# `ws` rides here too, not in `[dependencies]`: it is the `ws_gateway_guards`
-# test that drives `GuardAsWsMessageCheck`, and `guards/ws` pulls `nest-rs-ws`
-# and turns on `poem/websocket` — which a consumer asserting on a log line
-# should not link, and which silently made this crate's own `ws` feature gate a
-# no-op.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp", "ws"] }
+# caller builds with, and `guard_markers` opens a real socket (`build_ws`).
+nest-rs-testing = { path = ".", features = ["orm", "tls", "ws"] }
+# `transport_parity` boots one module serving both in-band endpoints to pin
+# that they answer one app wiring identically. That is cross-crate wiring (the
+# global pool × graphql × mcp), so it lives here rather than in any single
+# surface crate.
 nest-rs-mcp = { path = "../nest-rs-mcp" }
 # `transport_parity` registers the two authz bridges, whose `covers()` is what
 # keeps a guard listed both in the pool and in a bridge running once.
@@ -139,9 +132,9 @@ validator.workspace = true
 # trait + a typed error to throw and catch.
 thiserror.workspace = true
 async-trait.workspace = true
-# `tests/integration/ws_gateway_guards.rs` drives a `#[gateway]` + `#[messages]`
-# impl over `TestClient` — no socket, hence no `ws` feature — so it needs the
-# macros and `WsModule` even when that feature is off.
+# `tests/integration/ws_gateway_guards.rs` and `guard_markers.rs` declare a
+# `#[gateway]` + `#[messages]` impl, so the suite names the macros and
+# `WsModule` itself rather than through the `ws` feature.
 nest-rs-ws = { path = "../nest-rs-ws" }
 # `figment::Jail` isolates the real process env for the pinned-config override
 # test (the deployment tier of the precedence rule), matching how

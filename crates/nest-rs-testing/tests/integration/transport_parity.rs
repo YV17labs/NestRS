@@ -15,9 +15,8 @@ use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_core::{Layer, Posture, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::HandlerMetadata;
-use nest_rs_http::{Reflector, async_trait};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::{HttpView, async_trait};
 use nest_rs_mcp::{
     AllowAllMcpGuard, McpOperationGuard, ServerHandler, mcp, tool_handler, tool_router,
 };
@@ -25,7 +24,6 @@ use nest_rs_mcp::{
 use nest_rs_mcp::rmcp;
 use nest_rs_testing::mcp::{initialize_request, post_message, post_message_with};
 use nest_rs_testing::{TestApp, TestResponse};
-use poem::Request;
 use poem::http::StatusCode;
 
 /// Stands in for `AuthnGuard`: requires a bearer unless the surface admits an
@@ -39,12 +37,12 @@ impl Layer for BearerGuard {}
 
 #[async_trait]
 impl Guard for BearerGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        if req.headers().contains_key("authorization")
-            || matches!(
-                Reflector::new(req).posture(),
-                Posture::Public | Posture::InBand
-            )
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand)
+            || HttpView::of(cx)?
+                .request()
+                .header("authorization")
+                .is_some()
         {
             return Ok(());
         }
@@ -52,7 +50,7 @@ impl Guard for BearerGuard {
     }
 }
 
-impl HttpGuard for BearerGuard {}
+impl GuardFor<HttpView> for BearerGuard {}
 
 /// An IP allow-list or an API key: a check on the HTTP request alone, the
 /// shape a bridge used to keep off the in-band edges.
@@ -64,8 +62,8 @@ impl Layer for ApiKeyGuard {}
 
 #[async_trait]
 impl Guard for ApiKeyGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        if req.headers().contains_key(API_KEY) {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        if HttpView::of(cx)?.request().header(API_KEY).is_some() {
             return Ok(());
         }
         Err(Denial::forbidden("an API key is required"))
@@ -84,8 +82,8 @@ impl Layer for PublicOnlyGuard {}
 
 #[async_trait]
 impl Guard for PublicOnlyGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        if Reflector::new(req).is_public() {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        if cx.reflector().is_public() {
             return Ok(());
         }
         Err(Denial::unauthorized("only public handlers"))
@@ -116,8 +114,8 @@ impl Layer for PostureProbe {}
 
 #[async_trait]
 impl Guard for PostureProbe {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let posture = Reflector::new(req).posture();
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let posture = cx.reflector().posture();
         self.postures
             .seen
             .lock()
@@ -163,7 +161,10 @@ macro_rules! recording_guard {
 
         #[async_trait]
         impl Guard for $name {
-            async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+            async fn check_http(
+                &self,
+                _cx: &mut nest_rs_core::UnitContext<'_>,
+            ) -> Result<(), Denial> {
                 self.trail.seen.lock().expect("trail lock").push($label);
                 Ok(())
             }

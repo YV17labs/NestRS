@@ -1736,12 +1736,6 @@ version = "7.0.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
- "nest-rs-exception-filters",
- "nest-rs-filters",
- "nest-rs-http",
- "nest-rs-interceptors",
- "nest-rs-pipes",
- "poem",
  "serde_json",
  "tracing",
 ]
@@ -1761,6 +1755,7 @@ dependencies = [
  "hyper-util",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http-macros",
  "nest-rs-pipes",
  "poem",
@@ -1792,6 +1787,8 @@ version = "7.0.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
+ "nest-rs-exception-filters",
+ "nest-rs-filters",
  "nest-rs-http",
  "poem",
 ]

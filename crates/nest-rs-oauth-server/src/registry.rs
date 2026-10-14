@@ -5,6 +5,7 @@ use aws_lc_rs::constant_time::verify_slices_are_equal;
 
 use nest_rs_authn::AuthError;
 use nest_rs_authn::PrincipalIdentity;
+use nest_rs_core::AmbientValue;
 
 /// A machine client permitted to use the `client_credentials` grant, as loaded
 /// from configuration. Generic over the principal payload `P` the app attaches
@@ -46,6 +47,8 @@ pub struct AuthenticatedClient<P> {
     /// principal's [`PrincipalIdentity::scopes`].
     pub scopes: Vec<String>,
 }
+
+impl<P: Send + Sync + 'static> AmbientValue for AuthenticatedClient<P> {}
 
 impl<P> PrincipalIdentity for AuthenticatedClient<P> {
     fn actor_id(&self) -> Option<String> {

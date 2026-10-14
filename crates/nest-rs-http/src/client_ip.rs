@@ -19,7 +19,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use nest_rs_core::current_request_scope;
-use poem::http::header;
+use poem::http::{HeaderMap, header};
 use poem::{FromRequest, Request, RequestBody, Result};
 
 use crate::HttpConfig;
@@ -51,30 +51,41 @@ impl ClientOrigin {
     /// [`HttpConfig`] the app booted with.
     ///
     /// Off the request task (a hand-built `Request`) nothing is trusted.
-    pub fn of(req: &Request) -> Self {
-        let scope = current_request_scope();
-        let config = scope.as_ref().and_then(|s| s.root().get::<HttpConfig>());
-        Self::of_with(
-            req,
-            config.as_deref().map_or(&[][..], |c| &c.trusted_proxies),
+    pub fn of(req: &crate::Request) -> Self {
+        let config = configured();
+        Self::of_head(
+            req.headers(),
+            req.peer_addr().map(|peer| peer.ip()),
+            trusted_proxies(config.as_deref()),
         )
+    }
+
+    /// [`of`](Self::of) for a request the router hands over as poem's.
+    fn of_poem(req: &Request) -> Self {
+        let config = configured();
+        Self::of_with(req, trusted_proxies(config.as_deref()))
     }
 
     /// [`of`](Self::of) against an explicit list, for the transport edge, which
     /// runs before the request scope `of` reads exists.
     pub(crate) fn of_with(req: &Request, trusted_proxies: &[IpAddr]) -> Self {
-        // Nothing trusted: no header can be believed, so none is read.
-        fn believed(req: &Request, trusted: bool, name: impl header::AsHeaderName) -> Option<&str> {
-            trusted
-                .then(|| req.headers().get(name)?.to_str().ok())
-                .flatten()
-        }
-        let trusted = !trusted_proxies.is_empty();
-        Self::resolve(
-            believed(req, trusted, header::FORWARDED),
-            believed(req, trusted, X_FORWARDED_FOR),
-            believed(req, trusted, X_REAL_IP),
+        Self::of_head(
+            req.headers(),
             req.remote_addr().as_socket_addr().map(SocketAddr::ip),
+            trusted_proxies,
+        )
+    }
+
+    /// The resolution over a request's head and its peer.
+    fn of_head(headers: &HeaderMap, peer: Option<IpAddr>, trusted_proxies: &[IpAddr]) -> Self {
+        // Nothing trusted: no header can be believed, so none is read.
+        let trusted = !trusted_proxies.is_empty();
+        let believed = |name: &str| trusted.then(|| headers.get(name)?.to_str().ok()).flatten();
+        Self::resolve(
+            believed(header::FORWARDED.as_str()),
+            believed(X_FORWARDED_FOR),
+            believed(X_REAL_IP),
+            peer,
             trusted_proxies,
         )
     }
@@ -314,8 +325,19 @@ fn parse_forwarded_entry(raw: &str) -> Option<IpAddr> {
 
 impl<'a> FromRequest<'a> for ClientIp {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        Ok(ClientOrigin::of(req).into())
+        Ok(ClientOrigin::of_poem(req).into())
     }
+}
+
+/// The configuration of the app the running request belongs to; none off the
+/// request task.
+fn configured() -> Option<std::sync::Arc<HttpConfig>> {
+    current_request_scope().and_then(|scope| scope.root().get::<HttpConfig>())
+}
+
+/// The proxies `config` trusts; none without one.
+fn trusted_proxies(config: Option<&HttpConfig>) -> &[IpAddr] {
+    config.map_or(&[][..], |config| &config.trusted_proxies)
 }
 
 #[cfg(test)]

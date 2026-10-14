@@ -1,6 +1,6 @@
 //! Mirror tests for `src/ws/` — only compiled when the `ws` feature is on.
 //!
-//! A gateway is `Guarded`, so these suites install the ambient ability with
+//! A gateway is `Gated`, so these suites install the ambient ability with
 //! [`with_ability`] and drive `Gateway::dispatch` directly, as the connection loop does.
 
 mod authorize;

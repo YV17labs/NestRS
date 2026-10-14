@@ -1,7 +1,9 @@
-//! Re-export everything a custom guard implementation needs in one `use`.
+//! Re-export everything a custom guard implementation needs in one `use`; the
+//! view of the edge a guard checks comes from that edge's crate.
 //!
 //! ```
 //! use nest_rs_guards::prelude::*;
+//! use nest_rs_http::HttpView;
 //!
 //! #[injectable]
 //! #[derive(Default)]
@@ -11,23 +13,23 @@
 //!
 //! #[async_trait]
 //! impl Guard for MyGuard {
-//!     async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
-//!         Ok(())
+//!     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+//!         if cx.reflector().is_public() {
+//!             return Ok(());
+//!         }
+//!         match HttpView::of(cx)?.request().header("x-api-key") {
+//!             Some(_) => Ok(()),
+//!             None => Err(Denial::unauthorized("an API key is required")),
+//!         }
 //!     }
 //! }
 //!
-//! impl HttpGuard for MyGuard {}
+//! impl GuardFor<HttpView> for MyGuard {}
 //! # fn main() {}
 //! ```
 
-pub use crate::{AppBuilderGuardsExt, Denial, Guard, GuardSpec, HttpGuard, guard};
+pub use crate::{AppBuilderGuardsExt, Denial, Guard, GuardFor, GuardSpec, guard};
 pub use async_trait::async_trait;
-pub use nest_rs_core::{Layer, LayerKind, LayerSite, Posture, injectable};
-#[cfg(feature = "graphql")]
-pub use nest_rs_graphql::async_graphql::Context as GraphqlContext;
-pub use nest_rs_http::poem::Request as HttpRequest;
-pub use nest_rs_http::{HandlerMetadata, Public};
-#[cfg(feature = "ws")]
-pub use nest_rs_ws::WsClient;
-#[cfg(feature = "ws")]
-pub use serde_json::Value as WsMessageData;
+pub use nest_rs_core::{
+    AmbientValue, Layer, LayerKind, LayerSite, Posture, UnitContext, injectable,
+};

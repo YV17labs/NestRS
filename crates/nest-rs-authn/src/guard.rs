@@ -6,11 +6,11 @@ use std::sync::Arc;
 use nest_rs_core::trace_context::field;
 use nest_rs_core::{
     Container, ContainerBuilder, Discoverable, Layer, Net, Posture, ProviderResidency, Unanswered,
-    within,
+    UnitContext, within,
 };
-use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
-use nest_rs_http::HandlerMetadata;
-use nest_rs_http::{Reflector, RejectedCredential, async_trait};
+use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardFor, GuardPhase, PrincipalClaim};
+use nest_rs_http::__private::{put_poem, take_poem};
+use nest_rs_http::{HttpView, RejectedCredential, async_trait};
 use poem::Request;
 
 use crate::error::{AuthError, UNAVAILABLE};
@@ -21,7 +21,8 @@ use crate::strategy::{AUTHENTICATE_TIMEOUT, Strategy};
 const TRANSPORT: &str = "http";
 
 /// The authentication guard: runs a [`Strategy`] on the request, attaches the
-/// resulting principal, and records `actor_id` on the span. Generic over the
+/// resulting principal — and its granted scopes — for the rest of the request,
+/// and records `actor_id` on the span. Generic over the
 /// strategy `S`. Bind it via `#[use_guards]` / `use_guards_global`; on a
 /// `#[public]` route it authenticates opportunistically but never rejects, and
 /// on an in-band endpoint (`/graphql`) it admits an anonymous request while
@@ -141,13 +142,18 @@ impl<S: Strategy> Layer for AuthnGuard<S> {}
 /// with a 503.
 #[async_trait]
 impl<S: Strategy> Guard for AuthnGuard<S> {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let strategy = std::any::type_name::<S>();
-        let posture = Reflector::new(req).posture();
+        let posture = cx.reflector().posture();
         let is_public = posture == Posture::Public;
+        // `Strategy::authenticate` still takes poem's request, so the view
+        // lends it out and takes it back.
+        let mut req = take_poem(HttpView::of(cx)?);
+        let outcome = self.authenticate(strategy, &mut req).await;
+        put_poem(HttpView::of(cx)?, req);
         // Nothing was decided about the credential: the same 503 as an
         // unreachable store, on every route. `authenticate` already said why.
-        let Some(outcome) = self.authenticate(strategy, req).await else {
+        let Some(outcome) = outcome else {
             return Err(Denial::unavailable(None, UNAVAILABLE));
         };
         match outcome {
@@ -162,12 +168,12 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                 }
                 // No `actor_id` field: every line carries it off the ambient context.
                 tracing::debug!(target: crate::TARGET, strategy, "authenticated");
-                // A principal that is not scope-aware publishes nothing, and the
+                // A principal that is not scope-aware attaches nothing, and the
                 // absence is what turns scope gating off.
                 if let Some(scopes) = crate::PrincipalIdentity::scopes(&principal) {
-                    req.extensions_mut().insert(GrantedScopes::new(scopes));
+                    cx.attach(GrantedScopes::new(scopes));
                 }
-                req.extensions_mut().insert(principal);
+                cx.attach(principal);
                 Ok(())
             }
             // The credential was never evaluated: fail closed on every route,
@@ -202,12 +208,16 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                     "rejected credential on a public route — continuing as anonymous",
                 );
                 // Recorded so a handler that does read a principal answers the
-                // 401 this credential earned, not a 500.
-                req.extensions_mut().insert(RejectedCredential {
-                    principal: std::any::TypeId::of::<S::Principal>(),
-                    client_message: error.client_message().to_owned(),
-                    bearer_error: error.error_code(),
-                });
+                // 401 this credential earned, not a 500: on the request, which
+                // shapes the edge's answer, never attached as an identity.
+                HttpView::of(cx)?
+                    .request_mut()
+                    .extensions_mut()
+                    .insert(RejectedCredential {
+                        principal: std::any::TypeId::of::<S::Principal>(),
+                        client_message: error.client_message().to_owned(),
+                        bearer_error: error.error_code(),
+                    });
                 Ok(())
             }
             Err(error) => {
@@ -236,6 +246,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
 }
 
 /// HTTP is the only edge this guard checks, and enough for all: the GraphQL
-/// POST, the `/mcp` request and the WS upgrade are HTTP requests. The marker
+/// POST, the `/mcp` request and the WS upgrade are HTTP requests, and what it
+/// attaches there is ambient for every operation they carry. The declaration
 /// lets a `#[controller]` or a `#[gateway]` struct bind it.
-impl<S: Strategy> nest_rs_guards::HttpGuard for AuthnGuard<S> {}
+impl<S: Strategy> GuardFor<HttpView> for AuthnGuard<S> {}

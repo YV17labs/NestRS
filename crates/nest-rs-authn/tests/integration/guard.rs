@@ -1,28 +1,87 @@
 //! Covers `src/guard.rs`.
 //!
-//! `AUTHENTICATE_TIMEOUT` is driven over a strategy that never answers, on the
-//! guard alone and on every edge it authenticates for, on paused time.
+//! The guard runs through the HTTP edge's guard stage, as the unit a route of
+//! each posture declares. `AUTHENTICATE_TIMEOUT` is driven over a strategy that
+//! never answers, on the guard alone and on every edge it authenticates for, on
+//! paused time.
 
+use std::any::TypeId;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
-use nest_rs_core::{injectable, module};
+use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, PrincipalIdentity, Strategy};
+use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+use nest_rs_core::{AmbientValue, Handler, Posture, injectable, module};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
+use nest_rs_http::__private::{attached, check_request};
+use nest_rs_http::{HttpConfig, HttpModule, RejectedCredential, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
 use poem::Request;
 use poem::http::StatusCode;
+
+/// A principal with an audit identity.
+#[derive(Clone, Debug, PartialEq)]
+struct Who(&'static str);
+
+impl AmbientValue for Who {}
+
+impl PrincipalIdentity for Who {
+    fn actor_id(&self) -> Option<String> {
+        Some(self.0.to_owned())
+    }
+}
+
+/// A principal with none, as a machine client's is.
+#[derive(Clone, Debug)]
+struct Nobody;
+
+impl AmbientValue for Nobody {}
+
+impl PrincipalIdentity for Nobody {
+    fn actor_id(&self) -> Option<String> {
+        None
+    }
+}
+
+struct Routes;
+
+/// Declare a route of `posture`, as `#[routes]` declares each handler.
+const fn route(method: &'static str, posture: Posture) -> Handler {
+    declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: TypeId::of::<Routes>(),
+        host_name: "Routes",
+        method,
+        address: "/",
+        posture,
+        meta: MetaLevels::default,
+    })
+}
+
+/// A route with no posture of its own, gated by its guards alone.
+static GATED: Handler = route("gated", Posture::Gated);
+
+/// A `#[public]` route.
+static PUBLIC: Handler = route("public", Posture::Public);
+
+/// An in-band endpoint, as `/graphql` declares itself: its operations each
+/// declare their own posture.
+static IN_BAND: Handler = route("in_band", Posture::InBand);
+
+/// Run `guard` on `req` as the HTTP edge runs it on the route `site`.
+async fn check(guard: &dyn Guard, site: &'static Handler, req: &mut Request) -> Result<(), Denial> {
+    check_request(site, [("AuthnGuard", guard)], req).await
+}
 
 struct AuthenticateAs(&'static str);
 
 #[async_trait]
 impl Strategy for AuthenticateAs {
-    type Principal = &'static str;
+    type Principal = Who;
 
     async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
-        Ok(self.0)
+        Ok(Who(self.0))
     }
 }
 
@@ -30,7 +89,7 @@ struct FailWith;
 
 #[async_trait]
 impl Strategy for FailWith {
-    type Principal = ();
+    type Principal = Nobody;
 
     async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
         Err(AuthError::MissingCredentials)
@@ -41,18 +100,11 @@ struct RejectWith(fn() -> AuthError);
 
 #[async_trait]
 impl Strategy for RejectWith {
-    type Principal = ();
+    type Principal = Nobody;
 
     async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
         Err((self.0)())
     }
-}
-
-/// A request carrying the `#[public]` marker the route macro attaches.
-fn public_request() -> Request {
-    let mut req = crate::request(&[]);
-    req.extensions_mut().insert(nest_rs_http::Public);
-    req
 }
 
 #[tokio::test]
@@ -60,8 +112,8 @@ async fn attaches_principal_on_success() {
     let guard = AuthnGuard::new(Arc::new(AuthenticateAs("alice")));
     let mut req = crate::request(&[]);
 
-    guard.check_http(&mut req).await.expect("guard passes");
-    assert_eq!(req.extensions().get::<&'static str>(), Some(&"alice"));
+    check(&guard, &GATED, &mut req).await.expect("guard passes");
+    assert_eq!(attached::<Who>(&req).as_deref(), Some(&Who("alice")));
 }
 
 #[tokio::test]
@@ -69,16 +121,17 @@ async fn strategy_error_denies_as_unauthorized() {
     let guard = AuthnGuard::new(Arc::new(FailWith));
     let mut req = crate::request(&[]);
 
-    let denial = guard.check_http(&mut req).await.expect_err("auth failed");
+    let denial = check(&guard, &GATED, &mut req)
+        .await
+        .expect_err("auth failed");
     assert!(matches!(denial, Denial::Unauthorized { .. }));
-    assert!(req.extensions().get::<&'static str>().is_none());
+    assert!(attached::<Nobody>(&req).is_none());
 }
 
 #[tokio::test]
 async fn public_route_admits_an_anonymous_caller() {
     let guard = AuthnGuard::new(Arc::new(FailWith));
-    guard
-        .check_http(&mut public_request())
+    check(&guard, &PUBLIC, &mut crate::request(&[]))
         .await
         .expect("no credential on a public route is not a failure");
 }
@@ -89,8 +142,8 @@ async fn public_route_admits_a_rejected_credential_as_anonymous() {
     // route into a 401 — it is logged and the request continues anonymously.
     let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(RejectWith(|| AuthError::InvalidSignature)));
-    guard
-        .check_http(&mut public_request())
+    let mut req = crate::request(&[]);
+    check(&guard, &PUBLIC, &mut req)
         .await
         .expect("a rejected credential still leaves the public route reachable");
 
@@ -106,21 +159,20 @@ async fn public_route_admits_a_rejected_credential_as_anonymous() {
         "the event names the strategy that rejected it, got {:?}",
         event.fields,
     );
-}
-
-/// A request to an in-band endpoint, stamped as `/graphql` stamps it: its
-/// operations each declare their own posture.
-fn in_band_request() -> Request {
-    let mut req = crate::request(&[]);
-    req.extensions_mut().insert(nest_rs_core::Posture::InBand);
-    req
+    // …and the request carries the refusal a handler reading a principal
+    // answers with, never an identity.
+    let rejected = req
+        .extensions()
+        .get::<RejectedCredential>()
+        .expect("the rejected credential is recorded on the request");
+    assert_eq!(rejected.principal, TypeId::of::<Nobody>());
+    assert!(attached::<Nobody>(&req).is_none());
 }
 
 #[tokio::test]
 async fn an_in_band_request_admits_an_anonymous_caller() {
     let guard = AuthnGuard::new(Arc::new(FailWith));
-    guard
-        .check_http(&mut in_band_request())
+    check(&guard, &IN_BAND, &mut crate::request(&[]))
         .await
         .expect("no credential on an in-band endpoint is left to its operations' gates");
 }
@@ -130,8 +182,7 @@ async fn an_in_band_request_admits_an_anonymous_caller() {
 #[tokio::test]
 async fn an_in_band_request_still_verifies_a_presented_credential() {
     let guard = AuthnGuard::new(Arc::new(RejectWith(|| AuthError::InvalidSignature)));
-    let denial = guard
-        .check_http(&mut in_band_request())
+    let denial = check(&guard, &IN_BAND, &mut crate::request(&[]))
         .await
         .expect_err("a rejected credential is refused on an in-band endpoint");
     assert_eq!(denial.http_status(), 401);
@@ -151,8 +202,7 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
         retry_after: None,
     })));
 
-    let denial = guard
-        .check_http(&mut public_request())
+    let denial = check(&guard, &PUBLIC, &mut crate::request(&[]))
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
     assert!(
@@ -192,8 +242,7 @@ async fn a_successful_check_publishes_the_actor_into_the_ambient_context() {
 
     let seen = nest_rs_core::with_request_scope(None, correlation, async {
         let mut req = Request::default();
-        guard
-            .check_http(&mut req)
+        check(&guard, &GATED, &mut req)
             .await
             .expect("the strategy authenticates");
         nest_rs_core::current_actor_id()
@@ -235,7 +284,7 @@ struct StalledStrategy;
 
 #[async_trait]
 impl Strategy for StalledStrategy {
-    type Principal = &'static str;
+    type Principal = Who;
 
     async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
         std::future::pending().await
@@ -248,11 +297,11 @@ struct SlowStrategy;
 
 #[async_trait]
 impl Strategy for SlowStrategy {
-    type Principal = &'static str;
+    type Principal = Who;
 
     async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
         tokio::time::sleep(AUTHENTICATE_TIMEOUT - Duration::from_millis(1)).await;
-        Ok("ada")
+        Ok(Who("ada"))
     }
 }
 
@@ -262,7 +311,7 @@ struct PanickingStrategy;
 
 #[async_trait]
 impl Strategy for PanickingStrategy {
-    type Principal = &'static str;
+    type Principal = Who;
 
     async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
         panic!("the strategy's store unwound")
@@ -317,7 +366,7 @@ async fn a_strategy_that_never_answers_is_denied_at_the_bound() {
     let mut req = crate::request(&[]);
 
     let sent = tokio::time::Instant::now();
-    let denial = within_twice_the_bound(guard.check_http(&mut req))
+    let denial = within_twice_the_bound(check(&guard, &GATED, &mut req))
         .await
         .expect_err("a strategy that never answered decided nothing, so nothing passes");
 
@@ -334,10 +383,7 @@ async fn a_strategy_that_never_answers_is_denied_at_the_bound() {
     };
     assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
     assert_eq!(denial.message(), unavailable.client_message());
-    assert!(
-        req.extensions().get::<&'static str>().is_none(),
-        "no principal is attached",
-    );
+    assert!(attached::<Who>(&req).is_none(), "no principal is attached");
     assert_the_strategy_was_waited_out(&logs);
 }
 
@@ -348,13 +394,13 @@ async fn a_strategy_that_panics_is_denied_and_said_once() {
     let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(PanickingStrategy));
 
-    for mut req in [crate::request(&[]), public_request()] {
-        let denial = guard
-            .check_http(&mut req)
+    for site in [&GATED, &PUBLIC] {
+        let mut req = crate::request(&[]);
+        let denial = check(&guard, site, &mut req)
             .await
             .expect_err("a strategy that unwound decided nothing, so nothing passes");
         assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
-        assert!(req.extensions().get::<&'static str>().is_none());
+        assert!(attached::<Who>(&req).is_none());
     }
 
     let said = logs.find(
@@ -382,7 +428,7 @@ async fn a_strategy_that_never_answers_is_denied_on_a_public_route_too() {
     let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(StalledStrategy));
 
-    let denial = within_twice_the_bound(guard.check_http(&mut public_request()))
+    let denial = within_twice_the_bound(check(&guard, &PUBLIC, &mut crate::request(&[])))
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
 
@@ -399,11 +445,11 @@ async fn a_strategy_answering_inside_the_bound_is_waited_for() {
     let guard = AuthnGuard::new(Arc::new(SlowStrategy));
     let mut req = crate::request(&[]);
 
-    within_twice_the_bound(guard.check_http(&mut req))
+    within_twice_the_bound(check(&guard, &GATED, &mut req))
         .await
         .expect("a strategy that answers in time is heard");
 
-    assert_eq!(req.extensions().get::<&'static str>(), Some(&"ada"));
+    assert_eq!(attached::<Who>(&req).as_deref(), Some(&Who("ada")));
     logs.expect_none(nest_rs_authn::TARGET, STALLED);
 }
 
@@ -575,12 +621,12 @@ mod graphql {
 
     #[async_trait]
     impl Strategy for BearerStrategy {
-        type Principal = &'static str;
+        type Principal = super::Who;
 
         async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError> {
             match req.headers().get(header::AUTHORIZATION) {
                 None => Err(AuthError::MissingCredentials),
-                Some(bearer) if bearer == "Bearer good" => Ok("ada"),
+                Some(bearer) if bearer == "Bearer good" => Ok(super::Who("ada")),
                 Some(_) => Err(AuthError::InvalidToken),
             }
         }
@@ -804,9 +850,9 @@ mod nets {
 
     #[async_trait]
     impl Strategy for StoreBackedStrategy {
-        type Principal = ();
+        type Principal = super::Nobody;
 
-        async fn authenticate(&self, _req: &mut Request) -> Result<(), AuthError> {
+        async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
             Err(AuthError::MissingCredentials)
         }
     }
@@ -821,9 +867,9 @@ mod nets {
 
     #[async_trait]
     impl Strategy for LocalStrategy {
-        type Principal = ();
+        type Principal = super::Nobody;
 
-        async fn authenticate(&self, _req: &mut Request) -> Result<(), AuthError> {
+        async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
             Err(AuthError::MissingCredentials)
         }
     }

@@ -12,3 +12,10 @@
 mod error;
 mod expose;
 mod module;
+
+/// The principal the suite's authentication stand-ins attach: a caller with no
+/// identity of its own.
+#[derive(Clone, Debug, Default)]
+pub struct Anyone;
+
+impl nest_rs_core::AmbientValue for Anyone {}

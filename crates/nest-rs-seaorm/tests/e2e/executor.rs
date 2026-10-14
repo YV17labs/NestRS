@@ -49,9 +49,9 @@ impl CrudService for ItemsService {
 struct PublishedItems;
 
 impl AbilityFactory for PublishedItems {
-    type Actor = ();
+    type Actor = crate::Anyone;
 
-    fn define(&self, _actor: &(), _ab: &mut AbilityBuilder) {}
+    fn define(&self, _actor: &crate::Anyone, _ab: &mut AbilityBuilder) {}
 
     fn define_visitor(&self, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, item::Entity)

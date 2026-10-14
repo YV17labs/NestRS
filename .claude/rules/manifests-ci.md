@@ -80,10 +80,14 @@ with all of this, or it is not shipped:
 5. **The composition witness**: a test in the capability's own crate booting
    the documented wiring through `nest_rs_testing::TestApp` (or
    `App::builder`), one per `for_root` seam.
-6. **Every guard edge armed**: a crate implementing `Guard::check_<edge>`
-   behind its own `<edge>` feature is enabled by the umbrella's `<edge>`
-   feature as `<crate>?/<edge>`. Every `check_*` defaults to `Ok(())`, so a
-   pairing left out is a guard that passes everything on that edge.
+6. **Every guard edge armed**: a crate implementing `GuardFor<V>` for an edge's
+   view does so behind that edge's feature, which the umbrella's `<edge>`
+   feature enables as `<crate>?/<edge>`; left out, a decorator binding the
+   guard on that edge fails to compile. `GuardFor<HttpView>` goes behind every
+   feature whose edge runs an HTTP request (`#[gateway]` binds it on the
+   upgrade). A guard whose one `check` serves every
+   edge declares `impl<V: UnitView> GuardFor<V>` once and owes no feature
+   (`ThrottlerGuard`).
 
 `demo/` is our `sample/`: a docs snippet with no counterpart in `demo/` or the
 owning crate's suite is undocumented.

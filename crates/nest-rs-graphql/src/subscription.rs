@@ -33,6 +33,7 @@ use tracing::Instrument;
 
 use crate::config::GraphqlConfig;
 use crate::context::OperationBridge;
+use nest_rs_http::__private::install_attached;
 
 /// The composed schema as a bare [`Executor`], as the mount serves it: a
 /// graphql-ws driver ([`async_graphql::http::WebSocket`]) takes an executor,
@@ -283,24 +284,29 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         }
         let (mut req, mut body) = req.split();
         // A denial at the upgrade is an ordinary HTTP response: no socket opens.
-        if let Some(guard) = &self.bridge.op_guard
-            && let Err(resp) = guard.before(&mut req).await
-        {
+        if let Err(resp) = self.bridge.before(&mut req).await {
             return Ok(resp);
         }
         let websocket = WebSocket::from_request(&req, &mut body).await?;
         let protocol = GraphQLProtocol::from_request(&req, &mut body).await?;
-        let data = self.bridge.connection_data(&req);
+        // What the upgrade's guards attached reaches the socket the way it
+        // reaches a POST: forwarded by the seeds, carried by the connection.
+        // Never the upgrade's scope nor its transaction: the socket's own
+        // executor is installed below.
+        let (data, carried) = install_attached(&req, async {
+            (
+                self.bridge.connection_data(&req),
+                RequestContinuation::capture(Continuation::Connection),
+            )
+        })
+        .await;
         let executor = self.executor.clone();
         let bounds = self.bounds;
         let socket_executor = socket_executor();
         // `around` wraps the **whole socket**: one upgrade, one principal.
-        let guard = self.bridge.op_guard.clone();
+        let bridge = Arc::clone(&self.bridge);
         // Read on the request task, before poem answers the `101`.
         let correlation = socket_correlation();
-        // Never the upgrade's scope nor its transaction: the socket's own
-        // executor is installed below.
-        let carried = RequestContinuation::capture(Continuation::Connection);
         let sockets = self.sockets.clone();
 
         Ok(websocket
@@ -343,10 +349,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                         None => served.await,
                     });
                 });
-                let guarded: crate::BoxFuture<'_, ()> = match &guard {
-                    Some(guard) => guard.around(&req, serving),
-                    None => serving,
-                };
+                let guarded: crate::BoxFuture<'_, ()> = bridge.around(&req, serving);
                 // Executor outermost, ability inside, as on the POST path.
                 let served: crate::BoxFuture<'_, ()> = match socket_executor {
                     Some(executor) => {

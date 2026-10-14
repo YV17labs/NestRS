@@ -19,6 +19,9 @@ nest-rs-http.workspace = true
 nest-rs-config.workspace = true
 nest-rs-core.workspace = true
 nest-rs-mcp-macros.workspace = true
+# The edge runs its guards itself: the pool at the request, each operation's
+# chain; it renders a denial as a JSON-RPC error.
+nest-rs-guards.workspace = true
 # `Valid<T>` / `Piped<P, T>` on a tool argument: the `#[mcp]` expansion runs the
 # pipe over the wire value and renders a rejection as `invalid_params`.
 nest-rs-pipes.workspace = true
@@ -38,11 +41,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }
-# The global-pool tests drive `use_guards_global` onto `/mcp` through
-# `GlobalPoolMcpGuard`, which lives behind guards' `mcp` feature. Dev-dep cycle
-# (guards/mcp depends on this crate) is allowed by Cargo, same as
-# nest-rs-graphql ↔ nest-rs-guards.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["mcp"] }
 # A real `ThrottlerGuard` in the global pool proves the fallback carries a
 # non-authn guard's `429` — the behaviour `/mcp` could not have before.
 nest-rs-throttler = { path = "../nest-rs-throttler" }

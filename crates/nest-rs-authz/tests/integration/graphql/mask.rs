@@ -17,9 +17,8 @@ use nest_rs_graphql::async_graphql::{
     Error as GqlError, Executor, Request as GqlRequest, Result as GqlResult, SimpleObject,
 };
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -101,11 +100,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let role = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let role = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .unwrap_or_default()
             .to_string();
         let mut b = AbilityBuilder::new();
@@ -124,15 +122,14 @@ impl Guard for AbilityInjector {
             }
             _ => {}
         }
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
-impl HttpGuard for PassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 
 #[resolver]
 struct MaskResolver {

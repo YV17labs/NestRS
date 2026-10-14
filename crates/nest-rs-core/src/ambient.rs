@@ -73,6 +73,11 @@ pub fn ambient<T: AmbientValue>() -> Option<Arc<T>> {
     request_scope::current_request_ctx(|ctx| ctx.ambient.get::<T>()).flatten()
 }
 
+/// Whether the running unit carries an ambient value of any type.
+pub fn carries_ambient() -> bool {
+    request_scope::current_request_ctx(|ctx| !ctx.ambient.is_empty()).unwrap_or(false)
+}
+
 /// Run `fut` with `value` added to what the running unit carries, replacing
 /// the `T` it carried for `fut` alone.
 pub fn with_ambient<T: AmbientValue, F: Future>(
@@ -110,6 +115,14 @@ impl AmbientValue for Deadline {
         (into == Continuation::Batch).then_some(self)
     }
 }
+
+/// Ambient on a routed unit whose reply no response mask shapes: an ability its
+/// guards attached is withheld from the reads a mask would have scoped, so such
+/// a route reads nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnmaskedReply;
+
+impl AmbientValue for UnmaskedReply {}
 
 /// A value as the map holds it.
 type Erased = Arc<dyn Any + Send + Sync>;
@@ -243,6 +256,15 @@ impl Pending {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Record everything `later` recorded, each replacing a value of its type
+    /// recorded here: a later stage of the same unit attaching on top.
+    pub fn merge(&mut self, later: Pending) {
+        let Entries { inline, spill } = later.0;
+        for entry in inline.into_iter().flatten().chain(spill) {
+            self.0.set(entry);
+        }
+    }
 }
 
 impl fmt::Debug for Pending {
@@ -311,6 +333,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_later_stage_replaces_what_it_attaches_again_and_keeps_the_rest() {
+        let mut first = Pending::default();
+        first.attach(Arc::new(Tenant("acme")));
+        first.attach(Arc::new(Handle::Transaction));
+        let mut later = Pending::default();
+        later.attach(Arc::new(Tenant("globex")));
+        first.merge(later);
+
+        let seen =
+            install_pending(first, async { (ambient::<Tenant>(), ambient::<Handle>()) }).await;
+        assert_eq!(seen.0.as_deref(), Some(&Tenant("globex")));
+        assert_eq!(seen.1.as_deref(), Some(&Handle::Transaction));
+    }
+
+    #[tokio::test]
     async fn a_value_is_read_where_it_was_added_and_nowhere_else() {
         assert!(ambient::<Tenant>().is_none(), "no unit, no value");
         let seen = with_ambient(Arc::new(Tenant("acme")), async { ambient::<Tenant>() }).await;
@@ -318,6 +355,22 @@ mod tests {
         assert!(
             ambient::<Tenant>().is_none(),
             "the value goes with its scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_unit_carries_ambient_once_a_value_is_added() {
+        assert!(!carries_ambient(), "no unit, nothing carried");
+        let seen = with_request_scope(None, Correlation::minted(None), async {
+            let bare = carries_ambient();
+            let added = with_ambient(Arc::new(Tenant("acme")), async { carries_ambient() }).await;
+            (bare, added)
+        })
+        .await;
+        assert_eq!(
+            seen,
+            (false, true),
+            "a unit carries nothing until a value is added"
         );
     }
 

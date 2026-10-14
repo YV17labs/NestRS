@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_filters::{Filter, RequestSnapshot, filter};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::MappedError;
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
@@ -36,13 +36,16 @@ impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         COUNTER.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl HttpGuard for CountingGuard {}
+impl GuardFor<nest_rs_http::HttpView> for CountingGuard {}
 
 #[controller(path = "/pool")]
 #[use_guards(CountingGuard)]
@@ -183,12 +186,15 @@ impl Layer for DenyAll {}
 
 #[async_trait]
 impl Guard for DenyAll {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("denied"))
     }
 }
 
-impl HttpGuard for DenyAll {}
+impl GuardFor<nest_rs_http::HttpView> for DenyAll {}
 
 #[controller(path = "/edge")]
 struct EdgeController;

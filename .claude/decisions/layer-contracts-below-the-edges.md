@@ -66,3 +66,17 @@ checks run on the kernel's wiring step, as the pipes' does, so every global
 family is now checked there. No departure from the record. Guards still depend
 on poem and `nest-rs-http`, and on the in-band edges behind features, until the
 two branches named above land.
+
+**2026-10-12 — `feat/guard-contract` landed its part.** `nest-rs-guards`
+depends on `nest-rs-core` alone: `Guard` has `check_http` and `check`, both over
+the unit's context, and `GuardFor<V>` names the view of the units a site
+dispatches, each view in its edge's crate. Every runner left guards with the
+contract, so no edge calls back in: the route shaper and the HTTP guard stage
+are `nest-rs-http`'s, the WS upgrade and per-message table `nest-rs-ws`'s, the
+GraphQL and MCP operation chains their edges', and the `WsMessageCheck` slot is
+gone. One departure: the route's response layers — interceptors, filters and
+exception filters at a route — wrap in `nest-rs-interceptors`, which depends on
+the other two families until they move into `nest-rs-core`, so a crate
+declaring a `#[routes]` reaches `nest-rs-interceptors`; the umbrella's `http`
+feature already brings it. `feat/endpoint-guards-and-class-gate` still owes the
+endpoint units and `McpOperationGuard`'s retirement.

@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
-use nest_rs_http::{HttpConfig, RawBody, async_trait, controller, routes};
+use nest_rs_core::{Layer, UnitContext, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::{HttpConfig, HttpView, RawBody, async_trait, controller, routes};
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
 use poem::web::Json;
@@ -179,12 +179,12 @@ impl Layer for Refuse {}
 
 #[async_trait]
 impl Guard for Refuse {
-    async fn check_http(&self, _req: &mut poem::Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("no credential"))
     }
 }
 
-impl HttpGuard for Refuse {}
+impl GuardFor<HttpView> for Refuse {}
 
 /// Told once `/read/counted` has its body's first frame in hand.
 static FIRST_FRAME: Notify = Notify::const_new();

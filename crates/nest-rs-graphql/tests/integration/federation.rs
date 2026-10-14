@@ -6,10 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_graphql::{Result, SimpleObject};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::{
-    GraphqlConfig, GraphqlModule, GraphqlOperationContext, operations, resolver,
-};
-use nest_rs_guards::{Denial, GraphqlGuard, Guard, GuardSpecs, async_trait, guard};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+use nest_rs_guards::{Denial, Guard, GuardFor, GuardSpecs, async_trait, guard};
 use nest_rs_http::poem::http::StatusCode;
 use nest_rs_testing::TestApp;
 
@@ -34,15 +32,15 @@ impl Layer for Closed {}
 
 #[async_trait]
 impl Guard for Closed {
-    async fn check_graphql(
+    async fn check(
         &self,
-        _op: &GraphqlOperationContext<'_>,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("not for this router"))
     }
 }
 
-impl GraphqlGuard for Closed {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for Closed {}
 
 #[resolver]
 struct WidgetsResolver;
@@ -389,6 +387,36 @@ impl PooledResolver {
 #[module(imports = [subgraph()], providers = [PooledResolver, Closed])]
 struct PooledModule;
 
+#[module(imports = [subgraph()], providers = [PooledResolver, crate::FieldStoreDown])]
+struct StoreDownPooledModule;
+
+/// A pooled guard that cannot evaluate `_service` files what failed on the
+/// federation field's denial line, and the client reads the condition alone.
+#[tokio::test]
+async fn a_federation_denial_keeping_its_cause_files_the_chain() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::builder()
+        .module::<StoreDownPooledModule>()
+        .use_guards_global([guard::<crate::FieldStoreDown>()])
+        .build()
+        .await
+        .expect("a federated schema under a global pool boots");
+
+    let body = post_graphql(&app, serde_json::json!({ "query": "{ _service { sdl } }" })).await;
+    assert_eq!(
+        body["errors"][0]["message"],
+        nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
+        "{body}",
+    );
+    assert!(!body.to_string().contains("refused"), "{body}");
+    let event = logs.expect_one("nest_rs::layers", "guard denied the federation field");
+    assert_eq!(event.field("field").as_deref(), Some("_service"));
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some(crate::STORE_DOWN_CHAIN)
+    );
+}
+
 /// How many operations [`Counting`] was asked about.
 static COUNTED_CHECKS: AtomicUsize = AtomicUsize::new(0);
 
@@ -401,16 +429,16 @@ impl Layer for Counting {}
 
 #[async_trait]
 impl Guard for Counting {
-    async fn check_graphql(
+    async fn check(
         &self,
-        _op: &GraphqlOperationContext<'_>,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         COUNTED_CHECKS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl GraphqlGuard for Counting {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for Counting {}
 
 #[resolver]
 struct CountedResolver;
@@ -1182,8 +1210,8 @@ impl MissingEntityResolver {
 #[module(imports = [subgraph()], providers = [MissingEntityResolver])]
 struct MissingEntityModule;
 
-/// **The gate and the entity site's subtraction must agree**: `GuardSpecs` can
-/// be seeded without `use_guards_global`, which alone seeds the `FederationGate`.
+/// **The gate and the entity site's subtraction must agree**: both read
+/// `GuardSpecs`, which an app can seed without `use_guards_global`.
 #[tokio::test]
 async fn a_pool_seeded_without_the_gate_still_reaches_an_entity() {
     let app = TestApp::builder()

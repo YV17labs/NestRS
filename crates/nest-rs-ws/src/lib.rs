@@ -9,7 +9,7 @@
 //! ```
 //! use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
 //! # use nest_rs_core::{Layer, injectable};
-//! # use nest_rs_guards::{Guard, HttpGuard};
+//! # use nest_rs_guards::{Guard, GuardFor};
 //! # use nest_rs_ws::{async_trait, input};
 //! #
 //! # #[injectable]
@@ -21,7 +21,7 @@
 //! # #[async_trait]
 //! # impl Guard for AuthnGuard {}
 //! #
-//! # impl HttpGuard for AuthnGuard {}
+//! # impl GuardFor<nest_rs_http::HttpView> for AuthnGuard {}
 //! #
 //! # #[input]
 //! # struct SendMessage {
@@ -99,8 +99,8 @@
 //! - **Connection-level**: `#[use_guards]` on the gateway struct reuses the
 //!   HTTP `Guard` trait and runs on the upgrade request.
 //! - **Per-message**: `#[use_guards]` beside a `#[subscribe_message]` runs
-//!   `Guard::check_ws_message` (global + per-message, deduped by `TypeId`)
-//!   each time the event fires.
+//!   `Guard::check` on the message's [`WsView`] (global + per-message, deduped
+//!   by `TypeId`) each time the event fires.
 //!
 //! `#[on_connect]` / `#[on_disconnect]` on the `#[messages]` impl block are the
 //! lifecycle hooks; `on_disconnect` runs while the connection is still registered.
@@ -157,6 +157,7 @@ mod opaque;
 mod scope;
 mod server;
 pub mod unit;
+mod view;
 
 pub use config::WsConfig;
 pub use context::{BoxFuture, Captured, SocketContext};
@@ -165,19 +166,24 @@ pub use envelope::{
     ReplyValueFallback, WsEnvelope, WsError, WsReply,
 };
 pub use error::WsScopeError;
-pub use gateway::{Gateway, GatewayEndpoint, gateway_endpoint};
-pub use guard::{EventLayerTable, WsMessageCheck};
+pub use gateway::{Gateway, GatewayEndpoint};
+pub use guard::denial_to_ws_error;
 pub use module::{WsModule, WsSetup};
 pub use namespace::WsNamespaces;
 pub use opaque::Opaque;
 pub use scope::Scoped;
 pub use server::{ConnId, Global, Registry, WsClient, WsServer};
+pub use view::WsView;
 
 #[doc(hidden)]
 pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::gateway::gateway_endpoint;
+    pub use crate::guard::{
+        EventChain, EventLayerTable, check_ws_gateway, guard_ws_upgrade, ws_event_chain,
+    };
     pub use crate::namespace::WsNamespaceEntry;
 }
 

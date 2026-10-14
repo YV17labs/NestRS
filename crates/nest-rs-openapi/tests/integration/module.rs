@@ -2,7 +2,7 @@
 
 use nest_rs_config::Config;
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::poem::web::Multipart;
 use nest_rs_http::{
     ApiVersioning, Header, HttpConfig, HttpModule, HttpSecurityHeaders, async_trait, controller,
@@ -10,7 +10,6 @@ use nest_rs_http::{
 };
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
 use nest_rs_testing::TestApp;
-use poem::Request;
 use poem::http::StatusCode;
 use serde_json::Value;
 
@@ -381,12 +380,12 @@ impl Layer for DenyEveryone {}
 
 #[async_trait]
 impl Guard for DenyEveryone {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("no"))
     }
 }
 
-impl HttpGuard for DenyEveryone {}
+impl GuardFor<nest_rs_http::HttpView> for DenyEveryone {}
 
 #[module(imports = [openapi(true)], providers = [WidgetsController, DenyEveryone])]
 struct GuardedApp;

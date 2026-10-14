@@ -1,11 +1,17 @@
-//! What one MCP operation *is*, for the layers that run around it.
-//!
-//! [`McpOperationContext`] carries no arguments: deciding access from a payload
-//! is a pipe's job, never a guard's.
+//! What one MCP operation *is*, and the guard chain that runs around it.
 
 use std::fmt;
 
-use nest_rs_core::Container;
+use nest_rs_core::__private::{Pending, new_unit_context};
+use nest_rs_core::{Container, Handler};
+use nest_rs_guards::__private::{
+    GlobalBucket, SiteChainCell, SiteChainSources, failure_chain, run_stage,
+};
+
+use crate::McpError;
+use crate::error::unresolvable_chain;
+use crate::guard::denial_to_mcp_error;
+use crate::view::McpView;
 
 /// The container serving the current MCP operation, read off the ambient request
 /// scope; `None` outside a dispatch nested under the HTTP transport edge.
@@ -38,63 +44,60 @@ impl fmt::Display for McpOperationKind {
     }
 }
 
-/// One MCP operation, as a [`Guard`](https://docs.rs/nest-rs-guards) sees it.
+/// Run an operation site's guard chain — called by `#[tools]` at the start of
+/// every decorated operation, `handler` the site's declaration: the app-wide
+/// pool, the host's `#[use_guards]` and the operation's own, each guard's
+/// `check` on the operation; what they attached comes back, for the operation
+/// to run under.
 ///
-/// The caller's `Ability` is ambient by the time a guard runs, read with
-/// `nest_rs_authz::current_ability` as on any other transport.
-pub struct McpOperationContext<'a> {
-    container: &'a Container,
+/// The pool is part of this chain, as on `/graphql`: the endpoint's request
+/// runs `check_http`, never `check`, so leaving the pool out here would leave a
+/// global guard overriding only `check` never consulted. `cell` memoizes the
+/// composed chain per app; `sources` is consulted only on the miss that
+/// composes it.
+pub async fn run_layered_mcp_chain(
+    cell: &SiteChainCell,
+    route_label: &'static str,
     host: &'static str,
     kind: McpOperationKind,
     name: &'static str,
-}
-
-impl<'a> McpOperationContext<'a> {
-    /// Describe the operation about to run; emitted by `#[tools]`.
-    pub fn new(
-        container: &'a Container,
-        host: &'static str,
-        kind: McpOperationKind,
-        name: &'static str,
-    ) -> Self {
-        Self {
-            container,
-            host,
-            kind,
-            name,
+    sources: &(dyn Fn() -> SiteChainSources + Sync),
+    handler: &'static Handler,
+) -> Result<Pending, McpError> {
+    let Some(container) = current_container() else {
+        // No app is ambient: declared guards cannot be resolved, so the
+        // operation fails closed; one that declared none loses nothing.
+        let declared = sources();
+        if declared.provider.is_empty() && declared.method.is_empty() {
+            return Ok(Pending::default());
         }
+        return Err(unresolvable_chain(route_label));
+    };
+
+    let chain = cell
+        .chain(&container, route_label, sources, |_| GlobalBucket::Fold)
+        .map_err(denial_to_mcp_error)?;
+    if chain.is_empty() {
+        return Ok(Pending::default());
     }
 
-    /// The app serving this operation — what a guard resolves collaborators
-    /// from when it needs one it did not `#[inject]`.
-    pub fn container(&self) -> &Container {
-        self.container
-    }
-
-    /// The `#[mcp]` host type this operation belongs to.
-    pub fn host(&self) -> &'static str {
-        self.host
-    }
-
-    /// Whether this is a tool call or a prompt fetch.
-    pub fn kind(&self) -> McpOperationKind {
-        self.kind
-    }
-
-    /// The operation's wire name — the tool or prompt the client asked for.
-    pub fn name(&self) -> &'static str {
-        self.name
-    }
-}
-
-impl fmt::Debug for McpOperationContext<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("McpOperationContext")
-            .field("host", &self.host)
-            .field("kind", &self.kind)
-            .field("name", &self.name)
-            .finish_non_exhaustive()
-    }
+    let mut view = McpView::new(kind, name, host);
+    let mut cx = new_unit_context(handler, &mut view, None, None);
+    run_stage(&chain, &mut cx).await.map_err(|(guard, denial)| {
+        // Structural floor mirroring the HTTP edge's; host and operation stay
+        // separate fields for an incident query.
+        tracing::warn!(
+            target: nest_rs_core::target::LAYERS,
+            guard,
+            host,
+            kind = kind.as_str(),
+            operation = name,
+            status = denial.http_status(),
+            error = failure_chain(&denial),
+            "guard denied the operation",
+        );
+        denial_to_mcp_error(denial)
+    })
 }
 
 /// Whether an operation's description holds no prose — `str::trim` leaves

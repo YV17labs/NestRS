@@ -2,17 +2,17 @@
 //! `http_only_guard_on_a_resolver`.
 //!
 //! `#[resolver]` and `#[operations]` are two decorators emitting the same
-//! `GraphqlGuard` bound at two scopes, and a snapshot is owed per
+//! `GuardFor<GraphqlView>` bound at two scopes, and a snapshot is owed per
 //! site — HTTP's three emitters being the worked example, each
 //! underlining the decorator the guard was written under, with a snapshot of
 //! its own. The resolver scope had one and the operation scope did not, so
 //! either half of `#[operations]`' bound could be deleted and the pair stayed
 //! proved by the other decorator's snapshot.
 
-use nest_rs::core::{Layer, injectable};
+use nest_rs::core::{Layer, UnitContext, injectable};
 use nest_rs::graphql::{operations, resolver};
-use nest_rs::guards::{Denial, Guard, async_trait};
-use poem::Request;
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::http::HttpView;
 
 #[injectable]
 #[derive(Default)]
@@ -22,10 +22,12 @@ impl Layer for HttpOnlyGuard {}
 
 #[async_trait]
 impl Guard for HttpOnlyGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
+
+impl GuardFor<HttpView> for HttpOnlyGuard {}
 
 #[resolver]
 struct DemoResolver;

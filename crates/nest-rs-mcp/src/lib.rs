@@ -72,34 +72,39 @@ mod propagate;
 mod registry;
 mod scope;
 pub mod unit;
+mod view;
 
 pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
 pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
 pub use error::{Opaque, pipe_error, problem_error, unresolvable_chain};
-pub use guard::{BoxFuture, McpOperationGuard};
+pub use guard::{BoxFuture, McpOperationGuard, denial_to_mcp_error};
 pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpOptions, McpSetup};
-pub use operation::{McpOperationContext, McpOperationKind, current_container};
+pub use operation::{McpOperationKind, current_container};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
 /// Per-operation accessor for `#[injectable(scope = request)]` providers inside
 /// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;
+pub use view::McpView;
 
 #[doc(hidden)]
 pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::endpoint::endpoint_site;
     pub use crate::error::{OperationAnswer, refused};
-    pub use crate::guard::FallbackMcpGuard;
     pub use crate::identity::declared_identity;
-    pub use crate::operation::description_is_blank;
-    pub use crate::registry::{DefaultOperationLayers, DefaultToolRouter, register_host};
+    pub use crate::operation::{description_is_blank, run_layered_mcp_chain};
+    pub use crate::registry::{
+        DefaultOperationLayers, DefaultToolRouter, ENDPOINT, declare_endpoint, register_host,
+    };
+    pub use nest_rs_core::__private::install_pending;
 }
 
 pub use rmcp::model::ProtocolVersion;

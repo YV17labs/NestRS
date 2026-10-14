@@ -819,7 +819,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         item,
                     })
             }),
-        quote!(::nest_rs_guards::HttpGuard),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_http::HttpView>),
     );
 
     // Only when the controller streams: an unused binding warns in the developer's build.
@@ -950,7 +950,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     .attach_meta::<#self_ty, ::nest_rs_http::HttpControllerMeta>(__meta)
                     .attach_meta::<#self_ty, ::nest_rs_http::HttpBootCheck>(
                         ::nest_rs_http::HttpBootCheck::new(|__container| {
-                            ::nest_rs_guards::dispatch::boot_validate_guards(
+                            ::nest_rs_guards::__private::boot_validate_guards(
                                 __container,
                                 &<#self_ty>::__nestrs_controller_guard_specs(),
                                 #ctrl_tag,
@@ -1222,7 +1222,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     let mut expr = quote! {
         {
             #named_shaper_assert
-            ::nest_rs_http::__private::shaped(#wrapper_expr, #shaper_selection, #probe)
+            ::nest_rs_http::__private::shaped(#wrapper_expr, __nestrs_shaper, #probe)
         }
     };
     let method_exception_filter_specs = scoped_specs(
@@ -1237,7 +1237,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     // One call for the three pools: each generic wrapper level adds a
     // `Request`-sized slot to the future poem boxes per request.
     expr = quote! {
-        ::nest_rs_guards::dispatch::wrap_route_response_layers(
+        ::nest_rs_interceptors::__private::wrap_route_response_layers(
             container,
             #expr,
             &<#self_ty>::__nestrs_controller_exception_filter_specs(),
@@ -1258,8 +1258,12 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     } else {
         quote!(false)
     };
-    expr = quote! {
-        ::nest_rs_guards::dispatch::wrap_route_shaper(
+    // The selection is evaluated once: it arms the response shaper, and its
+    // presence tells the route shaper the reply is masked.
+    expr = quote! {{
+        let __nestrs_shaper = #shaper_selection;
+        let __nestrs_masked = ::core::option::Option::is_some(&__nestrs_shaper);
+        ::nest_rs_http::__private::wrap_route_shaper(
             container,
             #expr,
             #route_label_lit,
@@ -1270,9 +1274,10 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
             #method_pipe_specs,
             #no_pipes_flag,
             #gate_selection,
+            __nestrs_masked,
             #handler,
         )
-    };
+    }};
 
     if let Some(header) = deprecation_header {
         expr = quote! { ::nest_rs_http::__private::deprecated_route(#expr, #header) };

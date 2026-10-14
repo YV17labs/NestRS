@@ -21,8 +21,8 @@ pub type Captured = Arc<dyn Any + Send + Sync>;
 /// as dyn SocketContext]` to carry state (an executor, an ability) from the
 /// upgrade request into every message handler.
 pub trait SocketContext: Send + Sync + 'static {
-    /// Runs once on the post-guard upgrade request. The returned state moves
-    /// into the connection task.
+    /// Runs once on the admitted upgrade request, under what its guards
+    /// attached. The returned state moves into the connection task.
     fn capture(&self, req: &Request) -> Captured;
 
     /// Wrap one message dispatch with the captured state installed.

@@ -9,6 +9,7 @@
 use std::any::{Any, type_name};
 use std::sync::Arc;
 
+use nest_rs_core::__private::Pending;
 use nest_rs_core::RequestScope;
 use poem::Request;
 use poem::http::request::Parts;
@@ -84,6 +85,8 @@ pub(crate) struct McpAmbient {
     /// Whatever the endpoint's [`McpOperationGuard`](crate::McpOperationGuard)
     /// snapshotted — the caller's ability, for the canonical bridge.
     pub(crate) guard_captured: Option<Captured>,
+    /// What the request's guards attached, ambient for each operation.
+    pub(crate) attached: Pending,
     /// The span the request arrived under: in session mode rmcp's serve loop runs
     /// on a bare `tokio::spawn`, so a tool's events would otherwise lose the request.
     pub(crate) span: tracing::Span,
@@ -99,6 +102,7 @@ impl Default for McpAmbient {
             scope: None,
             captured: None,
             guard_captured: None,
+            attached: Pending::default(),
             span: tracing::Span::none(),
             correlation: nest_rs_core::Correlation::minted(None),
         }

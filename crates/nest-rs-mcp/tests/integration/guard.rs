@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::module;
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::async_trait;
 use nest_rs_mcp::{
     AllowAllMcpGuard, BoxFuture, CallToolResult, Captured, ContentBlock, McpError, McpMount,
@@ -202,12 +202,12 @@ impl nest_rs_core::Layer for DenyEverythingGuard {}
 
 #[async_trait]
 impl Guard for DenyEverythingGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("global pool refused"))
     }
 }
 
-impl HttpGuard for DenyEverythingGuard {}
+impl GuardFor<nest_rs_http::HttpView> for DenyEverythingGuard {}
 
 #[module(providers = [PoolTool, DenyEverythingGuard, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct BridgedModule;
@@ -311,4 +311,38 @@ async fn an_empty_global_pool_leaves_mcp_deny_all() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[module(providers = [PoolTool, crate::StoreDown])]
+struct StoreDownPoolModule;
+
+/// A pooled guard that cannot evaluate the `/mcp` request files what failed on
+/// the request's denial line, and the client reads the condition alone.
+#[tokio::test]
+async fn a_request_denial_keeping_its_cause_files_the_chain() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<StoreDownPoolModule>()
+        .use_guards_global([guard::<crate::StoreDown>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().post("/mcp").send().await;
+    resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a response body");
+    assert!(
+        !body.contains("refused"),
+        "the cause stays on the server: {body}"
+    );
+    let event = logs.expect_one("nest_rs::layers", "guard denied the request");
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some(crate::STORE_DOWN_CHAIN)
+    );
 }

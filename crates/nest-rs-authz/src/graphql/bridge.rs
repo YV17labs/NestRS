@@ -1,19 +1,21 @@
 //! [`GraphqlAbilityBridge`] — per-operation bridge that authenticates and
-//! installs the ambient [`Ability`], the GraphQL analog of `AbilityGuard` + `Authorize`.
+//! attaches the caller's ability, the GraphQL analog of `AbilityGuard` + `Authorize`.
 
 use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
 use nest_rs_graphql::{BoxFuture, GraphqlOperationGuard};
-use nest_rs_guards::{Guard, denial_to_http_response};
+use nest_rs_guards::Guard;
+use nest_rs_http::__private::denial_to_http_response;
 use poem::{Request, Response};
 
-use crate::{Ability, run_ability_chain, with_ability};
+use crate::chain::run_ability_chain;
 
-/// Runs the controllers' guard chain (`A` then `G`) on the GraphQL request and
-/// scopes the operation to the resulting ability. It joins the app's global
-/// guard pool, never replaces it: a pooled `A` or `G` runs once, here.
+/// Runs the controllers' guard chain (`A` then `G`) on the GraphQL request; the
+/// ability `G` attaches is ambient for every operation the request carries. It
+/// joins the app's global guard pool, never replaces it: a pooled `A` or `G`
+/// runs once, here.
 #[injectable]
 pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
     #[inject]
@@ -29,20 +31,14 @@ impl<A: Guard, G: Guard> GraphqlAbilityBridge<A, G> {
 impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
         Box::pin(async move {
-            run_ability_chain(&*self.auth, &*self.ability, req)
-                .await
-                .map_err(denial_to_http_response)
-        })
-    }
-
-    fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
-        Box::pin(async move {
-            // `None` only when `G` attached no ability; `Repo` then fails its
-            // reads closed.
-            match req.extensions().get::<Arc<Ability>>().cloned() {
-                Some(ability) => with_ability(ability, inner).await,
-                None => inner.await,
-            }
+            run_ability_chain(
+                &nest_rs_graphql::__private::ENDPOINT,
+                &*self.auth,
+                &*self.ability,
+                req,
+            )
+            .await
+            .map_err(denial_to_http_response)
         })
     }
 

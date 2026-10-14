@@ -6,13 +6,12 @@ use std::sync::Arc;
 
 use nest_rs_core::{AccessGraphError, App, Layer, injectable, module};
 use nest_rs_graphql::{async_graphql, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{async_trait, controller, routes};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
 use nest_rs_ws::{WsModule, gateway, messages};
-use poem::Request;
 
 #[injectable]
 #[derive(Default)]
@@ -22,12 +21,15 @@ impl Layer for AuthzGuard {}
 
 #[async_trait]
 impl Guard for AuthzGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
     }
 }
 
-impl HttpGuard for AuthzGuard {}
+impl GuardFor<nest_rs_http::HttpView> for AuthzGuard {}
 
 #[module(providers = [AuthzGuard])]
 struct GuardModule;

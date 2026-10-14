@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{App, Layer, MissingDependencyError, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule, ThrottlerStore};
 
@@ -67,12 +67,12 @@ impl Layer for UnprovidedGuard {}
 
 #[async_trait]
 impl Guard for UnprovidedGuard {
-    async fn check_http(&self, _req: &mut poem::Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for UnprovidedGuard {}
+impl GuardFor<nest_rs_http::HttpView> for UnprovidedGuard {}
 
 #[controller(path = "/unwired")]
 #[use_guards(UnprovidedGuard)]

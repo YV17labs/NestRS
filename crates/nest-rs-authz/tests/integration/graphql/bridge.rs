@@ -2,7 +2,6 @@
 //! batches it triggers included, with no batch binding listed anywhere.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, current_ability};
@@ -10,9 +9,8 @@ use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::dataloader::DataLoader;
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, dataloader, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
 use nest_rs_testing::TestApp;
 
 use super::query;
@@ -27,7 +25,7 @@ impl Layer for PassGuard {}
 #[async_trait]
 impl Guard for PassGuard {}
 
-impl HttpGuard for PassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 
 /// Stands in for `AbilityGuard`: a caller with an `x-role` header gets an
 /// authenticated ability, anyone else the visitor's.
@@ -39,19 +37,18 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let builder = AbilityBuilder::new();
-        let ability = match req.headers().get("x-role") {
+        let ability = match nest_rs_http::HttpView::of(cx)?.request().header("x-role") {
             Some(_) => builder.build(),
             None => builder.build_visitor(),
         };
-        req.extensions_mut()
-            .insert(Arc::new(ability.expect("an empty rule set builds")));
+        cx.attach(ability.expect("an empty rule set builds"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 /// Answers each key with the ability its batch ran under.
 #[injectable]

@@ -32,27 +32,31 @@ mod resolver;
 mod scope;
 mod subscription;
 pub mod unit;
+mod view;
 
 pub use config::GraphqlConfig;
 pub use context::{BoxFuture, GraphqlOperationGuard};
 pub use context::{GraphqlContextSeed, SeedLifetime};
-pub use error::{CODE_EXTENSION, FIELD_ERRORS_EXTENSION, pipe_error, problem_error};
-pub use federation::GraphqlFederationGuard;
+pub use error::{
+    CODE_EXTENSION, FIELD_ERRORS_EXTENSION, denial_to_graphql_error, pipe_error, problem_error,
+};
 pub use module::{GraphqlModule, GraphqlSetup};
 pub use opaque::Opaque;
-pub use operation::GraphqlOperationContext;
 pub use scope::Scoped;
+pub use view::{FieldRole, GraphqlView};
 
 #[doc(hidden)]
 pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::context::FallbackOperationGuard;
+    pub use crate::context::ENDPOINT;
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate};
-    pub use crate::federation::FederationGate;
     pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};
-    pub use crate::operation::{IsStreamReturn, answers_a_stream, run_field};
+    pub use crate::operation::{
+        GraphqlSite, IsStreamReturn, answers_a_stream, field_name, run_field,
+        run_layered_graphql_chain,
+    };
     pub use crate::resolver::{
         GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
         GraphqlSubscriptionObject, ResolverDescriptor,
@@ -60,6 +64,8 @@ pub mod __private {
     pub use crate::subscription::{compose_schema, keep_masked_item};
 
     pub use inventory;
+    pub use nest_rs_core::__private::install_pending;
+    pub use nest_rs_core::ambient;
     // For `#[crud]`-generated ops, so the consumer needs no nest-rs-pipes dependency.
     pub use nest_rs_pipes::__private::{MaybeValidateFallback, ValidateProbe};
 }

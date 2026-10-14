@@ -1,8 +1,9 @@
 //! [`authorize`] — the class-level access gate, the WS analog of
 //! [`crate::mcp::authorize`].
 
-use nest_rs_guards::{Denial, denial_to_ws_error};
+use nest_rs_guards::Denial;
 use nest_rs_ws::WsError;
+use nest_rs_ws::denial_to_ws_error;
 
 use crate::gate::{Refusal, reason, transport};
 use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};

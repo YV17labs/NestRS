@@ -13,15 +13,13 @@
 //! Data-coupled bindings live in `nest_rs_seaorm::graphql` (`bind`).
 //!
 //! ```
-//! # use std::sync::Arc;
 //! # use nest_rs_authz::graphql::GraphqlAbilityBridge;
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};
 //! # use nest_rs_core::{Layer, injectable, module};
 //! # use nest_rs_graphql::async_graphql::{Result, SimpleObject};
 //! # use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
-//! # use nest_rs_guards::{Denial, Guard, HttpGuard};
+//! # use nest_rs_guards::{Denial, Guard, GuardFor};
 //! # use nest_rs_http::async_trait;
-//! # use nest_rs_http::poem::Request;
 //! # use nest_rs_testing::TestApp;
 //! # mod users {
 //! #     use sea_orm::entity::prelude::*;
@@ -48,24 +46,24 @@
 //! # impl Layer for PassGuard {}
 //! # #[async_trait]
 //! # impl Guard for PassGuard {}
-//! # impl HttpGuard for PassGuard {}
+//! # impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 //! # #[injectable]
 //! # #[derive(Default)]
 //! # struct Grants;
 //! # impl Layer for Grants {}
 //! # #[async_trait]
 //! # impl Guard for Grants {
-//! #     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+//! #     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
 //! #         let mut ab = AbilityBuilder::new();
-//! #         if req.headers().contains_key("x-viewer") {
+//! #         if nest_rs_http::HttpView::of(cx)?.request().header("x-viewer").is_some() {
 //! #             ab.can(Action::Read, users::Entity).fields([users::Column::Id]);
 //! #         }
 //! #         let ability = ab.build().map_err(|_| Denial::internal("malformed rules"))?;
-//! #         req.extensions_mut().insert(Arc::new(ability));
+//! #         cx.attach(ability);
 //! #         Ok(())
 //! #     }
 //! # }
-//! # impl HttpGuard for Grants {}
+//! # impl GuardFor<nest_rs_http::HttpView> for Grants {}
 //! #[resolver]
 //! struct UsersResolver;
 //!

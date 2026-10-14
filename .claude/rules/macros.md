@@ -28,8 +28,8 @@ its **own** surface crate's re-export (`::nest_rs_queue::TARGET` from
 `nest-rs-queue-macros`), never a sibling's root and never a bare third-party
 path — `::anyhow`, `::tracing`, `::uuid` resolve against the consumer's extern
 prelude and break every app that lacks that direct dependency. Routing through
-the umbrella is also what dissolves the cycles: `nest-rs-guards`,
-`nest-rs-authz` and `nest-rs-seaorm` sit above the transports, and only
+the umbrella is also what dissolves the cycles: `nest-rs-guards` sits below
+the transports, `nest-rs-authz` and `nest-rs-seaorm` above them, and only
 `::nest_rs::` sits above all of them.
 
 **A seam that is not public API lives in its crate's `__private`** — one inline

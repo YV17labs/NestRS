@@ -14,6 +14,9 @@ categories = ["web-programming::http-server", "asynchronous"]
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-http-macros.workspace = true
+# The edge runs its guards itself: a route's, a self-mount's request. The guard
+# contract names no HTTP type, so the dependency points this way.
+nest-rs-guards.workspace = true
 # `HttpTls::from_env` reads the `<PREFIX>_HTTP__TLS_*` keys through the
 # framework-wide env scheme (`env_var`, empty-as-unset), like every other
 # per-crate `from_env` shortcut; `tls` brings the process's crypto provider
@@ -74,12 +77,9 @@ nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
 # the `Json<T>` extractor in `from_request` test paths.
 serde.workspace = true
-# `#[routes]` macro emits paths to `::nest_rs_guards::GuardsRouteInterceptor`
-# and `::nest_rs_interceptors::InterceptorExt`, so any test using `#[routes]`
-# needs both crates in scope. Allowed as dev-deps despite the cycle through
-# `nest-rs-graphql → nest-rs-http` — Cargo permits cycles that go through
-# dev-dependencies.
-nest-rs-guards = { path = "../nest-rs-guards" }
+# `#[routes]` composes a route's response-side layers through
+# `nest-rs-interceptors`, so any test using `#[routes]` needs it in scope. An
+# allowed dev-dependency cycle: the interceptors depend on this crate.
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `tests/global_prefix.rs` drives an in-process server through poem's
 # `TestClient`, gated behind poem's `test` feature. `websocket` lets

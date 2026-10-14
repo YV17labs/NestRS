@@ -10,8 +10,9 @@
 //! reconstructing the handler's type: a WS frame, like an HTTP body, has no
 //! schema promising a key, so a stripped key is simply absent.
 
-use nest_rs_guards::{Denial, denial_to_ws_error};
+use nest_rs_guards::Denial;
 use nest_rs_ws::WsError;
+use nest_rs_ws::denial_to_ws_error;
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;

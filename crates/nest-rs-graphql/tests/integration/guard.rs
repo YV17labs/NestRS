@@ -1,20 +1,20 @@
 //! `#[use_guards]` on a `#[resolver]` impl — end-to-end through the in-process
 //! harness.
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result, Result as GqlResult};
 use nest_rs_graphql::{
-    GraphqlContextSeed, GraphqlModule, GraphqlOperationContext, SeedLifetime, async_trait,
-    operations, resolver,
+    GraphqlContextSeed, GraphqlModule, SeedLifetime, async_trait, operations, resolver,
 };
-use nest_rs_guards::{Denial, GraphqlGuard, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;
-use poem::Request;
 use poem::http::StatusCode;
 
 #[derive(Clone)]
 struct Role(String);
+
+impl AmbientValue for Role {}
 
 #[injectable]
 #[derive(Default)]
@@ -24,20 +24,19 @@ impl Layer for RoleHeaderGuard {}
 
 #[http_async_trait]
 impl Guard for RoleHeaderGuard {
-    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
-        if let Some(role) = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_owned())
-        {
-            req.extensions_mut().insert(Role(role));
+    async fn check_http(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        let request = nest_rs_http::HttpView::of(cx)?.request();
+        if let Some(role) = request.header("x-role").map(str::to_owned) {
+            cx.attach(Role(role));
         }
         Ok(())
     }
 }
 
-impl HttpGuard for RoleHeaderGuard {}
+impl GuardFor<nest_rs_http::HttpView> for RoleHeaderGuard {}
 
 #[injectable]
 #[derive(Default)]
@@ -47,8 +46,8 @@ nest_rs_core::inventory::submit! {
     GraphqlContextSeed {
         lifetime: SeedLifetime::Connection,
         owner_type_id: || Some(std::any::TypeId::of::<RequireAdmin>()),
-        seed: |req, _container, gql| match req.extensions().get::<Role>() {
-            Some(role) => gql.data(role.clone()),
+        seed: |_req, _container, gql| match nest_rs_core::ambient::<Role>() {
+            Some(role) => gql.data(Role::clone(&role)),
             None => gql,
         },
     }
@@ -58,18 +57,18 @@ impl Layer for RequireAdmin {}
 
 #[async_trait]
 impl Guard for RequireAdmin {
-    async fn check_graphql(
+    async fn check(
         &self,
-        op: &GraphqlOperationContext<'_>,
+        cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
-        match op.data_opt::<Role>() {
+        match cx.ambient::<Role>() {
             Some(role) if role.0 == "admin" => Ok(()),
             _ => Err(Denial::forbidden("forbidden")),
         }
     }
 }
 
-impl GraphqlGuard for RequireAdmin {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for RequireAdmin {}
 
 #[resolver]
 #[use_guards(RequireAdmin)]
@@ -204,16 +203,16 @@ impl Layer for DenyAll {}
 
 #[async_trait]
 impl Guard for DenyAll {
-    async fn check_graphql(
+    async fn check(
         &self,
-        _op: &GraphqlOperationContext<'_>,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("denied by the resolver-scope guard"))
     }
 }
 
-impl GraphqlGuard for DenyAll {}
-impl HttpGuard for DenyAll {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for DenyAll {}
+impl GuardFor<nest_rs_http::HttpView> for DenyAll {}
 
 /// Counts the GraphQL operations it is asked about, and lets each through.
 #[injectable]
@@ -226,17 +225,17 @@ impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
-    async fn check_graphql(
+    async fn check(
         &self,
-        _op: &GraphqlOperationContext<'_>,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl GraphqlGuard for CountingGuard {}
-impl HttpGuard for CountingGuard {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for CountingGuard {}
+impl GuardFor<nest_rs_http::HttpView> for CountingGuard {}
 
 #[derive(nest_rs_graphql::async_graphql::SimpleObject)]
 #[graphql(complex)]
@@ -473,8 +472,8 @@ mod unresolvable {
     use nest_rs_core::{Container, Layer, ReachableProviders, injectable, module};
     use nest_rs_graphql::GraphqlConfig;
     use nest_rs_graphql::async_graphql::{Executor, Request, Result};
-    use nest_rs_graphql::{GraphqlOperationContext, async_trait, operations, resolver};
-    use nest_rs_guards::{Denial, GraphqlGuard, Guard};
+    use nest_rs_graphql::{async_trait, operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_testing::LogCapture;
 
     #[injectable]
@@ -485,15 +484,15 @@ mod unresolvable {
 
     #[async_trait]
     impl Guard for NeverProvided {
-        async fn check_graphql(
+        async fn check(
             &self,
-            _op: &GraphqlOperationContext<'_>,
+            _cx: &mut nest_rs_core::UnitContext<'_>,
         ) -> std::result::Result<(), Denial> {
             Ok(())
         }
     }
 
-    impl GraphqlGuard for NeverProvided {}
+    impl GuardFor<nest_rs_graphql::GraphqlView> for NeverProvided {}
 
     #[resolver]
     #[use_guards(NeverProvided)]
@@ -578,10 +577,8 @@ mod owned_chain {
 
     use nest_rs_core::{Layer, injectable, module};
     use nest_rs_graphql::async_graphql::Result;
-    use nest_rs_graphql::{
-        GraphqlModule, GraphqlOperationContext, async_trait, operations, resolver,
-    };
-    use nest_rs_guards::{Denial, GraphqlGuard, Guard};
+    use nest_rs_graphql::{GraphqlModule, async_trait, operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_testing::TestApp;
     use poem::http::StatusCode;
 
@@ -601,15 +598,15 @@ mod owned_chain {
 
     #[async_trait]
     impl Guard for CountsItsDrop {
-        async fn check_graphql(
+        async fn check(
             &self,
-            _op: &GraphqlOperationContext<'_>,
+            _cx: &mut nest_rs_core::UnitContext<'_>,
         ) -> std::result::Result<(), Denial> {
             Ok(())
         }
     }
 
-    impl GraphqlGuard for CountsItsDrop {}
+    impl GuardFor<nest_rs_graphql::GraphqlView> for CountsItsDrop {}
 
     #[resolver]
     #[use_guards(CountsItsDrop)]

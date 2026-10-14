@@ -43,8 +43,6 @@ pub const TARGET: &str = "nest_rs::authz";
 pub use ability::{Ability, FieldSet};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, RuleSpec};
-#[cfg(any(feature = "graphql", feature = "mcp"))]
-pub use chain::run_ability_chain;
 pub use context::{current_ability, with_ability};
 pub use error::{MalformedRuleError, MaskReplyError};
 pub use factory::AbilityFactory;

@@ -3,11 +3,11 @@
 //! chain whose declarations cannot line up fails boot with a named error
 //! instead of answering `500` on every request.
 
-use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket};
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_scoped};
 use nest_rs_core::Container;
 use nest_rs_core::layer_chain::LayerSite;
 
-use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_global_guards, resolve_scoped};
+use crate::registry::{GuardSpec, resolve_global_guards};
 use crate::{Guard, GuardPhase};
 
 /// Validate one resolved guard chain (in execution order).
@@ -107,7 +107,7 @@ pub fn validate_guard_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> 
 /// again, whole, as it mounts.
 pub fn boot_validate_guards(
     container: &Container,
-    controller_specs: &[ScopedGuardSpec],
+    controller_specs: &[GuardSpec],
     label: &str,
 ) -> Result<(), String> {
     let global = resolve_global_guards(container);

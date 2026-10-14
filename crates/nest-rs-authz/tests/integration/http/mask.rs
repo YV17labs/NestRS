@@ -1,16 +1,13 @@
 //! Wire → model → mask → retain wire keys, driven through a real `#[routes]`
 //! handler and the `Authorize` response shaper — no live database.
 
-use std::sync::Arc;
-
 use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_testing::TestApp;
-use poem::Request;
 use serde::Serialize;
 
 mod widget {
@@ -66,11 +63,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let admin = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let admin = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .map(|role| role == "admin")
             .unwrap_or(false);
         let mut b = AbilityBuilder::new();
@@ -82,13 +78,12 @@ impl Guard for AbilityInjector {
                 .when(|p| p.eq(widget::Column::Id, 1))
                 .fields([widget::Column::Name]);
         }
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 #[injectable]
 #[derive(Default)]
@@ -98,16 +93,15 @@ impl Layer for ListAbilityInjector {}
 
 #[async_trait]
 impl Guard for ListAbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for ListAbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for ListAbilityInjector {}
 
 #[controller(path = "/widgets")]
 struct WidgetController;
@@ -389,12 +383,12 @@ impl Layer for PostAbilityInjector {}
 
 #[async_trait]
 impl Guard for PostAbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         use crate::post;
 
-        let narrow = req
-            .headers()
-            .get("x-role")
+        let narrow = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .is_some_and(|role| role == "narrow");
         let mut b = AbilityBuilder::new();
         if narrow {
@@ -407,13 +401,12 @@ impl Guard for PostAbilityInjector {
             b.cannot(Action::Read, post::Entity)
                 .when(|p| post::in_org(&p, 9));
         }
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for PostAbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for PostAbilityInjector {}
 
 #[controller(path = "/posts")]
 struct PostController;

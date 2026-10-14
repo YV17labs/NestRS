@@ -481,32 +481,30 @@ fn the_bound_answers_before_the_http_edge_times_a_request_out() {
     assert!(HIT_TIMEOUT < timeout, "{HIT_TIMEOUT:?} vs {timeout:?}");
 }
 
-// Each module below binds the guard where a developer would: the only witness
-// its capability marker has, since `#[operations]`, `#[tools]` and `#[messages]`
-// bound it against `GraphqlGuard` / `McpGuard` / `WsGuard`.
+// Each module below binds the guard where a developer would — the only witness
+// of its `GuardFor` declaration, since `#[operations]`, `#[tools]` and
+// `#[messages]` bind every guard they name on their edge's view — and pins the
+// site's budget with `#[meta(Throttle::per_minute(1))]` under a module default
+// no test reaches: a second call refused is the site's metadata honoured.
 
-/// One request per minute, so the *second* call is the assertion and the first
-/// proves the site was reachable at all.
-#[cfg(any(feature = "graphql", feature = "mcp", feature = "ws"))]
-fn one_per_minute() -> ThrottlerConfig {
+/// A default no test reaches, so a refusal is the site's own budget.
+fn generous() -> ThrottlerConfig {
     ThrottlerConfig {
-        limit: Some(1),
+        limit: Some(1_000),
         window_secs: Some(60),
         pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
     }
 }
 
-#[cfg(feature = "graphql")]
 mod graphql {
     use nest_rs_core::module;
     use nest_rs_graphql::async_graphql::Result as GraphqlResult;
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_testing::TestApp;
-    use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
+    use nest_rs_throttler::{Throttle, ThrottlerGuard, ThrottlerModule};
 
     use super::{
-        StalledStoreModule, assert_the_store_was_waited_out, edge, one_per_minute,
-        within_twice_the_bound,
+        StalledStoreModule, assert_the_store_was_waited_out, edge, generous, within_twice_the_bound,
     };
 
     #[resolver]
@@ -517,7 +515,14 @@ mod graphql {
     impl RatedResolver {
         #[query]
         #[public]
+        #[meta(Throttle::per_minute(1))]
         async fn tick(&self) -> GraphqlResult<String> {
+            Ok("ok".to_owned())
+        }
+
+        #[query]
+        #[public]
+        async fn tock(&self) -> GraphqlResult<String> {
             Ok("ok".to_owned())
         }
     }
@@ -525,7 +530,7 @@ mod graphql {
     #[module(
         imports = [
             GraphqlModule::for_root(None),
-            ThrottlerModule::for_root(one_per_minute()),
+            ThrottlerModule::for_root(generous()),
         ],
         providers = [RatedResolver],
     )]
@@ -535,7 +540,7 @@ mod graphql {
         imports = [
             nest_rs_http::HttpModule::for_root(edge()),
             GraphqlModule::for_root(None),
-            ThrottlerModule::for_root(one_per_minute()),
+            ThrottlerModule::for_root(generous()),
             StalledStoreModule,
         ],
         providers = [RatedResolver],
@@ -548,10 +553,10 @@ mod graphql {
             .expect("a resolver binding ThrottlerGuard boots")
     }
 
-    async fn tick(app: &TestApp) -> String {
+    async fn query(app: &TestApp, field: &str) -> String {
         app.http()
             .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ tick }" }))
+            .body_json(&serde_json::json!({ "query": format!("{{ {field} }}") }))
             .send()
             .await
             .0
@@ -562,17 +567,17 @@ mod graphql {
     }
 
     #[tokio::test]
-    async fn a_second_operation_inside_the_window_is_refused() {
+    async fn a_second_operation_inside_the_field_s_window_is_refused() {
         let logs = nest_rs_testing::LogCapture::install();
         let app = app().await;
 
-        let first = tick(&app).await;
+        let first = query(&app, "tick").await;
         assert!(
             first.contains("\"tick\":\"ok\""),
             "the field resolves inside the budget: {first}",
         );
 
-        let second = tick(&app).await;
+        let second = query(&app, "tick").await;
         assert!(
             second.contains("Too Many Requests"),
             "the second operation inside the window is refused: {second}",
@@ -581,6 +586,13 @@ mod graphql {
             !second.contains("\"tick\":\"ok\""),
             "…and the resolver body never ran: {second}",
         );
+        for _ in 0..3 {
+            let other = query(&app, "tock").await;
+            assert!(
+                other.contains("\"tock\":\"ok\""),
+                "a field pinning no budget counts under the module default: {other}",
+            );
+        }
 
         let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
         assert_eq!(event.level, "warn");
@@ -625,7 +637,7 @@ mod graphql {
             .await
             .expect("a resolver over a custom store boots");
 
-        let refused = within_twice_the_bound(tick(&app)).await;
+        let refused = within_twice_the_bound(query(&app, "tick")).await;
 
         assert!(
             refused.contains("Too Many Requests"),
@@ -639,17 +651,15 @@ mod graphql {
     }
 }
 
-#[cfg(feature = "mcp")]
 mod mcp {
     use nest_rs_core::module;
     use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, mcp, tools};
     use nest_rs_testing::TestApp;
     use nest_rs_testing::mcp::call_tool;
-    use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
+    use nest_rs_throttler::{Throttle, ThrottlerGuard, ThrottlerModule};
 
     use super::{
-        StalledStoreModule, assert_the_store_was_waited_out, edge, one_per_minute,
-        within_twice_the_bound,
+        StalledStoreModule, assert_the_store_was_waited_out, edge, generous, within_twice_the_bound,
     };
 
     const PATH: &str = "/mcp/rated";
@@ -664,7 +674,15 @@ mod mcp {
         /// Answer with a constant — the assertions are about what ran around it.
         #[tool]
         #[public]
+        #[meta(Throttle::per_minute(1))]
         async fn tick(&self) -> Result<String, McpError> {
+            Ok("ok".to_owned())
+        }
+
+        /// The same, under the module default.
+        #[tool]
+        #[public]
+        async fn tock(&self) -> Result<String, McpError> {
             Ok("ok".to_owned())
         }
     }
@@ -672,7 +690,7 @@ mod mcp {
     // Without an operation guard `/mcp` is deny-all, and a `401` would hide
     // whether the per-operation chain ran at all.
     #[module(
-        imports = [ThrottlerModule::for_root(one_per_minute())],
+        imports = [ThrottlerModule::for_root(generous())],
         providers = [RatedTool, AllowAllMcpGuard as dyn McpOperationGuard],
     )]
     struct RatedMcpModule;
@@ -686,7 +704,7 @@ mod mcp {
                 sse_keep_alive: None,
                 ..Default::default()
             }),
-            ThrottlerModule::for_root(one_per_minute()),
+            ThrottlerModule::for_root(generous()),
             StalledStoreModule,
         ],
         providers = [RatedTool, AllowAllMcpGuard as dyn McpOperationGuard],
@@ -694,7 +712,7 @@ mod mcp {
     struct StalledMcpModule;
 
     #[tokio::test]
-    async fn a_second_tool_call_inside_the_window_is_refused() {
+    async fn a_second_tool_call_inside_the_tool_s_window_is_refused() {
         let logs = nest_rs_testing::LogCapture::install();
         let app = TestApp::for_module::<RatedMcpModule>()
             .await
@@ -711,6 +729,13 @@ mod mcp {
             second.contains("Too Many Requests"),
             "the second call inside the window is refused: {second}",
         );
+        for _ in 0..3 {
+            let other = call_tool(app.http(), PATH, "tock", None).await;
+            assert!(
+                !other.contains("Too Many Requests"),
+                "a tool pinning no budget counts under the module default: {other}",
+            );
+        }
 
         let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
         assert_eq!(event.level, "warn");
@@ -719,13 +744,6 @@ mod mcp {
             event.field("operation").as_deref(),
             Some("tick"),
             "the bucket is the operation's, got {:?}",
-            event.fields,
-        );
-        assert_eq!(
-            event.field("kind").as_deref(),
-            Some("tool"),
-            "…and the kind beside it, because a tool and a prompt may share a \
-             name and are two addresses, got {:?}",
             event.fields,
         );
         assert!(event.field("retry_after").is_some());
@@ -760,20 +778,23 @@ mod mcp {
     }
 }
 
-#[cfg(feature = "ws")]
 mod ws {
-    use nest_rs_core::module;
-    use nest_rs_guards::Guard;
+    use std::any::TypeId;
+
+    use nest_rs_core::__private::{
+        HandlerDeclaration, MetaLevels, declare_handler, new_unit_context,
+    };
+    use nest_rs_core::{Handler, Peer, Posture, UnitView, module};
+    use nest_rs_guards::{Denial, Guard};
     use nest_rs_testing::TestApp;
-    use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
-    use nest_rs_ws::{WsClient, WsModule, gateway, messages};
+    use nest_rs_throttler::{Throttle, ThrottlerGuard, ThrottlerModule};
+    use nest_rs_ws::{WsModule, gateway, messages};
 
     use super::{
         FailingStoreModule, StalledStoreModule, assert_the_store_failure_was_said,
-        assert_the_store_was_waited_out, one_per_minute, within_twice_the_bound,
+        assert_the_store_was_waited_out, generous, within_twice_the_bound,
     };
 
-    /// The compile witness for `WsGuard`.
     #[gateway(path = "/ws/rated")]
     struct RatedGateway;
 
@@ -782,13 +803,21 @@ mod ws {
         #[subscribe_message("tick")]
         #[use_guards(ThrottlerGuard)]
         #[public]
+        #[meta(Throttle::per_minute(1))]
         async fn tick(&self) -> &'static str {
+            "ok"
+        }
+
+        #[subscribe_message("tock")]
+        #[use_guards(ThrottlerGuard)]
+        #[public]
+        async fn tock(&self) -> &'static str {
             "ok"
         }
     }
 
     #[module(
-        imports = [WsModule, ThrottlerModule::for_root(one_per_minute())],
+        imports = [WsModule, ThrottlerModule::for_root(generous())],
         providers = [RatedGateway],
     )]
     struct RatedWsModule;
@@ -796,7 +825,7 @@ mod ws {
     #[module(
         imports = [
             WsModule,
-            ThrottlerModule::for_root(one_per_minute()),
+            ThrottlerModule::for_root(generous()),
             StalledStoreModule,
         ],
         providers = [RatedGateway],
@@ -806,43 +835,47 @@ mod ws {
     #[module(
         imports = [
             WsModule,
-            ThrottlerModule::for_root(one_per_minute()),
+            ThrottlerModule::for_root(generous()),
             FailingStoreModule,
         ],
         providers = [RatedGateway],
     )]
     struct FailingWsModule;
 
-    /// The boot proves the wiring, and the entry is then exercised on the guard
-    /// the container built.
     #[tokio::test]
-    async fn a_second_message_on_one_connection_is_refused() {
+    async fn a_second_message_on_one_connection_inside_the_event_s_window_is_refused() {
         let logs = nest_rs_testing::LogCapture::install();
-        let app = TestApp::for_module::<RatedWsModule>()
+        let app = TestApp::builder()
+            .module::<RatedWsModule>()
+            .build_ws()
             .await
-            .expect("a #[subscribe_message] binding ThrottlerGuard boots");
-        let guard = app
-            .container()
-            .get::<ThrottlerGuard>()
-            .expect("ThrottlerModule registers the guard as global infrastructure");
+            .expect("a #[subscribe_message] binding ThrottlerGuard boots on a real port");
+        let mut socket = app.socket("/ws/rated").connect().await;
 
-        let client = WsClient::for_test();
-        let data = serde_json::Value::Null;
+        socket.send("tick", serde_json::Value::Null).await;
+        let first = socket.next_envelope().await;
+        assert_eq!(first["data"], "ok", "inside the budget: {first}");
 
-        guard
-            .check_ws_message(&client, "tick", &data)
-            .await
-            .expect("the first message on this connection is inside the budget");
+        socket.send("tick", serde_json::Value::Null).await;
+        let refused = socket.next_envelope().await;
+        assert_eq!(
+            refused["event"], "tick",
+            "the refusal answers its event: {refused}"
+        );
+        assert_eq!(refused["data"]["error"], "Too Many Requests", "{refused}");
+        assert_eq!(
+            refused["data"]["errors"]["code"], "RATE_LIMITED",
+            "{refused}"
+        );
 
-        guard
-            .check_ws_message(&client, "tick", &data)
-            .await
-            .expect_err("the second message inside the window is refused");
-
-        guard
-            .check_ws_message(&client, "other", &data)
-            .await
-            .expect("a different event on the same connection has its own bucket");
+        for _ in 0..3 {
+            socket.send("tock", serde_json::Value::Null).await;
+            let other = socket.next_envelope().await;
+            assert_eq!(
+                other["data"], "ok",
+                "an event pinning no budget counts under the module default: {other}",
+            );
+        }
 
         let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
         assert_eq!(event.level, "warn");
@@ -853,15 +886,43 @@ mod ws {
             "the event names the unit, got {:?}",
             event.fields,
         );
-        assert_eq!(
-            event.field("connection").as_deref(),
-            Some(client.id().to_string()).as_deref(),
+        assert!(
+            event
+                .field("connection")
+                .is_some_and(|connection| connection.parse::<u64>().is_ok()),
             "…and the connection the bucket is keyed on, a number this process \
              minted for the socket — never the peer's address, got {:?}",
             event.fields,
         );
         assert_eq!(event.field("client"), None, "got {:?}", event.fields);
         assert!(event.field("retry_after").is_some());
+
+        app.shutdown().await.expect("the transport stops cleanly");
+    }
+
+    struct Gateway;
+
+    /// A message of the `tick` event, as `#[messages]` declares it.
+    static TICK: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_ws::unit::MESSAGE,
+        host: TypeId::of::<Gateway>(),
+        host_name: "Gateway",
+        method: "tick",
+        address: "tick",
+        posture: Posture::Public,
+        meta: MetaLevels::default,
+    });
+
+    struct Message;
+
+    impl UnitView for Message {}
+
+    /// The guard's entry on one message of connection `7`, as the gateway's
+    /// per-message table runs it: no socket, so time can be paused.
+    async fn check_a_message(guard: &ThrottlerGuard) -> Result<(), Denial> {
+        let mut view = Message;
+        let mut cx = new_unit_context(&TICK, &mut view, Some(Peer::new(None, Some(7))), None);
+        guard.check(&mut cx).await
     }
 
     /// No request timeout reaches a socket's messages at all.
@@ -877,13 +938,9 @@ mod ws {
             .expect("ThrottlerModule registers the guard as global infrastructure");
 
         let sent = tokio::time::Instant::now();
-        let refused = within_twice_the_bound(guard.check_ws_message(
-            &WsClient::for_test(),
-            "tick",
-            &serde_json::Value::Null,
-        ))
-        .await
-        .expect_err("a store that cannot answer refuses the message");
+        let refused = within_twice_the_bound(check_a_message(&guard))
+            .await
+            .expect_err("a store that cannot answer refuses the message");
 
         assert!(sent.elapsed() >= nest_rs_throttler::HIT_TIMEOUT);
         assert_eq!(
@@ -907,8 +964,7 @@ mod ws {
             .get::<ThrottlerGuard>()
             .expect("ThrottlerModule registers the guard as global infrastructure");
 
-        let refused = guard
-            .check_ws_message(&WsClient::for_test(), "tick", &serde_json::Value::Null)
+        let refused = check_a_message(&guard)
             .await
             .expect_err("a store that cannot count refuses the message");
 

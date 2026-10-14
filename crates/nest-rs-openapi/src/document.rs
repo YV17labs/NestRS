@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Discovery};
+use nest_rs_http::__private::global_guards_active;
 use nest_rs_http::{
-    ApiVersioning, GlobalGuardsActive, HttpConfig, HttpControllerMeta, HttpRouteMeta,
-    MEDIA_TYPE_PARAM, RouteTemplate, declared_versions, join_path,
+    ApiVersioning, HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
+    declared_versions, join_path,
 };
 use poem::http::{StatusCode, header};
 use schemars::SchemaGenerator;
@@ -38,7 +39,7 @@ pub(crate) fn build_document(
     settings.definitions_path = "/components/schemas".into();
     let mut generator = settings.into_generator();
 
-    let global_guards = container.get::<GlobalGuardsActive>().is_some();
+    let global_guards = global_guards_active(container);
     let selection = VersionSelection::resolve(container, claims);
 
     let controllers = discovery.meta::<HttpControllerMeta>();

@@ -12,10 +12,9 @@ mod controller;
 mod interceptor;
 
 use nest_rs_core::{Layer, injectable};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
 use nest_rs_mcp::{ServerHandler, mcp, rmcp, tool_handler, tool_router};
-use poem::Request;
 use poem::http::header;
 
 /// Refuses every caller through `Denial::unauthorized`, the ordinary guard path.
@@ -27,12 +26,12 @@ impl Layer for AlwaysUnauthorized {}
 
 #[async_trait]
 impl Guard for AlwaysUnauthorized {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("missing bearer token"))
     }
 }
 
-impl HttpGuard for AlwaysUnauthorized {}
+impl GuardFor<nest_rs_http::HttpView> for AlwaysUnauthorized {}
 
 /// Read the `WWW-Authenticate` challenge off a response, panicking with its status when absent.
 pub fn challenge(resp: &poem::Response) -> String {

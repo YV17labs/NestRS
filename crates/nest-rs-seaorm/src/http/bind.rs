@@ -1,6 +1,5 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::Arc;
 
 use nest_rs_authz::{Ability, ActionMarker, with_ability};
 use poem::http::StatusCode;
@@ -49,7 +48,7 @@ where
             ));
         }
 
-        let ability = req.extensions().get::<Arc<Ability>>().ok_or_else(|| {
+        let ability = nest_rs_core::ambient::<Ability>().ok_or_else(|| {
             Error::from_string(
                 "missing request `Ability` — is the ability guard applied to this route?",
                 StatusCode::INTERNAL_SERVER_ERROR,

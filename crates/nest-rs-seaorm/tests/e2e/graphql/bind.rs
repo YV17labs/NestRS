@@ -7,7 +7,7 @@ use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefau
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait};
+use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
@@ -68,9 +68,9 @@ impl CrudService for GhostsService {
 struct ReadEverything;
 
 impl AbilityFactory for ReadEverything {
-    type Actor = ();
+    type Actor = crate::Anyone;
 
-    fn define(&self, _actor: &(), ab: &mut AbilityBuilder) {
+    fn define(&self, _actor: &crate::Anyone, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, ghost::Entity);
     }
 }
@@ -85,13 +85,13 @@ impl Layer for AlwaysAuthenticated {}
 
 #[async_trait]
 impl Guard for AlwaysAuthenticated {
-    async fn check_http(&self, req: &mut poem::Request) -> Result<(), Denial> {
-        req.extensions_mut().insert(());
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(crate::Anyone);
         Ok(())
     }
 }
 
-impl HttpGuard for AlwaysAuthenticated {}
+impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
 type Bridge = GraphqlAbilityBridge<AlwaysAuthenticated, GhostAbilityGuard>;
 

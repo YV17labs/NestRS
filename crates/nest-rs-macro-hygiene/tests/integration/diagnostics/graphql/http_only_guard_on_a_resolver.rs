@@ -1,13 +1,13 @@
-//! A guard bound where it has no `check_*` is the fail-open this bound closes.
+//! A guard bound where it does not check is the fail-open this bound closes.
 //!
-//! `Guard::check_graphql` defaults to `Ok(())`, so before the `GraphqlGuard`
-//! bound this compiled, read as a protection, and passed every operation — the
-//! shape `#[use_guards(ThrottlerGuard)]` beside a `#[query]` had.
+//! `Guard::check` admits by default, so without the `GuardFor<GraphqlView>`
+//! bound an HTTP-only guard beside a resolver compiled, read as a protection,
+//! and passed every operation.
 
-use nest_rs::core::{Layer, injectable};
+use nest_rs::core::{Layer, UnitContext, injectable};
 use nest_rs::graphql::{operations, resolver};
-use nest_rs::guards::{Denial, Guard, async_trait};
-use poem::Request;
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::http::HttpView;
 
 #[injectable]
 #[derive(Default)]
@@ -17,10 +17,12 @@ impl Layer for HttpOnlyGuard {}
 
 #[async_trait]
 impl Guard for HttpOnlyGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
+
+impl GuardFor<HttpView> for HttpOnlyGuard {}
 
 #[resolver]
 #[use_guards(HttpOnlyGuard)]

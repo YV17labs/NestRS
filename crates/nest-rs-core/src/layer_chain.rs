@@ -62,6 +62,7 @@ pub(crate) mod __private {
 
     use super::GlobalSpecs;
     use crate::container::Container;
+    use crate::error::UnresolvedLayerError;
     use crate::layer::{Layer, LayerSite};
 
     /// Resolve a family's global registry into [`LayerSite::Global`] entries.
@@ -245,6 +246,76 @@ pub(crate) mod __private {
                 "redundant layer declaration deduped",
             );
         }
+    }
+
+    /// Resolve one site's scoped declarations into entries from `source`, so
+    /// dedup against the global chain finds the same key. The first spec no
+    /// imported module provides refuses the site, named as its boot log names
+    /// it: a site never runs without a layer it declares.
+    pub fn resolve_scoped<'s, L: ?Sized + 's>(
+        container: &Container,
+        specs: impl IntoIterator<Item = &'s super::LayerSpec<L>>,
+        source: LayerSite,
+        site: &str,
+    ) -> Result<Vec<ResolvedLayer<L>>, UnresolvedLayerError> {
+        specs
+            .into_iter()
+            .map(|spec| {
+                let layer = spec
+                    .resolve(container)
+                    .ok_or_else(|| UnresolvedLayerError {
+                        layer: spec.name,
+                        site: site.to_owned(),
+                    })?;
+                Ok(ResolvedLayer {
+                    type_id: spec.type_id,
+                    name: spec.name,
+                    source,
+                    layer,
+                })
+            })
+            .collect()
+    }
+
+    /// The one `error` a site files when a layer it declares does not resolve —
+    /// for the operator; the client reads an opaque refusal.
+    pub fn report_unresolved(unresolved: &UnresolvedLayerError) {
+        tracing::error!(
+            target: crate::target::LAYERS,
+            layer = unresolved.layer,
+            site = unresolved.site.as_str(),
+            "a layer the site declares is provided by no imported module",
+        );
+    }
+
+    /// Refuse a site composed at mount whose declared layer does not resolve:
+    /// its `error`, and the refusal filed on `container` for the boot to fail on.
+    pub fn refuse_unresolved(container: &Container, unresolved: UnresolvedLayerError) {
+        report_unresolved(&unresolved);
+        crate::container::__private::refuse_site(container, unresolved.into());
+    }
+
+    /// Trace the chain one site composed for a family (`kind`), in the order it
+    /// runs; nothing for an empty one.
+    pub fn log_effective_chain<L: Layer + ?Sized>(
+        site: &str,
+        kind: &str,
+        chain: &[ResolvedLayer<L>],
+    ) {
+        if chain.is_empty() {
+            return;
+        }
+        let entries: Vec<String> = chain
+            .iter()
+            .map(|e| format!("{} ({})", e.name, e.source.label()))
+            .collect();
+        tracing::trace!(
+            target: crate::target::LAYERS,
+            route = site,
+            kind,
+            chain = entries.join(", ").as_str(),
+            "effective layer chain",
+        );
     }
 
     /// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration,

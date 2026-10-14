@@ -222,6 +222,7 @@ fn warn_if_shed(event: &str, kind: &'static str, sent: usize, shed: usize) {
 /// Per-connection handle a `#[subscribe_message]` handler receives by
 /// declaring a `&WsClient` parameter. Holds its gateway's registry as a
 /// type-erased [`Registry`], free of the namespace parameter.
+#[derive(Clone)]
 pub struct WsClient {
     id: ConnId,
     registry: Arc<dyn Registry>,

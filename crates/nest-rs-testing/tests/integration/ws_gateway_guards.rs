@@ -4,11 +4,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsModule, gateway, messages};
-use poem::Request;
 use poem::http::StatusCode;
 use tokio::sync::Mutex;
 
@@ -32,13 +31,16 @@ impl Layer for CountingDenyGuard {}
 
 #[async_trait]
 impl Guard for CountingDenyGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         COUNTER.fetch_add(1, Ordering::SeqCst);
         Err(Denial::forbidden("counted-and-denied"))
     }
 }
 
-impl HttpGuard for CountingDenyGuard {}
+impl GuardFor<nest_rs_http::HttpView> for CountingDenyGuard {}
 
 #[gateway(path = "/ws-bare")]
 struct BareGateway;

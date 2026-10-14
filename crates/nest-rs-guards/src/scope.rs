@@ -1,15 +1,18 @@
 //! OAuth scope as a transport-agnostic dimension of a denial.
 //!
 //! Two markers, kept below both `nest-rs-authn` and `nest-rs-authz` so the two
-//! agree without depending on each other: [`GrantedScopes`] rides the request,
+//! agree without depending on each other: [`GrantedScopes`] rides the unit,
 //! [`RequiredScopes`] the response. Neither is a decision; they carry the
 //! evidence to the edge, which renders the RFC 6750 `insufficient_scope`
 //! challenge once for every transport.
 
 use std::sync::Arc;
 
-/// The scopes a caller's credential carries, attached to the request by the
-/// authentication guard.
+use nest_rs_core::AmbientValue;
+
+/// The scopes a caller's credential carries, attached to the unit by the
+/// authentication guard and read back through
+/// [`UnitContext::ambient`](nest_rs_core::UnitContext::ambient).
 ///
 /// **Absence is not emptiness.** No `GrantedScopes` means the principal is not
 /// scope-aware (a session cookie, an mTLS identity) and scope gating does not
@@ -35,6 +38,8 @@ impl GrantedScopes {
         self.0.clone()
     }
 }
+
+impl AmbientValue for GrantedScopes {}
 
 /// The scopes an operation required but the caller's credential did not carry,
 /// attached to the refused response.
@@ -78,7 +83,7 @@ mod tests {
     #[test]
     fn an_empty_grant_carries_nothing() {
         // The OAuth principal that was granted no scope — distinct from a
-        // principal with no `GrantedScopes` extension at all, which is not
+        // principal with no `GrantedScopes` attached at all, which is not
         // scope-aware and is never gated.
         assert!(GrantedScopes::default().as_slice().is_empty());
     }

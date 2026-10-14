@@ -491,3 +491,53 @@ async fn a_field_torn_down_by_a_sibling_that_panics_files_cancelled() {
         "the sibling did not unwind: {filed:#?}",
     );
 }
+
+#[resolver]
+#[use_guards(crate::FieldStoreDown)]
+struct StoreDownResolver;
+
+#[operations]
+impl StoreDownResolver {
+    #[query]
+    #[public]
+    async fn guarded(&self) -> async_graphql::Result<String> {
+        Ok("never reached".into())
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [StoreDownResolver, crate::FieldStoreDown],
+)]
+struct StoreDownModule;
+
+/// A field guard that cannot evaluate the field files what failed on the
+/// field's denial line, and the client reads the condition alone.
+#[tokio::test]
+async fn a_field_denial_keeping_its_cause_files_the_chain() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<StoreDownModule>()
+        .await
+        .expect("the schema boots");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ guarded }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body = resp.json().await.value().deserialize::<serde_json::Value>();
+    assert_eq!(
+        body["errors"][0]["message"],
+        nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
+        "{body}",
+    );
+    assert!(!body.to_string().contains("refused"), "{body}");
+    let event = logs.expect_one("nest_rs::layers", "guard denied the operation");
+    assert_eq!(event.field("status").as_deref(), Some("503"));
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some(crate::STORE_DOWN_CHAIN)
+    );
+}

@@ -95,8 +95,8 @@ impl {{resolver}} {
 /// the app's guards, the twin of `resource::HTTP_CONTROLLER`.
 ///
 /// **One guard on the struct**: `/graphql` authenticates in band through
-/// `AuthzGraphqlModule`'s bridge, and `AuthnGuard` implements no
-/// `check_graphql`, so `#[resolver]` refuses it at compile time.
+/// `AuthzGraphqlModule`'s bridge, and `AuthnGuard` declares no
+/// `GuardFor<GraphqlView>`, so `#[resolver]` refuses it at compile time.
 pub(crate) const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 
 use nest_rs::graphql::{crud, resolver};

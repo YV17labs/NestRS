@@ -1,9 +1,9 @@
 //! `Authorize<A, S>` as a [`RouteResponseShaper`] declares the route's class
-//! gate, run with its guards, and does two things keyed on the ability the
-//! guard attached:
+//! gate, run with its guards, and arms the route's response mask, keyed on the
+//! ability the guard attached:
 //!
-//! 1. Wraps the handler in [`with_ability`] so the data layer scopes every
-//!    query via `current_ability()` — no hand-written filter.
+//! 1. A masked route is one whose reads run under that ability: the data layer
+//!    scopes every query via `current_ability()` — no hand-written filter.
 //! 2. Masks the JSON response: parse into `S::Model` (filling the unexposed
 //!    columns the `#[expose]` output omits via [`WireModelDefaults`]), run typed
 //!    [`Ability::mask`] / [`Ability::mask_many`], then retain only the entity's
@@ -30,7 +30,7 @@ use serde_json::Value;
 
 use super::authorize::{Authorize, class_gate};
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
-use crate::{Ability, Action, ActionMarker, WireModelDefaults, with_ability};
+use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 
 impl<A, S> RouteResponseShaper for Authorize<A, S>
 where
@@ -40,17 +40,18 @@ where
 {
     const GATE: Option<fn(&Request) -> Option<Response>> = Some(class_gate::<A, S>);
 
-    fn capture(req: &Request) -> Option<Box<dyn ResponseShaping>> {
+    fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
         // A missing ability means the class gate already answered 500, so there
         // is nothing to shape.
-        let ability = req.extensions().get::<Arc<Ability>>().cloned()?;
+        let ability = nest_rs_core::ambient::<Ability>()?;
         Some(Box::new(AbilityShaping::<S>::new(ability, A::ACTION)))
     }
 }
 
-/// The ambient ability plus the entity's mask, captured off the request and
-/// ready to wrap the handler. Shared by `Authorize<A, S>` and `nest-rs-seaorm`'s
-/// `Bind<A, S>`, which differ only in how they name the entity.
+/// The caller's ability plus the entity's mask, captured before the handler and
+/// ready to mask what it answers. Shared by `Authorize<A, S>` and
+/// `nest-rs-seaorm`'s `Bind<A, S>`, which differ only in how they name the
+/// entity.
 pub struct AbilityShaping<S> {
     ability: Arc<Ability>,
     action: Action,
@@ -76,7 +77,7 @@ where
 {
     fn apply<'a>(self: Box<Self>, inner: RouteFuture<'a>) -> RouteFuture<'a> {
         Box::pin(async move {
-            let resp = with_ability(self.ability.clone(), inner).await?;
+            let resp = inner.await?;
             Ok(mask_entity_response::<S>(&self.ability, self.action, resp).await)
         })
     }

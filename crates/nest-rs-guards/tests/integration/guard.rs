@@ -8,13 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aws_lc_rs::hmac;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
-use nest_rs_http::poem::Request;
+use nest_rs_core::{Layer, UnitContext, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::poem::http::StatusCode;
-use nest_rs_http::{
-    HttpConfig, HttpModule, RawBody, async_trait, controller, current_body_limit, routes,
-};
+use nest_rs_http::{HttpConfig, HttpModule, HttpView, RawBody, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 
 /// The secret the sender signs with.
@@ -58,7 +55,8 @@ impl Layer for WebhookSignature {}
 
 #[async_trait]
 impl Guard for WebhookSignature {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let req = HttpView::of(cx)?.request_mut();
         let header = |name| req.headers().get(name).and_then(|v| v.to_str().ok());
         let (Some(id), Some(timestamp), Some(signatures)) = (
             header("webhook-id"),
@@ -77,14 +75,11 @@ impl Guard for WebhookSignature {
             .filter_map(|s| STANDARD.decode(s).ok())
             .collect();
 
-        let limit = current_body_limit().unwrap_or(RawBody::DEFAULT_LIMIT);
-        let body = req
-            .take_body()
-            .into_bytes_limit(limit)
-            .await
-            .map_err(|error| {
-                Denial::unauthorized(format!("an unreadable webhook body: {error}"))
-            })?;
+        // The edge's read: its cap and its gap bound the body, and answer a
+        // read they stop themselves.
+        let body = req.take_body().into_bytes().await.map_err(|error| {
+            Denial::unauthorized(format!("an unreadable webhook body: {error}"))
+        })?;
         let key = hmac::Key::new(hmac::HMAC_SHA256, SECRET);
         let signed = [
             id.as_bytes(),
@@ -107,7 +102,7 @@ impl Guard for WebhookSignature {
     }
 }
 
-impl HttpGuard for WebhookSignature {}
+impl GuardFor<HttpView> for WebhookSignature {}
 
 #[controller(path = "/webhooks")]
 struct WebhooksController;

@@ -38,11 +38,10 @@ struct SecondEndpoint;
 impl nest_rs_core::Discoverable for FirstEndpoint {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<FirstEndpoint, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/tools", "mcp", |_c, r: Route| {
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, r: Route| {
                 r.at("/tools", poem::endpoint::make_sync(|_| "first"))
             })
-            .owned_by("FirstTools")
-            .exempt(),
+            .owned_by("FirstTools"),
         )
     }
 }
@@ -50,11 +49,10 @@ impl nest_rs_core::Discoverable for FirstEndpoint {
 impl nest_rs_core::Discoverable for SecondEndpoint {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<SecondEndpoint, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/tools", "mcp", |_c, r: Route| {
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, r: Route| {
                 r.at("/tools", poem::endpoint::make_sync(|_| "second"))
             })
-            .owned_by("SecondTools")
-            .exempt(),
+            .owned_by("SecondTools"),
         )
     }
 }
@@ -67,7 +65,7 @@ struct ChatSocket;
 impl nest_rs_core::Discoverable for ChatSocket {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<ChatSocket, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/users", "ws", |_c, r: Route| {
+            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/users", "ws", |_c, r: Route| {
                 r.at("/users", poem::endpoint::make_sync(|_| "socket"))
             })
             .owned_by("ChatGateway"),
@@ -159,7 +157,8 @@ async fn a_self_mount_collision_names_the_owners_not_just_the_kind() {
 // panic as duplicates unless canonical before the boot check compares them.
 #[test]
 fn a_mount_path_is_canonical_before_anything_compares_it() {
-    let mount = |path: &'static str| HttpEndpointMeta::new(path, "probe", |_c, r| r);
+    let mount =
+        |path: &'static str| HttpEndpointMeta::new(&crate::GATED_MOUNT, path, "probe", |_c, r| r);
 
     assert_eq!(
         mount("/x/").path(),
@@ -221,7 +220,8 @@ struct TemplatedSocket;
 impl nest_rs_core::Discoverable for TemplatedSocket {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<TemplatedSocket, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/rooms/:room", "ws", |_c, r: Route| r).owned_by("RoomsGateway"),
+            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/rooms/:room", "ws", |_c, r: Route| r)
+                .owned_by("RoomsGateway"),
         )
     }
 }
@@ -249,10 +249,9 @@ struct DocsInThe6xSpelling;
 impl nest_rs_core::Discoverable for DocsInThe6xSpelling {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<DocsInThe6xSpelling, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/docs", "docs", |_c, r: Route| r)
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/docs", "docs", |_c, r: Route| r)
                 .also_mounts(["/docs-json/*rest"])
-                .owned_by("DocsHost")
-                .exempt(),
+                .owned_by("DocsHost"),
         )
     }
 }

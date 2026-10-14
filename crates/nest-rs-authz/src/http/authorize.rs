@@ -3,9 +3,9 @@
 
 use std::any::TypeId;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
-use nest_rs_guards::{Denial, denial_to_http_error, denial_to_http_response};
+use nest_rs_guards::Denial;
+use nest_rs_http::__private::{denial_to_http_error, denial_to_http_response};
 use poem::{FromRequest, Request, RequestBody, Response, Result};
 
 use crate::gate::{Refusal, transport};
@@ -25,13 +25,12 @@ use crate::{Ability, ActionMarker, Subject};
 /// `#[query]`/`#[mutation]`:
 ///
 /// ```
-/// # use std::sync::Arc;
 /// # use nest_rs_authz::{AbilityBuilder, Action, Create};
 /// # use nest_rs_core::{Layer, injectable, input, module};
-/// # use nest_rs_guards::{Denial, Guard, HttpGuard};
+/// # use nest_rs_guards::{Denial, Guard, GuardFor};
 /// # use nest_rs_http::poem::http::StatusCode;
 /// # use nest_rs_http::poem::web::Json;
-/// # use nest_rs_http::poem::{Request, Result};
+/// # use nest_rs_http::poem::Result;
 /// # use nest_rs_http::{Valid, async_trait, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// # mod users {
@@ -68,17 +67,17 @@ use crate::{Ability, ActionMarker, Subject};
 /// # impl Layer for Grants {}
 /// # #[async_trait]
 /// # impl Guard for Grants {
-/// #     async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
+/// #     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> std::result::Result<(), Denial> {
 /// #         let mut ab = AbilityBuilder::new();
-/// #         if req.headers().contains_key("x-admin") {
+/// #         if nest_rs_http::HttpView::of(cx)?.request().header("x-admin").is_some() {
 /// #             ab.can(Action::Manage, users::Entity);
 /// #         }
 /// #         let ability = ab.build().map_err(|_| Denial::internal("malformed rules"))?;
-/// #         req.extensions_mut().insert(Arc::new(ability));
+/// #         cx.attach(ability);
 /// #         Ok(())
 /// #     }
 /// # }
-/// # impl HttpGuard for Grants {}
+/// # impl GuardFor<nest_rs_http::HttpView> for Grants {}
 /// # #[controller(path = "/users")]
 /// # #[use_guards(Grants)]
 /// # #[derive(Default)]
@@ -132,10 +131,10 @@ pub(crate) fn class_gate<A: ActionMarker, S: Subject>(req: &Request) -> Option<R
     decide::<A, S>(req).err().map(denial_to_http_response)
 }
 
-/// Whether the request's [`Ability`] grants `A` on the class `S`, each refusal
-/// filed once.
+/// Whether the [`Ability`] the request's guards attached grants `A` on the
+/// class `S`, each refusal filed once.
 fn decide<A: ActionMarker, S: Subject>(req: &Request) -> std::result::Result<(), Denial> {
-    let Some(ability) = req.extensions().get::<Arc<Ability>>() else {
+    let Some(ability) = nest_rs_core::ambient::<Ability>() else {
         // A wiring bug, and the response body is an opaque problem+json: log it
         // or the developer sees a 500 with nothing to grep for.
         tracing::error!(

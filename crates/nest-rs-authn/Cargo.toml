@@ -22,8 +22,8 @@ nest-rs-core.workspace = true
 # `reqwest` is `ClientTls`, what the JWK Set endpoint's certificate chains to
 # and the certificate presented to it, converted for the client fetching it.
 nest-rs-config = { workspace = true, features = ["reqwest"] }
-# `Strategy` reads the `poem::Request`; `AuthnGuard` implements the `Guard` trait
-# re-exported by the HTTP surface.
+# `Strategy` reads the `poem::Request`; `AuthnGuard` reads it through the HTTP
+# edge's view.
 nest-rs-http.workspace = true
 nest-rs-guards.workspace = true
 poem.workspace = true
@@ -69,12 +69,12 @@ serde_json = { workspace = true }
 base64 = { workspace = true }
 # The guard's bound is witnessed on every edge it authenticates for — a route,
 # the GraphQL POST, the MCP POST, the WS upgrade — each booted as an app binds
-# it. The guards' edge features are what seed the GraphQL and MCP fallbacks from
-# the global pool.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp", "ws"] }
+# it.
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-ws = { path = "../nest-rs-ws" }
+# The suite's `#[routes]` wrap each route's response layers.
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 
 [lints]
 workspace = true

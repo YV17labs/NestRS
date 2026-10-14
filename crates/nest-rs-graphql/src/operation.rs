@@ -1,92 +1,111 @@
-//! What one GraphQL operation *is*, for the layers that run around it.
-//!
-//! The federation root fields are reached only through an
-//! [`Extension`](async_graphql::extensions::Extension), handed an
-//! [`ExtensionContext`] and never a `Context`, with no public constructor to
-//! bridge the two. [`GraphqlOperationContext`] spans both sites, so
-//! `check_graphql` is declared once.
+//! What runs around one GraphQL field a resolver declares: its guard chain,
+//! composed once per site, and — for a root field — its own unit of work.
 
-use std::any::Any;
-
-use async_graphql::extensions::ExtensionContext;
-use async_graphql::{Context, Result};
+use async_graphql::parser::types::OperationType;
+use async_graphql::{Context, Error as GraphqlError};
+use nest_rs_core::__private::{Pending, new_unit_context};
+use nest_rs_core::{Container, Handler};
+use nest_rs_guards::__private::{
+    GlobalBucket, SiteChainCell, SiteChainSources, failure_chain, run_stage,
+};
 use tracing::Instrument;
 
-/// One GraphQL operation, as a [`Guard`](https://docs.rs/nest-rs-guards) sees
-/// it at a resolver field or a federation root field.
-pub struct GraphqlOperationContext<'a> {
-    site: Site<'a>,
+use crate::error::denial_to_graphql_error;
+use crate::view::{FieldRole, GraphqlView};
+
+/// Which GraphQL site is running the chain — what decides whether it folds the
+/// app-wide pool, and the role its fields play.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GraphqlSite {
+    /// A `#[query]` / `#[mutation]` / `#[subscription]`: the app-wide pool runs
+    /// here, each pooled guard's `check`, which the `/graphql` request's
+    /// `check_http` never stands in for.
+    Operation,
+    /// A `#[field_resolver]`: its resolver's and method's guards run, the pool
+    /// does not — the root field of the same request already ran it, and
+    /// folding it again would run it once per parent.
+    Field,
+    /// An `#[entity]`, reached only through `_entities`, whose federation gate
+    /// runs the pool once per field; folding it here would run it once per
+    /// representation.
+    Entity,
 }
 
-/// The two places async-graphql lets a check run.
-enum Site<'a> {
-    /// A resolver field — `#[query]`, `#[mutation]`, `#[entity]`,
-    /// `#[field_resolver]`. Emitted inline by `#[operations]`.
-    Field(&'a Context<'a>),
-    /// A federation root field, from the schema extension; it belongs to no
-    /// resolver.
-    Federation {
-        ctx: &'a ExtensionContext<'a>,
-        field: &'static str,
-    },
+impl GraphqlSite {
+    /// Whether this site composes the pool, read off the container so the memo
+    /// cell's key still covers the whole composition.
+    ///
+    /// An entity skips it only where the federation gate runs it: a global
+    /// pool can be absent, and skipping then would leave nothing to skip.
+    fn bucket(self) -> fn(&Container) -> GlobalBucket {
+        match self {
+            Self::Operation => |_| GlobalBucket::Fold,
+            Self::Field => |_| GlobalBucket::Skip,
+            Self::Entity => |container| {
+                if crate::federation::gate_runs(container) {
+                    GlobalBucket::Skip
+                } else {
+                    GlobalBucket::Fold
+                }
+            },
+        }
+    }
+
+    /// The role this site's fields play.
+    fn role(self) -> FieldRole {
+        match self {
+            Self::Operation => FieldRole::RootField,
+            Self::Field => FieldRole::Nested,
+            Self::Entity => FieldRole::Entity,
+        }
+    }
 }
 
-impl<'a> GraphqlOperationContext<'a> {
-    /// The operation a resolver field is about to run.
-    pub fn field(ctx: &'a Context<'a>) -> Self {
-        Self {
-            site: Site::Field(ctx),
-        }
-    }
+/// Run a resolver site's guard chain — called by `#[operations]` at the start
+/// of every resolver method, `handler` the site's declaration. Dedups the
+/// resolver's and the method's guards against the global chain, then runs each
+/// guard's `check` on the field: what they attached comes back, for the method
+/// to run under.
+///
+/// `sources` is consulted only when the chain is composed. A `&dyn Fn` rather
+/// than an `impl Fn`, so this body codegens once rather than per resolver.
+/// GraphQL pipes run at the transport's request entry, not here.
+pub async fn run_layered_graphql_chain(
+    ctx: &Context<'_>,
+    container: &Container,
+    cell: &SiteChainCell,
+    route_label: &str,
+    sources: &(dyn Fn() -> SiteChainSources + Sync),
+    site: GraphqlSite,
+    handler: &'static Handler,
+) -> Result<Pending, GraphqlError> {
+    let chain = cell
+        .chain(container, route_label, sources, site.bucket())
+        .map_err(denial_to_graphql_error)?;
+    // The executing operation's kind: async-graphql pins it on the query
+    // environment it hands each field (`=7.2.1`, the workspace's pin).
+    let operation: OperationType = ctx.query_env.operation.node.ty;
+    let mut view = GraphqlView::new(handler.address(), operation, site.role());
+    let mut cx = new_unit_context(handler, &mut view, None, None);
+    run_stage(&chain, &mut cx).await.map_err(|(guard, denial)| {
+        // Structural floor mirroring the HTTP edge's: every denial visible at
+        // warn+ regardless of what the individual guard logged.
+        tracing::warn!(
+            target: nest_rs_core::target::LAYERS,
+            guard,
+            route = route_label,
+            status = denial.http_status(),
+            error = failure_chain(&denial),
+            "guard denied the operation",
+        );
+        denial_to_graphql_error(denial)
+    })
+}
 
-    /// The operation a federation root field is about to run.
-    pub(crate) fn federation(ctx: &'a ExtensionContext<'a>, field: &'static str) -> Self {
-        Self {
-            site: Site::Federation { ctx, field },
-        }
-    }
-
-    /// The field being resolved, as the client wrote it in the document.
-    pub fn name(&self) -> &str {
-        match &self.site {
-            Site::Field(ctx) => ctx.item.node.name.node.as_str(),
-            Site::Federation { field, .. } => field,
-        }
-    }
-
-    /// The full async-graphql context — arguments, selection set — or `None`
-    /// on a federation root field, which has none.
-    pub fn context(&self) -> Option<&'a Context<'a>> {
-        match &self.site {
-            Site::Field(ctx) => Some(ctx),
-            Site::Federation { .. } => None,
-        }
-    }
-
-    /// Request- or schema-scoped data, or `None`.
-    pub fn data_opt<D: Any + Send + Sync>(&self) -> Option<&'a D> {
-        match &self.site {
-            Site::Field(ctx) => ctx.data_opt::<D>(),
-            Site::Federation { ctx, .. } => ctx.data_opt::<D>(),
-        }
-    }
-
-    /// Request- or schema-scoped data, or an error naming the missing type.
-    pub fn data<D: Any + Send + Sync>(&self) -> Result<&'a D> {
-        match &self.site {
-            Site::Field(ctx) => ctx.data::<D>(),
-            Site::Federation { ctx, .. } => ctx.data::<D>(),
-        }
-    }
-
-    /// Request- or schema-scoped data. Panics when absent — for data the
-    /// framework guarantees, like the [`Container`](nest_rs_core::Container).
-    pub fn data_unchecked<D: Any + Send + Sync>(&self) -> &'a D {
-        match &self.site {
-            Site::Field(ctx) => ctx.data_unchecked::<D>(),
-            Site::Federation { ctx, .. } => ctx.data_unchecked::<D>(),
-        }
-    }
+/// The field `ctx` resolves, as the client wrote it in the document (`listUsers`,
+/// never an alias).
+pub fn field_name<'a>(ctx: &'a Context<'_>) -> &'a str {
+    ctx.item.node.name.node.as_str()
 }
 
 /// Run one dispatched root field as its own unit of work; `#[operations]` wraps

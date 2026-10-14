@@ -75,7 +75,7 @@ mod gate_order {
     use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
     use nest_rs_core::{Layer, injectable, module};
     use nest_rs_filters::{Filter, RequestSnapshot};
-    use nest_rs_guards::{Denial, Guard, HttpGuard};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_http::poem::web::Json;
     use nest_rs_http::{async_trait, controller, crud, routes};
     use nest_rs_interceptors::{Interceptor, Next};
@@ -131,18 +131,21 @@ mod gate_order {
 
     #[async_trait]
     impl Guard for Grants {
-        async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+        async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
             let mut ab = AbilityBuilder::new();
-            if req.headers().contains_key("x-read") {
+            if nest_rs_http::HttpView::of(cx)?
+                .request()
+                .header("x-read")
+                .is_some()
+            {
                 ab.can(Action::Read, secret::Entity);
             }
-            req.extensions_mut()
-                .insert(Arc::new(ab.build().expect("valid test ability")));
+            cx.attach(ab.build().expect("valid test ability"));
             Ok(())
         }
     }
 
-    impl HttpGuard for Grants {}
+    impl GuardFor<nest_rs_http::HttpView> for Grants {}
 
     /// A cache answering every request from its store, as a route-scoped
     /// caching interceptor does on a hit.

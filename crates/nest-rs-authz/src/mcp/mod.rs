@@ -11,13 +11,11 @@
 //! `#[operations]` does on GraphQL and `#[routes]` on HTTP.
 //!
 //! ```
-//! # use std::sync::Arc;
 //! # use nest_rs_authz::mcp::McpAbilityBridge;
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};
 //! # use nest_rs_core::{Layer, injectable, input, module};
-//! # use nest_rs_guards::{Denial, Guard, HttpGuard};
+//! # use nest_rs_guards::{Denial, Guard, GuardFor};
 //! # use nest_rs_http::async_trait;
-//! # use nest_rs_http::poem::Request;
 //! # use nest_rs_mcp::{Json, McpError, McpOperationGuard, mcp, tools};
 //! # use nest_rs_testing::TestApp;
 //! # use nest_rs_testing::mcp::call_tool_as;
@@ -52,17 +50,17 @@
 //! # impl Layer for Grants {}
 //! # #[async_trait]
 //! # impl Guard for Grants {
-//! #     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+//! #     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
 //! #         let mut ab = AbilityBuilder::new();
-//! #         if req.headers().contains_key("x-viewer") {
+//! #         if nest_rs_http::HttpView::of(cx)?.request().header("x-viewer").is_some() {
 //! #             ab.can(Action::Read, users::Entity).fields([users::Column::Id]);
 //! #         }
 //! #         let ability = ab.build().map_err(|_| Denial::internal("malformed rules"))?;
-//! #         req.extensions_mut().insert(Arc::new(ability));
+//! #         cx.attach(ability);
 //! #         Ok(())
 //! #     }
 //! # }
-//! # impl HttpGuard for Grants {}
+//! # impl GuardFor<nest_rs_http::HttpView> for Grants {}
 //! # #[mcp(path = "/mcp")]
 //! # #[derive(Clone, Default)]
 //! # struct UsersTool;

@@ -180,7 +180,9 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
-    pub use crate::ambient::{Pending, install_pending, with_ambient_from};
+    pub use crate::ambient::{
+        Pending, UnmaskedReply, carries_ambient, install_pending, with_ambient_from,
+    };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{use_exception_filters_global, use_interceptors_global};
     pub use crate::container::__private::{
@@ -197,7 +199,8 @@ pub mod __private {
     };
     pub use crate::layer_chain::__private::{
         ResolvedLayer, SiteChains, check_specs_resolvable, compose_chain, dedup_bucket,
-        resolve_global_layers,
+        log_effective_chain, refuse_unresolved, report_unresolved, resolve_global_layers,
+        resolve_scoped,
     };
     pub use crate::lifecycle::__private::LifecycleHook;
     pub use crate::module::__private::{dynamic_import_module, module_registered};

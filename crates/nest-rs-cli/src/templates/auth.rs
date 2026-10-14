@@ -10,6 +10,7 @@
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AuthzAbility` reads it to build the caller's rules.
 pub(crate) const AUTHN_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
+use nest_rs::core::AmbientValue;
 use nest_rs::seaorm::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -38,6 +39,10 @@ impl Claims {
         self.roles.contains(&Role::Admin)
     }
 }
+
+// The authentication guard attaches the claims for the rest of the request:
+// `Ctx<Claims>` in a handler, and every guard after it, reads them back.
+impl AmbientValue for Claims {}
 
 // Puts `actor_id` on the request span, so every downstream event — denials
 // included — is attributable without threading the id through each call site.
@@ -157,10 +162,9 @@ impl DevTokenController {
 ///
 /// Not on `DevTokenController`: a `#[controller]` registers metadata, never an
 /// instance, so its `#[hooks]` could not run (`nest_rs::core::ProviderResidency`).
-pub(crate) const AUTHN_HTTP_GUARD: &str = r#"use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, HttpGuard};
-use nest_rs::http::async_trait;
-use nest_rs::http::poem::Request;
+pub(crate) const AUTHN_HTTP_GUARD: &str = r#"use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
+use nest_rs::http::{HttpView, async_trait};
 
 use super::audit::is_development;
 
@@ -175,7 +179,7 @@ impl Layer for DevOnlyGuard {}
 
 #[async_trait]
 impl Guard for DevOnlyGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if is_development() {
             return Ok(());
         }
@@ -183,7 +187,7 @@ impl Guard for DevOnlyGuard {
     }
 }
 
-impl HttpGuard for DevOnlyGuard {}
+impl GuardFor<HttpView> for DevOnlyGuard {}
 "#;
 
 pub(crate) const AUTHN_HTTP_AUDIT: &str = r#"use nest_rs::config::Environment;

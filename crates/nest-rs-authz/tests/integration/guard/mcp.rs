@@ -9,9 +9,8 @@ use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
 use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, mcp, tools};
 use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
 
@@ -23,6 +22,8 @@ const PATH: &str = "/mcp/guard";
 #[derive(Clone)]
 struct Actor;
 
+impl nest_rs_core::AmbientValue for Actor {}
+
 /// Stands in for the app's authn guard: attaches the principal `AbilityGuard`
 /// builds the caller's rules from.
 #[injectable]
@@ -33,13 +34,13 @@ impl Layer for ActorGuard {}
 
 #[async_trait]
 impl Guard for ActorGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        req.extensions_mut().insert(Actor);
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(Actor);
         Ok(())
     }
 }
 
-impl HttpGuard for ActorGuard {}
+impl GuardFor<nest_rs_http::HttpView> for ActorGuard {}
 
 /// One grant, so an admitted operation is admitted against a real ability
 /// rather than an empty one.

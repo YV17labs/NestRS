@@ -11,7 +11,8 @@
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote, quote_spanned};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
+use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
@@ -248,9 +249,11 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 })
         })
     };
-    // `Guard::check_mcp` defaults to `Ok(())`: the bound makes a guard declare MCP.
-    let capability_bounds =
-        guard_capability_bounds(operation_guards(), quote!(::nest_rs_guards::McpGuard));
+    // `Guard::check` admits by default: the bound makes a guard declare MCP.
+    let capability_bounds = guard_capability_bounds(
+        operation_guards(),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_mcp::McpView>),
+    );
     let layers = layer_deps(operation_guards());
     let description_checks = operations.all().filter_map(|op| {
         let cfgs = &op.cfgs;
@@ -335,8 +338,9 @@ fn router_impl(
         return Ok(None);
     }
     let mut groups: Vec<(&[TokenStream2], Vec<TokenStream2>)> = Vec::new();
+    let generic = !impl_generics.to_token_stream().is_empty();
     for op in ops {
-        let wrapped = wrapper(self_ty, op)?;
+        let wrapped = wrapper(self_ty, op, generic)?;
         let own = &op.cfgs;
         let conditions = quote!(#(#own)*).to_string();
         match groups
@@ -394,7 +398,7 @@ type Generics<'a> = (
 
 /// The generated method that rmcp routes to: the four request layers, then the
 /// authored method.
-fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
+fn wrapper(self_ty: &Type, op: &Operation, generic: bool) -> syn::Result<TokenStream2> {
     let Operation {
         role,
         role_attr,
@@ -427,7 +431,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         &format!("{} {}::{}", role.label(), type_label(self_ty), name),
         name.span(),
     );
-    let chain = guard_chain(self_ty, op, &label);
+    let chain = guard_chain(self_ty, op, &label, generic);
     let gate = access_gate(posture);
     let pipe_prelude = pipes.iter().map(pipe_statement);
     let call_args = forwarded_arg_idents(sig)?;
@@ -448,34 +452,47 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         #wire_sig {
             let __nestrs_ready: ::core::result::Result<_, ::nest_rs_mcp::McpError> = async {
                 #chain
-                #gate
-                #(#pipe_prelude)*
-                ::core::result::Result::Ok((#(#piped,)*))
+                ::nest_rs_mcp::__private::install_pending(
+                    ::core::clone::Clone::clone(&__nestrs_attached),
+                    async {
+                        #gate
+                        #(#pipe_prelude)*
+                        ::core::result::Result::Ok((__nestrs_attached, #(#piped,)*))
+                    },
+                )
+                .await
             }
             .await;
-            let (#(#piped,)*) = match __nestrs_ready {
+            let (__nestrs_attached, #(#piped,)*) = match __nestrs_ready {
                 ::core::result::Result::Ok(__nestrs_ready) => __nestrs_ready,
                 ::core::result::Result::Err(__nestrs_refusal) => return #refused,
             };
-            #body
+            ::nest_rs_mcp::__private::install_pending(__nestrs_attached, async move { #body }).await
         }
     })
 }
 
-/// Step 1 — the host-scope + operation-scope guard chain.
+/// Step 1 — the host-scope + operation-scope guard chain, run as the unit the
+/// operation's `Handler` declares; binds `__nestrs_attached`, what its guards
+/// attached, which the rest of the operation runs under.
 ///
 /// Always emitted, even when the operation declares none: the impl half cannot
 /// see whether the host struct declared guards.
-fn guard_chain(self_ty: &Type, op: &Operation, label: &LitStr) -> TokenStream2 {
+fn guard_chain(self_ty: &Type, op: &Operation, label: &LitStr, generic: bool) -> TokenStream2 {
     let method_specs = scoped_specs(&op.guards, quote!(dyn ::nest_rs_guards::Guard));
     let force = force_guard_typeids(&op.force_guards);
     let kind = op.role.kind();
     let name = LitStr::new(&op.name().to_string(), op.name().span());
+    let handler = if generic {
+        generic_operation_handler(self_ty, op)
+    } else {
+        nest_rs_codegen::handler_ref(self_ty, op.name())
+    };
     quote! {
-        {
+        let __nestrs_attached = {
             static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::__private::SiteChainCell =
                 ::nest_rs_guards::__private::SiteChainCell::new();
-            ::nest_rs_guards::run_layered_mcp_chain(
+            ::nest_rs_mcp::__private::run_layered_mcp_chain(
                 &__NESTRS_GUARD_CHAIN,
                 #label,
                 ::core::any::type_name::<#self_ty>(),
@@ -486,9 +503,39 @@ fn guard_chain(self_ty: &Type, op: &Operation, label: &LitStr) -> TokenStream2 {
                     method: #method_specs,
                     force: #force,
                 },
-            ).await?;
-        }
+                #handler,
+            ).await?
+        };
     }
+}
+
+/// The declaration of an operation on a generic host, which has no one type to
+/// declare its sites on: a site of its own, with no `#[meta]` (the generic host
+/// refuses it).
+fn generic_operation_handler(self_ty: &Type, op: &Operation) -> TokenStream2 {
+    let host_name = LitStr::new(&type_label(self_ty), op.name().span());
+    let method = LitStr::new(&op.name().unraw().to_string(), op.name().span());
+    let wire_name = LitStr::new(&op.wire_name, op.name().span());
+    let posture = match op.posture {
+        Posture::Public => quote!(Public),
+        Posture::Authorize { .. } => quote!(Gated),
+    };
+    quote! {{
+        struct __NestrsGenericHost;
+        static __NESTRS_OPERATION: ::nest_rs_core::Handler =
+            ::nest_rs_core::__private::declare_handler(
+                ::nest_rs_core::__private::HandlerDeclaration {
+                    unit: ::nest_rs_mcp::unit::OPERATION,
+                    host: ::core::any::TypeId::of::<__NestrsGenericHost>(),
+                    host_name: #host_name,
+                    method: #method,
+                    address: #wire_name,
+                    posture: ::nest_rs_core::Posture::#posture,
+                    meta: ::nest_rs_core::__private::MetaLevels::default,
+                },
+            );
+        &__NESTRS_OPERATION
+    }}
 }
 
 /// Step 2 — the class-level gate `#[authorize(Action, Entity)]` desugars to.

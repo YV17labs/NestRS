@@ -2,7 +2,7 @@
 //! the address the generated `Discoverable` mounts it at.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_pipes::{GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, Valid, pipe};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
@@ -951,12 +951,12 @@ impl Layer for V1Guard {}
 
 #[async_trait]
 impl Guard for V1Guard {
-    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("the v1 socket refused you"))
     }
 }
 
-impl HttpGuard for V1Guard {}
+impl GuardFor<nest_rs_http::HttpView> for V1Guard {}
 
 #[injectable]
 #[derive(Default)]
@@ -966,12 +966,12 @@ impl Layer for V2Guard {}
 
 #[async_trait]
 impl Guard for V2Guard {
-    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("the v2 socket refused you"))
     }
 }
 
-impl HttpGuard for V2Guard {}
+impl GuardFor<nest_rs_http::HttpView> for V2Guard {}
 
 #[gateway(path = "/chat", version = "1")]
 #[use_guards(V1Guard)]
@@ -1975,8 +1975,8 @@ async fn a_socket_whose_client_stops_reading_is_closed_at_the_send_deadline() {
     drop(socket);
 }
 
-/// Refuses every message, and declares no `WsGuard`: the global pool is
-/// `Arc<dyn Guard>`, with no marker to consult.
+/// Refuses every message, and declares no `GuardFor<WsView>`: the global pool
+/// is `Arc<dyn Guard>`, with no declaration to consult.
 #[injectable]
 #[derive(Default)]
 struct UnmarkedWsGuard;
@@ -1985,12 +1985,7 @@ impl Layer for UnmarkedWsGuard {}
 
 #[async_trait]
 impl Guard for UnmarkedWsGuard {
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        _event: &str,
-        _data: &serde_json::Value,
-    ) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("refused by an unmarked WS check"))
     }
 }
@@ -2000,7 +1995,7 @@ struct UnmarkedPoolModule;
 
 /// The other edges are held in `nest-rs-testing`'s `guard_markers`.
 #[tokio::test]
-async fn a_pooled_guard_without_ws_guard_still_checks_every_message() {
+async fn a_pooled_guard_declaring_no_ws_view_still_checks_every_message() {
     let app = nest_rs_testing::TestApp::builder()
         .module::<UnmarkedPoolModule>()
         .use_guards_global([nest_rs_guards::guard::<UnmarkedWsGuard>()])
@@ -2017,7 +2012,7 @@ async fn a_pooled_guard_without_ws_guard_still_checks_every_message() {
     );
     assert!(
         reply.contains("refused by an unmarked WS check"),
-        "the pool ran the guard's own check_ws_message: {reply}",
+        "the pool ran the guard's own check: {reply}",
     );
 
     app.shutdown().await.expect("the transport stops cleanly");
@@ -2033,17 +2028,12 @@ impl Layer for LeakyInternalGuard {}
 
 #[async_trait]
 impl Guard for LeakyInternalGuard {
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        _event: &str,
-        _data: &serde_json::Value,
-    ) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::internal("secret detail: redis at 10.0.3.7 refused"))
     }
 }
 
-impl nest_rs_guards::WsGuard for LeakyInternalGuard {}
+impl GuardFor<nest_rs_ws::WsView> for LeakyInternalGuard {}
 
 /// Refuses every message as a rate limit lifting in seven seconds.
 #[injectable]
@@ -2054,17 +2044,12 @@ impl Layer for SevenSecondsGuard {}
 
 #[async_trait]
 impl Guard for SevenSecondsGuard {
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        _event: &str,
-        _data: &serde_json::Value,
-    ) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::rate_limited(7, "too many messages"))
     }
 }
 
-impl nest_rs_guards::WsGuard for SevenSecondsGuard {}
+impl GuardFor<nest_rs_ws::WsView> for SevenSecondsGuard {}
 
 #[gateway(path = "/refusing")]
 struct RefusingGateway;
@@ -2347,5 +2332,147 @@ async fn once_cors_is_set_only_the_origins_it_lists_open_a_socket() {
     );
     logs.expect_none("nest_rs::ws", "browser origin refused");
 
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Who an upgrade's guard admitted.
+#[derive(Debug)]
+struct Admitted(&'static str);
+
+impl nest_rs_core::AmbientValue for Admitted {}
+
+/// Admits every upgrade, attaching who it admitted.
+#[injectable]
+#[derive(Default)]
+struct AdmittingGuard;
+
+impl Layer for AdmittingGuard {}
+
+#[async_trait]
+impl Guard for AdmittingGuard {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(Admitted("alice"));
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for AdmittingGuard {}
+
+/// What the socket context read at the upgrade, re-installed around each
+/// message under a type of its own: the connection carries `Admitted` to its
+/// messages whatever `capture` saw.
+#[derive(Debug)]
+struct SeenAtCapture(Option<&'static str>);
+
+impl nest_rs_core::AmbientValue for SeenAtCapture {}
+
+/// Captures the upgrade's `Admitted`, as a data context captures the caller's
+/// ability.
+#[injectable]
+#[derive(Default)]
+struct AdmittedContext;
+
+impl nest_rs_ws::SocketContext for AdmittedContext {
+    fn capture(&self, _req: &HttpRequest) -> nest_rs_ws::Captured {
+        std::sync::Arc::new(SeenAtCapture(
+            nest_rs_core::ambient::<Admitted>().map(|admitted| admitted.0),
+        ))
+    }
+
+    fn around<'a>(
+        &'a self,
+        captured: &'a nest_rs_ws::Captured,
+        inner: nest_rs_ws::BoxFuture<'a, WsReply>,
+    ) -> nest_rs_ws::BoxFuture<'a, WsReply> {
+        match std::sync::Arc::clone(captured).downcast::<SeenAtCapture>() {
+            Ok(seen) => Box::pin(nest_rs_core::with_ambient(seen, inner)),
+            Err(_) => inner,
+        }
+    }
+}
+
+fn seen_at_capture() -> &'static str {
+    nest_rs_core::ambient::<SeenAtCapture>()
+        .and_then(|seen| seen.0)
+        .unwrap_or("nobody")
+}
+
+#[gateway(path = "/admitted/by-gateway")]
+#[use_guards(AdmittingGuard)]
+pub(crate) struct GuardedUpgradeGateway;
+
+#[messages]
+impl GuardedUpgradeGateway {
+    #[subscribe_message("whoami")]
+    #[public]
+    async fn whoami(&self, _ask: String) -> String {
+        seen_at_capture().to_owned()
+    }
+}
+
+#[gateway(path = "/admitted/by-pool")]
+pub(crate) struct PooledUpgradeGateway;
+
+#[messages]
+impl PooledUpgradeGateway {
+    #[subscribe_message("whoami")]
+    #[public]
+    async fn whoami(&self, _ask: String) -> String {
+        seen_at_capture().to_owned()
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [
+        AdmittingGuard,
+        AdmittedContext as dyn nest_rs_ws::SocketContext,
+        GuardedUpgradeGateway,
+        PooledUpgradeGateway,
+    ],
+)]
+struct AdmittedModule;
+
+async fn whoami(app: &nest_rs_testing::ws::WsApp, path: &str) -> serde_json::Value {
+    let mut socket = app.socket(path).connect().await;
+    socket.send("whoami", serde_json::json!("?")).await;
+    socket.next_envelope().await["data"].clone()
+}
+
+#[tokio::test]
+async fn a_socket_context_captures_what_the_gateways_upgrade_guards_attached() {
+    let app = TestApp::builder()
+        .module::<AdmittedModule>()
+        .build_ws()
+        .await
+        .expect("the gateways boot");
+
+    assert_eq!(
+        whoami(&app, "/admitted/by-gateway").await,
+        "alice",
+        "the gateway's own chain attached it, ambient where the upgrade is captured",
+    );
+    assert_eq!(
+        whoami(&app, "/admitted/by-pool").await,
+        "nobody",
+        "an upgrade no guard ran on captures nothing",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[tokio::test]
+async fn a_socket_context_captures_what_the_app_wide_pool_attached_at_the_upgrade() {
+    let app = TestApp::builder()
+        .module::<AdmittedModule>()
+        .use_guards_global([nest_rs_guards::guard::<AdmittingGuard>()])
+        .build_ws()
+        .await
+        .expect("the gateways boot");
+
+    assert_eq!(
+        whoami(&app, "/admitted/by-pool").await,
+        "alice",
+        "the pool runs at the edge, around the gateway that captures",
+    );
     app.shutdown().await.expect("the transport stops cleanly");
 }

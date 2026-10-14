@@ -1,48 +1,25 @@
 //! [`AbilityGuard<F>`] — request-scoped bridge from the authenticated actor to
-//! the [`Ability`](crate::Ability) the enforcement layers read. Generic over
+//! the [`Ability`] the enforcement layers read. Generic over
 //! the app's [`AbilityFactory`].
 
 use std::sync::Arc;
 
-use nest_rs_core::{Layer, Posture, injectable};
+use nest_rs_core::{Edge, Layer, Posture, UnitContext, injectable};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
-use nest_rs_http::HandlerMetadata;
-use nest_rs_http::{Reflector, async_trait};
-use poem::Request;
+use nest_rs_http::async_trait;
 
-use crate::{AbilityBuilder, AbilityFactory};
-
-// The three in-band entries only: `check_http` builds the ability, never reads one back.
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-use crate::current_ability;
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-use crate::gate::{Refusal, reason, transport};
-
-#[cfg(feature = "graphql")]
-use nest_rs_graphql::GraphqlOperationContext;
-#[cfg(feature = "mcp")]
-use nest_rs_mcp::McpOperationContext;
-#[cfg(feature = "ws")]
-use nest_rs_ws::WsClient;
-#[cfg(feature = "ws")]
-use serde_json::Value;
-
-/// The refusal every in-band entry files: no ambient ability, so nothing
-/// decided what this caller may do.
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-fn deny_unscoped(refusal: Refusal<'_>) {
-    crate::gate::warn_denied(Refusal {
-        reason: Some(reason::NO_AMBIENT_ABILITY),
-        ..refusal
-    });
-}
+use crate::gate::{Refusal, reason};
+use crate::{Ability, AbilityBuilder, AbilityFactory};
 
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AuthzAbility>)]`.
-/// `F::Actor` is read from request extensions; its absence on a non-public
-/// route is a `500` (an authn guard must run first). On a `#[public]`
-/// route, and on an in-band endpoint (`/graphql`) whose operations gate
-/// themselves, the guard builds an Ability for the anonymous (visitor) actor —
-/// see the dev's `AbilityFactory` to define visitor rules.
+/// `F::Actor` is the principal the authentication guard attached; its absence
+/// on a non-public route is a `500` (an authn guard must run first). On a
+/// `#[public]` route, and on an in-band endpoint (`/graphql`) whose operations
+/// gate themselves, the guard builds an Ability for the anonymous (visitor)
+/// actor — see the dev's `AbilityFactory` to define visitor rules.
+///
+/// The ability is attached for the rest of the request: on a route, the reads
+/// it scopes run where the route's response mask arms them, and nowhere else.
 ///
 /// `AuthzGuard` is not a framework type: an app aliases it once at its authz
 /// module root, `pub type AuthzGuard = AbilityGuard<AuthzAbility>;`.
@@ -58,25 +35,20 @@ impl<F: AbilityFactory> Layer for AbilityGuard<F> {}
 /// `use_guards_global([..., guard::<AuthzGuard>()])` is the canonical path.
 #[async_trait]
 impl<F: AbilityFactory> Guard for AbilityGuard<F> {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         // Absent ⇒ the principal is not scope-aware and no rule is scope-gated.
-        let granted = req
-            .extensions()
-            .get::<GrantedScopes>()
-            .map(GrantedScopes::shared);
-        let built = match req.extensions().get::<F::Actor>() {
+        let granted = cx
+            .ambient::<GrantedScopes>()
+            .map(|granted| granted.shared());
+        let built = match cx.ambient::<F::Actor>() {
             Some(actor) => {
                 let mut builder = AbilityBuilder::new().with_granted_scopes(granted);
-                self.factory.define(actor, &mut builder);
+                self.factory.define(&actor, &mut builder);
                 Some(builder.build())
             }
             // `#[public]` or in band: no authenticated actor, so the factory's
             // visitor branch decides.
-            None if matches!(
-                Reflector::new(req).posture(),
-                Posture::Public | Posture::InBand
-            ) =>
-            {
+            None if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) => {
                 // No credential, so no scopes — `Some(empty)`, not `None`: a
                 // scope-gated visitor rule is withheld, never granted to everyone.
                 let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
@@ -89,9 +61,9 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         };
         match built {
             // A malformed rule fails construction (fail-closed): deny the
-            // request rather than install an ability whose denial evaporates.
+            // request rather than attach an ability whose denial evaporates.
             Some(Ok(ability)) => {
-                req.extensions_mut().insert(Arc::new(ability));
+                cx.attach(ability);
                 Ok(())
             }
             Some(Err(err)) => {
@@ -115,45 +87,26 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         }
     }
 
-    #[cfg(feature = "graphql")]
-    async fn check_graphql(&self, _op: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
-        if current_ability().is_none() {
-            deny_unscoped(Refusal::on(transport::GRAPHQL));
-            return Err(Denial::unauthorized(
-                "no ambient ability — authentication did not run on the GraphQL operation",
-            ));
+    /// Refuse a unit no ability reaches: the request that carried it did not
+    /// authenticate, or nothing re-established the ability for it.
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        if cx.ambient::<Ability>().is_some() {
+            return Ok(());
         }
-        Ok(())
-    }
-
-    #[cfg(feature = "ws")]
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        event: &str,
-        _data: &Value,
-    ) -> Result<(), Denial> {
-        if current_ability().is_none() {
-            deny_unscoped(Refusal {
-                event: Some(event),
-                ..Refusal::on(transport::WS)
-            });
-            return Err(Denial::unauthorized(
-                "no ambient ability — WS connection did not authenticate",
-            ));
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "mcp")]
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
-        if current_ability().is_none() {
-            deny_unscoped(Refusal::on(transport::MCP));
-            return Err(Denial::unauthorized(
-                "no ambient ability — the MCP operation did not authenticate",
-            ));
-        }
-        Ok(())
+        let edge = cx.edge();
+        crate::gate::warn_denied(Refusal {
+            reason: Some(reason::NO_AMBIENT_ABILITY),
+            event: (edge == Some(Edge::Ws)).then(|| cx.handler().address()),
+            ..Refusal::on(edge.map_or("unit", Edge::as_str))
+        });
+        Err(Denial::unauthorized(match edge {
+            Some(Edge::Graphql) => {
+                "no ambient ability — authentication did not run on the GraphQL operation"
+            }
+            Some(Edge::Ws) => "no ambient ability — WS connection did not authenticate",
+            Some(Edge::Mcp) => "no ambient ability — the MCP operation did not authenticate",
+            _ => "no ambient ability — the unit's request did not authenticate",
+        }))
     }
 
     fn phase(&self) -> GuardPhase {
@@ -165,35 +118,41 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     }
 }
 
-/// `AbilityGuard` checks HTTP: [`check_http`](Guard::check_http) installs the
-/// caller's ability on the request. Declared so a `#[controller]` may bind it —
-/// and so may a `#[gateway]` struct, whose guards run on the upgrade.
-impl<F: AbilityFactory> nest_rs_guards::HttpGuard for AbilityGuard<F> {}
+/// `AbilityGuard` checks HTTP: [`check_http`](Guard::check_http) attaches the
+/// caller's ability. Declared under every transport feature, since each one
+/// runs it on an HTTP request: a `#[controller]` binds it, a `#[gateway]`
+/// struct on its upgrade, `/graphql` and `/mcp` on theirs.
+impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AbilityGuard<F> {}
 
-/// `AbilityGuard` checks GraphQL: [`check_graphql`](Guard::check_graphql) refuses
-/// an operation no bridge installed an ability for. Declared so a resolver may
-/// bind it — the marker is what a `#[use_guards]` on a `#[resolver]` requires.
+/// `AbilityGuard` checks GraphQL: [`check`](Guard::check) refuses an operation
+/// no ability reaches. Declared so a resolver may bind it.
 #[cfg(feature = "graphql")]
-impl<F: AbilityFactory> nest_rs_guards::GraphqlGuard for AbilityGuard<F> {}
+impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_graphql::GraphqlView> for AbilityGuard<F> {}
 
-/// And WebSocket messages, for the same reason: `check_ws_message` refuses a
-/// message whose connection never authenticated.
+/// And WebSocket messages, for the same reason: `check` refuses a message
+/// whose connection never authenticated.
 #[cfg(feature = "ws")]
-impl<F: AbilityFactory> nest_rs_guards::WsGuard for AbilityGuard<F> {}
+impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_ws::WsView> for AbilityGuard<F> {}
 
-/// And MCP operations: [`check_mcp`](Guard::check_mcp) refuses an operation no
-/// bridge installed an ability for.
+/// And MCP operations: [`check`](Guard::check) refuses an operation no ability
+/// reaches.
 #[cfg(feature = "mcp")]
-impl<F: AbilityFactory> nest_rs_guards::McpGuard for AbilityGuard<F> {}
+impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_mcp::McpView> for AbilityGuard<F> {}
 
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs_http::Public;
+    use nest_rs_core::__private::{
+        HandlerDeclaration, MetaLevels, declare_handler, declare_unit, new_unit_context,
+    };
+    use nest_rs_core::operation_log::Kind;
+    use nest_rs_core::{AmbientValue, Handler, UnitView, with_ambient};
+    use nest_rs_http::__private::{attached, check_request};
+    use poem::Request;
 
     use super::*;
-    use crate::{Ability, AbilityBuilder, Action, with_ability};
+    use crate::{AbilityBuilder, Action, with_ability};
 
     mod post {
         use sea_orm::entity::prelude::*;
@@ -238,11 +197,17 @@ mod tests {
         impl ActiveModelBehavior for ActiveModel {}
     }
 
+    /// The principal an authentication guard would have attached.
+    #[derive(Clone)]
+    struct Caller;
+
+    impl AmbientValue for Caller {}
+
     struct NoRules;
 
     impl AbilityFactory for NoRules {
-        type Actor = ();
-        fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+        type Actor = Caller;
+        fn define(&self, _actor: &Caller, _builder: &mut AbilityBuilder) {}
     }
 
     fn guard() -> AbilityGuard<NoRules> {
@@ -251,26 +216,45 @@ mod tests {
         }
     }
 
-    fn public_request() -> Request {
-        let mut req = Request::default();
-        req.extensions_mut().insert(Public);
-        req
-    }
+    struct Routes;
 
-    /// The ability the guard attached, or `None` when it attached nothing.
-    fn attached(req: &Request) -> Option<Arc<Ability>> {
-        req.extensions().get::<Arc<Ability>>().cloned()
+    static PUBLIC_ROUTE: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: TypeId::of::<Routes>(),
+        host_name: "Routes",
+        method: "list",
+        address: "/posts",
+        posture: Posture::Public,
+        meta: MetaLevels::default,
+    });
+
+    static GATED_ROUTE: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: TypeId::of::<Routes>(),
+        host_name: "Routes",
+        method: "create",
+        address: "/posts",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    /// Run `guard`'s HTTP entry on a request to `route`: the ability it
+    /// attached, or its denial.
+    async fn ability_on<F: AbilityFactory>(
+        guard: &AbilityGuard<F>,
+        route: &'static Handler,
+    ) -> Result<Option<Arc<Ability>>, Denial> {
+        let mut req = Request::default();
+        check_request(route, [("AbilityGuard", guard as &dyn Guard)], &mut req).await?;
+        Ok(attached::<Ability>(&req))
     }
 
     #[tokio::test]
     async fn the_default_visitor_branch_grants_nothing() {
-        let mut req = public_request();
-        guard()
-            .check_http(&mut req)
+        let ability = ability_on(&guard(), &PUBLIC_ROUTE)
             .await
-            .expect("a public route admits the anonymous caller");
-
-        let ability = attached(&req).expect("the guard attaches an ability");
+            .expect("a public route admits the anonymous caller")
+            .expect("the guard attaches an ability");
         assert!(
             !ability.can_class(Action::Read, TypeId::of::<post::Entity>()),
             "the default `define_visitor` must grant nothing",
@@ -282,8 +266,8 @@ mod tests {
         struct PublicReads;
 
         impl AbilityFactory for PublicReads {
-            type Actor = ();
-            fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+            type Actor = Caller;
+            fn define(&self, _actor: &Caller, _builder: &mut AbilityBuilder) {}
             fn define_visitor(&self, ability: &mut AbilityBuilder) {
                 ability
                     .can(Action::Read, post::Entity)
@@ -291,15 +275,13 @@ mod tests {
             }
         }
 
-        let mut req = public_request();
-        AbilityGuard {
+        let guard = AbilityGuard {
             factory: Arc::new(PublicReads),
-        }
-        .check_http(&mut req)
-        .await
-        .expect("a public route admits the anonymous caller");
-
-        let ability = attached(&req).expect("the guard attaches an ability");
+        };
+        let ability = ability_on(&guard, &PUBLIC_ROUTE)
+            .await
+            .expect("a public route admits the anonymous caller")
+            .expect("the guard attaches an ability");
         assert!(
             ability.can_class(Action::Read, TypeId::of::<post::Entity>()),
             "the visitor branch's grant must reach the request",
@@ -313,19 +295,22 @@ mod tests {
 
     #[tokio::test]
     async fn an_authenticated_ability_is_not_a_visitors() {
-        let mut req = Request::default();
-        req.extensions_mut().insert(());
-        guard()
-            .check_http(&mut req)
+        let ability = with_ambient(Arc::new(Caller), ability_on(&guard(), &GATED_ROUTE))
             .await
-            .expect("an authenticated actor builds an ability");
-
+            .expect("an authenticated actor builds an ability")
+            .expect("the guard attaches an ability");
         assert!(
-            !attached(&req)
-                .expect("the guard attaches an ability")
-                .is_visitor(),
+            !ability.is_visitor(),
             "an actor-backed ability is never the visitor's",
         );
+    }
+
+    #[tokio::test]
+    async fn a_gated_route_with_no_actor_is_a_wiring_500() {
+        let Err(denial) = ability_on(&guard(), &GATED_ROUTE).await else {
+            panic!("no authentication guard ran, so the route is refused");
+        };
+        assert_eq!(denial.http_status(), 500);
     }
 
     #[tokio::test]
@@ -333,8 +318,8 @@ mod tests {
         struct MalformedVisitor;
 
         impl AbilityFactory for MalformedVisitor {
-            type Actor = ();
-            fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+            type Actor = Caller;
+            fn define(&self, _actor: &Caller, _builder: &mut AbilityBuilder) {}
             fn define_visitor(&self, ability: &mut AbilityBuilder) {
                 ability.can(Action::Read, comment::Entity).when(|p| {
                     p.related::<comment::Entity, _>(comment::Relation::Post, |c| {
@@ -344,29 +329,49 @@ mod tests {
             }
         }
 
-        let mut req = public_request();
-        let denial = AbilityGuard {
+        let mut req = Request::default();
+        let guard = AbilityGuard {
             factory: Arc::new(MalformedVisitor),
-        }
-        .check_http(&mut req)
+        };
+        let denial = check_request(
+            &PUBLIC_ROUTE,
+            [("AbilityGuard", &guard as &dyn Guard)],
+            &mut req,
+        )
         .await
         .expect_err("a malformed visitor rule must deny");
-
         assert_eq!(denial.http_status(), 500);
         assert!(
-            attached(&req).is_none(),
+            attached::<Ability>(&req).is_none(),
             "a denied request must carry no ability at all",
         );
     }
+
+    struct Gateway;
+
+    static PING: Handler = declare_handler(HandlerDeclaration {
+        unit: declare_unit("nest-rs-ws", "nest_rs::ws", Kind::Server, "ws.message"),
+        host: TypeId::of::<Gateway>(),
+        host_name: "Gateway",
+        method: "ping",
+        address: "ping",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    struct Message;
+
+    impl UnitView for Message {}
 
     // A gateway importing `AuthzHttpModule` instead of `AuthzWsModule` seeds no
     // ability around messages: the per-message guard must deny.
     #[tokio::test]
     async fn ws_message_without_ambient_ability_is_denied() {
         let logs = nest_rs_testing::LogCapture::install();
-        let client = WsClient::for_test();
+        let mut view = Message;
+        let mut cx = new_unit_context(&PING, &mut view, None, None);
         let denial = guard()
-            .check_ws_message(&client, "ping", &Value::Null)
+            .check(&mut cx)
             .await
             .expect_err("missing ambient ability must deny");
         assert_eq!(denial.http_status(), 401);
@@ -385,12 +390,13 @@ mod tests {
 
     #[tokio::test]
     async fn ws_message_with_ambient_ability_passes() {
-        let client = WsClient::for_test();
         let ability: Arc<Ability> =
             Arc::new(AbilityBuilder::new().build().expect("empty ability builds"));
         with_ability(ability, async {
+            let mut view = Message;
+            let mut cx = new_unit_context(&PING, &mut view, None, None);
             guard()
-                .check_ws_message(&client, "ping", &Value::Null)
+                .check(&mut cx)
                 .await
                 .expect("seeded ability admits the message");
         })

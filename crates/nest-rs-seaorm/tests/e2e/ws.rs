@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{Ability, AbilityBuilder, Action, current_ability};
+use nest_rs_authz::{Ability, AbilityBuilder, Action, current_ability, with_ability};
 use nest_rs_core::Container;
 use nest_rs_seaorm::ws::WsDataContext;
 use nest_rs_seaorm::{
@@ -39,6 +39,8 @@ fn ability() -> Arc<Ability> {
     Arc::new(b.build().expect("valid test ability"))
 }
 
+/// The upgrade's guard stage leaves the ability ambient while the gateway
+/// captures, as `nest-rs-ws`'s gateway suite proves over a real upgrade.
 #[tokio::test]
 async fn capture_reads_the_upgrade_ability_and_installs_a_lazy_executor() {
     let container = Container::builder()
@@ -46,10 +48,11 @@ async fn capture_reads_the_upgrade_ability_and_installs_a_lazy_executor() {
         .build();
     let ctx = WsDataContext::from_container(&container);
 
-    let mut req = Request::default();
-    req.extensions_mut().insert(ability());
-
-    let captured = ctx.capture(&req);
+    let captured = with_ability(ability(), async { ctx.capture(&Request::default()) }).await;
+    assert!(
+        current_ability().is_none(),
+        "nothing is ambient outside the upgrade",
+    );
     ctx.around(
         &captured,
         Box::pin(async {

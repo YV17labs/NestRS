@@ -72,13 +72,15 @@ Review a new edge, or a change to one, against it:
 5. **Guards at two scopes** plus `#[force_guards]`, composed once per site and
    deduplicated by `TypeId`; a denial renders through one
    `denial_to_<edge>_error`, so a guard's refusal and a gate's look the same.
-6. **A `Guard::check_<edge>` entry, a marker trait `<Edge>Guard: Guard`, and the
-   bound the decorators emit for it** (`guard_capability_bounds`). Every
-   `check_*` defaults to `Ok(())`, so without the bound an empty
-   `impl Guard for X {}` passes everything; the marker makes the author declare
-   that the guard checks this edge. All four edges assert, at every emitter (HTTP
-   has three: `#[controller]`, `#[routes]`, and `#[gateway]` for the upgrade),
-   with a trybuild snapshot each.
+6. **A view, `<Edge>View` in the edge crate's `view.rs`, and the bound the
+   decorators emit for it** (`guard_capability_bounds`: `GuardFor<<Edge>View>`).
+   A guard has two entries, `check_http` for an HTTP request and `check` for
+   every other edge's unit, both reading a `UnitContext` and both admitting by
+   default, so without the bound an empty `impl Guard for X {}` passes
+   everything; `GuardFor` makes the author declare that the guard checks this
+   edge's units. All four edges assert, at every emitter (HTTP has three:
+   `#[controller]`, `#[routes]`, and `#[gateway]` for the upgrade), with a
+   trybuild snapshot each.
 7. **Per-argument pipes**, run **after** the gate, so a refused caller never pays
    for validation and a validation message is never an existence oracle; a
    rejection is the edge's native error.
@@ -118,7 +120,8 @@ Review a new edge, or a change to one, against it:
 12. **Discovery and its gate** (`container.md`).
 13. **Aggregation**, as above.
 14. **A mount** — a `Transport` through `TransportContribution`, stating its
-    `stop_bound`, or an HTTP self-mount declaring its `EdgePosture`.
+    `stop_bound`, or an HTTP self-mount declaring its `static` `Handler`, whose
+    posture says how the pool meets it.
 15. **Its target, unit and operation line** (`observability.md`).
 16. **A way down** (below), proved over a real socket — an in-process test
     cannot see a socket left open.
@@ -168,7 +171,7 @@ executions; it chooses the **site**, by the family's nature:
 
 | Family | Global scope runs at | Controller / handler scope runs at |
 |---|---|---|
-| Guard | the route shaper; a `Guarded` self-mount's edge; the in-band operation guard; the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
+| Guard | the route shaper; a `Gated` self-mount's edge; the in-band operation guard; the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
 | Pipe | the route shaper; `/graphql` POST variables and WS `data` at their endpoint — a graphql-ws operation runs none | the route shaper; per argument on the other edges |
 | Exception filter | the route, closest to the handler | the route |
 | Interceptor | the transport edge — sees 404s, denials and self-mounts, before authentication | around the handler, inside the guards |
@@ -198,16 +201,20 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   one composed on its first dispatch (a GraphQL or MCP operation) refuses that
   unit opaquely and files one `error` naming both. **A surface beyond the
   route table is a self-mount**, the transport's one other mount (it is built
-  from `HttpConfig` alone, with no builder), and declares an `EdgePosture`:
-  `Guarded` (default; a WS upgrade) gets the global chain at its edge; `Exempt`
-  gates in band (GraphQL, MCP) or is deliberately public (OpenAPI).
+  from `HttpConfig` alone, with no builder), and declares a `static` `Handler`
+  with its posture: `Gated` (a WS upgrade, `/mcp`) gets the global chain at its
+  edge; `InBand` (`/graphql`) runs it at its request, its operations gating
+  themselves; `Public` (OpenAPI, health, static files) is deliberately open. An
+  in-band mount runs the pool itself, inside its endpoint
+  (`nest_rs_http::__private::guards_in_band`).
 - **The in-band edges also run a per-operation chain**, composed once per site in
   a shared `SiteChainCell` from the app-wide pool, the provider's `#[use_guards]`
   and the operation's own — one `compose`, no per-transport switch over where the
-  pool runs. **An `Exempt` endpoint guard checks the request; the site checks the
-  operation**: `check_http` once per request, `check_mcp` / `check_graphql` once
-  per operation, and neither stands in for the other.
-- **`/graphql` and `/mcp` stay fail-secure under `Exempt`**: the global pool
+  pool runs. **An in-band endpoint's guards check the request; the site checks
+  the operation**: `check_http` once per request, `check` once per operation,
+  and neither stands in for the other. What a request's guards attach
+  (`cx.attach`) is ambient for every unit the request carries.
+- **`/graphql` and `/mcp` stay fail-secure in band**: the global pool
   always runs at the request, in band, and a bridge adds its guards to it, never
   replaces it — each guard once, the bridge where the pool lists the first guard
   it covers. GraphQL's `InBand` posture lets `AuthnGuard` admit anonymous
@@ -218,10 +225,11 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
 - **The global site takes no capability bound**, by decision: a global guard
   legitimately serves whichever edges it implements, and the pool reaches each
   operation where the operation exists, at all four edges. The pool dispatches
-  on `dyn Guard`, so a pooled guard runs every `check_*` it overrides whatever
-  marker it declares — a missing marker never opens an edge (held by a test per
-  edge); the marker matters only where a decorator binds the guard. A guard declaring a
-  marker without overriding its `check_*` is a visible line, not a gap to close
+  on `dyn Guard`, so a pooled guard runs the entries it overrides whatever
+  `GuardFor` it declares — a missing declaration never opens an edge (held by a
+  test per edge); the declaration matters only where a decorator binds the
+  guard. A guard declaring `GuardFor<V>` without overriding the entry `V`'s
+  units run is a visible line, not a gap to close
   (`.claude/decisions/check-http-stays-on-guard.md`).
 - **Only route mounts (global, controller and method scope composed), the global
   bucket and a WS upgrade are phase-validated**
@@ -252,8 +260,8 @@ per field — the whole chain at that site, since the field belongs to no
 resolver. An `#[entity]` body therefore composes everything but the pool, and a
 `#[field_resolver]` too, naming where the pool ran (the root field that produced
 its parent) — never once per parent row; its resolver's own `#[use_guards]` still
-run. No site subtracts a bucket without naming where it ran. `check_graphql`
-takes a `GraphqlOperationContext`, whose `context()` is `None` at the federation
+run. No site subtracts a bucket without naming where it ran. A guard's `check`
+reads the field through `GraphqlView`, whose `role()` is `Federation` at that
 site: a refusal a guard can read, not a fabrication.
 
 **An `#[entity]` is a `#[query]` for posture, and stricter**, because the router

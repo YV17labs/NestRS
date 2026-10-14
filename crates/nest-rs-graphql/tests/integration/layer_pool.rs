@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::async_trait;
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
@@ -33,13 +33,16 @@ impl Layer for CountingPassGuard {}
 
 #[async_trait]
 impl Guard for CountingPassGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         GUARD_RUNS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl HttpGuard for CountingPassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for CountingPassGuard {}
 
 /// Counts every HTTP interception, then forwards.
 #[injectable]

@@ -22,6 +22,8 @@ pub struct Caller {
 
 pub type AuthenticatedClient = nest_rs::oauth::server::AuthenticatedClient<ClientPayload>;
 
+impl nest_rs::core::AmbientValue for Caller {}
+
 impl nest_rs::authn::PrincipalIdentity for Caller {
     fn actor_id(&self) -> Option<String> {
         Some(self.user_id.to_string())

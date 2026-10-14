@@ -1,11 +1,11 @@
 //! The MCP half of the same rule. Both scopes are checked — the host struct's
 //! guards and the operation's own fold into one per-operation chain, so both run
-//! `check_mcp` and both owe the marker.
+//! `check` and both owe `GuardFor<McpView>`.
 
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, async_trait};
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::http::HttpView;
 use nest_rs::mcp::{McpError, mcp, tools};
-use poem::Request;
 
 #[injectable]
 #[derive(Default)]
@@ -15,10 +15,12 @@ impl Layer for HttpOnlyGuard {}
 
 #[async_trait]
 impl Guard for HttpOnlyGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
+
+impl GuardFor<HttpView> for HttpOnlyGuard {}
 
 #[mcp]
 #[use_guards(HttpOnlyGuard)]

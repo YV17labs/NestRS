@@ -1,9 +1,9 @@
 //! Mount-time composition of the response-side layer pools for one HTTP
-//! route: exception-filters, filters, interceptors.
+//! route: exception-filters, filters, interceptors — interceptors outermost.
 //!
-//! Guards and pipes run inside [`RouteShaper`] at request time; the
-//! response-side families wrap the endpoint, composed here at mount through the
-//! same `compose_chain` dedup as every other layer kind.
+//! Guards and pipes run in the route's shaper at request time, around what is
+//! composed here; the response-side families wrap the endpoint, composed at
+//! mount through the same `compose_chain` dedup as every other layer kind.
 //!
 //! Execution sites differ by scope for interceptors and filters:
 //!
@@ -23,24 +23,29 @@
 //! The three families compose in **one** call ([`wrap_route_response_layers`]):
 //! every nested enum level adds a `Request`-sized slot (~500 B) to the route's
 //! future, which poem boxes per request for every route, bare included.
-//!
-//! [`RouteShaper`]: crate::dispatch::RouteShaper
 
-use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers};
+use nest_rs_core::__private::{
+    ResolvedLayer, compose_chain, dedup_bucket, refuse_unresolved, resolve_global_layers,
+    resolve_scoped,
+};
 use nest_rs_core::layer_chain::LayerSite;
-use nest_rs_core::{Container, UnresolvedLayerError};
+use nest_rs_core::{Container, LayerSpec, UnresolvedLayerError};
 use nest_rs_exception_filters::{ExceptionFilterErased, ExceptionFilterSpecs};
 use nest_rs_filters::{Filter, FilterChain, FilterSpecs};
+use nest_rs_http::__private::refused_route;
 use nest_rs_http::MappedError;
-use nest_rs_interceptors::{Interceptor, InterceptorChain, InterceptorSpecs};
 use poem::endpoint::BoxEndpoint;
 use poem::{Endpoint, EndpointExt, Request, Response};
 
-use crate::dispatch::route_shaper::refused_route;
-use crate::dispatch::scoped_spec::{
-    ScopedExceptionFilterSpec, ScopedFilterSpec, ScopedInterceptorSpec, refuse_unresolved,
-    resolve_scoped,
-};
+use crate::interceptor::{Interceptor, InterceptorChain};
+use crate::registry::InterceptorSpecs;
+
+/// An exception-filter declaration at a route's or a controller's scope.
+pub type ExceptionFilterDeclaration = LayerSpec<dyn ExceptionFilterErased>;
+/// A filter declaration at a route's or a controller's scope.
+pub type FilterDeclaration = LayerSpec<dyn Filter>;
+/// An interceptor declaration at a route's or a controller's scope.
+pub type InterceptorDeclaration = LayerSpec<dyn Interceptor>;
 
 /// One HTTP route's endpoint as it leaves [`wrap_route_response_layers`]:
 /// still the macro-emitted handler type, or behind the one box its
@@ -86,12 +91,12 @@ where
 pub fn wrap_route_response_layers<E>(
     container: &Container,
     endpoint: E,
-    controller_exception_filters: &[ScopedExceptionFilterSpec],
-    method_exception_filters: &[ScopedExceptionFilterSpec],
-    controller_filters: &[ScopedFilterSpec],
-    method_filters: &[ScopedFilterSpec],
-    controller_interceptors: &[ScopedInterceptorSpec],
-    method_interceptors: &[ScopedInterceptorSpec],
+    controller_exception_filters: &[ExceptionFilterDeclaration],
+    method_exception_filters: &[ExceptionFilterDeclaration],
+    controller_filters: &[FilterDeclaration],
+    method_filters: &[FilterDeclaration],
+    controller_interceptors: &[InterceptorDeclaration],
+    method_interceptors: &[InterceptorDeclaration],
     route_label: &str,
 ) -> RouteEndpoint<E>
 where
@@ -148,8 +153,8 @@ where
 /// it away.
 fn compose_exception_filters(
     container: &Container,
-    controller: &[ScopedExceptionFilterSpec],
-    method: &[ScopedExceptionFilterSpec],
+    controller: &[ExceptionFilterDeclaration],
+    method: &[ExceptionFilterDeclaration],
     route_label: &str,
 ) -> Result<Vec<ResolvedLayer<dyn ExceptionFilterErased>>, UnresolvedLayerError> {
     let global = resolve_global_layers::<ExceptionFilterSpecs>(container);
@@ -169,8 +174,8 @@ fn compose_exception_filters(
 /// survivors run here — global filters execute at the transport edge.
 fn compose_route_filters(
     container: &Container,
-    controller: &[ScopedFilterSpec],
-    method: &[ScopedFilterSpec],
+    controller: &[FilterDeclaration],
+    method: &[FilterDeclaration],
     route_label: &str,
 ) -> Result<Vec<ResolvedLayer<dyn Filter>>, UnresolvedLayerError> {
     let global = dedup_bucket(resolve_global_layers::<FilterSpecs>(container));
@@ -189,8 +194,8 @@ fn compose_route_filters(
 /// sub-chain) already warned once.
 fn compose_route_interceptors(
     container: &Container,
-    controller: &[ScopedInterceptorSpec],
-    method: &[ScopedInterceptorSpec],
+    controller: &[InterceptorDeclaration],
+    method: &[InterceptorDeclaration],
     route_label: &str,
 ) -> Result<Vec<ResolvedLayer<dyn Interceptor>>, UnresolvedLayerError> {
     let global = dedup_bucket(resolve_global_layers::<InterceptorSpecs>(container));
@@ -283,12 +288,12 @@ mod tests {
         ] {
             let logs = LogCapture::install();
             let container = Container::default();
-            let mut controller_exception_filters: Vec<ScopedExceptionFilterSpec> = Vec::new();
-            let mut method_exception_filters: Vec<ScopedExceptionFilterSpec> = Vec::new();
-            let mut controller_filters: Vec<ScopedFilterSpec> = Vec::new();
-            let mut method_filters: Vec<ScopedFilterSpec> = Vec::new();
-            let mut controller_interceptors: Vec<ScopedInterceptorSpec> = Vec::new();
-            let mut method_interceptors: Vec<ScopedInterceptorSpec> = Vec::new();
+            let mut controller_exception_filters: Vec<ExceptionFilterDeclaration> = Vec::new();
+            let mut method_exception_filters: Vec<ExceptionFilterDeclaration> = Vec::new();
+            let mut controller_filters: Vec<FilterDeclaration> = Vec::new();
+            let mut method_filters: Vec<FilterDeclaration> = Vec::new();
+            let mut controller_interceptors: Vec<InterceptorDeclaration> = Vec::new();
+            let mut method_interceptors: Vec<InterceptorDeclaration> = Vec::new();
             match slot {
                 Slot::ControllerExceptionFilter => controller_exception_filters.push(unprovided()),
                 Slot::MethodExceptionFilter => method_exception_filters.push(unprovided()),

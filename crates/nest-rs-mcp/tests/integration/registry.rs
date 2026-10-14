@@ -826,6 +826,56 @@ async fn a_second_path_is_a_second_endpoint() {
     );
 }
 
+/// Every endpoint address a pooled guard saw a request run as, in order. Each
+/// test runs in its own process.
+static ADDRESSES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+/// Admits every request, recording the address of the site it runs as.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct AddressWitness;
+
+impl nest_rs_core::Layer for AddressWitness {}
+
+#[nest_rs_guards::async_trait]
+impl nest_rs_guards::Guard for AddressWitness {
+    async fn check_http(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> Result<(), nest_rs_guards::Denial> {
+        let address = cx.handler().address();
+        ADDRESSES
+            .lock()
+            .expect("only this guard writes it")
+            .push(address);
+        Ok(())
+    }
+}
+
+impl nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AddressWitness {}
+
+#[module(imports = [TwoPathApp], providers = [AddressWitness])]
+struct WitnessedTwoPathApp;
+
+/// A guard keying on the site's address tells two endpoints apart.
+#[tokio::test]
+async fn each_endpoint_runs_its_requests_as_its_own_path() {
+    let app = TestApp::builder()
+        .module::<WitnessedTwoPathApp>()
+        .use_guards_global([nest_rs_guards::guard::<AddressWitness>()])
+        .build()
+        .await
+        .expect("two paths boot under a global pool");
+
+    for path in [SHARED, OTHER] {
+        app.http().post(path).send().await;
+    }
+    assert_eq!(
+        *ADDRESSES.lock().expect("only the witness writes it"),
+        [SHARED, OTHER],
+    );
+}
+
 /// `BetaTool` is linked into this binary but its module is not imported.
 #[module(imports = [AlphaMcpModule])]
 struct AlphaOnlyApp;

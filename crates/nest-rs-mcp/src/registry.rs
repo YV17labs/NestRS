@@ -7,11 +7,14 @@
 //! tool context, [`McpConfig`](crate::McpConfig) and the session store resolve
 //! once per path ([`McpMount::from_container`]).
 
+use std::any::TypeId;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use nest_rs_core::{Container, ContainerBuilder, Discovery};
+use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+use nest_rs_core::{Container, ContainerBuilder, Discovery, Handler, Posture};
+use nest_rs_http::__private::guards_in_band;
 use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta, normalize_mount_path};
 use poem::Route;
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerConfig, Tool};
@@ -20,6 +23,7 @@ use crate::composite::{CompositeHandler, common_protocol_versions};
 use crate::endpoint::{McpMount, endpoint};
 use crate::host::McpHost;
 use crate::identity::{McpIdentity, ResolvedIdentity};
+use crate::module::McpModule;
 
 /// The `HttpEndpointMeta` label every MCP mount carries.
 pub(crate) const MCP_LABEL: &str = "mcp";
@@ -27,6 +31,37 @@ pub(crate) const MCP_LABEL: &str = "mcp";
 /// Where a bare `#[mcp]` mounts; a host that wants its own endpoint writes the
 /// whole path instead.
 pub const DEFAULT_PATH: &str = "/mcp";
+
+/// The site an MCP endpoint's request at `path` runs as before its operations —
+/// `path` empty for the default one: a gated endpoint, so an authentication
+/// guard refuses an anonymous call. `#[mcp]` declares one per host, the first
+/// host on a path the one its requests run as.
+pub const fn declare_endpoint(path: &'static str) -> Handler {
+    declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: TypeId::of::<McpModule>(),
+        host_name: "McpModule",
+        method: "",
+        address: mount_address(path),
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    })
+}
+
+/// The address an endpoint declared at `path` is mounted at: the default for
+/// none, and without the trailing slash a declaration may carry (`/mcp/`
+/// mounts `/mcp`).
+const fn mount_address(path: &'static str) -> &'static str {
+    match path.as_bytes() {
+        [] => DEFAULT_PATH,
+        [_, .., b'/'] => path.split_at(path.len() - 1).0,
+        _ => path,
+    }
+}
+
+/// The site of the endpoint at [`DEFAULT_PATH`], and of one an app mounts by
+/// hand through [`endpoint`](crate::endpoint()).
+pub static ENDPOINT: Handler = declare_endpoint(DEFAULT_PATH);
 
 /// Build one host instance from the live container, per MCP session.
 type BuildHost = fn(&Container) -> Arc<dyn McpHost>;
@@ -95,9 +130,11 @@ pub trait DefaultOperationLayers: Sized + 'static {
 impl<T: 'static> DefaultOperationLayers for T {}
 
 /// Record `P` as a host of the MCP endpoint at `path`, and — for the first host
-/// to claim that path — attach the endpoint itself plus its boot check.
+/// to claim that path — attach the endpoint itself, its requests running as
+/// `site`, plus its boot check.
 pub fn register_host<P: 'static>(
     builder: ContainerBuilder,
+    site: &'static Handler,
     path: &'static str,
     host: &'static str,
     identity: McpIdentity,
@@ -132,14 +169,13 @@ pub fn register_host<P: 'static>(
     let detached = DetachedWork::new();
     let mount_work = detached.clone();
     builder
-        .attach_meta::<P, HttpEndpointMeta>(
-            HttpEndpointMeta::new(path, MCP_LABEL, move |container, route: Route| {
-                mount(container, route, &mount_path, &mount_work)
+        .attach_meta::<P, HttpEndpointMeta>(guards_in_band(
+            HttpEndpointMeta::new(site, path, MCP_LABEL, move |container, route: Route| {
+                mount(container, route, &mount_path, site, &mount_work)
             })
             .runs_detached(detached)
-            .owned_by(host)
-            .exempt(),
-        )
+            .owned_by(host),
+        ))
         .attach_meta::<P, HttpBootCheck>(HttpBootCheck::new(move |container| {
             let path = check_path.as_str();
             let hosts = resolve(container, path);
@@ -235,7 +271,13 @@ fn declared_names(meta: &McpHostMeta) -> impl Iterator<Item = Cow<'static, str>>
     meta.declared_tools().into_iter().map(|tool| tool.name)
 }
 
-fn mount(container: &Container, route: Route, path: &str, detached: &DetachedWork) -> Route {
+fn mount(
+    container: &Container,
+    route: Route,
+    path: &str,
+    site: &'static Handler,
+    detached: &DetachedWork,
+) -> Route {
     let hosts = hosts_on(container, path);
 
     // Built once: rmcp's `#[tool_handler]` rebuilds the whole `ToolRouter` on every `get_tool`.
@@ -258,7 +300,9 @@ fn mount(container: &Container, route: Route, path: &str, detached: &DetachedWor
 
     // A contested or unbacked identity already failed the boot in `check_identity`.
     let identity = Arc::new(resolve_identity(container, path, &hosts).unwrap_or_default());
-    let mount = McpMount::from_container(container).stopped_with(detached.clone());
+    let mount = McpMount::from_container(container)
+        .stopped_with(detached.clone())
+        .running_as(site);
     let tools = Arc::new(tools);
     let shared_path: Arc<str> = Arc::from(path);
     let container = container.clone();
@@ -465,4 +509,31 @@ fn check_protocol_versions(path: &str, hosts: &[ResolvedHost]) -> Result<(), Str
         "mcp hosts on one path declare different protocol versions — the endpoint advertises their intersection",
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_endpoint_is_addressed_where_register_host_mounts_it() {
+        for (declared, mounted) in [
+            ("", DEFAULT_PATH),
+            ("/mcp/", "/mcp"),
+            ("/mcp/markers", "/mcp/markers"),
+            ("/", "/"),
+        ] {
+            assert_eq!(mount_address(declared), mounted, "declared {declared:?}");
+            let defaulted = if declared.is_empty() {
+                DEFAULT_PATH
+            } else {
+                declared
+            };
+            assert_eq!(
+                normalize_mount_path(defaulted),
+                mounted,
+                "declared {declared:?}"
+            );
+        }
+    }
 }

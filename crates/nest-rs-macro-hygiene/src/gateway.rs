@@ -1,15 +1,16 @@
 //! `#[gateway]` + `#[use_guards]` + `#[messages]`: the guard-layer emission,
 //! the message dispatch table and the versioned mount.
 
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, HttpGuard, async_trait};
-use nest_rs::http::poem::Request as HttpRequest;
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::http::HttpView;
 use nest_rs::ws::{gateway, messages};
 
-/// Bound on the gateway struct, so it runs on the upgrade and owes [`HttpGuard`].
+/// Bound on the gateway struct, so it runs on the upgrade and owes
+/// `GuardFor<HttpView>`.
 ///
-/// It overrides `check_http`: an empty `impl Guard` beside `impl HttpGuard` is
-/// the lying attestation this crate's trybuild snapshots refuse.
+/// It overrides `check_http`: an empty `impl Guard` beside the declaration is
+/// the lying one this crate's trybuild snapshots refuse.
 #[injectable]
 pub struct HygieneWsGuard;
 
@@ -17,17 +18,17 @@ impl Layer for HygieneWsGuard {}
 
 #[async_trait]
 impl Guard for HygieneWsGuard {
-    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for HygieneWsGuard {}
+impl GuardFor<HttpView> for HygieneWsGuard {}
 
 /// A value `#[meta]` declares, read by type.
 pub struct HygieneLimit(pub u32);
 
-/// Guarded, so the `#[use_guards]` wrap is emitted.
+/// Gated, so the `#[use_guards]` wrap is emitted.
 #[gateway(path = "/hygiene")]
 #[meta(HygieneLimit(100))]
 #[use_guards(HygieneWsGuard)]

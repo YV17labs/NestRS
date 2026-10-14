@@ -35,9 +35,11 @@ async-graphql.workspace = true
 # analog); re-exported so a crud consumer needs no direct nest-rs-pipes dep.
 nest-rs-pipes.workspace = true
 # Re-exported as `nest_rs_graphql::async_trait` for implementors of the async
-# guard seams (`Guard::check_graphql`, operation guards) — boxed like
-# `nest-rs-guards`' HTTP `Guard`.
+# seams (operation guards).
 async-trait.workspace = true
+# The edge runs its guards itself: the pool at the request, each field's chain,
+# the federation gate; it renders a denial in GraphQL's error form.
+nest-rs-guards.workspace = true
 # Re-exported so the GraphqlModule mount code can name the poem integration
 # through the framework, keeping it out of every app's manifest.
 async-graphql-poem.workspace = true
@@ -61,12 +63,9 @@ tokio.workspace = true
 # Close frame — exists only over a real upgrade, and so does the shutdown window
 # a DataLoader batch is stopped at.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "ws"] }
-# `#[resolver]` macro emits paths to `::nest_rs_guards::run_global_graphql_guards`,
-# so any test using `#[resolver]` needs the crate in scope. Dev-dep cycle is
-# allowed by Cargo (nest-rs-guards depends on us as a normal dep).
-nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
 # The layer-pool test asserts the transport-edge interceptor pool covers the
-# `/graphql` self-mount. Same allowed dev-dep cycle as nest-rs-guards.
+# `/graphql` self-mount. An allowed dev-dependency cycle: the interceptors
+# depend on `nest-rs-http`, which this crate does.
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `test-util` (not part of tokio's `full`) pauses time, so the socket-lifetime
 # ceiling is asserted against a four-hour deadline in microseconds instead of

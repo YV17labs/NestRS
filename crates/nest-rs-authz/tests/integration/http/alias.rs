@@ -4,16 +4,13 @@
 //! `#[routes]` hands each parameter type to `nest_rs_http::__private::ShaperProbe`, so a
 //! rename changes the spelling, not the type.
 
-use std::sync::Arc;
-
 use nest_rs_authz::http::Authorize as Az;
 use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults, current_ability};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_testing::TestApp;
-use poem::Request;
 
 mod gadget {
     use sea_orm::entity::prelude::*;
@@ -61,24 +58,22 @@ impl Layer for GrantInjector {}
 
 #[async_trait]
 impl Guard for GrantInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let granted = req
-            .headers()
-            .get("x-grant")
-            .and_then(|v| v.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let granted = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-grant")
             .map(|v| v == "yes")
             .unwrap_or(false);
         let mut b = AbilityBuilder::new();
         if granted {
             b.can(Action::Read, gadget::Entity);
         }
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for GrantInjector {}
+impl GuardFor<nest_rs_http::HttpView> for GrantInjector {}
 
 #[controller(path = "/gadgets")]
 struct GadgetController;

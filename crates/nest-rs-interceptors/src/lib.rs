@@ -55,6 +55,7 @@ mod builder;
 mod ext;
 mod interceptor;
 mod registry;
+mod route;
 
 pub use builder::AppBuilderInterceptorsExt;
 pub use ext::InterceptorExt;
@@ -62,3 +63,14 @@ pub use interceptor::{Interceptor, InterceptorChain, InterceptorEndpoint, Next};
 pub use registry::{InterceptorSpec, InterceptorSpecs, interceptor};
 // Re-exported so an `Interceptor` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::route::{
+        ExceptionFilterDeclaration, FilterDeclaration, InterceptorDeclaration, RouteEndpoint,
+        wrap_route_response_layers,
+    };
+}

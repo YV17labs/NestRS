@@ -106,9 +106,9 @@ macro_rules! visitor_app {
             pub(super) struct $factory;
 
             impl AbilityFactory for $factory {
-                type Actor = ();
+                type Actor = crate::Anyone;
 
-                fn define(&self, _actor: &(), _ab: &mut AbilityBuilder) {}
+                fn define(&self, _actor: &crate::Anyone, _ab: &mut AbilityBuilder) {}
 
                 $define_visitor
             }

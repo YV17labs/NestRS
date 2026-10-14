@@ -1,46 +1,43 @@
-//! [`RouteShaper`] — the HTTP per-route shaper. A generic endpoint the
-//! `#[routes]` macro wraps around each route at mount time. Orchestrates the
-//! request-side layer families — guards and pipes — at the route scope,
-//! deduplicating against the global chain by `TypeId`, and runs the route's
-//! class gate between them. The response-side families (exception-filters,
-//! filters, interceptors) wrap the endpoint *inside* the shaper — see
-//! [`route_layers`](crate::dispatch::route_layers).
+//! [`RouteShaper`] — the HTTP per-route shaper, a generic endpoint the
+//! `#[routes]` macro wraps around each route at mount time. It runs the
+//! request-side layer families at the route scope, deduplicated against the
+//! global chain by `TypeId`: the guard stage, the route's class gates, then the
+//! pipes. The response-side families (exception-filters, filters,
+//! interceptors) wrap the endpoint *inside* it.
 
 use std::any::TypeId;
 
 use nest_rs_core::__private::{
-    ResolvedLayer, compose_chain, dedup_bucket, refuse_site, resolve_global_layers,
+    ResolvedLayer, compose_chain, dedup_bucket, log_effective_chain, refuse_site,
+    report_unresolved, resolve_global_layers, resolve_scoped,
 };
 use nest_rs_core::layer_chain::LayerSite;
-use nest_rs_core::{Container, Handler, Layer};
-use nest_rs_http::__private::{GateFn, HandlerRef};
-use nest_rs_http::BodyError;
-use nest_rs_http::poem::error::ReadBodyError;
-use nest_rs_http::poem::{Body, Endpoint, Request, Response, Result};
-use nest_rs_pipes::{GlobalPipe, PipeSpecs};
+use nest_rs_core::{Container, Handler};
+use nest_rs_guards::__private::{resolve_global_guards, validate_guard_chain};
+use nest_rs_guards::{Denial, Guard, GuardSpec};
+use nest_rs_pipes::{GlobalPipe, PipeSpec, PipeSpecs};
+use poem::error::ReadBodyError;
+use poem::{Body, Endpoint, Request, Response, Result};
 use serde_json::Value;
 
-use crate::dispatch::denial_convert::{denial_to_http_response, deny_http};
-use crate::dispatch::route_layers::RouteEndpoint;
-use crate::dispatch::scoped_spec::{
-    ScopedGuardSpec, ScopedPipeSpec, report_unresolved, resolve_global_guards, resolve_scoped,
-};
-use crate::dispatch::validate::validate_guard_chain;
-use crate::{Denial, Guard};
+use crate::error::BodyError;
+use crate::guard_stage::denial_to_http_response;
+use crate::shaper::GateFn;
 
-/// HTTP per-route shaper: the route's declaration carried on the request, then
-/// the deduped guard chain, the route's class gates and the deduped pipe chain,
-/// wrapped around the route's inner endpoint.
+/// HTTP per-route shaper: the deduped guard stage, the route's class gates and
+/// the deduped pipe chain, wrapped around the route's inner endpoint, which
+/// runs under what the guards attached.
 ///
 /// Built by [`wrap_route_shaper`] at mount, resolving the global + per-route
 /// chain eagerly so a broken chain surfaces at boot; dedups by `TypeId` and
 /// runs every layer in declaration order. No `#[public]` skip: guards read the
-/// route's posture themselves.
+/// route's posture themselves, off its `Handler`.
 pub struct RouteShaper<E> {
     handler: &'static Handler,
     guards: Vec<ResolvedLayer<dyn Guard>>,
     gates: Vec<GateFn>,
     pipes: Vec<ResolvedLayer<dyn GlobalPipe>>,
+    masked: bool,
     inner: E,
 }
 
@@ -50,18 +47,26 @@ where
 {
     type Output = Response;
 
-    async fn call(&self, mut req: Request) -> Result<Response> {
-        // A pointer, read by every layer inside through `Reflector`: nothing the
-        // route declared is copied per request.
-        req.extensions_mut().insert(HandlerRef(self.handler));
-        for entry in &self.guards {
-            // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
-            // blanket would nest a second boxed future per check.
-            if let Err(denial) = entry.layer.as_ref().check_http(&mut req).await {
-                return Ok(deny_http(entry.name, denial));
-            }
-        }
+    async fn call(&self, req: Request) -> Result<Response> {
+        // What the guards attach is withheld from the reads a mask would scope
+        // when no response shaper masks the route's reply.
+        crate::guard_stage::guard_then(
+            self.handler,
+            &self.guards,
+            req,
+            |req| self.after_the_guards(req),
+            !self.masked,
+        )
+        .await
+    }
+}
 
+impl<E> RouteShaper<E>
+where
+    E: Endpoint<Output = Response>,
+{
+    /// Everything after the guard stage, under what it attached.
+    async fn after_the_guards(&self, mut req: Request) -> Result<Response> {
         // After the guards, whose ability it reads; before the pipes, so a
         // refused caller pays for no validation; and outside every route-scoped
         // interceptor and filter, so none answers or maps what it refuses.
@@ -81,10 +86,9 @@ where
     }
 }
 
-/// One HTTP route as `#[routes]` mounts it: shaped when any layer runs at the
-/// route — a guard, a class gate, a pipe, or a route-scoped response layer
-/// reading what the route declared — bare (untouched) when none does, and
-/// refused when its chains did not compose.
+/// One HTTP route as `#[routes]` mounts it: shaped when any request-side layer
+/// runs at the route — a guard, a class gate, a pipe — bare (untouched) when
+/// none does, and refused when its chains did not compose.
 ///
 /// The bare arm is not an access decision: the boot's unguarded-route scan
 /// warns independently.
@@ -113,17 +117,17 @@ where
     }
 }
 
-/// What a route whose chains did not compose answers: an opaque `500`, never
+/// What a site whose chains did not compose answers: an opaque `500`, never
 /// the handler without the layers it declares.
-pub(crate) fn refused_route() -> Response {
+pub fn refused_route() -> Response {
     denial_to_http_response(Denial::internal("the route's layer chain did not compose"))
 }
 
 /// Compose the route's guard / pipe chains and wrap `endpoint` in a
-/// [`RouteShaper`] running them around the route's class `gates`, carrying
-/// `handler` for every layer inside — or return it untouched when no layer runs
-/// at the route. Emitted by `#[routes]` for every handler, `gates` selected by
-/// type from what the route declares.
+/// [`RouteShaper`] running them around the route's class `gates`, as the unit
+/// `handler` declares — or return it untouched when no layer runs at the route.
+/// Emitted by `#[routes]` for every handler, `gates` selected by type from what
+/// the route declares, `masked` whether a response shaper masks its reply.
 ///
 /// A declared layer that does not resolve, or a method scope that orders an
 /// authorization guard before the authentication guard whose principal it
@@ -135,17 +139,18 @@ pub(crate) fn refused_route() -> Response {
 )]
 pub fn wrap_route_shaper<E>(
     container: &Container,
-    endpoint: RouteEndpoint<E>,
+    endpoint: E,
     route_label: &'static str,
-    controller_guards: Vec<ScopedGuardSpec>,
-    method_guards: Vec<ScopedGuardSpec>,
+    controller_guards: Vec<GuardSpec>,
+    method_guards: Vec<GuardSpec>,
     force_guards: Vec<TypeId>,
-    controller_pipes: Vec<ScopedPipeSpec>,
-    method_pipes: Vec<ScopedPipeSpec>,
+    controller_pipes: Vec<PipeSpec>,
+    method_pipes: Vec<PipeSpec>,
     no_pipes: bool,
     gates: Vec<GateFn>,
+    masked: bool,
     handler: &'static Handler,
-) -> ShapedRoute<RouteEndpoint<E>>
+) -> ShapedRoute<E>
 where
     E: Endpoint<Output = Response> + 'static,
 {
@@ -172,8 +177,7 @@ where
             return ShapedRoute::Refused;
         }
     };
-    let layered = matches!(endpoint, RouteEndpoint::Layered(_));
-    if guards.is_empty() && gates.is_empty() && pipes.is_empty() && !layered {
+    if guards.is_empty() && gates.is_empty() && pipes.is_empty() {
         return ShapedRoute::Bare(endpoint);
     }
     ShapedRoute::Shaped(RouteShaper {
@@ -181,6 +185,7 @@ where
         guards,
         gates,
         pipes,
+        masked,
         inner: endpoint,
     })
 }
@@ -188,10 +193,10 @@ where
 fn resolve_guards(
     container: &Container,
     route_label: &str,
-    controller_guards: &[ScopedGuardSpec],
-    method_guards: &[ScopedGuardSpec],
+    controller_guards: &[GuardSpec],
+    method_guards: &[GuardSpec],
     force_guards: &[TypeId],
-) -> nest_rs_core::anyhow::Result<Vec<ResolvedLayer<dyn Guard>>> {
+) -> anyhow::Result<Vec<ResolvedLayer<dyn Guard>>> {
     let global = resolve_global_guards(container);
     let controller = resolve_scoped(container, controller_guards, LayerSite::Host, route_label)
         .inspect_err(report_unresolved)?;
@@ -207,7 +212,7 @@ fn resolve_guards(
     // The controller's boot check validated the global and controller scopes; a
     // method scope makes this route's chain one of its own.
     if !method_guards.is_empty() || !force_guards.is_empty() {
-        validate_guard_chain(route_label, &chain).map_err(nest_rs_core::anyhow::Error::msg)?;
+        validate_guard_chain(route_label, &chain).map_err(anyhow::Error::msg)?;
     }
     log_effective_chain(route_label, "guards", &chain);
     // The single execution site for the guard pool on a routed handler, after
@@ -218,9 +223,9 @@ fn resolve_guards(
 fn resolve_pipes(
     container: &Container,
     route_label: &str,
-    controller_pipes: &[ScopedPipeSpec],
-    method_pipes: &[ScopedPipeSpec],
-) -> nest_rs_core::anyhow::Result<Vec<ResolvedLayer<dyn GlobalPipe>>> {
+    controller_pipes: &[PipeSpec],
+    method_pipes: &[PipeSpec],
+) -> anyhow::Result<Vec<ResolvedLayer<dyn GlobalPipe>>> {
     let global = resolve_global_layers::<PipeSpecs>(container);
     let controller = resolve_scoped(container, controller_pipes, LayerSite::Host, route_label)
         .inspect_err(report_unresolved)?;
@@ -230,27 +235,6 @@ fn resolve_pipes(
         compose_chain::<dyn GlobalPipe>(dedup_bucket(global), controller, method, &[], route_label);
     log_effective_chain(route_label, "pipes", &chain);
     Ok(chain)
-}
-
-pub(super) fn log_effective_chain<L: Layer + ?Sized>(
-    route: &str,
-    kind: &str,
-    chain: &[ResolvedLayer<L>],
-) {
-    if chain.is_empty() {
-        return;
-    }
-    let entries: Vec<String> = chain
-        .iter()
-        .map(|e| format!("{} ({})", e.name, e.source.label()))
-        .collect();
-    tracing::trace!(
-        target: nest_rs_core::target::LAYERS,
-        route,
-        kind,
-        chain = entries.join(", ").as_str(),
-        "effective layer chain",
-    );
 }
 
 /// Whether the transport's body wrapper ended this read — past the cap, or no
@@ -276,20 +260,20 @@ async fn apply_body_pipes(
 ) -> Result<()> {
     let content_type = req
         .headers()
-        .get(nest_rs_http::poem::http::header::CONTENT_TYPE)
+        .get(poem::http::header::CONTENT_TYPE)
         .and_then(|h| h.to_str().ok())
         .unwrap_or_default()
         .to_owned();
     if !content_type.contains("json") {
         return Ok(());
     }
-    let limit = nest_rs_http::current_body_limit().unwrap_or(nest_rs_http::RawBody::DEFAULT_LIMIT);
+    let limit = crate::current_body_limit().unwrap_or(crate::RawBody::DEFAULT_LIMIT);
     let body = req.take_body();
     let bytes = match body.into_bytes_limit(limit).await {
         Ok(b) => b,
         Err(ReadBodyError::PayloadTooLarge) => {
-            return Err(nest_rs_http::poem::Error::from_status(
-                nest_rs_http::poem::http::StatusCode::PAYLOAD_TOO_LARGE,
+            return Err(poem::Error::from_status(
+                poem::http::StatusCode::PAYLOAD_TOO_LARGE,
             ));
         }
         Err(err) => {
@@ -317,11 +301,11 @@ async fn apply_body_pipes(
             // A `400` RFC 9457 problem: the pipe message as `detail`, field-level
             // errors as an `errors` extension member.
             let mut problem =
-                nest_rs_http::ProblemDetails::bad_request().with_detail(err.message().to_owned());
+                crate::ProblemDetails::bad_request().with_detail(err.message().to_owned());
             if let Some(details) = err.into_details() {
                 problem = problem.with_extension("errors", details);
             }
-            return Err(nest_rs_http::poem::Error::from(problem));
+            return Err(poem::Error::from(problem));
         }
     }
     // A re-serialization failure must not hand the handler an empty body
@@ -332,9 +316,7 @@ async fn apply_body_pipes(
             error = %nest_rs_core::error_message(&err),
             "global pipe: failed to re-serialize the transformed body",
         );
-        nest_rs_http::poem::Error::from_status(
-            nest_rs_http::poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-        )
+        poem::Error::from_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
     })?;
     req.set_body(Body::from_bytes(rewritten.into()));
     Ok(())
@@ -346,9 +328,9 @@ mod tests {
 
     use nest_rs_core::__private::take_site_refusal;
     use nest_rs_core::{Layer, LayerSite, LayerSpec};
-    use nest_rs_http::poem::Body;
-    use nest_rs_http::poem::http::StatusCode;
     use nest_rs_testing::LogCapture;
+    use poem::Body;
+    use poem::http::StatusCode;
 
     use super::*;
 
@@ -359,7 +341,7 @@ mod tests {
 
     static ROUTE: Handler =
         nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
-            unit: nest_rs_http::unit::REQUEST,
+            unit: crate::unit::REQUEST,
             host: TypeId::of::<Routes>(),
             host_name: "Routes",
             method: "route",
@@ -391,10 +373,10 @@ mod tests {
         ] {
             let logs = LogCapture::install();
             let container = Container::default();
-            let mut controller_guards: Vec<ScopedGuardSpec> = Vec::new();
-            let mut method_guards: Vec<ScopedGuardSpec> = Vec::new();
-            let mut controller_pipes: Vec<ScopedPipeSpec> = Vec::new();
-            let mut method_pipes: Vec<ScopedPipeSpec> = Vec::new();
+            let mut controller_guards: Vec<GuardSpec> = Vec::new();
+            let mut method_guards: Vec<GuardSpec> = Vec::new();
+            let mut controller_pipes: Vec<PipeSpec> = Vec::new();
+            let mut method_pipes: Vec<PipeSpec> = Vec::new();
             match slot {
                 Slot::ControllerGuard => controller_guards.push(unprovided()),
                 Slot::MethodGuard => method_guards.push(unprovided()),
@@ -404,9 +386,7 @@ mod tests {
 
             let route = wrap_route_shaper(
                 &container,
-                RouteEndpoint::Plain(nest_rs_http::poem::endpoint::make_sync(|_| {
-                    Response::builder().body("the handler ran")
-                })),
+                poem::endpoint::make_sync(|_| Response::builder().body("the handler ran")),
                 "get /x",
                 controller_guards,
                 method_guards,
@@ -415,6 +395,7 @@ mod tests {
                 method_pipes,
                 false,
                 Vec::new(),
+                true,
                 &ROUTE,
             );
             assert!(
@@ -473,7 +454,7 @@ mod tests {
             Err::<Vec<u8>, _>(std::io::Error::other("the client hung up mid-body"))
         });
         Request::builder()
-            .method(nest_rs_http::poem::http::Method::POST)
+            .method(poem::http::Method::POST)
             .uri("/things".parse().expect("a uri"))
             .content_type("application/json")
             .body(Body::from_bytes_stream(stream))
@@ -489,10 +470,7 @@ mod tests {
         let err = apply_body_pipes(&mut req, &pipe())
             .await
             .expect_err("a body that cannot be read is not a body the pipes ran on");
-        assert_eq!(
-            err.status(),
-            nest_rs_http::poem::http::StatusCode::BAD_REQUEST,
-        );
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST,);
 
         let event = logs.expect_one("nest_rs::layers", "global pipe: failed to read body");
         assert_eq!(event.level, "warn");
@@ -509,7 +487,7 @@ mod tests {
         // read-failure line.
         let logs = LogCapture::install();
         let mut req = Request::builder()
-            .method(nest_rs_http::poem::http::Method::POST)
+            .method(poem::http::Method::POST)
             .uri("/things".parse().expect("a uri"))
             .content_type("application/json")
             .body(Body::from_bytes(vec![b'x'; 64 * 1024 * 1024].into()));
@@ -517,10 +495,7 @@ mod tests {
         let err = apply_body_pipes(&mut req, &pipe())
             .await
             .expect_err("a body past the limit is refused");
-        assert_eq!(
-            err.status(),
-            nest_rs_http::poem::http::StatusCode::PAYLOAD_TOO_LARGE,
-        );
+        assert_eq!(err.status(), StatusCode::PAYLOAD_TOO_LARGE,);
         logs.expect_none("nest_rs::layers", "global pipe: failed to read body");
     }
 
@@ -536,9 +511,7 @@ mod tests {
         let container = Container::default();
         let route = wrap_route_shaper(
             &container,
-            RouteEndpoint::Plain(nest_rs_http::poem::endpoint::make_sync(|_| {
-                Response::builder().body("the handler ran")
-            })),
+            poem::endpoint::make_sync(|_| Response::builder().body("the handler ran")),
             "get /gated",
             Vec::new(),
             Vec::new(),
@@ -547,6 +520,7 @@ mod tests {
             Vec::new(),
             false,
             vec![refuse_unless_admitted as GateFn],
+            true,
             &ROUTE,
         );
         assert!(

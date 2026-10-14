@@ -128,7 +128,7 @@ pub use nest_rs_worker as worker;
 /// HTTP-API case.
 pub mod prelude {
     pub use nest_rs_core::{
-        App, AppBuilder, Container, ContainerBuilder, Module, hooks, injectable, module,
+        App, AppBuilder, Container, ContainerBuilder, Module, Reflector, hooks, injectable, module,
     };
 
     // Outside every edge's feature: a headless worker needs `#[input]` too.
@@ -136,8 +136,8 @@ pub mod prelude {
 
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
-        ClientIp, Ctx, HttpConfig, HttpModule, RawBody, Reflector, Scoped, Valid, controller,
-        http_code, interceptor, redirect, response_header, routes,
+        ClientIp, Ctx, HttpConfig, HttpModule, RawBody, Scoped, Valid, controller, http_code,
+        interceptor, redirect, response_header, routes,
     };
 
     // poem's extractors until the HTTP edge's API stops naming poem

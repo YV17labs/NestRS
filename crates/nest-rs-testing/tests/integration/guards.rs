@@ -3,12 +3,12 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::HandlerMetadata;
-use nest_rs_http::{Ctx, Reflector, async_trait, controller, routes};
+use nest_rs_core::{AmbientValue, Layer, injectable, module};
+use nest_rs_graphql::async_graphql::Result as GqlResult;
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::{Ctx, HttpView, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
-use poem::Request;
 use poem::http::StatusCode;
 use tokio::sync::Mutex;
 
@@ -23,12 +23,15 @@ impl Layer for DenyGuard {}
 
 #[async_trait]
 impl Guard for DenyGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
     }
 }
 
-impl HttpGuard for DenyGuard {}
+impl GuardFor<HttpView> for DenyGuard {}
 
 /// Denies with `401 Unauthorized` — paired with [`DenyGuard`] to observe order.
 #[injectable]
@@ -39,12 +42,15 @@ impl Layer for ChallengeGuard {}
 
 #[async_trait]
 impl Guard for ChallengeGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::unauthorized("unauthorized"))
     }
 }
 
-impl HttpGuard for ChallengeGuard {}
+impl GuardFor<HttpView> for ChallengeGuard {}
 
 #[controller(path = "/h")]
 struct HandlerScope;
@@ -175,13 +181,16 @@ impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         COUNTER.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl HttpGuard for CountingGuard {}
+impl GuardFor<HttpView> for CountingGuard {}
 
 #[controller(path = "/dedup")]
 #[use_guards(CountingGuard)]
@@ -300,8 +309,8 @@ async fn the_first_listed_guard_runs_before_the_second() {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
-// The framework never skips a guard for `#[public]`: a guard reads the marker
-// (`Reflector::is_public`) and decides what public means for it.
+// The framework never skips a guard for `#[public]`: a guard reads the posture
+// (`cx.reflector().is_public()`) and decides what public means for it.
 
 /// Denies every request *unless* the route is `#[public]`, in which case it
 /// admits with no principal — the `AuthnGuard` posture, distilled.
@@ -313,15 +322,18 @@ impl Layer for PublicAwareGuard {}
 
 #[async_trait]
 impl Guard for PublicAwareGuard {
-    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
-        if Reflector::new(req).is_public() {
+    async fn check_http(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        if cx.reflector().is_public() {
             return Ok(());
         }
         Err(Denial::forbidden("forbidden"))
     }
 }
 
-impl HttpGuard for PublicAwareGuard {}
+impl GuardFor<HttpView> for PublicAwareGuard {}
 
 #[controller(path = "/pub")]
 struct PublicScope;
@@ -368,45 +380,50 @@ async fn a_public_route_bypasses_an_active_global_guard() {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Principal(String);
+struct Tenant(String);
 
-/// Reads `x-user` (defaulting to `anon`) and attaches it as a `Principal` for
-/// the handler to read back through `Ctx<Principal>`.
+impl AmbientValue for Tenant {}
+
+/// Reads `x-tenant` (defaulting to `anon`) and attaches it as a `Tenant` for
+/// the rest of the request: a route handler reads it through `Ctx<Tenant>`, a
+/// resolver from the ambient context.
 #[injectable]
 #[derive(Default)]
-struct AttachPrincipalGuard;
+struct TenantGuard;
 
-impl Layer for AttachPrincipalGuard {}
+impl Layer for TenantGuard {}
 
 #[async_trait]
-impl Guard for AttachPrincipalGuard {
-    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
-        let who = req
-            .headers()
-            .get("x-user")
-            .and_then(|v| v.to_str().ok())
+impl Guard for TenantGuard {
+    async fn check_http(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        let tenant = HttpView::of(cx)?
+            .request()
+            .header("x-tenant")
             .unwrap_or("anon")
             .to_owned();
-        req.extensions_mut().insert(Principal(who));
+        cx.attach(Tenant(tenant));
         Ok(())
     }
 }
 
-impl HttpGuard for AttachPrincipalGuard {}
+impl GuardFor<HttpView> for TenantGuard {}
 
 #[controller(path = "/ctx")]
-#[use_guards(AttachPrincipalGuard)]
+#[use_guards(TenantGuard)]
 struct CtxScope;
 
 #[routes]
 impl CtxScope {
     #[get("/whoami")]
-    async fn whoami(&self, principal: Ctx<Principal>) -> String {
-        principal.into_inner().0
+    async fn whoami(&self, tenant: Ctx<Tenant>) -> String {
+        tenant.into_inner().0
     }
 }
 
-#[module(providers = [AttachPrincipalGuard, CtxScope])]
+#[module(providers = [TenantGuard, CtxScope])]
 struct CtxModule;
 
 #[tokio::test]
@@ -416,15 +433,56 @@ async fn a_guard_attached_context_is_read_back_by_the_handler() {
     let resp = app
         .http()
         .get("/ctx/whoami")
-        .header("x-user", "alice")
+        .header("x-tenant", "acme")
         .send()
         .await;
     resp.assert_status_is_ok();
-    resp.assert_text("alice").await;
+    resp.assert_text("acme").await;
 
     let anon = app.http().get("/ctx/whoami").send().await;
     anon.assert_status_is_ok();
     anon.assert_text("anon").await;
+}
+
+#[resolver]
+struct TenantResolver;
+
+#[operations]
+impl TenantResolver {
+    #[query]
+    #[public]
+    async fn tenant(&self) -> GqlResult<String> {
+        Ok(nest_rs_core::ambient::<Tenant>().map_or_else(String::new, |tenant| tenant.0.clone()))
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [TenantGuard, TenantResolver],
+)]
+struct TenantGraphqlModule;
+
+/// The `/graphql` request runs the pool once, in band; what it attached is
+/// ambient for every field the request resolves.
+#[tokio::test]
+async fn a_guard_attached_context_on_the_graphql_request_is_read_by_a_resolver() {
+    let app = TestApp::builder()
+        .module::<TenantGraphqlModule>()
+        .use_guards_global([guard::<TenantGuard>()])
+        .build()
+        .await
+        .expect("a resolver under a pooled guard boots");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .header("x-tenant", "acme")
+        .body_json(&serde_json::json!({ "query": "{ tenant }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("a body");
+    assert!(body.contains(r#""tenant":"acme""#), "{body}");
 }
 
 #[controller(path = "/ctx-bare")]
@@ -433,8 +491,8 @@ struct CtxUnguarded;
 #[routes]
 impl CtxUnguarded {
     #[get("/whoami")]
-    async fn bare_whoami(&self, principal: Ctx<Principal>) -> String {
-        principal.into_inner().0
+    async fn bare_whoami(&self, tenant: Ctx<Tenant>) -> String {
+        tenant.into_inner().0
     }
 }
 
@@ -451,7 +509,7 @@ async fn a_missing_context_is_a_bare_500_without_leaking_the_rust_type() {
     resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
-        !body.contains("Principal"),
+        !body.contains("Tenant"),
         "the response body must not leak the context type name: {body:?}"
     );
 }
@@ -469,12 +527,15 @@ impl Guard for SessionGuard {
         nest_rs_guards::GuardPhase::Authentication
     }
 
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for SessionGuard {}
+impl GuardFor<HttpView> for SessionGuard {}
 
 /// Reads the principal: an authorization-phase guard.
 #[injectable]
@@ -489,12 +550,15 @@ impl Guard for PolicyGuard {
         nest_rs_guards::GuardPhase::Authorization
     }
 
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for PolicyGuard {}
+impl GuardFor<HttpView> for PolicyGuard {}
 
 #[controller(path = "/misordered")]
 struct MisorderedScope;
@@ -563,13 +627,16 @@ impl Guard for FreshSessionGuard {
         nest_rs_guards::GuardPhase::Authentication
     }
 
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         FRESH_SESSION_RUNS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl HttpGuard for FreshSessionGuard {}
+impl GuardFor<HttpView> for FreshSessionGuard {}
 
 #[controller(path = "/replayed")]
 struct ReplayedScope;

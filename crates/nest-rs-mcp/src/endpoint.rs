@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Container, Correlation, current_request_scope};
-use nest_rs_http::__private::OriginPolicy;
+use nest_rs_core::{Container, Correlation, Handler, current_request_scope};
 use nest_rs_http::__private::poem_bridge::response_to_poem;
+use nest_rs_http::__private::{OriginPolicy, attached_pending};
 use nest_rs_http::DetachedWork;
 use nest_rs_http::ResponseError as _;
 use poem::endpoint::TowerCompatExt;
@@ -16,27 +16,28 @@ use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
 use crate::config::McpConfig;
 use crate::context::{McpAmbient, McpToolContext};
-use crate::guard::{FallbackMcpGuard, McpOperationGuard};
-use crate::guards::deny_all;
+use crate::guard::McpOperationGuard;
+use crate::guards::{GlobalPoolMcpGuard, deny_all};
 use crate::propagate::PropagatingHandler;
+use crate::registry::ENDPOINT;
+use nest_rs_guards::__private::global_guards_active;
 
-/// The operation guard an MCP mount runs: the global guard pool, through its
-/// fallback slot, with the app's registered `dyn McpOperationGuard` (the authz
-/// bridge) added to it; the registered guard alone when the pool is empty; else
-/// deny-all.
+/// The operation guard an MCP mount runs: the global guard pool, with the
+/// app's registered `dyn McpOperationGuard` (the authz bridge) added to it; the
+/// registered guard alone when the app lists no pool; else deny-all.
 pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGuard> {
     let bridge = container.get_dyn::<dyn McpOperationGuard>();
-    match (container.get::<FallbackMcpGuard>(), bridge) {
-        (Some(pool), bridge) => {
+    match (global_guards_active(container), bridge) {
+        (true, bridge) => {
             tracing::debug!(
                 target: crate::TARGET,
                 mode = "global_guard_pool",
                 bridge = bridge.is_some(),
                 "mcp operations gated",
             );
-            (pool.0)(container, bridge)
+            Arc::new(GlobalPoolMcpGuard::new(container, bridge))
         }
-        (None, Some(bridge)) => {
+        (false, Some(bridge)) => {
             tracing::debug!(
                 target: crate::TARGET,
                 mode = "operation_guard",
@@ -45,7 +46,7 @@ pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGua
             bridge
         }
         // `deny_all` says the fail-closed posture itself, at `warn`.
-        (None, None) => deny_all(),
+        (false, None) => deny_all(),
     }
 }
 
@@ -61,6 +62,8 @@ pub struct McpMount {
     /// Told and stopped by the HTTP transport; a hand-built [`endpoint`]'s is never
     /// told, so its operations end only with their clients' cancellations.
     detached: DetachedWork,
+    /// The site the endpoint's requests run as.
+    site: &'static Handler,
 }
 
 impl McpMount {
@@ -75,6 +78,7 @@ impl McpMount {
             config: McpConfig::default(),
             session_store: None,
             detached: DetachedWork::new(),
+            site: &ENDPOINT,
         }
     }
 
@@ -123,6 +127,7 @@ impl McpMount {
             config,
             session_store: container.get_dyn::<dyn SessionStore>(),
             detached: DetachedWork::new(),
+            site: &ENDPOINT,
         }
     }
 
@@ -131,6 +136,13 @@ impl McpMount {
     /// [`HttpEndpointMeta`](nest_rs_http::HttpEndpointMeta).
     pub(crate) fn stopped_with(mut self, work: DetachedWork) -> Self {
         self.detached = work;
+        self
+    }
+
+    /// Run the endpoint's requests as `site`, the one `#[mcp]` declared for its
+    /// path.
+    pub(crate) fn running_as(mut self, site: &'static Handler) -> Self {
+        self.site = site;
         self
     }
 
@@ -157,6 +169,7 @@ where
         config,
         session_store,
         detached,
+        site,
     } = mount;
 
     let handler_context = context.clone();
@@ -188,6 +201,7 @@ where
             origins,
             guard,
             context,
+            site: EndpointSite(site),
             inner,
         }),
     )
@@ -197,7 +211,21 @@ struct GuardedEndpoint<E> {
     origins: OriginPolicy,
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
+    site: EndpointSite,
     inner: E,
+}
+
+/// The site an endpoint's request runs as, on the request for the guards that
+/// run it ([`endpoint_site`]).
+#[derive(Clone, Copy)]
+struct EndpointSite(&'static Handler);
+
+/// The site the MCP endpoint `req` reached runs its requests as: the one its
+/// path declares, [`ENDPOINT`] for a request no endpoint marked.
+pub fn endpoint_site(req: &Request) -> &'static Handler {
+    req.extensions()
+        .get::<EndpointSite>()
+        .map_or(&ENDPOINT, |site| site.0)
 }
 
 impl<E> Endpoint for GuardedEndpoint<E>
@@ -216,6 +244,7 @@ where
             );
             return Ok(response_to_poem(refused.as_response()));
         }
+        req.extensions_mut().insert(self.site);
         self.guard.before(&mut req).await?;
 
         // Post-guard, while the ambient executor and ability are reachable; rmcp
@@ -227,10 +256,14 @@ where
         let captured = self.context.as_ref().map(|context| context.capture(&req));
         // Post-`before`, so the guard sees the ability its chain attached.
         let guard_captured = self.guard.capture(&req);
+        // What the request's guards attached, re-installed around each
+        // operation on rmcp's own task, which no ambient context reaches.
+        let attached = attached_pending(&req);
         req.extensions_mut().insert(McpAmbient {
             scope: scope.clone(),
             captured,
             guard_captured,
+            attached,
             // The request's own span: the interceptor band is the outermost wrap.
             span: tracing::Span::current(),
             correlation: correlation.clone(),

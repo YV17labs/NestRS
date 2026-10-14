@@ -8,7 +8,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use nest_rs_core::Container;
+use nest_rs_core::{Container, Handler, Posture};
 use poem::Route;
 
 use crate::detached::DetachedWork;
@@ -160,42 +160,34 @@ impl<E: Endpoint, T: Clone + Send + Sync + 'static> Endpoint for WithData<E, T> 
 
 type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
 
-/// How a self-mounted endpoint relates to the global guard pool. A self-mount
-/// has no route shaper, so the default, [`Guarded`](EdgePosture::Guarded), runs
-/// the global guard chain at its edge.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub enum EdgePosture {
-    /// Run the global guard chain at the HTTP edge; a denial rejects the
-    /// request (e.g. a WS upgrade GET — an unauthenticated upgrade is refused).
-    #[default]
-    Guarded,
-    /// Skip the global edge guard — this surface gates **in-band** (GraphQL
-    /// per operation, MCP per request) or is intentionally anonymous (the
-    /// OpenAPI document / UI), and must stay fail-secure through its own seam.
-    Exempt,
-}
-
 /// Discovery metadata for a self-mounting HTTP endpoint owned by another
 /// surface (a GraphQL schema, an MCP streamable-HTTP service). The closure
 /// nests one opaque sub-endpoint at its own path.
+///
+/// Its [`Handler`] declares who may call it. The transport runs the global
+/// guard pool at the edge of a [`Gated`](Posture::Gated) one before the
+/// surface sees the request; a [`Public`](Posture::Public) one (the OpenAPI
+/// document) runs none, and an [`InBand`](Posture::InBand) one (`/graphql`)
+/// runs the pool itself, its operations each gated by their own posture.
 pub struct HttpEndpointMeta {
     path: Cow<'static, str>,
     also: Vec<Cow<'static, str>>,
     label: Cow<'static, str>,
     owner: Option<Cow<'static, str>>,
-    posture: EdgePosture,
+    handler: &'static Handler,
+    in_band: bool,
     self_guarded: bool,
     detached: Option<DetachedWork>,
     mount: Arc<MountFn>,
 }
 
 impl HttpEndpointMeta {
-    /// Declare a self-mount at `path`, [`EdgePosture::Guarded`] until
-    /// [`Self::exempt`]; `path` and `label` may be owned, read from config.
-    /// The surface answers under `path` whole, so it is one literal address:
-    /// a template fails the boot, naming the owner.
+    /// Declare a self-mount at `path`, its posture the one `handler` declares;
+    /// `path` and `label` may be owned, read from config. The surface answers
+    /// under `path` whole, so it is one literal address: a template fails the
+    /// boot, naming the owner.
     pub fn new<F>(
+        handler: &'static Handler,
         path: impl Into<Cow<'static, str>>,
         label: impl Into<Cow<'static, str>>,
         mount: F,
@@ -210,7 +202,8 @@ impl HttpEndpointMeta {
             also: Vec::new(),
             label: label.into(),
             owner: None,
-            posture: EdgePosture::Guarded,
+            handler,
+            in_band: false,
             self_guarded: false,
             detached: None,
             mount: Arc::new(mount),
@@ -240,13 +233,6 @@ impl HttpEndpointMeta {
     /// whatever [`also_mounts`](Self::also_mounts) declared.
     pub fn paths(&self) -> impl Iterator<Item = &str> {
         std::iter::once(self.path.as_ref()).chain(self.also.iter().map(Cow::as_ref))
-    }
-
-    /// Mark this self-mount [`EdgePosture::Exempt`] — the transport skips the
-    /// global edge guard (the surface gates in-band, or is public).
-    pub fn exempt(mut self) -> Self {
-        self.posture = EdgePosture::Exempt;
-        self
     }
 
     /// Name the type that owns this mount (`ChatGateway`, `PostsTools`), which a
@@ -298,17 +284,23 @@ impl HttpEndpointMeta {
         self.owner.as_deref().unwrap_or(&self.label)
     }
 
-    /// This self-mount's edge posture — whether the transport runs the global
-    /// guard chain at its edge or leaves it to gate in-band.
-    pub fn posture(&self) -> EdgePosture {
-        self.posture
+    /// The dispatch site this surface's requests run as: its posture, and the
+    /// metadata a guard reads.
+    pub fn handler(&self) -> &'static Handler {
+        self.handler
     }
 
-    /// Whether the self-mount's edge access is **implicit**: it is
-    /// [`Guarded`](EdgePosture::Guarded), declared no guards of its own, and no
-    /// global guard pool is active. The transport warns on these at boot.
+    /// Whether the transport runs the global guard pool at this surface's
+    /// edge: a [`Gated`](Posture::Gated) surface that does not run it itself.
+    pub fn guarded_at_the_edge(&self) -> bool {
+        self.handler.posture() == Posture::Gated && !self.in_band
+    }
+
+    /// Whether the self-mount's edge access is **implicit**: guarded at the
+    /// edge, declaring no guards of its own, and no global guard pool is
+    /// active. The transport warns on these at boot.
     pub fn edge_access_is_implicit(&self, global_guards: bool) -> bool {
-        !global_guards && !self.self_guarded && self.posture == EdgePosture::Guarded
+        !global_guards && !self.self_guarded && self.guarded_at_the_edge()
     }
 
     /// Mount this surface onto `route`, resolving its dependencies from
@@ -318,29 +310,12 @@ impl HttpEndpointMeta {
     }
 }
 
-type PoemBoxEndpoint = poem::endpoint::BoxEndpoint<'static, poem::Response>;
-
-type GuardWrapFn = dyn Fn(&Container, PoemBoxEndpoint) -> PoemBoxEndpoint + Send + Sync;
-
-/// Discovery metadata that wraps a single [`EdgePosture::Guarded`] self-mount
-/// with the global guard chain, provided by `nest-rs-guards`'
-/// `use_guards_global`. Absent when no global guard is registered.
-pub struct SelfMountGuardWrap(Arc<GuardWrapFn>);
-
-impl SelfMountGuardWrap {
-    /// Wrap a guarded self-mount's endpoint in the global guard chain.
-    pub fn new<F>(wrap: F) -> Self
-    where
-        F: Fn(&Container, PoemBoxEndpoint) -> PoemBoxEndpoint + Send + Sync + 'static,
-    {
-        Self(Arc::new(wrap))
-    }
-
-    /// Wrap `endpoint` with the global guard chain — a denial rejects the
-    /// request at this self-mount's edge.
-    pub fn apply(&self, container: &Container, endpoint: PoemBoxEndpoint) -> PoemBoxEndpoint {
-        (self.0)(container, endpoint)
-    }
+/// `meta` as a [`Gated`](Posture::Gated) surface that runs the global guard
+/// pool at its own request, beside guards of its own, rather than at the
+/// transport's edge (`/mcp`).
+pub fn guards_in_band(mut meta: HttpEndpointMeta) -> HttpEndpointMeta {
+    meta.in_band = true;
+    meta
 }
 
 #[cfg(test)]
@@ -385,23 +360,49 @@ mod tests {
         assert_eq!(refused.status(), http::StatusCode::FORBIDDEN);
     }
 
-    fn meta() -> HttpEndpointMeta {
-        HttpEndpointMeta::new("/ws", "ws", |_c, r| r)
-    }
+    struct Mounts;
+
+    static UPGRADE: Handler =
+        nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
+            unit: crate::unit::REQUEST,
+            host: std::any::TypeId::of::<Mounts>(),
+            host_name: "Mounts",
+            method: "",
+            address: "/ws",
+            posture: Posture::Gated,
+            meta: nest_rs_core::__private::MetaLevels::default,
+        });
+
+    static DOCUMENT: Handler =
+        nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
+            unit: crate::unit::REQUEST,
+            host: std::any::TypeId::of::<Mounts>(),
+            host_name: "Mounts",
+            method: "",
+            address: "/api",
+            posture: Posture::Public,
+            meta: nest_rs_core::__private::MetaLevels::default,
+        });
 
     #[test]
-    fn a_guarded_edge_is_implicit_only_without_a_global_pool() {
-        let m = meta();
-        assert_eq!(m.posture(), EdgePosture::Guarded);
+    fn a_gated_edge_is_implicit_only_without_a_global_pool() {
+        let m = HttpEndpointMeta::new(&UPGRADE, "/ws", "ws", |_c, r| r);
+        assert!(m.guarded_at_the_edge());
         assert!(m.edge_access_is_implicit(false));
         assert!(!m.edge_access_is_implicit(true));
+        assert!(
+            !m.self_guarded().edge_access_is_implicit(false),
+            "a surface binding guards of its own is not implicit",
+        );
     }
 
     #[test]
-    fn an_exempt_edge_is_never_implicit() {
-        let m = meta().exempt();
-        assert_eq!(m.posture(), EdgePosture::Exempt);
-        assert!(!m.edge_access_is_implicit(false));
-        assert!(!m.edge_access_is_implicit(true));
+    fn a_public_or_in_band_edge_is_never_implicit() {
+        let public = HttpEndpointMeta::new(&DOCUMENT, "/api", "openapi", |_c, r| r);
+        assert!(!public.guarded_at_the_edge());
+        assert!(!public.edge_access_is_implicit(false));
+        let in_band = guards_in_band(HttpEndpointMeta::new(&UPGRADE, "/mcp", "mcp", |_c, r| r));
+        assert!(!in_band.guarded_at_the_edge());
+        assert!(!in_band.edge_access_is_implicit(false));
     }
 }

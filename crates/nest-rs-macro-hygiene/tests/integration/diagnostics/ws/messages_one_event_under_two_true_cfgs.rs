@@ -3,9 +3,9 @@
 //! disagree on the winner: the `match` keeps the first method, the chain table
 //! keeps the second method's guards, so the first ran under the second's chain.
 
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, WsGuard, async_trait};
-use nest_rs::ws::{WsClient, gateway, messages};
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::ws::{WsView, gateway, messages};
 
 #[injectable]
 #[derive(Default)]
@@ -15,17 +15,12 @@ impl Layer for Deny {}
 
 #[async_trait]
 impl Guard for Deny {
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        _event: &str,
-        _data: &nest_rs::ws::serde_json::Value,
-    ) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("never"))
     }
 }
 
-impl WsGuard for Deny {}
+impl GuardFor<WsView> for Deny {}
 
 #[gateway(path = "/ws")]
 struct DemoGateway;

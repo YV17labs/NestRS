@@ -7,8 +7,9 @@
 //! primitive for a hand-written `ServerHandler` surface, which no decorator
 //! reaches.
 
-use nest_rs_guards::{Denial, denial_to_mcp_error};
+use nest_rs_guards::Denial;
 use nest_rs_mcp::McpError;
+use nest_rs_mcp::denial_to_mcp_error;
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;

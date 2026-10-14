@@ -1,18 +1,15 @@
 //! The resolver gate end-to-end through the in-band path: `GraphqlAbilityBridge`
 //! builds the ability per operation and `#[authorize(Read, …)]` admits or rejects
-//! by role. `/graphql` is `EdgePosture::Exempt`, so the bridge is the only
+//! by role. `/graphql` is an `InBand` mount, so the bridge is the only
 //! execution site.
-
-use std::sync::Arc;
 
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
 use nest_rs_testing::TestApp;
 
 use super::query;
@@ -60,11 +57,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let role = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let role = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .map(str::to_owned);
         let mut b = AbilityBuilder::new();
         let ability = match role.as_deref() {
@@ -79,15 +75,14 @@ impl Guard for AbilityInjector {
             }
             Some(_) => b.build(),
         };
-        req.extensions_mut()
-            .insert(Arc::new(ability.expect("valid test ability")));
+        cx.attach(ability.expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
-impl HttpGuard for PassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 
 impl nest_rs_authz::WireModelDefaults for widget::Entity {}
 

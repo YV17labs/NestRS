@@ -120,11 +120,13 @@ pub(crate) struct EchoSocket;
 impl nest_rs_core::Discoverable for EchoSocket {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<EchoSocket, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/socket", "echo", |_container, route: Route| {
-                route.at("/socket", poem::get(echo))
-            })
-            .owned_by("EchoSocket")
-            .exempt(),
+            HttpEndpointMeta::new(
+                &crate::PUBLIC_MOUNT,
+                "/socket",
+                "echo",
+                |_container, route: Route| route.at("/socket", poem::get(echo)),
+            )
+            .owned_by("EchoSocket"),
         )
     }
 }
@@ -596,23 +598,27 @@ async fn an_idle_connection_is_closed_at_the_signal_without_spending_the_window(
 fn stuck_mount(path: &'static str, owner: &'static str) -> HttpEndpointMeta {
     let work = DetachedWork::new();
     let carried = work.clone();
-    HttpEndpointMeta::new(path, "probe", move |_container, route: Route| {
-        let work = carried.clone();
-        route.at(
-            path,
-            poem::endpoint::make(move |_| {
-                let work = work.clone();
-                async move {
-                    let mut unit = Box::pin(work.run(std::future::pending::<()>()));
-                    assert!(futures_util::poll!(unit.as_mut()).is_pending());
-                    std::mem::forget(unit);
-                    "started"
-                }
-            }),
-        )
-    })
+    HttpEndpointMeta::new(
+        &crate::PUBLIC_MOUNT,
+        path,
+        "probe",
+        move |_container, route: Route| {
+            let work = carried.clone();
+            route.at(
+                path,
+                poem::endpoint::make(move |_| {
+                    let work = work.clone();
+                    async move {
+                        let mut unit = Box::pin(work.run(std::future::pending::<()>()));
+                        assert!(futures_util::poll!(unit.as_mut()).is_pending());
+                        std::mem::forget(unit);
+                        "started"
+                    }
+                }),
+            )
+        },
+    )
     .owned_by(owner)
-    .exempt()
     .runs_detached(work)
 }
 

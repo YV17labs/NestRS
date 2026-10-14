@@ -1,6 +1,6 @@
 //! Per-request [`Ability`] bridge into the GraphQL context. The auth guard
-//! chain on `/graphql` stores it on the poem request; the seed forwards it
-//! into every GraphQL operation's context.
+//! chain on `/graphql` attaches it; the seed forwards it into every GraphQL
+//! operation's context.
 
 use std::sync::Arc;
 
@@ -19,8 +19,8 @@ nest_rs_core::inventory::submit! {
         owner_type_id: || None,
         // The ability is the caller's, so it lives as long as the connection.
         lifetime: SeedLifetime::Connection,
-        seed: |req, _container, gql| match req.extensions().get::<Arc<Ability>>() {
-            Some(ability) => gql.data(ability.clone()),
+        seed: |_req, _container, gql| match crate::current_ability() {
+            Some(ability) => gql.data(ability),
             None => gql,
         },
     }
@@ -60,10 +60,10 @@ pub(crate) fn forbidden_fields(fields: &[String]) -> Error {
 /// with the scopes to ask the authorization server for in `requiredScopes`.
 ///
 /// Distinct from [`forbidden`] as RFC 6750 §3.1 separates them: this one is
-/// actionable. Rendered by `nest_rs_guards::denial_to_graphql_error`, so a gate's
+/// actionable. Rendered by `nest_rs_graphql::denial_to_graphql_error`, so a gate's
 /// refusal and a guard's read identically on the wire.
 pub(crate) fn insufficient_scope(required: &[String]) -> Error {
-    nest_rs_guards::denial_to_graphql_error(Denial::insufficient_scope(
+    nest_rs_graphql::denial_to_graphql_error(Denial::insufficient_scope(
         required.to_vec(),
         "insufficient_scope",
     ))
@@ -71,7 +71,7 @@ pub(crate) fn insufficient_scope(required: &[String]) -> Error {
 
 /// A GraphQL `unauthenticated` error — the anonymous caller's answer to a
 /// gated operation. Code `UNAUTHENTICATED`, the same one
-/// `nest_rs_guards::denial_to_graphql_error` gives a `401` denial, so a client
+/// `nest_rs_graphql::denial_to_graphql_error` gives a `401` denial, so a client
 /// reads one code for "log in" whichever layer refused.
 pub(crate) fn unauthenticated() -> Error {
     nest_rs_graphql::problem_error(&Problem::new(401, code::UNAUTHENTICATED))

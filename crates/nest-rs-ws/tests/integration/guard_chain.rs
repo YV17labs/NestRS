@@ -1,16 +1,17 @@
 //! Boot-time phase validation of a gateway's **upgrade** chain. The per-message
-//! chains are not validated: they run `check_ws_message`, where the principal
-//! contract this check reads does not hold.
+//! chains are not validated: they run `check`, where the principal contract
+//! this check reads does not hold.
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardPhase, HttpGuard, PrincipalClaim, WsGuard};
+use nest_rs_core::{AmbientValue, Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_testing::TestApp;
-use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
 use nest_rs_ws::{WsClient, WsConfig, WsModule, async_trait, gateway, messages};
 
 /// What the authentication guard attaches and the authorization guard reads.
 #[derive(Clone)]
 struct Caller;
+
+impl AmbientValue for Caller {}
 
 #[injectable]
 #[derive(Default)]
@@ -28,14 +29,14 @@ impl Guard for Authenticate {
         Some(PrincipalClaim::of::<Caller>())
     }
 
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        req.extensions_mut().insert(Caller);
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(Caller);
         Ok(())
     }
 }
 
-impl HttpGuard for Authenticate {}
-impl WsGuard for Authenticate {}
+impl GuardFor<nest_rs_http::HttpView> for Authenticate {}
+impl GuardFor<nest_rs_ws::WsView> for Authenticate {}
 
 #[injectable]
 #[derive(Default)]
@@ -54,8 +55,8 @@ impl Guard for Authorize {
     }
 }
 
-impl HttpGuard for Authorize {}
-impl WsGuard for Authorize {}
+impl GuardFor<nest_rs_http::HttpView> for Authorize {}
+impl GuardFor<nest_rs_ws::WsView> for Authorize {}
 
 /// The path carries no word the assertions below look for, so they cannot pass
 /// on the path alone.
@@ -152,8 +153,8 @@ impl Layer for Unprovided {}
 #[async_trait]
 impl Guard for Unprovided {}
 
-impl HttpGuard for Unprovided {}
-impl WsGuard for Unprovided {}
+impl GuardFor<nest_rs_http::HttpView> for Unprovided {}
+impl GuardFor<nest_rs_ws::WsView> for Unprovided {}
 
 #[gateway(path = "/ws/unprovided")]
 struct UnprovidedGateway;

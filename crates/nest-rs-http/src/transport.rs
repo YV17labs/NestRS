@@ -12,12 +12,13 @@ use poem::middleware::{Compression, Cors};
 use poem::{EndpointExt, Response, Route};
 use tokio_util::sync::CancellationToken;
 
-use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
+use crate::boot_check::HttpBootCheck;
 use crate::controller::HttpControllerMeta;
 use crate::detached::DetachedWork;
 use crate::drain::Drain;
-use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
+use crate::endpoint::HttpEndpointMeta;
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
+use crate::guard_stage::GuardedEndpoint;
 use crate::interceptor::HttpEndpointWrap;
 use crate::route_template::RouteTemplate;
 use crate::server::Server;
@@ -349,7 +350,7 @@ impl Transport for HttpTransport {
         }
         let mut route = Route::new();
 
-        let global_guards = container.get::<GlobalGuardsActive>().is_some();
+        let global_guards = nest_rs_guards::__private::global_guards_active(container);
         let mut unguarded: Vec<String> = Vec::new();
         let mut prefix_owner: HashMap<String, String> = HashMap::new();
         // Routes mount flat (`<prefix>/<path>`), so distinct prefixes can still
@@ -465,13 +466,10 @@ impl Transport for HttpTransport {
                 "unguarded routes detected",
             );
         }
-        // Absent without a global guard pool. A `Guarded` self-mount has no route
-        // shaper, so the transport runs the pool at its edge.
-        let self_mount_guard = discovery
-            .meta::<SelfMountGuardWrap>()
-            .into_iter()
-            .next()
-            .map(|d| d.meta);
+        // Empty without a global guard pool. A self-mount guarded at the edge
+        // has no route shaper, so the transport runs the pool there.
+        let edge_pool =
+            nest_rs_guards::__private::resolve_global_chain(container, "self-mount edge");
         // A warning, not a fail-secure stop: a gateway may bind its own
         // `#[use_guards]` inside its opaque mount closure.
         let mut unguarded_edges: Vec<String> = Vec::new();
@@ -530,18 +528,16 @@ impl Transport for HttpTransport {
             if d.meta.edge_access_is_implicit(global_guards) {
                 unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
             }
-            match (d.meta.posture(), &self_mount_guard) {
-                (EdgePosture::Guarded, Some(wrap)) => {
-                    // `nest_no_strip`: the isolated sub-route matches its own full path.
-                    let isolated: BoxEndpoint<'static, Response> =
-                        d.meta.mount(container, Route::new()).boxed();
-                    let wrapped = wrap.apply(container, isolated);
-                    route = route.nest_no_strip(d.meta.path(), wrapped);
-                }
-                _ => {
-                    // `Exempt`: gated in band (GraphQL, MCP) or public by design (OpenAPI).
-                    route = d.meta.mount(container, route);
-                }
+            if d.meta.guarded_at_the_edge() && !edge_pool.is_empty() {
+                // `nest_no_strip`: the isolated sub-route matches its own full path.
+                let isolated: BoxEndpoint<'static, Response> =
+                    d.meta.mount(container, Route::new()).boxed();
+                let guarded = GuardedEndpoint::new(d.meta.handler(), edge_pool.clone(), isolated);
+                route = route.nest_no_strip(d.meta.path(), guarded);
+            } else {
+                // Gated in band (GraphQL, MCP), public by design (OpenAPI), or
+                // no pool to run.
+                route = d.meta.mount(container, route);
             }
         }
         if !unguarded_edges.is_empty() {

@@ -5,6 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::future::Either;
 use futures_util::{SinkExt, StreamExt};
+use nest_rs_core::__private::install_pending;
 use nest_rs_core::{
     Container, Continuation, Correlation, RequestContinuation, RequestScope, operation_log,
 };
@@ -70,8 +71,8 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
     }
 }
 
-/// The endpoint returned by [`gateway_endpoint`], holding the gateway's own
-/// [`WsServer<N>`].
+/// The endpoint `#[messages]` mounts a gateway's upgrade at, holding the
+/// gateway's own [`WsServer<N>`].
 pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
@@ -710,21 +711,22 @@ async fn handle_text<G: Gateway>(
             ));
         }
     };
-    let WsEnvelope { event, mut data } = envelope;
+    let WsEnvelope { event, data } = envelope;
     let event_ref = event.clone();
     let conn_id = client.id();
     let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
-        // The guard bridge filed the denial while it still held it.
-        if let Err(frame) = guards.check(client, &event_ref, &data).await {
-            return WsReply::Error(frame);
-        }
+        // The chain filed the denial while it still held it.
+        let (attached, mut data) = match guards.check(client, &event_ref, data).await {
+            Ok(admitted) => admitted,
+            Err(frame) => return WsReply::Error(frame),
+        };
         // Guards see the raw value; global data pipes run after them.
         for pipe in wiring.pipes.iter() {
             if let Err(err) = pipe.transform_ws_data(&event_ref, &mut data) {
                 return WsReply::pipe_error(&event_ref, "data", err);
             }
         }
-        gateway.dispatch(client, &event_ref, data).await
+        install_pending(attached, gateway.dispatch(client, &event_ref, data)).await
     });
     let dispatch: BoxFuture<'_, WsReply> = match wiring.ambient.as_ref() {
         Some((ctx, captured)) => ctx.around(captured, inner),
@@ -804,7 +806,6 @@ mod tests {
     use std::any::TypeId;
 
     use super::*;
-    use crate::guard::WsMessageCheck;
 
     #[tokio::test]
     async fn a_writer_that_panicked_is_said_once_without_its_value() {
@@ -911,24 +912,32 @@ mod tests {
 
     struct DenyAll;
 
+    impl nest_rs_core::Layer for DenyAll {}
+
     #[async_trait]
-    impl WsMessageCheck for DenyAll {
+    impl nest_rs_guards::Guard for DenyAll {
         async fn check(
             &self,
-            _client: &WsClient,
-            _event: &str,
-            _data: &serde_json::Value,
-        ) -> Result<(), crate::WsError> {
-            Err(crate::WsError::with_details(
+            _cx: &mut nest_rs_core::UnitContext<'_>,
+        ) -> Result<(), nest_rs_guards::Denial> {
+            Err(nest_rs_guards::Denial::forbidden(
                 "author `banned` is not allowed to post",
-                serde_json::json!({ "reason": "forbidden" }),
             ))
         }
-
-        fn type_key(&self) -> TypeId {
-            TypeId::of::<Self>()
-        }
     }
+
+    struct Moderated;
+
+    static MODERATED: nest_rs_core::Handler =
+        nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
+            unit: crate::unit::MESSAGE,
+            host: TypeId::of::<Moderated>(),
+            host_name: "Moderated",
+            method: "moderated",
+            address: "moderated",
+            posture: nest_rs_core::Posture::Gated,
+            meta: nest_rs_core::__private::MetaLevels::default,
+        });
 
     struct Echo;
 
@@ -957,7 +966,18 @@ mod tests {
     async fn a_denied_message_answers_the_frame_its_check_rendered_and_files_nothing_more() {
         let logs = nest_rs_testing::LogCapture::install();
         let mut guards = EventLayerTable::new();
-        guards.insert("moderated", vec![Arc::new(DenyAll)]);
+        guards.insert(
+            "moderated",
+            crate::guard::EventChain::Composed {
+                handler: &MODERATED,
+                guards: vec![nest_rs_core::__private::ResolvedLayer {
+                    type_id: TypeId::of::<DenyAll>(),
+                    name: "DenyAll",
+                    source: nest_rs_core::LayerSite::Method,
+                    layer: Arc::new(DenyAll),
+                }],
+            },
+        );
 
         let frame = handle_text(
             &Echo,
@@ -977,13 +997,13 @@ mod tests {
         );
         assert_eq!(
             frame["data"]["errors"]["reason"], "forbidden",
-            "the structured half the check rendered travels whole: {frame}",
+            "the structured half the chain rendered travels whole: {frame}",
         );
         assert!(
             logs.events()
                 .iter()
                 .all(|event| event.target != crate::TARGET || event.level != "warn"),
-            "the check filed the denial where it held it; the gateway adds no second line: {:#?}",
+            "the chain filed the denial where it held it; the gateway adds no second line: {:#?}",
             logs.events(),
         );
     }

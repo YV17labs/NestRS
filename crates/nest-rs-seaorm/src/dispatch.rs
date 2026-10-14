@@ -18,11 +18,14 @@ pub(crate) struct RequestSnapshot {
 }
 
 impl RequestSnapshot {
-    /// Capture from the post-guard request, while the guard's ability is reachable.
+    /// Capture from the post-guard request, while the guard's ability is
+    /// reachable: kept on the request by an in-band endpoint's guards, or ambient
+    /// under a self-mount's.
     pub(crate) fn capture(db: &DatabaseConnection, req: &Request) -> Self {
         Self {
             pool: db.clone(),
-            ability: req.extensions().get::<Arc<Ability>>().cloned(),
+            ability: nest_rs_http::__private::attached::<Ability>(req)
+                .or_else(nest_rs_authz::current_ability),
         }
     }
 }

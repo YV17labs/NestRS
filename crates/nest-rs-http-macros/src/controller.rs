@@ -85,8 +85,10 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let filter_specs = scoped_specs(&filters, quote!(dyn ::nest_rs_filters::Filter));
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
-    let capability_bounds =
-        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::HttpGuard));
+    let capability_bounds = guard_capability_bounds(
+        guards.iter(),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_http::HttpView>),
+    );
     let controller_has_throttler = guards.iter().any(crate::routes::guard_path_is_throttler);
     let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
     let exception_filter_specs = scoped_specs(
@@ -129,7 +131,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_interceptors(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_interceptor_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedInterceptorSpec>
+                -> ::std::vec::Vec<::nest_rs_interceptors::__private::InterceptorDeclaration>
             {
                 #interceptor_specs
             }
@@ -137,7 +139,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_filters(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_interceptors::__private::FilterDeclaration>
             {
                 #filter_specs
             }
@@ -145,7 +147,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_guards(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
             {
                 #guard_specs
             }
@@ -160,7 +162,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_pipes(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_pipe_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedPipeSpec>
+                -> ::std::vec::Vec<::nest_rs_http::__private::PipeSpec>
             {
                 #pipe_specs
             }
@@ -168,7 +170,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_exception_filters(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedExceptionFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_interceptors::__private::ExceptionFilterDeclaration>
             {
                 #exception_filter_specs
             }

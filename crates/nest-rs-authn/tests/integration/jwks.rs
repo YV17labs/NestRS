@@ -81,6 +81,8 @@ struct Claims {
     exp: u64,
 }
 
+impl nest_rs_core::AmbientValue for Claims {}
+
 impl PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         Some(self.sub.clone())

@@ -25,6 +25,7 @@ use std::error::Error as StdError;
 use async_graphql::{Error, ErrorExtensions};
 use nest_rs_core::problem::code;
 use nest_rs_core::{DecodeError, Problem, ToProblem};
+use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 
 /// The extension member carrying field-level validation errors — the name
@@ -50,6 +51,30 @@ pub fn pipe_error(err: &PipeError) -> Error {
         // Absent, not null: a client branches on presence.
         None => Error::new(message),
     }
+}
+
+/// Render a guard's [`Denial`] as an `async_graphql::Error`: its message, its
+/// `extensions.code`, and the scopes or the wait it names.
+///
+/// The required scopes of a scope denial ride as a `requiredScopes` list
+/// extension, since an error frame has no `401` to enrich. A `5xx` answers its
+/// condition's sentence, never the guard's text.
+pub fn denial_to_graphql_error(denial: Denial) -> Error {
+    use nest_rs_guards::__private::{client_message, denial_code};
+
+    let code = denial_code(&denial).as_str();
+    let scopes = denial.required_scopes();
+    let required = (!scopes.is_empty()).then(|| scopes.to_vec());
+    let retry_after = denial.retry_after_secs();
+    Error::new(client_message(&denial)).extend_with(move |_, e| {
+        e.set(CODE_EXTENSION, code);
+        if let Some(required) = required {
+            e.set("requiredScopes", required);
+        }
+        if let Some(retry_after) = retry_after {
+            e.set("retryAfterSeconds", retry_after);
+        }
+    })
 }
 
 /// Render what a [`ToProblem`] error says — a [`Problem`] among them — as an
@@ -180,6 +205,48 @@ mod tests {
 
     fn extensions(err: &Error) -> serde_json::Value {
         serde_json::to_value(&err.extensions).expect("extensions serialize")
+    }
+
+    /// What an unavailable dependency's refusal said of it stays on the server;
+    /// the class a client branches on and the wait it acts on travel.
+    #[test]
+    fn an_unavailable_denial_tells_the_client_its_condition_and_its_wait_only() {
+        let err = denial_to_graphql_error(Denial::unavailable(Some(7), "store at 10.0.0.1 down"));
+        assert_eq!(err.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        let extensions = extensions(&err);
+        assert!(!extensions.to_string().contains("10.0.0.1"), "{extensions}");
+        assert_eq!(extensions["code"], "UNAVAILABLE");
+        assert_eq!(extensions["retryAfterSeconds"], 7);
+    }
+
+    #[test]
+    fn an_internal_denial_answers_the_opaque_message() {
+        let err = denial_to_graphql_error(Denial::internal("redis at 10.0.3.7 refused"));
+        assert_eq!(err.message, OPAQUE_CLIENT_MESSAGE);
+        assert_eq!(extensions(&err)["code"], "INTERNAL");
+    }
+
+    /// A client branches on one member, `code`, whether a guard refused it or a
+    /// `Problem` answered it.
+    #[test]
+    fn a_denial_names_its_class_by_the_code_a_problem_carries() {
+        for (denial, code) in [
+            (Denial::unauthorized("no token"), "UNAUTHENTICATED"),
+            (Denial::forbidden("not yours"), "FORBIDDEN"),
+            (
+                Denial::insufficient_scope(["posts:write"], "too narrow"),
+                "INSUFFICIENT_SCOPE",
+            ),
+            (Denial::rate_limited(7, "slow down"), "RATE_LIMITED"),
+        ] {
+            let extensions = extensions(&denial_to_graphql_error(denial));
+            assert_eq!(extensions["code"], code, "{extensions}");
+        }
+        let scoped = extensions(&denial_to_graphql_error(Denial::insufficient_scope(
+            ["posts:write"],
+            "too narrow",
+        )));
+        assert_eq!(scoped["requiredScopes"], serde_json::json!(["posts:write"]));
     }
 
     #[test]

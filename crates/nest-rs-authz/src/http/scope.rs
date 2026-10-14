@@ -4,7 +4,6 @@
 
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::Arc;
 
 use poem::http::StatusCode;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
@@ -35,8 +34,8 @@ where
     E: EntityTrait,
     A: ActionMarker,
 {
-    async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        let ability = req.extensions().get::<Arc<Ability>>().ok_or_else(|| {
+    async fn from_request(_req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
+        let ability = nest_rs_core::ambient::<Ability>().ok_or_else(|| {
             Error::from_string(
                 "missing request `Ability` — is the ability guard applied to this route?",
                 StatusCode::INTERNAL_SERVER_ERROR,

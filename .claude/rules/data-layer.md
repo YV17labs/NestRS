@@ -77,9 +77,13 @@ rolled back otherwise, including on a `MappedError`-tagged response. Guards
 run inside it, so a denied mutation never touches the data layer and opens no
 transaction at all.
 
-**The ability** is installed inside the per-route guards by the `#[routes]`
-shaper — the one seam that runs after `AbilityGuard` and still wraps the
-handler — so `nest-rs-http` knows nothing of authz or the ORM.
+**The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
+rest of the unit once its guard stage passed. A route no response mask shapes,
+an `#[sse]` stream among them, runs under the `UnmaskedReply` marker its
+shaper attaches, and
+`current_ability` withholds the ability there, so a read the mask would have
+scoped fails closed — and `nest-rs-http` knows nothing of authz or the ORM
+(`.claude/decisions/unmasked-reply-withholds-the-ability.md`).
 
 ## What waits for the commit — the event, and nothing else
 

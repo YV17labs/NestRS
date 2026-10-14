@@ -21,7 +21,7 @@ use nest_rs_codegen::{
     impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, layer_deps, normalize_forwarded_args,
     pipe_wrapper, reject_http_only_layers, scoped_specs, shared_receiver, take_flag_attr,
-    take_path_list,
+    take_path_list, type_label,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -132,8 +132,10 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
-    let capability_bounds =
-        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::GraphqlGuard));
+    let capability_bounds = guard_capability_bounds(
+        guards.iter(),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_graphql::GraphqlView>),
+    );
 
     // A generic resolver has no single `TypeId`, so it cannot be a `providers` entry.
     let descriptor = if item.generics.params.is_empty() {
@@ -177,7 +179,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 
             #[doc(hidden)]
             pub fn __nestrs_resolver_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
             {
                 #guard_specs
             }
@@ -522,15 +524,17 @@ enum ChainSite {
 impl ChainSite {
     fn path(self) -> TokenStream2 {
         match self {
-            Self::Operation => quote!(::nest_rs_guards::GraphqlSite::Operation),
-            Self::Entity => quote!(::nest_rs_guards::GraphqlSite::Entity),
-            Self::Field => quote!(::nest_rs_guards::GraphqlSite::Field),
+            Self::Operation => quote!(::nest_rs_graphql::__private::GraphqlSite::Operation),
+            Self::Entity => quote!(::nest_rs_graphql::__private::GraphqlSite::Entity),
+            Self::Field => quote!(::nest_rs_graphql::__private::GraphqlSite::Field),
         }
     }
 }
 
 /// Emit the layered guard chain for a resolver operation: global +
-/// resolver-scope + per-method guards, deduped by `TypeId`.
+/// resolver-scope + per-method guards, deduped by `TypeId`, run as the unit
+/// `handler` declares. Binds `__nestrs_attached`, what the guards attached,
+/// which the rest of the operation runs under ([`under_attached`]).
 ///
 /// **Always emitted, whatever the operation returns**: the failure channel is
 /// the wrapper's ([`wrapper_output`]), never the developer's method
@@ -542,17 +546,18 @@ fn layered_resolver_chain(
     ctx: &Ident,
     route_label: &str,
     site: ChainSite,
+    handler: &TokenStream2,
 ) -> TokenStream2 {
     let label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
     let method_specs = scoped_specs(method_guards, quote!(dyn ::nest_rs_guards::Guard));
     let force_typeids = force_guard_typeids(force_guards);
     let site = site.path();
     quote! {
-        {
+        let __nestrs_attached = {
             static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::__private::SiteChainCell =
                 ::nest_rs_guards::__private::SiteChainCell::new();
             let __container = #ctx.data_unchecked::<::nest_rs_core::Container>();
-            ::nest_rs_guards::run_layered_graphql_chain(
+            ::nest_rs_graphql::__private::run_layered_graphql_chain(
                 #ctx,
                 __container,
                 &__NESTRS_GUARD_CHAIN,
@@ -563,8 +568,17 @@ fn layered_resolver_chain(
                     force: #force_typeids,
                 },
                 #site,
-            ).await?;
-        }
+                #handler,
+            ).await?
+        };
+    }
+}
+
+/// `rest` run under what the operation's guards attached
+/// (`__nestrs_attached`, bound by [`layered_resolver_chain`]).
+fn under_attached(rest: TokenStream2) -> TokenStream2 {
+    quote! {
+        ::nest_rs_graphql::__private::install_pending(__nestrs_attached, async move { #rest }).await
     }
 }
 
@@ -836,6 +850,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 &method_guards,
                 &force_method_guards,
                 &field_label,
+                &field,
             )?;
             field_dep_types.extend(deps.into_iter().map(|dep| (cfgs.clone(), dep)));
             let key = field_parent_key(&parent_ty);
@@ -1017,6 +1032,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let route_label_lit = LitStr::new(&route_label, proc_macro2::Span::call_site());
             let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
             gsig.output = wrapper_output(&sig);
+            let site_handler = nest_rs_codegen::handler_ref(&self_ty, &method_name);
             let checks = layered_resolver_chain(
                 &self_ty,
                 &method_guards,
@@ -1028,6 +1044,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 } else {
                     ChainSite::Operation
                 },
+                &site_handler,
             );
             let authz_entity = |spec: &AuthorizeSpec| match &spec.entity {
                 Some(entity) => quote!(#entity),
@@ -1140,26 +1157,28 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 // async-graphql's `#[Subscription]` awaits the method it is given.
                 let mut gsig = gsig;
                 gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
+                let rest = under_attached(quote! { #gate #bind_prelude #(#pipe_prelude)* #body });
                 quote! {
                     #(#deleg_attrs)*
                     #entity_attr
-                    #gsig { #checks #gate #bind_prelude #(#pipe_prelude)* #body }
+                    #gsig { #checks #rest }
                 }
             } else {
                 let role_lit = LitStr::new(role_label, proc_macro2::Span::call_site());
                 let succeeded = quote!(::core::result::Result::is_ok);
+                let rest = under_attached(quote! { #gate #bind_prelude #(#pipe_prelude)* #body });
                 let mut gsig = gsig;
                 gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
                 quote! {
                     #(#deleg_attrs)*
                     #entity_attr
                     #gsig {
-                        let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(#gctx);
+                        let __operation = ::nest_rs_graphql::__private::field_name(#gctx);
                         ::nest_rs_graphql::__private::run_field(
                             #role_lit,
-                            __operation.name(),
+                            __operation,
                             #succeeded,
-                            async move { #checks #gate #bind_prelude #(#pipe_prelude)* #body },
+                            async move { #checks #rest },
                         )
                         .await
                     }
@@ -1235,12 +1254,12 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     layers.keys.extend(field_layers.keys);
     layers.labels.extend(field_layers.labels);
     let injected_methods = injected_methods_with_layers(&self_ty, &layers);
-    // `Guard::check_graphql` defaults to `Ok(())`: the bound makes a guard declare it.
+    // `Guard::check` admits by default: the bound makes a guard declare it.
     let capability_bounds = guard_capability_bounds(
         all_guard_paths
             .iter()
             .map(|(cfgs, item)| Conditional { cfgs, item }),
-        quote!(::nest_rs_guards::GraphqlGuard),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_graphql::GraphqlView>),
     );
 
     let markers = declared.markers(&self_ty, &item.generics);
@@ -1282,6 +1301,7 @@ fn field_method(
     guards: &[Path],
     force_guards: &[Path],
     field_label: &str,
+    field: &str,
 ) -> syn::Result<(Type, TokenStream2, Vec<Type>)> {
     let owned_sig = {
         let mut s = sig.clone();
@@ -1362,6 +1382,31 @@ fn field_method(
     let where_clause = &sig.generics.where_clause;
     let output = wrapper_output(sig);
 
+    let host_name = LitStr::new(&type_label(self_ty), proc_macro2::Span::call_site());
+    let method_lit = LitStr::new(&method_name.unraw().to_string(), method_name.span());
+    let field_lit = LitStr::new(field, proc_macro2::Span::call_site());
+    // A field resolver is no unit and declares no site of its own: the guards
+    // its chain runs read the resolver's `#[meta]` through this declaration.
+    let site_handler = quote! {{
+        fn __nestrs_field_meta() -> ::nest_rs_core::__private::MetaLevels {
+            ::nest_rs_core::__private::MetaLevels {
+                host: <#self_ty>::__nestrs_host_meta(),
+                method: ::std::vec::Vec::new(),
+            }
+        }
+        static __NESTRS_FIELD: ::nest_rs_core::Handler = ::nest_rs_core::__private::declare_handler(
+            ::nest_rs_core::__private::HandlerDeclaration {
+                unit: ::nest_rs_graphql::unit::FIELD,
+                host: ::core::any::TypeId::of::<#self_ty>(),
+                host_name: #host_name,
+                method: #method_lit,
+                address: #field_lit,
+                posture: ::nest_rs_core::Posture::Gated,
+                meta: __nestrs_field_meta,
+            },
+        );
+        &__NESTRS_FIELD
+    }};
     let checks = layered_resolver_chain(
         self_ty,
         guards,
@@ -1369,6 +1414,7 @@ fn field_method(
         &format_ident!("__ctx"),
         field_label,
         ChainSite::Field,
+        &site_handler,
     );
     // By path: method lookup on a value tries a trait method taking `self` first.
     let call = call_as_result(
@@ -1381,6 +1427,12 @@ fn field_method(
         ),
         RootKind::Query,
     );
+    let rest = under_attached(quote! {
+        let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
+        #(#dep_bindings)*
+        let __resolver = <#self_ty>::from_container(__container);
+        #call
+    });
     let method = quote! {
         #(#deleg_attrs)*
         async fn #method_name #generics (
@@ -1389,10 +1441,7 @@ fn field_method(
             #(, #gql_args)*
         ) #output #where_clause {
             #checks
-            let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
-            #(#dep_bindings)*
-            let __resolver = <#self_ty>::from_container(__container);
-            #call
+            #rest
         }
     };
     Ok((parent_ty, method, injected_deps))

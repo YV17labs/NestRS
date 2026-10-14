@@ -1,15 +1,30 @@
-//! `GuardEndpoint`/`GuardExt` — a [`Guard`]'s `check_http` gate in front of a
-//! poem endpoint, and the [`Denial`] → HTTP response mapping. The endpoint is
-//! driven by calling `.call(..)` directly (no live socket).
+//! `GuardedEndpoint` — a guard stage's `check_http` in front of an endpoint, the
+//! [`Denial`] → HTTP response mapping, and what the stage attaches. The
+//! endpoint is driven by calling `.call(..)` directly (no live socket).
 
+use std::any::TypeId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use nest_rs_core::Layer;
-use nest_rs_guards::{Denial, Guard, GuardExt, HttpGuard};
+use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler};
+use nest_rs_core::{Handler, Layer, LayerSite, Posture, UnitContext};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::__private::GuardedEndpoint;
 use nest_rs_http::async_trait;
 use nest_rs_testing::LogCapture;
-use poem::{Endpoint, IntoResponse, Request, endpoint::make_sync};
+use poem::{Endpoint, EndpointExt, IntoResponse, Request, endpoint::make_sync};
+
+struct Mount;
+
+static UPGRADE: Handler = declare_handler(HandlerDeclaration {
+    unit: nest_rs_http::unit::REQUEST,
+    host: TypeId::of::<Mount>(),
+    host_name: "Mount",
+    method: "",
+    address: "/ws",
+    posture: Posture::Gated,
+    meta: MetaLevels::default,
+});
 
 /// A guard whose decision is fixed at construction: `None` allows, `Some(d)`
 /// denies with `d`. Increments a shared counter each time it runs, so a test
@@ -35,7 +50,7 @@ impl Layer for DecisionGuard {}
 
 #[async_trait]
 impl Guard for DecisionGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         self.ran.fetch_add(1, Ordering::SeqCst);
         match &self.denial {
             None => Ok(()),
@@ -44,13 +59,28 @@ impl Guard for DecisionGuard {
     }
 }
 
-impl HttpGuard for DecisionGuard {}
+fn entry(guard: DecisionGuard) -> ResolvedLayer<dyn Guard> {
+    ResolvedLayer {
+        type_id: TypeId::of::<DecisionGuard>(),
+        name: "DecisionGuard",
+        source: LayerSite::Host,
+        layer: Arc::new(guard),
+    }
+}
+
+fn guarded<E>(chain: Vec<ResolvedLayer<dyn Guard>>, inner: E) -> GuardedEndpoint
+where
+    E: Endpoint + 'static,
+    E::Output: IntoResponse,
+{
+    GuardedEndpoint::new(&UPGRADE, chain, inner.map_to_response().boxed())
+}
 
 async fn call_guarded(guard: DecisionGuard) -> poem::Response {
-    let ep = make_sync(|_| "ok".into_response()).guard(Arc::new(guard));
-    ep.call(Request::builder().finish())
+    guarded(vec![entry(guard)], make_sync(|_| "ok"))
+        .call(Request::builder().finish())
         .await
-        .expect("GuardEndpoint maps a denial to Ok(Response), never Err")
+        .expect("a guard stage maps a denial to Ok(Response), never Err")
 }
 
 #[tokio::test]
@@ -101,14 +131,16 @@ async fn a_denial_short_circuits_before_the_handler_runs() {
     // The handler increments a marker; a denying guard in front must keep it 0.
     let handler_ran = Arc::new(AtomicU32::new(0));
     let marker = handler_ran.clone();
-    let ep = make_sync(move |_| {
-        marker.fetch_add(1, Ordering::SeqCst);
-        "ok".into_response()
-    })
-    .guard(Arc::new(DecisionGuard::deny(
-        Denial::forbidden("nope"),
-        Arc::new(AtomicU32::new(0)),
-    )));
+    let ep = guarded(
+        vec![entry(DecisionGuard::deny(
+            Denial::forbidden("nope"),
+            Arc::new(AtomicU32::new(0)),
+        ))],
+        make_sync(move |_| {
+            marker.fetch_add(1, Ordering::SeqCst);
+            "ok"
+        }),
+    );
     let resp = ep
         .call(Request::builder().finish())
         .await
@@ -123,7 +155,7 @@ async fn a_denial_short_circuits_before_the_handler_runs() {
 
 #[tokio::test]
 async fn a_denial_at_this_site_is_visible_at_warn() {
-    // This endpoint is the WS upgrade's gate: its denial must log at warn, as its
+    // This stage is the WS upgrade's gate: its denial must log at warn, as its
     // per-message twin's does.
     let logs = LogCapture::install();
     let resp = call_guarded(DecisionGuard::deny(
@@ -156,41 +188,46 @@ async fn an_allowed_request_logs_no_denial() {
 }
 
 #[tokio::test]
-async fn chained_guards_all_run_when_each_allows() {
-    // `.guard(a).guard(b)` — the outer wraps the inner; both `check_http` run
-    // before the handler when neither denies.
-    let outer_ran = Arc::new(AtomicU32::new(0));
-    let inner_ran = Arc::new(AtomicU32::new(0));
-    let ep = make_sync(|_| "ok".into_response())
-        .guard(Arc::new(DecisionGuard::allow(inner_ran.clone())))
-        .guard(Arc::new(DecisionGuard::allow(outer_ran.clone())));
+async fn every_guard_of_the_stage_runs_when_each_allows() {
+    let first_ran = Arc::new(AtomicU32::new(0));
+    let second_ran = Arc::new(AtomicU32::new(0));
+    let ep = guarded(
+        vec![
+            entry(DecisionGuard::allow(first_ran.clone())),
+            entry(DecisionGuard::allow(second_ran.clone())),
+        ],
+        make_sync(|_| "ok"),
+    );
     let resp = ep
         .call(Request::builder().finish())
         .await
         .expect("both allow");
     assert_eq!(resp.status(), poem::http::StatusCode::OK);
-    assert_eq!(outer_ran.load(Ordering::SeqCst), 1, "outer guard ran");
-    assert_eq!(inner_ran.load(Ordering::SeqCst), 1, "inner guard ran");
+    assert_eq!(first_ran.load(Ordering::SeqCst), 1, "the first guard ran");
+    assert_eq!(second_ran.load(Ordering::SeqCst), 1, "the second guard ran");
 }
 
 #[tokio::test]
-async fn an_outer_denial_short_circuits_the_inner_guard() {
-    // The outer guard denies, so the inner guard must never run.
-    let inner_ran = Arc::new(AtomicU32::new(0));
-    let ep = make_sync(|_| "ok".into_response())
-        .guard(Arc::new(DecisionGuard::allow(inner_ran.clone())))
-        .guard(Arc::new(DecisionGuard::deny(
-            Denial::unauthorized("stop"),
-            Arc::new(AtomicU32::new(0)),
-        )));
+async fn a_denial_short_circuits_the_guards_listed_after_it() {
+    let second_ran = Arc::new(AtomicU32::new(0));
+    let ep = guarded(
+        vec![
+            entry(DecisionGuard::deny(
+                Denial::unauthorized("stop"),
+                Arc::new(AtomicU32::new(0)),
+            )),
+            entry(DecisionGuard::allow(second_ran.clone())),
+        ],
+        make_sync(|_| "ok"),
+    );
     let resp = ep
         .call(Request::builder().finish())
         .await
         .expect("denial is Ok(Response)");
     assert_eq!(resp.status(), poem::http::StatusCode::UNAUTHORIZED);
     assert_eq!(
-        inner_ran.load(Ordering::SeqCst),
+        second_ran.load(Ordering::SeqCst),
         0,
-        "the inner guard must not run once the outer denies",
+        "a guard listed after the denying one must not run",
     );
 }

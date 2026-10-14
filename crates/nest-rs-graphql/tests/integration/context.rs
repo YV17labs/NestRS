@@ -1,16 +1,18 @@
-//! Per-request context bridge: a value an HTTP guard attaches to the request
-//! reaches a GraphQL resolver — end-to-end through the harness.
+//! Per-request context bridge: a value an HTTP guard attaches to the
+//! `/graphql` request reaches a GraphQL resolver — end-to-end through the
+//! harness.
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Context;
 use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, SeedLifetime, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
-use poem::Request;
 
 #[derive(Clone)]
 struct RequestTag(String);
+
+impl AmbientValue for RequestTag {}
 
 #[injectable]
 #[derive(Default)]
@@ -20,13 +22,13 @@ impl Layer for TagGuard {}
 
 #[async_trait]
 impl Guard for TagGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        req.extensions_mut().insert(RequestTag("hello".into()));
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(RequestTag("hello".into()));
         Ok(())
     }
 }
 
-impl HttpGuard for TagGuard {}
+impl GuardFor<nest_rs_http::HttpView> for TagGuard {}
 
 #[resolver]
 struct TagResolver;
@@ -35,8 +37,8 @@ nest_rs_core::inventory::submit! {
     GraphqlContextSeed {
         lifetime: SeedLifetime::Connection,
         owner_type_id: || Some(std::any::TypeId::of::<TagResolver>()),
-        seed: |req, _container, gql| match req.extensions().get::<RequestTag>() {
-            Some(tag) => gql.data(tag.clone()),
+        seed: |_req, _container, gql| match nest_rs_core::ambient::<RequestTag>() {
+            Some(tag) => gql.data(RequestTag::clone(&tag)),
             None => gql,
         },
     }
@@ -408,5 +410,49 @@ async fn a_multipart_part_that_does_not_decode_is_answered_without_its_value() {
     assert!(
         body.contains("the `map` part: invalid type: a string"),
         "{body}"
+    );
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [crate::RequestStoreDown, TagResolver],
+)]
+struct RequestStoreDownModule;
+
+/// A pooled guard that cannot evaluate the `/graphql` request files what failed
+/// on the request's denial line, and the client reads the condition alone.
+#[tokio::test]
+async fn a_request_denial_keeping_its_cause_files_the_chain() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::builder()
+        .module::<RequestStoreDownModule>()
+        .use_guards_global([guard::<crate::RequestStoreDown>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ tag }" }))
+        .send()
+        .await;
+
+    resp.assert_status(poem::http::StatusCode::SERVICE_UNAVAILABLE);
+    let body = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a response body");
+    assert!(
+        !body.contains("refused"),
+        "the cause stays on the server: {body}"
+    );
+    let event = logs.expect_one("nest_rs::layers", "guard denied the request");
+    assert_eq!(event.field("status").as_deref(), Some("503"));
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some(crate::STORE_DOWN_CHAIN)
     );
 }

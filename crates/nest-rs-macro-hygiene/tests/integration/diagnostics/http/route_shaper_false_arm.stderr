@@ -11,10 +11,10 @@ help: the trait `poem::FromRequest<'_>` is not implemented for `Authorize<u8>`
    | ^^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `poem::FromRequest<'a>`:
              &'a HeaderMap
-             &'a HttpRequest
              &'a LocalAddr
              &'a RemoteAddr
              &'a nest_rs::nest_rs_http::Uri
+             &'a poem::Request
              Bind<A, S>
              ClientIp
              Ctx<T>
@@ -33,10 +33,10 @@ help: the trait `poem::FromRequest<'_>` is not implemented for `Authorize<u8>`
    | ^^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `poem::FromRequest<'a>`:
              &'a HeaderMap
-             &'a HttpRequest
              &'a LocalAddr
              &'a RemoteAddr
              &'a nest_rs::nest_rs_http::Uri
+             &'a poem::Request
              Bind<A, S>
              ClientIp
              Ctx<T>

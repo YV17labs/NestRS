@@ -105,37 +105,31 @@ graphql = [
     "dep:nest-rs-graphql",
     "http",
     "authz",
-    "nest-rs-guards/graphql",
     "nest-rs-testing?/graphql",
     "nest-rs-seaorm?/graphql",
     "nest-rs-authz?/graphql",
-    "nest-rs-throttler?/graphql",
 ]
-# `#[messages]` names `GuardAsWsMessageCheck` and the per-message chain runner,
-# both behind guards' `ws`. The gateway reuses the HTTP guards at the upgrade, so
-# authz's `http` binding is what runs there; `nest-rs-authz/ws` is the separate
-# per-message half `#[messages]` emits from an `#[authorize(Action, Entity)]` —
-# the class gate and the reply mask. Both, because a gateway needs the upgrade
-# chain *and* the posture.
+# `#[messages]` names the per-message chain the gateway runs and binds each
+# guard on `GuardFor<WsView>`. The gateway reuses the HTTP guards at the upgrade,
+# so authz's `http` binding is what runs there; `nest-rs-authz/ws` is the
+# separate per-message half `#[messages]` emits from an
+# `#[authorize(Action, Entity)]` — the class gate and the reply mask. Both,
+# because a gateway needs the upgrade chain *and* the posture.
 ws = [
     "dep:nest-rs-ws",
     "http",
-    "nest-rs-guards/ws",
     "nest-rs-testing?/ws",
     "nest-rs-seaorm?/ws",
     "nest-rs-authz?/http",
     "nest-rs-authz?/ws",
-    "nest-rs-throttler?/ws",
 ]
-# `#[mcp]` mounts through `HttpEndpointMeta` and resolves its operation guard
-# against the global pool, which guards' `mcp` feature seeds.
+# `#[mcp]` mounts through `HttpEndpointMeta` and runs the global pool at its
+# request and in each operation's chain.
 mcp = [
     "dep:nest-rs-mcp",
     "http",
-    "nest-rs-guards/mcp",
     "nest-rs-seaorm?/mcp",
     "nest-rs-authz?/mcp",
-    "nest-rs-throttler?/mcp",
 ]
 # `#[processor]` folds pipes over the job payload and reaches the worker-context
 # seam; neither is a crate a `#[process]` method names.
@@ -187,10 +181,8 @@ social = ["dep:nest-rs-social", "authn", "oauth-client"]
 opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-testing?/opentelemetry"]
 openapi = ["dep:nest-rs-openapi", "http"]
 health = ["dep:nest-rs-health", "http", "nest-rs-seaorm?/health"]
-# HTTP only, deliberately: `ThrottlerGuard` checks all four request-carrying
-# edges, and each of the other three rides its own transport feature above
-# (`nest-rs-throttler?/graphql`, `?/ws`, `?/mcp`) — weakly, so this stays the
-# one dependency an HTTP-only app pays for.
+# HTTP only: `ThrottlerGuard` checks every edge through one `check`, and
+# declares it once for every view, so no edge's feature reaches it.
 throttler = ["dep:nest-rs-throttler", "http"]
 server-timing = ["dep:nest-rs-server-timing", "http"]
 # Mounts as the HTTP router's fallback; `#[derive(Embed)]` resolves through

@@ -1,27 +1,24 @@
-error[E0277]: `HttpOnlyGuard` does not check WebSocket messages
-  --> tests/integration/diagnostics/ws/http_only_guard_on_a_message.rs:33:18
+error[E0277]: `HttpOnlyGuard` does not declare that it checks `WsView` units
+  --> tests/integration/diagnostics/ws/http_only_guard_on_a_message.rs:35:18
    |
-33 |     #[use_guards(HttpOnlyGuard)]
-   |                  ^^^^^^^^^^^^^ this guard has no `check_ws_message`
+35 |     #[use_guards(HttpOnlyGuard)]
+   |                  ^^^^^^^^^^^^^ bound at a site whose units are `WsView`
    |
-help: the trait `WsGuard` is not implemented for `HttpOnlyGuard`
-  --> tests/integration/diagnostics/ws/http_only_guard_on_a_message.rs:15:1
+   = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
+   = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<WsView> for HttpOnlyGuard {}`
+help: the trait `GuardFor<WsView>` is not implemented for `HttpOnlyGuard`
+      but trait `GuardFor<HttpView>` is implemented for it
+  --> tests/integration/diagnostics/ws/http_only_guard_on_a_message.rs:26:1
    |
-15 | struct HttpOnlyGuard;
-   | ^^^^^^^^^^^^^^^^^^^^
-   = note: a guard bound beside a `#[subscribe_message]` runs `Guard::check_ws_message`, whose default is `Ok(())` — binding one that does not override it passes every message silently
-   = note: override `check_ws_message`, then declare `impl WsGuard for HttpOnlyGuard {}`; or move it to the `#[gateway]` struct, where guards run on the HTTP upgrade instead
-help: the trait `WsGuard` is implemented for `AbilityGuard<F>`
-  --> $WORKSPACE/crates/nest-rs-authz/src/guard.rs
-   |
-   | impl<F: AbilityFactory> nest_rs_guards::WsGuard for AbilityGuard<F> {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+26 | impl GuardFor<HttpView> for HttpOnlyGuard {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `HttpView`, found `WsView`
 note: required by a bound in `__nestrs_assert_guard_capability`
-  --> tests/integration/diagnostics/ws/http_only_guard_on_a_message.rs:29:1
+  --> tests/integration/diagnostics/ws/http_only_guard_on_a_message.rs:31:1
    |
-29 | #[messages]
+31 | #[messages]
    | ^^^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
 ...
-33 |     #[use_guards(HttpOnlyGuard)]
+35 |     #[use_guards(HttpOnlyGuard)]
    |                  ------------- required by a bound in this function
    = note: this error originates in the attribute macro `messages` (in Nightly builds, run with -Z macro-backtrace for more info)

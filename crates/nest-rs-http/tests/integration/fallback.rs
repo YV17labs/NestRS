@@ -79,11 +79,10 @@ struct DocsMount;
 impl Discoverable for DocsMount {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<Self, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/docs", "docs", |_, route: Route| {
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/docs", "docs", |_, route: Route| {
                 route.at("/docs", poem::endpoint::make_sync(|_| "docs"))
             })
-            .owned_by("DocsHost")
-            .exempt(),
+            .owned_by("DocsHost"),
         )
     }
 }

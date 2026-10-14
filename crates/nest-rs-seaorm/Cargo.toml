@@ -124,7 +124,7 @@ nest-rs-seaorm = { path = ".", features = ["full"] }
 # `graphql` because the `federation` e2e writes a `#[resolver]`: `#[operations]`
 # expands to the per-site guard chain, which this crate only exposes with the
 # GraphQL edge compiled in.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
+nest-rs-guards = { path = "../nest-rs-guards" }
 # Same reason one layer up: the subgraph's operation guard is
 # `GraphqlAbilityBridge`, and the bridge lives behind authz's own `graphql`
 # feature. A dev-dep, so no consumer of this crate gains it.

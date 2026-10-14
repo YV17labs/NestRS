@@ -7,12 +7,11 @@
 use crate::AlwaysUnauthorized;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule, WELL_KNOWN_PATH};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsModule, gateway, messages};
-use poem::Request;
 use poem::http::{StatusCode, header};
 
 use crate::{EchoTool, challenge};
@@ -58,7 +57,7 @@ struct McpResourceServer;
 
 #[tokio::test]
 async fn an_mcp_endpoint_refusing_an_unauthenticated_call_carries_the_pointer() {
-    // `/mcp` is `EdgePosture::Exempt`: it skips the guard chain, not discovery.
+    // `/mcp` refuses at its own request stage; discovery still decorates the refusal.
     let app = TestApp::for_module::<McpResourceServer>()
         .await
         .expect("boots");
@@ -107,12 +106,12 @@ impl Layer for TokenTooNarrow {}
 
 #[async_trait]
 impl Guard for TokenTooNarrow {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::insufficient_scope([REQUIRED], "forbidden"))
     }
 }
 
-impl HttpGuard for TokenTooNarrow {}
+impl GuardFor<nest_rs_http::HttpView> for TokenTooNarrow {}
 
 /// A refusal no wider token fixes, so no challenge may be emitted.
 #[injectable]
@@ -123,12 +122,12 @@ impl Layer for NeverAllowed {}
 
 #[async_trait]
 impl Guard for NeverAllowed {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
     }
 }
 
-impl HttpGuard for NeverAllowed {}
+impl GuardFor<nest_rs_http::HttpView> for NeverAllowed {}
 
 /// The step-up challenge: its error code, the scope to request, and the document.
 fn assert_is_step_up(challenge: &str) {
@@ -282,12 +281,12 @@ impl Layer for ScopeWithAControlCharacter {}
 
 #[async_trait]
 impl Guard for ScopeWithAControlCharacter {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::insufficient_scope([UNREPRESENTABLE], "forbidden"))
     }
 }
 
-impl HttpGuard for ScopeWithAControlCharacter {}
+impl GuardFor<nest_rs_http::HttpView> for ScopeWithAControlCharacter {}
 
 #[controller(path = "/malformed")]
 #[use_guards(ScopeWithAControlCharacter)]
@@ -360,13 +359,13 @@ impl Layer for ExpiredCredential {}
 
 #[async_trait]
 impl Guard for ExpiredCredential {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         // What `AuthnGuard` returns for an expired token.
         Err(Denial::invalid_credential("invalid token", "invalid_token"))
     }
 }
 
-impl HttpGuard for ExpiredCredential {}
+impl GuardFor<nest_rs_http::HttpView> for ExpiredCredential {}
 
 #[controller(path = "/guarded")]
 #[use_guards(ExpiredCredential)]

@@ -19,17 +19,13 @@ all-features = true
 
 [features]
 default = []
-# HTTP surface: poem extractors (`Authorize`, `Scope`), the request-scoped
-# `AbilityGuard`, and the `RouteResponseShaper` that masks responses
-# transparently. The `Bind` route-model extractor lives in
-# `nest_rs_seaorm::Bind` (it must use the data layer). Also activates the
-# unified `nest_rs_guards::Guard` impl so `AbilityGuard` can be used both
-# per-route and globally via `App::builder().use_guards_global(...)`.
-# `AbilityGuard` itself is at the crate root and every transport feature turns
-# it on, because it answers all four; this feature adds only HTTP's own
-# extractors and shaper. It no longer forwards `nest-rs-guards/ws`: that
-# forwarding existed solely because the guard's `check_ws_message` used to
-# compile under `http`, which is what the guard living in `http/` cost.
+# HTTP surface: poem extractors (`Authorize`, `Scope`), the `AbilityGuard`'s
+# HTTP entry, and the `RouteResponseShaper` that masks responses transparently.
+# The `Bind` route-model extractor lives in `nest_rs_seaorm::Bind` (it must use
+# the data layer). `AbilityGuard` itself is at the crate root and every
+# transport feature turns it on, because it answers all four; its
+# `GuardFor<HttpView>` comes with it, since every edge runs `check_http` on an
+# HTTP request, and each in-band feature declares its own edge's view.
 http = [
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
@@ -43,10 +39,8 @@ graphql = [
     # The root `AbilityGuard` is what a resolver binds, and its `check_http`
     # entry is what `GraphqlAbilityBridge` runs in band — so this surface needs
     # `nest-rs-http`, which the GraphQL bindings alone never named.
-    # `nest-rs-guards/graphql` needs no `dep:` line: it is the strong form,
-    # which activates the optional dependency as well as its feature.
     "dep:nest-rs-http",
-    "nest-rs-guards/graphql",
+    "dep:nest-rs-guards",
     "dep:poem",
 ]
 # MCP surface: the operation-guard ability bridge (`McpAbilityBridge`), which
@@ -54,33 +48,25 @@ graphql = [
 # Masking inside a tool body is the transport-free `masked_output_ambient`. The
 # data context that makes `Repo` work inside a tool body is
 # `nest_rs_seaorm::McpDataContext`, behind that crate's `mcp` feature.
-# `nest-rs-guards/mcp` is forwarded for the same reason the GraphQL binding
-# forwards `nest-rs-guards/graphql`: it is what seeds the pool's in-band runner
-# (`GlobalPoolMcpGuard`) so `use_guards_global` reaches `/mcp`.
 mcp = [
     "dep:nest-rs-mcp",
     # Same as GraphQL: the root guard's `check_http` is what `McpAbilityBridge`
     # runs in band.
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
-    "nest-rs-guards/mcp",
     "dep:poem",
 ]
 # WebSocket surface: the per-message class gate (`ws::authorize`) and reply mask
 # (`ws::masked_value_for`) that `#[messages]` emits from an
 # `#[authorize(Action, Entity)]`. There is no bridge here and deliberately so —
-# a gateway is `EdgePosture::Guarded`, so the upgrade already ran the real HTTP
-# chain; what a message needs re-established is the ambient ability, and that is
-# `nest_rs_seaorm::ws::WsDataContext`. `nest-rs-guards/ws` is forwarded for
-# `denial_to_ws_error`, so a gate refusal and a guard refusal reach the client
-# through one frame.
+# a gateway's upgrade already ran the real HTTP chain, and what a message needs
+# re-established is the ambient ability, which the connection carries and
+# `nest_rs_seaorm::ws::WsDataContext` installs.
 ws = [
     "dep:nest-rs-ws",
-    # The root guard's `check_ws_message` lives behind *this* feature now, and
-    # its `check_http` entry is what runs on the upgrade.
+    # The root guard's `check_http` entry is what runs on the upgrade.
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
-    "nest-rs-guards/ws",
     "dep:poem",
 ]
 # Enable every transport binding at once — useful for

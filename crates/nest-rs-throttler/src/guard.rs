@@ -1,23 +1,15 @@
 //! [`ThrottlerGuard`] — rate-limiting guard.
 
+use std::borrow::Cow;
 use std::fmt::{self, Write as _};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::{Layer, Unanswered, injectable, within};
-use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::HandlerMetadata;
-use nest_rs_http::{ClientOrigin, Reflector, async_trait};
-use poem::Request;
-
-#[cfg(feature = "graphql")]
-use nest_rs_graphql::GraphqlOperationContext;
-#[cfg(feature = "mcp")]
-use nest_rs_mcp::McpOperationContext;
-#[cfg(feature = "ws")]
-use nest_rs_ws::WsClient;
+use nest_rs_core::{Edge, Layer, Unanswered, UnitContext, UnitView, injectable, within};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::{ClientOrigin, HttpView, async_trait};
 
 use crate::pseudonym::PseudonymStore;
 use crate::store::{Decision, HIT_TIMEOUT, ThrottlerStore};
@@ -25,15 +17,12 @@ use crate::throttle::Throttle;
 
 /// The edge a bucket belongs to — the leading segment of every key, and the
 /// `transport` field on every denial: a `#[query]`, a `#[tool]` and a
-/// `#[subscribe_message]` may share a name, and must not share a budget.
+/// `#[subscribe_message]` may share a name, and must not share a budget. An
+/// in-band edge's word is its own (`Edge::as_str`).
 mod transport {
     pub(super) const HTTP: &str = "http";
-    #[cfg(feature = "graphql")]
-    pub(super) const GRAPHQL: &str = "graphql";
-    #[cfg(feature = "mcp")]
-    pub(super) const MCP: &str = "mcp";
-    #[cfg(feature = "ws")]
-    pub(super) const WS: &str = "ws";
+    /// A unit off the framework's edges, which names no edge of its own.
+    pub(super) const UNIT: &str = "unit";
 }
 
 /// U+001F (unit separator) joins the parts of a bucket key: it appears in none
@@ -80,22 +69,22 @@ fn rate_limited(retry_after: Duration) -> Denial {
 /// Counts one unit of work against a limit and refuses the caller over it —
 /// `429` + `Retry-After` on HTTP, the edge's own error frame elsewhere.
 ///
-/// **All four request-carrying edges.** The bucket is the unit the edge
-/// *addresses*, joined with the caller that edge can see: the matched route
-/// pattern and the client's network on HTTP — its address in IPv4, its `/64`
-/// in IPv6 — the field name on GraphQL, the tool or prompt on MCP, the event
-/// and the connection on WS.
+/// **All four request-carrying edges**, through one guard contract and no
+/// edge feature. The bucket is the unit the edge *addresses*, joined with the
+/// caller that edge can see: the matched route pattern and the client's network
+/// on HTTP — its address in IPv4, its `/64` in IPv6 — the field name on
+/// GraphQL, the tool or prompt on MCP, the event and the connection on WS.
 ///
-/// **Only HTTP carries per-unit metadata**, so `#[meta(Throttle::...)]`
-/// overrides the module default there and nowhere else; the other edges count
-/// against [`ThrottlerConfig`](crate::ThrottlerConfig)'s limit.
+/// A site's `#[meta(Throttle::...)]` overrides the module default on every
+/// edge; a site that pins none counts against
+/// [`ThrottlerConfig`](crate::ThrottlerConfig)'s limit.
 ///
 /// The store is the bound `Arc<dyn ThrottlerStore>`:
 /// [`InMemoryThrottler`](crate::InMemoryThrottler) by default, or a shared
 /// store when its module is imported instead.
 #[injectable]
 pub struct ThrottlerGuard {
-    /// The limit a route that pins no `#[meta(Throttle)]` runs under.
+    /// The limit a site that pins no `#[meta(Throttle)]` runs under.
     /// **Injected, never defaulted**: a guard built without `for_root` fails the
     /// boot naming `Throttle` rather than run 60/minute in silence.
     #[inject]
@@ -178,19 +167,22 @@ impl Layer for ThrottlerGuard {}
 
 #[async_trait]
 impl Guard for ThrottlerGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let limit = Reflector::new(req)
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let limit = cx
+            .reflector()
             .get::<Throttle>()
             .copied()
             .unwrap_or(*self.default);
 
+        let view = HttpView::of(cx)?;
         // Per route: keyed on the IP alone, a lenient route would drain a strict
         // route's budget.
-        let ip = ClientId::from(ClientOrigin::of(req));
+        let ip = ClientId::from(ClientOrigin::of(view.request()));
         // The declared template, so dynamic segments don't fragment the bucket;
         // a request the router matched nothing for falls back to its raw path.
-        let route = nest_rs_http::__private::matched_template(req)
-            .unwrap_or_else(|| req.uri().path().into());
+        let route = view
+            .route()
+            .unwrap_or_else(|| Cow::Borrowed(view.request().uri().path()));
         let key = bucket_key(&[&transport::HTTP, &route, &ip]);
 
         let decision = self.count(transport::HTTP, &key, limit).await?;
@@ -209,128 +201,62 @@ impl Guard for ThrottlerGuard {
         Err(rate_limited(decision.retry_after))
     }
 
-    /// GraphQL's unit is the **field**, counted once per field resolved.
-    ///
-    /// **The caller half is the actor**
-    /// ([`current_actor_id`](nest_rs_core::current_actor_id)): the peer address
-    /// is not reachable here, and keyed on the field alone one client would
-    /// `429` everybody. An **anonymous** caller shares one bucket, reported once
-    /// per process; the same guard in `use_guards_global` meters `/graphql` per
-    /// client address.
-    #[cfg(feature = "graphql")]
-    async fn check_graphql(&self, operation: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
-        let field = operation.name();
-        static SEEN: AtomicBool = AtomicBool::new(false);
-        let caller = caller_bucket(
-            &SEEN,
-            "graphql_anonymous_operation_shares_a_bucket",
-            "an anonymous GraphQL operation has no actor to key on, so every anonymous caller \
-             shares one bucket per field; bind ThrottlerGuard in use_guards_global as well, so \
-             the /graphql request itself is metered per client address",
-        );
-        let key = bucket_key(&[&transport::GRAPHQL, &field, &caller]);
+    /// An in-band edge's unit — a GraphQL field, a WS message, an MCP operation —
+    /// counted once per unit, keyed on the address its site declares (the
+    /// field, the event, the tool or prompt) and the caller: the connection on
+    /// an edge that holds one (WS), else the actor
+    /// ([`current_actor_id`](nest_rs_core::current_actor_id)), else one shared
+    /// anonymous bucket, reported once per process. The same guard in
+    /// `use_guards_global` meters the request that carried the unit per client
+    /// address.
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let limit = cx
+            .reflector()
+            .get::<Throttle>()
+            .copied()
+            .unwrap_or(*self.default);
+        let edge = cx.edge().map_or(transport::UNIT, Edge::as_str);
+        let address = cx.handler().address();
+        let connection = cx.peer().and_then(|peer| peer.connection);
+        let key = match connection {
+            Some(connection) => bucket_key(&[&edge, &address, &connection]),
+            None => bucket_key(&[&edge, &address, &caller_bucket(cx.edge())]),
+        };
 
-        let decision = self.count(transport::GRAPHQL, &key, *self.default).await?;
+        let decision = self.count(edge, &key, limit).await?;
         if decision.allowed {
             return Ok(());
         }
-        tracing::warn!(
-            target: crate::TARGET,
-            transport = transport::GRAPHQL,
-            operation = %field,
-            retry_after = retry_after_secs(decision.retry_after),
-            "rate limit exceeded",
-        );
-        Err(rate_limited(decision.retry_after))
-    }
-
-    /// MCP's unit is the **operation** — the tool or prompt the client named.
-    /// The kind leads the name because the protocol namespaces them separately:
-    /// a `#[tool]` and a `#[prompt]` may share a name and are two addresses.
-    ///
-    /// The caller half is the actor, as on GraphQL: `nest_rs_mcp::propagate`
-    /// carries the request scope across the task rmcp spawns.
-    #[cfg(feature = "mcp")]
-    async fn check_mcp(&self, ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
-        let kind = ctx.kind();
-        let name = ctx.name();
-        static SEEN: AtomicBool = AtomicBool::new(false);
-        let caller = caller_bucket(
-            &SEEN,
-            "mcp_anonymous_operation_shares_a_bucket",
-            "an anonymous MCP operation has no actor to key on, so every anonymous caller shares \
-             one bucket per operation; bind ThrottlerGuard in use_guards_global as well, so the \
-             /mcp request itself is metered per client address",
-        );
-        let key = bucket_key(&[&transport::MCP, &kind, &name, &caller]);
-
-        let decision = self.count(transport::MCP, &key, *self.default).await?;
-        if decision.allowed {
-            return Ok(());
+        let retry_after = retry_after_secs(decision.retry_after);
+        match connection {
+            // The connection is a number this process minted for the socket,
+            // never the peer's address.
+            Some(connection) => tracing::warn!(
+                target: crate::TARGET,
+                transport = edge,
+                event = address,
+                connection,
+                retry_after,
+                "rate limit exceeded",
+            ),
+            None => tracing::warn!(
+                target: crate::TARGET,
+                transport = edge,
+                operation = address,
+                retry_after,
+                "rate limit exceeded",
+            ),
         }
-        tracing::warn!(
-            target: crate::TARGET,
-            transport = transport::MCP,
-            kind = %kind,
-            operation = %name,
-            retry_after = retry_after_secs(decision.retry_after),
-            "rate limit exceeded",
-        );
-        Err(rate_limited(decision.retry_after))
-    }
-
-    /// WS's unit is the **event**, and the caller half the connection: the peer
-    /// address is gone by dispatch. A reconnect opens a fresh bucket, which the
-    /// same guard on the `#[gateway]` struct meters per address at the upgrade.
-    #[cfg(feature = "ws")]
-    async fn check_ws_message(
-        &self,
-        client: &WsClient,
-        event: &str,
-        _data: &serde_json::Value,
-    ) -> Result<(), Denial> {
-        let connection = client.id();
-        let key = bucket_key(&[&transport::WS, &event, &connection]);
-
-        let decision = self.count(transport::WS, &key, *self.default).await?;
-        if decision.allowed {
-            return Ok(());
-        }
-        tracing::warn!(
-            target: crate::TARGET,
-            transport = transport::WS,
-            event = %event,
-            connection,
-            retry_after = retry_after_secs(decision.retry_after),
-            "rate limit exceeded",
-        );
         Err(rate_limited(decision.retry_after))
     }
 }
 
-/// `ThrottlerGuard` checks HTTP requests: [`check_http`](Guard::check_http)
-/// counts one request against its route's bucket. Declared so a
-/// `#[controller]`, a `#[routes]` verb or a `#[gateway]` struct may bind it.
-impl nest_rs_guards::HttpGuard for ThrottlerGuard {}
-
-/// …and GraphQL operations, keyed on the field
-/// ([`check_graphql`](Guard::check_graphql)). Declared so a `#[resolver]` or a
-/// single `#[query]` may bind it.
-#[cfg(feature = "graphql")]
-impl nest_rs_guards::GraphqlGuard for ThrottlerGuard {}
-
-/// …and MCP operations, keyed on the tool or prompt
-/// ([`check_mcp`](Guard::check_mcp)). Declared so an `#[mcp]` host or a single
-/// `#[tool]` may bind it.
-#[cfg(feature = "mcp")]
-impl nest_rs_guards::McpGuard for ThrottlerGuard {}
-
-/// …and WS messages, keyed on the event and the connection
-/// ([`check_ws_message`](Guard::check_ws_message)). Declared so a
-/// `#[subscribe_message]` may bind it; on the `#[gateway]` struct the marker
-/// required is `HttpGuard`, because those guards run on the upgrade.
-#[cfg(feature = "ws")]
-impl nest_rs_guards::WsGuard for ThrottlerGuard {}
+/// `ThrottlerGuard` checks every unit: an HTTP request through
+/// [`check_http`](Guard::check_http), keyed on its route, and a unit of any
+/// other edge through [`check`](Guard::check), keyed on its address — so a
+/// `#[controller]`, a `#[gateway]`, a `#[resolver]`, an `#[mcp]` host or any
+/// of their operations may bind it.
+impl<V: UnitView> GuardFor<V> for ThrottlerGuard {}
 
 /// The identity a rate-limit bucket is keyed on.
 enum ClientId {
@@ -399,22 +325,42 @@ impl From<ClientOrigin> for ClientId {
     }
 }
 
-/// The caller half of an in-band bucket key: the authenticated principal, or a
-/// reported shared bucket when there is none.
-#[cfg(any(feature = "graphql", feature = "mcp"))]
-fn caller_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static str) -> String {
-    match nest_rs_core::current_actor_id() {
-        Some(actor) => actor,
-        None => {
-            warn_shared_bucket(seen, reason, detail);
-            ANONYMOUS_CALLER.to_owned()
-        }
+/// The caller half of an in-band bucket key with no connection to key on: the
+/// authenticated principal, or a reported shared bucket when there is none.
+fn caller_bucket(edge: Option<Edge>) -> Cow<'static, str> {
+    if let Some(actor) = nest_rs_core::current_actor_id() {
+        return Cow::Owned(actor);
     }
+    static GRAPHQL: AtomicBool = AtomicBool::new(false);
+    static MCP: AtomicBool = AtomicBool::new(false);
+    static OTHER: AtomicBool = AtomicBool::new(false);
+    match edge {
+        Some(Edge::Graphql) => warn_shared_bucket(
+            &GRAPHQL,
+            "graphql_anonymous_operation_shares_a_bucket",
+            "an anonymous GraphQL operation has no actor to key on, so every anonymous caller \
+             shares one bucket per field; bind ThrottlerGuard in use_guards_global as well, so \
+             the /graphql request itself is metered per client address",
+        ),
+        Some(Edge::Mcp) => warn_shared_bucket(
+            &MCP,
+            "mcp_anonymous_operation_shares_a_bucket",
+            "an anonymous MCP operation has no actor to key on, so every anonymous caller shares \
+             one bucket per operation; bind ThrottlerGuard in use_guards_global as well, so the \
+             /mcp request itself is metered per client address",
+        ),
+        _ => warn_shared_bucket(
+            &OTHER,
+            "anonymous_unit_shares_a_bucket",
+            "an anonymous unit has no actor or connection to key on, so every anonymous caller \
+             shares one bucket per address",
+        ),
+    }
+    Cow::Borrowed(ANONYMOUS_CALLER)
 }
 
 /// What an unauthenticated caller is keyed as; never `""`, which an actor could
 /// be named.
-#[cfg(any(feature = "graphql", feature = "mcp"))]
 const ANONYMOUS_CALLER: &str = "<anonymous>";
 
 /// Report a keying degradation **once per process**, at `warn`.
@@ -436,6 +382,11 @@ fn warn_shared_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static 
 mod tests {
     use std::net::{IpAddr, SocketAddr};
 
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+    use nest_rs_core::{Handler, Peer};
+    use nest_rs_http::__private::check_request;
+    use poem::Request;
+
     use super::*;
     use crate::DEFAULT_THROTTLE;
 
@@ -455,6 +406,18 @@ mod tests {
             Ok(Decision::allowed())
         }
     }
+
+    struct Routes;
+
+    static LOGIN: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: std::any::TypeId::of::<Routes>(),
+        host_name: "Routes",
+        method: "login",
+        address: "/login",
+        posture: nest_rs_core::Posture::Public,
+        meta: MetaLevels::default,
+    });
 
     /// A request from `peer`, which poem's builder cannot set.
     fn from_peer(peer: &str) -> Request {
@@ -477,16 +440,99 @@ mod tests {
 
     const KEY: &str = "a pseudonym key of at least 32 bytes, for tests";
 
+    /// A store keeping its counters in this process, recording each raw key.
+    #[derive(Default)]
+    struct InProcess(parking_lot::Mutex<Vec<String>>);
+
+    #[async_trait]
+    impl ThrottlerStore for InProcess {
+        async fn hit(
+            &self,
+            key: &str,
+            _limit: Throttle,
+        ) -> Result<Decision, crate::ThrottlerStoreError> {
+            self.0.lock().push(key.to_owned());
+            Ok(Decision::allowed())
+        }
+
+        fn in_process(&self) -> bool {
+            true
+        }
+    }
+
+    /// A unit named `tick` on the edge `unit` belongs to.
+    const fn tick(unit: nest_rs_core::operation_log::Unit) -> Handler {
+        declare_handler(HandlerDeclaration {
+            unit,
+            host: std::any::TypeId::of::<Routes>(),
+            host_name: "Routes",
+            method: "tick",
+            address: "tick",
+            posture: nest_rs_core::Posture::Public,
+            meta: MetaLevels::default,
+        })
+    }
+
+    static FIELD: Handler = tick(nest_rs_graphql::unit::FIELD);
+    static TOOL: Handler = tick(nest_rs_mcp::unit::OPERATION);
+    static MESSAGE: Handler = tick(nest_rs_ws::unit::MESSAGE);
+
+    struct Unit;
+
+    impl nest_rs_core::UnitView for Unit {}
+
+    /// `guard`'s entry on the unit `site` declares, from `peer`.
+    async fn check_unit(guard: &ThrottlerGuard, site: &'static Handler, peer: Option<Peer>) {
+        let mut view = Unit;
+        let mut cx = nest_rs_core::__private::new_unit_context(site, &mut view, peer, None);
+        guard
+            .check(&mut cx)
+            .await
+            .unwrap_or_else(|denial| panic!("a hit under the limit is allowed: {denial:?}"));
+    }
+
+    /// The keys a store already holds counters under: the edge, the unit's
+    /// address, then the connection, the actor or the anonymous bucket.
+    #[tokio::test]
+    async fn an_in_band_unit_is_keyed_on_its_edge_its_address_and_its_caller() {
+        let store = Arc::new(InProcess::default());
+        let guard = ThrottlerGuard::new(store.clone(), DEFAULT_THROTTLE, None)
+            .expect("an in-process store needs no pseudonym key");
+
+        check_unit(&guard, &FIELD, None).await;
+        check_unit(&guard, &TOOL, None).await;
+        check_unit(&guard, &MESSAGE, Some(Peer::new(None, Some(7)))).await;
+        let correlation = nest_rs_core::Correlation::minted(None);
+        nest_rs_core::with_request_scope(None, correlation, async {
+            nest_rs_core::__private::set_actor_id("ada");
+            check_unit(&guard, &FIELD, None).await;
+        })
+        .await;
+
+        assert_eq!(
+            *store.0.lock(),
+            [
+                "graphql\u{1f}tick\u{1f}<anonymous>",
+                "mcp\u{1f}tick\u{1f}<anonymous>",
+                "ws\u{1f}tick\u{1f}7",
+                "graphql\u{1f}tick\u{1f}ada",
+            ],
+        );
+    }
+
     #[tokio::test]
     async fn a_client_address_never_reaches_a_store_outside_the_process() {
         let store = Arc::new(Recording::default());
         let guard = ThrottlerGuard::new(store.clone(), DEFAULT_THROTTLE, Some(KEY))
             .expect("a store outside the process boots with a key");
         for peer in ["203.0.113.7", "203.0.113.7", "203.0.113.8"] {
-            guard
-                .check_http(&mut from_peer(peer))
-                .await
-                .expect("a hit under the limit is allowed");
+            check_request(
+                &LOGIN,
+                [("ThrottlerGuard", &guard as &dyn Guard)],
+                &mut from_peer(peer),
+            )
+            .await
+            .unwrap_or_else(|denial| panic!("a hit under the limit is allowed: {denial:?}"));
         }
         let keys = store.0.lock();
         assert_eq!(keys.len(), 3, "{keys:?}");

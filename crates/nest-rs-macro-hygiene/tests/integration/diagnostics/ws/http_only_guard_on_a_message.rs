@@ -1,14 +1,14 @@
 //! The WS half of the same rule. A guard bound beside a `#[subscribe_message]`
-//! runs `check_ws_message`, whose default is `Ok(())`.
+//! runs `check`, which admits by default.
 //!
-//! The remedy the note offers is the one that matters here: move it to the
-//! `#[gateway]` struct, where guards run on the HTTP upgrade — a distinction the
-//! trait's defaults used to swallow.
+//! The refusal names the HTTP view the guard does declare: a guard checking only
+//! the request belongs on the `#[gateway]` struct, whose guards run on the HTTP
+//! upgrade — a distinction the trait's defaults used to swallow.
 
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, async_trait};
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::http::HttpView;
 use nest_rs::ws::{gateway, messages};
-use poem::Request;
 
 #[injectable]
 #[derive(Default)]
@@ -18,10 +18,12 @@ impl Layer for HttpOnlyGuard {}
 
 #[async_trait]
 impl Guard for HttpOnlyGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
+
+impl GuardFor<HttpView> for HttpOnlyGuard {}
 
 #[gateway(path = "/ws")]
 struct DemoGateway;

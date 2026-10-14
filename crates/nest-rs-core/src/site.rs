@@ -15,8 +15,9 @@ use crate::handler::Handler;
 use crate::interceptor::__private::InterceptorStage;
 use crate::interceptor::{GlobalInterceptors, Interceptor, InterceptorSpec, module_interceptors};
 use crate::layer::{Layer, LayerSite};
-use crate::layer_chain::__private::{ResolvedLayer, compose_chain, resolve_global_layers};
-use crate::layer_chain::LayerSpec;
+use crate::layer_chain::__private::{
+    ResolvedLayer, compose_chain, resolve_global_layers, resolve_scoped,
+};
 
 /// One dispatch site — a route, a message, an operation, an endpoint — as its
 /// decorators declared it, in a `static`: its [`Handler`] and its
@@ -229,7 +230,7 @@ impl UnitChains {
         let bound = (declared.layers)();
 
         let unit_stage = if global.unit_stage {
-            let mut stage = resolve_all(
+            let mut stage = resolve_scoped(
                 container,
                 module_interceptors(container, InterceptorStage::Unit),
                 LayerSite::Global,
@@ -246,7 +247,7 @@ impl UnitChains {
         let mut global_interceptors = Vec::new();
         if global.handler_stage {
             global_interceptors.extend(resolve_global_layers::<GlobalInterceptors>(container));
-            global_interceptors.extend(resolve_all(
+            global_interceptors.extend(resolve_scoped(
                 container,
                 module_interceptors(container, InterceptorStage::Handler),
                 LayerSite::Global,
@@ -256,13 +257,13 @@ impl UnitChains {
         }
         let mut handler_stage = compose_chain(
             global_interceptors,
-            resolve_all(
+            resolve_scoped(
                 container,
                 bound.host_interceptors.iter().map(|spec| &spec.0),
                 LayerSite::Host,
                 &label,
             )?,
-            resolve_all(
+            resolve_scoped(
                 container,
                 bound.method_interceptors.iter().map(|spec| &spec.0),
                 LayerSite::Method,
@@ -286,13 +287,13 @@ impl UnitChains {
         }
         let mut exception_filters = compose_chain(
             global_filters,
-            resolve_all(
+            resolve_scoped(
                 container,
                 bound.host_exception_filters.iter().map(|spec| &spec.0),
                 LayerSite::Host,
                 &label,
             )?,
-            resolve_all(
+            resolve_scoped(
                 container,
                 bound.method_exception_filters.iter().map(|spec| &spec.0),
                 LayerSite::Method,
@@ -367,33 +368,6 @@ fn site_label(handler: &Handler) -> String {
     } else {
         format!("{}::{}", handler.host_name(), handler.method())
     }
-}
-
-/// Every spec of `specs`, resolved as an entry from `source`; the first that
-/// does not resolve refuses the site.
-fn resolve_all<'s, L: ?Sized + 's>(
-    container: &Container,
-    specs: impl IntoIterator<Item = &'s LayerSpec<L>>,
-    source: LayerSite,
-    site: &str,
-) -> Result<Vec<ResolvedLayer<L>>, UnresolvedLayerError> {
-    specs
-        .into_iter()
-        .map(|spec| {
-            let layer = spec
-                .resolve(container)
-                .ok_or_else(|| UnresolvedLayerError {
-                    layer: spec.name,
-                    site: site.to_owned(),
-                })?;
-            Ok(ResolvedLayer {
-                type_id: spec.type_id,
-                name: spec.name,
-                source,
-                layer,
-            })
-        })
-        .collect()
 }
 
 /// Say once per process, at `debug`, that an interceptor listed at the handler

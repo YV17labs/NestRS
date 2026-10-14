@@ -29,32 +29,3 @@ pub trait PrincipalIdentity {
         None
     }
 }
-
-/// The anonymous principal: no identity.
-impl PrincipalIdentity for () {
-    fn actor_id(&self) -> Option<String> {
-        None
-    }
-}
-
-/// Test/fixture principals.
-impl PrincipalIdentity for &'static str {
-    fn actor_id(&self) -> Option<String> {
-        Some((*self).to_owned())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn anonymous_principal_has_no_actor_id() {
-        assert_eq!(().actor_id(), None);
-    }
-
-    #[test]
-    fn str_principal_is_its_own_actor_id() {
-        assert_eq!("ada".actor_id(), Some("ada".to_owned()));
-    }
-}

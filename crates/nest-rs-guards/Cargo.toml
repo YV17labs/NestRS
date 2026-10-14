@@ -6,58 +6,28 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Transport-spanning guards for NestRS — one trait, four transports (HTTP, GraphQL, WS, MCP), declared once with App::builder().use_guards_global(...)."
+description = "One guard contract for NestRS — a guard checks an HTTP request or any edge's unit, declared once with App::builder().use_guards_global(...)."
 keywords = ["framework", "nestrs", "guards", "authorization", "middleware"]
 categories = ["web-programming", "authentication"]
 
-# The three per-edge marker traits — `GraphqlGuard`, `WsGuard`, `McpGuard` — are
-# each behind their edge's feature, and docs.rs builds default features only, so
-# the published page carried neither the traits nor the doc links naming them.
-# Three of the four markers this crate exists to declare were invisible on the
-# page a reader lands on from crates.io.
-[package.metadata.docs.rs]
-all-features = true
-
-[features]
-default = []
-# GraphQL surface: the `check_graphql` guard entry + the `/graphql` in-band
-# chain runners.
-graphql = ["dep:nest-rs-graphql"]
-# WebSocket surface: the `check_ws_message` guard entry, `GuardAsWsMessageCheck`
-# bridge and the per-message chain runner.
-ws = ["dep:nest-rs-ws"]
-# MCP surface: `GlobalPoolMcpGuard`, the `McpOperationGuard` that runs the
-# global pool in band on `/mcp`, a registered bridge inside it (the twin of
-# `/graphql`'s).
-mcp = ["dep:nest-rs-mcp"]
-
 [dependencies]
 async-trait.workspace = true
-serde_json.workspace = true
 tracing.workspace = true
-poem.workspace = true
+# The machine-readable half of a denial the in-band edges answer, one JSON
+# object every edge with no status line carries the same way.
+serde_json.workspace = true
+# The only framework crate below this one: the contract names a unit's context,
+# never an edge's types, so every edge depends on guards and guards on none.
 nest-rs-core.workspace = true
-nest-rs-http.workspace = true
-nest-rs-graphql = { workspace = true, optional = true }
-nest-rs-mcp = { workspace = true, optional = true }
-nest-rs-interceptors.workspace = true
-nest-rs-pipes.workspace = true
-nest-rs-ws = { workspace = true, optional = true }
-nest-rs-exception-filters.workspace = true
-nest-rs-filters.workspace = true
 
 [dev-dependencies]
-# Async unit tests drain a poem `Response` body (`into_bytes().await`) to assert
-# the RFC-9457 `problem+json` denial rendering. `test-util` pauses time, so a
-# body that stops arriving meets the edge's gap without the suite waiting it out.
+# The webhook guard's suite boots a route over the HTTP edge, and drains the
+# body through the edge's cap. `test-util` pauses time for its gap bound.
 tokio = { workspace = true, features = ["test-util"] }
-# `LogCapture`, to assert the denial `warn` a status assertion cannot see — a
-# gateway-scope denial once rendered 401 while logging nothing. Dev-dep cycle,
-# the same one `nest-rs-graphql` and `nest-rs-ws` already carry.
+nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-testing = { path = "../nest-rs-testing" }
-# A request body that fails *mid-stream* is the one shape `Body::from_bytes`
-# cannot make, and it is the shape the global-pipe read failure needs.
-futures-util.workspace = true
+# `#[routes]` composes a route's response-side layers through the interceptors.
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # The body-reading guard the docs teach for a webhook verifies an HMAC-SHA256
 # (aws-lc-rs, the workspace's crypto backend) over base64 signatures, as
 # Standard Webhooks spells them.

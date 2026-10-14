@@ -1,8 +1,9 @@
 //! [`authorize`] — the class-level access gate, the MCP analog of
 //! [`crate::graphql::authorize`].
 
-use nest_rs_guards::{Denial, denial_to_mcp_error};
+use nest_rs_guards::Denial;
 use nest_rs_mcp::McpError;
+use nest_rs_mcp::denial_to_mcp_error;
 
 use crate::gate::{Refusal, reason, transport};
 use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};

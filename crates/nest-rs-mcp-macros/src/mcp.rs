@@ -54,8 +54,10 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         Ok(values) => nest_rs_codegen::host_meta_fn(&values),
         Err(err) => return refused_beside(err, item),
     };
-    let capability_bounds =
-        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::McpGuard));
+    let capability_bounds = guard_capability_bounds(
+        guards.iter(),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_mcp::McpView>),
+    );
 
     let InjectableBody {
         ctor,
@@ -105,7 +107,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             /// composes an operation's chain.
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
             {
                 #guard_specs
             }
@@ -135,8 +137,11 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
+                static __NESTRS_MCP_ENDPOINT: ::nest_rs_core::Handler =
+                    ::nest_rs_mcp::__private::declare_endpoint(#path);
                 ::nest_rs_mcp::__private::register_host::<Self>(
                     builder,
+                    &__NESTRS_MCP_ENDPOINT,
                     #path,
                     #host_name,
                     ::nest_rs_mcp::__private::declared_identity(#identity_name, #identity_title),
@@ -185,7 +190,7 @@ fn refused_beside(err: syn::Error, mut item: ItemStruct) -> TokenStream {
         impl #impl_generics #name #ty_generics #where_clause {
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
             {
                 ::std::vec::Vec::new()
             }

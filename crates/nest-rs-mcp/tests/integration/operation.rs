@@ -4,12 +4,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, McpGuard, async_trait};
+use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_mcp::rmcp::serde_json::json;
-use nest_rs_mcp::{
-    AllowAllMcpGuard, McpError, McpOperationContext, McpOperationGuard, McpOperationKind, mcp,
-    tools,
-};
+use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, McpOperationKind, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_method, call_tool, open_session};
 
@@ -28,17 +25,39 @@ impl Layer for Recorder {}
 
 #[async_trait]
 impl Guard for Recorder {
-    async fn check_mcp(&self, ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let view = cx
+            .switch_to::<nest_rs_mcp::McpView>()
+            .ok_or_else(|| Denial::internal("an MCP operation has the MCP view"))?;
+        let seen = format!("{} {}", view.kind(), view.name().unwrap_or_default());
+        let method = view.method();
+        assert_eq!(
+            method,
+            match view.kind() {
+                McpOperationKind::Tool => "tools/call",
+                McpOperationKind::Prompt => "prompts/get",
+            },
+            "the view names the JSON-RPC method its router answers",
+        );
+        assert!(
+            view.host().ends_with("::LayeredTool"),
+            "the view names its host type"
+        );
+        assert_eq!(
+            cx.handler().address(),
+            view.name().unwrap_or_default(),
+            "the site the unit runs as is the operation's own",
+        );
         self.tools
             .lock()
             .expect("the recorder's log is only touched here")
-            .push(format!("{} {}", ctx.kind(), ctx.name()));
+            .push(seen);
         Ok(())
     }
 }
 
-impl McpGuard for Recorder {}
+impl GuardFor<nest_rs_mcp::McpView> for Recorder {}
 
 /// Refuses everything, so a denial's shape can be read off the wire.
 #[injectable]
@@ -49,12 +68,12 @@ impl Layer for Closed {}
 
 #[async_trait]
 impl Guard for Closed {
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("not for you"))
     }
 }
 
-impl McpGuard for Closed {}
+impl GuardFor<nest_rs_mcp::McpView> for Closed {}
 
 #[mcp(path = "/mcp/layers")]
 #[use_guards(Recorder)]
@@ -78,6 +97,14 @@ impl LayeredTool {
         Ok("never reached".to_owned())
     }
 
+    /// Gated by a guard whose identity store is down.
+    #[tool]
+    #[public]
+    #[use_guards(crate::StoreDown)]
+    async fn down(&self) -> Result<String, McpError> {
+        Ok("never reached".to_owned())
+    }
+
     /// A prompt is an operation like any other, so it takes the chain too.
     #[prompt]
     #[public]
@@ -92,6 +119,7 @@ impl LayeredTool {
     LayeredTool,
     Recorder,
     Closed,
+    crate::StoreDown,
     AllowAllMcpGuard as dyn McpOperationGuard,
 ])]
 struct LayeredModule;
@@ -163,6 +191,30 @@ async fn an_operation_scope_guard_refuses_that_operation_alone() {
     );
 }
 
+/// A guard that cannot evaluate the operation files what failed on the
+/// operation's denial line, and the client reads the condition alone.
+#[tokio::test]
+async fn an_operation_denial_keeping_its_cause_files_the_chain() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+
+    let refused = call_tool(app.http(), PATH, "down", None).await;
+    assert!(
+        refused.contains(nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE),
+        "the client reads the condition: {refused}",
+    );
+    assert!(
+        !refused.contains("refused the connection") && !refused.contains("never reached"),
+        "…never the cause, and the body never ran: {refused}",
+    );
+    let event = logs.expect_one("nest_rs::layers", "guard denied the operation");
+    assert_eq!(event.field("operation").as_deref(), Some("down"));
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some(crate::STORE_DOWN_CHAIN)
+    );
+}
+
 #[tokio::test]
 async fn a_guard_bound_to_an_operation_is_under_the_access_contract() {
     use nest_rs_core::Discoverable;
@@ -180,16 +232,10 @@ async fn a_guard_bound_to_an_operation_is_under_the_access_contract() {
     );
 }
 
-#[tokio::test]
-async fn the_operation_reports_its_kind_and_name() {
-    let container = nest_rs_core::Container::default();
-    let ctx = McpOperationContext::new(&container, "LayeredTool", McpOperationKind::Tool, "open");
-
-    assert_eq!(ctx.host(), "LayeredTool");
-    assert_eq!(ctx.kind(), McpOperationKind::Tool);
-    assert_eq!(ctx.kind().as_str(), "tool");
-    assert_eq!(ctx.name(), "open");
-    assert_eq!(ctx.container().id(), container.id());
+#[test]
+fn an_operation_kind_reads_as_the_router_serving_it() {
+    assert_eq!(McpOperationKind::Tool.as_str(), "tool");
+    assert_eq!(McpOperationKind::Prompt.to_string(), "prompt");
 }
 
 /// `static` counters are this test's alone: nextest runs each test in its own process.
@@ -204,19 +250,19 @@ impl Layer for Pooled {}
 
 #[async_trait]
 impl Guard for Pooled {
-    async fn check_http(&self, _req: &mut poem::Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         POOLED_HTTP_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         POOLED_MCP_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl HttpGuard for Pooled {}
-impl McpGuard for Pooled {}
+impl GuardFor<nest_rs_http::HttpView> for Pooled {}
+impl GuardFor<nest_rs_mcp::McpView> for Pooled {}
 
 #[mcp(path = "/mcp/pooled")]
 #[use_guards(Pooled)]
@@ -272,8 +318,8 @@ async fn a_pooled_guard_checks_the_request_once_and_the_operation_once() {
         1,
         "and the operation is checked once too: the pool joins the per-operation \
          chain, where the host-scope declaration of the same guard dedups onto it \
-         by `TypeId`. Charging the `check_http` against the `check_mcp` is what \
-         used to leave this at zero",
+         by `TypeId`. Charging the request's `check_http` against the \
+         operation's `check` is what used to leave this at zero",
     );
 }
 
@@ -289,13 +335,13 @@ impl Layer for PoolOnlyMcp {}
 
 #[async_trait]
 impl Guard for PoolOnlyMcp {
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         POOL_ONLY_MCP_CALLS.fetch_add(1, Ordering::SeqCst);
         Err(Denial::forbidden("the pool refuses this operation"))
     }
 }
 
-impl McpGuard for PoolOnlyMcp {}
+impl GuardFor<nest_rs_mcp::McpView> for PoolOnlyMcp {}
 
 #[mcp(path = "/mcp/unbridged")]
 #[derive(Clone, Default)]
@@ -354,13 +400,13 @@ impl Layer for DeclaredEverywhere {}
 
 #[async_trait]
 impl Guard for DeclaredEverywhere {
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         DECLARED_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl McpGuard for DeclaredEverywhere {}
+impl GuardFor<nest_rs_mcp::McpView> for DeclaredEverywhere {}
 
 /// Stands in for `McpAbilityBridge`, which runs nothing from the pool.
 #[injectable]
@@ -428,12 +474,12 @@ impl Layer for NeverProvided {}
 
 #[async_trait]
 impl Guard for NeverProvided {
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl McpGuard for NeverProvided {}
+impl GuardFor<nest_rs_mcp::McpView> for NeverProvided {}
 
 #[mcp(path = "/mcp/orphan")]
 #[use_guards(NeverProvided)]
@@ -517,12 +563,12 @@ impl Layer for CountsItsDrop {}
 
 #[async_trait]
 impl Guard for CountsItsDrop {
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl McpGuard for CountsItsDrop {}
+impl GuardFor<nest_rs_mcp::McpView> for CountsItsDrop {}
 
 #[mcp(path = "/mcp/counted")]
 #[use_guards(CountsItsDrop)]

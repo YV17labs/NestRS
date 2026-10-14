@@ -25,7 +25,3 @@ impl HttpBootCheck {
         (self.0)(container)
     }
 }
-
-/// Marker provided by `use_guards_global` when at least one global guard is
-/// registered; the transport reads it to refuse an unguardable `mount(...)`.
-pub struct GlobalGuardsActive;

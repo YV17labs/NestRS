@@ -1,10 +1,13 @@
 //! `OpenApiModule` — self-mounts `/api` (Swagger UI) + `/api-json` (the document)
-//! over the HTTP transport. Both endpoints are **public** (`EdgePosture::Exempt`).
+//! over the HTTP transport. Both endpoints are **public** (`Posture::Public`).
 
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{Collecting, Container, ContainerBuilder, DynamicModule, Registering};
+use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+use nest_rs_core::{
+    Collecting, Container, ContainerBuilder, DynamicModule, Handler, Posture, Registering,
+};
 use nest_rs_http::{HttpEndpointMeta, join_path, matched, version_path};
 use poem::{Route, get};
 
@@ -74,46 +77,51 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
         return builder;
     }
     builder.provide_meta(
-        HttpEndpointMeta::new(DOCS_PATH, "openapi", move |container, route: Route| {
-            // One ledger for every document, so a route collision is reported once.
-            let mut reported = Reported::default();
-            let default = spec(container, &options, None, &mut reported);
-            if options.emit_document {
-                let dest = options.document_path.clone();
-                let contents = format!("{default}\n");
-                tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
-                    Ok(()) => tracing::info!(
-                        target: crate::TARGET,
-                        path = %dest.display(),
-                        bytes = contents.len(),
-                        "wrote OpenAPI document",
-                    ),
-                    Err(err) => tracing::warn!(
-                        target: crate::TARGET,
-                        path = %dest.display(),
-                        error = %nest_rs_core::error_message(&err),
-                        "failed to write OpenAPI document",
-                    ),
-                });
-            }
-            let mut route = route
-                .at(SPEC_PATH, matched(get(ui::spec_endpoint(default))))
-                .at(DOCS_PATH, matched(get(ui::swagger_index)))
-                .at(CSS_PATH, matched(get(ui::swagger_css)))
-                .at(BUNDLE_PATH, matched(get(ui::swagger_bundle)))
-                .at(PRESET_PATH, matched(get(ui::swagger_preset)))
-                .at(INITIALIZER_PATH, matched(get(ui::swagger_initializer)));
-            // OpenAPI keys operations by path, so a version the path does not
-            // carry needs a document of its own.
-            for version in versioned_documents(container) {
-                let spec = spec(container, &options, Some(&version), &mut reported);
-                route = route.at(
-                    document_path(&version),
-                    matched(get(ui::spec_endpoint(spec))),
-                );
-            }
-            route
-        })
+        HttpEndpointMeta::new(
+            &DOCUMENT,
+            DOCS_PATH,
+            "openapi",
+            move |container, route: Route| {
+                // One ledger for every document, so a route collision is reported once.
+                let mut reported = Reported::default();
+                let default = spec(container, &options, None, &mut reported);
+                if options.emit_document {
+                    let dest = options.document_path.clone();
+                    let contents = format!("{default}\n");
+                    tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
+                        Ok(()) => tracing::info!(
+                            target: crate::TARGET,
+                            path = %dest.display(),
+                            bytes = contents.len(),
+                            "wrote OpenAPI document",
+                        ),
+                        Err(err) => tracing::warn!(
+                            target: crate::TARGET,
+                            path = %dest.display(),
+                            error = %nest_rs_core::error_message(&err),
+                            "failed to write OpenAPI document",
+                        ),
+                    });
+                }
+                let mut route = route
+                    .at(SPEC_PATH, matched(get(ui::spec_endpoint(default))))
+                    .at(DOCS_PATH, matched(get(ui::swagger_index)))
+                    .at(CSS_PATH, matched(get(ui::swagger_css)))
+                    .at(BUNDLE_PATH, matched(get(ui::swagger_bundle)))
+                    .at(PRESET_PATH, matched(get(ui::swagger_preset)))
+                    .at(INITIALIZER_PATH, matched(get(ui::swagger_initializer)));
+                // OpenAPI keys operations by path, so a version the path does not
+                // carry needs a document of its own.
+                for version in versioned_documents(container) {
+                    let spec = spec(container, &options, Some(&version), &mut reported);
+                    route = route.at(
+                        document_path(&version),
+                        matched(get(ui::spec_endpoint(spec))),
+                    );
+                }
+                route
+            },
+        )
         // Every path the closure registers beyond `DOCS_PATH`, or a versioned
         // catch-all controller answers `/api-json`, a sibling outside its subtree.
         .also_mounts([
@@ -123,10 +131,21 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
             BUNDLE_PATH,
             PRESET_PATH,
             INITIALIZER_PATH,
-        ])
-        .exempt(),
+        ]),
     )
 }
+
+/// The site the document and its UI answer as: public by design, a development
+/// surface no guard gates.
+static DOCUMENT: Handler = declare_handler(HandlerDeclaration {
+    unit: nest_rs_http::unit::REQUEST,
+    host: TypeId::of::<OpenApiModule>(),
+    host_name: "OpenApiModule",
+    method: "",
+    address: DOCS_PATH,
+    posture: Posture::Public,
+    meta: MetaLevels::default,
+});
 
 fn spec(
     container: &Container,

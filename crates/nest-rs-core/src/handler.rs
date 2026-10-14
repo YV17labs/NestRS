@@ -47,7 +47,8 @@ impl Handler {
     /// What the decorator declared a client addresses: the route template as
     /// written (without the app's prefix or version), the GraphQL field, the
     /// WS event, the MCP tool or prompt, the queue, the job, the event type,
-    /// the mount path.
+    /// the mount path. A self-mount its configuration moves (`/graphql`) keeps
+    /// its default path here.
     pub fn address(&self) -> &'static str {
         self.declared.address
     }

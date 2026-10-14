@@ -54,6 +54,7 @@ use tracing::Instrument;
 use crate::McpError;
 use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
 use crate::guard::{BoxFuture, McpOperationGuard};
+use nest_rs_core::__private::install_pending;
 
 /// Wraps a tool host so each operation runs with the request scope, the
 /// operation guard's ambient state, and the registered [`McpToolContext`]'s
@@ -107,6 +108,7 @@ impl<H> PropagatingHandler<H> {
             scope,
             captured: context_captured,
             guard_captured,
+            attached,
             span,
             correlation,
         } = ambient;
@@ -124,8 +126,10 @@ impl<H> PropagatingHandler<H> {
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
         let line = OperationLine::open(method, addressed, correlation.clone(), operation.clone());
 
+        // Inside the operation's own scope: rmcp's task carries no ambient
+        // context for the attachments to extend.
         let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(async move {
-            nest_rs_core::with_request_scope(scope, correlation, inner)
+            nest_rs_core::with_request_scope(scope, correlation, install_pending(attached, inner))
                 .await
                 .map(OperationValue::new)
         });

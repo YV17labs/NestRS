@@ -159,10 +159,9 @@ async fn a_service_in_a_module_the_gateway_imports_still_resolves_the_registry()
 }
 
 use nest_rs_core::{Layer, Transport, injectable};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_testing::LogCapture;
 use nest_rs_ws::async_trait;
-use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
 use nest_rs_ws::nest_rs_http::{HttpConfig, HttpTransport};
 
 #[injectable]
@@ -173,15 +172,15 @@ impl Layer for TicketGuard {}
 
 #[async_trait]
 impl Guard for TicketGuard {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        match req.headers().get("x-ticket") {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        match nest_rs_http::HttpView::of(cx)?.request().header("x-ticket") {
             Some(_) => Ok(()),
             None => Err(Denial::unauthorized("missing ticket")),
         }
     }
 }
 
-impl HttpGuard for TicketGuard {}
+impl GuardFor<nest_rs_http::HttpView> for TicketGuard {}
 
 #[gateway(path = "/guarded")]
 #[use_guards(TicketGuard)]

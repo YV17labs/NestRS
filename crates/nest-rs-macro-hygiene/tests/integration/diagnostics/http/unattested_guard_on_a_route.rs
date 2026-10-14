@@ -1,9 +1,8 @@
-//! A guard bound where it has no `check_*` is the fail-open this bound closes.
+//! A guard bound where it does not check is the fail-open this bound closes.
 //!
-//! `Guard::check_http` defaults to `Ok(())` like every other edge's entry, so
-//! before the `HttpGuard` bound an empty `impl Guard for X {}` beside a verb
-//! compiled, read as a protection, and passed every request. HTTP was the last
-//! edge without the attestation.
+//! `Guard::check_http` admits by default like `Guard::check`, so without the
+//! `GuardFor<HttpView>` bound an empty `impl Guard for X {}` beside a verb
+//! compiled, read as a protection, and passed every request.
 
 use nest_rs::core::{Layer, injectable};
 use nest_rs::guards::Guard;

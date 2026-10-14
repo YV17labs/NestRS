@@ -7,7 +7,7 @@ use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefau
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, async_trait, guard};
 use nest_rs_seaorm::{
     Access, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError,
 };
@@ -86,9 +86,9 @@ impl CrudService for PostsService {
 struct PublishedOnly;
 
 impl AbilityFactory for PublishedOnly {
-    type Actor = ();
+    type Actor = crate::Anyone;
 
-    fn define(&self, _actor: &(), ab: &mut AbilityBuilder) {
+    fn define(&self, _actor: &crate::Anyone, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, post::Entity)
             .when(|p| p.eq(post::Column::Published, true))
             .fields([post::Column::Id, post::Column::Title]);
@@ -107,13 +107,13 @@ impl Layer for AlwaysAuthenticated {}
 
 #[async_trait]
 impl Guard for AlwaysAuthenticated {
-    async fn check_http(&self, req: &mut poem::Request) -> Result<(), Denial> {
-        req.extensions_mut().insert(());
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(crate::Anyone);
         Ok(())
     }
 }
 
-impl HttpGuard for AlwaysAuthenticated {}
+impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
 /// The subgraph's operation guard, aliased because a `providers = [...]` entry
 /// is one type path — a generic's comma would read as the next provider.

@@ -31,6 +31,8 @@ impl Claims {
     }
 }
 
+impl nest_rs::core::AmbientValue for Claims {}
+
 impl nest_rs::authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|sub| sub.to_string())

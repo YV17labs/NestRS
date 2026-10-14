@@ -1,10 +1,10 @@
-//! The per-site guard chain: what an in-band transport composes once and then
-//! runs on every operation.
+//! The per-site guard chain: what an in-band edge composes once and then runs
+//! on every operation.
 //!
-//! GraphQL and MCP have no mount seam — neither the schema nor the MCP host can
-//! see [`Guard`] — so each site memoizes its chain in a [`SiteChainCell`] the
-//! decorator emits as a `static`: composed once per site, then one atomic load
-//! and one `Weak` upgrade per operation.
+//! GraphQL and MCP have no mount seam to compose a chain at, so each site
+//! memoizes its chain in a [`SiteChainCell`] the decorator emits as a `static`:
+//! composed once per site, then one atomic load and one `Weak` upgrade per
+//! operation.
 //!
 //! The cell is keyed by [`ContainerId`]: a test process serves several apps, and
 //! one app's guard chain must never gate another's operations. The `static`
@@ -14,32 +14,33 @@
 use std::any::TypeId;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, site_chains};
+use nest_rs_core::__private::{
+    ResolvedLayer, compose_chain, dedup_bucket, log_effective_chain, report_unresolved,
+    resolve_scoped, site_chains,
+};
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, ContainerId, UnresolvedLayerError};
 
-use crate::dispatch::route_shaper::log_effective_chain;
-use crate::dispatch::scoped_spec::{
-    ScopedGuardSpec, report_unresolved, resolve_global_guards, resolve_scoped,
-};
+use crate::registry::{GuardSpec, resolve_global_guards};
 use crate::{Denial, Guard};
 
 /// The scope-tagged guard declarations of one operation site, as the decorator
 /// knows them. Read once per site, on the cache miss that composes the chain.
 pub struct SiteChainSources {
     /// `#[use_guards(...)]` on the provider — the resolver struct, the MCP host.
-    pub provider: Vec<ScopedGuardSpec>,
+    pub provider: Vec<GuardSpec>,
     /// `#[use_guards(...)]` beside the operation.
-    pub method: Vec<ScopedGuardSpec>,
+    pub method: Vec<GuardSpec>,
     /// `#[force_guards(...)]` — replay these even when a broader scope has them.
     pub force: Vec<TypeId>,
 }
 
 /// Whether a site composes the app-wide guard pool into its chain.
 ///
-/// Every site does, bar one — see [`compose`].
+/// Every site does, bar the ones a site in front of them already ran it for —
+/// see [`SiteChainCell::chain`].
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GlobalBucket {
+pub enum GlobalBucket {
     /// Fold the pool in, deduped against the narrower scopes.
     Fold,
     /// Leave it out: a site in front of this one already ran it.
@@ -47,7 +48,7 @@ pub(crate) enum GlobalBucket {
 }
 
 /// One composed chain, as shared by every operation of its site.
-type Chain = Arc<[ResolvedLayer<dyn Guard>]>;
+pub type Chain = Arc<[ResolvedLayer<dyn Guard>]>;
 
 /// One site's composed guard chain, memoized per [`ContainerId`].
 ///
@@ -88,14 +89,16 @@ impl SiteChainCell {
         }
     }
 
-    /// This site's chain for `container`, composing it on first sight. See
-    /// [`compose`].
+    /// This site's chain for `container`, composing it on first sight: the
+    /// app-wide pool, the provider's `#[use_guards]` and the operation's own,
+    /// deduplicated; the pool is left out where `global` says a site in front
+    /// of this one ran it.
     ///
     /// `global` is a function of the container, so the memo's key covers
     /// everything the composition reads. A site whose chain does not compose
     /// is refused with an opaque [`Denial::internal`], its `error` filed, and
     /// nothing is memoized: the unit never runs without a layer it declares.
-    pub(crate) fn chain(
+    pub fn chain(
         &self,
         container: &Container,
         route_label: &str,
@@ -156,12 +159,9 @@ impl SiteChainCell {
 
 /// Resolve, dedup and order this site's chain.
 ///
-/// The app-wide pool is folded in on both transports: this site runs its
-/// [`check_graphql`](Guard::check_graphql) / `check_mcp`, which an `Exempt`
-/// edge's `check_http` never stands in for.
-///
-/// Only `#[entity]` operations skip it ([`GlobalBucket::Skip`]): the federation
-/// gate in front of `_entities` already ran it. Skipping composes and then drops
+/// The app-wide pool is folded in: this site runs each guard's
+/// [`check`](Guard::check), which the endpoint request's `check_http` never
+/// stands in for. Skipping it ([`GlobalBucket::Skip`]) composes and then drops
 /// the global entries, never composes without them — the pool is what
 /// `compose_chain`'s dedup collapses a narrower declaration against.
 fn compose(
@@ -183,9 +183,96 @@ fn compose(
     Ok(chain.into())
 }
 
+/// Guards in the order they run.
+type Guards = Vec<ResolvedLayer<dyn Guard>>;
+
+/// Split the global pool at the first guard a bridge covers, the bridge running
+/// every guard `covers` names itself: the guards listed before that one, then
+/// the rest, every covered guard left to the bridge. Run head, bridge, tail,
+/// and the bridge sits where the pool placed the authentication it carries,
+/// ahead of a pooled guard reading the principal; with nothing covered it runs
+/// after the whole pool.
+pub fn split_at_covered(pool: Guards, covers: &[TypeId]) -> (Guards, Guards) {
+    let covered = |entry: &ResolvedLayer<dyn Guard>| covers.contains(&entry.type_id);
+    let mut head = pool;
+    let at = head.iter().position(covered).unwrap_or(head.len());
+    let mut tail = head.split_off(at);
+    tail.retain(|entry| !covered(entry));
+    (head, tail)
+}
+
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::Layer;
+
     use super::*;
+
+    struct First;
+    struct Covered;
+    struct Middle;
+    struct AlsoCovered;
+    struct Last;
+
+    macro_rules! admit_all {
+        ($($guard:ident),*) => {$(
+            impl Layer for $guard {}
+            impl Guard for $guard {}
+        )*};
+    }
+
+    admit_all!(First, Covered, Middle, AlsoCovered, Last);
+
+    fn entry<G: Guard>(guard: G) -> ResolvedLayer<dyn Guard> {
+        ResolvedLayer {
+            type_id: TypeId::of::<G>(),
+            name: std::any::type_name::<G>(),
+            source: LayerSite::Global,
+            layer: Arc::new(guard),
+        }
+    }
+
+    fn pool() -> Vec<ResolvedLayer<dyn Guard>> {
+        vec![
+            entry(First),
+            entry(Covered),
+            entry(Middle),
+            entry(AlsoCovered),
+            entry(Last),
+        ]
+    }
+
+    fn ids(chain: &[ResolvedLayer<dyn Guard>]) -> Vec<TypeId> {
+        chain.iter().map(|entry| entry.type_id).collect()
+    }
+
+    #[test]
+    fn the_bridge_sits_at_the_first_guard_it_covers_and_runs_every_covered_one() {
+        let covers = [TypeId::of::<Covered>(), TypeId::of::<AlsoCovered>()];
+        let (head, tail) = split_at_covered(pool(), &covers);
+        assert_eq!(ids(&head), [TypeId::of::<First>()]);
+        assert_eq!(ids(&tail), [TypeId::of::<Middle>(), TypeId::of::<Last>()]);
+    }
+
+    #[test]
+    fn a_bridge_covering_nothing_in_the_pool_runs_after_it() {
+        let (head, tail) = split_at_covered(pool(), &[TypeId::of::<u8>()]);
+        assert_eq!(ids(&head).len(), 5);
+        assert!(ids(&tail).is_empty());
+    }
+
+    #[test]
+    fn a_bridge_covering_the_whole_pool_runs_alone() {
+        let covers = [
+            TypeId::of::<First>(),
+            TypeId::of::<Covered>(),
+            TypeId::of::<Middle>(),
+            TypeId::of::<AlsoCovered>(),
+            TypeId::of::<Last>(),
+        ];
+        let (head, tail) = split_at_covered(pool(), &covers);
+        assert!(ids(&head).is_empty());
+        assert!(ids(&tail).is_empty());
+    }
 
     fn declares_nothing() -> SiteChainSources {
         SiteChainSources {

@@ -216,8 +216,9 @@ plural folder (`events/` is an edge): several sit at the port as
   `schedule`, `mcp`, `events`; a new edge, `<edge>/module.rs` +
   `<Module><Edge>Module`, is a framework change.
 - **A file under `<edge>/` serves that edge alone**; a type several edges
-  dispatch to (a guard with `check_http` and `check_ws_message`) sits at the
-  crate or module root, or the other edges need that edge's feature to reach it.
+  dispatch to (a guard declaring `GuardFor<HttpView>` and `GuardFor<WsView>`)
+  sits at the crate or module root, or the other edges need that edge's feature
+  to reach it.
 - `mod.rs` and `lib.rs` carry `mod`, `pub use` and, where the crate writes doc
   comments, a `//!` — no logic.
 - An injected service field is `svc`, or `<name>_svc` beside others; other

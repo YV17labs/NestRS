@@ -3,12 +3,11 @@
 //! the self-mounts: last, outside the prefix, and public.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_static_files::{Embedded, StaticFilesConfig, StaticFilesModule, StaticFilesOptions};
 use nest_rs_testing::{LogCapture, TestApp};
-use poem::Request;
 use poem::http::StatusCode;
 
 use crate::embedded::Site;
@@ -277,12 +276,12 @@ impl Layer for DenyEveryone {}
 
 #[async_trait]
 impl Guard for DenyEveryone {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("no"))
     }
 }
 
-impl HttpGuard for DenyEveryone {}
+impl GuardFor<nest_rs_http::HttpView> for DenyEveryone {}
 
 #[module(imports = [StaticFilesModule], providers = [PostsController, DenyEveryone])]
 struct GuardedApp;

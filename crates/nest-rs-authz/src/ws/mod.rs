@@ -69,7 +69,7 @@
 //! # }
 //! ```
 //!
-//! There is no `WsAbilityBridge`: a gateway is `Guarded`, so the HTTP guards run
+//! There is no `WsAbilityBridge`: a gateway is `Gated`, so the HTTP guards run
 //! on the upgrade. Per message only the ambient ability is re-installed, by
 //! `nest_rs_seaorm::ws::WsDataContext` (`dyn SocketContext`).
 

@@ -37,7 +37,6 @@ pub(crate) mod reason {
     pub(crate) const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
     /// Nothing installed an ability: a wiring failure, reported by every
     /// fail-closed exit, masking included (via [`mask_reason`](crate::ability::mask_reason)).
-    #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
     pub(crate) const NO_AMBIENT_ABILITY: &str = crate::ability::mask_reason::NO_AMBIENT_ABILITY;
     /// A field grant stripped a key the answer cannot be delivered without.
     /// Only the edges handing a typed value back reach it; HTTP and WS drop the key.

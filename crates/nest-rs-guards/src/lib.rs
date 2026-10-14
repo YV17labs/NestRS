@@ -1,38 +1,40 @@
 //! # nest-rs-guards
 //!
-//! Transport-spanning guards for nestrs — **one trait, four transports**
-//! (HTTP, GraphQL, WS, MCP). Declared once with
-//! `App::builder().use_guards_global(...)`, every handler on every
-//! transport runs through the chain.
+//! One guard contract for every edge. A [`Guard`] checks an HTTP request
+//! through [`check_http`](Guard::check_http) — a route, a WebSocket upgrade, the
+//! request of an in-band endpoint — and a unit an in-band edge carries through
+//! [`check`](Guard::check): a GraphQL field, a WebSocket message, an MCP
+//! operation. Declared once with `App::builder().use_guards_global(...)`, the
+//! pool runs at every site of every edge.
 //!
-//! Plug-in point for the Layer System: every guard is a [`Layer`](nest_rs_core::Layer), so the
-//! `#[routes]` / `#[operations]` / `#[messages]` shapers dedup by `TypeId` when
-//! the same guard is declared at multiple sites (global + controller +
-//! method) — the broadest [`LayerSite`](nest_rs_core::LayerSite) wins, and a
-//! redundant declaration is logged at `debug`. The framework runs guards site
-//! by site, from the broadest in, in **declaration order** within each;
-//! [`Layer::priority`](nest_rs_core::Layer::priority) is an opt-in tiebreaker
-//! within a site, never across.
+//! The contract names a unit's context, never an edge's types: this crate
+//! depends on `nest-rs-core` alone, and every edge depends on it and runs the
+//! guards itself.
 //!
-//! `#[public]` is not a framework-level skip: the macro attaches a
-//! [`Public`](nest_rs_http::Public) marker via the same metadata channel
-//! as `#[meta(...)]`, and each guard decides whether to honor it. An
-//! `AbilityGuard` may still run on a public route to apply visitor rules;
-//! an `AuthnGuard` may skip rejection when no token is present.
+//! Every guard is a [`Layer`](nest_rs_core::Layer), so a guard declared at
+//! several sites (global, host, method) runs once, deduplicated by `TypeId` —
+//! the broadest [`LayerSite`](nest_rs_core::LayerSite) wins, and a redundant
+//! declaration is logged at `debug`. Sites run from the broadest in, each in
+//! **declaration order**; [`Layer::priority`](nest_rs_core::Layer::priority) is
+//! an opt-in tiebreaker within a site, never across.
+//!
+//! `#[public]` is not a framework-level skip: a site's
+//! [`Posture`](nest_rs_core::Posture) is read through
+//! [`UnitContext::reflector`](nest_rs_core::UnitContext::reflector), and each
+//! guard decides what it means — an authentication guard admits an anonymous
+//! caller there, an ability guard builds the visitor's rules.
 //!
 //! ## Defining a guard
 //!
-//! Override only the `check_*` method(s) where this guard has work to do —
-//! the rest inherit `Ok(())` defaults — then **attest each edge you
-//! overrode** with its marker ([`HttpGuard`], [`GraphqlGuard`], [`WsGuard`],
-//! [`McpGuard`]). The impl-half decorators bind against the marker, so a guard
-//! declared where it has no `check_*` is a compile error at the
-//! `#[use_guards]` line instead of a chain entry that passes everything.
-//! `Layer` provides `priority()` / `name()` defaults; override `priority()`
-//! only when this guard must beat declaration order.
+//! Override the entry where the guard has work — both admit by default — then
+//! **declare each edge it checks** with [`GuardFor`]. The decorators bind a
+//! guard on the edges it declares, so a guard declared where its check is the
+//! default is a compile error at the `#[use_guards]` line instead of a chain
+//! entry that passes everything.
 //!
 //! ```
 //! use nest_rs_guards::prelude::*;
+//! use nest_rs_http::HttpView;
 //! # mod audit { pub const TARGET: &str = "features::audit"; }
 //!
 //! #[injectable]
@@ -43,15 +45,21 @@
 //!
 //! #[async_trait]
 //! impl Guard for AuditGuard {
-//!     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-//!         tracing::info!(target: audit::TARGET, method = %req.method(), path = %req.uri(), "request seen");
+//!     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+//!         let request = HttpView::of(cx)?.request();
+//!         tracing::info!(target: audit::TARGET, method = %request.method(), "request seen");
 //!         Ok(())
 //!     }
 //! }
 //!
-//! impl HttpGuard for AuditGuard {}
+//! impl GuardFor<HttpView> for AuditGuard {}
 //! # fn main() {}
 //! ```
+//!
+//! A value a guard makes known for the rest of the unit — a principal, a
+//! tenant — is attached with [`UnitContext::attach`](nest_rs_core::UnitContext::attach):
+//! its type implements [`AmbientValue`](nest_rs_core::AmbientValue), and it is
+//! ambient once the whole stage passed, never on a refused unit.
 //!
 //! ## Registering globally
 //!
@@ -62,92 +70,53 @@
 //! `AuthnGuard` — globally, on a controller or gateway, or beside one route —
 //! and the boot fails naming both, instead of every request answering `500`.
 //!
-//! The pool holds `Arc<dyn Guard>` and runs every `check_*` a pooled guard
-//! overrides, marker or not; decorator sites bind on the markers, so declare
-//! them anyway.
+//! The pool holds `Arc<dyn Guard>` and runs whichever entry a site calls,
+//! declared or not; the decorators bind on [`GuardFor`], so declare the edges
+//! anyway.
 //!
-//! ## Marking a handler `#[public]`
+//! ## Where guards run
 //!
-//! ```
-//! # use nest_rs_http::{controller, routes};
-//! # #[controller(path = "/")]
-//! # struct HealthController;
-//! # #[routes]
-//! # impl HealthController {
-//! #[get("/health/live")]
-//! #[public]
-//! async fn live(&self) -> &'static str { "ok" }
-//! # }
-//! # fn main() {}
-//! ```
-//!
-//! The macro attaches a [`Public`](nest_rs_http::Public) marker to the
-//! route. Guards that want to honor it read it via the transport's
-//! reflector and adjust their policy.
-//!
-//! ## Architecture
-//!
-//! `#[routes]` bakes a [`RouteShaper`] per route at mount; `#[operations]`
-//! emits a `run_layered_graphql_chain` call at the start of every resolver
-//! method; `#[messages]` composes its per-event guard table at gateway
-//! mount (wrapping each guard via `GuardAsWsMessageCheck`) — the per-route
-//! entry is what gives TypeId-level dedup against the global chain. Guards
-//! have **no** transport-edge band: the pool executes in the shaper
-//! (post-routing, so it reads `#[public]`), at a `Guarded` self-mount's
-//! edge, or in band on `/graphql` and `/mcp` (`GlobalPoolOperationGuard`,
-//! `GlobalPoolMcpGuard`), a registered bridge run inside it.
+//! The HTTP edge runs [`check_http`](Guard::check_http) after routing, so a
+//! guard reads the route's `#[public]`; a self-mount runs it at its request.
+//! The in-band edges run [`check`](Guard::check) per operation, from a chain
+//! each site composes once.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod builder;
+mod chain;
 mod denial;
-pub mod dispatch;
-mod endpoint;
 mod guard;
 pub mod prelude;
+mod reason;
 mod registry;
 mod scope;
+mod stage;
+#[cfg(test)]
+mod testing;
+mod validate;
 
 pub use builder::AppBuilderGuardsExt;
 pub use denial::Denial;
-pub use endpoint::{GuardEndpoint, GuardExt};
-pub use guard::{Guard, GuardPhase, HttpGuard, PrincipalClaim};
-// Capability markers the impl-half decorators bind on. `HttpGuard` takes no
-// `cfg`: HTTP is the substrate the other three edges mount on.
-#[cfg(feature = "graphql")]
-pub use guard::GraphqlGuard;
-#[cfg(feature = "mcp")]
-pub use guard::McpGuard;
-#[cfg(feature = "ws")]
-pub use guard::WsGuard;
-pub use scope::{GrantedScopes, RequiredScopes};
-// The bridge `#[messages]` wraps per-event guards in.
-#[cfg(feature = "ws")]
-pub use guard::GuardAsWsMessageCheck;
-// Re-exported for macro-emitted code.
-pub use nest_rs_core::layer_chain;
+pub use guard::{Guard, GuardFor, GuardPhase, PrincipalClaim};
 pub use registry::{GuardSpec, GuardSpecs, guard};
+pub use scope::{GrantedScopes, RequiredScopes};
 // Re-exported so a `Guard` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;
-
-// Re-exported for macro-emitted code.
-#[cfg(feature = "ws")]
-pub use dispatch::denial_to_ws_error;
-#[cfg(feature = "graphql")]
-pub use dispatch::{GraphqlSite, denial_to_graphql_error, run_layered_graphql_chain};
-pub use dispatch::{RouteShaper, denial_to_http_error, denial_to_http_response};
-#[cfg(feature = "mcp")]
-pub use dispatch::{denial_to_mcp_error, run_layered_mcp_chain};
 
 #[doc(hidden)]
 pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    #[cfg(any(feature = "graphql", feature = "mcp"))]
-    pub use crate::dispatch::chain::{SiteChainCell, SiteChainSources};
-    #[cfg(feature = "ws")]
-    pub use crate::dispatch::ws_chain::{check_ws_gateway, guard_ws_upgrade, ws_event_chain};
+    pub use crate::chain::{
+        Chain, GlobalBucket, SiteChainCell, SiteChainSources, split_at_covered,
+    };
+    pub use crate::denial::failure_chain;
+    pub use crate::reason::{client_message, denial_code, structured_reason};
+    pub use crate::registry::{global_guards_active, resolve_global_chain, resolve_global_guards};
+    pub use crate::stage::run_stage;
+    pub use crate::validate::{boot_validate_guards, validate_guard_chain};
 
     pub use nest_rs_core::__private::{ResolvedLayer, compose_chain};
 }

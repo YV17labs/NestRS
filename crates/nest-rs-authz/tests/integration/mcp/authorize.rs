@@ -11,9 +11,8 @@ use std::sync::Arc;
 use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
 use nest_rs_mcp::{McpError, McpOperationGuard, mcp, tools};
 
 use super::{PassGuard, widget};
@@ -28,11 +27,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let role = req
-            .headers()
-            .get("x-role")
-            .and_then(|value| value.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let role = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .unwrap_or_default()
             .to_owned();
         let mut builder = AbilityBuilder::new();
@@ -51,20 +49,17 @@ impl Guard for AbilityInjector {
             // The anonymous branch holds a real grant; the gate must still refuse it.
             "visitor" => {
                 builder.can(Action::Read, widget::Entity);
-                req.extensions_mut().insert(Arc::new(
-                    builder.build_visitor().expect("valid test ability"),
-                ));
+                cx.attach(builder.build_visitor().expect("valid test ability"));
                 return Ok(());
             }
             _ => {}
         }
-        req.extensions_mut()
-            .insert(Arc::new(builder.build().expect("valid test ability")));
+        cx.attach(builder.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 #[mcp(path = "/mcp/gate")]
 #[derive(Clone, Default)]

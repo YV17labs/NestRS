@@ -2,7 +2,7 @@
 //! interceptor is mounted by the import, so only a boot can see it.
 
 use nest_rs_core::{Discovery, Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::__private::HttpEndpointWrap;
 use nest_rs_http::poem::http::StatusCode;
 use nest_rs_http::poem::{Request, Response};
@@ -107,8 +107,12 @@ impl Layer for AdmitGuard {}
 
 #[async_trait]
 impl Guard for AdmitGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        if req.headers().contains_key(ADMIT) {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        if nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header(ADMIT)
+            .is_some()
+        {
             Ok(())
         } else {
             Err(Denial::unauthorized("no"))
@@ -116,7 +120,7 @@ impl Guard for AdmitGuard {
     }
 }
 
-impl HttpGuard for AdmitGuard {}
+impl GuardFor<nest_rs_http::HttpView> for AdmitGuard {}
 
 #[controller(path = "/private")]
 struct PrivateController;

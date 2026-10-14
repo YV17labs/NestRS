@@ -237,13 +237,7 @@ impl Issuer {
 fn config(jwks_uri: String) -> AuthnConfig {
     AuthnConfig {
         jwks_uri: Some(jwks_uri),
-        tls: nest_rs_config::ClientTls::new(
-            Some(nest_rs_config::Material {
-                bytes: AUTHORITY.pem().as_bytes().to_vec(),
-                path: None,
-            }),
-            None,
-        ),
+        tls: AUTHORITY.client_tls(),
         ..AuthnConfig::default()
     }
 }

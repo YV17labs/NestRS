@@ -214,13 +214,7 @@ mod tests {
         });
         let client = OAuthClient::new(nest_rs_oauth_client::OAuthClientConfig {
             userinfo_url: format!("https://{addr}/user"),
-            tls: nest_rs_config::ClientTls::new(
-                Some(nest_rs_config::Material {
-                    bytes: authority.pem().as_bytes().to_vec(),
-                    path: None,
-                }),
-                None,
-            ),
+            tls: authority.client_tls(),
             ..GithubSocialConfig {
                 client_id: "id".into(),
                 client_secret: "secret".into(),

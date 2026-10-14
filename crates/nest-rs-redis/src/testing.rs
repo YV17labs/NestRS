@@ -31,7 +31,7 @@ pub(crate) fn inline(pem: &str) -> Material {
 
 /// The test authority trusted, and no certificate presented.
 pub(crate) fn trusting_the_authority() -> ClientTls {
-    ClientTls::new(Some(inline(AUTHORITY.pem())), None)
+    AUTHORITY.client_tls()
 }
 
 /// `cert` presented with `key`, nothing else set.

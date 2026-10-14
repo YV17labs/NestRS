@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use nest_rs_authn::{AuthError, JwtOptions, JwtService};
-use nest_rs_config::{ClientTls, Config, ConfigService, Material, Namespaced, var_name};
+use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, var_name};
 use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, TARGET};
 use nest_rs_testing::{LogCapture, TestAuthority, TestCertificate};
 use serde::Deserialize;
@@ -194,17 +194,6 @@ static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
 
 static CERTIFICATE: LazyLock<TestCertificate> = LazyLock::new(|| AUTHORITY.server(&["127.0.0.1"]));
 
-/// The client's TLS settings trusting [`AUTHORITY`].
-fn trusting() -> ClientTls {
-    ClientTls::new(
-        Some(Material {
-            bytes: AUTHORITY.pem().as_bytes().to_vec(),
-            path: None,
-        }),
-        None,
-    )
-}
-
 /// What a double does with each request it reads.
 #[derive(Clone)]
 enum Behaviour {
@@ -356,7 +345,7 @@ async fn stream_chunked(
 /// A client whose every endpoint is on `addr`, each URL carrying
 /// [`QUERY_SECRET`] in its query, trusting [`AUTHORITY`].
 fn client_for(addr: SocketAddr) -> OAuthClient {
-    OAuthClient::new(endpoints_on(addr, trusting())).expect("client builds")
+    OAuthClient::new(endpoints_on(addr, AUTHORITY.client_tls())).expect("client builds")
 }
 
 fn endpoints_on(addr: SocketAddr, tls: ClientTls) -> OAuthClientConfig {

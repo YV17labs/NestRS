@@ -38,8 +38,9 @@ ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws", "poem/webso
 queue = ["dep:nest-rs-queue", "dep:serde", "tokio/test-util"]
 # A test certificate authority (`TestAuthority`): the certificates a TLS test
 # presents or trusts, issued in process rather than committed, and the
-# handshakes a double accepts with them and dials a service with.
-tls = ["dep:rcgen", "dep:rustls", "dep:tokio-rustls"]
+# handshakes a double accepts with them and dials a service with; and the
+# `ClientTls` a framework client trusting the authority holds.
+tls = ["dep:rcgen", "dep:rustls", "dep:tokio-rustls", "nest-rs-config/tls"]
 
 [dependencies]
 nest-rs-core.workspace = true

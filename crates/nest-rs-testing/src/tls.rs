@@ -6,6 +6,7 @@
 
 use std::sync::{Arc, LazyLock};
 
+use nest_rs_config::{ClientTls, Material};
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     KeyUsagePurpose,
@@ -72,6 +73,18 @@ impl TestAuthority {
     /// The authority's certificate, for a client to trust.
     pub fn pem(&self) -> &str {
         &self.pem
+    }
+
+    /// The TLS settings of a framework client trusting this authority alone,
+    /// as `TLS_CA_CERT` naming its [`pem`](Self::pem) sets them.
+    pub fn client_tls(&self) -> ClientTls {
+        ClientTls::new(
+            Some(Material {
+                bytes: self.pem.as_bytes().to_vec(),
+                path: None,
+            }),
+            None,
+        )
     }
 
     /// A server certificate naming `names` — each a DNS name, or an IP

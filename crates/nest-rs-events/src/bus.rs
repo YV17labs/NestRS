@@ -42,6 +42,12 @@ impl EventBus {
         self.wired.store(true, Ordering::Relaxed);
     }
 
+    /// Let go of every listener once the app has ended: a listener that emits
+    /// holds the bus that holds it, and neither would ever drop.
+    pub(crate) fn unsubscribe_all(&self) {
+        self.listeners.write().clear();
+    }
+
     /// Runs each listener in registration order, awaited in turn — once the
     /// emitter's transaction has committed, when it emits inside one. No-op when
     /// nothing is registered for `E`.

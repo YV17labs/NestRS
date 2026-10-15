@@ -1,5 +1,6 @@
-//! [`HealthModule`] — mounts the probe routes, resolves [`HealthConfig`], and
-//! fills the indicator registry at the kernel's wiring step.
+//! [`HealthModule`] — mounts the probe routes, resolves [`HealthConfig`],
+//! fills the indicator registry at the kernel's wiring step, and hands the
+//! service's container back at its close step.
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::{Container, ContainerBuilder, Module, Registering, module};
@@ -32,13 +33,19 @@ impl HealthModule {
 /// [`HealthModule::for_root`].
 pub type HealthSetup = ConfigSetup<HealthModule, HealthConfig>;
 
-/// Attaches the indicator wiring: `#[module]` takes only imports and providers,
-/// so this hand-written module carries the step for [`HealthModule`].
+/// Attaches the indicator wiring and the close that undoes it: `#[module]`
+/// takes only imports and providers, so this hand-written module carries the
+/// steps for [`HealthModule`].
 struct HealthWiring;
 
 impl Module for HealthWiring {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_wiring("nest_rs::health::indicators", wire_indicators)
+        builder
+            .provide_wiring("nest_rs::health::indicators", wire_indicators)
+            .provide_close::<HealthService, _, _>(|svc| async move {
+                svc.release_container();
+                Ok(())
+            })
     }
 }
 

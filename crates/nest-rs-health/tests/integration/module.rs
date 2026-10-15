@@ -122,3 +122,44 @@ mod probed_from_an_init_hook {
         );
     }
 }
+
+/// The service holds the assembled container to run indicators against; the
+/// app's end hands it back, so the singletons it holds drop with the app.
+mod dropped_at_the_end {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use nest_rs_core::{App, injectable, module};
+    use nest_rs_health::HealthModule;
+
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+
+    #[injectable]
+    #[derive(Default)]
+    struct HoldsASocket;
+
+    impl Drop for HoldsASocket {
+        fn drop(&mut self) {
+            DROPPED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[module(imports = [HealthModule], providers = [HoldsASocket])]
+    struct ProbedModule;
+
+    #[tokio::test]
+    async fn a_provider_beside_the_health_service_is_dropped_when_the_app_closes() {
+        let app = App::builder()
+            .module::<ProbedModule>()
+            .build()
+            .await
+            .expect("boots");
+        app.init().await.expect("the init hooks run");
+
+        app.close().await;
+
+        assert!(
+            DROPPED.load(Ordering::SeqCst),
+            "the health service no longer keeps the container, and every singleton in it, alive"
+        );
+    }
+}

@@ -117,3 +117,60 @@ async fn an_emit_on_a_bus_no_wiring_step_reached_is_dropped_with_a_warn() {
     let log = container.get::<SeedLog>().expect("SeedLog is provided");
     assert_eq!(log.rows.load(Ordering::SeqCst), 0);
 }
+
+/// A listener that emits holds the bus the bus holds it on: the app's end
+/// unsubscribes it, so both drop with the app.
+mod dropped_at_the_end {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use nest_rs_core::{App, injectable, module};
+    use nest_rs_events::{EventBus, EventsModule, listeners};
+
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Clone)]
+    struct Paid;
+
+    #[derive(Clone)]
+    struct Receipted;
+
+    #[injectable]
+    struct Receipts {
+        #[inject]
+        bus: Arc<EventBus>,
+    }
+
+    impl Drop for Receipts {
+        fn drop(&mut self) {
+            DROPPED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[listeners]
+    impl Receipts {
+        #[on_event]
+        async fn on_paid(&self, _event: Paid) {
+            self.bus.emit(Receipted).await;
+        }
+    }
+
+    #[module(imports = [EventsModule], providers = [Receipts])]
+    struct ReceiptsModule;
+
+    #[tokio::test]
+    async fn a_listener_that_emits_is_dropped_when_the_app_closes() {
+        let app = App::builder()
+            .module::<ReceiptsModule>()
+            .build()
+            .await
+            .expect("boots");
+
+        app.close().await;
+
+        assert!(
+            DROPPED.load(Ordering::SeqCst),
+            "the bus let go of the listener holding it"
+        );
+    }
+}

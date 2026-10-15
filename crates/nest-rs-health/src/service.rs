@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -24,8 +24,10 @@ const REASON_DEADLINE: &str = "probe deadline exceeded";
 #[injectable]
 #[derive(Default)]
 pub struct HealthService {
-    /// Set once by `HealthModule`'s wiring step, before the first hook.
-    container: OnceLock<Container>,
+    /// Set by `HealthModule`'s wiring step, before the first hook, and taken
+    /// back by its close: held for good, it would keep the container, and
+    /// every singleton in it, alive past the app.
+    container: RwLock<Option<Container>>,
     /// Absent without `ConfigModule` (a hand-built container): the defaults
     /// stand, so a probe never runs unbounded.
     config: OnceLock<Arc<HealthConfig>>,
@@ -33,7 +35,18 @@ pub struct HealthService {
 
 impl HealthService {
     pub(crate) fn install_container(&self, container: Container) {
-        if self.container.set(container.clone()).is_ok() {
+        let installed = {
+            let mut held = self
+                .container
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            let empty = held.is_none();
+            if empty {
+                *held = Some(container.clone());
+            }
+            empty
+        };
+        if installed {
             if let Some(config) = container.get::<HealthConfig>() {
                 #[expect(
                     clippy::let_underscore_must_use,
@@ -42,9 +55,17 @@ impl HealthService {
                 let _ = self.config.set(config);
             }
             report_unreachable_indicators(&container);
-            // Inside the once-guard: a service two apps share reports once.
+            // Inside the guard: a service two live apps share reports once.
             crate::controller::report_prefixed_probe_paths(&container);
         }
+    }
+
+    /// Hand the container back once the app ends, so its singletons drop.
+    pub(crate) fn release_container(&self) {
+        self.container
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
     }
 
     /// Run every reachable indicator for `kind` **concurrently** and aggregate
@@ -53,12 +74,17 @@ impl HealthService {
     /// the container before any hook runs; a service no boot wired (a
     /// hand-built container) reports `up` with no indicator run.
     pub async fn probe(&self, kind: ProbeKind) -> ProbeReport {
-        let Some(container) = self.container.get() else {
+        let held = self
+            .container
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let Some(container) = held else {
             return ProbeReport::empty_up();
         };
 
         // Silent on skips: `report_unreachable_indicators` named them at boot.
-        let entries: Vec<&'static HealthIndicator> = reachable_indicators(container)
+        let entries: Vec<&'static HealthIndicator> = reachable_indicators(&container)
             .filter(|entry| entry.kind == kind)
             .collect();
         if entries.is_empty() {
@@ -66,7 +92,7 @@ impl HealthService {
         }
 
         let config = self.config.get().cloned().unwrap_or_default();
-        run_indicators(&entries, container, kind, &config).await
+        run_indicators(&entries, &container, kind, &config).await
     }
 }
 

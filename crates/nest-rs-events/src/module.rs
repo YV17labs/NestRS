@@ -14,6 +14,9 @@ use crate::{EventBus, ListenerMethod};
 /// method to it at the kernel's wiring step, from the assembled container and
 /// before the first lifecycle hook — so an event an init hook emits reaches its
 /// listeners.
+///
+/// Once the app has ended — after every shutdown hook, at the kernel's close
+/// step — the bus lets go of its listeners, so they drop with the app.
 pub struct EventsModule;
 
 impl Module for EventsModule {
@@ -21,6 +24,10 @@ impl Module for EventsModule {
         builder
             .provide_arc(Arc::new(EventBus::new()))
             .provide_wiring("nest_rs::events::listeners", wire_listeners)
+            .provide_close::<EventBus, _, _>(|bus| async move {
+                bus.unsubscribe_all();
+                Ok(())
+            })
     }
 }
 

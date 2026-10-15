@@ -524,8 +524,9 @@ impl App {
     /// misordered guard chain) fails the boot here, before any hook runs, as
     /// does a transport stating a stop past
     /// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND)
-    /// ([`UnboundedTransportError`]); a `listen` that fails fails it with the
-    /// error carrying [`BootStep::Listen`], before any transport serves. A stop
+    /// ([`UnboundedTransportError`](crate::UnboundedTransportError)); a
+    /// `listen` that fails fails it with the error carrying
+    /// [`BootStep::Listen`], before any transport serves. A stop
     /// asked while a transport configures or listens, or an init hook waits,
     /// stops the boot there ([`BootInterruptedError`](crate::BootInterruptedError)).
     /// Once the transports have stopped, the shutdown hooks run, then the

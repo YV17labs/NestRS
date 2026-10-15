@@ -405,8 +405,9 @@ idle timeout for its connections to this server. A balancer that keeps one open
 longer reuses it as the server closes it, and answers that request `502`. The
 default clears the 60 seconds of AWS's Application Load Balancer and of nginx's
 upstream keep-alive; Google Cloud's load balancer keeps 600, so set `620` behind
-it. The boot line `transport listening` carries `idle_timeout_secs`, for the day
-intermittent `502`s send you looking.
+it. The `debug` boot line `transport listening` carries `idle_timeout_secs`
+beside the address the transport bound, for the day intermittent `502`s send
+you looking.
 
 ## Shutdown
 
@@ -475,8 +476,10 @@ What the window does depends on what the connection is doing:
   own.
 
 What the transport stopped at the close gets half a second to unwind, once for
-every mount together, so none of it is still running when the shutdown hooks
-start; what still is then — a unit blocking its thread — is named at `error`.
+all of it — the HTTP/2 streams it cut and every mount's work together — so none
+of it is still running when the shutdown hooks start, and the transport is back
+within its stop bound, the window and that half second; what still runs then —
+a unit blocking its thread — is named at `error`.
 When the window closes on open connections, one `warn` on `nest_rs::http`
 counts them: `cut`, the connections it closed, and `upgraded_open`, the sockets
 a hand-built self-mount left open. The shutdown hooks run once every transport has

@@ -120,8 +120,9 @@ Review a new edge, or a change to one, against it:
     and a trybuild snapshot of the refused `?`.
 12. **Discovery and its gate** (`container.md`).
 13. **Aggregation**, as above.
-14. **A mount** — a `Transport` through `TransportContribution`, stating its
-    `stop_bound`, or an HTTP self-mount declaring its `static` `Handler`, whose
+14. **A mount** — a `Transport` through `TransportContribution`, binding in
+    `listen`, never in `serve`, and stating a finite `stop_bound` the kernel
+    holds, or an HTTP self-mount declaring its `static` `Handler`, whose
     posture says how the pool meets it.
 15. **Its target, unit and operation line** (`observability.md`).
 16. **A way down** (below), proved over a real socket — an in-process test

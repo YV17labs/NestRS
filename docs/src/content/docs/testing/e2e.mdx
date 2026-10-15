@@ -353,7 +353,10 @@ let app = TestApp::builder()
 ```
 
 Drive non-HTTP transports through `HeadlessApp::spawn_transport` — the queue's
-is `nest_rs::queue::QueueWorker`.
+is `nest_rs::queue::QueueWorker`. It runs a transport the way `App::run` does:
+configured, held to a stop bound the kernel accepts, listening, then serving —
+so once it returns, what the transport listens on accepts, and a client needs
+no retry loop.
 
 ### A worker drains its whole Redis database
 

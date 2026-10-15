@@ -143,7 +143,7 @@ $ nestrs run dev assistant
 ```text frame="terminal"
 INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
 DEBUG nest_rs::mcp: mcp operations gated mode="operation_guard"
-INFO nest_rs::http: transport listening addr=0.0.0.0:3003 tls=false
+INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3003"
 ```
 
 Point an MCP-aware client at `http://localhost:3003/mcp`. With Claude Code, add

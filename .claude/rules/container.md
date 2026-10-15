@@ -420,10 +420,18 @@ abandoned with a line naming it, never awaited in silence. Its invariants — th
 steps and their constants are tabulated on `SHUTDOWN_HOOKS_TIMEOUT`, the signal
 and the teardown in `way_down.rs`'s `//!`:
 
+- **No transport serves until every transport listens**: each takes what
+  serving needs (a socket, its TLS material) in `Transport::listen`, after the
+  init hooks, and a `listen` that fails is the boot's failure, before anything
+  serves.
 - **The transports stop together**, each within its `Transport::stop_bound`: a
-  window for what it still runs, then a settle for what it stopped to unwind,
+  window for what it still runs, then one settle for what it stopped to unwind,
   so nothing it carried runs into the hooks; a unit blocking its thread cannot
-  unwind and is named at `error`. What each edge owes is in `edges.md` and
+  unwind and is named at `error`. **The kernel holds each transport to its
+  bound**: a bound past `MAX_STOP_BOUND` is refused at the boot, and one still
+  serving at the longest bound plus the settle is abandoned and named at
+  `error`. **An early end stops the app**: a `serve` returning before the stop,
+  `Ok` included, is a failure. What each edge owes is in `edges.md` and
   `queue.md`.
 - **A resource the framework opens closes after the shutdown hooks**, in
   reverse, within their budget (`ContainerBuilder::provide_close`), and the

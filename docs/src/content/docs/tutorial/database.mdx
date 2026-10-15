@@ -177,7 +177,7 @@ in the service.
 ```bash frame="terminal"
 $ nestrs run dev blog
 INFO nest_rs::orm: connecting to database max_connections=None
-INFO nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
+INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3005"
 ```
 
 `connecting to database` is the only ORM boot line — the pool is lazy, so

@@ -26,7 +26,7 @@ use crate::panic;
 ///
 /// | Step | Bound | Default |
 /// |---|---|---|
-/// | the transports stop, together | each its own: the HTTP window then [`SHUTDOWN_SETTLE_TIMEOUT`], the Redis worker's drain window, the scheduler's tick bound then the settle | 20.5 s, the longest |
+/// | the transports stop, together | each its own [`Transport::stop_bound`](crate::Transport::stop_bound), which the kernel holds: the HTTP window then [`SHUTDOWN_SETTLE_TIMEOUT`], the Redis worker's drain window, the scheduler's tick bound then the settle | 20.5 s, the longest |
 /// | the shutdown hooks run | this budget, across all three phases | 5 s |
 /// | resources close, then the container drops | what the hooks left of this budget | inside the 5 s |
 /// | telemetry flushes | `nest_rs_opentelemetry`'s flush bound, every provider at once | 3 s |

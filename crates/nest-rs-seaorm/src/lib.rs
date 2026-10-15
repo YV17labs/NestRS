@@ -2,7 +2,8 @@
 //! one engine it supports, as CI runs it. One substrate and its bindings:
 //!
 //! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
-//!   and opens the one `sea_orm::DatabaseConnection` every binding shares.
+//!   and opens the one `sea_orm::DatabaseConnection` every binding shares,
+//!   closing it when the app ends, after every shutdown hook.
 //! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port:
 //!   [`SeaOrmUnitOfWork`], which every edge — an HTTP request, a WS message, an
 //!   MCP operation, a queue attempt, a scheduled tick — runs its unit of work

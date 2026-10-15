@@ -58,12 +58,18 @@ impl DynamicModule for SeaOrmSetup {
                 .into_iter()
                 .fold(builder, ContainerBuilder::provide_meta),
         );
-        builder.provide_factory_after::<DatabaseConnection, (SeaOrmConfig,), _, _>(
-            |container| async move {
-                let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
-                connect(&config, config.app_connect_options()?).await
-            },
-        )
+        builder
+            .provide_factory_after::<DatabaseConnection, (SeaOrmConfig,), _, _>(
+                |container| async move {
+                    let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
+                    connect(&config, config.app_connect_options()?).await
+                },
+            )
+            // Waits for checked-out connections: one an abandoned unit still
+            // holds keeps it to the hooks' deadline, where it is abandoned.
+            .provide_close::<DatabaseConnection, _, _>(
+                |db| async move { Ok(db.close_by_ref().await?) },
+            )
     }
 }
 

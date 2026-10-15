@@ -21,6 +21,11 @@
 //!
 //! A binding pulls its port's crate, which an app using Redis for another port
 //! does not compile.
+//!
+//! The connection attaches no close to the app's way down: a Valkey or Redis
+//! connection owes its server no goodbye — `QUIT` is deprecated since Redis
+//! 7.2 in favour of closing the socket — so it ends when the app's container
+//! drops, after every shutdown hook.
 
 #![warn(missing_docs)]
 #![cfg_attr(

@@ -273,3 +273,62 @@ async fn a_database_postgres_does_not_have_fails_the_boot_at_once() {
     assert!(!said.contains("nestrs_boot_proof_absent"), "{said}");
     assert!(!said.contains("  "), "one sentence, unpadded: {said}");
 }
+
+/// `url` naming its connections `name` in `pg_stat_activity`.
+fn with_application_name(url: &str, name: &str) -> String {
+    let joiner = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{joiner}application_name={name}")
+}
+
+/// How many of the server's connections carry `name`, asked from `observer`.
+async fn connections_named(observer: &DatabaseConnection, name: &str) -> i64 {
+    let row = observer
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "SELECT count(*) AS open FROM pg_stat_activity WHERE application_name = $1",
+            [name.into()],
+        ))
+        .await
+        .expect("pg_stat_activity answers")
+        .expect("a count is one row");
+    row.try_get::<i64>("", "open").expect("the count")
+}
+
+/// The pool says goodbye to Postgres when the app ends — every connection
+/// closed by the app, never left for the server to notice a dropped socket.
+#[tokio::test]
+async fn closing_the_app_closes_every_connection_its_pool_opened() {
+    let name = format!("nestrs-close-{}", std::process::id());
+    let app = App::builder()
+        .provide(SeaOrmConfig {
+            url: with_application_name(&crate::harness::url(), &name),
+            ..config(None)
+        })
+        .module::<PoolModule>()
+        .build()
+        .await
+        .expect("boots");
+    let db = app
+        .container()
+        .get::<DatabaseConnection>()
+        .expect("the pool");
+    db.execute_unprepared("SELECT 1")
+        .await
+        .expect("the pool answers");
+    let observer = crate::harness::connect().await;
+    assert!(
+        connections_named(&observer, &name).await >= 1,
+        "the pool's connections are open"
+    );
+
+    app.close().await;
+
+    assert!(
+        db.get_postgres_connection_pool().is_closed(),
+        "the app closed its pool"
+    );
+    nest_rs_testing::wait_for(Duration::from_secs(5), || async {
+        connections_named(&observer, &name).await == 0
+    })
+    .await;
+}

@@ -1221,6 +1221,108 @@ async fn the_lifetime_ceiling_closes_with_going_away() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
+/// The floor every per-unit timeout is held to: a second.
+const MESSAGE_DEADLINE: Duration = Duration::from_secs(1);
+
+static STALL_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[gateway(path = "/deadline")]
+pub(crate) struct DeadlineGateway;
+
+#[messages]
+impl DeadlineGateway {
+    #[subscribe_message("stall")]
+    #[public]
+    async fn stall(&self) -> String {
+        STALL_STARTED.notify_one();
+        std::future::pending::<()>().await;
+        "never".to_owned()
+    }
+
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        message_timeout: Some(MESSAGE_DEADLINE),
+        ..WsConfig::default()
+    })],
+    providers = [DeadlineGateway],
+)]
+struct DeadlineModule;
+
+/// The read loop answers one message at a time: one that never answers would
+/// hold its socket until the connection's lifetime ends.
+#[tokio::test]
+async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_on() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<DeadlineModule>()
+        .build_ws()
+        .await
+        .expect("a pinned message deadline boots");
+    assert!(
+        logs.find("nest_rs::ws", OUTLASTS_THE_WINDOW).is_empty(),
+        "a deadline inside the window is not worth a word",
+    );
+
+    let mut socket = app.socket("/deadline").connect().await;
+    socket.send("stall", serde_json::Value::Null).await;
+    STALL_STARTED.notified().await;
+    // The deadline passes on paused time, while nothing reads: its frame waits
+    // buffered for the read below, back on the real clock.
+    tokio::time::pause();
+    tokio::time::sleep(MESSAGE_DEADLINE + Duration::from_millis(1)).await;
+    tokio::time::resume();
+
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["event"], "stall", "{frame}");
+    assert_eq!(
+        frame["data"]["error"], "the message was not answered in time",
+        "{frame}"
+    );
+    assert_eq!(frame["data"]["errors"]["reason"], "timeout", "{frame}");
+    assert_eq!(
+        frame["data"]["errors"]["code"],
+        nest_rs_core::problem::code::UNAVAILABLE.as_str(),
+        "{frame}"
+    );
+
+    socket.send("echo", serde_json::json!("still here")).await;
+    assert_eq!(
+        socket.next_envelope().await["data"],
+        "still here",
+        "the socket goes on serving",
+    );
+
+    let line = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_ws::unit::MESSAGE.name(),
+        )
+        .into_iter()
+        .find(|line| line.field("event").as_deref() == Some("stall"))
+        .expect("the timed-out message files its line");
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+    );
+    let cut = logs.expect_one(
+        "nest_rs::ws",
+        "websocket message not answered within its deadline; it is cut",
+    );
+    assert_eq!(cut.level, "warn");
+    assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
+    assert_eq!(cut.field("event").as_deref(), Some("stall"));
+    assert_eq!(cut.field("message_timeout_secs").as_deref(), Some("1"));
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
 #[module(
     imports = [WsModule, WsModule::for_root(WsConfig {
         max_message_bytes: 64,
@@ -1605,6 +1707,26 @@ async fn leaving_app() -> nest_rs_testing::ws::WsApp {
         .build_ws()
         .await
         .expect("a gateway boots on a real port")
+}
+
+/// The sentence a gateway's boot check files for a deadline the window cannot hold.
+const OUTLASTS_THE_WINDOW: &str = "the message timeout outlasts the shutdown window: a message \
+                                   admitted just before a stop can be cut unanswered";
+
+#[tokio::test]
+async fn a_message_deadline_past_the_shutdown_window_is_said_at_boot() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+
+    let said = logs.expect_one("nest_rs::ws", OUTLASTS_THE_WINDOW);
+    assert_eq!(said.level, "warn");
+    assert_eq!(said.field("path").as_deref(), Some("/leaving"));
+    assert_eq!(said.field("message_timeout_secs").as_deref(), Some("20"));
+    assert_eq!(
+        said.field("shutdown_timeout_secs").as_deref(),
+        Some(WINDOW.as_secs().to_string().as_str()),
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
 }
 
 #[tokio::test]

@@ -141,6 +141,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             root_container,
             // The connection inherits the upgrade request's id and actor.
             connection: nest_rs_core::Correlation::inherited(),
+            message_timeout: ws_config.message_timeout,
         };
         let limits = SocketLimits {
             max_lifetime,
@@ -180,6 +181,8 @@ struct DispatchWiring {
     /// The upgrade that opened this socket, actor included: nothing
     /// re-authenticates per message.
     connection: nest_rs_core::Correlation,
+    /// What one message may hold the socket for; `None` ⇒ no deadline.
+    message_timeout: Option<Duration>,
 }
 
 /// Per-socket limits resolved once at upgrade from [`WsConfig`].
@@ -775,21 +778,33 @@ async fn handle_text<G: Gateway>(
         }
     };
     let WsEnvelope { event, data } = envelope;
-    let event_ref = event.clone();
+    let event_ref = event.as_str();
     let conn_id = client.id();
-    let inner = async move {
+    let body = async move {
         // The chain filed the denial while it still held it.
-        let (attached, mut data) = match guards.check(client, &event_ref, data).await {
+        let (attached, mut data) = match guards.check(client, event_ref, data).await {
             Ok(admitted) => admitted,
             Err(frame) => return WsReply::Error(frame),
         };
         // Guards see the raw value; global data pipes run after them.
         for pipe in wiring.pipes.iter() {
-            if let Err(err) = pipe.transform_ws_data(&event_ref, &mut data) {
-                return WsReply::pipe_error(&event_ref, "data", err);
+            if let Err(err) = pipe.transform_ws_data(event_ref, &mut data) {
+                return WsReply::pipe_error(event_ref, "data", err);
             }
         }
-        install_pending(attached, gateway.dispatch(client, &event_ref, data)).await
+        install_pending(attached, gateway.dispatch(client, event_ref, data)).await
+    };
+    let deadline = wiring
+        .message_timeout
+        .map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
+    // The body alone is cut: the unit settles outside it, so a commit never is.
+    let inner = async move {
+        match deadline {
+            Some((timeout, at)) => tokio::time::timeout_at(at, body)
+                .await
+                .unwrap_or_else(|_| timed_out(conn_id, event_ref, timeout)),
+            None => body.await,
+        }
     };
     // Inside the socket context, so what it installs is ambient for the unit.
     let spec = UnitSpec::new(
@@ -797,6 +812,10 @@ async fn handle_text<G: Gateway>(
         ExecutorScope::Request,
         TransactionPolicy::PerUnit,
     );
+    let spec = match deadline {
+        Some((_, at)) => spec.with_deadline(at),
+        None => spec,
+    };
     let inner: BoxFuture<'_, WsReply> = Box::pin(run_unit(
         wiring.unit_of_work.as_ref(),
         spec,
@@ -871,6 +890,33 @@ async fn handle_text<G: Gateway>(
         WsReply::Error(error) => Some(error_frame(&event, &error)),
     }
 }
+
+/// What a message past its deadline is answered: an error frame in the
+/// class HTTP's request timeout answers (`UNAVAILABLE`), with `timeout` as its
+/// reason, said once at `warn` for the operator.
+fn timed_out(conn_id: ConnId, event: &str, timeout: Duration) -> WsReply {
+    tracing::warn!(
+        target: crate::TARGET,
+        conn_id,
+        event,
+        reason = TIMEOUT_REASON,
+        message_timeout_secs = timeout.as_secs(),
+        "websocket message not answered within its deadline; it is cut",
+    );
+    WsReply::Error(crate::WsError::with_details(
+        MESSAGE_TIMED_OUT,
+        serde_json::json!({
+            "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
+            "reason": TIMEOUT_REASON,
+        }),
+    ))
+}
+
+/// The sentence a message past its deadline is answered with.
+const MESSAGE_TIMED_OUT: &str = "the message was not answered in time";
+
+/// The `reason` a deadline's refusal carries, beside its `code`.
+const TIMEOUT_REASON: &str = "timeout";
 
 fn error_frame(event: &str, error: &crate::WsError) -> String {
     WsEnvelope::encode(event, error)
@@ -1037,6 +1083,7 @@ mod tests {
             pipes: Arc::new([]),
             root_container: None,
             connection: nest_rs_core::Correlation::minted(None),
+            message_timeout: None,
         }
     }
 

@@ -74,19 +74,26 @@ pub const SSE_KEEP_ALIVE_CEILING: Bound = Bound {
           than hourly keeps nothing alive",
 };
 
+/// The floor of an edge's per-unit timeout — HTTP's request here, a WebSocket
+/// message's and an MCP operation's in their own crates — and its off switch.
+pub const UNIT_TIMEOUT_FLOOR: Floor = Floor::UnitsOrOff(Bound {
+    count: 1,
+    why: "a timeout under a second cuts every unit before its handler has run",
+});
+
+/// The ceiling on [`UNIT_TIMEOUT_FLOOR`]'s settings — an hour.
+pub const UNIT_TIMEOUT_CEILING: Bound = Bound {
+    count: 60 * 60,
+    why: "a unit still running after an hour has outlived every client and proxy timeout in \
+          front of it, and a timeout that long is a typo more often than a choice (`30000` meant \
+          as milliseconds is eight hours); a handler that runs longer turns it off",
+};
+
 const REQUEST_TIMEOUT: DurationBounds = DurationBounds::secs(
     "REQUEST_TIMEOUT_SECS",
     "HttpConfig::request_timeout",
-    Floor::UnitsOrOff(Bound {
-        count: 1,
-        why: "a budget under a second times out every request before its handler has run",
-    }),
-    Bound {
-        count: 60 * 60,
-        why: "a request still running after an hour has outlived every client and proxy timeout \
-              in front of it, and a budget that long is a unit slip (`30000` meant as \
-              milliseconds is eight hours); a route that streams for longer turns it off",
-    },
+    UNIT_TIMEOUT_FLOOR,
+    UNIT_TIMEOUT_CEILING,
 );
 
 /// hyper's own head default, and Kestrel's `RequestHeadersTimeout`.

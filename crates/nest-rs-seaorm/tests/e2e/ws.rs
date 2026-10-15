@@ -274,3 +274,70 @@ async fn a_connect_hook_that_panics_after_writing_leaves_nothing() {
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+/// The floor every per-unit timeout is held to: a second.
+const MESSAGE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(1);
+
+static WROTE_THEN_STALLED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[gateway(path = "/ws/unit/deadline")]
+#[use_guards(Granting)]
+pub(crate) struct DeadlineGateway;
+
+#[messages]
+impl DeadlineGateway {
+    #[subscribe_message("stall")]
+    #[public]
+    async fn stall(&self) -> String {
+        write("INSERT INTO ws_unit_deadline (id) VALUES (1)").await;
+        WROTE_THEN_STALLED.notify_one();
+        std::future::pending::<()>().await;
+        "never".to_owned()
+    }
+}
+
+#[module(
+    imports = [
+        SeaOrmModule::for_root(SeaOrmConfig {
+            url: crate::harness::url(),
+            ..Default::default()
+        }),
+        SeaOrmDatabaseModule,
+        WsModule::for_root(nest_rs_ws::WsConfig {
+            message_timeout: Some(MESSAGE_DEADLINE),
+            ..nest_rs_ws::WsConfig::default()
+        }),
+    ],
+    providers = [Granting, DeadlineGateway],
+)]
+struct DeadlineModule;
+
+/// The deadline cuts the message's body inside its unit, so the unit settles
+/// the cut as a failure: a rollback, never a commit of half the work.
+#[tokio::test]
+async fn a_message_that_wrote_then_outlived_its_deadline_leaves_no_row() {
+    let conn = crate::harness::connect().await;
+    table(&conn, "ws_unit_deadline").await;
+    let app = TestApp::builder()
+        .module::<DeadlineModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots over live Postgres");
+
+    let mut socket = app.socket("/ws/unit/deadline").connect().await;
+    socket.send("stall", json!(null)).await;
+    WROTE_THEN_STALLED.notified().await;
+    // Paused only once the write landed: the deadline is the framework's own.
+    tokio::time::pause();
+    tokio::time::sleep(MESSAGE_DEADLINE + std::time::Duration::from_millis(1)).await;
+    tokio::time::resume();
+
+    let answer = socket.next_envelope().await;
+    assert_eq!(answer["data"]["errors"]["reason"], "timeout", "{answer}");
+    assert_eq!(
+        crate::harness::committed_rows(&conn, "ws_unit_deadline").await,
+        0,
+        "the cut message's write was rolled back",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}

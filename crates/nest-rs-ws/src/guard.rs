@@ -136,7 +136,8 @@ pub fn denial_to_ws_error(denial: Denial) -> WsError {
 /// The boot check `#[messages]` emits for a gateway: its upgrade chain is
 /// phase-validated (an HTTP `GET`, the entry the check reads), and a guard no
 /// imported module provides — on the upgrade or on any event — refuses, named
-/// with its site.
+/// with its site. A message deadline the shutdown window cannot hold is said
+/// at `warn`.
 pub fn check_ws_gateway(
     container: &Container,
     path: &str,
@@ -148,6 +149,14 @@ pub fn check_ws_gateway(
         resolve_scoped(container, method, LayerSite::Method, &event_site(event))
             .map_err(|unresolved| unresolved.to_string())?;
     }
+    let window = container
+        .get::<nest_rs_http::HttpConfig>()
+        .unwrap_or_default()
+        .shutdown_timeout;
+    container
+        .get::<crate::WsConfig>()
+        .unwrap_or_default()
+        .warn_when_messages_outlast_the_window(window, path);
     Ok(())
 }
 

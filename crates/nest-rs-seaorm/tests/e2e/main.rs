@@ -26,6 +26,7 @@ mod module;
 mod public_visitor;
 mod relational_authz;
 mod scope;
+mod soft_delete;
 mod worker;
 mod ws;
 

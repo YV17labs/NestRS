@@ -53,10 +53,9 @@ and the difference matters when you are deciding what to test:
   and deliberately emits nothing for a hidden `Uuid`, timestamp, `Decimal` or
   enum without `Default`, so `wire_to_model` fails closed. Give those an explicit
   [`#[wire_default(…)]`](/security/authorization/response-masking/).
-- **A half-wired soft delete fails the boot**, naming the entity and the
-  service — in one direction. The entity flag without
-  `CrudService::soft_delete_column` is caught; the service opting in without the
-  entity flag registers nothing and is not. See [CRUD](/database/crud/).
+- **A unique column on a `soft_delete` table** answers `409` for a value every
+  read calls free, when its index is a full one: index it `WHERE deleted_at IS
+  NULL`. See [CRUD](/database/crud/#soft-delete-and-timestamps).
 
 ## The two you carry yourself
 

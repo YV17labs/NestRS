@@ -130,7 +130,7 @@ where
 {
     /// A keyset page of readable rows, ascending by primary key, starting after
     /// `after`. Fetches one extra row to decide `has_more` and `next_cursor`.
-    /// `extra` is ANDed onto the ability scope (e.g. `deleted_at IS NULL`).
+    /// `extra` is ANDed onto the scope (e.g. a tenant predicate).
     pub async fn page(
         first: u64,
         after: Option<Uuid>,
@@ -182,8 +182,8 @@ where
 
     /// **One keyset page per parent**, for every key in `keys`, in a single
     /// round trip. The read-side primitive an auto-resolved `has_many` relation
-    /// is built on; `extra` is ANDed onto the ability scope exactly as in
-    /// [`page`](Self::page) (e.g. `deleted_at IS NULL`).
+    /// is built on; `extra` is ANDed onto the scope exactly as in
+    /// [`page`](Self::page) (e.g. a tenant predicate).
     ///
     /// Every key gets an entry, empty when it has no children. The limit is
     /// applied **per partition** — a single `LIMIT` would starve the parents

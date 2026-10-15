@@ -262,22 +262,6 @@ where
         Self::Entity::default().table_name()
     }
 
-    /// Soft-delete opt-in. Override on the service to return the entity's
-    /// `deleted_at` column. `None` (default) ⇒ hard delete and unfiltered reads.
-    fn soft_delete_column() -> Option<<Self::Entity as EntityTrait>::Column> {
-        None
-    }
-
-    /// The `WHERE` that hides soft-deleted rows: `deleted_at IS NULL` when
-    /// [`soft_delete_column`](Self::soft_delete_column) is set, else `TRUE`.
-    /// `Repo` reads AND this onto the ability scope.
-    fn live_read_filter() -> Condition {
-        match Self::soft_delete_column() {
-            Some(col) => crate::soft_delete::live_condition_for_column(col),
-            None => Condition::all(),
-        }
-    }
-
     /// Every row the caller may [`Read`](Action::Read), up to
     /// [`LIST_CAP`](crate::LIST_CAP) rows; a capped result logs a `warn`.
     /// Collections that may exceed it paginate with [`page`](CrudService::page).
@@ -286,7 +270,6 @@ where
         tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), "listing rows");
         let conn = Repo::<Self::Entity>::conn()?;
         let rows = Repo::<Self::Entity>::scoped(Action::Read)
-            .filter(Self::live_read_filter())
             .limit(crate::LIST_CAP + 1)
             .all(&conn)
             .await?;
@@ -313,12 +296,13 @@ where
         <Self::Entity as EntityTrait>::Model: Send + Sync,
     {
         tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), first, ?after, "paging rows");
-        Repo::<Self::Entity>::page(first, after, Self::live_read_filter()).await
+        Repo::<Self::Entity>::page(first, after, Condition::all()).await
     }
 
     /// Load a row by id and authorize the caller for `action` on it, in SQL
     /// under `condition_for(action)`, so a relational rule holds too. A
-    /// denied-but-existing row is [`Access::Denied`], not [`Access::Missing`].
+    /// denied-but-existing row is [`Access::Denied`], not [`Access::Missing`];
+    /// a soft-deleted row is [`Access::Missing`], whatever the action.
     async fn access(
         &self,
         action: Action,
@@ -328,11 +312,9 @@ where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     {
         let conn = Repo::<Self::Entity>::conn()?;
-        let live = Self::live_read_filter();
         let entity = Self::entity_name();
         if let Some(model) = Repo::<Self::Entity>::unscoped_by_id(id)
             .filter(scope_for::<Self::Entity>(action))
-            .filter(live.clone())
             .one(&conn)
             .await?
         {
@@ -340,7 +322,6 @@ where
             return Ok(Access::Found(model));
         }
         let exists = Repo::<Self::Entity>::unscoped_by_id(id)
-            .filter(live)
             .one(&conn)
             .await?
             .is_some();
@@ -463,8 +444,8 @@ pub trait Updatable: CrudService {
     }
 }
 
-/// Opt-in write capability: the resource accepts **deletes** (hard or, when
-/// [`soft_delete_column`](CrudService::soft_delete_column) is set, soft).
+/// Opt-in write capability: the resource accepts **deletes**: a soft delete
+/// when the entity is declared `#[expose(..., soft_delete)]`, else a hard one.
 #[async_trait]
 pub trait Deletable: CrudService {
     /// Delete a loaded row, in the request transaction. Ability-scoped by
@@ -478,7 +459,7 @@ pub trait Deletable: CrudService {
                 "{entity} row not found or outside the caller's scope"
             ))
         };
-        match Self::soft_delete_column() {
+        match crate::soft_delete::tombstone_column::<Self::Entity>() {
             Some(col) => match Repo::<Self::Entity>::soft_delete(model, col).await {
                 Ok(()) => {
                     tracing::debug!(target: crate::target::ORM, entity, ?id, "row soft-deleted");

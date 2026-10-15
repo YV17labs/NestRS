@@ -22,10 +22,6 @@ pub struct PostsService {
 
 impl CrudService for PostsService {
     type Entity = Posts;
-
-    fn soft_delete_column() -> Option<super::entities::post::Column> {
-        Some(super::entities::post::Column::DeletedAt)
-    }
 }
 
 impl Creatable for PostsService {

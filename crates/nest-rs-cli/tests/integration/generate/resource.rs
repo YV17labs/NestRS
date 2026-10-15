@@ -163,8 +163,8 @@ fn generate_resource_declares_the_columns_its_migration_scaffolds() {
 
     let service = fs::read_to_string(feature.join("service.rs")).unwrap();
     assert!(
-        service.contains("fn soft_delete_column()"),
-        "the flag makes the column addressable; the override is what tombstones: {service}",
+        !service.contains("soft_delete"),
+        "the entity's flag alone tombstones and hides deleted rows: {service}",
     );
 
     write_fake_migrations_crate(dir.path());

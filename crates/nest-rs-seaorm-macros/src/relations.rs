@@ -50,7 +50,7 @@ pub(crate) fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     }
 
     let pk_loader_ident = format_ident!("{}ById", last_segment_ident(&service));
-    let pk_loader_block = emit_pk_loader(model, &service, pk);
+    let pk_loader_block = emit_pk_loader(model, &service, pk)?;
     let pk_trait_impl = emit_pk_loadable_impl(model, &pk_loader_ident);
     let fk_loaders = emit_fk_loaders(model, &service, pk)?;
     let field_resolvers = emit_field_resolvers(model, pk)?;
@@ -63,34 +63,19 @@ pub(crate) fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     })
 }
 
-fn live_rows_filter(model: &ResourceModel) -> TokenStream2 {
-    if model.soft_delete {
-        quote! { .filter(::nest_rs_seaorm::live_condition::<Entity>()) }
-    } else {
-        quote! {}
-    }
-}
-
-/// The same live-row predicate as a `Condition` value, for the `Repo` methods
-/// that take one rather than being chained onto.
-fn live_rows_condition(model: &ResourceModel) -> TokenStream2 {
-    if model.soft_delete {
-        quote! { ::nest_rs_seaorm::live_condition::<Entity>() }
-    } else {
-        quote! { ::nest_rs_seaorm::sea_orm::Condition::all() }
-    }
-}
-
 /// `#[dataloader] impl <Service> { async fn by_id(&self, keys: &[Pk]) -> ... }`.
-fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField) -> TokenStream2 {
+fn emit_pk_loader(
+    model: &ResourceModel,
+    service: &syn::Path,
+    pk: &ResourceField,
+) -> syn::Result<TokenStream2> {
     let pk_ident = &pk.ident;
     let pk_ty = &pk.ty;
-    let pk_col = pascal_case(pk_ident);
+    let pk_col = column_of(pk, "primary_key", &pk.ident)?;
     let wire = &model.output_ident;
     let target_label = format!("loading {} by id", wire);
-    let live = live_rows_filter(model);
 
-    quote! {
+    Ok(quote! {
         #[::nest_rs_seaorm::__private::dataloader]
         impl #service {
             async fn by_id(
@@ -112,7 +97,6 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
                 let __rows = ::nest_rs_seaorm::Repo::<Entity>::scoped(
                     ::nest_rs_authz::Action::Read,
                 )
-                    #live
                     .filter(
                         <Column as ::nest_rs_seaorm::sea_orm::ColumnTrait>::is_in(
                             &Column::#pk_col,
@@ -138,7 +122,7 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
                 ::core::result::Result::Ok(__map)
             }
         }
-    }
+    })
 }
 
 /// `impl PkLoadable for Entity { type Loader = <Service>ById; type Wire = User; }`
@@ -151,6 +135,23 @@ fn emit_pk_loadable_impl(model: &ResourceModel, loader: &Ident) -> TokenStream2 
             type Wire = #wire;
         }
     }
+}
+
+/// The `Column` variant sea-orm derives for `field`, which `attr::parse`
+/// computed for every scalar column; `key` is the `#[sea_orm]` key naming the
+/// field, and `at` what the refusal points to.
+fn column_of<'a>(field: &'a ResourceField, key: &str, at: &Ident) -> syn::Result<&'a Ident> {
+    field.column.as_ref().ok_or_else(|| {
+        syn::Error::new_spanned(
+            at,
+            format!(
+                "{}: \"{}\" is a relation or an `ignore`d field — a relation's key must be a \
+                 column of the entity",
+                nest_rs_codegen::site("sea_orm", Some(key)),
+                field.ident,
+            ),
+        )
+    })
 }
 
 /// The scalar column a `belongs_to` names in `from = "…"`, or the refusal both
@@ -226,7 +227,9 @@ fn emit_fk_loaders(
             .find(|(k, _)| k == &key)
             .is_some_and(|(_, count)| *count == 1);
 
-        let fk_ty = &fk_column(model, from)?.ty;
+        let fk = fk_column(model, from)?;
+        let fk_ty = &fk.ty;
+        let fk_col = column_of(fk, "from", from)?;
         let fk_col_pascal = pascal_case(from);
         let method_name = format_ident!("by_{}", from);
         let loader_ident = format_ident!("{}By{}", last_segment_ident(service), fk_col_pascal,);
@@ -247,7 +250,6 @@ fn emit_fk_loaders(
             }
         });
         let target_label = format!("paging {} by {}", wire, from);
-        let live = live_rows_condition(model);
         let pk_ident = &pk.ident;
 
         blocks.push(quote! {
@@ -301,11 +303,11 @@ fn emit_fk_loaders(
                         // Ranked per parent: a shared `LIMIT n` would starve
                         // later parents into an empty page.
                         let __pages = ::nest_rs_seaorm::Repo::<Entity>::relation_pages(
-                            Column::#fk_col_pascal,
+                            Column::#fk_col,
                             &__parents,
                             __first,
                             __after,
-                            #live,
+                            ::nest_rs_seaorm::sea_orm::Condition::all(),
                         )
                         .await?;
                         for (__parent, __page) in __pages {

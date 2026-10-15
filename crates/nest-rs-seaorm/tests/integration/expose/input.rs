@@ -1,6 +1,7 @@
-//! The GraphQL half of `#[expose]`: what the macro *emits* must compile with
-//! nothing but `nest-rs-seaorm`'s own `graphql` feature turned on, `Uuid`
-//! and `DateTime*` `InputType` impls included.
+//! The GraphQL inputs of `#[expose]` (`src/input.rs` in the macro crate): what
+//! the macro *emits* must compile with nothing but `nest-rs-seaorm`'s own
+//! `graphql` feature turned on, `Uuid` and `DateTime*` `InputType` impls
+//! included.
 
 use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable, expose};
 use sea_orm::entity::prelude::*;

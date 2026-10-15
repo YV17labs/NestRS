@@ -152,3 +152,54 @@ pub(super) mod notes {
         type Entity = Entity;
     }
 }
+
+/// A key sea-orm names through heck and through `enum_name`: `ownerID`'s
+/// variant is `OwnerId`, the primary key's `Key`. The compile is the assertion
+/// — a loader spelling either variant otherwise names a `Column` that does
+/// not exist.
+#[expect(
+    non_snake_case,
+    reason = "the fixture: a column whose ident sea-orm does not split on `_`"
+)]
+pub(super) mod shelves {
+    use super::*;
+
+    #[expose(name = "Shelf", service = ShelvesService, graphql)]
+    #[sea_orm::model]
+    #[derive(Clone, Debug, DeriveEntityModel)]
+    #[sea_orm(
+        table_name = "shelves",
+        model_attrs(derive(PartialEq, Serialize, Deserialize))
+    )]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key, auto_increment = false, enum_name = "Key")]
+        #[expose]
+        pub id: Uuid,
+        #[expose]
+        pub ownerID: Uuid,
+        #[sea_orm(belongs_to, from = "ownerID", to = "id")]
+        #[expose]
+        pub owner: HasOne<super::people::Entity>,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    pub(crate) struct ShelvesService;
+
+    impl CrudService for ShelvesService {
+        type Entity = Entity;
+    }
+}
+
+#[test]
+fn a_key_is_named_by_the_variant_sea_orm_derives() {
+    use nest_rs_seaorm::graphql::RelatedTo;
+    use std::any::TypeId;
+
+    assert!(matches!(shelves::Column::Key, shelves::Column::Key));
+    assert!(matches!(shelves::Column::OwnerId, shelves::Column::OwnerId));
+    assert_eq!(
+        TypeId::of::<<shelves::Entity as RelatedTo<people::Entity>>::Loader>(),
+        TypeId::of::<shelves::ShelvesServiceByOwnerID>(),
+    );
+}

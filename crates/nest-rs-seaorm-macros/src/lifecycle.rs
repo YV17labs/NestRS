@@ -3,16 +3,15 @@
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::Type;
+use syn::{Ident, Type};
 
 use crate::attr::ResourceModel;
 
 // `attr::parse` has validated the `deleted_at` / `created_at` / `updated_at` columns.
 pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     let mut blocks = Vec::new();
-    if model.soft_delete {
-        blocks.push(emit_soft_deletable());
-        blocks.push(emit_soft_delete_registration(model));
+    if let Some(column) = &model.deleted_at {
+        blocks.push(emit_soft_deletable(column));
     }
     if model.timestamps {
         blocks.push(emit_timestamps());
@@ -20,32 +19,25 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     quote! { #(#blocks)* }
 }
 
-fn emit_soft_deletable() -> TokenStream2 {
+/// The trait, its seal, and the registration every `Repo` read consults: an
+/// entity declared `soft_delete` hides its tombstones whether or not it names
+/// a service.
+fn emit_soft_deletable(column: &Ident) -> TokenStream2 {
     quote! {
+        impl ::nest_rs_seaorm::__private::SoftDeleteDeclared for Entity {}
+
         impl ::nest_rs_seaorm::SoftDeletable for Entity {
             fn deleted_at_column() -> Column {
-                Column::DeletedAt
+                Column::#column
             }
         }
-    }
-}
 
-/// Pair the entity's flag with the service's override, for the boot audit
-/// (`nest_rs_seaorm::SoftDeleteAudit`): without `CrudService::soft_delete_column`,
-/// `DELETE` still erases the row and answers `204`. No `service` ⇒ no entry.
-fn emit_soft_delete_registration(model: &ResourceModel) -> TokenStream2 {
-    let Some(service) = &model.service else {
-        return TokenStream2::new();
-    };
-    quote! {
-        ::nest_rs_seaorm::inventory::submit! {
-            ::nest_rs_seaorm::SoftDeleteRegistration {
-                // `entity_name`, not `table_name()`: it is what every
-                // `nest_rs_seaorm::service` log carries.
-                entity: || <#service as ::nest_rs_seaorm::CrudService>::entity_name(),
-                service: || ::core::any::type_name::<#service>(),
-                tombstones: || <#service as ::nest_rs_seaorm::CrudService>::soft_delete_column()
-                    .is_some(),
+        ::nest_rs_seaorm::__private::inventory::submit! {
+            ::nest_rs_seaorm::__private::SoftDeleteRegistration {
+                entity: || ::core::any::TypeId::of::<Entity>(),
+                column: || <Column as ::nest_rs_seaorm::sea_orm::IdenStatic>::as_str(
+                    &Column::#column,
+                ),
             }
         }
     }

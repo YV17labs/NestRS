@@ -10,7 +10,11 @@ paths:
 A framework crate's tests run in process in `tests/integration/main.rs`, and
 against Postgres, Valkey or S3 in `tests/e2e/main.rs`, which connects to the dev
 container's — always reachable, over TLS alone; each suite's modules mirror
-`src/`. A flat `tests/<x>.rs` is a binary of its own, relinked per file. This
+`src/`. A decorator's expansion is tested in its surface crate (`macros.md`),
+so its folder there, named for the decorator, mirrors the macro crate's `src/`:
+`nest-rs-seaorm`'s `tests/integration/expose/wire.rs` is
+`nest-rs-seaorm-macros/src/wire.rs`. A flat `tests/<x>.rs` is a binary of its
+own, relinked per file. This
 file is the toolbox and the decisions that keep live tests from meeting each
 other. Reach for `nest-rs-testing` before hand-rolling a harness.
 

@@ -3214,6 +3214,7 @@ dependencies = [
 name = "nest-rs-seaorm-macros"
 version = "7.0.0"
 dependencies = [
+ "heck 0.5.0",
  "nest-rs-codegen",
  "proc-macro2",
  "quote",

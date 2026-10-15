@@ -86,21 +86,20 @@ async fn access(&self, action: Action, id: Uuid)
     // Scoped load: the caller's own grant for `action`, in one lookup.
     if let Some(model) = Repo::<E>::unscoped_by_id(id)
         .filter(scope_for::<E>(action))
-        .filter(live_read_filter())
         .one(&conn).await?
     {
         return Ok(Access::Found(model));
     }
     // Only now, and only to tell "forbidden" from "absent".
     let exists = Repo::<E>::unscoped_by_id(id)
-        .filter(live_read_filter())
         .one(&conn).await?
         .is_some();
     if exists { Ok(Access::Denied) } else { Ok(Access::Missing) }
 }
 ```
 
-Two things to notice:
+A soft-deleted row is `Missing` for every action: both lookups hide it, as
+every `Repo` read does. Two things to notice:
 
 1. **The authorization is decided in SQL.** The scoped lookup filters the
    primary key by `scope_for(action)` — the exact `condition_for` the list

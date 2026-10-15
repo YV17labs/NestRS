@@ -80,12 +80,15 @@ impl ResourceField {
 }
 
 /// The `Column` variant sea-orm names a field: its `enum_name`, else the field
-/// in UpperCamelCase, with `Self` escaped as sea-orm escapes it. `None` for an
-/// `enum_name` that is no identifier, which sea-orm's derive refuses itself.
+/// through heck's UpperCamelCase, as sea-orm's derive converts it, with `Self`
+/// escaped as sea-orm escapes it. `None` for a name that is no identifier,
+/// which sea-orm's derive refuses itself.
 fn column_variant(field: &Ident, enum_name: Option<&LitStr>) -> Option<Ident> {
+    use heck::ToUpperCamelCase;
+
     let mut variant = match enum_name {
         Some(lit) => lit.parse::<Ident>().ok()?,
-        None => nest_rs_codegen::pascal_case(&field.unraw()),
+        None => syn::parse_str::<Ident>(&field.unraw().to_string().to_upper_camel_case()).ok()?,
     };
     if variant == "Self" {
         variant = format_ident!("Self_");
@@ -119,8 +122,9 @@ pub(crate) struct ResourceModel {
     pub complex: bool,
     /// When set, emit GraphQL surface types (SimpleObject, loaders, relations).
     pub graphql: bool,
-    /// Stamp `deleted_at` instead of hard-deleting; emit `SoftDeletable`.
-    pub soft_delete: bool,
+    /// `soft_delete`'s tombstone: the `Column` variant of `deleted_at`, which a
+    /// delete stamps and every `Repo` read filters on.
+    pub deleted_at: Option<Ident>,
     /// Maintain `created_at` / `updated_at` via `ActiveModelBehavior::before_save`.
     pub timestamps: bool,
 }
@@ -416,6 +420,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         });
     }
 
+    let mut deleted_at = None;
     if soft_delete {
         let Some(field) = fields.iter().find(|f| f.ident == "deleted_at") else {
             return Err(syn::Error::new_spanned(
@@ -429,6 +434,13 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                 "`deleted_at` must be `Option<DateTimeWithTimeZone>` (or similar) for soft delete",
             ));
         }
+        let Some(column) = &field.column else {
+            return Err(syn::Error::new_spanned(
+                &field.ident,
+                "`#[expose(..., soft_delete)]` stamps `deleted_at`, so it must be a column, not a relation or an `ignore`d field",
+            ));
+        };
+        deleted_at = Some(column.clone());
     }
     if timestamps {
         for name in ["created_at", "updated_at"] {
@@ -455,7 +467,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         service,
         complex,
         graphql,
-        soft_delete,
+        deleted_at,
         timestamps,
     })
 }

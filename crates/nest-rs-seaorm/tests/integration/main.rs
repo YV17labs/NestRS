@@ -1,6 +1,7 @@
-//! `nest-rs-seaorm`'s in-process suite: what the exposure decorators emit — their
-//! refusals are trybuild snapshots in `nest-rs-macro-hygiene`'s suite — and the
-//! pool's refusal of a server it cannot verify, before any login.
+//! `nest-rs-seaorm`'s in-process suite: what the exposure decorators emit, in
+//! `expose/`, which mirrors their macro crate's `src/` — their refusals are
+//! trybuild snapshots in `nest-rs-macro-hygiene`'s suite — and the pool's
+//! refusal of a server it cannot verify, before any login.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

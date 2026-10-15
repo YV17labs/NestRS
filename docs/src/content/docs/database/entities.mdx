@@ -96,7 +96,7 @@ a set of bare flags.
 | `service = …` | path | The service that owns the entity. Required as soon as the entity exposes a relation or another feature needs its PK loader — it's where the macro emits the loaders. |
 | `graphql` | flag | Emit the GraphQL object + input objects, and auto-resolve exposed relations through dataloaders. An exposed relation **without** `graphql` is a compile error. |
 | `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and `updated_at` on every save. Requires both columns. |
-| `soft_delete` | flag | Emit `impl SoftDeletable` so deletes set `deleted_at` and reads filter tombstoned rows. Requires a `deleted_at: Option<…>` column. |
+| `soft_delete` | flag | Deletes set `deleted_at`, and every `Repo` read hides a tombstoned row. Requires a `deleted_at: Option<…>` column. |
 | `complex` | flag | Force `#[graphql(complex)]` on the wire DTO. Auto-enabled when `graphql` is set and the entity has auto-resolved relations — you rarely set it by hand. |
 
 ## Recommended standard columns
@@ -219,7 +219,6 @@ input field:
 #[expose(input(create, update), validate(length(min = 1)))]
 pub title: String,
 
-#[sea_orm(unique)]
 #[expose(input(create, update), validate(email))]
 pub email: String,
 ```
@@ -307,14 +306,15 @@ SeaORM-level behaviour:
 - **`timestamps`** emits `ActiveModelBehavior::before_save`, stamping
   `created_at` on insert and `updated_at` on every save with
   `chrono::Utc::now().fixed_offset()`.
-- **`soft_delete`** emits `impl SoftDeletable for Entity` (declaring
-  the `deleted_at` column). This is only **half** the wiring: the entity
-  flag makes the column addressable, but the service must also override
-  `soft_delete_column()` to return it (default `None` ⇒ hard delete). With
-  both halves in place, `CrudService` deletes by setting the tombstone and
-  ANDs `deleted_at IS NULL` onto every read so a soft-deleted row is
-  invisible — in lists, by-id loads, and relation batches alike. See
-  [CRUD](/database/crud/#soft-delete-and-timestamps) for the service side.
+- **`soft_delete`** emits `impl SoftDeletable for Entity` and registers
+  the entity, with or without a `service`. `SoftDeletable` is sealed: only
+  the decorator implements it, so the trait never goes without the
+  registration. That is the whole wiring:
+  `Deletable::delete` sets the tombstone instead of erasing the row, and
+  every `Repo` read and update ANDs `deleted_at IS NULL`, so a soft-deleted
+  row is invisible — in lists, by-id loads, relation batches and your own
+  queries alike. `Repo::with_tombstones` is the one read that keeps it. See
+  [CRUD](/database/crud/#soft-delete-and-timestamps).
 
 <Aside type="caution">
 SeaORM requires exactly **one** `ActiveModelBehavior` per entity. The

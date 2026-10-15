@@ -9,7 +9,7 @@ use nest_rs::database::atomic;
 use nest_rs::graphql::dataloader;
 use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, DbOutcome, Deletable, Executor, Repo, ServiceError,
-    Updatable, live_condition,
+    Updatable,
 };
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, Set,
@@ -33,10 +33,6 @@ pub struct UsersService {
 
 impl CrudService for UsersService {
     type Entity = Users;
-
-    fn soft_delete_column() -> Option<entity::Column> {
-        Some(entity::Column::DeletedAt)
-    }
 }
 
 impl Creatable for UsersService {
@@ -157,7 +153,6 @@ impl UsersService {
             return Ok(None);
         };
         Repo::<Users>::unscoped_by_id(row.user_id)
-            .filter(live_condition::<Users>())
             .one(conn)
             .await
             .map_err(|e| social_store_unavailable(identity.provider, &e))
@@ -299,7 +294,6 @@ fn social_store_unavailable(provider: &str, err: &(dyn std::error::Error + 'stat
 
 async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Model>, DbErr> {
     Repo::<Users>::unscoped()
-        .filter(live_condition::<Users>())
         .filter(entity::Column::Email.eq(email.to_owned()))
         .one(conn)
         .await
@@ -388,7 +382,6 @@ impl UsersService {
         }
         tracing::debug!(target: crate::users::TARGET, count = names.len(), "loading users by name");
         let rows = Repo::<Users>::scoped(Action::Read)
-            .filter(live_condition::<Users>())
             .filter(entity::Column::Name.is_in(names.iter().cloned()))
             .all(&Repo::<Users>::conn()?)
             .await?;

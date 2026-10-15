@@ -9,11 +9,32 @@ use sea_orm::{
 };
 
 use crate::executor::{Executor, ExecutorScope, current_executor, current_executor_scope};
+use crate::soft_delete::live_condition_of;
 
-/// Row-level filter for `action` on `E` from the ambient ability. A worker/system
-/// (`Job`) executor is the sole unscoped path; every other path without an ability
-/// — request-scoped or untagged — denies all rows (fail-closed).
+/// Row-level filter for `action` on `E`: the ambient ability's condition, and,
+/// for every action but [`Create`](Action::Create) and
+/// [`Delete`](Action::Delete), the one hiding the tombstones of an entity
+/// declared `#[expose(..., soft_delete)]`. A worker/system (`Job`) executor is
+/// the sole path without an ability that the ability leaves unscoped; every
+/// other one — request-scoped or untagged — denies all rows (fail-closed).
+///
+/// `Create` checks a fresh row against the ability alone, so a row inserted
+/// already deleted (an archive import) is no denial. `Delete` reaches a
+/// tombstoned row: [`Repo::delete`] is the hard purge, and
+/// [`Repo::soft_delete`] stays idempotent.
 pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
+    let scope = ability_scope::<E>(action);
+    if matches!(action, Action::Create | Action::Delete) {
+        return scope;
+    }
+    match live_condition_of::<E>() {
+        Some(live) => Condition::all().add(scope).add(live),
+        None => scope,
+    }
+}
+
+/// The ambient ability's condition for `action` on `E`, alone.
+fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
     match current_ability() {
         Some(ability) => ability.condition_for::<E>(action),
         None if current_executor_scope() == Some(ExecutorScope::Job) => Condition::all(),
@@ -68,7 +89,8 @@ impl<E: EntityTrait> Repo<E> {
         })
     }
 
-    /// Every row of `E` the caller may [`Read`](Action::Read).
+    /// Every row of `E` the caller may [`Read`](Action::Read), soft-deleted rows
+    /// left out.
     pub async fn all() -> Result<Vec<E::Model>, DbErr> {
         let conn = Self::conn()?;
         E::find()
@@ -90,10 +112,25 @@ impl<E: EntityTrait> Repo<E> {
             .await
     }
 
-    /// A [`Select`] pre-filtered to what the caller may `action`, for a custom
-    /// query. Chain further constraints and execute against [`Repo::conn`].
+    /// A [`Select`] pre-filtered to what the caller may `action` ([`scope_for`]),
+    /// for a custom query. Chain further constraints and execute against
+    /// [`Repo::conn`].
     pub fn scoped(action: Action) -> Select<E> {
         E::find().filter(scope_for::<E>(action))
+    }
+
+    /// A [`Select`] filtered to what the caller may `action` **with its
+    /// soft-deleted rows**, which every other read hides: the one way to read a
+    /// tombstone. In a job it reads every row, as [`scoped`](Self::scoped)
+    /// does.
+    ///
+    /// Bar: the deleted row is what the caller is after — an administrator's
+    /// view of deleted records, a retention job — never a read that means to
+    /// show live rows. It reads a tombstone only: no `Repo` write un-deletes
+    /// one, since [`update`](Self::update) hides it too; a restore write is
+    /// planned for 7.x.
+    pub fn with_tombstones(action: Action) -> Select<E> {
+        E::find().filter(ability_scope::<E>(action))
     }
 
     /// Whether the caller may `action` this row, decided in SQL: one query on
@@ -135,14 +172,17 @@ impl<E: EntityTrait> Repo<E> {
     /// **Not** a signature-authenticated webhook: none exists, and one first
     /// needs raw-body HMAC-SHA256 verification in a `Guard`, a constant-time
     /// compare, a replay window, fail-closed secret handling and a denial `warn`.
+    ///
+    /// Soft-deleted rows stay hidden: hiding them is no authorization filter,
+    /// and a deleted account must not sign in.
     pub fn unscoped() -> Select<E> {
-        E::find()
+        live_rows(E::find())
     }
 
     /// The by-primary-key analog of [`unscoped`](Self::unscoped), under the same
     /// bar.
     pub fn unscoped_by_id(id: <E::PrimaryKey as PrimaryKeyTrait>::ValueType) -> Select<E> {
-        E::find_by_id(id)
+        live_rows(E::find_by_id(id))
     }
 
     /// System **write** — the write pendant of [`unscoped`](Self::unscoped): a
@@ -166,9 +206,9 @@ impl<E: EntityTrait> Repo<E> {
     }
 
     /// Update a row, gated by `condition_for(Update)` ANDed with the primary
-    /// key: a row outside the caller's scope is never touched and surfaces as
-    /// [`DbErr::RecordNotUpdated`], so a caller cannot mutate by id past its
-    /// scope.
+    /// key: a row outside the caller's scope, or soft-deleted, is never touched
+    /// and surfaces as [`DbErr::RecordNotUpdated`], so a caller cannot mutate by
+    /// id past its scope.
     ///
     /// Runs [`ActiveModelBehavior`] — see `scoped_save`.
     pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
@@ -217,6 +257,10 @@ impl<E: EntityTrait> Repo<E> {
     /// Soft-delete a loaded row: stamp `col = now()` in the request transaction,
     /// gated by `condition_for(Delete)` ANDed with the primary key. Idempotent
     /// when the row is already tombstoned. Hard purge stays on [`Self::delete`].
+    ///
+    /// The row is then hidden from every read but
+    /// [`with_tombstones`](Self::with_tombstones) when `E` is declared
+    /// `#[expose(..., soft_delete)]` and `col` is its `deleted_at`.
     pub async fn soft_delete<A, M>(model: M, col: E::Column) -> Result<(), DbErr>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
@@ -227,6 +271,14 @@ impl<E: EntityTrait> Repo<E> {
         active.set(col, Value::from(crate::now()));
         Self::scoped_save(active, Action::Delete).await?;
         Ok(())
+    }
+}
+
+/// `select`, without the tombstones of a soft-deletable `E`.
+fn live_rows<E: EntityTrait>(select: Select<E>) -> Select<E> {
+    match live_condition_of::<E>() {
+        Some(live) => select.filter(live),
+        None => select,
     }
 }
 
@@ -273,7 +325,7 @@ mod tests {
     mod tombstone {
         use sea_orm::entity::prelude::*;
 
-        use crate::soft_delete::SoftDeletable;
+        use crate::soft_delete::{SoftDeletable, SoftDeleteDeclared};
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "tombstones")]
@@ -288,11 +340,95 @@ mod tests {
 
         impl ActiveModelBehavior for ActiveModel {}
 
+        impl SoftDeleteDeclared for Entity {}
+
         impl SoftDeletable for Entity {
             fn deleted_at_column() -> Column {
                 Column::DeletedAt
             }
         }
+    }
+
+    inventory::submit! {
+        crate::soft_delete::SoftDeleteRegistration {
+            entity: || std::any::TypeId::of::<tombstone::Entity>(),
+            column: || sea_orm::IdenStatic::as_str(&tombstone::Column::DeletedAt),
+        }
+    }
+
+    const LIVE: &str = r#""tombstones"."deleted_at" IS NULL"#;
+
+    fn tombstone_sql(select: Select<tombstone::Entity>) -> String {
+        select.build(DatabaseBackend::Postgres).to_string()
+    }
+
+    #[tokio::test]
+    async fn every_action_but_create_and_delete_hides_a_soft_deletable_entitys_tombstones() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_job_executor(pool, async {
+            for action in [Action::Read, Action::Update, Action::Manage] {
+                let s = tombstone_sql(Repo::<tombstone::Entity>::scoped(action));
+                assert!(s.contains(LIVE), "{action:?} hides tombstones: {s}");
+            }
+            let s = tombstone_sql(Repo::<tombstone::Entity>::scoped(Action::Create));
+            assert!(
+                !s.contains("IS NULL"),
+                "a row inserted already deleted (an archive import) passes the create check: {s}",
+            );
+            let s = tombstone_sql(Repo::<tombstone::Entity>::scoped(Action::Delete));
+            assert!(
+                !s.contains("IS NULL"),
+                "the hard purge and the soft delete reach a tombstoned row: {s}",
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_entity_without_tombstones_carries_no_live_condition() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_job_executor(pool, async {
+            let s = sql(scope_for::<widget::Entity>(Action::Read));
+            assert!(!s.contains("deleted_at"), "{s}");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn the_live_condition_is_anded_after_the_abilitys() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_request_executor(pool, async {
+            let s = tombstone_sql(Repo::<tombstone::Entity>::scoped(Action::Read));
+            assert!(
+                s.contains("1 = 0") && s.contains(LIVE),
+                "hiding tombstones never widens a denial: {s}",
+            );
+        })
+        .await;
+    }
+
+    #[test]
+    fn the_ability_less_escapes_hide_tombstones_too() {
+        let s = tombstone_sql(Repo::<tombstone::Entity>::unscoped());
+        assert!(s.contains(LIVE), "unscoped: {s}");
+        let s = tombstone_sql(Repo::<tombstone::Entity>::unscoped_by_id(7));
+        assert!(s.contains(LIVE) && s.contains('7'), "unscoped_by_id: {s}");
+    }
+
+    #[tokio::test]
+    async fn with_tombstones_keeps_the_ability_and_drops_the_live_condition() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_job_executor(pool.clone(), async {
+            let s = tombstone_sql(Repo::<tombstone::Entity>::with_tombstones(Action::Read));
+            assert!(!s.contains("IS NULL"), "a job reads every row: {s}");
+        })
+        .await;
+        with_request_executor(pool, async {
+            let s = tombstone_sql(Repo::<tombstone::Entity>::with_tombstones(Action::Read));
+            assert!(s.contains("1 = 0"), "still scoped by the ability: {s}");
+            assert!(!s.contains("IS NULL"), "{s}");
+        })
+        .await;
     }
 
     fn sql(cond: Condition) -> String {

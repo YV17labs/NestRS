@@ -178,6 +178,10 @@ if !Repo::<user::Entity>::can(Action::Update, &model).await? {
 }
 ```
 
+On an entity declared `soft_delete`, a deleted row answers `false` for
+every action but `Create` and `Delete`, as every `Repo` read leaves it out;
+`Delete` stays `true` where the grant holds, since the hard purge reaches it.
+
 A row a route bound through `Bind<Update, S>` was already authorized for
 `Update` in SQL, and needs neither check.
 

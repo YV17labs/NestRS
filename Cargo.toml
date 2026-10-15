@@ -137,6 +137,10 @@ syn = { version = "3.0", features = ["full"] }  # public
 quote = "1.0"
 proc-macro2 = "1.0"  # public
 proc-macro-crate = "3.5"
+# sea-orm-macros derives an entity's `Column` variants with heck, so `#[expose]`
+# names them with it too. 0.5.0 (2024-03) crosses the freshness bar: finished,
+# without an advisory, and it moves when sea-orm-macros moves.
+heck = "0.5"
 
 tempfile = "3.27"
 tokio-rustls = "0.26"  # public in nest-rs-testing alone

@@ -85,8 +85,8 @@ serde_json.workspace = true
 schemars.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
-# `#[expose(..., soft_delete)]` submits its entity/service pair here at link
-# time, so `SoftDeleteAudit` can refuse boot on a half-wired tombstone.
+# `#[expose(..., soft_delete)]` registers its entity here at link time, so
+# every `Repo` read of it hides its tombstoned rows.
 inventory.workspace = true
 # `Bind` validates UUID v7 path ids, and an exposed entity's write DTO mints
 # its `Uuid` primary key.

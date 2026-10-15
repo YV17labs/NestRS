@@ -395,18 +395,14 @@ pub struct Model {
 }
 ```
 
-Activate on the service. `CrudService` carries the **read** half plus
-`soft_delete_column`; the write half is opt-in — implement `Creatable`,
-`Updatable`, `Deletable` only for the operations the resource offers (the
-framework cannot infer opt-in per service without specialization):
+The flag is the whole declaration: the service writes nothing for it.
+`CrudService` carries the **read** half; the write half is opt-in — implement
+`Creatable`, `Updatable`, `Deletable` only for the operations the resource
+offers (the framework cannot infer opt-in per service without specialization):
 
 ```rust title="crates/features/src/posts/service.rs"
 impl CrudService for PostsService {
     type Entity = Posts;
-
-    fn soft_delete_column() -> Option<entity::Column> {
-        Some(entity::Column::DeletedAt)
-    }
 }
 
 impl Creatable for PostsService { type Create = CreatePost; }
@@ -416,9 +412,11 @@ impl Deletable for PostsService {}
 
 | Concern | Behaviour |
 |---------|-----------|
-| `list` / `page` / `access` | AND `deleted_at IS NULL` with the ability scope |
-| `delete` (via `CrudService`) | `UPDATE … SET deleted_at = now()` — idempotent |
-| Hard purge | `Repo::delete` directly (admin escape hatch) |
+| Every `Repo` read and update — `list`, `page`, `access`, `Bind`, relation batches, a custom `Repo::scoped` query, `Repo::unscoped` | ANDs `deleted_at IS NULL` after the ability scope: a deleted row reads as absent |
+| `delete` (via `Deletable`) | `UPDATE … SET deleted_at = now()` — idempotent |
+| Reading a deleted row | `Repo::<E>::with_tombstones(action)` — the one way (admin, retention) |
+| Restoring a deleted row | Not offered in 7.0: `Repo::update` hides a tombstone too; `Repo::restore` is planned for 7.x |
+| Hard purge | `Repo::delete` directly, which reaches a tombstone |
 | `timestamps` flag | Emits `ActiveModelBehavior::before_save` — **remove** any manual empty `impl ActiveModelBehavior` on the entity |
 
 Migration snippet (Postgres):
@@ -430,29 +428,14 @@ ALTER TABLE post
   ADD COLUMN deleted_at TIMESTAMPTZ NULL;
 ```
 
-Custom queries that use `Repo::scoped` must AND
-[`live_condition::<E>()`](https://docs.rs/nest-rs-seaorm/latest/nest_rs_seaorm/fn.live_condition.html)
-when `E: SoftDeletable` (e.g. login-by-email paths).
+A value that must be unique — an email, a name — is unique among the **live**
+rows: give it a partial index (`CREATE UNIQUE INDEX … WHERE deleted_at IS
+NULL`). With a full one, a deleted user's email reads as free everywhere and
+still refuses the next signup with a `409`.
 
-An entity that does not declare `soft_delete_column` hard-deletes — the right
-shape for join tables and lookups (`orgs/` in Publish stays hard delete). Drop
-**both** halves together when you mean it: the entity flag makes the column
-addressable, the service override is what tombstones.
-
-Keeping only one half is **a boot failure**, not a caveat. `#[expose(...,
-soft_delete)]` on an entity whose service never overrides the column would
-answer `DELETE` with the same `204` a tombstone answers, having destroyed the
-row — so `SeaOrmDatabaseModule` refuses to start and names both sides:
-
-```text frame="terminal"
-Error: soft delete is declared on the entity but not on the service:
-  - `post` is `#[expose(..., soft_delete)]` but `features::posts::PostService`
-    does not override `CrudService::soft_delete_column`: DELETE would erase the
-    row for good and reads would never filter `deleted_at`.
-```
-
-`nestrs g resource` scaffolds both halves plus the three columns, matching the
-migration it tells you to generate next.
+An entity without the flag hard-deletes — the right shape for join tables and
+lookups. `nestrs g resource` scaffolds the flag plus the three columns,
+matching the migration it tells you to generate next.
 
 ## Reference
 

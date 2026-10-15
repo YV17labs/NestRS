@@ -28,15 +28,17 @@ safe route, a transaction on a mutation. No connection parameter, no
 transaction object to thread through the call stack.
 
 `Repo<E>` is generic over the entity. Every method runs against the ambient
-executor, every read carries the ambient ability filter:
+executor, every read carries the ambient ability filter, and every read and
+update of an entity declared `soft_delete` leaves its deleted rows out:
 
 ```rust title="nest_rs::seaorm::Repo"
 Repo::<Posts>::conn()?;                    // raw handle for a custom query
 Repo::<Posts>::all().await?;               // every readable row
 Repo::<Posts>::find_by_id(id).await?;      // None if absent OR out of scope
 Repo::<Posts>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
-Repo::<Posts>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
-Repo::<Posts>::delete(model).await?;       // 0 rows if out of scope
+Repo::<Posts>::with_tombstones(Action::Read);  // the same, deleted rows kept
+Repo::<Posts>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope or deleted
+Repo::<Posts>::delete(model).await?;       // 0 rows if out of scope; purges a deleted row too
 Repo::<Posts>::can(Action::Update, &model).await?;  // the instance check, in SQL
 Repo::<Posts>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
 ```
@@ -49,6 +51,17 @@ relational rule the model alone cannot show. The macro-generated
 `CrudService::access(action, id)` loads unscoped so a denied-but-existing
 row surfaces as `Access::Denied` (distinct from `Access::Missing`) — the
 gateway route-model binding goes through.
+
+The deleted rows are left out after the ability's condition, for every
+action but `Create` and `Delete`: `Repo::delete` is the hard purge, so it
+reaches a tombstone, and `Repo::can(Delete, …)` answers for it; a create
+checks its fresh row against the ability alone, so importing a row already
+deleted is no denial. `Repo::unscoped` and
+`unscoped_by_id` hide them too — they drop the ability, not the deletion,
+so a deleted account cannot sign in. `Repo::with_tombstones` is the one
+read that keeps them, for an administrator's view or a retention job. It
+reads only: no `Repo` write brings a deleted row back yet — `Repo::restore`
+is planned for 7.x.
 
 ## Under the hood: the ambient executor
 

@@ -25,6 +25,8 @@ syn = { workspace = true, features = ["extra-traits"] }
 quote.workspace = true
 proc-macro2.workspace = true
 nest-rs-codegen.workspace = true
+# Names a field's `Column` variant as sea-orm's derive does.
+heck.workspace = true
 
 [lints]
 workspace = true

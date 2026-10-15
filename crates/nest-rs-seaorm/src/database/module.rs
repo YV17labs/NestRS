@@ -9,8 +9,7 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
 /// Binds the `nest-rs-database` port: [`SeaOrmUnitOfWork`] as `dyn
 /// UnitOfWork`, which every edge opens its units of work through, the
-/// `DbContext` request interceptor for HTTP (feature `http`), and the
-/// link-time audits this binding brings. A bare import beside
+/// `DbContext` request interceptor for HTTP (feature `http`). A bare import beside
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 pub struct SeaOrmDatabaseModule;
 
@@ -38,7 +37,7 @@ impl Module for SeaOrmDatabaseModule {
         }
         #[cfg(feature = "http")]
         let builder = <crate::DbContext as nest_rs_core::Discoverable>::register(builder);
-        <crate::soft_delete::SoftDeleteAudit as nest_rs_core::Discoverable>::register(builder)
+        builder
     }
 }
 

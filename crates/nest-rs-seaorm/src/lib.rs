@@ -11,8 +11,10 @@
 //!   the unit's first data-layer touch.
 //! - [`SeaOrmHealthModule`] (bare, feature `health`) binds a health indicator.
 //!
-//! Services query through [`Repo`]: every call runs on the ambient executor and
-//! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability).
+//! Services query through [`Repo`]: every call runs on the ambient executor,
+//! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability),
+//! and an entity declared `#[expose(..., soft_delete)]` keeps its deleted rows
+//! out of every read but [`Repo::with_tombstones`].
 //! [`nest_rs_database::atomic`] runs a block inside a [`Savepoint`] of that
 //! executor's transaction, or a transaction of its own on the pool.
 //! An entity crosses the wire through [`macro@expose`], and a column's enum
@@ -86,9 +88,7 @@ pub use service::{
     model_uuid,
 };
 pub use slug::resolve_unique_slug;
-pub use soft_delete::{
-    SoftDeletable, SoftDeleteRegistration, audit_soft_delete_bindings, live_condition,
-};
+pub use soft_delete::{SoftDeletable, live_condition};
 pub use time::now;
 pub use unit::SeaOrmUnitOfWork;
 
@@ -106,6 +106,9 @@ pub mod __private {
     pub use crate::error::crud_error;
     #[cfg(feature = "graphql")]
     pub use crate::error::graphql_crud_error;
+
+    pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
+    pub use inventory;
 
     // What `#[expose]` and `#[wire_enum]` emit, so an entity crate declares
     // none of these; each derive carries a `crate = ` override pointing here.
@@ -268,7 +271,3 @@ pub use nest_rs_seaorm_macros::wire_enum;
 /// Re-exported so an app resolves the framework's exact `sea_orm` pin, part of
 /// this crate's API.
 pub use sea_orm;
-
-/// Re-exported for the `inventory::submit!` that `#[expose(..., soft_delete)]`
-/// emits: the entity crate does not declare `inventory`.
-pub use inventory;

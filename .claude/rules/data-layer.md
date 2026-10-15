@@ -32,12 +32,26 @@ its callers must clear; the method's doc is the authority, not this list.
 - **`Repo::insert_unscoped`** — the write pendant, on an explicit connection:
   pre-principal provisioning (a social-login user) and principal-less system
   work. An authorized create stays on `Creatable`.
+- **`Repo::with_tombstones`** — the ability-scoped read that keeps
+  soft-deleted rows: an administrator's view of deleted records, a retention
+  job. Every other read hides them. It reads only: no `Repo` write un-deletes
+  a row (`Repo::restore` is planned for 7.x).
 - **A truly contextless path** — a shutdown hook — keeps an injected
   `Arc<DatabaseConnection>`, because no executor exists there.
 
 No webhook ingress exists; `Repo::unscoped`'s rustdoc states the bar a
 signature-authenticated one must clear before it ships. Auditing the escapes
 is one grep per method name.
+
+**A soft-deleted row is hidden by `Repo`, declared once on the entity.**
+`#[expose(..., soft_delete)]` registers the entity, and every `Repo` read and
+update — the ability-less escapes included, since hiding a tombstone is no
+authorization filter — ANDs `deleted_at IS NULL` after the ability's
+condition; `Deletable::delete` then stamps rather than erases. `Delete` alone
+reaches a tombstone: `Repo::delete` is the hard purge, and `Repo::soft_delete`
+stays idempotent. `Create`'s check of a fresh row tests the ability alone, so a
+row inserted already deleted (an archive import) is no denial. A service never
+writes the condition.
 
 **`Repo` has no scoped bulk delete.** A retention purge selects through
 `Repo::scoped(Action::Delete)` and deletes row by row through `Repo::delete`,

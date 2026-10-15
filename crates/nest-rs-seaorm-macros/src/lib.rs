@@ -20,8 +20,9 @@ mod wire_enum;
 /// Emits a wire DTO (`Serialize` + `JsonSchema`) and `Create/Update` input
 /// types; add the `graphql` flag (and enable the `graphql` feature on
 /// `nest-rs-seaorm`) for GraphQL types and auto-resolved relations. Add
-/// `soft_delete` and/or `timestamps` for lifecycle columns (see
-/// `nest-rs-seaorm` `SoftDeletable` + `CrudService::soft_delete_column`).
+/// `soft_delete` and/or `timestamps` for lifecycle columns: `soft_delete`
+/// registers the entity, so a delete stamps `deleted_at` and every `Repo` read
+/// hides a stamped row (see `nest-rs-seaorm`'s `SoftDeletable`).
 ///
 /// **Exposure is opt-in.** A column crosses the wire only when it carries
 /// `#[expose]`; a field with no `#[expose]` is hidden from every transport
@@ -36,7 +37,8 @@ mod wire_enum;
 /// `JsonSchema`, GraphQL `SimpleObject` under `graphql`), the `Create`/`Update`
 /// input types, active-model write glue, `impl WireModelDefaults` (for response
 /// masking to rebuild unexposed columns), lifecycle column glue
-/// (`soft_delete`/`timestamps`), and — under `graphql` — the relation loaders +
+/// (`soft_delete`'s `SoftDeletable` and registration, `timestamps`'
+/// `ActiveModelBehavior`), and — under `graphql` — the relation loaders +
 /// `#[ComplexObject]` field resolvers for `#[expose]`d relations.
 #[proc_macro_attribute]
 pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {

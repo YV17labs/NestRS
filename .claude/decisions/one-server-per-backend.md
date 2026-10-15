@@ -140,3 +140,13 @@ allow. The same pass showed a failover's freeze outliving its test: the frozen
 node slept past the Sentinel failover's return, and the `mutual_tls` test
 after it found that node unanswering. A test freezing a node now waits, within
 twice the freeze, until it answers again before returning.
+
+**2026-10-15, the atomic migration re-run after the idempotent enqueue:** the
+push script now skips a job its queue still holds, the contract
+`JobProducer::enqueue` states for every driver, which closes the first of the
+two paths above: a push the cluster client sends again after its answer was
+lost files nothing twice. `a_queue_runs_on_through_an_atomic_migration_of_its_slot`
+ran green on the Cluster environment after it, every job counted once, beside
+the whole Redis suite on the Sentinel and Cluster environments. The test keeps
+asserting once: a second run left would be a delivery the slot's move lost,
+Valkey's, and is still a defect to find.

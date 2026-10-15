@@ -19,6 +19,14 @@ from `demo/` with `nestrs run db <recipe>`.
   second, it never runs.
 - **House columns:** `created_at` / `updated_at` defaulting to
   `current_timestamp`; a nullable `deleted_at` for soft delete.
+- **A value unique among a soft-deleted table's rows is unique among its live
+  ones**: a partial unique index (`… WHERE deleted_at IS NULL`), never
+  `unique_key()`. `Repo` hides a tombstone, so a full index would refuse, with
+  a conflict, a value every read calls free. A seed's `ON CONFLICT` on that
+  column names the same predicate (`target_and_where`), and the entity declares
+  no `#[sea_orm(unique)]` on it: the index lives in the migration, and the
+  attribute would generate `find_by_<column>`/`delete_by_<column>`, raw queries
+  that see tombstones.
 
 ## Seed (`demo/crates/seed`)
 

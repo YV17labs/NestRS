@@ -63,7 +63,6 @@ pub struct Model {
     pub org_id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
-    #[sea_orm(unique)]
     #[expose(input(create, update), validate(email))]
     pub email: String,
     #[wire_default]

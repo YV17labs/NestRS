@@ -422,6 +422,10 @@ impl UnitOfWork for Marking {
             Some((spec.unit.name(), spec.scope, spec.policy));
         Ok(Box::new(MarkingUnit(self.answer)))
     }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
 }
 
 impl OpenUnit for MarkingUnit {
@@ -2891,4 +2895,146 @@ async fn shutdown_lets_go_of_a_daily_cron_claim_its_lock_never_answers() {
         "nothing fires once shutdown is asked for",
     );
     assert_abandoned_once_at_shutdown(&logs, "close_the_day");
+}
+
+/// A unit of work settling on a task of its own after `takes` — never when
+/// `None` — within `net`.
+struct Settling {
+    takes: Option<Duration>,
+    net: Duration,
+}
+
+struct SettlingUnit(Option<Duration>);
+
+impl UnitOfWork for Settling {
+    fn open(&self, _: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
+        Ok(Box::new(SettlingUnit(self.takes)))
+    }
+
+    fn settle_net(&self) -> Duration {
+        self.net
+    }
+}
+
+impl OpenUnit for SettlingUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(Marker)
+    }
+
+    fn settle(self: Box<Self>, _ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
+        let takes = self.0;
+        let settling = tokio::spawn(async move {
+            match takes {
+                Some(takes) => tokio::time::sleep(takes).await,
+                None => std::future::pending().await,
+            }
+        });
+        Box::pin(async move {
+            drop(settling.await);
+            Settlement::Settled
+        })
+    }
+}
+
+fn tick_quick(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        Ok(())
+    })
+}
+
+fn tick_outliving(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        std::future::pending::<()>().await;
+        Ok(())
+    })
+}
+
+/// One occurrence of a tick timed out at one second, over `unit`, and what the
+/// schedule filed about it.
+async fn one_timed_tick(run: RunFn, unit: Settling) -> Vec<nest_rs_testing::CapturedEvent> {
+    struct TimedHost;
+
+    let logs = LogCapture::install();
+    let container = crate::hermetic()
+        .provide_dyn::<dyn UnitOfWork>(Arc::new(unit))
+        .attach_meta::<TimedHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
+            provider: "TimedHost",
+            method: "tick",
+            trigger: Trigger::Interval(Duration::from_secs(60)),
+            run,
+            timeout: Duration::from_secs(1),
+            transaction: TransactionPolicy::PerUnit,
+            replicas: Replicas::Each,
+            key: None,
+        })
+        .build();
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_secs(65)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("serve returns Ok");
+    logs.find("nest_rs::schedule", "scheduled job failed")
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tick_that_answered_in_time_is_never_cut_while_it_commits() {
+    let failed = one_timed_tick(
+        tick_quick,
+        Settling {
+            takes: Some(Duration::from_secs(2)),
+            net: Duration::from_secs(16),
+        },
+    )
+    .await;
+    assert!(failed.is_empty(), "a slow commit is no timeout: {failed:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tick_cut_during_its_body_reports_a_retryable_timeout() {
+    let failed = one_timed_tick(
+        tick_outliving,
+        Settling {
+            takes: Some(Duration::from_millis(100)),
+            net: Duration::from_secs(16),
+        },
+    )
+    .await;
+    let event = failed.first().expect("the cut tick is reported");
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|error| error.contains("1s timeout")),
+        "{event:?}"
+    );
+    assert_eq!(event.field("retryable").as_deref(), Some("true"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tick_whose_commit_never_answers_is_reported_in_doubt_and_not_retryable() {
+    let failed = one_timed_tick(
+        tick_quick,
+        Settling {
+            takes: None,
+            net: Duration::from_secs(1),
+        },
+    )
+    .await;
+    let event = failed.first().expect("the tick in doubt is reported");
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|error| error.contains("its writes may have landed")),
+        "{event:?}"
+    );
+    assert_eq!(event.field("retryable").as_deref(), Some("false"));
 }

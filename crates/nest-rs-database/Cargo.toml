@@ -25,5 +25,10 @@ uuid.workspace = true
 # before the settle's is built.
 futures-util.workspace = true
 
+[dev-dependencies]
+# `test-util` pauses time, so a deadline and a settle that outlives it are read
+# off one clock.
+tokio = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

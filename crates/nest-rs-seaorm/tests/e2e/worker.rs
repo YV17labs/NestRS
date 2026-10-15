@@ -420,3 +420,93 @@ async fn work_held_by_an_attempt_that_failed_never_runs() {
     assert_eq!(committed_rows(&conn, TABLE).await, 0);
     assert!(sighted(&sightings).is_empty());
 }
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct DeadlineProbe {
+    id: i32,
+}
+
+#[nest_rs_queue::queue(name = "worker-deadline", job = DeadlineProbe)]
+struct DeadlineQueue;
+
+/// How many times the listener on the job's committed write ran.
+static LISTENER_RUNS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+struct DeadlineProcessor;
+
+impl nest_rs_core::ProviderResidency for DeadlineProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[nest_rs_queue::processor]
+impl DeadlineProcessor {
+    /// Writes and returns within its timeout; what listens to the write
+    /// outlives it.
+    #[process(queue = DeadlineQueue, retries = 1, timeout = "1s")]
+    async fn write(&self, _job: DeadlineProbe) -> anyhow::Result<()> {
+        current_executor()
+            .expect("the attempt runs with an ambient executor")
+            .execute_unprepared("INSERT INTO worker_deadline_probe DEFAULT VALUES")
+            .await?;
+        nest_rs_database::after_commit(async {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            LISTENER_RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        Ok(())
+    }
+}
+
+static BARE: nest_rs_queue::QueueBackend =
+    nest_rs_queue::QueueBackend::new("bare", nest_rs_queue::Capabilities::NONE);
+
+/// The timeout bounds the body: a job that answered in time is never retried
+/// because what listens to its commit outlives it, so its write lands once and
+/// its listener runs once.
+#[tokio::test]
+async fn a_job_whose_listener_outlives_its_timeout_is_not_retried() {
+    use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
+
+    let conn = crate::harness::connect_arc().await;
+    scratch_table(&conn, "worker_deadline_probe").await;
+    let unit: Arc<dyn UnitOfWork> = Arc::new(SeaOrmUnitOfWork::new(
+        conn.clone(),
+        &SeaOrmConfig::default(),
+    ));
+    let method = nest_rs_core::inventory::iter::<nest_rs_queue::ProcessMethod>()
+        .find(|method| method.name() == "DeadlineProcessor::write")
+        .expect("the processor's method is submitted");
+    let mut delivery = Delivery::new(
+        &BARE,
+        nest_rs_queue::QueueName::new("worker-deadline").expect("a valid name"),
+        serde_json::json!({
+            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
+            "payload": { "id": 1 },
+        }),
+    );
+
+    let outcome = consume::attempt(
+        method,
+        &mut delivery,
+        nest_rs_core::Container::builder()
+            .provide(DeadlineProcessor)
+            .build(),
+        Some(unit),
+    )
+    .await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Ok),
+        "a commit whose listener outlives the timeout is no timeout: {outcome:?}"
+    );
+    assert_eq!(row_count(&conn, "worker_deadline_probe").await, 1);
+    nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+        LISTENER_RUNS.load(std::sync::atomic::Ordering::SeqCst) == 1
+    })
+    .await;
+    assert_eq!(
+        LISTENER_RUNS.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the listener ran once, on the driver's task"
+    );
+}

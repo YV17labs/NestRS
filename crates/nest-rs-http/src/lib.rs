@@ -24,6 +24,7 @@ mod config;
 mod context;
 mod controller;
 mod cors;
+mod deadline;
 mod deprecation;
 mod detached;
 mod drain;
@@ -196,6 +197,7 @@ pub use config::{
 pub use context::{Ctx, RejectedCredential};
 pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, RequestBodyMeta};
 pub use cors::HttpCors;
+pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
 pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, endpoint_fn};

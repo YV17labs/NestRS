@@ -1382,6 +1382,10 @@ impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
             settled: false,
         }))
     }
+
+    fn settle_net(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(16)
+    }
 }
 
 impl nest_rs_database::OpenUnit for RecordingUnit {
@@ -1448,6 +1452,83 @@ async fn a_message_cut_at_its_deadline_settles_its_unit_as_a_failure() {
         units_ended(),
     );
 
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Told back to let a held rollback end.
+static ROLLBACK_RELEASED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// A binding whose rollback waits, on a task of its own, until the test lets it
+/// end — a statement the cut body left running in the database.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct HeldRollback;
+
+struct HeldRollbackUnit;
+
+impl nest_rs_database::UnitOfWork for HeldRollback {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(HeldRollbackUnit))
+    }
+
+    fn settle_net(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(16)
+    }
+}
+
+impl nest_rs_database::OpenUnit for HeldRollbackUnit {
+    fn executor(&self) -> std::sync::Arc<dyn nest_rs_database::Executor> {
+        std::sync::Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        let ended = tokio::spawn(async move {
+            if !ok {
+                ROLLBACK_RELEASED.notified().await;
+            }
+        });
+        Box::pin(async move {
+            drop(ended.await);
+            nest_rs_database::Settlement::Settled
+        })
+    }
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        message_timeout: Some(MESSAGE_DEADLINE),
+        ..WsConfig::default()
+    })],
+    providers = [DeadlineGateway, HeldRollback as dyn nest_rs_database::UnitOfWork],
+)]
+struct HeldRollbackModule;
+
+/// A cut message is answered at its deadline, whatever its rollback still waits
+/// on: the driver ends the rollback on its own task.
+#[tokio::test]
+async fn a_message_cut_at_its_deadline_is_answered_while_its_rollback_still_waits() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<HeldRollbackModule>()
+        .build_ws()
+        .await
+        .expect("a pinned message deadline boots over a unit-of-work binding");
+
+    let mut socket = app.socket("/deadline").connect().await;
+    socket.send("stall", serde_json::Value::Null).await;
+    STALL_STARTED.notified().await;
+    tokio::time::pause();
+    tokio::time::sleep(MESSAGE_DEADLINE + Duration::from_millis(1)).await;
+    tokio::time::resume();
+
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["data"]["errors"]["reason"], "timeout", "{frame}");
+    ROLLBACK_RELEASED.notify_one();
     app.shutdown().await.expect("the transport stops cleanly");
 }
 

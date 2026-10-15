@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nest_rs_core::Container;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
@@ -46,12 +47,17 @@ pub struct HandlerContext {
     pub unit_of_work: Option<Arc<dyn UnitOfWork>>,
     /// The attempt this is: the job's id, its number and its queue.
     pub attempt: Attempt,
+    /// When the attempt's body is cut: its start plus its method's `timeout`.
+    pub deadline: tokio::time::Instant,
+    /// The method's `timeout`, which the cut reports.
+    pub timeout: Duration,
 }
 
 /// Run `body` — the method's call — as the attempt's one unit of work under
 /// `policy`, through the binding `context` carries: the unit names the job and
-/// the attempt, and a success its driver could not honour fails the attempt
-/// with the driver's classification.
+/// the attempt, a success its driver could not honour fails the attempt with
+/// the driver's classification, and the body alone is cut at the attempt's
+/// deadline, failing it retryably, so a commit is never cut.
 pub fn run_attempt<F>(
     context: HandlerContext,
     policy: TransactionPolicy,
@@ -63,12 +69,20 @@ where
     let HandlerContext {
         unit_of_work,
         attempt,
+        deadline,
+        timeout,
         ..
     } = context;
-    let spec =
-        UnitSpec::new(crate::unit::JOB, ExecutorScope::Job, policy).with_job(attempt.job_ref());
+    let spec = UnitSpec::new(crate::unit::JOB, ExecutorScope::Job, policy)
+        .with_job(attempt.job_ref())
+        .with_deadline(deadline);
+    let cut = async move {
+        tokio::time::timeout_at(deadline, body)
+            .await
+            .unwrap_or_else(|_| Err(JobError::retry(nest_rs_core::JobTimedOut::new(timeout))))
+    };
     async move {
-        run_unit(unit_of_work.as_ref(), spec, body, Result::is_ok, |why| {
+        run_unit(unit_of_work.as_ref(), spec, cut, Result::is_ok, |why| {
             Err(JobError::unhonoured(why))
         })
         .await

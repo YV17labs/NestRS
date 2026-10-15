@@ -536,3 +536,64 @@ async fn work_held_by_a_request_that_rolled_back_never_runs() {
         "nothing reacts to a write that never landed",
     );
 }
+
+/// How many times the listener on the request's committed write ran.
+static LISTENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The request timeout bounds the handler: one that wrote and answered within
+/// it answers its own status, never `503`, however long what listens to its
+/// commit runs — the response waits for that until the deadline, then lets it
+/// run on.
+#[tokio::test]
+async fn a_post_whose_listener_outlives_the_request_timeout_answers_its_own_status() {
+    let conn = crate::harness::connect_arc().await;
+    conn.execute_unprepared("DROP TABLE IF EXISTS deadline_commit_probe")
+        .await
+        .expect("drop any leftover probe table");
+    conn.execute_unprepared("CREATE TABLE deadline_commit_probe (id INT PRIMARY KEY)")
+        .await
+        .expect("create the probe table");
+    let ctx = DbContext::new(conn.clone(), config());
+
+    let endpoint = make(|_req: Request| async {
+        current_executor()
+            .expect("the handler runs with an ambient executor")
+            .execute_unprepared("INSERT INTO deadline_commit_probe (id) VALUES (1)")
+            .await
+            .expect("the insert runs inside the request transaction");
+        nest_rs_database::after_commit(async {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            LISTENED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        StatusCode::CREATED.into_response()
+    });
+
+    let mut req = mutating_request();
+    let started = tokio::time::Instant::now();
+    req.extensions_mut()
+        .insert(nest_rs_http::RequestDeadline::new(
+            started + Duration::from_secs(1),
+            Duration::from_secs(1),
+        ));
+    let status = status_of(endpoint.interceptor(ctx).call(req).await);
+    let took = started.elapsed();
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a write that landed is never a 503"
+    );
+    assert!(
+        took < Duration::from_millis(1900),
+        "answered at the deadline, not after the listener, took {took:?}",
+    );
+    assert_eq!(
+        crate::harness::committed_rows(&conn, "deadline_commit_probe").await,
+        1
+    );
+    nest_rs_testing::wait_until(Duration::from_secs(5), || {
+        LISTENED.load(std::sync::atomic::Ordering::SeqCst) == 1
+    })
+    .await;
+}

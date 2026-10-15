@@ -5,6 +5,7 @@ use nest_rs_database::{BACKEND_REMEDY, UnitOfWork};
 use sea_orm::DatabaseConnection;
 
 use crate::module::{BudgetReach, SUBSTRATE_REMEDY, budgets};
+use crate::unit::Settles;
 use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
 /// Binds the `nest-rs-database` port: [`SeaOrmUnitOfWork`] as `dyn
@@ -18,16 +19,26 @@ impl Module for SeaOrmDatabaseModule {
         let builder = budgets(BudgetReach::Ambient)
             .into_iter()
             .fold(builder, ContainerBuilder::provide_meta);
-        // Queued after the pool's and config's factories, so a missing one is
-        // named before any later factory dials.
-        builder.provide_declared_factory_after::<
-            Arc<dyn UnitOfWork>,
-            (DatabaseConnection, SeaOrmConfig),
-            _,
-            _,
-        >(BACKEND_REMEDY, |container| async move {
-            Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
-        })
+        builder
+            // Queued after the pool's and config's factories, so a missing one
+            // is named before any later factory dials.
+            .provide_declared_factory_after::<
+                Arc<dyn UnitOfWork>,
+                (DatabaseConnection, SeaOrmConfig, Settles),
+                _,
+                _,
+            >(BACKEND_REMEDY, |container| async move {
+                Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
+            })
+            // Installed after the pool, so its close drains every settle still
+            // running before the pool's closes.
+            .provide_factory_after::<Settles, (DatabaseConnection,), _, _>(|_| async {
+                Ok(Settles::default())
+            })
+            .provide_close::<Settles, _, _>(|settles| async move {
+                settles.drain().await;
+                Ok(())
+            })
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
@@ -46,11 +57,16 @@ fn substrate(container: &Container) -> anyhow::Result<()> {
     unit_of_work(container).map(drop)
 }
 
-/// SeaORM's unit of work over the container's pool and config.
+/// SeaORM's unit of work over the container's pool and config, its settles
+/// drained by the binding's close.
 fn unit_of_work(container: &Container) -> anyhow::Result<SeaOrmUnitOfWork> {
     let db = present::<DatabaseConnection>(container)?;
     let config = present::<SeaOrmConfig>(container)?;
-    Ok(SeaOrmUnitOfWork::new(db, &config))
+    let settles = container
+        .get::<Settles>()
+        .map(|settles| (*settles).clone())
+        .unwrap_or_default();
+    Ok(SeaOrmUnitOfWork::draining_into(db, &config, settles))
 }
 
 fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Result<Arc<T>> {
@@ -76,6 +92,10 @@ mod tests {
     impl UnitOfWork for BareUnitOfWork {
         fn open(&self, _: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
             Err(Unhonoured::deterministic("never opened"))
+        }
+
+        fn settle_net(&self) -> std::time::Duration {
+            std::time::Duration::from_secs(16)
         }
     }
 
@@ -156,6 +176,57 @@ mod tests {
         assert!(
             refused.starts_with("SeaOrmDatabaseModule: no `SeaOrmConfig` in the container"),
             "{refused}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_work_a_unit_held_for_its_commit_is_drained_before_the_pool_closes() {
+        let app = App::builder()
+            .provide(DatabaseConnection::default())
+            .provide(SeaOrmConfig::default())
+            .module::<SeaOrmDatabaseModule>()
+            .build()
+            .await
+            .expect("the binding boots over a pool and its config");
+        let binding = app
+            .container()
+            .get_dyn::<dyn UnitOfWork>()
+            .expect("the binding");
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let unit = nest_rs_core::__private::declare_unit(
+            "nest-rs-queue",
+            "nest_rs::queue",
+            nest_rs_core::operation_log::Kind::Consumer,
+            "queue.job",
+        );
+        let started = tokio::time::Instant::now();
+        let deadline = started + std::time::Duration::from_secs(1);
+        nest_rs_database::run_unit(
+            Some(&binding),
+            UnitSpec::new(
+                unit,
+                nest_rs_database::ExecutorScope::Job,
+                nest_rs_database::TransactionPolicy::PerUnit,
+            )
+            .with_deadline(deadline),
+            async move {
+                nest_rs_database::after_commit(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                })
+                .await;
+            },
+            |()| true,
+            |_| (),
+        )
+        .await;
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(1));
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst), "it runs on");
+        app.close().await;
+        assert!(
+            ran.load(std::sync::atomic::Ordering::SeqCst),
+            "the binding's close drained it"
         );
     }
 

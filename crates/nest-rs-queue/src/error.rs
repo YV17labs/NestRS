@@ -197,9 +197,18 @@ impl JobError {
     pub fn unhonoured(unhonoured: nest_rs_database::Unhonoured) -> Self {
         Self {
             retryable: unhonoured.retryable,
-            source: unhonoured.reason.into(),
+            source: Box::new(unhonoured),
             details: None,
         }
+    }
+
+    /// Whether the attempt's commit did not answer in time, so what it wrote
+    /// may have landed
+    /// ([`Unhonoured::IN_DOUBT`](nest_rs_database::Unhonoured::IN_DOUBT)).
+    pub(crate) fn is_in_doubt(&self) -> bool {
+        self.source
+            .downcast_ref::<nest_rs_database::Unhonoured>()
+            .is_some_and(|why| *why == nest_rs_database::Unhonoured::IN_DOUBT)
     }
 
     /// Attach structured detail to a failure — what a rejected pipe knows about

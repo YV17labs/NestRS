@@ -273,6 +273,14 @@ impl LazyTransaction {
     /// success. A commit failure is returned unlogged, for the transport to
     /// classify.
     pub async fn finalize(self: Arc<Self>, success: bool) -> FinalizeOutcome {
+        let (outcome, held) = self.answer(success).await;
+        held.run().await;
+        outcome
+    }
+
+    /// [`finalize`](Self::finalize)'s first half: the transaction's answer, and
+    /// the work held for the commit, to run or drop once that answer is told.
+    pub(crate) async fn answer(self: Arc<Self>, success: bool) -> (FinalizeOutcome, Held) {
         let transport = self.transport;
         // Settling consumes `self` before `COMMIT` is awaited, so its `Drop`
         // cannot report a future dropped mid-`COMMIT`: this guard does.
@@ -281,7 +289,7 @@ impl LazyTransaction {
             armed: self.is_opened(),
         };
         self.settled.store(true, Ordering::Relaxed);
-        let after_commit = self.take_after_commit();
+        let work = self.take_after_commit();
         let outcome = Self::settle(self, success).await;
         abandoned.armed = false;
         let committed = match outcome {
@@ -289,8 +297,23 @@ impl LazyTransaction {
             FinalizeOutcome::NoTransaction => success,
             _ => false,
         };
-        settle_after_commit(transport, after_commit, committed).await;
-        outcome
+        (
+            outcome,
+            Held {
+                transport,
+                work,
+                committed,
+            },
+        )
+    }
+
+    /// Whether this boundary holds work for its commit.
+    pub(crate) fn holds_work(&self) -> bool {
+        self.after_commit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|held| !held.is_empty())
     }
 
     async fn settle(self: Arc<Self>, success: bool) -> FinalizeOutcome {
@@ -483,6 +506,20 @@ pub(crate) fn poison_once(flag: &AtomicU8, verdict: u8) {
         reason = "the first failure's verdict stands; a later one finds the slot taken"
     )]
     let _ = flag.compare_exchange(POISON_CLEAN, verdict, Ordering::Relaxed, Ordering::Relaxed);
+}
+
+/// The work a settled boundary held for its commit, and whether it committed.
+pub(crate) struct Held {
+    transport: &'static str,
+    work: Vec<Deferred>,
+    committed: bool,
+}
+
+impl Held {
+    /// Run the work when the boundary committed, or drop it.
+    pub(crate) async fn run(self) {
+        settle_after_commit(self.transport, self.work, self.committed).await;
+    }
 }
 
 /// Run the boundary's after-commit work when it `committed`, or drop it. A

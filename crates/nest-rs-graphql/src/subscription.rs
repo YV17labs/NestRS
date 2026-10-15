@@ -1174,6 +1174,10 @@ mod tests {
         ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
             Ok(Box::new(Opened(spec.policy)))
         }
+
+        fn settle_net(&self) -> std::time::Duration {
+            std::time::Duration::from_secs(16)
+        }
     }
 
     impl nest_rs_database::OpenUnit for Opened {

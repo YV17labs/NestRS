@@ -106,13 +106,24 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 
 No edge deadline sits above a job, so the timeout is what ends an attempt
 waiting on a call that never answers — an outbound request with no timeout of
-its own. Past it, the attempt is cut where it waits and fails **retryably**:
-the next attempt may meet the answer the first waited on in vain. What it wrote
-in its transaction never commits. The failure names the deadline, on the retry
-`warn`, the dead-letter line and its record alike:
+its own. It bounds the method's **body**: past it, the attempt is cut where it
+waits and fails **retryably**, since the next attempt may meet the answer the
+first waited on in vain, and what it wrote in its transaction is rolled back.
+The failure names the deadline, on the retry `warn`, the dead-letter line and
+its record alike:
 
 ```text frame="terminal"
  WARN nest_rs::queue: job failed; will retry within the budget error=the attempt did not end within its 1800s timeout, and was cut — the `timeout` key on its job decorator sets it retry_after_ms=1143 trace_id=… span_id=…
+```
+
+A body that returned within its timeout is never retried for what comes after
+it: its `COMMIT` runs to its answer, and a listener on what it committed runs
+on past the timeout rather than failing the attempt. A commit that does not
+answer within the driver's bound may have landed, so that attempt is
+**dead-lettered, never replayed** — running it again could write twice:
+
+```text frame="terminal"
+ERROR nest_rs::queue: job dead-lettered: its commit did not answer in time, and what it wrote may have landed outcome="in_doubt" error=the unit's commit did not answer within its bound; its writes may have landed trace_id=… span_id=…
 ```
 
 The default is the dispatch deadline of Google Cloud Tasks, and the same key,

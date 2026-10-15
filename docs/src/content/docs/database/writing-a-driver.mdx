@@ -134,6 +134,7 @@ store-specific code.
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use nest_rs::database::{
     OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
 };
@@ -156,6 +157,12 @@ impl UnitOfWork for YourUnitOfWork {
             )),
         }
     }
+
+    fn settle_net(&self) -> Duration {
+        // (6) Above every bound your store holds a statement to: its own
+        //     statement timeout, plus a second.
+        self.statement_timeout + Duration::from_secs(1)
+    }
 }
 
 impl OpenUnit for InTransaction {
@@ -165,6 +172,8 @@ impl OpenUnit for InTransaction {
     }
 
     fn settle(self: Box<Self>, ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
+        // (7) Run what follows on a task your module tracks and drains, so a
+        //     dropped future never cuts a commit; answer within `settle_net`.
         Box::pin(async move {
             // (4) Reclaim sole ownership. A handle still held escaped into a
             //     spawned task: nothing it wrote can be vouched for.
@@ -196,6 +205,17 @@ What your binding owes:
   a 2xx, a reply that is not an error frame, a tool answer without `isError`,
   a job's `Ok`. A failure stands whatever you answer; `Settlement::Unhonoured`
   turns a *success* you could not keep into the edge's failure.
+- **Never let a commit be cut.** An edge cuts a unit's *body* at its deadline
+  (`UnitSpec::deadline`) and drops the settle future when its client goes or
+  its operation is stopped: run the commit on a task of your own, tracked and
+  drained by your module's close before your pool's, so it always reaches its
+  answer.
+- **Answer within your settle net.** Past `settle_net` without your store's
+  answer to a commit, answer `Unhonoured::IN_DOUBT`: the commit may have
+  landed, so the unit is never retried. Wait for the work `after_commit` held
+  until the unit's deadline, then answer and let it run on: a slow listener
+  never fails a committed unit. A failed unit's rollback is waited for until
+  the deadline at most, whatever you answer.
 - **Fail closed on an escaped handle.** `settle` is called once the body and
   the executor `run_unit` installed are dropped, so a handle still alive was
   carried off by a spawned task: answer `Unhonoured` on a success.
@@ -237,6 +257,7 @@ use nest_rs::core::async_trait;
 use nest_rs::core::{Layer, injectable};
 use nest_rs::database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs::http::poem::http::{Method, StatusCode};
+use nest_rs::http::RequestDeadline;
 use nest_rs::http::poem::{Error, Request, Response, Result};
 use nest_rs::interceptors::{Interceptor, Next};
 
@@ -257,11 +278,26 @@ impl Interceptor for YourDbContext {
             Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => TransactionPolicy::Pool,
             _ => TransactionPolicy::PerUnit,
         };
-        let spec = UnitSpec::new(nest_rs::http::unit::REQUEST, ExecutorScope::Request, policy);
+        let mut spec = UnitSpec::new(nest_rs::http::unit::REQUEST, ExecutorScope::Request, policy);
+        // The request timeout cuts the handler alone, never the commit.
+        let deadline = req.extensions().get::<RequestDeadline>().cloned();
+        if let Some(deadline) = &deadline {
+            deadline.hand_to_unit(self.unit.settle_net());
+            spec = spec.with_deadline(deadline.at());
+        }
+        let handler = async move {
+            match deadline {
+                Some(deadline) => match tokio::time::timeout_at(deadline.at(), next.run(req)).await {
+                    Ok(answered) => answered,
+                    Err(_) => Err(Error::from_status(StatusCode::SERVICE_UNAVAILABLE)),
+                },
+                None => next.run(req).await,
+            }
+        };
         run_unit(
             Some(&self.unit),
             spec,
-            next.run(req),
+            handler,
             |result| matches!(result, Ok(resp) if resp.status().is_success() || resp.status().is_redirection()),
             |_| Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
         )
@@ -269,6 +305,11 @@ impl Interceptor for YourDbContext {
     }
 }
 ```
+
+The edge hands every request its `RequestDeadline` when a request timeout is
+set. Taking it over is what keeps the edge's own timer from cutting your
+commit: it then waits your settle net past the deadline, and answers `500`
+only for a commit that never answered.
 
 ## Step 4 — The Module
 

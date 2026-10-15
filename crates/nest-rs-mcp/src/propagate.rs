@@ -27,6 +27,7 @@
 use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use nest_rs_core::{Correlation, RequestContinuation, operation_log};
@@ -105,7 +106,9 @@ impl<H> PropagatingHandler<H> {
     /// for an operation that takes neither the registered context, a unit of
     /// work nor the operation deadline, which cuts the body, never its settle,
     /// so a commit is never cut. `stopped` resolves when the operation is to end
-    /// before it settles, with what the client is answered.
+    /// before it answers, with what the client is answered; like the deadline
+    /// it cuts the body alone, so a stop arriving while the unit settles leaves
+    /// the operation to end as it answered.
     async fn dispatch<T, F, S>(
         &self,
         method: &str,
@@ -163,19 +166,30 @@ impl<H> PropagatingHandler<H> {
             Some((_, at)) => spec.with_deadline(at),
             None => spec,
         };
+        let stopped_first = &AtomicBool::new(false);
         let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(nest_rs_core::with_request_scope(
             scope,
             correlation,
             run_unit(
                 unit,
                 spec,
-                async move {
+                async {
                     let body = install_pending(attached, inner);
-                    let answered = match deadline {
-                        Some((timeout, at)) => tokio::time::timeout_at(at, body)
-                            .await
-                            .unwrap_or_else(|_| Err(timed_out(method, addressed, timeout))),
-                        None => body.await,
+                    let cut = async move {
+                        match deadline {
+                            Some((timeout, at)) => tokio::time::timeout_at(at, body)
+                                .await
+                                .unwrap_or_else(|_| Err(timed_out(method, addressed, timeout))),
+                            None => body.await,
+                        }
+                    };
+                    let answered = tokio::select! {
+                        biased;
+                        answered = cut => answered,
+                        answer = stopped => {
+                            stopped_first.store(true, Ordering::Relaxed);
+                            answer
+                        }
                     };
                     answered.map(OperationValue::new)
                 },
@@ -202,35 +216,26 @@ impl<H> PropagatingHandler<H> {
                     _ => guarded.await,
                 }
             };
-            let ended = self
-                .detached
-                .run(async move {
-                    tokio::select! {
-                        biased;
-                        ran = nest_rs_core::panic::contain(ran) => Ended::Ran(ran),
-                        answer = stopped => Ended::Stopped(answer),
-                    }
-                })
-                .await;
+            let ended = self.detached.run(nest_rs_core::panic::contain(ran)).await;
             match ended {
-                Some(Ended::Ran(Ok(Ok(value)))) => {
+                Some(Ok(answered)) if stopped_first.load(Ordering::Relaxed) => {
+                    line.file(operation_log::CANCELLED);
+                    answered.and_then(OperationValue::take::<T>)
+                }
+                Some(Ok(Ok(value))) => {
                     line.file(operation_log::OK);
                     value.take::<T>()
                 }
-                Some(Ended::Ran(Ok(Err(error)))) => {
+                Some(Ok(Err(error))) => {
                     line.file(operation_log::ERROR);
                     Err(error)
                 }
-                Some(Ended::Ran(Err(payload))) => {
+                Some(Err(payload)) => {
                     line.unwound(&*payload);
                     Err(McpError::internal_error(
                         nest_rs_core::OPAQUE_CLIENT_MESSAGE,
                         None,
                     ))
-                }
-                Some(Ended::Stopped(answer)) => {
-                    line.file(operation_log::CANCELLED);
-                    answer
                 }
                 None => {
                     line.file(operation_log::CANCELLED);
@@ -244,14 +249,6 @@ impl<H> PropagatingHandler<H> {
         .instrument(span)
         .await
     }
-}
-
-/// How one dispatched operation ended, before the line names it.
-enum Ended<R, A> {
-    /// It ran to a result, or unwound.
-    Ran(std::thread::Result<R>),
-    /// It was stopped first, with the answer the stop gives.
-    Stopped(A),
 }
 
 /// What an operation past its deadline is answered: an internal error in the

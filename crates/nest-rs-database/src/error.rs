@@ -25,6 +25,15 @@ pub struct Unhonoured {
 }
 
 impl Unhonoured {
+    /// A unit whose commit did not answer within its driver's settle net
+    /// ([`UnitOfWork::settle_net`](crate::UnitOfWork::settle_net)): its writes
+    /// may have landed, so running it again could write them twice — never
+    /// retried, as a two-phase commit leaves an *in-doubt* transaction to an
+    /// operator.
+    pub const IN_DOUBT: Self = Self::deterministic(
+        "the unit's commit did not answer within its bound; its writes may have landed",
+    );
+
     /// A failure whose retryability was read off what the backend said.
     pub const fn new(reason: &'static str, retryable: bool) -> Self {
         Self { reason, retryable }

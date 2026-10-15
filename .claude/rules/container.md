@@ -338,9 +338,15 @@ from `<PREFIX>_<EDGE>__<UNIT>_TIMEOUT_SECS` with the unit's second segment —
 (`READ_TIMEOUT`) — on `nest_rs_http::UNIT_TIMEOUT_FLOOR`'s range. A unit
 whose head leaves before its answer (a socket's message, an MCP operation on
 an event stream) needs its own, since the request timeout ends at the head.
-The message's and the operation's deadlines cut the body inside its unit of
-work, so the settle is never cut; HTTP's request deadline does not yet: its
-timer wraps the whole chain, the unit's settle included. **A command whose
+**A unit's deadline bounds its body; its commit is never cut, and a commit
+that outruns its net is not retried**: each edge cuts the body it hands
+`run_unit` at the deadline — HTTP's through the `RequestDeadline` its edge
+hands the unit layer — and a cut unit is answered at its deadline whatever its
+rollback still waits on; the driver settles on a task it drains at its close,
+answers `Unhonoured::IN_DOUBT` past its settle net (`UnitOfWork::settle_net`,
+above every statement bound), and waits for held work until the deadline; an
+edge timer wrapping a unit is armed that net past the deadline, and answers in
+doubt, never a retryable timeout. **A command whose
 answer is the only record of what it claimed is never cut** — a timeout does
 not undo it — so it waits on the socket's liveness
 instead (`queue.md`). **Every port method the framework awaits returns a
@@ -383,9 +389,9 @@ than its total, so no size is cut (storage's `read_timeout` beside its
 
 A worker job — a queue attempt, a tick — is the one unit no edge deadline
 bounds, so its decorator's `timeout` key is its deadline, defaulting to
-`nest_rs_core::JOB_TIMEOUT` and never off: past it the attempt is cut, fails
-retryably and files `error` (held by `nest_rs_codegen::job`'s table and each
-edge's suite). Synchronous seams (`AbilityFactory`, the WS `Registry`,
+`nest_rs_core::JOB_TIMEOUT` and never off: past it the attempt's body is cut,
+fails retryably and files `error` (held by `nest_rs_codegen::job`'s table and
+each edge's suite). Synchronous seams (`AbilityFactory`, the WS `Registry`,
 `ConfigSource`) and in-process listeners are outside the family.
 
 ## Lifecycle hooks and the way down

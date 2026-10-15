@@ -526,6 +526,10 @@ impl nest_rs_database::UnitOfWork for Unsettleable {
     ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
         Ok(Box::new(UnsettleableUnit(self.0)))
     }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
 }
 
 impl nest_rs_database::OpenUnit for UnsettleableUnit {
@@ -592,6 +596,10 @@ impl nest_rs_database::UnitOfWork for Recording {
     ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
         self.0.lock().expect("lock").push(spec.job.clone());
         Ok(Box::new(Recorded))
+    }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
     }
 }
 
@@ -666,6 +674,159 @@ async fn the_unit_an_attempt_opens_names_the_job_and_attempt_its_method_is_hande
         named, handed,
         "the driver and the method agree on one identity"
     );
+}
+
+/// A unit of work settling the way a driver owes it — on a task of its own —
+/// that answers after `takes`, never when `takes` is `None`, declaring `net`,
+/// and recording how each unit it opened was settled.
+struct Settling {
+    takes: Option<Duration>,
+    net: Duration,
+    settled: Arc<Mutex<Vec<bool>>>,
+}
+
+struct SettlingUnit {
+    takes: Option<Duration>,
+    settled: Arc<Mutex<Vec<bool>>>,
+}
+
+impl nest_rs_database::UnitOfWork for Settling {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(SettlingUnit {
+            takes: self.takes,
+            settled: Arc::clone(&self.settled),
+        }))
+    }
+
+    fn settle_net(&self) -> Duration {
+        self.net
+    }
+}
+
+impl nest_rs_database::OpenUnit for SettlingUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(Nowhere)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        ok: bool,
+    ) -> Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        self.settled.lock().expect("lock").push(ok);
+        let takes = self.takes;
+        let settling = tokio::spawn(async move {
+            match takes {
+                Some(takes) => tokio::time::sleep(takes).await,
+                None => std::future::pending().await,
+            }
+        });
+        Box::pin(async move {
+            drop(settling.await);
+            nest_rs_database::Settlement::Settled
+        })
+    }
+}
+
+struct TimedProcessor;
+
+impl nest_rs_core::ProviderResidency for TimedProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl TimedProcessor {
+    /// Answers within its timeout when the file says so, else outlives it.
+    #[process(queue = TranscodeQueue, retries = 1, timeout = "1s")]
+    async fn timed(&self, job: TranscodeCommand) -> anyhow::Result<()> {
+        let took = if job.file == "quick.wav" { 500 } else { 5_000 };
+        tokio::time::sleep(Duration::from_millis(took)).await;
+        Ok(())
+    }
+}
+
+async fn timed_attempt(
+    file: &str,
+    takes: Option<Duration>,
+    net: Duration,
+) -> (AttemptOutcome, Vec<bool>) {
+    let settled = Arc::new(Mutex::new(Vec::new()));
+    let unit = Settling {
+        takes,
+        net,
+        settled: Arc::clone(&settled),
+    };
+    let outcome = consume::attempt(
+        method("TimedProcessor::timed"),
+        &mut transcode_delivery(file),
+        Container::builder().provide(TimedProcessor).build(),
+        Some(Arc::new(unit)),
+    )
+    .await;
+    let settled = settled.lock().expect("lock").clone();
+    (outcome, settled)
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_attempt_whose_body_answered_in_time_is_never_cut_while_it_commits() {
+    let started = tokio::time::Instant::now();
+    let (outcome, settled) = timed_attempt(
+        "quick.wav",
+        Some(Duration::from_secs(2)),
+        Duration::from_secs(16),
+    )
+    .await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Ok),
+        "a commit outrunning the timeout is no timeout, so nothing is replayed: {outcome:?}"
+    );
+    assert_eq!(settled, [true]);
+    assert_eq!(started.elapsed(), Duration::from_millis(2500));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_attempt_whose_body_outran_its_timeout_is_cut_rolled_back_and_retried() {
+    let started = tokio::time::Instant::now();
+    let (outcome, settled) = timed_attempt(
+        "slow.wav",
+        Some(Duration::from_secs(3)),
+        Duration::from_secs(16),
+    )
+    .await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Retry { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(settled, [false], "the cut body's unit rolls back");
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(1),
+        "answered at the timeout, its rollback left to the driver"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_attempt_whose_commit_never_answers_is_dead_lettered_in_doubt_past_the_net() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let started = tokio::time::Instant::now();
+    let (outcome, _) = timed_attempt("quick.wav", None, Duration::from_secs(1)).await;
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("what may have landed is never run again: {outcome:?}");
+    };
+    assert!(!error.retryable);
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(2),
+        "the timeout, then the unit's net"
+    );
+    let line = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: its commit did not answer in time, and what it wrote may have landed",
+    );
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("outcome").as_deref(), Some("in_doubt"));
 }
 
 static FLAKY_RUNS: AtomicU32 = AtomicU32::new(0);

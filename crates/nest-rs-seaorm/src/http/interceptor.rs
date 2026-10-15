@@ -6,6 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nest_rs_core::Layer;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
+use nest_rs_http::__private::poem_bridge::response_to_poem;
+use nest_rs_http::RequestDeadline;
 use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
@@ -20,6 +22,11 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 /// opened when nothing touches the data layer) for a mutating one.
 /// Auto-mounted at band −10 by importing
 /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule).
+///
+/// It takes the request timeout over from the edge: the handler alone is cut
+/// at the deadline, answered `503` with `Retry-After` since nothing it ran
+/// committed, and a commit is never cut — one past the deadline answers the
+/// handler's status, and one that never answers is a `500`.
 #[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
@@ -47,13 +54,39 @@ impl Interceptor for DbContext {
             TransactionPolicy::PerUnit
         };
         let spec = UnitSpec::new(nest_rs_http::unit::REQUEST, ExecutorScope::Request, policy);
-        // A success here would report writes that were never committed; the
-        // driver logged why.
-        run_unit(Some(&self.unit), spec, next.run(req), should_commit, |_| {
-            Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
-        })
+        let Some(deadline) = req.extensions().get::<RequestDeadline>().cloned() else {
+            return run_unit(
+                Some(&self.unit),
+                spec,
+                next.run(req),
+                should_commit,
+                unhonoured,
+            )
+            .await;
+        };
+        deadline.hand_to_unit(self.unit.settle_net());
+        let at = deadline.at();
+        let cut = async move {
+            match tokio::time::timeout_at(at, next.run(req)).await {
+                Ok(answered) => answered,
+                Err(_) => Ok(response_to_poem(deadline.timed_out())),
+            }
+        };
+        run_unit(
+            Some(&self.unit),
+            spec.with_deadline(at),
+            cut,
+            should_commit,
+            unhonoured,
+        )
         .await
     }
+}
+
+/// A success the unit could not honour reports writes that were never
+/// committed, or may have been: the driver logged why.
+fn unhonoured(_: nest_rs_database::Unhonoured) -> Result<Response> {
+    Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
 fn is_safe(method: &Method) -> bool {
@@ -132,5 +165,169 @@ mod tests {
         let mut resp = StatusCode::OK.into_response();
         resp.extensions_mut().insert(nest_rs_http::MappedError);
         assert!(!should_commit(&Ok(resp)));
+    }
+
+    use std::time::Duration;
+
+    use nest_rs_database::{Executor, OpenUnit, Settlement, Unhonoured};
+    use nest_rs_http::RequestDeadline;
+    use nest_rs_interceptors::InterceptorExt;
+    use poem::Endpoint;
+    use poem::endpoint::make;
+    use tokio::time::Instant;
+
+    /// A unit of work settling on a task of its own after `takes`, answering
+    /// `answer`.
+    struct Settling {
+        takes: Duration,
+        answer: Settlement,
+    }
+
+    struct SettlingUnit {
+        takes: Duration,
+        answer: Settlement,
+    }
+
+    struct Nowhere;
+
+    impl Executor for Nowhere {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    impl UnitOfWork for Settling {
+        fn open(&self, _: &UnitSpec) -> std::result::Result<Box<dyn OpenUnit>, Unhonoured> {
+            Ok(Box::new(SettlingUnit {
+                takes: self.takes,
+                answer: self.answer,
+            }))
+        }
+
+        fn settle_net(&self) -> Duration {
+            Duration::from_secs(16)
+        }
+    }
+
+    impl OpenUnit for SettlingUnit {
+        fn executor(&self) -> Arc<dyn Executor> {
+            Arc::new(Nowhere)
+        }
+
+        fn settle(
+            self: Box<Self>,
+            _ok: bool,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Settlement> + Send>> {
+            let Self { takes, answer } = *self;
+            let settling = tokio::spawn(async move {
+                tokio::time::sleep(takes).await;
+                answer
+            });
+            Box::pin(async move { settling.await.unwrap_or(Settlement::Settled) })
+        }
+    }
+
+    impl Settling {
+        fn interceptor(takes: Duration, answer: Settlement) -> DbContext {
+            DbContext {
+                unit: Arc::new(Self { takes, answer }),
+            }
+        }
+    }
+
+    /// A `POST` whose edge set its deadline one second from now.
+    fn posted_under_a_deadline() -> (Request, RequestDeadline) {
+        let deadline = RequestDeadline::new(
+            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        let mut req = Request::builder().method(Method::POST).finish();
+        req.extensions_mut().insert(deadline.clone());
+        (req, deadline)
+    }
+
+    fn answering_after(after: Duration) -> impl Endpoint<Output = Response> {
+        make(move |_req: Request| async move {
+            tokio::time::sleep(after).await;
+            StatusCode::CREATED.into_response()
+        })
+    }
+
+    fn status_of(result: Result<Response>) -> StatusCode {
+        match result {
+            Ok(resp) => resp.status(),
+            Err(err) => err.into_response().status(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_commit_past_the_deadline_answers_the_handlers_status() {
+        let started = Instant::now();
+        let (req, deadline) = posted_under_a_deadline();
+        let ctx = Settling::interceptor(Duration::from_secs(2), Settlement::Settled);
+        let answered = answering_after(Duration::from_millis(500))
+            .interceptor(ctx)
+            .call(req)
+            .await;
+        assert_eq!(
+            status_of(answered),
+            StatusCode::CREATED,
+            "never a 503 for a write that landed"
+        );
+        assert_eq!(started.elapsed(), Duration::from_millis(2500));
+        assert_eq!(
+            deadline.unit_net(),
+            Some(Duration::from_secs(16)),
+            "the edge waits the unit's net past the deadline"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_body_past_the_deadline_is_cut_and_answered_503_with_a_retry_after() {
+        let started = Instant::now();
+        let (req, _) = posted_under_a_deadline();
+        let ctx = Settling::interceptor(Duration::from_secs(5), Settlement::Settled);
+        let answered = answering_after(Duration::from_secs(30))
+            .interceptor(ctx)
+            .call(req)
+            .await
+            .expect("a cut body is an answer");
+        assert_eq!(answered.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            answered
+                .headers()
+                .get(poem::http::header::RETRY_AFTER)
+                .map(|v| v.as_bytes()),
+            Some(b"1".as_slice()),
+            "honest now: nothing it ran committed"
+        );
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(1),
+            "answered at the deadline, its rollback left to the driver"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_commit_in_doubt_answers_500_without_a_retry_after() {
+        let (req, _) = posted_under_a_deadline();
+        let ctx = Settling::interceptor(
+            Duration::from_millis(100),
+            Settlement::Unhonoured(Unhonoured::IN_DOUBT),
+        );
+        let answered = answering_after(Duration::from_millis(100))
+            .interceptor(ctx)
+            .call(req)
+            .await;
+        let resp = match answered {
+            Ok(resp) => resp,
+            Err(err) => err.into_response(),
+        };
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            resp.headers()
+                .get(poem::http::header::RETRY_AFTER)
+                .is_none()
+        );
     }
 }

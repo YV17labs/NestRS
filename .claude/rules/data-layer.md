@@ -113,7 +113,8 @@ landed. `nest_rs_database::after_commit(work)` hands work to the ambient
 executor; every unit settles through its driver's `OpenUnit::settle` (SeaORM's
 `LazyTransaction::finalize`), which runs it once the transaction committed (or
 the unit succeeded with nothing to roll back) and drops it on every other
-outcome. Held work runs under what its
+outcome; the unit's answer waits for it until the unit's deadline, never past
+it, so a slow listener never turns a committed write into a timeout. Held work runs under what its
 unit carried into the commit: the pool, the scope, the ability and every
 value that crosses. A panic in it is contained
 and logged at `error` — the commit already stood, and an unwind would turn it
@@ -250,7 +251,11 @@ Dropping an attempt mid-statement — a worker's drain window closing, the
 scheduler stopping a tick at its shutdown bound — leaves its transaction open,
 because sea-orm cannot send the rollback while the connection is busy. The
 framework owes the event: one `warn` on `nest_rs::orm` with
-`outcome = "abandoned"`, whether the drop came before settling or during it.
+`outcome = "abandoned"` for a drop before settling; a drop during it leaves the
+settle running on the driver's task, which the close drains. A body cut at its
+deadline is settled, not abandoned, but its rollback likewise waits for the
+statement it left running, which the statement budget bounds: nothing cancels
+that statement sooner.
 A worker's `shutdown_timeout` is therefore the ceiling on how long a dying
 worker holds locks.
 
@@ -264,7 +269,9 @@ take for a promise.
 retryable; *at* `COMMIT` only a serialization conflict or deadlock is, and an
 in-doubt commit aborts, because replaying what may have landed writes twice.
 The framework replays only what it knows rolled back (`retry.rs` holds the
-two predicates). **The promise is the transaction's, not the attempt's**:
+two predicates), so **a timeout is retryable only when it cut the body**: a
+commit that did not answer within the driver's settle net is in doubt
+(`Unhonoured::IN_DOUBT`), dead-lettered and reported `retryable=false`. **The promise is the transaction's, not the attempt's**:
 work stepped outside it — an HTTP call, `non_transactional` — is replayed with
 the body.
 

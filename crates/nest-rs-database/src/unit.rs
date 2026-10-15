@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::FutureExt as _;
 use futures_util::future::Either;
@@ -23,7 +24,10 @@ pub struct UnitSpec {
     pub scope: ExecutorScope,
     /// One transaction for the unit, or the pool.
     pub policy: TransactionPolicy,
-    /// When the unit's body is cut; `None` for an edge with no deadline.
+    /// When the unit's body is cut, by the edge running it; `None` for an edge
+    /// with no deadline. A failed unit is answered by then at the latest,
+    /// whatever its rollback still waits on, and the work held for a commit is
+    /// waited for until then; a commit itself is never cut.
     pub deadline: Option<tokio::time::Instant>,
     /// The job an attempt runs, set by the queue edge alone.
     pub job: Option<JobRef>,
@@ -129,6 +133,16 @@ pub trait UnitOfWork: Send + Sync + 'static {
     /// refuse it before its body runs, saying why (a policy the driver does not
     /// support).
     fn open(&self, spec: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured>;
+
+    /// How long a unit's settle waits, at most, for the database to answer its
+    /// commit or rollback: past it [`OpenUnit::settle`] answers
+    /// [`Unhonoured::IN_DOUBT`] for a commit. Above every bound the database
+    /// holds a statement to — SeaORM's is its statement budget plus a second —
+    /// so it fires only on a database that stopped bounding itself.
+    ///
+    /// An edge whose own timer wraps a unit arms it this far past the unit's
+    /// deadline: a net that never fires while the driver keeps its contract.
+    fn settle_net(&self) -> Duration;
 }
 
 /// One unit a [`UnitOfWork`] opened, settled once by [`run_unit`].
@@ -145,9 +159,22 @@ pub trait OpenUnit: Send {
     /// the commit — and answer whether a success could be honoured.
     ///
     /// Called once the body and every handle the unit installed for it are
-    /// dropped, so a handle still held is one that escaped the unit. The future
-    /// is `'static`, so the driver can run it on a task of its own; one that
-    /// settles nothing answers a ready future.
+    /// dropped, so a handle still held is one that escaped the unit; one that
+    /// settles nothing answers a ready future. What a driver owes:
+    ///
+    /// - **It completes once polled, even if the future is dropped**: the
+    ///   driver runs it on a task of its own, which it drains when it closes,
+    ///   so a client gone, a stopped operation or a deadline never cuts a
+    ///   `COMMIT` mid-flight.
+    /// - **It answers within [`settle_net`](UnitOfWork::settle_net)** of the
+    ///   commit being sent, and [`Unhonoured::IN_DOUBT`] past it — a commit that
+    ///   did not answer may have landed, so it is never retried.
+    /// - **It waits for the work held for a commit until the unit's deadline**
+    ///   ([`UnitSpec::deadline`]), then answers and lets that work run on: a
+    ///   slow listener never turns a committed unit into a failure.
+    ///
+    /// [`run_unit`] waits for a failed unit's rollback until the deadline at
+    /// most, since a failure stands whatever the driver answers.
     fn settle(self: Box<Self>, ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>>;
 }
 
@@ -208,6 +235,12 @@ impl Bound {
 /// driver could not honour turns a success into `unhonoured(why)`, and a
 /// failure stands whatever the driver answers.
 ///
+/// The edge cuts `body` at the spec's deadline itself, answering its timeout
+/// in its own terms; `run_unit` never cuts a commit. A failure is answered by
+/// the deadline at most, its rollback left to finish on the driver's task; a
+/// success waits for its settle, which the driver bounds
+/// ([`OpenUnit::settle`]).
+///
 /// An edge resolves its binding once, at mount or boot, and passes it here for
 /// every unit.
 ///
@@ -254,8 +287,9 @@ where
         unit_of_work: Arc::clone(binding),
         unit: spec.unit,
     };
+    let deadline = spec.deadline;
     let ran = install_unit(open.executor(), spec.scope, bound, body);
-    Either::Right(ran.then(move |outcome| settle(open, outcome, ok, unhonoured)))
+    Either::Right(ran.then(move |outcome| settle(open, outcome, ok, unhonoured, deadline)))
 }
 
 /// Settle `open` on `outcome`, which a success the driver could not honour
@@ -265,12 +299,22 @@ async fn settle<T>(
     outcome: T,
     ok: fn(&T) -> bool,
     unhonoured: fn(Unhonoured) -> T,
+    deadline: Option<tokio::time::Instant>,
 ) -> T {
     let succeeded = ok(&outcome);
-    match open.settle(succeeded).await {
+    let settling = open.settle(succeeded);
+    if !succeeded {
+        // A rollback may wait on a statement the cut body left running: the
+        // edge answers by its deadline, and the driver's task finishes it.
+        match deadline {
+            Some(deadline) => drop(tokio::time::timeout_at(deadline, settling).await),
+            None => drop(settling.await),
+        }
+        return outcome;
+    }
+    match settling.await {
         Settlement::Settled => outcome,
-        Settlement::Unhonoured(why) if succeeded => unhonoured(why),
-        Settlement::Unhonoured(_) => outcome,
+        Settlement::Unhonoured(why) => unhonoured(why),
     }
 }
 

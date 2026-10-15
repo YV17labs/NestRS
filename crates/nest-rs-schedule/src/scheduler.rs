@@ -1401,22 +1401,37 @@ impl Runner {
     async fn fire_inner(&self, id: JobId, task: Task, line: TickLine) {
         // A panic would otherwise end this job's schedule while the process
         // reports healthy; the run starts inside the catch too.
-        let spec = UnitSpec::new(crate::unit::TICK, ExecutorScope::Job, task.transaction);
+        let deadline = Instant::now() + task.timeout;
+        let spec = UnitSpec::new(crate::unit::TICK, ExecutorScope::Job, task.transaction)
+            .with_deadline(deadline);
+        let timed_out = || anyhow::Error::new(JobTimedOut::new(task.timeout));
         let run = nest_rs_core::panic::contain(run_unit(
             self.unit_of_work.as_ref(),
             spec,
-            async { (task.run)(&self.container).await },
+            // The body alone is cut, so a commit never is.
+            async {
+                tokio::time::timeout_at(deadline, (task.run)(&self.container))
+                    .await
+                    .unwrap_or_else(|_| Err(timed_out()))
+            },
             Result::is_ok,
             // A transaction that could not settle wrote nothing: a failed tick.
             // Its retryability is reported, not acted on: a schedule has no budget.
             |why| Err(anyhow::Error::new(why)),
         ));
         // A replica runs one occurrence at a time, so a call that never answers
-        // would skip every later one for as long as the process lives.
-        let outcome = match tokio::time::timeout(task.timeout, run).await {
-            Ok(caught) => caught,
-            Err(_) => Ok(Err(anyhow::Error::new(JobTimedOut::new(task.timeout)))),
-        };
+        // would skip every later one for as long as the process lives. Past a
+        // unit's settle net beyond the deadline, its commit never answered.
+        let net = self
+            .unit_of_work
+            .as_ref()
+            .map(|unit_of_work| unit_of_work.settle_net());
+        let outcome =
+            match tokio::time::timeout_at(net.map_or(deadline, |net| deadline + net), run).await {
+                Ok(caught) => caught,
+                Err(_) if net.is_some() => Ok(Err(anyhow::Error::new(Unhonoured::IN_DOUBT))),
+                Err(_) => Ok(Err(timed_out())),
+            };
         line.file(match &outcome {
             Ok(Ok(())) => nest_rs_core::operation_log::OK,
             Ok(Err(_)) => nest_rs_core::operation_log::ERROR,

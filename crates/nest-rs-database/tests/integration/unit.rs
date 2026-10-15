@@ -7,6 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::time::Duration;
 
 use nest_rs_core::operation_log::{Kind, Unit};
 use nest_rs_core::{Continuation, RequestContinuation};
@@ -76,6 +77,10 @@ impl UnitOfWork for Stub {
             answer: self.answer,
             handed: Mutex::new(Vec::new()),
         }))
+    }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
     }
 }
 
@@ -237,6 +242,10 @@ impl UnitOfWork for Refusing {
             "this driver does not support the unit's transaction policy",
         ))
     }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
 }
 
 #[tokio::test]
@@ -384,4 +393,154 @@ fn running_a_unit_holds_its_body_once() {
         size < alone + 1024,
         "run_unit weighs {size} bytes around a {alone}-byte unit"
     );
+}
+
+/// A binding settling the way a driver owes it: on a task of its own, which
+/// answers `answer` after `takes` and then says it ended.
+struct Spawning {
+    takes: Duration,
+    answer: Settlement,
+    ended: Arc<AtomicBool>,
+}
+
+impl Spawning {
+    fn binding(takes: Duration, answer: Settlement) -> (Arc<dyn UnitOfWork>, Arc<AtomicBool>) {
+        let ended = Arc::new(AtomicBool::new(false));
+        let binding = Self {
+            takes,
+            answer,
+            ended: Arc::clone(&ended),
+        };
+        (Arc::new(binding), ended)
+    }
+}
+
+struct SpawningUnit {
+    takes: Duration,
+    answer: Settlement,
+    ended: Arc<AtomicBool>,
+}
+
+impl UnitOfWork for Spawning {
+    fn open(&self, _: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
+        Ok(Box::new(SpawningUnit {
+            takes: self.takes,
+            answer: self.answer,
+            ended: Arc::clone(&self.ended),
+        }))
+    }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
+}
+
+impl OpenUnit for SpawningUnit {
+    fn executor(&self) -> Arc<dyn Executor> {
+        Arc::new(Handle(TransactionPolicy::PerUnit))
+    }
+
+    fn settle(self: Box<Self>, _ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
+        let Self {
+            takes,
+            answer,
+            ended,
+        } = *self;
+        let settling = tokio::spawn(async move {
+            tokio::time::sleep(takes).await;
+            ended.store(true, Ordering::SeqCst);
+            answer
+        });
+        Box::pin(async move {
+            settling
+                .await
+                .unwrap_or(Settlement::Unhonoured(Unhonoured::IN_DOUBT))
+        })
+    }
+}
+
+/// A unit whose body answers `outcome` after half a second, cut at one second.
+fn racing_its_deadline<T: Send>(
+    binding: &Arc<dyn UnitOfWork>,
+    outcome: T,
+    ok: fn(&T) -> bool,
+    unhonoured: fn(Unhonoured) -> T,
+) -> impl Future<Output = T> + Send + use<'_, T> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    run_unit(
+        Some(binding),
+        spec(ExecutorScope::Request).with_deadline(deadline),
+        async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            outcome
+        },
+        ok,
+        unhonoured,
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_unit_is_answered_at_its_deadline_while_its_rollback_runs_on() {
+    let (binding, ended) = Spawning::binding(Duration::from_secs(5), Settlement::Settled);
+    let started = tokio::time::Instant::now();
+    let answered = racing_its_deadline(&binding, Err::<(), _>("cut"), Result::is_ok, |_| {
+        Err("unhonoured")
+    })
+    .await;
+    assert_eq!(answered, Err("cut"));
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(1),
+        "answered at its deadline"
+    );
+    assert!(!ended.load(Ordering::SeqCst), "the rollback still runs");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(
+        ended.load(Ordering::SeqCst),
+        "and ends on the driver's task"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_succeeded_unit_waits_for_its_commit_past_its_deadline() {
+    let (binding, ended) = Spawning::binding(Duration::from_secs(2), Settlement::Settled);
+    let started = tokio::time::Instant::now();
+    let answered = racing_its_deadline(&binding, Ok::<_, &str>(7), Result::is_ok, |_| {
+        Err("unhonoured")
+    })
+    .await;
+    assert_eq!(answered, Ok(7), "a commit is never cut");
+    assert_eq!(started.elapsed(), Duration::from_millis(2500));
+    assert!(ended.load(Ordering::SeqCst));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_unit_dropped_once_its_body_returned_still_completes_its_settle() {
+    let (binding, ended) = Spawning::binding(Duration::from_secs(2), Settlement::Settled);
+    let dropped = tokio::time::timeout(
+        Duration::from_millis(600),
+        racing_its_deadline(&binding, Ok::<_, &str>(7), Result::is_ok, |_| {
+            Err("unhonoured")
+        }),
+    )
+    .await;
+    assert!(dropped.is_err(), "dropped while it settles");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(ended.load(Ordering::SeqCst), "the settle ran to its end");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_commit_that_did_not_answer_in_time_fails_the_unit_in_doubt_never_retried() {
+    let (binding, _) = Spawning::binding(
+        Duration::from_secs(17),
+        Settlement::Unhonoured(Unhonoured::IN_DOUBT),
+    );
+    let answered = racing_its_deadline(&binding, Ok::<_, Unhonoured>(7), Result::is_ok, Err).await;
+    assert_eq!(answered, Err(Unhonoured::IN_DOUBT));
+    const {
+        assert!(
+            !Unhonoured::IN_DOUBT.retryable,
+            "its writes may have landed"
+        )
+    };
 }

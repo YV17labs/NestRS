@@ -1127,6 +1127,10 @@ impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
     ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
         Ok(Box::new(RecordingUnit { settled: false }))
     }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
 }
 
 impl nest_rs_database::OpenUnit for RecordingUnit {
@@ -1200,4 +1204,130 @@ async fn a_tool_call_cut_at_its_deadline_settles_its_unit_as_a_failure() {
         "the cut call's unit settled as a failure: {ended:?}",
     );
     serving.stop().await;
+}
+
+const SETTLING: &str = "/mcp/settling";
+
+#[mcp(path = "/mcp/settling")]
+#[derive(Clone, Default)]
+struct SettlingTools;
+
+#[tools]
+impl SettlingTools {
+    #[tool(description = "Answers at once; its unit takes its time to commit.")]
+    #[public]
+    async fn quick(&self) -> Result<String, McpError> {
+        Ok("committed".to_owned())
+    }
+}
+
+/// Told when a unit's settle has started, and told back to let it land.
+static SETTLE_STARTED: Notify = Notify::const_new();
+static SETTLE_RELEASED: Notify = Notify::const_new();
+/// Set once a held commit landed.
+static SETTLE_LANDED: AtomicBool = AtomicBool::new(false);
+/// Whether the next unit to settle is held — the tool call's, not the
+/// handshake's.
+static HOLD_NEXT: AtomicBool = AtomicBool::new(false);
+
+/// A binding whose commit waits, on a task of its own, until the test lets it
+/// land — the settle in flight a stop arrives during.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct HeldCommit;
+
+struct HeldCommitUnit;
+
+impl nest_rs_database::UnitOfWork for HeldCommit {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(HeldCommitUnit))
+    }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
+}
+
+impl nest_rs_database::OpenUnit for HeldCommitUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        _ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        let held = HOLD_NEXT.swap(false, Ordering::SeqCst);
+        let landed = tokio::spawn(async move {
+            if held {
+                SETTLE_STARTED.notify_one();
+                SETTLE_RELEASED.notified().await;
+                SETTLE_LANDED.store(true, Ordering::SeqCst);
+            }
+        });
+        Box::pin(async move {
+            drop(landed.await);
+            nest_rs_database::Settlement::Settled
+        })
+    }
+}
+
+#[module(
+    providers = [
+        SettlingTools,
+        AllowAllMcpGuard as dyn McpOperationGuard,
+        HeldCommit as dyn nest_rs_database::UnitOfWork,
+    ],
+)]
+struct SettlingModule;
+
+/// A stop cuts the body, never the commit: one arriving while the unit
+/// settles leaves the operation to end as it answered, once its commit landed.
+/// rmcp sends a client nothing for a request it cancelled, as the protocol
+/// asks, so the line says how it ended.
+#[tokio::test]
+async fn a_stop_arriving_while_its_unit_commits_lets_the_operation_end_as_it_answered() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<SettlingModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), SETTLING, None).await;
+    HOLD_NEXT.store(true, Ordering::SeqCst);
+
+    let call = call_method(
+        app.http(),
+        SETTLING,
+        &session,
+        None,
+        "tools/call",
+        json!({ "name": "quick", "arguments": {} }),
+    );
+    tokio::pin!(call);
+    tokio::select! {
+        body = &mut call => panic!("the call answered before its unit settled: {body}"),
+        () = SETTLE_STARTED.notified() => {}
+    }
+    notify(
+        app.http(),
+        SETTLING,
+        &session,
+        None,
+        "notifications/cancelled",
+        json!({ "requestId": 99, "reason": "the user gave up" }),
+    )
+    .await;
+    // Past the stop: an operation it cut would file its line now.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    SETTLE_RELEASED.notify_one();
+
+    let line = operation_line(&logs, "quick").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "the stop came once the operation had answered: {line:?}",
+    );
+    assert!(SETTLE_LANDED.load(Ordering::SeqCst), "its commit landed");
 }

@@ -470,11 +470,14 @@ pub async fn attempt(
         attempt,
     };
     let checkpoints = delivery.checkpoints.clone();
+    let timeout = method.options().timeout();
     let context = HandlerContext {
         container: container.clone(),
         checkpoints: checkpoints.clone(),
         unit_of_work,
         attempt: Attempt::new(delivery.id.clone(), attempt, delivery.queue.clone()),
+        deadline: tokio::time::Instant::now() + timeout,
+        timeout,
     };
     let retry_after = backoff::retry_after(&delivery.id, attempt);
     // The ambient context too: a job the body pushes seals *this* trace, and
@@ -506,8 +509,7 @@ pub async fn attempt(
                 );
             }
         }
-        let timeout = method.options().timeout();
-        run(method.handler(), input, context, identity, last, retry_after, timeout).await
+        run(method.handler(), input, context, identity, last, retry_after).await
     })
     .instrument(span)
     .await;
@@ -735,27 +737,36 @@ async fn run(
     identity: JobIdentity,
     last: bool,
     retry_after: Duration,
-    timeout: Duration,
 ) -> AttemptOutcome {
     let attempt = identity.attempt;
     let line = JobLine::open(identity);
     // `Err` when nothing ran, saying why.
     let outcome = match input {
         // No edge deadline bounds developer code here: a handler that never
-        // answers would hold its permit for as long as the process lives.
-        Input::Payload(payload) => Ok(
-            match tokio::time::timeout(
-                timeout,
+        // answers would hold its permit for as long as the process lives. The
+        // handler cuts its body at the deadline itself; past a unit's settle
+        // net beyond it, a commit never answered and may have landed.
+        Input::Payload(payload) => Ok({
+            let (deadline, timeout) = (context.deadline, context.timeout);
+            let net = context
+                .unit_of_work
+                .as_ref()
+                .map(|unit_of_work| unit_of_work.settle_net());
+            match tokio::time::timeout_at(
+                net.map_or(deadline, |net| deadline + net),
                 nest_rs_core::panic::contain(handler(payload, context)),
             )
             .await
             {
                 Ok(caught) => caught,
+                Err(_) if net.is_some() => Ok(Err(JobError::unhonoured(
+                    nest_rs_database::Unhonoured::IN_DOUBT,
+                ))),
                 Err(_) => Ok(Err(JobError::retry(nest_rs_core::JobTimedOut::new(
                     timeout,
                 )))),
-            },
-        ),
+            }
+        }),
         Input::Refused(refused) => Ok(Ok(Err(refused))),
         Input::Stalled { deliveries } => Err(Unrun::Stalled { deliveries }),
         Input::Unread { version, waited } => Err(Unrun::Unread { version, waited }),
@@ -804,6 +815,19 @@ async fn run(
             )
         }
         Ok(Ok(Ok(()))) => (nest_rs_core::operation_log::OK, AttemptOutcome::Ok),
+        Ok(Ok(Err(error))) if error.is_in_doubt() => {
+            tracing::error!(
+                target: TARGET,
+                outcome = "in_doubt",
+                error = %nest_rs_core::error_message(&error),
+                "job dead-lettered: its commit did not answer in time, and what it wrote may \
+                 have landed",
+            );
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(error),
+            )
+        }
         Ok(Ok(Err(error))) if !error.retryable => {
             // `errors` is the member name HTTP and the WebSocket error frame use;
             // `error` is the whole chain, since a wrapper names no cause.
@@ -887,6 +911,8 @@ mod tests {
                 1,
                 QueueName::new("audio").expect("a valid name"),
             ),
+            deadline: tokio::time::Instant::now() + nest_rs_core::JOB_TIMEOUT,
+            timeout: nest_rs_core::JOB_TIMEOUT,
         }
     }
 
@@ -900,7 +926,6 @@ mod tests {
             identity(1),
             last,
             Duration::from_secs(1),
-            nest_rs_core::JOB_TIMEOUT,
         )
         .await
     }
@@ -1096,7 +1121,6 @@ mod tests {
             identity(4),
             true,
             Duration::from_secs(1),
-            nest_rs_core::JOB_TIMEOUT,
         )
         .await;
         assert!(matches!(result, AttemptOutcome::DeadLetter(_)));
@@ -1125,7 +1149,6 @@ mod tests {
             identity(1),
             false,
             Duration::from_secs(1),
-            nest_rs_core::JOB_TIMEOUT,
         )
         .await;
         assert!(matches!(result, AttemptOutcome::DeadLetter(_)));

@@ -130,6 +130,13 @@ impl std::fmt::Debug for SeaOrmConfig {
 }
 
 impl SeaOrmConfig {
+    /// How long one statement of the app's pool runs before Postgres cancels
+    /// it: the configured bound, or the default when none is set.
+    pub(crate) fn statement_timeout(&self) -> Duration {
+        self.statement_timeout_secs
+            .map_or(DEFAULT_STATEMENT_TIMEOUT, Duration::from_secs)
+    }
+
     /// The app's pool: [`connect_options`](Self::connect_options) with every
     /// statement bounded, the bound refused outside its range.
     pub(crate) fn app_connect_options(&self) -> Result<ConnectOptions> {

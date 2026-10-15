@@ -315,6 +315,12 @@ on "that node's upstream is flaky", and re-runs a handler that will overrun
 again. §15.6.4 is the origin's own sentence — explicitly temporary, and
 paired with `Retry-After`.
 
+Under a unit of work (`SeaOrmDatabaseModule`) the timeout cuts the handler
+alone: its writes roll back, so the `503` is honest. A handler that answered in
+time answers its own status however long its commit takes, and `500` without
+`Retry-After` when the commit never answered, since its writes may have landed
+([Transactions](/database/transactions/#a-deadline-cuts-the-body-never-the-commit)).
+
 A budget longer than the window, or none at all, files one `warn` on
 `nest_rs::http` at boot — `the request timeout outlasts the shutdown window`,
 with `request_timeout_secs` (`0` when off) and `shutdown_timeout_secs` — and the

@@ -24,7 +24,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use http::uri::{PathAndQuery, Uri};
-use http::{HeaderName, HeaderValue, StatusCode, Version, header};
+use http::{HeaderName, HeaderValue, Version, header};
 use http_body_util::combinators::BoxBody;
 use nest_rs_core::{Container, RequestContinuation, RequestScope};
 use tokio::time::Instant;
@@ -35,6 +35,7 @@ use crate::access_log::{AccessLog, Unanswered};
 use crate::body::Body;
 use crate::capped::{Capped, Overrun, Verdict};
 use crate::client_ip::ClientOrigin;
+use crate::deadline::RequestDeadline;
 use crate::drain::Drain;
 use crate::endpoint::Endpoint;
 use crate::error::{ResponseError, Result};
@@ -44,20 +45,6 @@ use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::{response_body, trace_context};
-
-/// What a request that outran its budget is answered with: `503`, not `504`, since
-/// RFC 9110 §15.6.5 scopes `504` to a gateway and this server is the origin (§15.6.4).
-fn timed_out(timeout: Duration) -> Response {
-    // Never `0`, which reads as "retry immediately" (RFC 9110 §10.2.3).
-    let seconds = timeout
-        .as_secs()
-        .saturating_add(u64::from(timeout.subsec_nanos() > 0))
-        .max(1);
-    Response::builder()
-        .status(StatusCode::SERVICE_UNAVAILABLE)
-        .header(header::RETRY_AFTER, HeaderValue::from(seconds))
-        .finish()
-}
 
 /// What a body read that stopped is answered with: `413` past the cap, `408`
 /// past the gap bound. The `408` closes an HTTP/1 connection, as RFC 9110
@@ -257,11 +244,17 @@ impl<E: Endpoint> EdgeEndpoint<E> {
         }
         let verdict = self.wrap_body(&mut req, declared.is_some());
 
+        // A unit of work under the request takes the cut over through it.
+        let deadline = self.timeout.map(|timeout| {
+            let deadline = RequestDeadline::new(arrival + timeout, timeout);
+            req.extensions_mut().insert(deadline.clone());
+            deadline
+        });
         // The deadline arms on the first `Pending`: a timeout only fires at an
         // await point anyway, so a synchronous response skips the timer wheel.
         let inner = continuation.scope(self.inner.call(req));
-        let result = match self.timeout {
-            Some(timeout) => {
+        let result = match deadline {
+            Some(deadline) => {
                 let mut inner = pin!(inner);
                 let first = poll_fn(|cx| match inner.as_mut().poll(cx) {
                     Poll::Ready(result) => Poll::Ready(Some(result)),
@@ -270,12 +263,30 @@ impl<E: Endpoint> EdgeEndpoint<E> {
                 .await;
                 match first {
                     Some(result) => result,
-                    None => match tokio::time::timeout_at(arrival + timeout, &mut inner).await {
+                    None => match tokio::time::timeout_at(deadline.at(), &mut inner).await {
                         Ok(result) => result,
-                        Err(_) => {
-                            tracing::warn!(target: crate::target::HTTP, ?timeout, "request timed out");
-                            return self.finish(timed_out(timeout));
-                        }
+                        Err(_) => match deadline.unit_net() {
+                            None => return self.finish(deadline.timed_out()),
+                            // The unit cut its body there itself: past its net,
+                            // its commit never answered.
+                            Some(net) => {
+                                match tokio::time::timeout_at(deadline.at() + net, &mut inner).await
+                                {
+                                    Ok(result) => result,
+                                    Err(_) => {
+                                        tracing::error!(
+                                            target: crate::target::HTTP,
+                                            net_ms = u64::try_from(net.as_millis())
+                                                .unwrap_or(u64::MAX),
+                                            "request's unit of work did not settle within its \
+                                             net; its writes may have landed",
+                                        );
+                                        return self
+                                            .finish(ProblemDetails::internal().into_response());
+                                    }
+                                }
+                            }
+                        },
                     },
                 }
             }
@@ -372,6 +383,8 @@ mod tests {
     use nest_rs_core::current_request_scope;
     use poem::handler;
     use poem::test::TestClient;
+
+    use http::StatusCode;
 
     use super::*;
     use crate::endpoint::BoxEndpoint;
@@ -665,24 +678,6 @@ mod tests {
         resp.assert_header("x-content-type-options", "nosniff");
     }
 
-    #[test]
-    fn the_retry_after_a_timeout_states_is_the_budget_that_ran_out() {
-        let value = |secs: u64, nanos: u32| {
-            timed_out(Duration::new(secs, nanos))
-                .headers()
-                .get(header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned)
-        };
-        assert_eq!(value(30, 0).as_deref(), Some("30"));
-        assert_eq!(value(0, 500_000_000).as_deref(), Some("1"), "never zero");
-        assert_eq!(
-            value(30, 1).as_deref(),
-            Some("31"),
-            "rounded up — a client that waits less may collide with the attempt",
-        );
-    }
-
     #[tokio::test]
     async fn synchronous_response_under_a_timeout_is_forwarded() {
         // The lazy timer's fast path: a first poll that resolves never arms it.
@@ -747,6 +742,80 @@ mod tests {
             .await
             .expect("the edge answers");
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// A request with no peer, arrived now, as the accept loop hands one over.
+    fn arrived() -> Request {
+        let (head, ()) = http::Request::new(()).into_parts();
+        let facts = crate::request::RequestFacts {
+            peer: None,
+            local: None,
+            scheme: http::uri::Scheme::HTTP,
+            original_uri: head.uri.clone(),
+            route: None,
+            arrival: Some(Instant::now()),
+        };
+        Request::from_raw(head, Body::empty(), facts)
+    }
+
+    /// A unit of work that took the request's deadline over, then answers
+    /// after `answers`, or never.
+    fn unit_answering(answers: Option<Duration>) -> impl Endpoint {
+        crate::endpoint_fn(move |req: Request| async move {
+            let deadline = req
+                .extensions()
+                .get::<crate::deadline::RequestDeadline>()
+                .cloned()
+                .expect("the edge hands its deadline down");
+            deadline.hand_to_unit(Duration::from_secs(2));
+            match answers {
+                Some(after) => tokio::time::sleep(after).await,
+                None => std::future::pending().await,
+            }
+            Ok(Response::builder()
+                .status(StatusCode::CREATED)
+                .body("committed"))
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_unit_that_took_the_deadline_over_is_waited_for_within_its_net() {
+        let ep = edge(
+            unit_answering(Some(Duration::from_secs(6))),
+            Some(Duration::from_secs(5)),
+            None,
+            Vec::new(),
+        );
+        let resp = ep.call(arrived()).await.expect("the edge answers");
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "a commit past the deadline is the request's answer"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_unit_that_never_settles_is_answered_500_without_retry_after_at_its_net() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let started = Instant::now();
+        let ep = edge(
+            unit_answering(None),
+            Some(Duration::from_secs(5)),
+            None,
+            Vec::new(),
+        );
+        let resp = ep.call(arrived()).await.expect("the edge answers");
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            resp.headers().get(header::RETRY_AFTER).is_none(),
+            "what may have landed is never invited again"
+        );
+        assert_eq!(started.elapsed(), Duration::from_secs(7));
+        let line = logs.expect_one(
+            crate::target::HTTP,
+            "request's unit of work did not settle within its net; its writes may have landed",
+        );
+        assert_eq!(line.level, "error");
     }
 
     #[tokio::test]

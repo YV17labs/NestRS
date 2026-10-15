@@ -359,3 +359,90 @@ async fn a_message_that_wrote_then_outlived_its_deadline_leaves_no_row() {
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+static BLOCKED_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[gateway(path = "/ws/unit/blocked")]
+#[use_guards(Granting)]
+pub(crate) struct BlockedGateway;
+
+#[messages]
+impl BlockedGateway {
+    #[subscribe_message("write")]
+    #[public]
+    async fn write_blocked(&self) -> String {
+        BLOCKED_STARTED.notify_one();
+        write("INSERT INTO ws_unit_blocked (id) VALUES (1)").await;
+        "written".to_owned()
+    }
+}
+
+#[module(
+    imports = [
+        SeaOrmModule::for_root(SeaOrmConfig {
+            url: crate::harness::url(),
+            ..Default::default()
+        }),
+        SeaOrmDatabaseModule,
+        WsModule::for_root(nest_rs_ws::WsConfig {
+            message_timeout: Some(MESSAGE_DEADLINE),
+            ..nest_rs_ws::WsConfig::default()
+        }),
+    ],
+    providers = [Granting, BlockedGateway],
+)]
+struct BlockedModule;
+
+/// A message whose statement Postgres holds behind a lock is answered at its
+/// deadline, not when the lock goes: the rollback waits for the statement on
+/// the driver's task, and nothing it wrote lands.
+#[tokio::test]
+async fn a_message_whose_statement_is_blocked_is_answered_at_its_deadline() {
+    use sea_orm::TransactionTrait;
+
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = crate::harness::connect().await;
+    table(&conn, "ws_unit_blocked").await;
+    let locker = conn.begin().await.expect("the locking transaction opens");
+    locker
+        .execute_unprepared("LOCK TABLE ws_unit_blocked IN ACCESS EXCLUSIVE MODE")
+        .await
+        .expect("the table is locked");
+    let app = TestApp::builder()
+        .module::<BlockedModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots over live Postgres");
+
+    let mut socket = app.socket("/ws/unit/blocked").connect().await;
+    socket.send("write", json!(null)).await;
+    BLOCKED_STARTED.notified().await;
+    let sent = std::time::Instant::now();
+    let answer = socket.next_envelope().await;
+    let took = sent.elapsed();
+    assert_eq!(answer["data"]["errors"]["reason"], "timeout", "{answer}");
+    assert!(
+        took < MESSAGE_DEADLINE + std::time::Duration::from_secs(2),
+        "answered at its deadline while the lock is still held, took {took:?}",
+    );
+
+    locker.rollback().await.expect("the lock goes");
+    assert_eq!(
+        crate::harness::committed_rows(&conn, "ws_unit_blocked").await,
+        0,
+        "the cut message's write was rolled back once the statement ran",
+    );
+    let abandoned: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|event| {
+            event.target == nest_rs_seaorm::target::ORM
+                && event.field("outcome").as_deref() == Some("abandoned")
+        })
+        .collect();
+    assert!(
+        abandoned.is_empty(),
+        "settled, never abandoned: {abandoned:#?}"
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}

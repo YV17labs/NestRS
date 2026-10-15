@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use nest_rs_core::{
     Container, Correlation, ReachableProviders, RequestScope, panic_message, with_request_scope,
 };
-use nest_rs_database::{JobRef, UnitOfWork};
+use nest_rs_database::UnitOfWork;
 use serde_json::Value;
 use tracing::Instrument;
 
@@ -20,8 +20,8 @@ use crate::checkpoint::CheckpointCell;
 use crate::envelope::{self, Opened, Unusable};
 use crate::inventory::{HandlerContext, JobHandler};
 use crate::{
-    CheckpointStore, Envelope, JobError, JobId, ProcessMethod, QueueBackend, QueueName, TARGET,
-    Throttle, backoff, unit,
+    Attempt, CheckpointStore, Envelope, JobError, JobId, ProcessMethod, QueueBackend, QueueName,
+    TARGET, Throttle, backoff, unit,
 };
 
 /// A job span's `messaging.operation.name` and `messaging.operation.type`, per
@@ -474,7 +474,7 @@ pub async fn attempt(
         container: container.clone(),
         checkpoints: checkpoints.clone(),
         unit_of_work,
-        job: JobRef::new(delivery.queue.as_str(), delivery.id.uuid(), attempt),
+        attempt: Attempt::new(delivery.id.clone(), attempt, delivery.queue.clone()),
     };
     let retry_after = backoff::retry_after(&delivery.id, attempt);
     // The ambient context too: a job the body pushes seals *this* trace, and
@@ -882,7 +882,11 @@ mod tests {
             container: Container::builder().build(),
             checkpoints: None,
             unit_of_work: None,
-            job: JobRef::new("audio", JobId::mint().uuid(), 1),
+            attempt: Attempt::new(
+                JobId::mint(),
+                1,
+                QueueName::new("audio").expect("a valid name"),
+            ),
         }
     }
 

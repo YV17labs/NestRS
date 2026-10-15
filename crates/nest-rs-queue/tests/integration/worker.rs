@@ -894,3 +894,64 @@ async fn a_receive_that_panics_is_retried_and_said_once() {
         Some("the backend's client unwound"),
     );
 }
+
+#[queue(name = "nestrs-worker-attempted", job = WorkerCommand)]
+struct AttemptedQueue;
+
+/// Each attempt's identity, as the method was handed it.
+static ATTEMPTS_SEEN: std::sync::Mutex<Vec<(nest_rs_queue::JobId, u32, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[injectable]
+#[derive(Default)]
+struct AttemptedProcessor;
+
+#[processor]
+impl AttemptedProcessor {
+    #[process(queue = AttemptedQueue, retries = 2)]
+    async fn run(
+        &self,
+        _job: WorkerCommand,
+        attempt: nest_rs_queue::Attempt,
+    ) -> anyhow::Result<()> {
+        ATTEMPTS_SEEN.lock().expect("lock").push((
+            attempt.job_id().clone(),
+            attempt.number(),
+            attempt.queue().to_string(),
+        ));
+        anyhow::bail!("failing, so the job is attempted again")
+    }
+}
+
+#[module(providers = [AttemptedProcessor])]
+struct AttemptedModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_method_is_handed_the_id_its_push_returned_and_the_number_of_each_attempt() {
+    let memory = Memory::new(&DELAYING, LEASE);
+    let queue = "nestrs-worker-attempted";
+    let (app, stop, serving) = boot_worker_of::<AttemptedModule>(&memory).await;
+    let producer = app
+        .container()
+        .get_dyn::<dyn JobProducer>()
+        .expect("the producer");
+    let receipt = nest_rs_queue::JobProducerExt::push(
+        &*producer,
+        AttemptedQueue,
+        WorkerCommand { seq: 1 },
+        None,
+    )
+    .await
+    .expect("a push");
+    nest_rs_testing::wait_until(Duration::from_secs(60), || {
+        memory.dead(queue).len() == 1 && memory.held(queue) == 0
+    })
+    .await;
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+    let seen = ATTEMPTS_SEEN.lock().expect("lock").clone();
+    let expected: Vec<_> = (1..=3)
+        .map(|number| (receipt.id().clone(), number, queue.to_owned()))
+        .collect();
+    assert_eq!(seen, expected, "one id across attempts, counted from 1");
+}

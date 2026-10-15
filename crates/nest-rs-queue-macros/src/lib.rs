@@ -39,10 +39,13 @@ mod queue;
 ///
 /// The method is `async fn(&self, job: T) -> Result<(), E>` with `T: Job` and
 /// any `E` converting into `Box<dyn Error + Send + Sync>` — `anyhow::Result<()>`
-/// is the usual spelling — and may take a `Checkpoint<S>` parameter beside the
-/// job: the job's progress, kept across its retries and redeliveries and
-/// cleared when it ends. A key the app's queue backend cannot honour fails the
-/// worker's boot, naming the method.
+/// is the usual spelling. Beside the job it may take, once each and in any
+/// order, the two parameters the port hands one attempt, recognised by their
+/// type: a `Checkpoint<S>`, the job's progress, kept across its retries and
+/// redeliveries and cleared when it ends; and an `Attempt`, the job's id — the
+/// one its push's receipt returned — and the attempt's number, which a handler
+/// calling out keys its idempotency on. A key the app's queue backend cannot
+/// honour fails the worker's boot, naming the method.
 ///
 /// The impl is re-emitted unchanged, with no `Discoverable` — the host's own
 /// `#[injectable]` owns it.

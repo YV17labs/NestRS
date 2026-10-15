@@ -127,7 +127,9 @@ Once the job ended, the same job is filed as a new one.
 crashes between a database commit and its outcome leaves the job to its lease,
 and the next delivery runs it again from the start of its body — the
 transaction bounds a retry, never a redelivery. A handler whose effects leave
-the process — an email, a charge — keeps its own idempotency key.
+the process — an email, a charge — keys them on its `Attempt` parameter's
+`job_id()`: the id its push minted, the same on every attempt and every
+redelivery, which the provider then refuses to act on twice.
 </Aside>
 
 ## Crashes, and the stall limit

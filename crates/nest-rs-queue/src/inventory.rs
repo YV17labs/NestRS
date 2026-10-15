@@ -8,10 +8,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nest_rs_core::Container;
-use nest_rs_database::{JobRef, UnitOfWork};
+use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 
 use crate::checkpoint::CheckpointCell;
-use crate::{Capabilities, Capability, JobError, ProcessOptions};
+use crate::{Attempt, Capabilities, Capability, JobError, ProcessOptions};
 
 /// The type-erased handler `#[processor]` emits for each `#[process]` method:
 /// deserializes the job payload ([`decode`]), resolves the provider, runs the
@@ -44,8 +44,35 @@ pub struct HandlerContext {
     /// The binding the attempt runs its unit of work through, resolved once by
     /// the worker; `None` runs it bare.
     pub unit_of_work: Option<Arc<dyn UnitOfWork>>,
-    /// The job this attempt runs, as the unit of work names it.
-    pub job: JobRef,
+    /// The attempt this is: the job's id, its number and its queue.
+    pub attempt: Attempt,
+}
+
+/// Run `body` — the method's call — as the attempt's one unit of work under
+/// `policy`, through the binding `context` carries: the unit names the job and
+/// the attempt, and a success its driver could not honour fails the attempt
+/// with the driver's classification.
+pub fn run_attempt<F>(
+    context: HandlerContext,
+    policy: TransactionPolicy,
+    body: F,
+) -> impl Future<Output = Result<(), JobError>> + Send
+where
+    F: Future<Output = Result<(), JobError>> + Send,
+{
+    let HandlerContext {
+        unit_of_work,
+        attempt,
+        ..
+    } = context;
+    let spec =
+        UnitSpec::new(crate::unit::JOB, ExecutorScope::Job, policy).with_job(attempt.job_ref());
+    async move {
+        run_unit(unit_of_work.as_ref(), spec, body, Result::is_ok, |why| {
+            Err(JobError::unhonoured(why))
+        })
+        .await
+    }
 }
 
 /// A `#[process]` method, as its decorator declared it.

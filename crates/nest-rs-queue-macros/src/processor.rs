@@ -200,18 +200,21 @@ fn emit_method(
     {
         return Err(syn::Error::new(checkpoint.span, CHECKPOINT_NEEDS_THE_POOL));
     }
+    let attempt = attempt_parameter(method)?;
     let job_ty = {
         let mut signature = method.clone();
-        if let Some(checkpoint) = &checkpoint {
-            signature.sig.inputs = signature
-                .sig
-                .inputs
-                .into_iter()
-                .enumerate()
-                .filter(|(index, _)| *index != checkpoint.index)
-                .map(|(_, input)| input)
-                .collect();
-        }
+        let set_aside = [
+            checkpoint.as_ref().map(|checkpoint| checkpoint.index),
+            attempt,
+        ];
+        signature.sig.inputs = signature
+            .sig
+            .inputs
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| !set_aside.contains(&Some(*index)))
+            .map(|(_, input)| input)
+            .collect();
         payload_arg_type(&signature, "#[process]", "job", provider)?
     };
     // A `Piped<P, T>` / `Valid<T>` job argument is a per-argument pipe: the
@@ -291,9 +294,11 @@ fn emit_method(
         .filter(|(_, input)| matches!(input, FnArg::Typed(_)))
         .map(|(index, _)| match &checkpoint {
             Some(checkpoint) if checkpoint.index == index => quote!(__checkpoint),
+            _ if attempt == Some(index) => quote!(__attempt),
             _ => quote!(__job),
         })
         .collect();
+    let attempt_take = attempt.map(|_| quote!(let __attempt = __context.attempt.clone();));
     let call = await_if_async(
         &method.sig,
         quote!(<#self_ty>::#method_ident(&__provider, #(#call_args),*)),
@@ -345,30 +350,17 @@ fn emit_method(
                     }
                 };
                 #checkpoint_open
-                let __unit = ::nest_rs_queue::__private::nest_rs_database::UnitSpec::new(
-                    ::nest_rs_queue::unit::JOB,
-                    ::nest_rs_queue::__private::nest_rs_database::ExecutorScope::Job,
-                    #transaction_tokens,
-                )
-                .with_job(__context.job);
+                #attempt_take
                 // The user `#[process]` method's `Err` is a transient fault —
                 // retryable within the budget. Mapped *inside* the unit so its
                 // settling reads one error type and can report a commit it could
                 // not honour in it.
-                ::nest_rs_queue::__private::nest_rs_database::run_unit(
-                    __context.unit_of_work.as_ref(),
-                    __unit,
+                ::nest_rs_queue::__private::run_attempt(
+                    __context,
+                    #transaction_tokens,
                     async move {
                         #call.map_err(::nest_rs_queue::JobError::retry)
                     },
-                    ::std::result::Result::is_ok,
-                    // A job that ran fine but whose transaction could not be
-                    // settled has written nothing, so the attempt fails rather
-                    // than reporting a success that lost its writes. Whether it is
-                    // *retried* is the driver's call.
-                    |__why| ::std::result::Result::Err(
-                        ::nest_rs_queue::JobError::unhonoured(__why),
-                    ),
                 )
                 .await
             })
@@ -428,6 +420,35 @@ fn checkpoint_parameter(method: &syn::ImplItemFn) -> syn::Result<Option<Checkpoi
             state: (*state).clone(),
             span: typed.ty.span(),
         });
+    }
+    Ok(found)
+}
+
+/// Where the method's `Attempt` parameter sits among its inputs, if it takes
+/// one — recognised, like `Checkpoint<_>`, by the last segment of its type.
+fn attempt_parameter(method: &syn::ImplItemFn) -> syn::Result<Option<usize>> {
+    let mut found = None;
+    for (index, input) in method.sig.inputs.iter().enumerate() {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+        let Type::Path(path) = &*typed.ty else {
+            continue;
+        };
+        let Some(last) = path.path.segments.last() else {
+            continue;
+        };
+        if last.ident != "Attempt" || !last.arguments.is_none() {
+            continue;
+        }
+        if found.is_some() {
+            return Err(syn::Error::new_spanned(
+                &typed.ty,
+                "a #[process] method takes at most one `Attempt` parameter — a method runs one \
+                 attempt at a time",
+            ));
+        }
+        found = Some(index);
     }
     Ok(found)
 }

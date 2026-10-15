@@ -578,6 +578,96 @@ async fn an_attempt_its_unit_could_not_settle_carries_the_classification() {
     );
 }
 
+/// A unit of work recording the job each unit it opens names, and settling
+/// nothing.
+#[derive(Default)]
+struct Recording(Mutex<Vec<Option<nest_rs_database::JobRef>>>);
+
+struct Recorded;
+
+impl nest_rs_database::UnitOfWork for Recording {
+    fn open(
+        &self,
+        spec: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        self.0.lock().expect("lock").push(spec.job.clone());
+        Ok(Box::new(Recorded))
+    }
+}
+
+impl nest_rs_database::OpenUnit for Recorded {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(Nowhere)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        _ok: bool,
+    ) -> Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        Box::pin(async { nest_rs_database::Settlement::Settled })
+    }
+}
+
+/// The identity each attempt handed `IdentifiedProcessor`: its job id and number.
+static IDENTIFIED: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+
+struct IdentifiedProcessor;
+
+impl nest_rs_core::ProviderResidency for IdentifiedProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl IdentifiedProcessor {
+    #[process(queue = TranscodeQueue, retries = 1)]
+    async fn identified(
+        &self,
+        _job: TranscodeCommand,
+        attempt: nest_rs_queue::Attempt,
+    ) -> anyhow::Result<()> {
+        IDENTIFIED
+            .lock()
+            .expect("lock")
+            .push((attempt.job_id().to_string(), attempt.number()));
+        anyhow::bail!("failing, so the job is attempted again")
+    }
+}
+
+#[tokio::test]
+async fn the_unit_an_attempt_opens_names_the_job_and_attempt_its_method_is_handed() {
+    let container = Container::builder().provide(IdentifiedProcessor).build();
+    let recording = Arc::new(Recording::default());
+    let mut delivery = transcode_delivery("x.wav");
+    for _ in 1..=2 {
+        consume::attempt(
+            method("IdentifiedProcessor::identified"),
+            &mut delivery,
+            container.clone(),
+            Some(Arc::clone(&recording) as Arc<dyn nest_rs_database::UnitOfWork>),
+        )
+        .await;
+    }
+    let handed = IDENTIFIED.lock().expect("lock").clone();
+    let named: Vec<(String, u32)> = recording
+        .0
+        .lock()
+        .expect("lock")
+        .iter()
+        .map(|job| {
+            let job = job.as_ref().expect("a queue attempt names its job");
+            assert_eq!(job.queue, "transcode");
+            (job.id.to_string(), job.attempt)
+        })
+        .collect();
+    assert_eq!(handed.len(), 2, "{handed:?}");
+    assert_eq!((handed[0].1, handed[1].1), (1, 2), "counted from 1");
+    assert_eq!(handed[0].0, handed[1].0, "one id across attempts");
+    assert_eq!(
+        named, handed,
+        "the driver and the method agree on one identity"
+    );
+}
+
 static FLAKY_RUNS: AtomicU32 = AtomicU32::new(0);
 
 struct FlakyProcessor;

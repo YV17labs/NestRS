@@ -4,7 +4,7 @@
 
 use nest_rs::core::{injectable, input};
 use nest_rs::pipes::Valid;
-use nest_rs::queue::{Checkpoint, processor, queue};
+use nest_rs::queue::{Attempt, Checkpoint, processor, queue};
 
 #[input]
 #[derive(Clone)]
@@ -58,13 +58,15 @@ impl HygieneProcessor {
         Ok(())
     }
 
+    /// An `Attempt` beside a `Checkpoint<_>`, in either order.
     #[process(queue = HygieneImportQueue, transactional = false)]
     async fn import(
         &self,
+        attempt: Attempt,
         job: HygieneCommand,
         progress: Checkpoint<u32>,
     ) -> nest_rs::core::anyhow::Result<()> {
-        let _ = (job.file, progress.get());
+        let _ = (job.file, progress.get(), attempt.job_id(), attempt.number());
         Ok(())
     }
 

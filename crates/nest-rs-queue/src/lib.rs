@@ -72,6 +72,7 @@
 /// reason each failed.
 pub const TARGET: &str = "nest_rs::queue";
 
+mod attempt;
 mod backend;
 mod backoff;
 mod capability;
@@ -97,6 +98,7 @@ mod queue_name;
 pub mod unit;
 mod worker;
 
+pub use attempt::Attempt;
 pub use backend::{BACKEND_REMEDY, BACKEND_TIMEOUT, QueueBackend};
 pub use capability::{Capabilities, Capability};
 pub use checkpoint::{Checkpoint, CheckpointStore};
@@ -134,7 +136,7 @@ pub mod __private {
     pub use crate::checkpoint::{CheckpointCell, open_checkpoint};
     pub use crate::error::undecodable;
     pub use crate::inventory::{
-        HandlerContext, JobHandler, decode, process_method, required_capabilities,
+        HandlerContext, JobHandler, decode, process_method, required_capabilities, run_attempt,
     };
     pub use crate::queue_name::is_valid_queue_name;
 

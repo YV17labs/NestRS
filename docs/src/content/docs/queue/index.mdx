@@ -131,6 +131,21 @@ The job argument also binds a [pipe](/fundamentals/pipes/):
 after deserialization, and hand the handler the transformed value — a
 rejection is a job error, so the queue's retry/failure policy applies.
 
+Beside the job, a method may take what the port hands one attempt, recognised
+by its type, once each and in any order: an `Attempt` — the job's id, the one
+its push's receipt returned and the same on every attempt, and the attempt's
+number from 1 — and a `Checkpoint<S>`, the job's saved progress
+([Retries and failure](/queue/retries-and-failure/)).
+
+```rust
+use nest_rs::queue::Attempt;
+
+#[process(queue = NotifyQueue, retries = 3)]
+async fn notify(&self, job: NotifyCommand, attempt: Attempt) -> Result<()> {
+    self.svc.send(&job, &attempt.job_id().to_string()).await
+}
+```
+
 ## How many at once, and how fast
 
 A `#[process]` method runs **one attempt at a time** per worker replica unless
@@ -147,7 +162,8 @@ receive the same job from the queue: each delivery holds a lease on its job,
 renewed while the attempt runs, and every write it makes is fenced on that
 lease. A job runs again only once a lease lapses — its replica crashed, froze,
 or was cut off from Redis for longer than the lease — so a handler whose effects
-leave the process keeps its own idempotency key. See
+leave the process keys them on `attempt.job_id()`, the one name its job keeps
+across every attempt and redelivery. See
 [Delivery on Redis](/queue/delivery/#at-least-once-and-the-fence).
 </Aside>
 

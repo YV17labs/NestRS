@@ -42,7 +42,11 @@ contract (`.claude/decisions/queue-redis-streams.md`).
   envelope whose id it still holds — waiting, held back, running — no second
   time, and answers `Ok`: a call sent again after a lost answer is harmless,
   and every driver owes it (`queue_kit!`). A backend's own record id reaches a
-  line only as `backend_id`. The wait before a retry is
+  line only as `backend_id`. **A handler keys its idempotency on
+  `Attempt::job_id`**: the parameters a `#[process]` method takes beside its
+  job are what the port hands one attempt, named for what each is and
+  recognised by type — `Checkpoint<S>` and `Attempt`, once each, never a
+  context bag; a tick's twin is deferred. The wait before a retry is
   `nest_rs_core::Backoff`'s, seeded by the job id — jittered by a hash of the id
   and the attempt, never a random draw, so it is reproducible.
 - **A backend declares each capability it honours, one at a time** — never

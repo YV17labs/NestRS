@@ -85,9 +85,10 @@ fn erased(chain: &[ResolvedLayer<dyn Guard>]) -> impl Iterator<Item = (&'static 
 pub async fn check_request<'g>(
     handler: &'static Handler,
     guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
-    req: &mut Request,
+    req: &mut crate::Request,
 ) -> Result<(), Denial> {
-    let (request, checked) = run_poem_stage(handler, guards, std::mem::take(req)).await;
+    let taken = std::mem::replace(req, crate::Request::builder().finish());
+    let (request, checked) = run_stage(handler, guards, taken).await;
     *req = request;
     let pending = checked.map_err(|(guard, denial)| {
         file_denial(guard, &denial);
@@ -107,7 +108,7 @@ pub async fn check_request<'g>(
 pub async fn check_request_chain(
     handler: &'static Handler,
     chain: &[ResolvedLayer<dyn Guard>],
-    req: &mut Request,
+    req: &mut crate::Request,
 ) -> Result<(), Denial> {
     if chain.is_empty() {
         return Ok(());
@@ -116,14 +117,17 @@ pub async fn check_request_chain(
 }
 
 /// Run `fut` under what `req`'s guard stages attached.
-pub fn install_attached<F: Future>(req: &Request, fut: F) -> impl Future<Output = F::Output> {
+pub fn install_attached<F: Future>(
+    req: &crate::Request,
+    fut: F,
+) -> impl Future<Output = F::Output> {
     install_pending(attached_pending(req), fut)
 }
 
 /// What `req`'s guard stages attached so far, to install around what runs
 /// after them — later stages, the endpoint, work that leaves the request's task
 /// (an MCP operation).
-pub fn attached_pending(req: &Request) -> Pending {
+pub fn attached_pending(req: &crate::Request) -> Pending {
     pending_in(req.extensions())
 }
 
@@ -136,7 +140,7 @@ fn pending_in(extensions: &http::Extensions) -> Pending {
 }
 
 /// The `T` one of `req`'s guard stages attached.
-pub fn attached<T: AmbientValue>(req: &Request) -> Option<Arc<T>> {
+pub fn attached<T: AmbientValue>(req: &crate::Request) -> Option<Arc<T>> {
     req.extensions().get::<Attached>()?.0.get::<T>()
 }
 
@@ -523,7 +527,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_later_stage_reads_what_an_earlier_one_attached_and_never_a_shadow() {
-        let mut req = tenant_request();
+        let mut req = request_from_poem(tenant_request());
         check_request_chain(&ROUTE, &chain(TenantGuard), &mut req)
             .await
             .expect("the tenant is known");
@@ -543,7 +547,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_stage_attaches_nothing() {
         let logs = nest_rs_testing::LogCapture::install();
-        let mut req = Request::builder().header("x-tenant", "globex").finish();
+        let mut req = request_from_poem(Request::builder().header("x-tenant", "globex").finish());
         let denial = check_request_chain(&ROUTE, &chain(TenantGuard), &mut req)
             .await
             .expect_err("an unknown tenant is refused");
@@ -656,9 +660,13 @@ mod tests {
     #[tokio::test]
     async fn an_in_band_request_stage_files_a_denials_chain() {
         let logs = nest_rs_testing::LogCapture::install();
-        let denial = check_request_chain(&ROUTE, &chain(StoreDown), &mut Request::default())
-            .await
-            .expect_err("the store is down");
+        let denial = check_request_chain(
+            &ROUTE,
+            &chain(StoreDown),
+            &mut crate::Request::builder().finish(),
+        )
+        .await
+        .expect_err("the store is down");
         assert_eq!(denial.http_status(), 503);
         let event = logs.expect_one("nest_rs::layers", "guard denied the request");
         assert_eq!(event.field("error").as_deref(), Some(STORE_DOWN_CHAIN));

@@ -26,7 +26,7 @@ use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
 use nest_rs_http::__private::OriginPolicy;
-use nest_rs_http::__private::poem_bridge::response_to_poem;
+use nest_rs_http::__private::poem_bridge::{request_from_poem, request_to_poem, response_to_poem};
 use nest_rs_http::DetachedWork;
 use nest_rs_http::ResponseError as _;
 use tracing::Instrument;
@@ -336,13 +336,17 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
             );
             return Ok(response_to_poem(refused.as_response()));
         }
-        let (mut req, mut body) = req.split();
+        let (req, mut body) = req.split();
+        let mut req = request_from_poem(req);
         // A denial at the upgrade is an ordinary HTTP response: no socket opens.
         if let Err(resp) = self.bridge.before(&mut req).await {
-            return Ok(resp);
+            return Ok(response_to_poem(resp));
         }
-        let websocket = WebSocket::from_request(&req, &mut body).await?;
-        let protocol = GraphQLProtocol::from_request(&req, &mut body).await?;
+        // poem's extractors take the upgrade from poem's own request.
+        let upgrade = request_to_poem(req);
+        let websocket = WebSocket::from_request(&upgrade, &mut body).await?;
+        let protocol = GraphQLProtocol::from_request(&upgrade, &mut body).await?;
+        let req = request_from_poem(upgrade);
         // What the upgrade's guards attached reaches the socket the way it
         // reaches a POST: forwarded by the seeds, carried by the connection.
         // Never the upgrade's scope nor its transaction: the socket's own

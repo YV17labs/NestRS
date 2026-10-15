@@ -126,8 +126,8 @@ async fn a_redis_that_stops_denies_with_one_line_from_the_guard_and_none_from_th
         .expect("ThrottlerModule registers the guard");
     server.stop();
 
-    let mut request = nest_rs_http::poem::Request::builder()
-        .uri_str("/rated")
+    let mut request = nest_rs_http::Request::builder()
+        .uri(nest_rs_http::Uri::from_static("/rated"))
         .finish();
     let refused = check_request(
         &RATED,

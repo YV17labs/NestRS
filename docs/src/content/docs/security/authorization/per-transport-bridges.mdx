@@ -139,6 +139,8 @@ The seeding is done by `GraphqlAbilityBridge`, registered as the
 `dyn GraphqlOperationGuard`:
 
 ```rust title="nest_rs::authz::graphql::GraphqlAbilityBridge"
+use nest_rs::http::{Request, Response};
+
 #[injectable]
 pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
     #[inject] auth: Arc<A>,
@@ -152,7 +154,8 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
 ```
 
 `before` runs the same HTTP guard chain (`AuthnGuard`, then
-`AbilityGuard`) on the GraphQL request. `/graphql` is **in band**
+`AbilityGuard`) on the GraphQL request — nestrs's own `Request`, the one a
+route's guards read. `/graphql` is **in band**
 (`Posture::InBand`) — one endpoint, posture declared per operation — so a
 caller with no credential is admitted here and takes the ability guard's
 *visitor* branch, while a bearer that does not verify is refused with

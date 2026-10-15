@@ -1,6 +1,6 @@
-//! Per-request context bridge: async-graphql-poem does not forward poem request
-//! extensions, so [`ContextEndpoint`] folds every link-time-registered
-//! [`GraphqlContextSeed`] over the parsed request before executing it.
+//! Per-request context bridge: async-graphql does not see the HTTP request, so
+//! [`ContextEndpoint`] folds every link-time-registered [`GraphqlContextSeed`]
+//! over the parsed request before executing it.
 
 use std::any::TypeId;
 use std::future::Future;
@@ -15,16 +15,20 @@ use nest_rs_core::__private::serde::de::DeserializeOwned;
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler};
 use nest_rs_core::{Container, Handler, Posture, ReachableProviders};
 use nest_rs_guards::__private::{resolve_global_chain, split_at_covered};
-use nest_rs_guards::Guard;
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::__private::poem_bridge::{
+    request_from_poem, response_from_poem, response_to_poem,
+};
 use nest_rs_http::__private::{check_request_chain, denial_to_http_response, install_attached};
+use nest_rs_http::{Request, Response};
 use nest_rs_pipes::{GlobalPipe, PipeError};
-use poem::http::{StatusCode, header};
+use poem::http::{HeaderValue, StatusCode};
+use poem::{Endpoint, Error, FromRequest, IntoResponse, RequestBody, Result};
 
 use crate::module::GraphqlModule;
-use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, RequestBody, Response, Result};
 
 /// A per-request forwarder, submitted via `inventory`, attaching values from
-/// the poem request (and the container) to the GraphQL request.
+/// the HTTP request (and the container) to the GraphQL request.
 pub struct GraphqlContextSeed {
     /// `None` for a framework-level seed (always fires); `Some(id)` gates the
     /// seed on its owner being reachable, so two apps forward different types
@@ -202,13 +206,13 @@ impl OperationBridge {
         // a `429`.
         check_request_chain(&ENDPOINT, &self.head, req)
             .await
-            .map_err(denial_to_http_response)?;
+            .map_err(denied)?;
         if let Some(bridge) = &self.bridge {
             bridge.before(req).await?;
         }
         check_request_chain(&ENDPOINT, &self.tail, req)
             .await
-            .map_err(denial_to_http_response)
+            .map_err(denied)
     }
 
     /// `inner`, as the bridge wraps it.
@@ -240,6 +244,11 @@ impl OperationBridge {
             })
             .data
     }
+}
+
+/// A request guard's refusal, as the endpoint answers it.
+fn denied(denial: Denial) -> Response {
+    response_from_poem(denial_to_http_response(denial))
 }
 
 impl<E> ContextEndpoint<E> {
@@ -354,18 +363,20 @@ async fn without_transaction(fut: BoxFuture<'_, ()>) {
     reason = "the refusal describes the body; the read and decode errors would quote it"
 )]
 async fn read_batch(req: &Request, body: &mut RequestBody) -> Result<BatchRequest, Response> {
-    let multipart = req
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value
-                .trim_start()
-                .get(..10)
-                .is_some_and(|kind| kind.eq_ignore_ascii_case("multipart/"))
-        });
-    if multipart {
-        return GraphQLBatchRequest::from_request(req, body)
+    let multipart = req.content_type().filter(|value| {
+        value
+            .trim_start()
+            .get(..10)
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("multipart/"))
+    });
+    if let Some(content_type) = multipart {
+        // The adapter's extractor reads the method, the query and the content type alone.
+        let head = poem::Request::builder()
+            .method(req.method().clone())
+            .uri(req.uri().clone())
+            .content_type(content_type)
+            .finish();
+        return GraphQLBatchRequest::from_request(&head, body)
             .await
             .map(|batch| batch.0)
             .map_err(|refusal| {
@@ -440,7 +451,7 @@ fn refused(reason: &str, status: StatusCode) -> Response {
     });
     Response::builder()
         .status(status)
-        .content_type("application/json")
+        .content_type(HeaderValue::from_static("application/json"))
         .body(serde_json::to_vec(&body).unwrap_or_default())
 }
 
@@ -455,22 +466,25 @@ fn variable_pipe_error_response(err: &PipeError) -> Box<Response> {
     Box::new(
         Response::builder()
             .status(StatusCode::OK)
-            .content_type("application/json")
+            .content_type(HeaderValue::from_static("application/json"))
             .body(serde_json::to_vec(&body).unwrap_or_default()),
     )
 }
 
 impl<E: Executor> Endpoint for ContextEndpoint<E> {
-    type Output = Response;
+    type Output = poem::Response;
 
-    async fn call(&self, req: Request) -> Result<Response> {
-        let (mut req, body) = req.split();
+    async fn call(&self, req: poem::Request) -> Result<poem::Response> {
+        let (req, body) = req.split();
+        let mut req = request_from_poem(req);
         if let Err(resp) = self.bridge.before(&mut req).await {
-            return Ok(resp);
+            return Ok(response_to_poem(resp));
         }
         // The rest of the request runs under what its guards attached: the
         // seeds forward it, the operations read it.
-        install_attached(&req, self.answer(&req, body)).await
+        install_attached(&req, self.answer(&req, body))
+            .await
+            .map(response_to_poem)
     }
 }
 
@@ -501,9 +515,9 @@ impl<E: Executor> ContextEndpoint<E> {
         // A local slot, since the guard scopes a `()` future.
         let mut answered: Option<Response> = None;
         let inner: BoxFuture<()> = Box::pin(async {
-            answered = Some(
+            answered = Some(response_from_poem(
                 GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response(),
-            );
+            ));
         });
         let guarded = self.bridge.around(req, inner);
         if read_only {

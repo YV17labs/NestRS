@@ -3,8 +3,7 @@
 
 use std::sync::Arc;
 
-use poem::http::StatusCode;
-use poem::{Error, Request, Response};
+use nest_rs_http::{HttpError, Request, Response, StatusCode};
 
 use crate::guard::McpOperationGuard;
 
@@ -21,7 +20,10 @@ pub(crate) fn deny_all() -> Arc<dyn McpOperationGuard> {
 }
 
 impl McpOperationGuard for DenyAllMcpGuard {
-    fn before<'a>(&'a self, req: &'a mut Request) -> crate::BoxFuture<'a, poem::Result<()>> {
+    fn before<'a>(
+        &'a self,
+        req: &'a mut Request,
+    ) -> crate::BoxFuture<'a, nest_rs_http::Result<()>> {
         Box::pin(async move {
             tracing::warn!(
                 target: crate::TARGET,
@@ -30,7 +32,7 @@ impl McpOperationGuard for DenyAllMcpGuard {
                 reason = "no McpOperationGuard registered",
                 "mcp operation denied",
             );
-            Err(Error::from_response(
+            Err(HttpError::from_response(
                 Response::builder()
                     .status(StatusCode::UNAUTHORIZED)
                     .body("unauthorized"),

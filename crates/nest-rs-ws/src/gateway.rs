@@ -12,7 +12,7 @@ use nest_rs_core::{
 };
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_http::__private::OriginPolicy;
-use nest_rs_http::__private::poem_bridge::response_to_poem;
+use nest_rs_http::__private::poem_bridge::{request_from_poem, response_to_poem};
 use nest_rs_http::DetachedWork;
 use nest_rs_http::ResponseError as _;
 use nest_rs_pipes::GlobalPipe;
@@ -108,6 +108,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         }
         let (req, mut body) = req.split();
         let ws = WebSocket::from_request(&req, &mut body).await?;
+        let req = request_from_poem(req);
         // The request does not survive into the connection task `on_upgrade` spawns.
         let ambient = self
             .ctx

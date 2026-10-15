@@ -9,8 +9,8 @@ use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{AmbientValue, Container, Discoverable, Handler, Posture, with_ambient};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::{attached, check_request};
+use nest_rs_http::Request;
 use nest_rs_testing::LogCapture;
-use poem::Request;
 
 use crate::{child, parent};
 

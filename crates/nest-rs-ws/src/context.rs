@@ -5,7 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use poem::Request;
+use nest_rs_http::Request;
 
 use crate::WsReply;
 

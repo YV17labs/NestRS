@@ -8,7 +8,8 @@ use nest_rs_core::injectable;
 use nest_rs_graphql::{BoxFuture, GraphqlOperationGuard};
 use nest_rs_guards::Guard;
 use nest_rs_http::__private::denial_to_http_response;
-use poem::{Request, Response};
+use nest_rs_http::__private::poem_bridge::response_from_poem;
+use nest_rs_http::{Request, Response};
 
 use crate::chain::run_ability_chain;
 
@@ -38,7 +39,7 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
                 req,
             )
             .await
-            .map_err(denial_to_http_response)
+            .map_err(|denial| response_from_poem(denial_to_http_response(denial)))
         })
     }
 

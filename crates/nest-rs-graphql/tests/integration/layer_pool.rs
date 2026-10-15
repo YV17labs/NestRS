@@ -65,11 +65,18 @@ impl Interceptor for CountingInterceptor {
 struct NoopOpGuard;
 
 impl GraphqlOperationGuard for NoopOpGuard {
-    fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
+    fn before<'a>(
+        &'a self,
+        _req: &'a mut nest_rs_http::Request,
+    ) -> BoxFuture<'a, Result<(), nest_rs_http::Response>> {
         Box::pin(async move { Ok(()) })
     }
 
-    fn around<'a>(&'a self, _req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
+    fn around<'a>(
+        &'a self,
+        _req: &'a nest_rs_http::Request,
+        inner: BoxFuture<'a, ()>,
+    ) -> BoxFuture<'a, ()> {
         inner
     }
 }
@@ -81,11 +88,18 @@ impl GraphqlOperationGuard for NoopOpGuard {
 struct CoveringOpGuard;
 
 impl GraphqlOperationGuard for CoveringOpGuard {
-    fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
+    fn before<'a>(
+        &'a self,
+        _req: &'a mut nest_rs_http::Request,
+    ) -> BoxFuture<'a, Result<(), nest_rs_http::Response>> {
         Box::pin(async move { Ok(()) })
     }
 
-    fn around<'a>(&'a self, _req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
+    fn around<'a>(
+        &'a self,
+        _req: &'a nest_rs_http::Request,
+        inner: BoxFuture<'a, ()>,
+    ) -> BoxFuture<'a, ()> {
         inner
     }
 

@@ -5,7 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_guards::Denial;
-use poem::{Request, Result};
+use nest_rs_http::{Request, Result};
 
 use crate::McpError;
 use crate::context::{Captured, OperationOutcome};

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use nest_rs_core::module;
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::async_trait;
+use nest_rs_http::{HttpError, Request, Response, StatusCode};
 use nest_rs_mcp::{
     AllowAllMcpGuard, BoxFuture, CallToolResult, Captured, ContentBlock, McpError, McpMount,
     McpOperationGuard, OperationOutcome, ServerHandler, endpoint, mcp, tool, tool_handler,
@@ -14,16 +15,14 @@ use nest_rs_mcp::{
 };
 use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
-use poem::http::StatusCode;
 use poem::test::TestClient;
-use poem::{Error, Request, Response};
 
 struct RejectGuard;
 
 impl McpOperationGuard for RejectGuard {
-    fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, poem::Result<()>> {
+    fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, nest_rs_http::Result<()>> {
         Box::pin(async move {
-            Err(Error::from_response(
+            Err(HttpError::from_response(
                 Response::builder()
                     .status(StatusCode::UNAUTHORIZED)
                     .body("nope"),
@@ -49,6 +48,7 @@ async fn a_mounted_guard_rejects_before_the_handler_runs() {
     );
     let resp = TestClient::new(guarded).post("/").send().await;
     assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
+    resp.assert_text("nope").await;
 }
 
 #[tokio::test]
@@ -88,7 +88,7 @@ async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
 #[tokio::test]
 async fn allow_all_guard_admits_the_request() {
     let guard = nest_rs_mcp::AllowAllMcpGuard;
-    let mut req = Request::default();
+    let mut req = Request::builder().finish();
     assert!(guard.before(&mut req).await.is_ok());
 }
 
@@ -105,7 +105,7 @@ struct Attached(String);
 struct AmbientGuard;
 
 impl McpOperationGuard for AmbientGuard {
-    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, poem::Result<()>> {
+    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, nest_rs_http::Result<()>> {
         Box::pin(async move {
             req.extensions_mut()
                 .insert(Attached("installed".to_owned()));

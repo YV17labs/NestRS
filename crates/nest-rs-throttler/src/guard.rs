@@ -385,7 +385,7 @@ mod tests {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
     use nest_rs_core::{Handler, Peer};
     use nest_rs_http::__private::check_request;
-    use poem::Request;
+    use nest_rs_http::Request;
 
     use super::*;
     use crate::DEFAULT_THROTTLE;
@@ -419,23 +419,10 @@ mod tests {
         meta: MetaLevels::default,
     });
 
-    /// A request from `peer`, which poem's builder cannot set.
+    /// A request from `peer`.
     fn from_peer(peer: &str) -> Request {
-        use poem::Addr;
-        use poem::web::{LocalAddr, RemoteAddr};
-
         let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
-        let (parts, ()) = poem::http::Request::new(()).into_parts();
-        Request::from_parts(
-            (
-                parts,
-                LocalAddr::default(),
-                RemoteAddr(Addr::socket(socket)),
-                poem::http::uri::Scheme::HTTP,
-            )
-                .into(),
-            poem::Body::empty(),
-        )
+        Request::builder().peer_addr(socket).finish()
     }
 
     const KEY: &str = "a pseudonym key of at least 32 bytes, for tests";

@@ -3,12 +3,14 @@
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Correlation, Handler, current_request_scope};
-use nest_rs_http::__private::poem_bridge::response_to_poem;
+use nest_rs_http::__private::poem_bridge::{
+    error_to_poem, request_from_poem, request_to_poem, response_to_poem,
+};
 use nest_rs_http::__private::{OriginPolicy, attached_pending};
-use nest_rs_http::DetachedWork;
 use nest_rs_http::ResponseError as _;
+use nest_rs_http::{DetachedWork, Method, Request};
 use poem::endpoint::TowerCompatExt;
-use poem::{Endpoint, IntoEndpoint, Request, Response, Result, Route};
+use poem::{Endpoint, IntoEndpoint, Response, Result, Route};
 use rmcp::ServerHandler;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -241,7 +243,8 @@ where
 {
     type Output = Response;
 
-    async fn call(&self, mut req: Request) -> Result<Self::Output> {
+    async fn call(&self, req: poem::Request) -> Result<Self::Output> {
+        let mut req = request_from_poem(req);
         if let Err(refused) = self.origins.allows(&req) {
             tracing::warn!(
                 target: crate::TARGET,
@@ -252,7 +255,7 @@ where
             return Ok(response_to_poem(refused.as_response()));
         }
         req.extensions_mut().insert(self.site);
-        self.guard.before(&mut req).await?;
+        self.guard.before(&mut req).await.map_err(error_to_poem)?;
 
         // Post-guard, while the ambient executor and ability are reachable; rmcp
         // forwards the extensions into every operation's `RequestContext`.
@@ -277,11 +280,15 @@ where
         });
 
         // A `GET` is the session's standalone stream, with no end of its own.
-        let standalone = req.method() == poem::http::Method::GET;
+        let standalone = req.method() == Method::GET;
 
         // Also installed here, for an operation rmcp resolves inline.
-        let mut response =
-            nest_rs_core::with_request_scope(scope, correlation, self.inner.call(req)).await?;
+        let mut response = nest_rs_core::with_request_scope(
+            scope,
+            correlation,
+            self.inner.call(request_to_poem(req)),
+        )
+        .await?;
         // Ended at the shutdown signal; a POST's stream ends with its answer.
         if standalone && response.status().is_success() {
             response

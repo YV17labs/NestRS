@@ -149,7 +149,7 @@ mod tests {
     use nest_rs_core::operation_log::Kind;
     use nest_rs_core::{AmbientValue, Handler, UnitView, with_ambient};
     use nest_rs_http::__private::{attached, check_request};
-    use poem::Request;
+    use nest_rs_http::Request;
 
     use super::*;
     use crate::{AbilityBuilder, Action, with_ability};
@@ -244,7 +244,7 @@ mod tests {
         guard: &AbilityGuard<F>,
         route: &'static Handler,
     ) -> Result<Option<Arc<Ability>>, Denial> {
-        let mut req = Request::default();
+        let mut req = Request::builder().finish();
         check_request(route, [("AbilityGuard", guard as &dyn Guard)], &mut req).await?;
         Ok(attached::<Ability>(&req))
     }
@@ -329,7 +329,7 @@ mod tests {
             }
         }
 
-        let mut req = Request::default();
+        let mut req = Request::builder().finish();
         let guard = AbilityGuard {
             factory: Arc::new(MalformedVisitor),
         };

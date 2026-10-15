@@ -1,7 +1,7 @@
 //! Per-operation ambient-state bridge for MCP handler bodies.
 //!
 //! rmcp dispatches every operation on its own task, where a task-local installed
-//! around the poem endpoint is gone, but it injects the request's [`Parts`] into
+//! around the HTTP endpoint is gone, but it injects the request's [`Parts`] into
 //! each operation's `RequestContext`: the endpoint stashes an [`McpAmbient`] in
 //! their extensions, and [`PropagatingHandler`](crate::PropagatingHandler)
 //! re-installs it inside the dispatch.
@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use nest_rs_core::__private::Pending;
 use nest_rs_core::RequestScope;
-use poem::Request;
-use poem::http::request::Parts;
+use nest_rs_http::Request;
+use nest_rs_http::RequestParts as Parts;
 use rmcp::model::{CallToolResponse, CallToolResult, Extensions};
 
 use crate::McpError;
@@ -79,7 +79,7 @@ pub type OperationOutcome = Result<OperationValue, McpError>;
 
 /// Re-installs ambient per-request state around each MCP operation.
 ///
-/// [`capture`](Self::capture) runs on the poem request, after the guard chain,
+/// [`capture`](Self::capture) runs on the HTTP request, after the guard chain,
 /// while the ambient executor and ability are reachable; [`around`](Self::around)
 /// runs inside rmcp's spawned dispatch, where they are not.
 pub trait McpToolContext: Send + Sync + 'static {

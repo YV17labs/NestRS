@@ -59,7 +59,7 @@ impl TagResolver {
 struct GraphqlTestModule;
 
 #[tokio::test]
-async fn resolver_reads_a_per_request_value_bridged_from_the_poem_request() {
+async fn resolver_reads_a_per_request_value_a_guard_attached() {
     let app = TestApp::builder()
         .module::<GraphqlTestModule>()
         .use_guards_global([guard::<TagGuard>()])
@@ -261,8 +261,8 @@ mod an_operation_guard_that_never_runs_the_operation {
     use nest_rs_core::{injectable, module};
     use nest_rs_graphql::async_graphql::Result as GqlResult;
     use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, operations, resolver};
+    use nest_rs_http::{Request, Response};
     use nest_rs_testing::{LogCapture, TestApp};
-    use poem::{Request, Response};
 
     /// Returns without ever polling `inner`, so the operation never executes.
     #[injectable]
@@ -455,4 +455,122 @@ async fn a_request_denial_keeping_its_cause_files_the_chain() {
         event.field("error").as_deref(),
         Some(crate::STORE_DOWN_CHAIN)
     );
+}
+
+/// The in-band seams read and answer on nestrs's request: an operation guard
+/// reads the head and keeps what it reads on the request, a seed forwards it,
+/// and a refusal is the guard's own response, its text said as a problem
+/// document's `detail` as the edge says every plain-text error.
+mod the_in_band_seams_speak_the_request_vocabulary {
+    use nest_rs_core::{Container, injectable, module};
+    use nest_rs_graphql::async_graphql::{Context, Request as GqlRequest, Result as GqlResult};
+    use nest_rs_graphql::{
+        BoxFuture, GraphqlContextSeed, GraphqlModule, GraphqlOperationGuard, SeedLifetime,
+        operations, resolver,
+    };
+    use nest_rs_http::{HeaderValue, Request, Response, StatusCode, header};
+    use nest_rs_testing::TestApp;
+
+    #[derive(Clone)]
+    struct Tenant(String);
+
+    /// Admits a request naming its tenant, kept on the request; refuses one
+    /// that names none with an answer of its own.
+    #[injectable]
+    #[derive(Default)]
+    struct TenantGate;
+
+    impl GraphqlOperationGuard for TenantGate {
+        fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
+            Box::pin(async move {
+                let Some(tenant) = req.header("x-tenant").map(str::to_owned) else {
+                    return Err(Response::builder()
+                        .status(StatusCode::FORBIDDEN)
+                        .header(header::WWW_AUTHENTICATE, HeaderValue::from_static("Tenant"))
+                        .body("name a tenant"));
+                };
+                req.extensions_mut().insert(Tenant(tenant));
+                Ok(())
+            })
+        }
+
+        fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
+            assert!(
+                req.extensions().get::<Tenant>().is_some(),
+                "`around` reads the request `before` admitted",
+            );
+            inner
+        }
+    }
+
+    /// Forwards what the gate kept on the request.
+    fn forward_tenant(req: &Request, _container: &Container, gql: GqlRequest) -> GqlRequest {
+        match req.extensions().get::<Tenant>() {
+            Some(tenant) => gql.data(tenant.clone()),
+            None => gql,
+        }
+    }
+
+    nest_rs_core::inventory::submit! {
+        GraphqlContextSeed {
+            lifetime: SeedLifetime::Request,
+            owner_type_id: || Some(std::any::TypeId::of::<TenantResolver>()),
+            seed: forward_tenant,
+        }
+    }
+
+    #[resolver]
+    struct TenantResolver;
+
+    #[operations]
+    impl TenantResolver {
+        #[query]
+        #[public]
+        async fn tenant(&self, ctx: &Context<'_>) -> GqlResult<String> {
+            Ok(ctx.data::<Tenant>()?.0.clone())
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [TenantResolver, TenantGate as dyn GraphqlOperationGuard],
+    )]
+    struct TenantModule;
+
+    #[tokio::test]
+    async fn a_seed_forwards_what_the_operation_guard_read_off_the_request() {
+        let app = TestApp::for_module::<TenantModule>().await.expect("boots");
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .header("x-tenant", "acme")
+            .body_json(&serde_json::json!({ "query": "{ tenant }" }))
+            .send()
+            .await;
+
+        resp.assert_json(serde_json::json!({ "data": { "tenant": "acme" } }))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_operation_guards_refusal_is_its_own_response() {
+        let app = TestApp::for_module::<TenantModule>().await.expect("boots");
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ tenant }" }))
+            .send()
+            .await;
+
+        resp.assert_status(poem::http::StatusCode::FORBIDDEN);
+        resp.assert_header("www-authenticate", "Tenant");
+        resp.json()
+            .await
+            .value()
+            .object()
+            .get("detail")
+            .assert_string("name a tenant");
+    }
 }

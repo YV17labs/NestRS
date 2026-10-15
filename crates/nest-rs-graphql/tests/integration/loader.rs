@@ -9,7 +9,6 @@ use nest_rs_graphql::async_graphql::{self, Context};
 use nest_rs_graphql::{
     BoxFuture, GraphqlModule, GraphqlOperationGuard, dataloader, operations, resolver,
 };
-use nest_rs_http::poem;
 use nest_rs_http::{HttpConfig, HttpModule};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -66,14 +65,14 @@ struct CallerBridge;
 impl GraphqlOperationGuard for CallerBridge {
     fn before<'a>(
         &'a self,
-        _req: &'a mut poem::Request,
-    ) -> BoxFuture<'a, Result<(), poem::Response>> {
+        _req: &'a mut nest_rs_http::Request,
+    ) -> BoxFuture<'a, Result<(), nest_rs_http::Response>> {
         Box::pin(async { Ok(()) })
     }
 
     fn around<'a>(
         &'a self,
-        _req: &'a poem::Request,
+        _req: &'a nest_rs_http::Request,
         inner: BoxFuture<'a, ()>,
     ) -> BoxFuture<'a, ()> {
         Box::pin(with_ambient(Arc::new(Caller("alice")), inner))

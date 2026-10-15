@@ -3,7 +3,7 @@
 
 use nest_rs_core::Handler;
 use nest_rs_guards::{Denial, Guard};
-use poem::Request;
+use nest_rs_http::Request;
 
 /// Authenticate, then authorize, on `req` as the unit `endpoint` declares,
 /// keeping what the two attach on the request for the endpoint to run its

@@ -12,8 +12,9 @@ use nest_rs_core::__private::ResolvedLayer;
 use nest_rs_core::Container;
 use nest_rs_guards::__private::{resolve_global_chain, split_at_covered};
 use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::__private::poem_bridge::error_from_poem;
 use nest_rs_http::__private::{check_request_chain, denial_to_http_error};
-use poem::{Request, Result};
+use nest_rs_http::{HttpError, Request, Result};
 
 use crate::context::{Captured, OperationOutcome};
 use crate::endpoint::endpoint_site;
@@ -50,6 +51,11 @@ impl GlobalPoolMcpGuard {
     }
 }
 
+/// A pooled guard's refusal, as the endpoint answers it.
+fn denied(denial: Denial) -> HttpError {
+    error_from_poem(denial_to_http_error(denial))
+}
+
 impl McpOperationGuard for GlobalPoolMcpGuard {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
@@ -63,7 +69,7 @@ impl McpOperationGuard for GlobalPoolMcpGuard {
                     reason = "global guard pool resolved empty",
                     "mcp operation denied",
                 );
-                return Err(denial_to_http_error(Denial::unauthorized(
+                return Err(denied(Denial::unauthorized(
                     "no guard resolved for this endpoint",
                 )));
             }
@@ -73,13 +79,13 @@ impl McpOperationGuard for GlobalPoolMcpGuard {
             let site = endpoint_site(req);
             check_request_chain(site, &self.head, req)
                 .await
-                .map_err(denial_to_http_error)?;
+                .map_err(denied)?;
             if let Some(bridge) = &self.bridge {
                 bridge.before(req).await?;
             }
             check_request_chain(site, &self.tail, req)
                 .await
-                .map_err(denial_to_http_error)
+                .map_err(denied)
         })
     }
 

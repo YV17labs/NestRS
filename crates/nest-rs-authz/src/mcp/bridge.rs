@@ -10,8 +10,9 @@ use std::sync::Arc;
 use nest_rs_core::injectable;
 use nest_rs_guards::Guard;
 use nest_rs_http::__private::denial_to_http_error;
+use nest_rs_http::__private::poem_bridge::error_from_poem;
+use nest_rs_http::{Request, Result};
 use nest_rs_mcp::{BoxFuture, McpOperationGuard};
-use poem::{Request, Result};
 
 use crate::chain::run_ability_chain;
 
@@ -46,7 +47,7 @@ impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
                 req,
             )
             .await
-            .map_err(denial_to_http_error)
+            .map_err(|denial| error_from_poem(denial_to_http_error(denial)))
         })
     }
 

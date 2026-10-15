@@ -70,8 +70,17 @@ static PUBLIC: Handler = route("public", Posture::Public);
 static IN_BAND: Handler = route("in_band", Posture::InBand);
 
 /// Run `guard` on `req` as the HTTP edge runs it on the route `site`.
-async fn check(guard: &dyn Guard, site: &'static Handler, req: &mut Request) -> Result<(), Denial> {
+async fn check(
+    guard: &dyn Guard,
+    site: &'static Handler,
+    req: &mut nest_rs_http::Request,
+) -> Result<(), Denial> {
     check_request(site, [("AuthnGuard", guard)], req).await
+}
+
+/// A request with no credential, as the edge hands it to its guards.
+fn bare() -> nest_rs_http::Request {
+    nest_rs_http::Request::builder().finish()
 }
 
 struct AuthenticateAs(&'static str);
@@ -110,7 +119,7 @@ impl Strategy for RejectWith {
 #[tokio::test]
 async fn attaches_principal_on_success() {
     let guard = AuthnGuard::new(Arc::new(AuthenticateAs("alice")));
-    let mut req = crate::request(&[]);
+    let mut req = bare();
 
     check(&guard, &GATED, &mut req).await.expect("guard passes");
     assert_eq!(attached::<Who>(&req).as_deref(), Some(&Who("alice")));
@@ -119,7 +128,7 @@ async fn attaches_principal_on_success() {
 #[tokio::test]
 async fn strategy_error_denies_as_unauthorized() {
     let guard = AuthnGuard::new(Arc::new(FailWith));
-    let mut req = crate::request(&[]);
+    let mut req = bare();
 
     let denial = check(&guard, &GATED, &mut req)
         .await
@@ -131,7 +140,7 @@ async fn strategy_error_denies_as_unauthorized() {
 #[tokio::test]
 async fn public_route_admits_an_anonymous_caller() {
     let guard = AuthnGuard::new(Arc::new(FailWith));
-    check(&guard, &PUBLIC, &mut crate::request(&[]))
+    check(&guard, &PUBLIC, &mut bare())
         .await
         .expect("no credential on a public route is not a failure");
 }
@@ -142,7 +151,7 @@ async fn public_route_admits_a_rejected_credential_as_anonymous() {
     // route into a 401 — it is logged and the request continues anonymously.
     let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(RejectWith(|| AuthError::InvalidSignature)));
-    let mut req = crate::request(&[]);
+    let mut req = bare();
     check(&guard, &PUBLIC, &mut req)
         .await
         .expect("a rejected credential still leaves the public route reachable");
@@ -172,7 +181,7 @@ async fn public_route_admits_a_rejected_credential_as_anonymous() {
 #[tokio::test]
 async fn an_in_band_request_admits_an_anonymous_caller() {
     let guard = AuthnGuard::new(Arc::new(FailWith));
-    check(&guard, &IN_BAND, &mut crate::request(&[]))
+    check(&guard, &IN_BAND, &mut bare())
         .await
         .expect("no credential on an in-band endpoint is left to its operations' gates");
 }
@@ -182,7 +191,7 @@ async fn an_in_band_request_admits_an_anonymous_caller() {
 #[tokio::test]
 async fn an_in_band_request_still_verifies_a_presented_credential() {
     let guard = AuthnGuard::new(Arc::new(RejectWith(|| AuthError::InvalidSignature)));
-    let denial = check(&guard, &IN_BAND, &mut crate::request(&[]))
+    let denial = check(&guard, &IN_BAND, &mut bare())
         .await
         .expect_err("a rejected credential is refused on an in-band endpoint");
     assert_eq!(denial.http_status(), 401);
@@ -202,7 +211,7 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
         retry_after: None,
     })));
 
-    let denial = check(&guard, &PUBLIC, &mut crate::request(&[]))
+    let denial = check(&guard, &PUBLIC, &mut bare())
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
     assert!(
@@ -241,7 +250,7 @@ async fn a_successful_check_publishes_the_actor_into_the_ambient_context() {
     let correlation = nest_rs_core::Correlation::minted(None);
 
     let seen = nest_rs_core::with_request_scope(None, correlation, async {
-        let mut req = Request::default();
+        let mut req = bare();
         check(&guard, &GATED, &mut req)
             .await
             .expect("the strategy authenticates");
@@ -363,7 +372,7 @@ async fn within_twice_the_bound<T>(unit: impl std::future::Future<Output = T>) -
 async fn a_strategy_that_never_answers_is_denied_at_the_bound() {
     let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(StalledStrategy));
-    let mut req = crate::request(&[]);
+    let mut req = bare();
 
     let sent = tokio::time::Instant::now();
     let denial = within_twice_the_bound(check(&guard, &GATED, &mut req))
@@ -395,7 +404,7 @@ async fn a_strategy_that_panics_is_denied_and_said_once() {
     let guard = AuthnGuard::new(Arc::new(PanickingStrategy));
 
     for site in [&GATED, &PUBLIC] {
-        let mut req = crate::request(&[]);
+        let mut req = bare();
         let denial = check(&guard, site, &mut req)
             .await
             .expect_err("a strategy that unwound decided nothing, so nothing passes");
@@ -428,7 +437,7 @@ async fn a_strategy_that_never_answers_is_denied_on_a_public_route_too() {
     let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(StalledStrategy));
 
-    let denial = within_twice_the_bound(check(&guard, &PUBLIC, &mut crate::request(&[])))
+    let denial = within_twice_the_bound(check(&guard, &PUBLIC, &mut bare()))
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
 
@@ -443,7 +452,7 @@ async fn a_strategy_that_never_answers_is_denied_on_a_public_route_too() {
 async fn a_strategy_answering_inside_the_bound_is_waited_for() {
     let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(SlowStrategy));
-    let mut req = crate::request(&[]);
+    let mut req = bare();
 
     within_twice_the_bound(check(&guard, &GATED, &mut req))
         .await

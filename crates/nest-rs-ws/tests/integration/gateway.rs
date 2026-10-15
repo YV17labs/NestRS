@@ -2362,7 +2362,10 @@ impl GuardFor<nest_rs_http::HttpView> for AdmittingGuard {}
 /// message under a type of its own: the connection carries `Admitted` to its
 /// messages whatever `capture` saw.
 #[derive(Debug)]
-struct SeenAtCapture(Option<&'static str>);
+struct SeenAtCapture {
+    admitted: Option<&'static str>,
+    path: String,
+}
 
 impl nest_rs_core::AmbientValue for SeenAtCapture {}
 
@@ -2373,10 +2376,11 @@ impl nest_rs_core::AmbientValue for SeenAtCapture {}
 struct AdmittedContext;
 
 impl nest_rs_ws::SocketContext for AdmittedContext {
-    fn capture(&self, _req: &HttpRequest) -> nest_rs_ws::Captured {
-        std::sync::Arc::new(SeenAtCapture(
-            nest_rs_core::ambient::<Admitted>().map(|admitted| admitted.0),
-        ))
+    fn capture(&self, req: &nest_rs_http::Request) -> nest_rs_ws::Captured {
+        std::sync::Arc::new(SeenAtCapture {
+            admitted: nest_rs_core::ambient::<Admitted>().map(|admitted| admitted.0),
+            path: req.uri().path().to_owned(),
+        })
     }
 
     fn around<'a>(
@@ -2393,8 +2397,12 @@ impl nest_rs_ws::SocketContext for AdmittedContext {
 
 fn seen_at_capture() -> &'static str {
     nest_rs_core::ambient::<SeenAtCapture>()
-        .and_then(|seen| seen.0)
+        .and_then(|seen| seen.admitted)
         .unwrap_or("nobody")
+}
+
+fn captured_path() -> String {
+    nest_rs_core::ambient::<SeenAtCapture>().map_or_else(String::new, |seen| seen.path.clone())
 }
 
 #[gateway(path = "/admitted/by-gateway")]
@@ -2407,6 +2415,12 @@ impl GuardedUpgradeGateway {
     #[public]
     async fn whoami(&self, _ask: String) -> String {
         seen_at_capture().to_owned()
+    }
+
+    #[subscribe_message("whereami")]
+    #[public]
+    async fn whereami(&self, _ask: String) -> String {
+        captured_path()
     }
 }
 
@@ -2434,8 +2448,12 @@ impl PooledUpgradeGateway {
 struct AdmittedModule;
 
 async fn whoami(app: &nest_rs_testing::ws::WsApp, path: &str) -> serde_json::Value {
+    ask(app, path, "whoami").await
+}
+
+async fn ask(app: &nest_rs_testing::ws::WsApp, path: &str, event: &str) -> serde_json::Value {
     let mut socket = app.socket(path).connect().await;
-    socket.send("whoami", serde_json::json!("?")).await;
+    socket.send(event, serde_json::json!("?")).await;
     socket.next_envelope().await["data"].clone()
 }
 
@@ -2456,6 +2474,11 @@ async fn a_socket_context_captures_what_the_gateways_upgrade_guards_attached() {
         whoami(&app, "/admitted/by-pool").await,
         "nobody",
         "an upgrade no guard ran on captures nothing",
+    );
+    assert_eq!(
+        ask(&app, "/admitted/by-gateway", "whereami").await,
+        "/admitted/by-gateway",
+        "the context captures off the upgrade request itself",
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }

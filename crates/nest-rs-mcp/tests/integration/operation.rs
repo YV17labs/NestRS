@@ -416,8 +416,8 @@ struct BridgeStub;
 impl McpOperationGuard for BridgeStub {
     fn before<'a>(
         &'a self,
-        _req: &'a mut poem::Request,
-    ) -> nest_rs_mcp::BoxFuture<'a, poem::Result<()>> {
+        _req: &'a mut nest_rs_http::Request,
+    ) -> nest_rs_mcp::BoxFuture<'a, nest_rs_http::Result<()>> {
         Box::pin(async { Ok(()) })
     }
 }

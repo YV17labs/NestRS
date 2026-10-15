@@ -480,9 +480,10 @@ through `TestApp`, never the app root: the root grows every transport and
 connection the app serves, and the moment it imports `SeaOrmDatabaseModule` a suite
 defined as infrastructure-free waits 30 s for a pool. Assert on the composed app
 in `tests/e2e/main.rs` instead — scaffolded empty, and where a test boots against
-a throwaway database with `nest_rs::testing`'s `EphemeralDatabase` (the
-`testing` and `seaorm` features of `nest-rs`, both on since `nestrs new`) before
-driving it through `TestApp` the same way.
+a throwaway database with `nest_rs::testing`'s `EphemeralDatabase` (`nest-rs`'s
+`seaorm` feature, on since `nestrs new`, and its `testing` feature, which each
+app enables in its `[dev-dependencies]` alone, so no release binary carries the
+harness) before driving it through `TestApp` the same way.
 
 ## Commands
 

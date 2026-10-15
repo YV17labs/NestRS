@@ -12,7 +12,7 @@ uuid.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-nest-rs.workspace = true
+nest-rs = { workspace = true, features = ["testing"] }
 tokio.workspace = true
 migrations.workspace = true
 

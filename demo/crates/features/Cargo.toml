@@ -35,10 +35,10 @@ tracing.workspace = true
 # Dev-only e2e helpers (`features::testing`): the dev keypair, the seeded org
 # id, Claims token minting, and the Redis database each draining test owns.
 # Enabled from the app suites' dev-dependencies; never on in a production build.
-test-support = []
+test-support = ["nest-rs/testing"]
 
 [dev-dependencies]
-nest-rs.workspace = true
+nest-rs = { workspace = true, features = ["testing"] }
 # Enables `features::testing` for this crate's own e2e suite.
 features = { path = ".", features = ["test-support"] }
 tokio.workspace = true

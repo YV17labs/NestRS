@@ -379,3 +379,50 @@ fn the_scaffold_leaves_validator_to_the_framework() {
     let cargo = fs::read_to_string(dir.path().join("acme/Cargo.toml")).unwrap();
     assert!(!cargo.contains("validator"), "{cargo}");
 }
+
+/// The test harness is a dev-dependency of each app, never a feature of the
+/// workspace's `nest-rs`: a release build of any app links none of it.
+#[test]
+fn the_test_harness_reaches_the_test_suites_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+    let root = dir.path().join("acme");
+    run_ok(&root, &["new", "blog"]);
+
+    let manifest = |path: &str| {
+        fs::read_to_string(root.join(path))
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap()
+    };
+    let features = |doc: &toml_edit::DocumentMut, table: &[&str]| -> Vec<String> {
+        let entry = table
+            .iter()
+            .try_fold(doc.as_item(), |item, key| item.get(key))
+            .and_then(|table| table.get("nest-rs"))
+            .unwrap_or_else(|| panic!("`{}` names `nest-rs`", table.join(".")));
+        entry
+            .get("features")
+            .and_then(toml_edit::Item::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|f| f.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let workspace = manifest("Cargo.toml");
+    assert!(
+        !features(&workspace, &["workspace", "dependencies"]).contains(&"testing".to_owned()),
+        "the workspace's `nest-rs` reaches every release build: {workspace}"
+    );
+    for app in ["apps/hello/Cargo.toml", "apps/blog/Cargo.toml"] {
+        let doc = manifest(app);
+        assert_eq!(
+            features(&doc, &["dev-dependencies"]),
+            ["testing"],
+            "{app} enables the harness for its suites: {doc}"
+        );
+    }
+}

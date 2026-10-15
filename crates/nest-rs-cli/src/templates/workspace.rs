@@ -19,7 +19,7 @@ tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }
-nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm", "testing"] }
+nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm"] }
 poem = { version = "3.1", features = ["tower-compat", "anyhow"] }
 sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
 sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio"] }
@@ -77,6 +77,7 @@ nest-rs.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+nest-rs = { workspace = true, features = ["testing"] }
 tokio.workspace = true
 "#;
 

@@ -52,7 +52,9 @@ serde_json.workspace = true
 `serde_json` also needs a `[workspace.dependencies]` pin (`serde_json = "1.0"`)
 like every other line here — the app manifest only points at the root.
 
-`testing` is what brings `TestApp` in; `EphemeralDatabase` rides the `seaorm`
+`testing` is what brings `TestApp` in, and `nestrs new` already put it on the
+app's `nest-rs` dev-dependency: it stays out of the workspace's `nest-rs`, so no
+release binary carries the harness. `EphemeralDatabase` rides the `seaorm`
 feature you enabled on the [entity page](/tutorial/entity/), which is what a
 suite testing against a real schema already has. There is no telemetry feature
 to enable: `blog` imports no `OpenTelemetryModule`, so

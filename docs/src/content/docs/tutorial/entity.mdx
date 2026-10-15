@@ -29,14 +29,13 @@ same folder so the tutorial can extend it in place.
 The `posts` module ships under the workspace's `features` crate. Its
 dependencies ride versions pinned in the workspace root, so both manifests
 need an entry. Add the pins first — note the `nest-rs` line **gains** features
-rather than being replaced: `nestrs new` already put `http`, `seaorm` and
-`testing` there, and dropping either of the first two breaks the app you just
-scaffolded. `authn` rides along because a resource also gets the auth adapter
-its guards need.
+rather than being replaced: `nestrs new` already put `http` and `seaorm` there,
+and dropping either breaks the app you just scaffolded. `authn` rides along
+because a resource also gets the auth adapter its guards need.
 
 ```toml title="Cargo.toml" {2}
 [workspace.dependencies]
-nest-rs = { version = "7.0", features = ["http", "seaorm", "testing", "authz", "authn"] }
+nest-rs = { version = "7.0", features = ["http", "seaorm", "authz", "authn"] }
 sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
 serde = { version = "1.0", features = ["derive"] }
 uuid = { version = "1.27", features = ["v7", "serde"] }

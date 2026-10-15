@@ -1063,3 +1063,127 @@ async fn a_modern_tool_call_is_cut_by_the_request_timeout_before_it_answers() {
     );
     serving.stop().await;
 }
+
+/// How a unit the recording binding opened ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnitEnd {
+    /// Settled, told whether the unit succeeded.
+    Settled { ok: bool },
+    /// Dropped before it settled: whatever it held stays unsettled.
+    Abandoned,
+}
+
+static UNITS_ENDED: Mutex<Vec<UnitEnd>> = Mutex::new(Vec::new());
+
+fn units_ended() -> Vec<UnitEnd> {
+    UNITS_ENDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// A unit-of-work binding recording how each unit it opened ended.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct RecordingUnitOfWork;
+
+/// One unit of [`RecordingUnitOfWork`], which records its end once.
+struct RecordingUnit {
+    settled: bool,
+}
+
+fn record(end: UnitEnd) {
+    UNITS_ENDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(end);
+}
+
+struct NoExecutor;
+
+impl nest_rs_database::Executor for NoExecutor {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(RecordingUnit { settled: false }))
+    }
+}
+
+impl nest_rs_database::OpenUnit for RecordingUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        mut self: Box<Self>,
+        ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        self.settled = true;
+        record(UnitEnd::Settled { ok });
+        Box::pin(std::future::ready(nest_rs_database::Settlement::Settled))
+    }
+}
+
+impl Drop for RecordingUnit {
+    fn drop(&mut self) {
+        if !self.settled {
+            record(UnitEnd::Abandoned);
+        }
+    }
+}
+
+#[module(
+    providers = [
+        StalledTools,
+        AllowAllMcpGuard as dyn McpOperationGuard,
+        RecordingUnitOfWork as dyn nest_rs_database::UnitOfWork,
+    ],
+)]
+struct StalledInUnitModule;
+
+/// The deadline cuts the operation's body inside its unit, never the unit
+/// around it: one cut around the unit would drop it unsettled, a transaction
+/// neither committed nor rolled back.
+#[tokio::test]
+async fn a_tool_call_cut_at_its_deadline_settles_its_unit_as_a_failure() {
+    let logs = LogCapture::install();
+    let serving = serve_stalled::<StalledInUnitModule>().await;
+    let session = crate::open_raw_session(serving.port, STALLED).await;
+    let (mut stream, head) = crate::post(
+        serving.port,
+        STALLED,
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "stalled", "arguments": {} }
+        }),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the call is accepted: {head}"
+    );
+
+    assert_cut_at_the_operation_deadline(&logs, &mut stream).await;
+    let ended = units_ended();
+    assert!(
+        !ended.contains(&UnitEnd::Abandoned),
+        "no unit was dropped unsettled: {ended:?}",
+    );
+    assert_eq!(
+        ended
+            .iter()
+            .filter(|end| **end == UnitEnd::Settled { ok: false })
+            .count(),
+        1,
+        "the cut call's unit settled as a failure: {ended:?}",
+    );
+    serving.stop().await;
+}

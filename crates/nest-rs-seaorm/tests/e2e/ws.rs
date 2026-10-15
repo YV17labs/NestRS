@@ -313,9 +313,11 @@ impl DeadlineGateway {
 struct DeadlineModule;
 
 /// The deadline cuts the message's body inside its unit, so the unit settles
-/// the cut as a failure: a rollback, never a commit of half the work.
+/// the cut as a failure: a rollback, never a commit of half the work, nor a
+/// transaction abandoned unsettled.
 #[tokio::test]
 async fn a_message_that_wrote_then_outlived_its_deadline_leaves_no_row() {
+    let logs = nest_rs_testing::LogCapture::install();
     let conn = crate::harness::connect().await;
     table(&conn, "ws_unit_deadline").await;
     let app = TestApp::builder()
@@ -338,6 +340,22 @@ async fn a_message_that_wrote_then_outlived_its_deadline_leaves_no_row() {
         crate::harness::committed_rows(&conn, "ws_unit_deadline").await,
         0,
         "the cut message's write was rolled back",
+    );
+    logs.expect_one(
+        nest_rs_ws::TARGET,
+        "websocket message not answered within its deadline; it is cut",
+    );
+    let abandoned: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|event| {
+            event.target == nest_rs_seaorm::target::ORM
+                && event.field("outcome").as_deref() == Some("abandoned")
+        })
+        .collect();
+    assert!(
+        abandoned.is_empty(),
+        "the unit settled its transaction as a rollback: {abandoned:#?}",
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }

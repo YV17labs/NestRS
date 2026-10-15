@@ -315,11 +315,14 @@ read gap at or past the deadline, is told at
 boot. **An edge's per-unit deadline is `<unit>_timeout` in its config**, read
 from `<PREFIX>_<EDGE>__<UNIT>_TIMEOUT_SECS` with the unit's second segment —
 `HTTP__REQUEST_`, `WS__MESSAGE_`, `MCP__OPERATION_`, never a mechanism
-(`READ_TIMEOUT`) — on `nest_rs_http::UNIT_TIMEOUT_FLOOR`'s range; it cuts the
-unit's body inside its unit of work, so the settle is never cut, and a unit
+(`READ_TIMEOUT`) — on `nest_rs_http::UNIT_TIMEOUT_FLOOR`'s range. A unit
 whose head leaves before its answer (a socket's message, an MCP operation on
-an event stream) needs its own, since the request timeout ends at the head. **A command whose answer is the only record of what it claimed is
-never cut** — a timeout does not undo it — so it waits on the socket's liveness
+an event stream) needs its own, since the request timeout ends at the head.
+The message's and the operation's deadlines cut the body inside its unit of
+work, so the settle is never cut; HTTP's request deadline does not yet: its
+timer wraps the whole chain, the unit's settle included. **A command whose
+answer is the only record of what it claimed is never cut** — a timeout does
+not undo it — so it waits on the socket's liveness
 instead (`queue.md`). **Every port method the framework awaits returns a
 `Result`, and the port, never the backend, decides the fail-closed answer**:
 a backend answers its error and logs nothing of its own. **Every such wait

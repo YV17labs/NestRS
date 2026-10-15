@@ -71,6 +71,14 @@ of its own at the request deadline's rung — `WsConfig::message_timeout` and
 under and inside the window, and a deployment that sets one past the window, or
 off, is told at boot as the request deadline's is. A `2026-07-28` stateless MCP
 request holds its head until the first message, so the request deadline already
-answered it; the operation deadline is the bound for every other shape. A
-GraphQL operation over the graphql-ws socket has none yet.
+answered it; the operation deadline is the bound for every other shape.
 
+Two members of the family have none yet. A GraphQL operation over the
+graphql-ws socket is bounded in count, not in time. A gateway's connect and
+disconnect hooks (`ws.connect`, `ws.disconnect`) are awaited unbounded, and a
+stalled `on_connect` holds its socket before the read loop, the lifetime
+ceiling and the shutdown signal are armed. Closing that gap takes a deadline in
+the same set, read off the units (`<PREFIX>_WS__CONNECT_TIMEOUT_SECS`,
+`<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS`), or `message_timeout` extended to the
+hooks, a hook past it handled as a hook that failed: `1011` for a connect, an
+`error` line for a disconnect.

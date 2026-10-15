@@ -1323,6 +1323,132 @@ async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_o
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
+/// How a unit the recording binding opened ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnitEnd {
+    /// Settled, told whether the unit succeeded.
+    Settled { ok: bool },
+    /// Dropped before it settled: whatever it held stays unsettled.
+    Abandoned,
+}
+
+static UNITS_ENDED: std::sync::Mutex<Vec<(&'static str, UnitEnd)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn units_ended() -> Vec<(&'static str, UnitEnd)> {
+    UNITS_ENDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// A unit-of-work binding recording how each unit it opened ended.
+#[injectable]
+#[derive(Default)]
+struct RecordingUnitOfWork;
+
+/// One unit of [`RecordingUnitOfWork`], which records its end once.
+struct RecordingUnit {
+    unit: &'static str,
+    settled: bool,
+}
+
+impl RecordingUnit {
+    fn record(&self, end: UnitEnd) {
+        UNITS_ENDED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((self.unit, end));
+    }
+}
+
+struct NoExecutor;
+
+impl nest_rs_database::Executor for NoExecutor {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
+    fn open(
+        &self,
+        spec: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(RecordingUnit {
+            unit: spec.unit.name(),
+            settled: false,
+        }))
+    }
+}
+
+impl nest_rs_database::OpenUnit for RecordingUnit {
+    fn executor(&self) -> std::sync::Arc<dyn nest_rs_database::Executor> {
+        std::sync::Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        mut self: Box<Self>,
+        ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        self.settled = true;
+        self.record(UnitEnd::Settled { ok });
+        Box::pin(std::future::ready(nest_rs_database::Settlement::Settled))
+    }
+}
+
+impl Drop for RecordingUnit {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.record(UnitEnd::Abandoned);
+        }
+    }
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        message_timeout: Some(MESSAGE_DEADLINE),
+        ..WsConfig::default()
+    })],
+    providers = [DeadlineGateway, RecordingUnitOfWork as dyn nest_rs_database::UnitOfWork],
+)]
+struct DeadlineInUnitModule;
+
+/// The deadline cuts the message's body inside its unit, never the unit around
+/// it: one cut around the unit would drop it unsettled, a transaction neither
+/// committed nor rolled back.
+#[tokio::test]
+async fn a_message_cut_at_its_deadline_settles_its_unit_as_a_failure() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<DeadlineInUnitModule>()
+        .build_ws()
+        .await
+        .expect("a pinned message deadline boots over a unit-of-work binding");
+
+    let mut socket = app.socket("/deadline").connect().await;
+    socket.send("stall", serde_json::Value::Null).await;
+    STALL_STARTED.notified().await;
+    tokio::time::pause();
+    tokio::time::sleep(MESSAGE_DEADLINE + Duration::from_millis(1)).await;
+    tokio::time::resume();
+
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["data"]["errors"]["reason"], "timeout", "{frame}");
+    let messages: Vec<UnitEnd> = units_ended()
+        .into_iter()
+        .filter(|(unit, _)| *unit == nest_rs_ws::unit::MESSAGE.name())
+        .map(|(_, end)| end)
+        .collect();
+    assert_eq!(
+        messages,
+        [UnitEnd::Settled { ok: false }],
+        "the cut message's unit settled as a failure: {:?}",
+        units_ended(),
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
 #[module(
     imports = [WsModule, WsModule::for_root(WsConfig {
         max_message_bytes: 64,

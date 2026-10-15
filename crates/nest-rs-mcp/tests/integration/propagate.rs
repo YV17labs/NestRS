@@ -863,7 +863,20 @@ impl StalledTools {
     }
 }
 
-#[module(providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard])]
+/// sse-stream re-arms rmcp's keep-alive on the system clock, which a paused
+/// tokio clock runs past: every poll would find it due and flood the stream
+/// ahead of the answer.
+fn without_keep_alive() -> nest_rs_mcp::McpConfig {
+    nest_rs_mcp::McpConfig {
+        sse_keep_alive: None,
+        ..nest_rs_mcp::McpConfig::default()
+    }
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(without_keep_alive())],
+    providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard],
+)]
 struct StalledModule;
 
 /// The HTTP request timeout the stalled tool is served under: the floor.
@@ -989,7 +1002,7 @@ async fn a_session_tool_call_past_the_request_timeout_is_cut_at_the_operation_de
 #[module(
     imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
         legacy_session_mode: false,
-        ..nest_rs_mcp::McpConfig::default()
+        ..without_keep_alive()
     })],
     providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard],
 )]
@@ -1140,6 +1153,7 @@ impl Drop for RecordingUnit {
 }
 
 #[module(
+    imports = [nest_rs_mcp::McpModule::for_root(without_keep_alive())],
     providers = [
         StalledTools,
         AllowAllMcpGuard as dyn McpOperationGuard,

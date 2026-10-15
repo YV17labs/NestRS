@@ -2,7 +2,7 @@
 //! authentication.
 
 use nest_rs_core::injectable;
-use nest_rs_http::Request;
+use nest_rs_http::{Request, Result};
 
 use crate::guard::McpOperationGuard;
 
@@ -13,10 +13,7 @@ use crate::guard::McpOperationGuard;
 pub struct AllowAllMcpGuard;
 
 impl McpOperationGuard for AllowAllMcpGuard {
-    fn before<'a>(
-        &'a self,
-        _req: &'a mut Request,
-    ) -> crate::BoxFuture<'a, nest_rs_http::Result<()>> {
+    fn before<'a>(&'a self, _req: &'a mut Request) -> crate::BoxFuture<'a, Result<()>> {
         Box::pin(async move { Ok(()) })
     }
 }

@@ -20,9 +20,8 @@ use nest_rs_http::__private::poem_bridge::{
     request_from_poem, response_from_poem, response_to_poem,
 };
 use nest_rs_http::__private::{check_request_chain, denial_to_http_response, install_attached};
-use nest_rs_http::{Request, Response};
+use nest_rs_http::{HeaderValue, Request, Response, StatusCode};
 use nest_rs_pipes::{GlobalPipe, PipeError};
-use poem::http::{HeaderValue, StatusCode};
 use poem::{Endpoint, Error, FromRequest, IntoResponse, RequestBody, Result};
 
 use crate::module::GraphqlModule;

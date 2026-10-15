@@ -108,12 +108,11 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         }
         let (req, mut body) = req.split();
         let ws = WebSocket::from_request(&req, &mut body).await?;
-        let req = request_from_poem(req);
         // The request does not survive into the connection task `on_upgrade` spawns.
         let ambient = self
             .ctx
             .as_ref()
-            .map(|ctx| (ctx.clone(), ctx.capture(&req)));
+            .map(|ctx| (ctx.clone(), ctx.capture(&request_from_poem(req))));
         // `None` outside the HTTP request scope: `Scoped<T>` then answers `NoScope`.
         let root_container =
             nest_rs_http::current_request_scope().map(|scope| scope.root().clone());

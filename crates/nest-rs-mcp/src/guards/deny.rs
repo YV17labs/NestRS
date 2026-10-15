@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_http::{HttpError, Request, Response, StatusCode};
+use nest_rs_http::{HttpError, Request, Response, Result, StatusCode};
 
 use crate::guard::McpOperationGuard;
 
@@ -20,10 +20,7 @@ pub(crate) fn deny_all() -> Arc<dyn McpOperationGuard> {
 }
 
 impl McpOperationGuard for DenyAllMcpGuard {
-    fn before<'a>(
-        &'a self,
-        req: &'a mut Request,
-    ) -> crate::BoxFuture<'a, nest_rs_http::Result<()>> {
+    fn before<'a>(&'a self, req: &'a mut Request) -> crate::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             tracing::warn!(
                 target: crate::TARGET,

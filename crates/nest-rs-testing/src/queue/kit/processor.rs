@@ -44,7 +44,7 @@ processors! {
     RenewalProcessor: renewal on RenewalQueue;
     DelayProcessor: delay on DelayQueue;
     TraceProcessor: trace on TraceQueue;
-    ResendProcessor: resend on ResendQueue;
+    ResendProcessor: resend on ResendQueue, retries = 1;
 }
 
 /// Run one attempt at `job` on `queue` as its [`Act`] says, reporting it.

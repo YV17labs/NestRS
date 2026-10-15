@@ -76,8 +76,9 @@ from the Redis binding, so each compiles and runs in the framework's suite.
    }
    ```
 
-   A backend declaring `Cancellation` implements `remove`, and `remove_unique`
-   beside `UniquePush`. The port waits `BACKEND_TIMEOUT` — eighteen seconds — for
+   A backend declaring `UniquePush` makes that check first: a held envelope's own
+   job holds its key, which never refuses it. A backend declaring
+   `Cancellation` implements `remove`, and `remove_unique` beside `UniquePush`. The port waits `BACKEND_TIMEOUT` — eighteen seconds — for
    each call, then gives up on it: bound your own round trips well inside that,
    so an outage reaches the caller as your error, with its cause. A call that
    panics is given up on the same way — a push or a cancel answers

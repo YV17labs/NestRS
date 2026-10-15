@@ -32,6 +32,10 @@ const WINDOW: Duration = Duration::from_secs(2);
 /// The longest a case waits for what it expects, past the leases it waits out.
 const PATIENCE: Duration = Duration::from_secs(20);
 
+/// The latest a first retry falls due after its failure: the port's one second,
+/// jittered up to a fifth longer.
+const FIRST_RETRY_AT_LATEST: Duration = Duration::from_millis(1200);
+
 /// A job pushed once runs once and completes.
 pub async fn a_pushed_job_runs_once<B: KitBackend>(backend: B, logs: LogCapture) {
     let kit = Kit::begin(backend, logs, OnceQueue).await;
@@ -354,8 +358,10 @@ pub async fn a_job_runs_in_the_trace_that_pushed_it<B: KitBackend>(backend: B, l
 }
 
 /// An envelope enqueued again while the backend holds its job — waiting, held
-/// back by a delay, running — is answered `Ok` and filed nothing, so the job
-/// runs once; enqueued again once the job ended, it is filed and runs again.
+/// back by a delay or a retry, running — is answered `Ok` and filed nothing, so
+/// the job runs once; enqueued again once the job ended, it is filed and runs
+/// again. Under a unique key, the envelope sent again is never refused as its
+/// own key's holder, and its job keeps the key.
 pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: KitBackend>(
     backend: B,
     logs: LogCapture,
@@ -364,14 +370,11 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
     let queue = queue_name::<ResendQueue>();
     let pushing = kit.producer().await;
     let recording = Recording::new(Arc::clone(&pushing.producer));
+    let capabilities = recording.backend().capabilities();
     kit.push_on(&recording, ResendQueue, 0, Act::Hold { ms: 300 }, None)
         .await;
     let pushed = recording.sent();
-    let delayed = if recording
-        .backend()
-        .capabilities()
-        .contains(Capability::DelayedPush)
-    {
+    let delayed = if capabilities.contains(Capability::DelayedPush) {
         let options = PushOptions::default().with_delay(Duration::from_secs(1));
         kit.push_on(
             &recording,
@@ -385,19 +388,81 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
     } else {
         None
     };
+    kit.push_on(
+        &recording,
+        ResendQueue,
+        2,
+        Act::FailFirst { attempts: 1 },
+        None,
+    )
+    .await;
+    let retried = recording.sent();
+    let keyed = if capabilities.contains(Capability::UniquePush) {
+        let options = PushOptions::default().with_unique(format!("kit-resend-{}", kit.run));
+        let holder = kit
+            .push_on(
+                &recording,
+                ResendQueue,
+                3,
+                Act::Complete,
+                Some(options.clone()),
+            )
+            .await;
+        Some((recording.sent(), options, holder))
+    } else {
+        None
+    };
     enqueue_again(&pushing, &queue, &pushed, None, "waiting").await;
     if let Some((envelopes, options)) = &delayed {
         enqueue_again(&pushing, &queue, envelopes, Some(options), "held back").await;
+    }
+    if let Some((envelopes, options, holder)) = &keyed {
+        enqueue_again(&pushing, &queue, envelopes, Some(options), "keyed").await;
+        let refused = pushing
+            .producer
+            .push(
+                ResendQueue,
+                KitCommand {
+                    run: kit.run,
+                    seq: 4,
+                    act: Act::Complete,
+                },
+                Some(options.clone()),
+            )
+            .await;
+        assert!(
+            matches!(
+                &refused,
+                Err(QueueError::UniqueKeyHeld { holder: held_by, .. }) if held_by == holder.id()
+            ),
+            "the key stays with the job sent again: {refused:?}"
+        );
     }
     let first = kit.worker(WINDOW).await;
     kit.until(|| !kit.attempts(ResendQueue::NAME, 0).is_empty())
         .await;
     enqueue_again(&pushing, &queue, &pushed, None, "running").await;
     kit.until(|| {
-        kit.completed(ResendQueue::NAME, 0) >= 1
-            && (delayed.is_none() || kit.completed(ResendQueue::NAME, 1) >= 1)
+        kit.attempts(ResendQueue::NAME, 2)
+            .first()
+            .is_some_and(|attempt| attempt.ended == Some(false))
     })
     .await;
+    let retry_due = Instant::now() + FIRST_RETRY_AT_LATEST;
+    enqueue_again(&pushing, &queue, &retried, None, "held back by a retry").await;
+    assert_eq!(
+        kit.attempts(ResendQueue::NAME, 2).len(),
+        1,
+        "sent again while its retry waits its backoff"
+    );
+    kit.until(|| {
+        kit.completed(ResendQueue::NAME, 0) >= 1
+            && (delayed.is_none() || kit.completed(ResendQueue::NAME, 1) >= 1)
+            && kit.completed(ResendQueue::NAME, 2) >= 1
+            && (keyed.is_none() || kit.completed(ResendQueue::NAME, 3) >= 1)
+    })
+    .await;
+    tokio::time::sleep_until(retry_due).await;
     tokio::time::sleep(kit.backend.lease()).await;
     first.stop().await;
     assert_eq!(
@@ -410,6 +475,27 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
             kit.attempts(ResendQueue::NAME, 1).len(),
             1,
             "sent twice while held back, run once"
+        );
+    }
+    let retries: Vec<_> = kit
+        .attempts(ResendQueue::NAME, 2)
+        .iter()
+        .map(|attempt| attempt.ended)
+        .collect();
+    assert_eq!(
+        retries,
+        [Some(false), Some(true)],
+        "sent again while its retry waits, failed once and completed once"
+    );
+    if keyed.is_some() {
+        assert_eq!(
+            kit.attempts(ResendQueue::NAME, 3).len(),
+            1,
+            "sent twice under its unique key, run once"
+        );
+        assert!(
+            kit.attempts(ResendQueue::NAME, 4).is_empty(),
+            "the push refused under the held key filed nothing"
         );
     }
 

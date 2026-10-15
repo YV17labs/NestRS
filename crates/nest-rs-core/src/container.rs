@@ -193,6 +193,8 @@ pub(crate) enum Origin {
     Import(ImportSite),
     /// A factory's output, queued by this import — `None` at the app root.
     Factory(Option<ImportSite>),
+    /// A test's override, installed before any module collects.
+    Override,
 }
 
 impl std::fmt::Display for Origin {
@@ -204,6 +206,7 @@ impl std::fmt::Display for Origin {
             Self::Factory(None) => {
                 f.write_str("a factory queued by `App::builder().provide_factory`")
             }
+            Self::Override => f.write_str("a test override (`App::builder().override_…`)"),
         }
     }
 }
@@ -423,7 +426,8 @@ pub(crate) fn build_transient(
 }
 
 /// The trait object a dyn binding makes of `value`. One already bound — a
-/// seed — wins over it, as a seed of `T` wins over the factory itself.
+/// seed, a test's override — wins over it, as a seed of `T` wins over the
+/// factory itself.
 fn install_dyn_only<T, D>(
     builder: ContainerBuilder,
     value: T,
@@ -433,8 +437,9 @@ where
     T: Any,
     D: ?Sized + Send + Sync + 'static,
 {
-    if builder.contains(TypeId::of::<Arc<D>>()) {
-        builder
+    let key = TypeId::of::<Arc<D>>();
+    if builder.contains(key) {
+        builder.stand_down(key)
     } else {
         builder.provide_dyn(bind(value))
     }
@@ -496,8 +501,15 @@ pub struct ContainerBuilder {
     /// The providers a `#[module]`'s register step built while an optional
     /// dependency was absent, for the seal to refuse when it arrived later.
     absent_optionals: Vec<AbsentOptional>,
-    /// The types a test's override replaced, which the kernel never closes.
-    replaced: HashSet<TypeId>,
+    /// The keys a test overrode, in the order the test gave them, each claimed
+    /// once whatever would have registered it stood down.
+    overrides: Vec<Override>,
+    /// The providers a `#[module]` never built because a test overrode one of
+    /// their keys, each with the keys the override left absent.
+    overridden_providers: Vec<OverriddenProvider>,
+    /// The checks a seed of a factory's output passes before anything reads
+    /// it, by the output's type ([`__private::check_seed`]).
+    seed_checks: HashMap<TypeId, SeedCheck>,
     /// Every unkeyed type in the order its first registration installed it,
     /// the reverse of which the closes run in.
     installed: Vec<TypeId>,
@@ -527,6 +539,36 @@ pub(crate) struct Stall {
     /// What it waited on, each with its label.
     pub(crate) missing: Vec<(TypeId, &'static str)>,
 }
+
+/// One key a test overrode: the double sits under it from before any module
+/// collects, and whatever would have registered it claims it instead.
+pub(crate) struct Override {
+    /// The overridden key.
+    pub(crate) key: TypeId,
+    /// The key's type, as a boot error names it.
+    pub(crate) type_name: &'static str,
+    /// Whether a seed, a factory or a provider would have registered it.
+    pub(crate) claimed: bool,
+}
+
+/// A provider a `#[module]` lists that a test override stands in for: it is
+/// never built, so its own dependencies go unchecked, and the keys it would
+/// have registered beside the overridden one are absent.
+pub(crate) struct OverriddenProvider {
+    /// The provider's own type, and its name as its module lists it.
+    pub(crate) provider: (TypeId, &'static str),
+    /// The scope it would have been built under, which its consumers are
+    /// still held to.
+    pub(crate) scope: ProviderScope,
+    /// The key the test overrode it through, by type name.
+    pub(crate) through: &'static str,
+    /// Its other keys, absent in this app.
+    pub(crate) absent: Vec<TypeId>,
+}
+
+/// What a seed of a factory's output passes before anything reads it, run
+/// against the container the drain has built so far.
+pub(crate) type SeedCheck = fn(&Container) -> anyhow::Result<()>;
 
 /// The boot phase a builder is in, which decides what
 /// [`ContainerBuilder::import`] runs of a module. A builder made outside a boot
@@ -581,6 +623,9 @@ impl ContainerBuilder {
     /// Register an already-shared `Arc<T>`.
     pub fn provide_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
         self.record::<T>(ProviderScope::Singleton);
+        if self.claim(TypeId::of::<T>()).is_some() {
+            return self;
+        }
         self.providers.insert(ProviderKey::typed::<T>(), value);
         self
     }
@@ -614,42 +659,111 @@ impl ContainerBuilder {
         self
     }
 
-    /// Replace a concrete provider without the override warning — the
-    /// intentional swap path used by
-    /// [`AppBuilder::override_value`](crate::AppBuilder::override_value).
-    pub(crate) fn replace<T: Any + Send + Sync>(mut self, value: T) -> Self {
-        self.replaced.insert(TypeId::of::<T>());
-        self.providers
-            .insert(ProviderKey::typed::<T>(), Arc::new(value));
+    /// Install a test's double under the key `K` before any module collects:
+    /// what would register `K` later claims it instead. A seed already there
+    /// is replaced, and counts as the claim.
+    pub(crate) fn install_override<K: ?Sized + 'static>(mut self, value: AnyArc) -> Self {
+        let (key, type_name) = (TypeId::of::<K>(), std::any::type_name::<K>());
+        let claimed = self.providers.insert(ProviderKey::of(key), value).is_some();
+        if let Entry::Vacant(slot) = self.origins.entry(key) {
+            slot.insert((Origin::Override, ProviderScope::Singleton));
+            self.installed.push(key);
+        }
+        match self.overrides.iter_mut().find(|o| o.key == key) {
+            Some(first) => first.claimed |= claimed,
+            None => self.overrides.push(Override {
+                key,
+                type_name,
+                claimed,
+            }),
+        }
         self
     }
 
-    /// Replace a concrete provider with a pre-shared `Arc<T>` without the
-    /// override warning — the intentional swap path used by
-    /// [`AppBuilder::override_arc`](crate::AppBuilder::override_arc).
-    pub(crate) fn replace_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
-        self.replaced.insert(TypeId::of::<T>());
-        self.providers.insert(ProviderKey::typed::<T>(), value);
+    /// The overridden type's name when a test overrode `key`, marking the
+    /// override claimed: what was about to register it stands down.
+    pub(crate) fn claim(&mut self, key: TypeId) -> Option<&'static str> {
+        let found = self.overrides.iter_mut().find(|o| o.key == key)?;
+        found.claimed = true;
+        Some(found.type_name)
+    }
+
+    /// What registers now skips `key`, which a seed or a test's override
+    /// already holds: it claims the override and takes its place as the key's
+    /// registrant, where a seed keeps its own, as without the override.
+    pub(crate) fn stand_down(mut self, key: TypeId) -> Self {
+        if self.claim(key).is_some() {
+            let origin = self.registration_origin();
+            if let Some(held @ (Origin::Override, _)) = self.origins.get_mut(&key) {
+                *held = (origin, ProviderScope::Singleton);
+            }
+        }
         self
+    }
+
+    /// Whether a test overrode `key`.
+    pub(crate) fn overrides(&self, key: TypeId) -> bool {
+        self.overrides.iter().any(|o| o.key == key)
+    }
+
+    /// The first override nothing claimed, in the order the test gave them.
+    pub(crate) fn unclaimed_override(&self) -> Option<&'static str> {
+        self.overrides
+            .iter()
+            .find(|o| !o.claimed)
+            .map(|o| o.type_name)
+    }
+
+    /// The overridden keys nothing claimed so far: after the factory phase,
+    /// those a module's provider will claim, which are not global.
+    pub(crate) fn unclaimed_override_ids(&self) -> impl Iterator<Item = TypeId> + '_ {
+        self.overrides.iter().filter(|o| !o.claimed).map(|o| o.key)
+    }
+
+    /// The providers a test override stands in for.
+    pub(crate) fn overridden_providers(&self) -> &[OverriddenProvider] {
+        &self.overridden_providers
+    }
+
+    /// The check a seed of the factory output `id` passes, if its module
+    /// declared one.
+    pub(crate) fn seed_check(&self, id: TypeId) -> Option<SeedCheck> {
+        self.seed_checks.get(&id).copied()
     }
 
     /// Note the registration of `T` under `scope` by whatever is registering
-    /// now; a second registration of one unkeyed type, whatever the two
-    /// scopes, is kept for [`App`](crate::App) to refuse once the register
-    /// phase ends, naming both. The test override path
-    /// ([`replace`](Self::replace), [`replace_dyn`](Self::replace_dyn)) does
-    /// not route here.
+    /// now ([`note`](Self::note)).
     fn record<T: ?Sized + 'static>(&mut self, scope: ProviderScope) {
+        if self.note(TypeId::of::<T>(), std::any::type_name::<T>(), scope) {
+            self.installed.push(TypeId::of::<T>());
+        }
+    }
+
+    /// Note the registration of `key`, named `type_name`, under `scope` by
+    /// whatever is registering now, true when it is the key's first. A test's
+    /// override holds the key until the first registration that would have
+    /// made it takes its place; a second registration of one unkeyed type,
+    /// whatever the two scopes and with an override or without, is kept for
+    /// [`App`](crate::App) to refuse once the register phase ends, naming
+    /// both.
+    fn note(&mut self, key: TypeId, type_name: &'static str, scope: ProviderScope) -> bool {
         let second = (self.registration_origin(), scope);
-        match self.origins.entry(TypeId::of::<T>()) {
-            Entry::Occupied(first) => self.duplicates.push(DuplicateProvider {
-                type_name: std::any::type_name::<T>(),
-                first: *first.get(),
-                second,
-            }),
+        match self.origins.entry(key) {
+            Entry::Occupied(mut first) if matches!(first.get().0, Origin::Override) => {
+                first.insert(second);
+                false
+            }
+            Entry::Occupied(first) => {
+                self.duplicates.push(DuplicateProvider {
+                    type_name,
+                    first: *first.get(),
+                    second,
+                });
+                false
+            }
             Entry::Vacant(slot) => {
                 slot.insert(second);
-                self.installed.push(TypeId::of::<T>());
+                true
             }
         }
     }
@@ -667,14 +781,14 @@ impl ContainerBuilder {
     /// What the close step reads off the registrations so far: the order each
     /// type was installed in, and the types the app handed in rather than a
     /// module opening them — what it seeded before any root was entered, and
-    /// what a test's override replaced.
+    /// what a test overrode.
     pub(crate) fn install_record(&self) -> InstallRecord {
         let handed_in = self
             .origins
             .iter()
             .filter(|(_, (origin, _))| matches!(origin, Origin::Seed))
             .map(|(id, _)| *id)
-            .chain(self.replaced.iter().copied())
+            .chain(self.overrides.iter().map(|o| o.key))
             .collect();
         InstallRecord::new(&self.installed, handed_in)
     }
@@ -707,14 +821,9 @@ impl ContainerBuilder {
     /// one with [`AppBuilder::override_dyn`](crate::AppBuilder::override_dyn).
     pub fn provide_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.record::<Arc<T>>(ProviderScope::Singleton);
-        self.providers
-            .insert(ProviderKey::of(TypeId::of::<Arc<T>>()), Arc::new(value));
-        self
-    }
-
-    /// Replace a trait-object provider without the duplicate check.
-    pub(crate) fn replace_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
-        self.replaced.insert(TypeId::of::<Arc<T>>());
+        if self.claim(TypeId::of::<Arc<T>>()).is_some() {
+            return self;
+        }
         self.providers
             .insert(ProviderKey::of(TypeId::of::<Arc<T>>()), Arc::new(value));
         self
@@ -1203,6 +1312,9 @@ impl ContainerBuilder {
         F: Fn(&RequestScope) -> T + Send + Sync + 'static,
     {
         self.record::<T>(ProviderScope::Request);
+        if self.claim(TypeId::of::<T>()).is_some() {
+            return self;
+        }
         self.scoped.insert(
             TypeId::of::<T>(),
             Arc::new(move |scope| Arc::new(factory(scope)) as AnyArc),
@@ -1220,6 +1332,9 @@ impl ContainerBuilder {
         F: Fn(&RequestScope) -> T + Send + Sync + 'static,
     {
         self.record::<T>(ProviderScope::Transient);
+        if self.claim(TypeId::of::<T>()).is_some() {
+            return self;
+        }
         self.transient.insert(
             TypeId::of::<T>(),
             Arc::new(move |scope| Arc::new(factory(scope)) as AnyArc),
@@ -1301,10 +1416,18 @@ impl ContainerBuilder {
     /// Every unkeyed `TypeId` registered as a **request-scoped or transient**
     /// factory, which a singleton may not inject.
     pub(crate) fn scoped_or_transient_ids(&self) -> HashSet<TypeId> {
+        // A double stands in as a singleton; its consumers keep the
+        // production scope check.
+        let overridden = self
+            .overridden_providers
+            .iter()
+            .filter(|o| o.scope != ProviderScope::Singleton)
+            .map(|o| o.provider.0);
         self.scoped
             .keys()
             .copied()
             .chain(self.transient.keys().copied())
+            .chain(overridden)
             .collect()
     }
 
@@ -1466,6 +1589,70 @@ pub(crate) mod __private {
     /// Leave the import [`enter_import`] entered last.
     pub fn leave_import(builder: ContainerBuilder) -> ContainerBuilder {
         builder.leave_import()
+    }
+
+    /// Whether a test overrode any of `keys` — the keys one provider
+    /// registers. `#[module]` emits it before building a provider, which it
+    /// then never builds.
+    pub fn overrides_any(builder: &ContainerBuilder, keys: &[TypeId]) -> bool {
+        keys.iter().any(|key| builder.overrides(*key))
+    }
+
+    /// Stand a test's override in for the provider `provider`, named `name`
+    /// and built under `scope`, which registers `keys`, each with its type's
+    /// name: each overridden key is claimed, the others are left absent, and
+    /// the provider is never built. Every key still counts as registered by
+    /// it, so a second registration is the duplicate it is without the
+    /// override. `#[module]` and the decorators that build a provider emit it.
+    pub fn claim_override(
+        mut builder: ContainerBuilder,
+        provider: TypeId,
+        name: &'static str,
+        scope: crate::ProviderScope,
+        keys: &[(TypeId, &'static str)],
+    ) -> ContainerBuilder {
+        let mut through = None;
+        let mut absent = Vec::new();
+        for (key, type_name) in keys {
+            builder.note(*key, type_name, scope);
+            match builder.claim(*key) {
+                Some(name) => through = through.or(Some(name)),
+                None => absent.push(*key),
+            }
+        }
+        if let Some(through) = through {
+            builder
+                .overridden_providers
+                .push(super::OverriddenProvider {
+                    provider: (provider, name),
+                    scope,
+                    through,
+                    absent,
+                });
+        }
+        builder
+    }
+
+    /// [`claim_override`] for a provider that registers its own type alone,
+    /// as `#[injectable]` emits it.
+    pub fn claim_own_override<P: 'static>(
+        builder: ContainerBuilder,
+        scope: crate::ProviderScope,
+    ) -> ContainerBuilder {
+        let (own, name) = (TypeId::of::<P>(), std::any::type_name::<P>());
+        claim_override(builder, own, name, scope, &[(own, name)])
+    }
+
+    /// Hold every seed of the factory output `id` to `check` before anything
+    /// reads it: the factory drain runs it where the seed makes the factory
+    /// skip. `ConfigModule` declares it for each config it queues.
+    pub fn check_seed(
+        mut builder: ContainerBuilder,
+        id: TypeId,
+        check: super::SeedCheck,
+    ) -> ContainerBuilder {
+        builder.seed_checks.insert(id, check);
+        builder
     }
 
     /// A provider `#[module]`'s register step left unbuilt once nothing more
@@ -2090,6 +2277,96 @@ mod tests {
         let duplicate = first_duplicate(&builder);
         assert_eq!(duplicate.type_name, std::any::type_name::<Counter>());
         assert_eq!(duplicate.scopes, None, "one scope twice names none");
+    }
+
+    fn overriding<T: Any + Send + Sync>(value: T) -> ContainerBuilder {
+        Container::builder().install_override::<T>(Arc::new(value))
+    }
+
+    fn holds_the_double_alone(builder: ContainerBuilder) {
+        assert!(builder.duplicate_providers().is_empty());
+        assert_eq!(
+            builder.unclaimed_override(),
+            None,
+            "the override is claimed"
+        );
+        let container = builder.build();
+        assert!(!container.has_dynamic_scopes(), "no factory registered");
+        assert_eq!(container.get::<Counter>().map(|c| c.0), Some(0));
+    }
+
+    #[test]
+    fn each_singleton_registration_of_an_overridden_type_claims_it_instead() {
+        holds_the_double_alone(overriding(Counter(0)).provide(Counter(1)));
+        holds_the_double_alone(overriding(Counter(0)).provide_arc(Arc::new(Counter(1))));
+    }
+
+    #[test]
+    fn a_request_scoped_or_transient_registration_of_an_overridden_type_claims_it_instead() {
+        holds_the_double_alone(overriding(Counter(0)).provide_scoped(|_| Counter(1)));
+        holds_the_double_alone(overriding(Counter(0)).provide_transient(|_| Counter(1)));
+    }
+
+    #[test]
+    fn a_trait_object_binding_of_an_overridden_trait_object_claims_it_instead() {
+        let builder = Container::builder()
+            .install_override::<Arc<dyn Hello>>(Arc::new(Arc::new(Curt) as Arc<dyn Hello>))
+            .provide_dyn::<dyn Hello>(Arc::new(Polite));
+        assert!(builder.duplicate_providers().is_empty());
+        assert_eq!(builder.unclaimed_override(), None);
+        let hello = builder.build().get_dyn::<dyn Hello>().expect("bound");
+        assert_eq!(hello.say(), "hi");
+    }
+
+    #[test]
+    fn a_second_registration_of_an_overridden_type_is_the_duplicate_it_is_without_it() {
+        let twice = [
+            overriding(Counter(0))
+                .provide(Counter(1))
+                .provide(Counter(2)),
+            overriding(Counter(0))
+                .provide_scoped(|_| Counter(1))
+                .provide_transient(|_| Counter(2)),
+        ];
+        for builder in &twice {
+            assert_eq!(
+                first_duplicate(builder).type_name,
+                std::any::type_name::<Counter>()
+            );
+        }
+        let bound_twice = Container::builder()
+            .install_override::<Arc<dyn Hello>>(Arc::new(Arc::new(Curt) as Arc<dyn Hello>))
+            .provide_dyn::<dyn Hello>(Arc::new(Polite))
+            .provide_dyn::<dyn Hello>(Arc::new(Polite));
+        assert_eq!(
+            first_duplicate(&bound_twice).type_name,
+            std::any::type_name::<Arc<dyn Hello>>()
+        );
+    }
+
+    #[test]
+    fn a_stand_down_takes_the_overrides_place_so_a_later_registration_is_a_duplicate() {
+        let builder = overriding(Counter(0))
+            .stand_down(TypeId::of::<Counter>())
+            .stand_down(TypeId::of::<Counter>());
+        assert!(builder.duplicate_providers().is_empty());
+        assert_eq!(builder.unclaimed_override(), None);
+        let then_registered = overriding(Counter(0))
+            .stand_down(TypeId::of::<Counter>())
+            .provide(Counter(1));
+        assert_eq!(
+            first_duplicate(&then_registered).type_name,
+            std::any::type_name::<Counter>()
+        );
+    }
+
+    #[test]
+    fn an_override_nothing_registers_stays_unclaimed() {
+        let builder = overriding(Counter(0)).provide(Greeter("hi"));
+        assert_eq!(
+            builder.unclaimed_override(),
+            Some(std::any::type_name::<Counter>())
+        );
     }
 
     #[test]

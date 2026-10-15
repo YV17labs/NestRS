@@ -93,6 +93,17 @@ pub trait Discoverable {
     /// Install this provider's construction into the builder — the register
     /// phase's per-provider step, emitted by the decorator.
     fn register(builder: ContainerBuilder) -> ContainerBuilder;
+
+    /// The register phase's step in place of [`register`](Discoverable::register)
+    /// when a test overrides this provider's type: the override is claimed,
+    /// nothing is built, and only what needs no instance is attached. Emitted
+    /// by the decorators that hold a provider under its own type; the default
+    /// claims nothing, so the boot refuses the override as one no provider
+    /// reads. Not API: may change in any release.
+    #[doc(hidden)]
+    fn __nestrs_register_overridden(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+    }
 }
 
 /// What the container holds under a provider's **own type**, stated by whatever
@@ -162,6 +173,7 @@ pub const INERT_HOST_HINT: &str = concat!(
 /// package's, the workspace's library — is said at `debug`; the app's own is
 /// said at `warn`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum InertHost {
     /// A dependency's host this app neither imports the module of nor
     /// registers — a capability it does not use, another binary's, or
@@ -184,6 +196,11 @@ pub enum InertHost {
     /// Held under its own type by this app's container, and listed by no module
     /// it imports: registered by hand or through a `for_root`.
     RegisteredOutsideModules,
+    /// Listed by a module this app imports, and overridden by a test through
+    /// another of its keys (`override_dyn` of its trait object): no host of
+    /// its own type exists for the methods to run on. Said at `debug`, since
+    /// the test asked for it.
+    Overridden,
     /// Listed by a module this app imports — bare or `as dyn Trait`, which
     /// holds it under its own type too — and absent all the same, or the
     /// container carries no composition to read, so the cause is not known.
@@ -194,7 +211,7 @@ impl InertHost {
     /// Whether the developer of this app can act on it — said at `warn` when
     /// so, at `debug` otherwise.
     pub fn is_the_apps(self) -> bool {
-        !matches!(self, Self::Dependency { .. })
+        !matches!(self, Self::Dependency { .. } | Self::Overridden)
     }
 
     /// A low-cardinality name for the cause, the `cause` field of the line.
@@ -204,6 +221,7 @@ impl InertHost {
             Self::ModuleNotImported { .. } => "module_not_imported",
             Self::NotListed => "not_listed",
             Self::RegisteredOutsideModules => "registered_outside_modules",
+            Self::Overridden => "overridden",
             Self::Unknown => "unknown",
         }
     }
@@ -233,6 +251,10 @@ impl InertHost {
                 "this app registers it by hand or through a `for_root`, and discovery reads only \
                  the `providers` of the `#[module]`s it imports: list it in one of those instead \
                  of registering it by hand",
+            ),
+            Self::Overridden => Cow::Borrowed(
+                "a test overrides it through another of its keys, so no host of its own type \
+                 exists: override its own type to run its methods on the double",
             ),
             Self::Unknown => Cow::Borrowed(INERT_HOST_HINT),
         }
@@ -268,6 +290,10 @@ fn classify(
     host: TypeId,
     held: bool,
 ) -> InertHost {
+    // Read before a listing in a reached module answers `Unknown`.
+    if composition.overrides(host) {
+        return InertHost::Overridden;
+    }
     let mut unreached = None;
     for module in descriptors {
         if module.providers.iter().any(|p| (p.provider)() == host) {
@@ -464,6 +490,7 @@ mod tests {
             let composition = Composition::from_descriptors(
                 &refs,
                 &[(TypeId::of::<AppModule>(), "api::module::ApiModule")],
+                Default::default(),
             );
             (modules, composition)
         }

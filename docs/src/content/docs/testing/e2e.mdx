@@ -203,9 +203,10 @@ assert!(paths.get_opt("/users").is_some());
 
 ## Provider overrides
 
-Three builders swap a provider after the four-phase build. The override
-applies before any consumer resolves the type, so controllers, resolvers,
-and guards pick it up.
+Three builders swap a provider for a double. The override is in place
+before anything is built, so every consumer injects the double — a
+singleton service built at boot as much as a controller, a resolver or a
+guard.
 
 | Builder | Takes | Use when |
 |---------|-------|----------|
@@ -236,18 +237,18 @@ let app = TestApp::builder()
     .await?;
 ```
 
-`override_arc` is the right shape when the test needs to observe what
-the fake recorded — wrap it in `Arc` once, hand the same handle to the
-container *and* the test, then assert against the shared state after the
-request:
+When the test needs to observe what the double recorded, keep a handle
+to it: build it in an `Arc` once, hand a clone to the container, and
+assert against the shared state after the request. The app binds
+`SmtpMailer as dyn Mailer`, so the double replaces `dyn Mailer` — the key
+`UsersService` injects — and the `Arc<RecordingMailer>` coerces on the way
+in:
 
 ```rust title="apps/api/tests/e2e/users.rs"
 use std::sync::Arc;
 
-use nest_rs::core::injectable;
 use parking_lot::Mutex;
 
-#[injectable]
 #[derive(Default)]
 struct RecordingMailer {
     sent: Mutex<Vec<String>>,
@@ -269,7 +270,7 @@ async fn signup_emails_the_new_user() {
     let mailer = Arc::new(RecordingMailer::default());
     let app = TestApp::builder()
         .module::<UsersModule>()
-        .override_arc::<RecordingMailer>(Arc::clone(&mailer))
+        .override_dyn::<dyn Mailer>(mailer.clone())
         .build()
         .await
         .unwrap();
@@ -289,6 +290,48 @@ async fn signup_emails_the_new_user() {
 The difference is who keeps the handle: `override_value` consumes its
 argument (you can't read it back later), `override_arc` takes a
 pre-cloned `Arc` so the test and the container share the same instance.
+
+### What an override does to the provider it replaces
+
+The double stands in for the whole provider, as NestJS's
+`overrideProvider(X).useValue(v)` does:
+
+- **The real provider is never built.** Its constructor never runs and
+  its own dependencies need not exist, so a test of `UsersService` can
+  override its mailer without wiring what the mailer would have needed.
+  An overridden factory output — a connection, a config — skips its
+  factory: no connection opens, and the module's close never runs on the
+  double.
+- **The double keeps the provider's module.** The access graph holds every
+  consumer to the imports production holds it to: a consumer outside the
+  module's imports fails the boot in the test as it would in production.
+- **A provider bound `Foo as dyn Trait` is overridden whole**, through
+  either key. Overriding `dyn Trait` leaves no `Foo`, and overriding `Foo`
+  leaves no `dyn Trait`: a consumer injecting the key left out fails the
+  boot with `OverriddenDependencyError`, which tells you to override the
+  key that consumer injects.
+- **Its hooks follow the double.** A double of the provider's own type
+  runs the provider's `#[hooks]`, `#[scheduled]` and kin on itself; one
+  given through the trait object leaves no host for them, so they do not
+  run, and the boot says so at `debug`.
+- **A request-scoped or transient provider becomes one double** serving
+  every request and every resolution.
+- **A seed of the same type is replaced**, whichever call comes first.
+- **A duplicate stays a duplicate.** A type two modules register, or a
+  trait object two modules bind, fails the boot with
+  `DuplicateProviderError` whether a test overrides it or not.
+
+An override nothing in the app's graph provides fails the boot with
+`UnclaimedOverrideError`: no module lists the type, no factory or seed
+makes it, so the double would never be read. Overriding an edge host
+such as a `#[controller]`, which registers routes rather than a value, is
+refused the same way.
+
+A seeded config is held to the same ranges and validation as one read
+from the environment, before any factory reads it: a test that seeds
+`HttpConfig { shutdown_timeout: Duration::MAX, .. }` fails the boot
+naming `HttpConfig::shutdown_timeout` and its range. So is a config
+given through an override.
 
 External-IO services — HTTP clients to third-party APIs, queue producers
 reaching an outside system — are the right override target. **The

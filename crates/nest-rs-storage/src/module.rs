@@ -78,12 +78,22 @@ mod tests {
     )]
     struct GuardedStorageModule;
 
+    /// A seed is held to the checks a read passes, so it carries the pair the
+    /// struct default holds none of.
+    fn seeded() -> StorageConfig {
+        StorageConfig {
+            access_key: "AKIASEEDED".into(),
+            secret_key: "seeded-secret".into(),
+            ..StorageConfig::default()
+        }
+    }
+
     #[tokio::test]
     async fn an_operation_budget_at_the_net_of_a_guard_injecting_the_client_fails_the_boot() {
         let Err(refused) = App::builder()
             .provide(StorageConfig {
                 operation_timeout: AUTHENTICATE_TIMEOUT,
-                ..StorageConfig::default()
+                ..seeded()
             })
             .module::<GuardedStorageModule>()
             .build()
@@ -114,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn the_default_client_boots_beside_the_authentication_guard() {
         App::builder()
-            .provide(StorageConfig::default())
+            .provide(seeded())
             .module::<GuardedStorageModule>()
             .build()
             .await

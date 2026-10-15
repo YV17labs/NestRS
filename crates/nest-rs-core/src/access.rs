@@ -106,13 +106,17 @@ impl ReachableProviders {
 pub struct Composition {
     root_crates: Vec<&'static str>,
     modules: HashSet<TypeId>,
+    overridden: HashSet<TypeId>,
 }
 
 impl Composition {
-    /// The composition of an app built from `roots`, each with its type's name.
+    /// The composition of an app built from `roots`, each with its type's
+    /// name, in which a test's overrides stand in for the providers
+    /// `overridden`.
     pub(crate) fn from_descriptors(
         descriptors: &[&ModuleDescriptor],
         roots: &[(TypeId, &'static str)],
+        overridden: HashSet<TypeId>,
     ) -> Self {
         let by_id: HashMap<TypeId, &ModuleDescriptor> =
             descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -124,6 +128,7 @@ impl Composition {
         Self {
             root_crates,
             modules: reachable(&ids, &by_id),
+            overridden,
         }
     }
 
@@ -136,6 +141,12 @@ impl Composition {
     /// Whether the app reaches the module `module`.
     pub fn reaches(&self, module: TypeId) -> bool {
         self.modules.contains(&module)
+    }
+
+    /// Whether a test's override stands in for the provider `provider`, which
+    /// the app then never built.
+    pub(crate) fn overrides(&self, provider: TypeId) -> bool {
+        self.overridden.contains(&provider)
     }
 }
 
@@ -174,13 +185,15 @@ pub(crate) fn positions(order: impl IntoIterator<Item = TypeId>) -> HashMap<Type
 /// from its module's import closure or be global infrastructure.
 ///
 /// Pure over its inputs (no link-time registry access). `roots` without a
-/// descriptor terminate a branch, making a hand-written root a no-op.
+/// descriptor terminate a branch, making a hand-written root a no-op. A
+/// provider in `overridden` is never built, so what it injects is not checked.
 pub(crate) fn validate_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
     global: &HashSet<TypeId>,
     registered: &HashSet<TypeId>,
     scoped_or_transient: &HashSet<TypeId>,
+    overridden: &HashSet<TypeId>,
 ) -> Result<(), AccessError> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -208,7 +221,11 @@ pub(crate) fn validate_access_graph(
             }
         }
 
-        for p in desc.providers {
+        for p in desc
+            .providers
+            .iter()
+            .filter(|p| !overridden.contains(&(p.provider)()))
+        {
             let (injects, names) = ((p.injects)(), (p.inject_names)());
             let (optionals, optional_names) = ((p.injects_optional)(), (p.inject_optional_names)());
             let required = labelled(&injects, &names);
@@ -345,8 +362,11 @@ pub(crate) fn scoped_cycle(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
     scopes: &HashMap<TypeId, ProviderScope>,
+    overridden: &HashSet<TypeId>,
 ) -> Option<ProviderCycleError> {
-    let graph = ProviderGraph::new(descriptors, roots, |p| scopes.contains_key(&(p.provides)()));
+    let graph = ProviderGraph::new(descriptors, roots, overridden, |p| {
+        scopes.contains_key(&(p.provides)())
+    });
     let cycle = graph.first_cycle(0..graph.nodes.len())?;
     let scope = scopes[&(graph.nodes[cycle[0]].1.provides)()];
     Some(graph.cycle_error(&cycle, scope))
@@ -364,8 +384,9 @@ pub(crate) fn singleton_cycle(
     roots: &[TypeId],
     scopes: &HashMap<TypeId, ProviderScope>,
     waiting: &[TypeId],
+    overridden: &HashSet<TypeId>,
 ) -> Option<ProviderCycleError> {
-    let graph = ProviderGraph::new(descriptors, roots, |p| {
+    let graph = ProviderGraph::new(descriptors, roots, overridden, |p| {
         !scopes.contains_key(&(p.provides)())
     });
     let starts = waiting
@@ -377,7 +398,8 @@ pub(crate) fn singleton_cycle(
 
 /// The providers the roots reach that a filter keeps, one node per provider
 /// type with its module, in declaration order, and an edge from each to the
-/// node registering what it injects, optionally or not.
+/// node registering what it injects, optionally or not — none from a provider
+/// a test's override stands in for, which is never built.
 struct ProviderGraph<'a> {
     nodes: Vec<(&'a ModuleDescriptor, &'a ProviderDescriptor)>,
     node_of: HashMap<TypeId, usize>,
@@ -388,6 +410,7 @@ impl<'a> ProviderGraph<'a> {
     fn new(
         descriptors: &[&'a ModuleDescriptor],
         roots: &[TypeId],
+        overridden: &HashSet<TypeId>,
         keep: impl Fn(&ProviderDescriptor) -> bool,
     ) -> Self {
         let by_id: HashMap<TypeId, &ModuleDescriptor> =
@@ -411,6 +434,9 @@ impl<'a> ProviderGraph<'a> {
         let edges = nodes
             .iter()
             .map(|(_, p)| {
+                if overridden.contains(&(p.provider)()) {
+                    return Vec::new();
+                }
                 (p.injects)()
                     .into_iter()
                     .chain((p.injects_optional)())
@@ -639,9 +665,14 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
 /// after every provider it injects, optionally or not, at any depth. Providers
 /// the graph does not order follow the composition — imported modules before
 /// their importer, imports as declared, then each module's `providers = [...]`
-/// left to right — and the earliest of them always goes next.
-pub(crate) fn dependency_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
-    let graph = ProviderGraph::new(descriptors, roots, |_| true);
+/// left to right — and the earliest of them always goes next. A provider in
+/// `overridden` is a test's double, which injects nothing.
+pub(crate) fn dependency_order(
+    descriptors: &[&ModuleDescriptor],
+    roots: &[TypeId],
+    overridden: &HashSet<TypeId>,
+) -> Vec<TypeId> {
+    let graph = ProviderGraph::new(descriptors, roots, overridden, |_| true);
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
     let module_rank = positions(modules_imports_first(roots, &by_id));
@@ -856,6 +887,7 @@ mod tests {
             &global(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("a dependency on global infrastructure is always reachable");
     }
@@ -899,6 +931,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("a provider may depend on another provider of the same module");
     }
@@ -935,6 +968,7 @@ mod tests {
             &global(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("an imported module's provider is reachable");
     }
@@ -969,6 +1003,7 @@ mod tests {
             &[&app, &billing, &users],
             &[TypeId::of::<AppMod>()],
             &global(),
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
         )
@@ -1008,6 +1043,7 @@ mod tests {
         let err = validate_access_graph(
             &[&billing],
             &[TypeId::of::<BillingMod>()],
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -1057,6 +1093,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("a module outside the root's import tree is not validated");
     }
@@ -1066,6 +1103,7 @@ mod tests {
         validate_access_graph(
             &[],
             &[TypeId::of::<AppMod>()],
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -1333,7 +1371,7 @@ mod tests {
             ],
         };
         assert_eq!(
-            dependency_order(&[&app], &[TypeId::of::<AppMod>()]),
+            dependency_order(&[&app], &[TypeId::of::<AppMod>()], &HashSet::new()),
             [
                 TypeId::of::<Zdb>(),
                 TypeId::of::<Mrepo>(),
@@ -1386,7 +1424,7 @@ mod tests {
             ],
         };
         assert_eq!(
-            dependency_order(&[&app], &[TypeId::of::<AppMod>()]),
+            dependency_order(&[&app], &[TypeId::of::<AppMod>()], &HashSet::new()),
             [TypeId::of::<Zdb>(), TypeId::of::<Aservice>()],
         );
     }
@@ -1447,7 +1485,7 @@ mod tests {
             }],
         };
         assert_eq!(
-            dependency_order(&[&a, &c, &b], &[TypeId::of::<AppMod>()]),
+            dependency_order(&[&a, &c, &b], &[TypeId::of::<AppMod>()], &HashSet::new()),
             [
                 TypeId::of::<Mrepo>(),
                 TypeId::of::<Zdb>(),

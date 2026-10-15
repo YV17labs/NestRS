@@ -290,8 +290,9 @@ gets `internal error` instead of waiting out its own timeout, the
 ## Trait-based DI
 
 Injecting `Arc<dyn WeatherService>` keeps the concrete provider
-module-private — a test app can swap in a stub by overriding the provider via
-`AppBuilder::override_dyn`. Same hexagonal pattern as the rest of the
+module-private — a test app swaps in a stub with
+`override_dyn::<dyn WeatherService>(…)`, which every consumer then injects,
+the tool host and any service built at boot alike. Same hexagonal pattern as the rest of the
 framework: the tool depends on the trait, the impl lives behind the module,
 the access graph rejects accidental coupling at boot.
 

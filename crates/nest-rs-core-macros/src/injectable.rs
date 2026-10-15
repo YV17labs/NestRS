@@ -58,6 +58,25 @@ pub(crate) fn provider(
         matches!(scope, InjectableScope::Singleton),
     );
 
+    let (scope_variant, then_overridden) = match scope {
+        InjectableScope::Singleton => (quote!(Singleton), then.clone()),
+        InjectableScope::Request => (quote!(Request), quote!(builder)),
+        InjectableScope::Transient => (quote!(Transient), quote!(builder)),
+    };
+    // A test's override stands in: claimed, nothing built, and what `then`
+    // attaches by type alone still attached.
+    let register_overridden = quote! {
+        fn __nestrs_register_overridden(
+            builder: ::nest_rs_core::ContainerBuilder,
+        ) -> ::nest_rs_core::ContainerBuilder {
+            let builder = ::nest_rs_core::__private::claim_own_override::<Self>(
+                builder,
+                ::nest_rs_core::ProviderScope::#scope_variant,
+            );
+            #then_overridden
+        }
+    };
+
     let (
         dependencies,
         dependency_names,
@@ -133,6 +152,8 @@ pub(crate) fn provider(
             #injected_optional_names
 
             #register_fn
+
+            #register_overridden
         }
 
         #singleton_marker

@@ -140,22 +140,25 @@ impl TestAppBuilder {
         self
     }
 
-    /// Replace a concrete provider with a test double by value; never the
-    /// database.
+    /// Replace the provider of `T` with a test double before anything is
+    /// built from it, exactly as [`AppBuilder::override_value`]: every
+    /// consumer injects the double, the provider is never built, and a type
+    /// nothing in the app provides fails the boot. Never the database.
     pub fn override_value<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.inner = self.inner.override_value(value);
         self
     }
 
-    /// Replace a `dyn Trait` provider with a test double behind an `Arc`, for
-    /// impls consumers inject as `Arc<dyn Trait>`.
+    /// Replace the trait object `Arc<dyn Trait>` with a test double, exactly
+    /// as [`AppBuilder::override_dyn`] — the double of a `Foo as dyn Trait`
+    /// binding, which it replaces whole.
     pub fn override_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.inner = self.inner.override_dyn(value);
         self
     }
 
-    /// Replace a concrete provider with a pre-shared `Arc<T>`, so the test can
-    /// keep inspecting the fake.
+    /// [`override_value`](Self::override_value) for a double the test
+    /// already holds in an `Arc`, so it can keep inspecting it.
     pub fn override_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
         self.inner = self.inner.override_arc(value);
         self

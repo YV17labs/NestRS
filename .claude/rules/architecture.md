@@ -135,7 +135,8 @@ role folders and a product's container: `redis/src/queue/config.rs` →
 `<PREFIX>_OAUTH__*`; `<PREFIX>_DATABASE__URL` names neither crate nor type. One
 namespace, one type; `Config` names a `#[config]` only (a nested struct is
 vocabulary, `HttpTls`); seeding (`App::builder().provide`) is for hermetic
-tests. A pinned base supersedes a bare import; two fail the boot
+tests, and pins the value, never the checks a read one passes. A pinned base
+supersedes a bare import; two fail the boot
 (`ContestedDeclarationError`), as does a config `App::new` cannot resolve.
 
 **A named instance inserts its name after the vendor** —

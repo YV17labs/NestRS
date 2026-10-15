@@ -58,8 +58,10 @@ nextest prints each test's time: compare before and after.
   strategy, a body cap or a timeout, or seed the whole config (`provide`) for
   a value the module does not pin — the transport has no builder.
 - **`provide` / `provide_arc`** seed a value, which short-circuits its
-  resolving factory; **`override_dyn` / `override_value`** swap a provider for
-  a double. Never the database (`CLAUDE.md`, hard "no").
+  resolving factory and still passes its config's checks;
+  **`override_dyn` / `override_value` / `override_arc`** replace a provider
+  before anything is built from it, so every consumer injects the double.
+  Never the database (`CLAUDE.md`, hard "no").
 - **`HeadlessApp` / `TransportHandle`** — boot with no transport, for
   lifecycle, DI and discovery assertions.
 - **`WsApp` / `WsSocket`, `GraphqlSocket`** — a real upgrade, for the edges

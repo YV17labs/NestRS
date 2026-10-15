@@ -59,3 +59,21 @@ provider is the larger hole, and both carry the same causes.
 it. Its cause — an import cycle, or a registration made later in the boot — is
 known only once every module has registered, and the access graph would then
 never be read first.
+
+## 2026-10-15 — an override nothing claims, after the register phase's refusals
+
+A test override is installed before any module collects, and whatever would
+register its type claims it. One nothing claimed (`UnclaimedOverrideError`)
+is read once the register phase's own refusals are: a module's refusal, a
+late factory or a duplicate can leave the provider that would have claimed it
+unregistered, and their remedies then claim it. A consumer of a key an
+override left absent — the other key of a `Foo as dyn Trait` binding
+overridden through one — is refused at the seal after the access graph and
+the cycles, before a provider never built (`OverriddenDependencyError`): that
+consumer, a singleton, would otherwise also stall, and the stall's causes,
+an import cycle or a later registration, would send the developer after a
+module that is fine.
+
+**Refused:** reading the unclaimed override before the register phase runs.
+Only the register phase shows which module providers claim, so the refusal
+would fire on every override of a module's provider.

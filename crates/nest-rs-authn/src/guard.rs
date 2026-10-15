@@ -62,6 +62,14 @@ impl<S: Strategy> Discoverable for AuthnGuard<S> {
             AUTHENTICATE_TIMEOUT,
         ))
     }
+
+    // A double arms no net: the strategy runs under none.
+    fn __nestrs_register_overridden(builder: ContainerBuilder) -> ContainerBuilder {
+        nest_rs_core::__private::claim_own_override::<Self>(
+            builder,
+            nest_rs_core::ProviderScope::Singleton,
+        )
+    }
 }
 
 impl<S: Strategy> ProviderResidency for AuthnGuard<S> {

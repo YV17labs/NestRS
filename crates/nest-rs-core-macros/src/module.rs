@@ -161,24 +161,33 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             .enumerate()
             .map(|(i, group)| {
                 let idx = proc_macro2::Literal::usize_unsuffixed(i);
-                let (provider, provided_keys, register_action) = match group {
+                let name_lit = path_label(match group {
+                    ProviderGroup::Concrete(p) => p,
+                    ProviderGroup::Dyn { provider, .. } => provider,
+                });
+                let (provider, provided_keys, register_action, overridden_action) = match group {
                     ProviderGroup::Concrete(p) => (
                         *p,
                         vec![quote! { ::std::any::TypeId::of::<#p>() }],
                         quote! {
                             builder = <#p as ::nest_rs_core::Discoverable>::register(builder);
                         },
-                    ),
-                    ProviderGroup::Dyn { provider, traits } => (
-                        *provider,
-                        std::iter::once(quote! { ::std::any::TypeId::of::<#provider>() })
-                            .chain(traits.iter().map(|trait_ty| {
-                                quote! {
-                                    ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>()
-                                }
-                            }))
-                            .collect(),
                         quote! {
+                            builder = <#p as ::nest_rs_core::Discoverable>::__nestrs_register_overridden(
+                                builder,
+                            );
+                        },
+                    ),
+                    ProviderGroup::Dyn { provider, traits } => {
+                        let keys: Vec<proc_macro2::TokenStream> =
+                            std::iter::once(quote! { ::std::any::TypeId::of::<#provider>() })
+                                .chain(traits.iter().map(|trait_ty| {
+                                    quote! {
+                                        ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>()
+                                    }
+                                }))
+                                .collect();
+                        let register = quote! {
                             let __provider: ::std::sync::Arc<#provider> = ::std::sync::Arc::new(
                                 <#provider>::__nestrs_from_container(&builder.snapshot()),
                             );
@@ -190,11 +199,41 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                                         as ::std::sync::Arc<#traits>,
                                 );
                             )*
-                        },
-                    ),
+                        };
+                        let named_keys = std::iter::once(quote! { #provider })
+                            .chain(traits.iter().map(|trait_ty| {
+                                quote! { ::std::sync::Arc<#trait_ty> }
+                            }))
+                            .map(|key| {
+                                quote! {
+                                    (
+                                        ::std::any::TypeId::of::<#key>(),
+                                        ::std::any::type_name::<#key>(),
+                                    )
+                                }
+                            });
+                        // One key overridden stands in for the whole binding.
+                        let overridden = quote! {
+                            builder = ::nest_rs_core::__private::claim_override(
+                                builder,
+                                ::std::any::TypeId::of::<#provider>(),
+                                #name_lit,
+                                ::nest_rs_core::ProviderScope::Singleton,
+                                &[ #(#named_keys),* ],
+                            );
+                        };
+                        (*provider, keys, register, overridden)
+                    }
                 };
-                let name_lit = path_label(provider);
                 let step = quote! {
+                    if !__done[#idx]
+                        && ::nest_rs_core::__private::overrides_any(&builder, &[ #(#provided_keys),* ])
+                    {
+                        // Never built: its dependencies need not exist.
+                        #overridden_action
+                        __done[#idx] = true;
+                        __progressed = true;
+                    }
                     if !__done[#idx] {
                         // An optional dep waits only while a pending provider supplies it.
                         let __required_ready =

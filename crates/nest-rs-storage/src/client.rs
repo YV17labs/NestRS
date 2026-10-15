@@ -86,6 +86,13 @@ impl Discoverable for Storage {
             |storage| Some(storage.config.operation_timeout),
         ))
     }
+
+    fn __nestrs_register_overridden(builder: ContainerBuilder) -> ContainerBuilder {
+        nest_rs_core::__private::claim_own_override::<Self>(
+            builder,
+            nest_rs_core::ProviderScope::Singleton,
+        )
+    }
 }
 
 impl ProviderResidency for Storage {

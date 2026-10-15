@@ -84,3 +84,23 @@ async fn container_exposes_the_overridden_binding() {
         .expect("dyn Greeter is registered");
     assert_eq!(greeter.greet(), "Mocked");
 }
+
+#[tokio::test]
+async fn an_override_of_a_controller_is_refused_since_nothing_reads_it() {
+    let Err(refused) = TestApp::builder()
+        .module::<GreeterModule>()
+        .override_value(GreeterController {
+            greeter: Arc::new(MockGreeter),
+        })
+        .build()
+        .await
+    else {
+        panic!("an override of an edge host boots");
+    };
+    assert!(
+        refused
+            .downcast_ref::<nest_rs_core::UnclaimedOverrideError>()
+            .is_some(),
+        "{refused:#}"
+    );
+}

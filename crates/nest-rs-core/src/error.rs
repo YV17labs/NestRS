@@ -105,8 +105,9 @@ impl AccessError {
 }
 
 /// A type registered twice — a concrete type or a trait object, under any two
-/// scopes; names both registrations and, when they differ, their scopes. The
-/// test override path is exempt.
+/// scopes; names both registrations and, when they differ, their scopes. A
+/// test override is never one of the two: what would register its type stands
+/// down for it.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
@@ -385,6 +386,45 @@ fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
             if count == 1 { "it" } else { "them" }
         ),
     }
+}
+
+/// A test override nothing in the app's graph would register: no module lists
+/// a provider the container holds under that type, and no factory or seed
+/// makes it, so the double would never be read. Raised once the register phase
+/// ends.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "the test overrides `{type_name}`, which nothing in this app's graph provides — no module \
+     lists it, and no factory or seed makes it — so the double would never be read: override \
+     the type the app registers (for a `Foo as dyn Trait` binding, `override_dyn::<dyn Trait>`)"
+)]
+pub struct UnclaimedOverrideError {
+    /// The overridden type.
+    pub type_name: &'static str,
+}
+
+/// A provider injects a key a test override removed: the override stands in
+/// for a whole provider through one of its keys, so the provider is never
+/// built and its other keys are absent. Raised once the access graph passes.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "unmet dependency: `{consumer}` (in module `{module}`) injects `{dependency}`, which the \
+     test removed with its provider — `{provider}` is overridden through `{through}`: override \
+     the key this consumer injects"
+)]
+pub struct OverriddenDependencyError {
+    /// The module listing the consumer.
+    pub module: &'static str,
+    /// The provider injecting the removed key.
+    pub consumer: &'static str,
+    /// The removed key, as the consumer labels it.
+    pub dependency: &'static str,
+    /// The overridden provider, by its own type.
+    pub provider: &'static str,
+    /// The key the test overrode it through.
+    pub through: &'static str,
 }
 
 /// `` `A` ``, `` `A` and `B` ``, `` `A`, `B` and `C` ``.

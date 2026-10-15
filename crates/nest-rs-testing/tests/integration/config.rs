@@ -1,12 +1,16 @@
 //! Namespaced config end-to-end: `ConfigModule::for_feature`, a seed winning
-//! over the factory, and a config pinned in code overridden per field.
+//! over the factory and held to the checks a read passes, and a config pinned
+//! in code overridden per field.
 
 use nest_rs_config::var_name;
 use std::any::TypeId;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigModule, ConfigService, MapSource, config};
+use nest_rs_config::{Config, ConfigError, ConfigModule, ConfigService, MapSource, config};
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, injectable, module};
+use nest_rs_http::HttpConfig;
 use nest_rs_testing::TestApp;
 
 #[config(namespace = "demoapp")]
@@ -182,4 +186,113 @@ async fn a_pinned_field_survives_an_environment_that_says_nothing() {
     let svc = app.container().get::<DemoService>().unwrap();
     assert_eq!(svc.max_connections(), 42, "the pin is the base");
     assert_eq!(svc.url(), "", "and an unpinned field keeps its own default");
+}
+
+#[tokio::test]
+async fn a_seed_outside_the_validation_its_read_passes_fails_the_boot_naming_the_namespace() {
+    let Err(refused) = TestApp::builder()
+        .module::<DemoModule>()
+        .provide(DemoConfig {
+            url: String::new(),
+            max_connections: 0,
+        })
+        .build_headless()
+        .await
+    else {
+        panic!("a seed no read would accept boots");
+    };
+    let config = refused
+        .downcast_ref::<ConfigError>()
+        .unwrap_or_else(|| panic!("not the config's refusal: {refused:#}"));
+    assert!(
+        matches!(config, ConfigError::Validation { namespace, .. } if namespace == "demoapp"),
+        "{refused:#}"
+    );
+}
+
+static PROBE_BUILT: AtomicBool = AtomicBool::new(false);
+
+struct Probe;
+
+/// A factory reading the seeded `HttpConfig`, as a pool reads its own.
+struct ProbeSetup;
+
+impl DynamicModule for ProbeSetup {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature(None::<HttpConfig>, builder)
+            .provide_factory_after::<Probe, (HttpConfig,), _, _>(|_| async {
+                PROBE_BUILT.store(true, Ordering::SeqCst);
+                Ok(Probe)
+            })
+    }
+}
+
+fn probe() -> ProbeSetup {
+    ProbeSetup
+}
+
+#[module(imports = [probe()])]
+struct ProbeModule;
+
+#[tokio::test]
+async fn a_seed_past_a_bound_fails_the_boot_before_any_factory_reads_it() {
+    let Err(refused) = TestApp::builder()
+        .module::<ProbeModule>()
+        .provide(HttpConfig {
+            shutdown_timeout: Duration::MAX,
+            ..HttpConfig::default()
+        })
+        .build_headless()
+        .await
+    else {
+        panic!("a seed past its bound boots");
+    };
+    assert!(
+        refused.to_string().contains("HttpConfig::shutdown_timeout"),
+        "{refused:#}"
+    );
+    assert!(
+        !PROBE_BUILT.load(Ordering::SeqCst),
+        "the factory reading the seed never ran"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_valid_seed_is_kept_as_seeded_whatever_the_environment_says() {
+    let mut seen: Option<String> = None;
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(var_name("demoapp", "URL"), "postgres://from-deployment/app");
+        seen = Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(async {
+                    let app = TestApp::builder()
+                        .module::<DemoModule>()
+                        .provide(DemoConfig {
+                            url: "postgres://seeded/app".into(),
+                            max_connections: 3,
+                        })
+                        .build_headless()
+                        .await
+                        .expect("a valid seed boots");
+                    app.container()
+                        .get::<DemoService>()
+                        .unwrap()
+                        .url()
+                        .to_owned()
+                }),
+        );
+        Ok(())
+    });
+    assert_eq!(seen.as_deref(), Some("postgres://seeded/app"));
 }

@@ -8,7 +8,7 @@ use nest_rs_core::{
     Collecting, Container, ContainerBuilder, DynamicModule, Instance, Module, Registering, Unnamed,
 };
 
-use crate::config::{Config, resolve_instance};
+use crate::config::{Config, check_seed, resolve_instance};
 use crate::environment::Environment;
 use crate::error::ConfigNotResolvedError;
 use crate::for_instance::ForInstance;
@@ -62,6 +62,12 @@ impl ConfigModule {
         config: impl Into<ForInstance<I, C>>,
         builder: ContainerBuilder,
     ) -> ContainerBuilder {
+        // A seed skips the factory below, never the checks its read runs.
+        let builder = nest_rs_core::__private::check_seed(
+            builder,
+            TypeId::of::<I::Of<C>>(),
+            check_seed::<C, I>,
+        );
         match config.into().into_pinned() {
             Some(base) => builder.provide_declared_factory::<I::Of<C>, _, _>(
                 "A config has one seam — pin it once, on the `for_root` of the module that owns \

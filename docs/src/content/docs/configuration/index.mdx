@@ -133,7 +133,9 @@ The full precedence chain, highest first:
 Need a value nothing can override — a test that must not read the ambient
 environment? Seed it on the builder: `App::builder().provide(cfg)`. A seed
 short-circuits the factory that resolves the config, so it is the one hard
-pin. See [Overriding in tests](/configuration/testing/).
+pin — of the value, never of the checks: it is held to the same ranges and
+validation as a read value before anything reads it. See [Overriding in
+tests](/configuration/testing/).
 </Aside>
 
 ## One seam per module

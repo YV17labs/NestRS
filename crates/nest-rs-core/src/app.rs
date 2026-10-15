@@ -23,8 +23,8 @@ use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    LateFactoryError, LateOptionalDependencyError, UnbuiltProviderError, UnregisteredModuleError,
-    UnresolvedFactoryError,
+    LateFactoryError, LateOptionalDependencyError, OverriddenDependencyError, UnbuiltProviderError,
+    UnclaimedOverrideError, UnregisteredModuleError, UnresolvedFactoryError,
 };
 use crate::lifecycle::{HookFailure, HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
 use crate::millis::millis;
@@ -159,8 +159,7 @@ fn check_register_phase(builder: &mut ContainerBuilder) -> Result<()> {
 }
 
 /// The providers `#[module]`s list that the register phase never built, in
-/// the order recorded. One whose keys are present by now — a test override
-/// replaced it — is no longer missing.
+/// the order recorded. One whose keys are present by now is no longer missing.
 fn unbuilt(builder: &ContainerBuilder) -> impl Iterator<Item = &Stall> {
     builder
         .stalls()
@@ -189,15 +188,65 @@ fn check_singleton_cycles(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
     scopes: &HashMap<TypeId, ProviderScope>,
+    overridden: &HashSet<TypeId>,
 ) -> Result<()> {
     let waiting: Vec<TypeId> = unbuilt(builder)
         .filter_map(|stall| stall.provides.first().copied())
         .chain(late_optionals(builder).map(|(built, _)| built.provider.0))
         .collect();
-    match singleton_cycle(descriptors, roots, scopes, &waiting) {
+    match singleton_cycle(descriptors, roots, scopes, &waiting, overridden) {
         Some(cycle) => Err(cycle.into()),
         None => Ok(()),
     }
+}
+
+/// Fail the boot on the first override nothing in the graph claimed: no seed,
+/// factory or provider would have registered its type, so nothing reads it.
+fn check_unclaimed_overrides(builder: &ContainerBuilder) -> Result<()> {
+    match builder.unclaimed_override() {
+        Some(type_name) => Err(UnclaimedOverrideError { type_name }.into()),
+        None => Ok(()),
+    }
+}
+
+/// Fail the boot on the first provider the roots reach that injects a key a
+/// test override removed — one its overridden provider would have registered
+/// beside the key the test overrode. The providers `standing_in` are never
+/// built, so what they inject is not read.
+fn check_overridden_dependencies(
+    builder: &ContainerBuilder,
+    reached: &[&ModuleDescriptor],
+    standing_in: &HashSet<TypeId>,
+) -> Result<()> {
+    let overridden = builder.overridden_providers();
+    if overridden.iter().all(|o| o.absent.is_empty()) {
+        return Ok(());
+    }
+    for module in reached {
+        for p in module.providers {
+            if standing_in.contains(&(p.provider)()) {
+                continue;
+            }
+            let (required, required_names) = ((p.injects)(), (p.inject_names)());
+            let (optional, optional_names) = ((p.injects_optional)(), (p.inject_optional_names)());
+            let injected = crate::access::labelled(&required, &required_names)
+                .chain(crate::access::labelled(&optional, &optional_names))
+                .chain((p.injects_per_request)());
+            for (key, dependency) in injected {
+                if let Some(removed) = overridden.iter().find(|o| o.absent.contains(&key)) {
+                    return Err(OverriddenDependencyError {
+                        module: module.name,
+                        consumer: p.name,
+                        dependency,
+                        provider: removed.provider.1,
+                        through: removed.through,
+                    }
+                    .into());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Fail the boot on the first provider a `#[module]` lists and the register
@@ -649,12 +698,14 @@ struct ModuleHooks {
 ///
 /// 1. **Seeds** — values registered with [`provide`](AppBuilder::provide) /
 ///    [`provide_arc`](AppBuilder::provide_arc) /
-///    [`provide_dyn`](AppBuilder::provide_dyn).
+///    [`provide_dyn`](AppBuilder::provide_dyn), then a test's overrides
+///    ([`override_value`](AppBuilder::override_value)), which replace them.
 /// 2. **Collect** — each module's [`collect`](crate::Module::collect) queues
 ///    the async factories its import tree owns. No provider is built yet.
 /// 3. **Factories** — every queued factory is `await`ed; each sees the
-///    container so far. A factory whose output type a seed already supplies is
-///    **skipped**.
+///    container so far. A factory whose output type a seed or an override
+///    already supplies is **skipped**, and a config so supplied passes the
+///    checks a read one does first.
 /// 4. **Register** — each module's [`register`](crate::Module::register) builds
 ///    its providers last, injecting seeds and factory outputs. A module that
 ///    cannot build what it must [`refuse`](ContainerBuilder::refuse)s, and the
@@ -775,32 +826,93 @@ impl AppBuilder {
         self
     }
 
-    /// Replace a concrete provider of type `T` *after* the module tree
-    /// registers, so this value wins — for tests swapping a real provider for a
-    /// fake.
+    /// Replace the provider of `T` with a test's double, before anything is
+    /// built from it: every consumer — a singleton built at boot included —
+    /// injects the double, and the provider it replaces is never built, so its
+    /// own dependencies need not exist.
     ///
-    /// Providers built in the register phase keep the original `Arc`; override
-    /// the `dyn Trait` instead ([`override_dyn`](Self::override_dyn)).
-    pub fn override_value<T: Any + Send + Sync>(mut self, value: T) -> Self {
-        self.overrides
-            .push(Box::new(move |builder| builder.replace(value)));
-        self
+    /// Whatever would have registered `T` stands down for it: a seed, a
+    /// factory — which never runs, so no connection opens and no variable is
+    /// read for it — or a module's provider, of any scope. A request-scoped or
+    /// transient `T` becomes one double serving every request. A provider bound
+    /// `Foo as dyn Trait` is overridden whole through either key: overriding
+    /// `Foo` leaves no `dyn Trait` and the converse, and a consumer injecting
+    /// the key left absent fails the boot
+    /// ([`OverriddenDependencyError`]). The
+    /// double keeps the provider's module, so the access graph holds its
+    /// consumers to the imports production holds them to.
+    ///
+    /// A type nothing in the app's graph would register fails the boot
+    /// ([`UnclaimedOverrideError`]): the double would never be read. So does an
+    /// edge host (`#[controller]` and its kin), which registers no value.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use nest_rs_core::{App, injectable, module};
+    ///
+    /// pub trait Mailer: Send + Sync {
+    ///     fn send(&self, to: &str) -> bool;
+    /// }
+    ///
+    /// #[injectable]
+    /// #[derive(Default)]
+    /// struct SmtpMailer;
+    ///
+    /// impl Mailer for SmtpMailer {
+    ///     fn send(&self, _: &str) -> bool {
+    ///         true
+    ///     }
+    /// }
+    ///
+    /// #[injectable]
+    /// struct UsersService {
+    ///     #[inject]
+    ///     mailer: Arc<dyn Mailer>,
+    /// }
+    ///
+    /// #[module(providers = [SmtpMailer as dyn Mailer, UsersService])]
+    /// struct UsersModule;
+    ///
+    /// struct Refusing;
+    ///
+    /// impl Mailer for Refusing {
+    ///     fn send(&self, _: &str) -> bool {
+    ///         false
+    ///     }
+    /// }
+    ///
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// let app = App::builder()
+    ///     .module::<UsersModule>()
+    ///     .override_dyn::<dyn Mailer>(Arc::new(Refusing))
+    ///     .build()
+    ///     .await?;
+    /// let users = app.container().get::<UsersService>().expect("built at boot");
+    /// assert!(!users.mailer.send("ada@example.com"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn override_value<T: Any + Send + Sync>(self, value: T) -> Self {
+        self.override_arc(Arc::new(value))
     }
 
-    /// Replace a `dyn Trait` binding after the module tree registers — the test
-    /// counterpart of [`provide_dyn`](Self::provide_dyn). See
-    /// [`override_value`](Self::override_value) for the eager-build caveat.
+    /// [`override_value`](Self::override_value) of the trait object
+    /// `Arc<dyn Trait>`, for a provider its consumers inject through a trait —
+    /// the double of a `Foo as dyn Trait` binding.
     pub fn override_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
-        self.overrides
-            .push(Box::new(move |builder| builder.replace_dyn(value)));
+        self.overrides.push(Box::new(move |builder| {
+            builder.install_override::<Arc<T>>(Arc::new(value))
+        }));
         self
     }
 
-    /// [`override_value`](Self::override_value) for a value the test already
-    /// holds in an `Arc`. Eager-build caveat applies.
+    /// [`override_value`](Self::override_value) for a double the test already
+    /// holds in an `Arc`, so it can read what the double recorded.
     pub fn override_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
-        self.overrides
-            .push(Box::new(move |builder| builder.replace_arc(value)));
+        self.overrides.push(Box::new(move |builder| {
+            builder.install_override::<T>(value)
+        }));
         self
     }
 
@@ -858,9 +970,13 @@ async fn assemble(
     modules: &[ModuleHooks],
     overrides: Vec<Registrar>,
 ) -> Result<(Container, InstallRecord)> {
-    let mut builder = std::mem::take(slot)
-        .provide_arc(Arc::clone(lifecycle))
-        .enter_phase(Phase::Collect);
+    let mut builder = std::mem::take(slot).provide_arc(Arc::clone(lifecycle));
+    // Before any module collects, so each path that would register an
+    // overridden key finds it and claims it instead.
+    for install in overrides {
+        builder = install(builder);
+    }
+    let mut builder = builder.enter_phase(Phase::Collect);
     for hooks in modules {
         builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
     }
@@ -890,23 +1006,36 @@ async fn assemble(
             .into());
         };
         let queued = pending.remove(index);
-        let output = if slot.contains(queued.id()) {
-            None
+        let id = queued.id();
+        let output: Registrar = if slot.contains(id) {
+            // A seed or an override skips the factory: before any factory
+            // reads it, it passes what the factory's own value would have.
+            if let Some(check) = slot.seed_check(id) {
+                check(&slot.snapshot())?;
+            }
+            Box::new(move |builder| builder.stand_down(id))
         } else {
             let type_name = queued.name;
             let factory = (queued.factory)(slot.snapshot());
-            let register = lifecycle
+            lifecycle
                 .boot(&BootStep::Factory { type_name }, factory)
                 .await?
-                .map_err(|source| FactoryFailedError { type_name, source })?;
-            Some(register)
+                .map_err(|source| FactoryFailedError { type_name, source })?
         };
-        *slot = std::mem::take(slot)
-            .install(queued.queued_by, output.into_iter().chain(queued.derives));
+        *slot = std::mem::take(slot).install(
+            queued.queued_by,
+            std::iter::once(output).chain(queued.derives),
+        );
         check_budgets(slot, &reached, Some(&queued.provides))?;
     }
-    // Seeded after register, yet global infrastructure for the access graph.
+    // An override a module's provider will claim keeps that module as its
+    // owner: global, it would let a consumer outside the module's closure
+    // boot in a test and fail in production.
     let mut global = slot.provider_ids();
+    for key in slot.unclaimed_override_ids() {
+        global.remove(&key);
+    }
+    // Seeded after register, yet global infrastructure for the access graph.
     global.insert(TypeId::of::<ReachableProviders>());
     global.insert(TypeId::of::<ProviderOrder>());
     global.insert(TypeId::of::<Composition>());
@@ -917,9 +1046,7 @@ async fn assemble(
     }
     *slot = builder;
     check_register_phase(slot)?;
-    for ov in overrides {
-        *slot = ov(std::mem::take(slot));
-    }
+    check_unclaimed_overrides(slot)?;
 
     let sealed = seal(slot, &descriptors, &roots, &global, &global_keyed)?;
     let installed = slot.install_record();
@@ -967,32 +1094,42 @@ fn seal(
     global_keyed: &HashSet<ProviderKey>,
 ) -> Result<Sealed> {
     let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
+    // A provider a test's double stands in for is never built: what it
+    // injects is checked and walked by nothing.
+    let overridden: HashSet<TypeId> = builder
+        .overridden_providers()
+        .iter()
+        .map(|o| o.provider.0)
+        .collect();
     validate_access_graph(
         descriptors,
         &ids,
         global,
         &builder.registered_ids(),
         &builder.scoped_or_transient_ids(),
+        &overridden,
     )
     .map_err(AccessError::into_anyhow)?;
     validate_keyed_access_graph(descriptors, &ids, global_keyed)?;
     let scopes = builder.dynamic_scopes();
-    if let Some(cycle) = scoped_cycle(descriptors, &ids, &scopes) {
+    if let Some(cycle) = scoped_cycle(descriptors, &ids, &scopes, &overridden) {
         return Err(cycle.into());
     }
     // After the access graph, whose remedy names the owning module
     // (`.claude/decisions/boot-refusal-order.md`).
-    check_singleton_cycles(builder, descriptors, &ids, &scopes)?;
+    check_singleton_cycles(builder, descriptors, &ids, &scopes, &overridden)?;
     let reached = reachable_descriptors(descriptors, &ids);
+    check_overridden_dependencies(builder, &reached, &overridden)?;
     check_unbuilt_providers(builder, &reached)?;
     check_late_optionals(builder, &reached)?;
     check_budgets(builder, &reached, None)?;
     let order = provider_order(descriptors, &ids);
+    let hook_order = HookOrder::new(dependency_order(descriptors, &ids, &overridden));
     Ok(Sealed {
         reachable: ReachableProviders(reachable_provider_ids(&order, global)),
         order: ProviderOrder::new(order),
-        composition: Composition::from_descriptors(descriptors, roots),
-        hook_order: HookOrder::new(dependency_order(descriptors, &ids)),
+        composition: Composition::from_descriptors(descriptors, roots, overridden),
+        hook_order,
     })
 }
 

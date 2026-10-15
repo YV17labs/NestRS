@@ -21,7 +21,10 @@ skipped, so a developer's personal secrets cannot leak in.
 
 `TestApp::builder()` exposes `.provide(value)` — when the value's type
 matches a config registered via `ConfigModule::for_feature::<C>()`, the
-seed wins and the factory never runs.
+seed wins and the factory never runs. The seed still passes what a read
+value does, before any factory reads it: a duration outside its range or a
+field its `validate()` refuses fails the boot with the same `ConfigError`,
+naming the field or the namespace.
 
 ```rust title="apps/auth/tests/e2e/token.rs"
 use auth::{AuthModule, ClientPayload, OAuthConfig, RegisteredClient};

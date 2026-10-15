@@ -5,13 +5,15 @@
 //! `ConfigModule::for_feature::<T>()` loads once at boot and registers
 //! `Arc<T>`, injected directly by any provider.
 
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
+use std::sync::Arc;
 
-use nest_rs_core::Instance;
+use nest_rs_core::{Container, Instance};
 use validator::Validate;
 
 use crate::Result;
 use crate::service::ConfigService;
+use crate::source::MapSource;
 
 /// The `<DOMAIN>` in `<PREFIX>_<DOMAIN>__<KEY>`. Supplied by the
 /// [`config`](macro@crate::config) macro from `#[config(namespace = "…")]`.
@@ -59,6 +61,27 @@ pub(crate) fn resolve_instance<C: Config, I: Instance>(pinned: Option<C>) -> Res
     resolve_under(namespace, pinned).map(Into::into)
 }
 
+/// The checks a read of `namespace` runs, on `value` nobody read: every bound
+/// over the value itself — an empty source answers each variable unset, so
+/// the read keeps the value and holds it to its range — then `validate()`.
+fn check_under<C: Config>(namespace: &str, value: &C) -> Result<()> {
+    let unset = ConfigService::with_source(namespace, Arc::new(MapSource::default()));
+    read(&unset, value.clone())?
+        .validate()
+        .map_err(|errors| crate::ConfigError::validation(namespace.to_owned(), errors))
+}
+
+/// Hold the `C` seeded for the instance `I` to the checks a read one passes:
+/// what the factory drain runs where the seed makes `C`'s factory skip.
+pub(crate) fn check_seed<C: Config, I: Instance>(container: &Container) -> anyhow::Result<()> {
+    let Some(seeded) = container.get::<I::Of<C>>() else {
+        return Ok(());
+    };
+    let seeded: &C = (*seeded).borrow();
+    let namespace = crate::namespace::instance_namespace::<I>(C::NAMESPACE);
+    check_under(&namespace, seeded).map_err(anyhow::Error::from)
+}
+
 /// The environment of `namespace` overlaid on `pinned`, or on `C::defaults()`,
 /// then validated.
 fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> Result<C> {
@@ -91,7 +114,9 @@ fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> 
 /// ```
 ///
 /// The one hard pin is seeding the value on the builder
-/// (`App::builder().provide(cfg)`), for hermetic tests.
+/// (`App::builder().provide(cfg)`), for hermetic tests. A seed pins the value,
+/// never the checks: it passes every bound and `validate()` before anything
+/// reads it.
 pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized + 'static {
     /// Field-by-field overlay of this namespace's environment over `base`: every
     /// field takes its `<PREFIX>_<NAMESPACE>__<KEY>` value when the variable is
@@ -126,6 +151,33 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     /// and validate the result.
     fn load() -> Result<Self> {
         Self::resolve(None)
+    }
+
+    /// The checks [`resolve`](Self::resolve) runs, on a value nobody read from
+    /// the environment: every bound over the value itself, then `validate()`.
+    /// What a seeded value goes through, before anything reads it.
+    ///
+    /// ```
+    /// # use nest_rs_config::{Config, ConfigService, config};
+    /// #[config(namespace = "kiln")]
+    /// #[derive(Clone, Debug)]
+    /// pub struct KilnConfig {
+    ///     #[validate(range(min = 1))]
+    ///     pub workers: u32,
+    /// }
+    /// # impl Default for KilnConfig {
+    /// #     fn default() -> Self { Self { workers: 4 } }
+    /// # }
+    /// # impl Config for KilnConfig {
+    /// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+    /// #         Ok(base)
+    /// #     }
+    /// # }
+    /// assert!(KilnConfig { workers: 4 }.check().is_ok());
+    /// assert!(KilnConfig { workers: 0 }.check().is_err());
+    /// ```
+    fn check(&self) -> Result<()> {
+        check_under(Self::NAMESPACE, self)
     }
 }
 

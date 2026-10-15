@@ -72,6 +72,18 @@ framework half.
   import cycle is tolerated while no provider waits across it. One built
   without an optional dependency the boot registers afterwards would run as if
   it were absent, and is refused too (`LateOptionalDependencyError`).
+- **A test override replaces its provider before anything is built from
+  it**, as NestJS's `overrideProvider` does: installed before any module
+  collects, it is claimed by whatever would register its key — a seed, a
+  factory that then never runs, a provider of any scope that is then never
+  built — and one nothing claims fails the boot (`UnclaimedOverrideError`).
+  The double keeps its provider's module and scope, so the access graph holds
+  its consumers to production's imports, and a second registration of its
+  key stays a duplicate (`DuplicateProviderError`); it injects nothing, so
+  neither the cycle walks nor the hook order read the replaced provider's
+  dependencies. A binding `as dyn Trait` is overridden whole through either
+  key, and a consumer of the key left absent fails the boot
+  (`OverriddenDependencyError`).
 
 ## `for_root` — one seam, one value, no chain
 
@@ -157,6 +169,10 @@ variables or tiers.
   a pin over `..Default::default()` opens nothing in any profile and neither
   does a process that forgot `<PREFIX>_ENV`. Held by each member's unit test,
   and review.
+- **A seed pins the value, never the checks**: a seeded config passes every
+  bound and `validate()` before anything reads it (`Config::check`, run where
+  the seed makes its factory skip), on every boot that drains factories — a
+  container built by hand drains none.
 - **A duration a deployment sets has a floor and a ceiling**, refused naming the
   variable whether pinned or read, never clamped. The floor is where the thing
   stops working; the ceiling is where a value becomes a slip, **and never above

@@ -313,12 +313,30 @@ pub(crate) mod __private {
 
     use super::Problem;
 
-    /// What answering `problem` for `error` keeps from the client, for the
-    /// edge to file at `error` as it files an opaque failure: `error`'s whole
-    /// chain when the answer is a `5xx` and `error` is more than the bare
+    /// What answering `problem` for `error` keeps from the client: `error`'s
+    /// whole chain when the answer is a `5xx` and `error` is more than the bare
     /// problem, else `None`.
-    pub fn withheld(problem: &Problem, error: &(dyn Error + 'static)) -> Option<String> {
-        (problem.is_server_error() && !error.is::<Problem>()).then(|| crate::error_message(error))
+    pub fn withheld(problem: &Problem, error: &(dyn Error + 'static)) -> Option<Withheld> {
+        if !problem.is_server_error() || error.is::<Problem>() {
+            return None;
+        }
+        let said = crate::error_message(error);
+        Some(if problem.status() == 503 {
+            Withheld::Unavailable(said)
+        } else {
+            Withheld::Failed(said)
+        })
+    }
+
+    /// The chain a `5xx` answer keeps from its client, and the level the edge
+    /// files it at.
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum Withheld {
+        /// The server failed: filed at `error`, as an opaque failure is.
+        Failed(String),
+        /// The server could not serve the unit in time (a `503`) — a statement
+        /// cancelled at its bound, a backend past its net: filed at `warn`.
+        Unavailable(String),
     }
 }
 
@@ -380,11 +398,20 @@ mod tests {
     fn a_server_answer_withholds_the_chain_behind_the_problem_and_nothing_else() {
         use super::__private::withheld;
 
+        use super::__private::Withheld;
+
         let unavailable = Problem::new(503, code::UNAVAILABLE);
         let outage = std::io::Error::other("the index at 10.0.0.1 refused");
         assert_eq!(
-            withheld(&unavailable, &outage).as_deref(),
-            Some("the index at 10.0.0.1 refused"),
+            withheld(&unavailable, &outage),
+            Some(Withheld::Unavailable(
+                "the index at 10.0.0.1 refused".to_owned()
+            )),
+            "an answer the server could not give in time is filed at warn",
+        );
+        assert_eq!(
+            withheld(&Problem::new(500, code::INTERNAL), &outage),
+            Some(Withheld::Failed("the index at 10.0.0.1 refused".to_owned())),
         );
         assert_eq!(withheld(&unavailable, &unavailable), None, "a bare problem");
         let conflict = Problem::new(409, code::CONFLICT);

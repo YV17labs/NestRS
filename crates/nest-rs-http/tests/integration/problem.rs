@@ -421,9 +421,9 @@ async fn a_problem_answers_its_status_and_its_code_member() {
 }
 
 /// A server `Problem` answers its status, its code and its wait, never the
-/// chain behind it, which every path that renders it files once at `error`;
-/// a bare `Problem`, like a bare status, withholds nothing and files nothing,
-/// and so does a client one.
+/// chain behind it, which every path that renders it files once — a `503`'s at
+/// `warn`, the server unable to serve it in time; a bare `Problem`, like a
+/// bare status, withholds nothing and files nothing, and so does a client one.
 #[tokio::test]
 async fn a_server_problem_answers_its_status_and_files_the_chain_it_withholds() {
     for path in ["/failure/outage", "/failure/outage-carried"] {
@@ -436,13 +436,13 @@ async fn a_server_problem_answers_its_status_and_files_the_chain_it_withholds() 
         assert_eq!(body["code"], "UNAVAILABLE", "{path}: {body}");
         assert!(!body.to_string().contains("10.0.0.1"), "{path}: {body}");
 
-        let failed = logs.expect_one(nest_rs_http::target::HTTP, "request failed");
-        assert_eq!(failed.level, "error", "{path}");
+        let unavailable = logs.expect_one(nest_rs_http::target::HTTP, "request unavailable");
+        assert_eq!(unavailable.level, "warn", "{path}");
         assert!(
-            failed
+            unavailable
                 .field("error")
                 .is_some_and(|e| e.contains("10.0.0.1") && e.contains("503 UNAVAILABLE")),
-            "{path}: {failed:#?}",
+            "{path}: {unavailable:#?}",
         );
     }
 
@@ -457,6 +457,7 @@ async fn a_server_problem_answers_its_status_and_files_the_chain_it_withholds() 
         assert!(resp.0.status().is_client_error(), "{path}");
     }
     logs.expect_none(nest_rs_http::target::HTTP, "request failed");
+    logs.expect_none(nest_rs_http::target::HTTP, "request unavailable");
 }
 
 /// An `HttpError` whose chain the client is owed no word of answers opaquely

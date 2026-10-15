@@ -73,7 +73,8 @@ pub fn is_retryable_conflict(err: &DbErr) -> bool {
 }
 
 /// Whether a **statement** failure inside an open transaction is one a fresh
-/// attempt could clear — a conflict, or the connection going away.
+/// attempt could clear — a conflict, the connection going away, or Postgres
+/// cancelling the statement at its bound (`57014`).
 ///
 /// Never use it at `COMMIT`, where a lost connection may mean the commit landed:
 /// the commit site keeps [`is_retryable_conflict`].
@@ -93,7 +94,11 @@ pub fn is_transient_failure(err: &DbErr) -> bool {
                 | SqlxError::PoolClosed
                 | SqlxError::WorkerCrashed => true,
                 other => other.as_database_error().is_some_and(|db| {
-                    matches!(db.code().as_deref(), Some(code) if CONNECTION_SQLSTATES.contains(&code))
+                    matches!(
+                        db.code().as_deref(),
+                        Some(code) if CONNECTION_SQLSTATES.contains(&code)
+                            || code == crate::error::CANCELLED
+                    )
                 }),
             }
         }

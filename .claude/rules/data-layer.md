@@ -59,7 +59,9 @@ bounded per run — the demo's notifications purge is the shape.
 
 **A database failure is classified once and said once.** `DbOutcome` reads a
 `DbErr` into the class every edge answers — a unique violation is a conflict,
-a row a write found gone is not found, anything else is opaque — and
+a row a write found gone is not found, a statement Postgres cancelled (`57014`)
+is unavailable, a `503` said at `warn` and retryable inside a transaction,
+anything else is opaque — and
 `ServiceError`, `#[crud]` and the product read it rather than matching the
 driver's error again. The server's message quotes the input it refused, so a
 driver says its errors through a `SafeLink`, by code and schema names; held by

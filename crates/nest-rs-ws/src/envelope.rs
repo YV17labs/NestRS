@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use nest_rs_core::__private::find_in_chain;
+use nest_rs_core::__private::{Withheld, find_in_chain};
 use nest_rs_core::{DecodeError, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem};
 use nest_rs_pipes::PipeError;
 use serde::{Deserialize, Serialize};
@@ -212,13 +212,14 @@ fn chain_reply(event: &str, error: &(dyn Error + 'static)) -> WsReply {
     WsReply::Error(frame)
 }
 
-/// `problem`'s frame as the answer to `error`: a refusal answered, filed at
-/// `warn`, unless the `5xx` answer withholds the chain behind it, which is then
-/// filed as an opaque failure's is.
+/// `problem`'s frame as the answer to `error`: a refusal answered — or a `503`,
+/// the server unable to serve it in time — filed at `warn`, unless the `5xx`
+/// answer withholds the chain behind a failure, which is then filed as an
+/// opaque failure's is.
 fn problem_reply(event: &str, error: &(dyn Error + 'static), problem: &Problem) -> WsReply {
     match nest_rs_core::__private::withheld(problem, error) {
-        Some(said) => failed(event, &said),
-        None => answered(event, error),
+        Some(Withheld::Failed(said)) => failed(event, &said),
+        Some(Withheld::Unavailable(_)) | None => answered(event, error),
     }
     WsReply::Error(WsError::from_problem(problem))
 }
@@ -477,7 +478,7 @@ mod tests {
     /// files the line an opaque failure files, at `error`, by either tier; a
     /// bare problem or a client one is a refusal answered, at `warn`.
     #[test]
-    fn a_server_problem_files_the_chain_its_frame_withholds_at_error() {
+    fn a_server_problem_files_the_chain_its_frame_withholds() {
         use nest_rs_core::problem::code;
 
         let logs = nest_rs_testing::LogCapture::install();
@@ -492,15 +493,19 @@ mod tests {
             frame.errors,
             Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 30 })),
         );
-        let lines = failed();
-        assert_eq!(lines.len(), 1, "{lines:#?}");
-        assert_eq!(lines[0].level, "error");
+        let unavailable = answered();
+        assert_eq!(unavailable.len(), 1, "{unavailable:#?}");
+        assert_eq!(
+            unavailable[0].level, "warn",
+            "a 503 is the server unable to serve it in time"
+        );
         assert!(
-            lines[0]
+            unavailable[0]
                 .field("error")
                 .is_some_and(|e| e.contains("10.0.0.1")),
-            "{lines:#?}"
+            "{unavailable:#?}"
         );
+        assert!(failed().is_empty(), "{:#?}", failed());
 
         let carried = nest_rs_core::anyhow::Error::from(Problem::new(500, code::INTERNAL))
             .context("charging the card");
@@ -509,14 +514,14 @@ mod tests {
         };
         assert_eq!(frame.error, OPAQUE_CLIENT_MESSAGE);
         let lines = failed();
-        assert_eq!(lines.len(), 2, "{lines:#?}");
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        assert_eq!(lines[0].level, "error");
         assert!(
-            lines[1]
+            lines[0]
                 .field("error")
                 .is_some_and(|e| e.contains("charging the card")),
             "{lines:#?}"
         );
-        assert!(answered().is_empty(), "{:#?}", answered());
 
         for (problem, said) in [
             (
@@ -532,11 +537,11 @@ mod tests {
         }
         assert_eq!(
             failed().len(),
-            2,
+            1,
             "a bare problem or a client one withholds nothing"
         );
         let refused = answered();
-        assert_eq!(refused.len(), 2, "{refused:#?}");
+        assert_eq!(refused.len(), 3, "{refused:#?}");
         assert!(
             refused.iter().all(|line| line.level == "warn"),
             "{refused:#?}"

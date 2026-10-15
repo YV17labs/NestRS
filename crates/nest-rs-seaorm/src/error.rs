@@ -32,8 +32,9 @@ pub enum ServiceError {
     #[error("validation failed")]
     Validation(#[from] ValidationErrors),
     /// A `Repo`/ORM query failed for a reason the caller cannot act on
-    /// ([`DbOutcome::Internal`]). The `DbErr` stays for `tracing`, said by its
-    /// SQLSTATE; the wire sees a generic message.
+    /// ([`DbOutcome::Internal`], a `500`), or Postgres cancelled it at its
+    /// bound ([`DbOutcome::Unavailable`], a `503`). The `DbErr` stays for
+    /// `tracing`, said by its SQLSTATE; the wire sees a generic message.
     #[error("database error")]
     Db(#[source] DbErr),
     /// Response masking could not reconcile a loaded row into its wire DTO: a
@@ -158,7 +159,8 @@ pub fn masking(failure: &serde_json::Error) -> ServiceError {
 /// A `DbErr` classified by [`DbOutcome`]: a unique violation is a
 /// [`Conflict`](ServiceError::Conflict) (`409`), a row a write found gone is
 /// [`NotFound`](ServiceError::NotFound) (`404`), anything else is
-/// [`Db`](ServiceError::Db) (`500`).
+/// [`Db`](ServiceError::Db) — a `503` for a statement Postgres cancelled, a
+/// `500` otherwise.
 impl From<DbErr> for ServiceError {
     fn from(err: DbErr) -> Self {
         match DbOutcome::of(&err) {
@@ -166,7 +168,7 @@ impl From<DbErr> for ServiceError {
                 Self::Conflict("the request conflicts with an existing record".into())
             }
             DbOutcome::NotFound => Self::NotFound("not found".into()),
-            DbOutcome::Internal => Self::Db(err),
+            DbOutcome::Unavailable | DbOutcome::Internal => Self::Db(err),
         }
     }
 }
@@ -241,6 +243,11 @@ pub enum DbOutcome {
     /// The row an update or delete addressed is no longer there: `404`,
     /// `NOT_FOUND`.
     NotFound,
+    /// Postgres cancelled the statement (SQLSTATE `57014`), past its
+    /// `statement_timeout` most often: the server could not serve it in time,
+    /// `503`, `UNAVAILABLE`, said at `warn`. Inside a transaction nothing it
+    /// wrote stands, so another attempt may succeed.
+    Unavailable,
     /// Anything else, answered opaquely and logged. `RecordNotInserted` is one:
     /// sea-orm also raises it for an `ON CONFLICT DO NOTHING` that inserted
     /// nothing, so only `#[crud]`, whose create can raise it for its scope
@@ -256,10 +263,19 @@ impl DbOutcome {
             _ if server_error(err).is_some_and(|server| server.is_unique_violation()) => {
                 Self::Conflict
             }
+            _ if server_error(err)
+                .is_some_and(|server| server.code().as_deref() == Some(CANCELLED)) =>
+            {
+                Self::Unavailable
+            }
             _ => Self::Internal,
         }
     }
 }
+
+/// SQLSTATE `query_canceled`: a statement Postgres cancelled, at its
+/// `statement_timeout` or by an operator.
+pub(crate) const CANCELLED: &str = "57014";
 
 /// The error the database server answered, when `err` carries one.
 fn server_error(err: &DbErr) -> Option<&(dyn DatabaseError + 'static)> {
@@ -393,6 +409,9 @@ impl nest_rs_core::ToProblem for ServiceError {
             Self::Conflict(_) => Problem::new(409, code::CONFLICT),
             Self::Forbidden(_) => Problem::new(403, code::FORBIDDEN),
             Self::NotFound(_) => Problem::new(404, code::NOT_FOUND),
+            Self::Db(err) if DbOutcome::of(err) == DbOutcome::Unavailable => {
+                Problem::new(503, code::UNAVAILABLE)
+            }
             Self::Db(_) | Self::Masking { .. } | Self::Internal { .. } => return None,
         };
         Some(problem.with_detail(self.to_string()))
@@ -410,8 +429,9 @@ impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
 
 /// What a `#[crud]` operation's failure answers on every edge: a unique
 /// violation is a `409`, a create its scope re-check rolled back
-/// (`RecordNotInserted`) a `403`, a row gone before the write a `404`; any other
-/// failure a `500`, its error filed once at `error`.
+/// (`RecordNotInserted`) a `403`, a row gone before the write a `404`, a
+/// statement Postgres cancelled a `503` filed at `warn`; any other failure a
+/// `500`, its error filed once at `error`.
 #[cfg(any(feature = "http", feature = "graphql"))]
 fn crud_problem(err: &DbErr) -> nest_rs_core::Problem {
     use nest_rs_core::Problem;
@@ -420,6 +440,15 @@ fn crud_problem(err: &DbErr) -> nest_rs_core::Problem {
     match DbOutcome::of(err) {
         DbOutcome::Conflict => Problem::new(409, code::CONFLICT),
         DbOutcome::NotFound => Problem::new(404, code::NOT_FOUND),
+        DbOutcome::Unavailable => {
+            tracing::warn!(
+                target: crate::target::ORM,
+                kind = "db",
+                error = %nest_rs_core::error_message(err),
+                "crud operation unavailable",
+            );
+            Problem::new(503, code::UNAVAILABLE)
+        }
         DbOutcome::Internal if matches!(err, DbErr::RecordNotInserted) => {
             Problem::new(403, code::FORBIDDEN)
         }
@@ -560,7 +589,7 @@ mod http {
     use poem::http::StatusCode;
     use poem::{IntoResponse, Response};
 
-    use super::ServiceError;
+    use super::{DbOutcome, ServiceError};
 
     impl ResponseError for ServiceError {
         fn status(&self) -> StatusCode {
@@ -571,6 +600,9 @@ mod http {
                 ServiceError::Conflict(_) => StatusCode::CONFLICT,
                 ServiceError::Forbidden(_) => StatusCode::FORBIDDEN,
                 ServiceError::NotFound(_) => StatusCode::NOT_FOUND,
+                ServiceError::Db(err) if DbOutcome::of(err) == DbOutcome::Unavailable => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
                 ServiceError::Db(_)
                 | ServiceError::Masking { .. }
                 | ServiceError::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -583,13 +615,11 @@ mod http {
         /// cause is logged.
         fn as_response(&self) -> Response {
             let status = self.status();
-            let detail = match self.to_problem() {
-                Some(problem) => problem.client_message(),
-                None => {
-                    log_opaque(self);
-                    Cow::Borrowed(nest_rs_core::OPAQUE_CLIENT_MESSAGE)
-                }
-            };
+            log_opaque(self);
+            let detail = self.to_problem().map_or(
+                Cow::Borrowed(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
+                |problem| problem.client_message(),
+            );
             let mut problem = ProblemDetails::from_status(status).with_detail(detail);
             if let Some(fields) = self.field_errors() {
                 problem = problem.with_extension("errors", fields);
@@ -598,13 +628,27 @@ mod http {
         }
     }
 
-    /// Emit the chain behind an opaque 5xx.
+    /// Emit the chain behind an opaque 5xx — a statement cancelled at its
+    /// bound at `warn`, the server unable to serve it in time; a 4xx stays
+    /// silent.
     fn log_opaque(err: &ServiceError) {
         let kind = match err {
             ServiceError::Db(_) => "db",
             ServiceError::Masking { .. } => "masking",
-            _ => "internal",
+            ServiceError::Internal { .. } => "internal",
+            _ => return,
         };
+        if let ServiceError::Db(e) = err
+            && DbOutcome::of(e) == DbOutcome::Unavailable
+        {
+            tracing::warn!(
+                target: crate::target::ORM,
+                kind,
+                error = %nest_rs_core::error_message(err),
+                "service error surfaced as 503",
+            );
+            return;
+        }
         tracing::error!(
             target: crate::target::ORM,
             kind,
@@ -615,8 +659,9 @@ mod http {
 
     /// A `#[crud]` operation's failure as its status, with an empty body: `409`
     /// for a unique violation, `403` for a create its scope re-check rolled
-    /// back, `404` for a row gone before the write, else a `500` whose error is
-    /// filed at `error`. Called by the `#[crud]` expansion.
+    /// back, `404` for a row gone before the write, `503` for a statement
+    /// Postgres cancelled, else a `500` whose error is filed at `error`. Called
+    /// by the `#[crud]` expansion.
     pub fn crud_error(err: sea_orm::DbErr) -> poem::Error {
         let problem = super::crud_problem(&err);
         poem::Error::from_status(nest_rs_http::ResponseError::status(&problem))
@@ -815,6 +860,33 @@ mod http {
         }
 
         #[tokio::test]
+        async fn a_statement_cancelled_at_its_bound_renders_a_503_said_at_warn() {
+            let logs = nest_rs_testing::LogCapture::install();
+            let (status, _, body) = body_json(ServiceError::from(
+                crate::error::tests::cancelled_statement(),
+            ))
+            .await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(body["status"], 503);
+            assert_eq!(body["detail"], nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+            let line = logs.expect_one(crate::target::ORM, "service error surfaced as 503");
+            assert_eq!(line.level, "warn");
+            assert!(
+                line.field("error")
+                    .is_some_and(|said| said.contains("57014")),
+                "{line:?}"
+            );
+            assert_eq!(
+                crud_error(crate::error::tests::cancelled_statement())
+                    .into_response()
+                    .status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+            );
+            let crud = logs.expect_one(crate::target::ORM, "crud operation unavailable");
+            assert_eq!(crud.level, "warn");
+        }
+
+        #[tokio::test]
         async fn validation_rides_field_errors_as_an_extension_member() {
             let mut errs = validator::ValidationErrors::new();
             errs.add("email", validator::ValidationError::new("not_an_email"));
@@ -985,6 +1057,37 @@ mod tests {
             table: None,
             message: "invalid input syntax for type uuid: \"secret-123\"",
         })
+    }
+
+    /// Postgres cancelling a statement past its `statement_timeout`.
+    pub(crate) fn cancelled_statement() -> DbErr {
+        refused(ServerRefusal {
+            code: "57014",
+            unique: false,
+            constraint: None,
+            table: None,
+            message: "canceling statement due to statement timeout",
+        })
+    }
+
+    #[test]
+    fn a_statement_cancelled_at_its_bound_is_the_server_unable_to_serve_in_time() {
+        assert_eq!(
+            DbOutcome::of(&cancelled_statement()),
+            DbOutcome::Unavailable
+        );
+        let error = ServiceError::from(cancelled_statement());
+        assert!(matches!(error, ServiceError::Db(_)), "{error:?}");
+        let problem = nest_rs_core::ToProblem::to_problem(&error)
+            .expect("an unavailable answer, not an opaque one");
+        assert_eq!(
+            (problem.status(), problem.code()),
+            (503, nest_rs_core::problem::code::UNAVAILABLE)
+        );
+        assert!(
+            crate::retry::is_transient_failure(&cancelled_statement()),
+            "a fresh attempt may meet the statement in its bound"
+        );
     }
 
     #[test]

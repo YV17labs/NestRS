@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use http::{Extensions, StatusCode};
 
+use nest_rs_core::__private::Withheld;
 use nest_rs_core::Problem;
 use nest_rs_core::problem::code;
 
@@ -404,14 +405,10 @@ impl HttpError {
         let problem = nest_rs_core::__private::find_in_chain::<Problem>(chain);
         let withheld = match problem {
             Some(problem) => nest_rs_core::__private::withheld(problem, chain),
-            None => self
-                .0
-                .status
-                .is_server_error()
-                .then(|| nest_rs_core::error_message(chain)),
+            None => withheld_behind(self.0.status, chain),
         };
-        if let Some(said) = withheld {
-            failed(&said);
+        if let Some(withheld) = withheld {
+            file(withheld);
         }
         let Some(problem) = problem else {
             return self.into_response();
@@ -429,6 +426,36 @@ pub(crate) fn failed(said: &str) {
         error = %said,
         "request failed",
     );
+}
+
+/// What a `5xx` status answered for `chain` keeps from the client, with no
+/// problem in the chain to say it: as core's `withheld` classes a problem's.
+pub(crate) fn withheld_behind(
+    status: StatusCode,
+    chain: &(dyn Error + 'static),
+) -> Option<Withheld> {
+    if !status.is_server_error() {
+        return None;
+    }
+    let said = nest_rs_core::error_message(chain);
+    Some(if status == StatusCode::SERVICE_UNAVAILABLE {
+        Withheld::Unavailable(said)
+    } else {
+        Withheld::Failed(said)
+    })
+}
+
+/// File what an answer withheld: a failure at `error`, a `503` — the server
+/// unable to serve the request in time — at `warn`.
+pub(crate) fn file(withheld: Withheld) {
+    match withheld {
+        Withheld::Failed(said) => failed(&said),
+        Withheld::Unavailable(said) => tracing::warn!(
+            target: crate::target::HTTP,
+            error = %said,
+            "request unavailable",
+        ),
+    }
 }
 
 /// A [`ResponseError`]'s own rendering, behind the box that erased its type.

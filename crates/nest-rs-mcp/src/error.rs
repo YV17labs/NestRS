@@ -51,6 +51,7 @@
 //! A deliberate `McpError::invalid_params(…)`, meant for the model to read and
 //! retry, is returned directly, never through here.
 
+use nest_rs_core::__private::Withheld;
 use nest_rs_core::ToProblem;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
@@ -104,8 +105,10 @@ pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
     let Some(problem) = error.to_problem() else {
         return opaque_error(error);
     };
-    if let Some(said) = nest_rs_core::__private::withheld(&problem, error) {
-        failed(&said);
+    match nest_rs_core::__private::withheld(&problem, error) {
+        Some(Withheld::Failed(said)) => failed(&said),
+        Some(Withheld::Unavailable(said)) => unavailable(&said),
+        None => {}
     }
     let mut data = serde_json::Map::new();
     data.insert("code".to_owned(), problem.code().as_str().into());
@@ -132,6 +135,16 @@ fn failed(said: &str) {
         target: crate::TARGET,
         error = %said,
         "mcp operation failed",
+    );
+}
+
+/// The operator's line for a `503` the answer withholds the cause of: the
+/// server could not serve it in time, which is no failure of its own.
+fn unavailable(said: &str) {
+    tracing::warn!(
+        target: crate::TARGET,
+        error = %said,
+        "mcp operation unavailable",
     );
 }
 
@@ -337,13 +350,16 @@ mod tests {
         let error = problem_error(&Outage);
         assert_eq!(error.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
         assert!(!format!("{error:?}").contains("10.0.0.1"), "{error:?}");
-        let failed = logs.expect_one("nest_rs::mcp", "mcp operation failed");
-        assert_eq!(failed.level, "error");
+        let unavailable = logs.expect_one("nest_rs::mcp", "mcp operation unavailable");
+        assert_eq!(
+            unavailable.level, "warn",
+            "the server could not serve it in time"
+        );
         assert!(
-            failed
+            unavailable
                 .field("error")
                 .is_some_and(|e| e.contains("10.0.0.1")),
-            "{failed:#?}"
+            "{unavailable:#?}"
         );
 
         let bare = problem_error(&Problem::new(503, code::UNAVAILABLE));
@@ -351,7 +367,7 @@ mod tests {
         let conflict = problem_error(&Problem::new(409, code::CONFLICT));
         assert_eq!(conflict.message, "conflict");
         assert_eq!(
-            logs.find("nest_rs::mcp", "mcp operation failed").len(),
+            logs.find("nest_rs::mcp", "mcp operation unavailable").len(),
             1,
             "a bare problem or a client one withholds nothing",
         );

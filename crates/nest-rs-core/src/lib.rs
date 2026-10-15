@@ -229,7 +229,7 @@ pub mod __private {
     pub use crate::outcome::__private::{caught_problem, settled};
     pub use crate::panic::__private::{Unwound, unwound};
     pub use crate::param::{ParamProbe, ParamProbeFallback, ParamProbeResolves};
-    pub use crate::problem::__private::withheld;
+    pub use crate::problem::__private::{Withheld, withheld};
     pub use crate::process_start::ProcessStart;
     pub use crate::site::{
         GlobalLayers, Shape, Site, SiteDeclaration, SiteLayers, UnitChains, declare_site,

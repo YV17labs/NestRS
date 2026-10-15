@@ -351,10 +351,7 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
         .cloned();
     let withheld = source.and_then(|chain| match &problem {
         Some(problem) => nest_rs_core::__private::withheld(problem, chain),
-        None => err
-            .status()
-            .is_server_error()
-            .then(|| nest_rs_core::error_message(chain)),
+        None => crate::error::withheld_behind(err.status(), chain),
     });
     let sentence = err.to_string();
     let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
@@ -368,7 +365,7 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
         if !body.is_empty() {
             let (parts, _) = resp.into_parts();
             if let Some(withheld) = withheld {
-                crate::error::failed(&withheld);
+                crate::error::file(withheld);
             }
             let mut answer = crate::poem_bridge::response_to_poem(match problem {
                 Some(problem) => problem_response(&problem),

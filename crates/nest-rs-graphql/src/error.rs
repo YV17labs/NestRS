@@ -23,6 +23,7 @@
 use std::error::Error as StdError;
 
 use async_graphql::{Error, ErrorExtensions};
+use nest_rs_core::__private::Withheld;
 use nest_rs_core::problem::code;
 use nest_rs_core::{DecodeError, Problem, ToProblem};
 use nest_rs_guards::Denial;
@@ -103,8 +104,10 @@ pub fn problem_error<E: ToProblem>(error: &E) -> Error {
 
 /// `problem` as the answer to `error`, filing what a `5xx` answer withholds.
 fn answered(problem: &Problem, error: &(dyn StdError + 'static)) -> Error {
-    if let Some(said) = nest_rs_core::__private::withheld(problem, error) {
-        failed(&said);
+    match nest_rs_core::__private::withheld(problem, error) {
+        Some(Withheld::Failed(said)) => failed(&said),
+        Some(Withheld::Unavailable(said)) => unavailable(&said),
+        None => {}
     }
     rendered(problem)
 }
@@ -135,6 +138,16 @@ fn failed(said: &str) {
         target: crate::TARGET,
         error = %said,
         "graphql operation failed",
+    );
+}
+
+/// The operator's line for a `503` the answer withholds the cause of: the
+/// server could not serve it in time, which is no failure of its own.
+fn unavailable(said: &str) {
+    tracing::warn!(
+        target: crate::TARGET,
+        error = %said,
+        "graphql operation unavailable",
     );
 }
 
@@ -387,7 +400,8 @@ mod tests {
     }
 
     /// A server problem answers the sentence an opaque failure answers, so it
-    /// files the line an opaque failure files; a bare problem or a client one
+    /// files the chain it withholds — at `warn` for a `503`, the server unable
+    /// to serve in time, at `error` otherwise; a bare problem or a client one
     /// withholds nothing and files none.
     #[test]
     fn a_server_problem_files_the_chain_its_answer_withholds() {
@@ -399,24 +413,25 @@ mod tests {
         let outage = ErrorReport(Outage(Ledger)).into_graphql_error();
         assert_eq!(outage.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
         assert_eq!(extensions(&outage)[CODE_EXTENSION], "UNAVAILABLE");
-        let lines = failed();
-        assert_eq!(lines.len(), 1, "{lines:#?}");
-        assert_eq!(lines[0].level, "error");
+        let unavailable = logs.expect_one(crate::TARGET, "graphql operation unavailable");
+        assert_eq!(unavailable.level, "warn");
         assert!(
-            lines[0]
+            unavailable
                 .field("error")
                 .is_some_and(|e| e.contains("10.0.0.1")),
-            "{lines:#?}"
+            "{unavailable:#?}"
         );
+        assert!(failed().is_empty(), "{:#?}", failed());
 
         let carried = nest_rs_core::anyhow::Error::from(Problem::new(500, code::INTERNAL))
             .context("charging the card");
         let charged = ErrorReport(carried).into_graphql_error();
         assert_eq!(charged.message, OPAQUE_CLIENT_MESSAGE);
         let lines = failed();
-        assert_eq!(lines.len(), 2, "{lines:#?}");
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        assert_eq!(lines[0].level, "error");
         assert!(
-            lines[1]
+            lines[0]
                 .field("error")
                 .is_some_and(|e| e.contains("charging the card")),
             "{lines:#?}"
@@ -424,11 +439,11 @@ mod tests {
 
         let bare = problem_error(&Problem::new(503, code::UNAVAILABLE));
         assert_eq!(bare.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
-        assert_eq!(failed().len(), 2, "a bare problem withholds nothing");
+        assert_eq!(failed().len(), 1, "a bare problem withholds nothing");
 
         let conflict = problem_error(&Problem::new(409, code::CONFLICT));
         assert_eq!(conflict.message, "conflict");
-        assert_eq!(failed().len(), 2, "a client problem withholds nothing");
+        assert_eq!(failed().len(), 1, "a client problem withholds nothing");
     }
 
     #[test]

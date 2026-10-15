@@ -250,7 +250,8 @@ checks its TLS material — and only when every one has does the app turn
 `Ready` and the transports start serving. A port already taken fails the boot
 there, naming the step (``the `listen` of transport `HttpTransport` ``), with
 the failed boot's teardown, before the queue worker has consumed a single job.
-A transport you write does its binding in `listen`, never in `serve`: one that
+A transport that panics as it configures or listens fails the boot the same
+way, its panic one `error` line. A transport you write does its binding in `listen`, never in `serve`: one that
 binds in `serve` counts as ready before it is.
 
 Shutdown is triggered by `SIGINT` / `SIGTERM`, or by the first transport

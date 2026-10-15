@@ -1084,6 +1084,210 @@ async fn a_transport_that_fails_to_listen_fails_the_boot_before_any_transport_se
     logs.expect_none(target::APP, "app ready");
 }
 
+/// Panics in its `listen`, as a transport with a bug there does.
+struct PanicsToListen;
+
+#[async_trait::async_trait]
+impl Transport for PanicsToListen {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(&mut self) -> anyhow::Result<nest_rs_core::Listening> {
+        panic!("the listener was never bound");
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        listen_boot("the panicked transport served");
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct PanicsToListenModule;
+
+impl Module for PanicsToListenModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_meta(TransportContribution {
+            name: "PanicsToListen",
+            build: |_| Ok(Box::new(PanicsToListen)),
+        })
+    }
+}
+
+#[nest_rs_core::module(imports = [PanicsToListenModule], providers = [WarmCache])]
+struct ListenPanicsModule;
+
+/// A `listen` that panics fails the boot as one that errs does: the panic is
+/// one line, the error carries the step, and the init hooks are torn down.
+#[tokio::test]
+async fn a_transport_that_panics_as_it_listens_fails_the_boot_and_its_hooks_are_torn_down() {
+    let logs = LogCapture::install();
+    let app = App::new::<ListenPanicsModule>().expect("the module boots");
+    let lifecycle = std::sync::Arc::clone(app.lifecycle());
+
+    let refused = tokio::time::timeout(Duration::from_secs(5), app.run())
+        .await
+        .expect("the boot stops at the listen")
+        .expect_err("the panicked listen failed the boot");
+
+    assert!(
+        matches!(
+            refused.downcast_ref::<nest_rs_core::BootStep>(),
+            Some(nest_rs_core::BootStep::Listen { transport }) if transport == "PanicsToListen"
+        ),
+        "the boot error carries the listen step: {refused:#}"
+    );
+    assert_eq!(
+        nest_rs_core::error_message(refused.as_ref()),
+        "the `listen` of transport `PanicsToListen`: transport `PanicsToListen` panicked",
+    );
+    assert_eq!(
+        *LISTEN_BOOT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ["init hook", "shutdown hook"],
+        "no transport served, and the teardown ran",
+    );
+    assert_eq!(lifecycle.cause(), Some(nest_rs_core::StopCause::BootFailed));
+    let line = logs.expect_one(
+        target::APP,
+        "transport panicked during the boot; the boot is aborted",
+    );
+    assert_eq!(line.field("transport").as_deref(), Some("PanicsToListen"));
+    assert_eq!(
+        line.field("step").as_deref(),
+        Some("the `listen` of transport `PanicsToListen`")
+    );
+    assert_eq!(
+        line.field(FIELD).as_deref(),
+        Some("the listener was never bound")
+    );
+    logs.expect_none(target::APP, "app ready");
+}
+
+/// A resource the boot opened before any transport configures.
+struct Opened;
+
+/// Panics in its `configure`, after the module's resource opened.
+struct PanicsToConfigure;
+
+#[async_trait::async_trait]
+impl Transport for PanicsToConfigure {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        panic!("a route could not be composed");
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        listen_boot("the panicked transport served");
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// Opens [`Opened`], then contributes the transport `build` builds as `name`.
+fn opens_then_panics(
+    builder: ContainerBuilder,
+    name: &'static str,
+    build: fn(&Container) -> anyhow::Result<Box<dyn Transport>>,
+) -> ContainerBuilder {
+    builder
+        .provide(Opened)
+        .provide_close::<Opened, _, _>(|_| async {
+            listen_boot("resource closed");
+            Ok(())
+        })
+        .provide_meta(TransportContribution { name, build })
+}
+
+struct ConfigurePanicsModule;
+
+impl Module for ConfigurePanicsModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        opens_then_panics(builder, "PanicsToConfigure", |_| {
+            Ok(Box::new(PanicsToConfigure))
+        })
+    }
+}
+
+struct BuildPanicsModule;
+
+impl Module for BuildPanicsModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        opens_then_panics(builder, "PanicsAsBuilt", |_| {
+            panic!("the transport's settings were never read")
+        })
+    }
+}
+
+/// Run `M`'s app to its boot failure, returning the error and the panic's line.
+async fn boot_panicking<M: Module>() -> (anyhow::Error, nest_rs_testing::CapturedEvent) {
+    let logs = LogCapture::install();
+    let app = App::new::<M>().expect("the module boots");
+    let lifecycle = std::sync::Arc::clone(app.lifecycle());
+
+    let refused = tokio::time::timeout(Duration::from_secs(5), app.run())
+        .await
+        .expect("the boot stops at the panic")
+        .expect_err("the panic failed the boot");
+
+    assert_eq!(
+        *LISTEN_BOOT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ["resource closed"],
+        "no transport served, and the resource the boot opened closed",
+    );
+    assert_eq!(lifecycle.cause(), Some(nest_rs_core::StopCause::BootFailed));
+    logs.expect_none(target::APP, "app ready");
+    let line = logs.expect_one(
+        target::APP,
+        "transport panicked during the boot; the boot is aborted",
+    );
+    (refused, line)
+}
+
+#[tokio::test]
+async fn a_transport_that_panics_as_it_configures_fails_the_boot_and_the_resources_close() {
+    let (refused, line) = boot_panicking::<ConfigurePanicsModule>().await;
+
+    assert_eq!(
+        refused.to_string(),
+        "transport `PanicsToConfigure` panicked"
+    );
+    assert_eq!(
+        line.field("transport").as_deref(),
+        Some("PanicsToConfigure")
+    );
+    assert_eq!(
+        line.field("step").as_deref(),
+        Some("the `configure` of transport `PanicsToConfigure`")
+    );
+    assert_eq!(
+        line.field(FIELD).as_deref(),
+        Some("a route could not be composed")
+    );
+}
+
+#[tokio::test]
+async fn a_transport_that_panics_as_it_is_built_fails_the_boot_and_the_resources_close() {
+    let (refused, line) = boot_panicking::<BuildPanicsModule>().await;
+
+    assert_eq!(refused.to_string(), "transport `PanicsAsBuilt` panicked");
+    assert_eq!(line.field("transport").as_deref(), Some("PanicsAsBuilt"));
+    assert_eq!(line.field("step"), None);
+    assert_eq!(
+        line.field(FIELD).as_deref(),
+        Some("the transport's settings were never read")
+    );
+}
+
 /// Serves until the app's stop token fires.
 struct ServesUntilStopped;
 

@@ -527,7 +527,9 @@ impl App {
     /// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND)
     /// ([`UnboundedTransportError`](crate::UnboundedTransportError)); a
     /// `listen` that fails fails it with the error carrying
-    /// [`BootStep::Listen`], before any transport serves. A stop
+    /// [`BootStep::Listen`], before any transport serves; a transport that
+    /// panics as it is built, configures or listens fails it as one that
+    /// returns an error does, the panic filed once at `error`. A stop
     /// asked while a transport configures or listens, or an init hook waits,
     /// stops the boot there ([`BootInterruptedError`](crate::BootInterruptedError)).
     /// Once the transports have stopped, the shutdown hooks run, then the
@@ -569,22 +571,30 @@ impl App {
 
         let mut transports: Vec<(&'static str, Box<dyn Transport>)> = Vec::new();
         for contribution in Discovery::new(&self.container).meta::<TransportContribution>() {
-            let transport = (contribution.meta.build)(&self.container)?;
+            let name = contribution.meta.name;
+            let built =
+                crate::panic::contain(async { (contribution.meta.build)(&self.container) }).await;
+            let transport = unwound(name, None, built)?;
             tracing::info!(
                 target: crate::target::APP,
                 transport = contribution.meta.name,
                 "attached module-contributed transport",
             );
-            transports.push((contribution.meta.name, transport));
+            transports.push((name, transport));
         }
 
         for (name, transport) in transports.iter_mut() {
             let step = BootStep::Configure {
                 transport: (*name).to_owned(),
             };
-            self.lifecycle
-                .boot(&step, transport.configure(&self.container))
-                .await??;
+            let configured = self
+                .lifecycle
+                .boot(
+                    &step,
+                    crate::panic::contain(transport.configure(&self.container)),
+                )
+                .await?;
+            unwound(name, Some(&step), configured)?;
         }
         // A site composed at `configure` (a route, a gateway) refuses here, its
         // mount having no `Result` to fail with.
@@ -611,11 +621,11 @@ impl App {
             let step = BootStep::Listen {
                 transport: (*name).to_owned(),
             };
-            let listening = self
+            let listened = self
                 .lifecycle
-                .boot(&step, transport.listen())
-                .await?
-                .context(step)?;
+                .boot(&step, crate::panic::contain(transport.listen()))
+                .await?;
+            let listening = unwound(name, Some(&step), listened).context(step)?;
             addresses.extend(listening.addresses.iter().map(ToString::to_string));
         }
 
@@ -727,6 +737,25 @@ impl App {
             None => Ok(()),
         }
     }
+}
+
+/// What a transport's boot step returned, or, when it panicked, the panic filed
+/// once at `error` and the boot's error naming the transport.
+fn unwound<T>(
+    transport: &'static str,
+    step: Option<&BootStep>,
+    outcome: Result<Result<T>, Box<dyn Any + Send>>,
+) -> Result<T> {
+    outcome.unwrap_or_else(|payload| {
+        crate::contained_panic!(
+            target: crate::target::APP,
+            payload.as_ref(),
+            "transport panicked during the boot; the boot is aborted",
+            transport,
+            step = step.map(tracing::field::display),
+        );
+        Err(anyhow!("transport `{transport}` panicked"))
+    })
 }
 
 /// Each transport still serving, by its task: its name and stop bound.

@@ -6,6 +6,7 @@ use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
 use tokio::task::JoinSet;
@@ -590,14 +591,12 @@ impl App {
         if let Some(refusal) = crate::container::__private::take_site_refusal(&self.container) {
             return Err(refusal);
         }
+        let mut stop_bound = Duration::ZERO;
         for (name, transport) in &transports {
-            __private::check_stop_bound(name, transport.stop_bound())?;
+            let bound = transport.stop_bound();
+            __private::check_stop_bound(name, bound)?;
+            stop_bound = stop_bound.max(bound);
         }
-        let stop_bound = transports
-            .iter()
-            .map(|(_, t)| t.stop_bound())
-            .max()
-            .unwrap_or_default();
         tracing::info!(
             target: crate::target::APP,
             stop_bound_ms = millis(stop_bound),
@@ -632,11 +631,10 @@ impl App {
     async fn serve_all(
         &self,
         transports: Vec<(&'static str, Box<dyn Transport>)>,
-        stop_bound: std::time::Duration,
+        stop_bound: Duration,
     ) -> Result<()> {
         let mut join = JoinSet::new();
-        let mut serving: HashMap<tokio::task::Id, (&'static str, std::time::Duration)> =
-            HashMap::new();
+        let mut serving = Serving::new();
         for (name, transport) in transports {
             let bound = transport.stop_bound();
             let stop = self.lifecycle.serving();
@@ -648,30 +646,22 @@ impl App {
         crate::way_down::transports(still_serving(&serving));
 
         let stopping = self.lifecycle.stopping();
-        let mut held_until: Option<Instant> = None;
+        let held = async {
+            stopping.cancelled().await;
+            tokio::time::sleep(stop_bound + crate::SHUTDOWN_SETTLE_TIMEOUT).await;
+        };
+        let mut held = std::pin::pin!(held);
         let mut first_err: Option<anyhow::Error> = None;
         loop {
-            let next = match held_until {
-                None => tokio::select! {
-                    next = join.join_next_with_id() => next,
-                    () = stopping.cancelled() => {
-                        held_until = Some(Instant::now() + stop_bound + crate::SHUTDOWN_SETTLE_TIMEOUT);
-                        continue;
-                    }
-                },
-                Some(deadline) => {
-                    if let Ok(next) =
-                        tokio::time::timeout_at(deadline, join.join_next_with_id()).await
-                    {
-                        next
-                    } else {
-                        // Aborted, never awaited: a task blocking its thread would hold the
-                        // way down past every bound.
-                        join.abort_all();
-                        let abandoned = abandon(&serving);
-                        first_err.get_or_insert(abandoned);
-                        break;
-                    }
+            let next = tokio::select! {
+                biased;
+                next = join.join_next_with_id() => next,
+                () = &mut held => {
+                    // Aborted, never awaited: a task blocking its thread would hold the
+                    // way down past every bound.
+                    join.abort_all();
+                    first_err.get_or_insert(abandon(&serving));
+                    break;
                 }
             };
             let Some(res) = next else { break };
@@ -739,13 +729,13 @@ impl App {
     }
 }
 
+/// Each transport still serving, by its task: its name and stop bound.
+type Serving = HashMap<tokio::task::Id, (&'static str, Duration)>;
+
 /// Name every transport still serving past the way down's bound at `error`,
 /// and the first, by name, as the app's error.
-fn abandon(
-    serving: &HashMap<tokio::task::Id, (&'static str, std::time::Duration)>,
-) -> anyhow::Error {
-    let mut abandoned: Vec<(&'static str, std::time::Duration)> =
-        serving.values().copied().collect();
+fn abandon(serving: &Serving) -> anyhow::Error {
+    let mut abandoned: Vec<(&'static str, Duration)> = serving.values().copied().collect();
     abandoned.sort_unstable();
     for (transport, bound) in &abandoned {
         tracing::error!(
@@ -1237,9 +1227,7 @@ fn seal(
     })
 }
 
-fn still_serving(
-    serving: &HashMap<tokio::task::Id, (&'static str, std::time::Duration)>,
-) -> Vec<&'static str> {
+fn still_serving(serving: &Serving) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = serving.values().map(|(name, _)| *name).collect();
     names.sort_unstable();
     names

@@ -1232,7 +1232,7 @@ async fn a_transport_that_ignores_its_stop_is_abandoned_at_its_bound_then_the_se
     assert_eq!(line.field("stop_bound_ms").as_deref(), Some("3000"));
 }
 
-/// Declares the bound it was built with, and records that it was configured.
+/// Declares the bound it was built with.
 struct Declares(Duration);
 
 #[async_trait::async_trait]

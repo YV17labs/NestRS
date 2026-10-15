@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _, Result, anyhow};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -23,8 +23,9 @@ use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    LateFactoryError, LateOptionalDependencyError, OverriddenDependencyError, UnbuiltProviderError,
-    UnclaimedOverrideError, UnregisteredModuleError, UnresolvedFactoryError,
+    LateFactoryError, LateOptionalDependencyError, OverriddenDependencyError,
+    UnboundedTransportError, UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError,
+    UnresolvedFactoryError,
 };
 use crate::lifecycle::{HookFailure, HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
 use crate::millis::millis;
@@ -71,6 +72,11 @@ pub enum BootStep {
         /// The transport, as its module names it.
         transport: String,
     },
+    /// A transport's [`listen`](Transport::listen), once every init hook ran.
+    Listen {
+        /// The transport, as its module names it.
+        transport: String,
+    },
     /// An init lifecycle hook.
     InitHook {
         /// The init phase it runs in.
@@ -91,6 +97,7 @@ impl std::fmt::Display for BootStep {
             Self::Configure { transport } => {
                 write!(f, "the `configure` of transport `{transport}`")
             }
+            Self::Listen { transport } => write!(f, "the `listen` of transport `{transport}`"),
             Self::InitHook {
                 phase,
                 provider,
@@ -504,17 +511,24 @@ impl App {
     }
 
     /// Configure each transport against the container, run the init lifecycle
-    /// hooks unless [`init`](Self::init) already did, then run all transports
-    /// concurrently under the app's stop token. The app is
-    /// [`Ready`](crate::AppState::Ready) once they serve, and turns
-    /// [`Draining`](crate::AppState::Draining) at `SIGINT` / `SIGTERM` or when a
-    /// transport fails, which stops the others.
+    /// hooks unless [`init`](Self::init) already did, have each transport
+    /// [`listen`](Transport::listen), then run all transports concurrently
+    /// under the app's stop token. The app is [`Ready`](crate::AppState::Ready)
+    /// once every transport listens — the `app ready` line names them and the
+    /// addresses they bound — and turns [`Draining`](crate::AppState::Draining)
+    /// at `SIGINT` / `SIGTERM` or when a transport fails, which stops the
+    /// others. A transport whose `serve` returns before a stop was asked, `Ok`
+    /// included, has failed.
     ///
     /// A site a transport composes as it configures — a route, a gateway — that
     /// could not compose (a layer it declares resolves to no provider, a
-    /// misordered guard chain) fails the boot here, before any hook runs; a
-    /// stop asked while a transport configures or an init hook waits stops the
-    /// boot there ([`BootInterruptedError`](crate::BootInterruptedError)).
+    /// misordered guard chain) fails the boot here, before any hook runs, as
+    /// does a transport stating a stop past
+    /// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND)
+    /// ([`UnboundedTransportError`]); a `listen` that fails fails it with the
+    /// error carrying [`BootStep::Listen`], before any transport serves. A stop
+    /// asked while a transport configures or listens, or an init hook waits,
+    /// stops the boot there ([`BootInterruptedError`](crate::BootInterruptedError)).
     /// Once the transports have stopped, the shutdown hooks run, then the
     /// resources the modules opened close and the container drops, all within
     /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT); a hook that
@@ -523,9 +537,12 @@ impl App {
     /// and its error is still what `run` returns.
     ///
     /// Each transport bounds its own stop ([`Transport::stop_bound`]); the
-    /// `way down bounded` boot line files the longest beside the hooks' budget.
-    /// A signal received once the way down has begun exits at once (130 /
-    /// 143). Transports come only from imported modules.
+    /// `way down bounded` boot line files the longest beside the hooks' budget,
+    /// and the kernel holds it: a transport still serving at the longest bound
+    /// plus [`SHUTDOWN_SETTLE_TIMEOUT`](crate::SHUTDOWN_SETTLE_TIMEOUT) after
+    /// the stop is abandoned, named at `error`, and is the app's error. A
+    /// signal received once the way down has begun exits at once (130 / 143).
+    /// Transports come only from imported modules.
     pub async fn run(self) -> Result<()> {
         let served = self.boot_and_serve().await;
         if served.is_err() {
@@ -573,6 +590,9 @@ impl App {
         if let Some(refusal) = crate::container::__private::take_site_refusal(&self.container) {
             return Err(refusal);
         }
+        for (name, transport) in &transports {
+            check_stop_bound(name, transport.stop_bound())?;
+        }
         let stop_bound = transports
             .iter()
             .map(|(_, t)| t.stop_bound())
@@ -587,29 +607,92 @@ impl App {
 
         self.init().await?;
 
+        let mut addresses: Vec<String> = Vec::new();
+        for (name, transport) in transports.iter_mut() {
+            let step = BootStep::Listen {
+                transport: (*name).to_owned(),
+            };
+            let listening = self
+                .lifecycle
+                .boot(&step, transport.listen())
+                .await?
+                .context(step)?;
+            addresses.extend(listening.addresses.iter().map(ToString::to_string));
+        }
+
         let names: Vec<&'static str> = transports.iter().map(|(name, _)| *name).collect();
-        self.lifecycle.turn_ready(&names.join(", "));
+        self.lifecycle
+            .turn_ready(&names.join(", "), &addresses.join(", "));
+        self.serve_all(transports, stop_bound).await
+    }
+
+    /// Serve every transport under the app's stop token until each has
+    /// returned, or, once the stop is asked, until `stop_bound` and the settle
+    /// have passed: what still serves then is abandoned.
+    async fn serve_all(
+        &self,
+        transports: Vec<(&'static str, Box<dyn Transport>)>,
+        stop_bound: std::time::Duration,
+    ) -> Result<()> {
         let mut join = JoinSet::new();
-        let mut serving: HashMap<tokio::task::Id, &'static str> = HashMap::new();
+        let mut serving: HashMap<tokio::task::Id, (&'static str, std::time::Duration)> =
+            HashMap::new();
         for (name, transport) in transports {
+            let bound = transport.stop_bound();
             let stop = self.lifecycle.serving();
             let task = join.spawn(crate::panic::contain(
                 async move { transport.serve(stop).await },
             ));
-            serving.insert(task.id(), name);
+            serving.insert(task.id(), (name, bound));
         }
         crate::way_down::transports(still_serving(&serving));
 
+        let stopping = self.lifecycle.stopping();
+        let mut held_until: Option<Instant> = None;
         let mut first_err: Option<anyhow::Error> = None;
-        while let Some(res) = join.join_next_with_id().await {
+        loop {
+            let next = match held_until {
+                None => tokio::select! {
+                    next = join.join_next_with_id() => next,
+                    () = stopping.cancelled() => {
+                        held_until = Some(Instant::now() + stop_bound + crate::SHUTDOWN_SETTLE_TIMEOUT);
+                        continue;
+                    }
+                },
+                Some(deadline) => {
+                    if let Ok(next) =
+                        tokio::time::timeout_at(deadline, join.join_next_with_id()).await
+                    {
+                        next
+                    } else {
+                        // Aborted, never awaited: a task blocking its thread would hold the
+                        // way down past every bound.
+                        join.abort_all();
+                        let abandoned = abandon(&serving);
+                        first_err.get_or_insert(abandoned);
+                        break;
+                    }
+                }
+            };
+            let Some(res) = next else { break };
             let ended = match &res {
                 Ok((task, _)) => *task,
                 Err(join_err) => join_err.id(),
             };
-            let transport = serving.remove(&ended).unwrap_or("<unknown>");
+            let transport = serving.remove(&ended).map_or("<unknown>", |(name, _)| name);
             crate::way_down::transports(still_serving(&serving));
             let failed = match res.map(|(_, served)| served) {
-                Ok(Ok(Ok(()))) => None,
+                Ok(Ok(Ok(()))) if stopping.is_cancelled() => None,
+                Ok(Ok(Ok(()))) => {
+                    tracing::error!(
+                        target: crate::target::APP,
+                        transport,
+                        "transport stopped serving before the app was asked to stop",
+                    );
+                    Some(anyhow!(
+                        "transport `{transport}` stopped serving before the app was asked to stop"
+                    ))
+                }
                 Ok(Ok(Err(e))) => {
                     tracing::error!(
                         target: crate::target::APP,
@@ -654,6 +737,42 @@ impl App {
             None => Ok(()),
         }
     }
+}
+
+/// Refuse a transport whose stop the kernel cannot hold: past
+/// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND), `Duration::MAX` among them.
+pub(crate) fn check_stop_bound(
+    transport: &'static str,
+    bound: std::time::Duration,
+) -> Result<(), UnboundedTransportError> {
+    if bound <= crate::MAX_STOP_BOUND {
+        return Ok(());
+    }
+    Err(UnboundedTransportError {
+        transport,
+        stop_bound_ms: millis(bound),
+    })
+}
+
+/// Name every transport still serving past the way down's bound at `error`,
+/// and the first, by name, as the app's error.
+fn abandon(
+    serving: &HashMap<tokio::task::Id, (&'static str, std::time::Duration)>,
+) -> anyhow::Error {
+    let mut abandoned: Vec<(&'static str, std::time::Duration)> =
+        serving.values().copied().collect();
+    abandoned.sort_unstable();
+    for (transport, bound) in &abandoned {
+        tracing::error!(
+            target: crate::target::APP,
+            transport,
+            stop_bound_ms = millis(*bound),
+            "transport did not stop within its declared bound: abandoned",
+        );
+    }
+    crate::way_down::transports(Vec::new());
+    let first = abandoned.first().map_or("<unknown>", |(name, _)| name);
+    anyhow!("transport `{first}` did not stop within its declared bound")
 }
 
 /// Start the shutdown hooks' budget, which the shutdown phases, the closes and
@@ -1133,8 +1252,10 @@ fn seal(
     })
 }
 
-fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = serving.values().copied().collect();
+fn still_serving(
+    serving: &HashMap<tokio::task::Id, (&'static str, std::time::Duration)>,
+) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = serving.values().map(|(name, _)| *name).collect();
     names.sort_unstable();
     names
 }

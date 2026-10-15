@@ -216,6 +216,22 @@ pub struct BootInterruptedError {
     pub step: crate::BootStep,
 }
 
+/// A transport states a stop past [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND) —
+/// [`Duration::MAX`](std::time::Duration::MAX) among them —, refused at the
+/// boot before any init hook runs: the kernel holds every transport to its
+/// bound.
+#[derive(Debug, Error)]
+#[error(
+    "transport `{transport}` states a stop bound of {stop_bound_ms} ms, past the one-day \
+     ceiling: a transport's stop is bounded: declare its drain window"
+)]
+pub struct UnboundedTransportError {
+    /// The transport, as its module names it.
+    pub transport: &'static str,
+    /// The bound it states, in milliseconds, saturated at `u64::MAX`.
+    pub stop_bound_ms: u64,
+}
+
 /// The app's init phases failed, were interrupted, or were dropped before they
 /// finished, on an earlier call: they do not run again, so neither
 /// [`App::init`](crate::App::init) nor [`App::run`](crate::App::run) proceeds.

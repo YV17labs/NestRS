@@ -64,7 +64,7 @@ impl Transport for NeverStops {
     }
 
     fn stop_bound(&self) -> Duration {
-        Duration::MAX
+        Duration::from_secs(3_600)
     }
 }
 
@@ -174,6 +174,46 @@ impl Module for ConfiguresSlowlyModule {
         builder.provide_meta(TransportContribution {
             name: "ConfiguresSlowly",
             build: |_| Ok(Box::new(ConfiguresSlowly)),
+        })
+    }
+}
+
+/// Prints [`READY`] once its `listen` is under way, then waits.
+struct ListensSlowly;
+
+#[async_trait::async_trait]
+impl Transport for ListensSlowly {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
+    async fn listen(&mut self) -> anyhow::Result<nest_rs_core::Listening> {
+        println!("{READY}");
+        tokio::time::sleep(WAITS_FOR).await;
+        Ok(nest_rs_core::Listening::default())
+    }
+
+    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct ListensSlowlyModule;
+
+impl Module for ListensSlowlyModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_meta(TransportContribution {
+            name: "ListensSlowly",
+            build: |_| Ok(Box::new(ListensSlowly)),
         })
     }
 }
@@ -310,6 +350,7 @@ async fn run_child(role: String) -> anyhow::Result<()> {
                 .map(drop),
         ),
         "configure" => said(App::new::<ConfiguresSlowlyModule>()?.run().await),
+        "listen" => said(App::new::<ListensSlowlyModule>()?.run().await),
         "init" => said(
             App::builder()
                 .module::<WarmsSlowlyModule>()
@@ -473,6 +514,12 @@ fn a_signal_during_a_factory_stops_the_boot_naming_its_type() {
 #[test]
 fn a_signal_while_a_transport_configures_stops_the_boot_naming_it() {
     signalled_during_the_boot("configure", "ConfiguresSlowly");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_signal_while_a_transport_listens_stops_the_boot_naming_it() {
+    signalled_during_the_boot("listen", "the `listen` of transport `ListensSlowly`");
 }
 
 #[cfg(unix)]

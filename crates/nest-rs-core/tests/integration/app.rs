@@ -248,7 +248,7 @@ async fn the_boot_line_files_the_longest_stop_bound_beside_the_hooks_budget() {
         .expect("the module boots")
         .run()
         .await
-        .expect("both transports stop cleanly");
+        .expect_err("both transports end on their own");
 
     let event = logs.expect_one(target::APP, "way down bounded");
     assert_eq!(event.level, "info");
@@ -950,4 +950,366 @@ async fn a_key_an_override_removed_listed_again_elsewhere_is_still_a_duplicate()
             .await,
     );
     assert_eq!(duplicated, std::any::type_name::<LeftPort>());
+}
+
+/// What the boot of a [`ListenFailsModule`] app ran, in order.
+static LISTEN_BOOT: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+fn listen_boot(step: &'static str) {
+    LISTEN_BOOT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(step);
+}
+
+/// Listens on `127.0.0.1:4000` and records that it served.
+struct ListensThenServes;
+
+#[async_trait::async_trait]
+impl Transport for ListensThenServes {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(&mut self) -> anyhow::Result<nest_rs_core::Listening> {
+        listen_boot("listened");
+        Ok(nest_rs_core::Listening::on([std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            4000,
+        ))]))
+    }
+
+    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+        listen_boot("served");
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// Fails its `listen`, as a transport whose port is taken does.
+struct RefusesToListen;
+
+#[async_trait::async_trait]
+impl Transport for RefusesToListen {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(&mut self) -> anyhow::Result<nest_rs_core::Listening> {
+        Err(anyhow!("the address is already in use"))
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        listen_boot("the refused transport served");
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct WarmCache;
+
+#[nest_rs_core::hooks]
+impl WarmCache {
+    #[on_module_init]
+    async fn warm(&self) {
+        listen_boot("init hook");
+    }
+
+    #[on_module_destroy]
+    async fn evict(&self) {
+        listen_boot("shutdown hook");
+    }
+}
+
+#[nest_rs_core::module(imports = [ListensThenRefusesModule], providers = [WarmCache])]
+struct ListenFailsModule;
+
+struct ListensThenRefusesModule;
+
+impl Module for ListensThenRefusesModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(TransportContribution {
+                name: "ListensThenServes",
+                build: |_| Ok(Box::new(ListensThenServes)),
+            })
+            .provide_meta(TransportContribution {
+                name: "RefusesToListen",
+                build: |_| Ok(Box::new(RefusesToListen)),
+            })
+    }
+}
+
+/// Every transport listens before any serves: one whose `listen` fails fails
+/// the boot naming the step, no transport serves, and the init hooks that ran
+/// are torn down.
+#[tokio::test]
+async fn a_transport_that_fails_to_listen_fails_the_boot_before_any_transport_serves() {
+    let logs = LogCapture::install();
+    let app = App::new::<ListenFailsModule>().expect("the module boots");
+    let lifecycle = std::sync::Arc::clone(app.lifecycle());
+
+    let refused = tokio::time::timeout(Duration::from_secs(5), app.run())
+        .await
+        .expect("the boot stops at the listen")
+        .expect_err("the listen failed the boot");
+
+    match refused.downcast_ref::<nest_rs_core::BootStep>() {
+        Some(nest_rs_core::BootStep::Listen { transport }) => {
+            assert_eq!(transport, "RefusesToListen");
+        }
+        other => panic!("the boot error carries the listen step, not {other:?}: {refused:#}"),
+    }
+    assert_eq!(
+        nest_rs_core::error_message(refused.as_ref()),
+        "the `listen` of transport `RefusesToListen`: the address is already in use",
+    );
+    assert_eq!(
+        *LISTEN_BOOT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ["init hook", "listened", "shutdown hook"],
+        "the hooks ran before the listens, no transport served, and the teardown ran",
+    );
+    assert_eq!(lifecycle.cause(), Some(nest_rs_core::StopCause::BootFailed));
+    logs.expect_none(target::APP, "app ready");
+}
+
+/// Serves until the app's stop token fires.
+struct ServesUntilStopped;
+
+#[async_trait::async_trait]
+impl Transport for ServesUntilStopped {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// Returns from `serve` at once, without an error, as a loop that found
+/// nothing to do and ended would.
+struct EndsAtOnce;
+
+#[async_trait::async_trait]
+impl Transport for EndsAtOnce {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct EndsBesideServingModule;
+
+impl Module for EndsBesideServingModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(TransportContribution {
+                name: "ServesUntilStopped",
+                build: |_| Ok(Box::new(ServesUntilStopped)),
+            })
+            .provide_meta(TransportContribution {
+                name: "EndsAtOnce",
+                build: |_| Ok(Box::new(EndsAtOnce)),
+            })
+    }
+}
+
+const ENDED_EARLY: &str = "transport stopped serving before the app was asked to stop";
+
+#[tokio::test]
+async fn a_transport_that_stops_serving_on_its_own_stops_the_app_with_an_error() {
+    let logs = LogCapture::install();
+    let app = App::new::<EndsBesideServingModule>().expect("the module boots");
+    let lifecycle = std::sync::Arc::clone(app.lifecycle());
+
+    let ended = tokio::time::timeout(Duration::from_secs(5), app.run())
+        .await
+        .expect("the early end stops the transport still serving")
+        .expect_err("a transport ending on its own is the app's error");
+
+    assert_eq!(
+        ended.to_string(),
+        "transport `EndsAtOnce` stopped serving before the app was asked to stop"
+    );
+    assert_eq!(
+        lifecycle.cause(),
+        Some(nest_rs_core::StopCause::TransportFailed)
+    );
+    let line = logs.expect_one(target::APP, ENDED_EARLY);
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("transport").as_deref(), Some("EndsAtOnce"));
+}
+
+/// Never returns from `serve`, its stop token ignored.
+struct IgnoresItsStop(Duration);
+
+#[async_trait::async_trait]
+impl Transport for IgnoresItsStop {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+
+    fn stop_bound(&self) -> Duration {
+        self.0
+    }
+}
+
+/// The bound [`IgnoresItsStop`] states.
+const IGNORED_BOUND: Duration = Duration::from_secs(3);
+
+struct IgnoresItsStopModule;
+
+impl Module for IgnoresItsStopModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(TransportContribution {
+                name: "IgnoresItsStop",
+                build: |_| Ok(Box::new(IgnoresItsStop(IGNORED_BOUND))),
+            })
+            .provide_meta(TransportContribution {
+                name: "Failing",
+                build: |_| Ok(Box::new(Failing)),
+            })
+    }
+}
+
+const ABANDONED: &str = "transport did not stop within its declared bound: abandoned";
+
+/// The kernel holds each transport to the bound it states: past the longest,
+/// plus the settle, one still serving is abandoned and named.
+#[tokio::test(start_paused = true)]
+async fn a_transport_that_ignores_its_stop_is_abandoned_at_its_bound_then_the_settle() {
+    let logs = LogCapture::install();
+    let app = App::new::<IgnoresItsStopModule>().expect("the module boots");
+    let started = tokio::time::Instant::now();
+
+    let failed = tokio::time::timeout(Duration::from_secs(60), app.run())
+        .await
+        .expect("the kernel does not wait on the transport past its bound")
+        .expect_err("a transport failed");
+
+    let took = started.elapsed();
+    let held = IGNORED_BOUND + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
+    assert!(
+        took >= held && took < held + Duration::from_millis(100),
+        "run returned at the bound plus the settle: took {took:?}",
+    );
+    assert!(
+        failed.to_string().contains("listener stopped"),
+        "the first failure is still the app's error: {failed:#}"
+    );
+    let line = logs.expect_one(target::APP, ABANDONED);
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("transport").as_deref(), Some("IgnoresItsStop"));
+    assert_eq!(line.field("stop_bound_ms").as_deref(), Some("3000"));
+}
+
+/// Declares the bound it was built with, and records that it was configured.
+struct Declares(Duration);
+
+#[async_trait::async_trait]
+impl Transport for Declares {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        Err(anyhow!("served past the bound check"))
+    }
+
+    fn stop_bound(&self) -> Duration {
+        self.0
+    }
+}
+
+/// The boot of one [`Declares`] transport stating `bound`.
+async fn run_declaring(bound: Duration) -> anyhow::Error {
+    struct DeclaresModule;
+    static BOUND: std::sync::Mutex<Duration> = std::sync::Mutex::new(Duration::ZERO);
+    impl Module for DeclaresModule {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.provide_meta(TransportContribution {
+                name: "Declares",
+                build: |_| {
+                    let bound = *BOUND
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    Ok(Box::new(Declares(bound)))
+                },
+            })
+        }
+    }
+    *BOUND
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = bound;
+    App::new::<DeclaresModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("every outcome here is an error")
+}
+
+/// An unbounded stop is refused before anything runs; a day is the ceiling,
+/// and the longest first-party window, an hour and its settle, is under it.
+#[tokio::test]
+async fn a_stop_bound_past_a_day_is_refused_at_the_boot() {
+    for (bound, refused_ms) in [
+        (Duration::MAX, Some(u64::MAX)),
+        (
+            nest_rs_core::MAX_STOP_BOUND + Duration::from_secs(1),
+            Some(86_401_000),
+        ),
+        (nest_rs_core::MAX_STOP_BOUND, None),
+        (Duration::from_millis(3_600_500), None),
+    ] {
+        let error = run_declaring(bound).await;
+        match (
+            error.downcast_ref::<nest_rs_core::UnboundedTransportError>(),
+            refused_ms,
+        ) {
+            (Some(refused), Some(ms)) => {
+                assert_eq!(refused.transport, "Declares");
+                assert_eq!(refused.stop_bound_ms, ms);
+                assert!(
+                    error
+                        .to_string()
+                        .ends_with("a transport's stop is bounded: declare its drain window"),
+                    "{error}"
+                );
+            }
+            (None, None) => assert!(
+                error.to_string().contains("served past the bound check"),
+                "{bound:?} is accepted: {error:#}"
+            ),
+            (refused, _) => panic!("{bound:?}: {refused:?}, {error:#}"),
+        }
+    }
 }

@@ -13,9 +13,9 @@ use crate::error::BootInterruptedError;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AppState {
-    /// From the start of the boot until its transports serve.
+    /// From the start of the boot until every transport listens.
     Starting,
-    /// The boot is done and the transports serve.
+    /// Every transport listens, and they serve.
     Ready,
     /// A stop was asked; serving winds down.
     Draining,
@@ -29,11 +29,12 @@ pub enum StopCause {
     Interrupt,
     /// `SIGTERM`.
     Terminate,
-    /// A transport returned `Err`, panicked, or stopped serving on its own —
-    /// an app left with no transport serving stops for this cause.
+    /// A transport returned `Err`, panicked, or stopped serving on its own
+    /// before a stop was asked — an app left with no transport serving stops
+    /// for this cause.
     TransportFailed,
-    /// The boot failed — a transport's `configure`, an init hook — before the
-    /// app served.
+    /// The boot failed — a transport's `configure` or `listen`, an init hook —
+    /// before the app served.
     BootFailed,
     /// [`App::close`](crate::App::close) ended an app that was not serving.
     Closed,
@@ -167,8 +168,9 @@ impl AppLifecycle {
         }
     }
 
-    /// `Starting → Ready`, said once; an app already draining stays so.
-    pub(crate) fn turn_ready(&self, transports: &str) {
+    /// `Starting → Ready`, said once with what serves and where; an app
+    /// already draining stays so.
+    pub(crate) fn turn_ready(&self, transports: &str, addresses: &str) {
         let turned = self.stand.send_if_modified(|stand| match stand {
             Stand::Starting => {
                 *stand = Stand::Ready;
@@ -177,7 +179,7 @@ impl AppLifecycle {
             Stand::Ready | Stand::Draining(_) => false,
         });
         if turned {
-            tracing::info!(target: crate::target::APP, transports, "app ready");
+            tracing::info!(target: crate::target::APP, transports, addresses, "app ready");
         }
     }
 
@@ -270,8 +272,8 @@ mod tests {
         assert_eq!(lifecycle.state(), AppState::Starting);
         assert_eq!(lifecycle.cause(), None);
 
-        lifecycle.turn_ready("Http, Scheduler");
-        lifecycle.turn_ready("Http, Scheduler");
+        lifecycle.turn_ready("Http, Scheduler", "0.0.0.0:3000");
+        lifecycle.turn_ready("Http, Scheduler", "0.0.0.0:3000");
         assert_eq!(lifecycle.state(), AppState::Ready);
         assert!(lifecycle.ready().await);
         assert!(!stopping.is_cancelled());
@@ -288,6 +290,7 @@ mod tests {
             ready.field("transports").as_deref(),
             Some("Http, Scheduler")
         );
+        assert_eq!(ready.field("addresses").as_deref(), Some("0.0.0.0:3000"));
         let draining = logs.expect_one(crate::target::APP, "app draining");
         assert_eq!(draining.field("cause").as_deref(), Some("Terminate"));
         assert_eq!(draining.field("signal").as_deref(), Some("SIGTERM"));
@@ -297,7 +300,7 @@ mod tests {
     async fn an_app_draining_before_it_served_never_turns_ready() {
         let lifecycle = AppLifecycle::new();
         assert!(lifecycle.drain(StopCause::Interrupt));
-        lifecycle.turn_ready("Http");
+        lifecycle.turn_ready("Http", "");
 
         assert_eq!(lifecycle.state(), AppState::Draining);
         assert!(!lifecycle.ready().await);
@@ -313,7 +316,7 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert!(!waiting.is_finished(), "still starting");
 
-        lifecycle.turn_ready("Http");
+        lifecycle.turn_ready("Http", "");
         assert_eq!(waiting.await.ok(), Some(true));
     }
 

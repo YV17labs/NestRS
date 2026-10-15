@@ -150,9 +150,9 @@ pub use error::{
     AccessGraphError, BootInterruptedError, BudgetPastNetError, ContestedDeclarationError,
     DecodeError, DuplicateProviderError, FactoryCycleError, FactoryFailedError, InitFailedError,
     KeyedDependencyError, LateFactoryError, LateOptionalDependencyError, MissingDependencyError,
-    OverriddenDependencyError, ProviderCycleError, ScopeViolationError, UnbuiltCause,
-    UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError, UnresolvedFactoryError,
-    UnresolvedLayerError, WiringFailedError,
+    OverriddenDependencyError, ProviderCycleError, ScopeViolationError, UnboundedTransportError,
+    UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError,
+    UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};
@@ -180,7 +180,7 @@ pub use trace_context::{
     Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,
     current_span_id, current_trace_id, current_traceparent, current_tracestate,
 };
-pub use transport::Transport;
+pub use transport::{Listening, MAX_STOP_BOUND, Transport};
 pub use unit_context::{Peer, UnitContext, UnitView};
 pub use wiring::WiringContribution;
 

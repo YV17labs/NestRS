@@ -3,6 +3,7 @@
 //! stopping it before its teardown, and the signal that stops the process,
 //! read by a [`ChildProcess`] from a shutdown hook.
 
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -10,8 +11,8 @@ use anyhow::anyhow;
 use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::target;
 use nest_rs_core::{
-    App, AppLifecycle, AppState, Collecting, Container, ContainerBuilder, Module, Registering,
-    StopCause, Transport, hooks, injectable, module,
+    App, AppLifecycle, AppState, Collecting, Container, ContainerBuilder, Listening, Module,
+    Registering, StopCause, Transport, hooks, injectable, module,
 };
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
@@ -64,7 +65,8 @@ impl Module for ConstructsModule {
     }
 }
 
-/// Serves until the app is ready, reads the handle, then stops serving.
+/// Reads the handle as it listens and once the app is ready, then stops
+/// serving.
 struct ReadsOnceReady(Option<Arc<AppLifecycle>>);
 
 #[async_trait::async_trait]
@@ -72,6 +74,15 @@ impl Transport for ReadsOnceReady {
     async fn configure(&mut self, container: &Container) -> anyhow::Result<()> {
         self.0 = container.get::<AppLifecycle>();
         Ok(())
+    }
+
+    async fn listen(&mut self) -> anyhow::Result<Listening> {
+        let lifecycle = self.0.as_ref().ok_or_else(|| anyhow!("configured first"))?;
+        read("listen", lifecycle);
+        Ok(Listening::on([
+            SocketAddr::from(([127, 0, 0, 1], 4000)),
+            SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 4000)),
+        ]))
     }
 
     async fn serve(self: Box<Self>, _stop: CancellationToken) -> anyhow::Result<()> {
@@ -119,7 +130,9 @@ async fn a_provider_reads_starting_through_the_boot_and_ready_once_the_app_serve
     assert_eq!(app.lifecycle().state(), AppState::Starting);
 
     let lifecycle = Arc::clone(app.lifecycle());
-    app.run().await.expect("the app serves, then stops");
+    app.run()
+        .await
+        .expect_err("the app serves, then its transport ends on its own");
 
     assert_eq!(
         reads(),
@@ -127,12 +140,17 @@ async fn a_provider_reads_starting_through_the_boot_and_ready_once_the_app_serve
             ("factory", AppState::Starting),
             ("constructor", AppState::Starting),
             ("init hook", AppState::Starting),
+            ("listen", AppState::Starting),
             ("serving", AppState::Ready),
         ]
     );
     let ready = logs.expect_one(target::APP, "app ready");
     assert_eq!(ready.level, "info");
     assert_eq!(ready.field("transports").as_deref(), Some("ReadsOnceReady"));
+    assert_eq!(
+        ready.field("addresses").as_deref(),
+        Some("127.0.0.1:4000, [::1]:4000")
+    );
     assert_eq!(lifecycle.state(), AppState::Draining);
     assert_eq!(
         lifecycle.cause(),

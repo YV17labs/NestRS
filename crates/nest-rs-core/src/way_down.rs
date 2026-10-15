@@ -121,7 +121,9 @@ fn exit_at_once(signal: Received) -> ! {
             Step::Boot(Some(BootStep::Factory { type_name })) => {
                 abandoning!(step = "boot", type_name)
             }
-            Step::Boot(Some(BootStep::Configure { transport })) => {
+            Step::Boot(Some(
+                BootStep::Configure { transport } | BootStep::Listen { transport },
+            )) => {
                 abandoning!(step = "boot", transport = transport.as_str())
             }
             Step::Boot(Some(BootStep::InitHook {

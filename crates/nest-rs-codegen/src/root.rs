@@ -104,7 +104,6 @@ const FRAMEWORK: &[FrameworkCrate] = &[
         "exception-filters",
     ),
     row("nest_rs_storage", "storage", "storage"),
-    row("nest_rs_worker", "worker", "worker"),
 ];
 
 fn umbrella() -> Option<&'static Umbrella> {

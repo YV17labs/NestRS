@@ -444,7 +444,7 @@ mod tests {
             .request_timeout
             .expect("the edge bounds a request by default");
         assert!(DEFAULT_STATEMENT_TIMEOUT < request);
-        assert!(DEFAULT_STATEMENT_TIMEOUT < nest_rs_worker::JOB_TIMEOUT);
+        assert!(DEFAULT_STATEMENT_TIMEOUT < nest_rs_core::JOB_TIMEOUT);
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
             .request_timeout
             .expect("the edge bounds a request by default");
         assert!(budget < request, "{budget:?}");
-        assert!(budget < nest_rs_worker::JOB_TIMEOUT, "{budget:?}");
+        assert!(budget < nest_rs_core::JOB_TIMEOUT, "{budget:?}");
     }
 
     #[test]

@@ -751,7 +751,7 @@ async fn run(
             .await
             {
                 Ok(caught) => caught,
-                Err(_) => Ok(Err(JobError::retry(nest_rs_worker::JobTimedOut::new(
+                Err(_) => Ok(Err(JobError::retry(nest_rs_core::JobTimedOut::new(
                     timeout,
                 )))),
             },
@@ -896,7 +896,7 @@ mod tests {
             identity(1),
             last,
             Duration::from_secs(1),
-            nest_rs_worker::JOB_TIMEOUT,
+            nest_rs_core::JOB_TIMEOUT,
         )
         .await
     }
@@ -1092,7 +1092,7 @@ mod tests {
             identity(4),
             true,
             Duration::from_secs(1),
-            nest_rs_worker::JOB_TIMEOUT,
+            nest_rs_core::JOB_TIMEOUT,
         )
         .await;
         assert!(matches!(result, AttemptOutcome::DeadLetter(_)));
@@ -1121,7 +1121,7 @@ mod tests {
             identity(1),
             false,
             Duration::from_secs(1),
-            nest_rs_worker::JOB_TIMEOUT,
+            nest_rs_core::JOB_TIMEOUT,
         )
         .await;
         assert!(matches!(result, AttemptOutcome::DeadLetter(_)));

@@ -7,11 +7,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use nest_rs_core::JOB_TIMEOUT;
 use nest_rs_core::{Container, Transport};
 use nest_rs_schedule::nest_rs_database::{
     self, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
 };
-use nest_rs_schedule::nest_rs_worker::JOB_TIMEOUT;
 use nest_rs_schedule::{
     CronExpression, CronJobMeta, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError,
     Replicas, RunFn, Scheduler, Trigger,

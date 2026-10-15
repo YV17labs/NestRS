@@ -54,7 +54,7 @@ full = [
     "schedule", "events", "authn", "authz",
     "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry",
     "openapi", "health", "throttler", "server-timing", "guards", "pipes",
-    "interceptors", "filters", "exception-filters", "worker",
+    "interceptors", "filters", "exception-filters",
     "storage", "static-files",
 ]
 
@@ -129,12 +129,12 @@ mcp = [
     "http",
     "nest-rs-authz?/mcp",
 ]
-# `#[processor]` folds pipes over the job payload and names the default job
-# timeout; neither is a crate a `#[process]` method names.
+# `#[processor]` folds pipes over the job payload, which is no crate a
+# `#[process]` method names.
 # A port forwards its kit weakly: beside `testing`, a queue driver's suite
 # reaches `queue_kit!` with no second manifest line, and a build without
 # `testing` compiles no harness.
-queue = ["dep:nest-rs-queue", "worker", "pipes", "nest-rs-testing?/queue"]
+queue = ["dep:nest-rs-queue", "pipes", "nest-rs-testing?/queue"]
 # The one Redis connection (`RedisModule`, `RedisConnection`) and nothing else:
 # an app that sends its own commands, or a health check, compiles no port.
 redis = ["dep:nest-rs-redis"]
@@ -193,8 +193,8 @@ static-files = ["dep:nest-rs-static-files", "http"]
 # test-only like the rest, so always on here.
 testing = ["dep:nest-rs-testing", "nest-rs-testing/tls"]
 # Layer-System extension-point crates. Writing a custom `Guard` (the mandated
-# authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` — or a
-# worker provider — should not force a direct per-crate dep.
+# authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` should
+# not force a direct per-crate dep.
 # Capability features above depend on these by name, which is what makes a bare
 # `features = ["http"]` sufficient.
 guards = ["dep:nest-rs-guards"]
@@ -202,7 +202,6 @@ pipes = ["dep:nest-rs-pipes"]
 interceptors = ["dep:nest-rs-interceptors"]
 filters = ["dep:nest-rs-filters"]
 exception-filters = ["dep:nest-rs-exception-filters"]
-worker = ["dep:nest-rs-worker"]
 storage = ["dep:nest-rs-storage"]
 
 [dependencies]
@@ -237,7 +236,6 @@ nest-rs-pipes = { workspace = true, optional = true }
 nest-rs-interceptors = { workspace = true, optional = true }
 nest-rs-filters = { workspace = true, optional = true }
 nest-rs-exception-filters = { workspace = true, optional = true }
-nest-rs-worker = { workspace = true, optional = true }
 nest-rs-storage = { workspace = true, optional = true }
 
 [lints]

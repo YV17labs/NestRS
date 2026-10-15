@@ -10,12 +10,12 @@ use croner::Cron;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use nest_rs_core::{
-    Container, Correlation, Discovery, ReachableProviders, Transport, Unanswered, inventory, within,
+    Container, Correlation, Discovery, JobTimedOut, ReachableProviders, Transport, Unanswered,
+    inventory, within,
 };
 use nest_rs_database::{
     ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec, run_unit,
 };
-use nest_rs_worker::JobTimedOut;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep};
 use tokio_util::sync::CancellationToken;
@@ -1651,7 +1651,7 @@ mod tests {
         };
         let task = Task {
             run,
-            timeout: nest_rs_worker::JOB_TIMEOUT,
+            timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
@@ -1739,7 +1739,7 @@ mod tests {
                 tz: Some(tz),
             },
             run: idle,
-            timeout: nest_rs_worker::JOB_TIMEOUT,
+            timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::Each,
             key: None,
@@ -1825,7 +1825,7 @@ mod tests {
         };
         let task = Task {
             run,
-            timeout: nest_rs_worker::JOB_TIMEOUT,
+            timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
@@ -1956,7 +1956,7 @@ mod tests {
         };
         let task = Task {
             run: idle,
-            timeout: nest_rs_worker::JOB_TIMEOUT,
+            timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
@@ -2022,7 +2022,7 @@ mod tests {
         };
         let task = Task {
             run,
-            timeout: nest_rs_worker::JOB_TIMEOUT,
+            timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };
@@ -2124,7 +2124,7 @@ mod tests {
             period: Duration::from_millis(100),
             task: Task {
                 run: idle,
-                timeout: nest_rs_worker::JOB_TIMEOUT,
+                timeout: nest_rs_core::JOB_TIMEOUT,
                 transaction: TransactionPolicy::Pool,
                 replicas: Replicas::One,
             },
@@ -2205,7 +2205,7 @@ mod tests {
         };
         let task = Task {
             run,
-            timeout: nest_rs_worker::JOB_TIMEOUT,
+            timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
         };

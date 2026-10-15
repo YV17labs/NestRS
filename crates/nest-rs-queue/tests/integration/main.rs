@@ -1,8 +1,5 @@
 //! The queue port in process: its decorators, pushes and attempts, against a
 //! backend declaring every capability and one declaring none.
-//!
-//! The manifest declares no `nest-rs-worker`: this suite is the call-site
-//! hygiene proof for `#[processor]`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

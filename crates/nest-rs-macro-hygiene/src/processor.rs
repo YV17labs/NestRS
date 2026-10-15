@@ -1,5 +1,5 @@
 //! `#[queue]` + `#[processor]` + `#[process]`: the expansion reaches
-//! `nest-rs-worker`, `nest-rs-database`, `nest-rs-pipes` and `nest-rs-queue`,
+//! `nest-rs-core`, `nest-rs-database`, `nest-rs-pipes` and `nest-rs-queue`,
 //! so the umbrella's `queue` feature must pull all four.
 
 use nest_rs::core::{injectable, input};

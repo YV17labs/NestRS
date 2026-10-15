@@ -37,7 +37,7 @@ pub struct CronJobMeta {
     pub run: RunFn,
     /// How long one run lasts before it is cut and reported failed — from the
     /// `timeout` key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to
-    /// [`JOB_TIMEOUT`](nest_rs_worker::JOB_TIMEOUT).
+    /// [`JOB_TIMEOUT`](nest_rs_core::JOB_TIMEOUT).
     pub timeout: Duration,
     /// How this job's data-layer work is settled — from the `transactional`
     /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one

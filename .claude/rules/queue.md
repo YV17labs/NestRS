@@ -5,7 +5,6 @@ paths:
   - "crates/nest-rs-redis/**"
   - "crates/nest-rs-schedule/**"
   - "crates/nest-rs-schedule-macros/**"
-  - "crates/nest-rs-worker/**"
 ---
 
 # Queue and schedule — the port, the Redis adapter, delivery

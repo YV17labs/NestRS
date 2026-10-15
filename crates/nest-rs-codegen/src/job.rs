@@ -350,13 +350,12 @@ pub fn timeout_value(member: JobDecorator, expr: &Expr) -> syn::Result<u64> {
     Ok(millis)
 }
 
-/// The deadline a parsed `timeout` sets, rooted at the surface path re-exporting
-/// `nest_rs_worker` that the calling macro emits through; `None` is
-/// `nest_rs_worker::JOB_TIMEOUT`.
-pub fn job_timeout(millis: Option<u64>, surface: &TokenStream) -> TokenStream {
+/// The deadline a parsed `timeout` sets; `None` is the kernel's
+/// `JOB_TIMEOUT`, which every framework crate reaches.
+pub fn job_timeout(millis: Option<u64>) -> TokenStream {
     match millis {
         Some(millis) => quote! { ::core::time::Duration::from_millis(#millis) },
-        None => quote! { #surface::nest_rs_worker::JOB_TIMEOUT },
+        None => quote! { ::nest_rs_core::JOB_TIMEOUT },
     }
 }
 
@@ -498,6 +497,18 @@ mod tests {
                 "{past}"
             );
         }
+    }
+
+    #[test]
+    fn the_default_timeout_is_the_kernels() {
+        assert_eq!(
+            job_timeout(None).to_string(),
+            quote!(::nest_rs_core::JOB_TIMEOUT).to_string(),
+        );
+        assert_eq!(
+            job_timeout(Some(1_500)).to_string(),
+            quote!(::core::time::Duration::from_millis(1500u64)).to_string(),
+        );
     }
 
     #[test]

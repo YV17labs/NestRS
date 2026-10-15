@@ -13,7 +13,6 @@ categories = ["asynchronous"]
 
 [dependencies]
 nest-rs-core.workspace = true
-nest-rs-worker.workspace = true
 # Each tick is a unit of work the scheduler runs through the bound
 # `dyn UnitOfWork`, resolved once at boot; `TransactionPolicy` is what the
 # `transactional` key selects.

@@ -2636,7 +2636,6 @@ dependencies = [
  "nest-rs-storage",
  "nest-rs-testing",
  "nest-rs-throttler",
- "nest-rs-worker",
  "nest-rs-ws",
 ]
 
@@ -3070,7 +3069,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-queue-macros",
- "nest-rs-worker",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3127,7 +3125,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-schedule-macros",
- "nest-rs-worker",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
@@ -3286,10 +3283,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
 ]
-
-[[package]]
-name = "nest-rs-worker"
-version = "7.0.0"
 
 [[package]]
 name = "nest-rs-ws"

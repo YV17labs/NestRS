@@ -37,7 +37,7 @@ mod scheduled;
 ///
 /// Every trigger takes `timeout = "30m"`: how long a run lasts before it is cut
 /// and reported failed, so a call that never answers skips no later occurrence;
-/// default ten minutes (`nest_rs_worker::JOB_TIMEOUT`), at most `"24h"`.
+/// default ten minutes (`nest_rs::core::JOB_TIMEOUT`), at most `"24h"`.
 ///
 /// A job firing once is identified by its crate, its host struct and its
 /// method, so moving its module inside the crate keeps it and renaming any of

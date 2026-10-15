@@ -268,7 +268,7 @@ fn emit_method(
     if checkpoint.is_some() {
         options = quote!(#options.with_checkpoint(true));
     }
-    let timeout = job_timeout(timeout, &quote!(::nest_rs_queue::__private));
+    let timeout = job_timeout(timeout);
     options = quote!(#options.with_timeout(#timeout));
 
     let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue::__private));

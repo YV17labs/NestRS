@@ -383,7 +383,7 @@ than its total, so no size is cut (storage's `read_timeout` beside its
 
 A worker job — a queue attempt, a tick — is the one unit no edge deadline
 bounds, so its decorator's `timeout` key is its deadline, defaulting to
-`nest_rs_worker::JOB_TIMEOUT` and never off: past it the attempt is cut, fails
+`nest_rs_core::JOB_TIMEOUT` and never off: past it the attempt is cut, fails
 retryably and files `error` (held by `nest_rs_codegen::job`'s table and each
 edge's suite). Synchronous seams (`AbilityFactory`, the WS `Registry`,
 `ConfigSource`) and in-process listeners are outside the family.

@@ -134,8 +134,6 @@ nest-rs-events = { path = "../nest-rs-events" }
 # their edges open each message's and each operation's unit through.
 nest-rs-ws = { path = "../nest-rs-ws" }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
-# The pool's default statement budget is pinned below the job timeout.
-nest-rs-worker = { path = "../nest-rs-worker" }
 # `test-util` (not part of tokio's `full`) pauses time, so the instant each
 # conflicting call retries at is read off the clock its backoff sleeps on.
 tokio = { workspace = true, features = ["test-util"] }

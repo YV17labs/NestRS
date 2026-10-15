@@ -194,7 +194,6 @@ nest-rs-opentelemetry = { version = "=7.0.0", path = "crates/nest-rs-opentelemet
 nest-rs-testing = { version = "=7.0.0", path = "crates/nest-rs-testing" }
 nest-rs-storage = { version = "=7.0.0", path = "crates/nest-rs-storage" }
 nest-rs-static-files = { version = "=7.0.0", path = "crates/nest-rs-static-files" }
-nest-rs-worker = { version = "=7.0.0", path = "crates/nest-rs-worker" }
 nest-rs-ws = { version = "=7.0.0", path = "crates/nest-rs-ws" }
 nest-rs-ws-macros = { version = "=7.0.0", path = "crates/nest-rs-ws-macros" }
 

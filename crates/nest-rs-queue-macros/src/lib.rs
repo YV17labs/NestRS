@@ -32,7 +32,7 @@ mod queue;
 ///   draining the queue counts against the one limit, and a retry is an attempt
 ///   like any other. Needs a backend declaring the throttle capability.
 /// - `timeout = "30m"` — how long an attempt runs before it is cut and fails
-///   retryably; default ten minutes (`nest_rs_worker::JOB_TIMEOUT`), at most
+///   retryably; default ten minutes (`nest_rs::core::JOB_TIMEOUT`), at most
 ///   `"24h"`.
 /// - `transactional = false` — run on the pool rather than one transaction per
 ///   attempt; required beside a `Checkpoint<_>` parameter.

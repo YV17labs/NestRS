@@ -55,13 +55,13 @@ pub struct ProcessOptions {
 
 impl ProcessOptions {
     /// One job at a time, no retry, no throttle, no checkpoint, and the
-    /// family's timeout ([`JOB_TIMEOUT`](nest_rs_worker::JOB_TIMEOUT)).
+    /// family's timeout ([`JOB_TIMEOUT`](nest_rs_core::JOB_TIMEOUT)).
     pub const DEFAULT: Self = Self {
         retries: 0,
         concurrency: NonZeroU32::MIN,
         throttle: None,
         checkpoint: false,
-        timeout: nest_rs_worker::JOB_TIMEOUT,
+        timeout: nest_rs_core::JOB_TIMEOUT,
     };
 
     /// `retries = N`: re-run a job whose attempt failed retryably, up to `N`

@@ -32,9 +32,6 @@ serde.workspace = true
 serde_json.workspace = true
 # The job span, the attempt's events and the operation line `consume` files.
 tracing.workspace = true
-# `JOB_TIMEOUT`, the bound an attempt runs within unless its decorator sets one,
-# and `JobTimedOut`, what an attempt cut there reports.
-nest-rs-worker.workspace = true
 # Re-exported for the same reason: `#[process]` runs each attempt as a unit of
 # work through `run_unit`, so the expansion names the port. Routing it through
 # this crate keeps `nest_rs_queue` the single import a `#[processor]` call site

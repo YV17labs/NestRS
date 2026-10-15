@@ -301,6 +301,14 @@ fn mount(
 
     // A contested or unbacked identity already failed the boot in `check_identity`.
     let identity = Arc::new(resolve_identity(container, path, &hosts).unwrap_or_default());
+    let window = container
+        .get::<nest_rs_http::HttpConfig>()
+        .unwrap_or_default()
+        .shutdown_timeout;
+    container
+        .get::<crate::McpConfig>()
+        .unwrap_or_default()
+        .warn_when_operations_outlast_the_window(window, path);
     let mount = McpMount::from_container(container)
         .stopped_with(detached.clone())
         .running_as(site);

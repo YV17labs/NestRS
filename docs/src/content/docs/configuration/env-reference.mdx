@@ -282,6 +282,7 @@ is refused too.)
 | `SSE_RETRY_SECS` | `retry:` interval advertised on SSE priming events, from `1` to `3600` (`0` ⇒ none) — default `3` |
 | `MAX_REQUEST_BODY_BYTES` | cap on a single POST body, enforced while streaming — default 4 MiB |
 | `STATELESS_PROTOCOL_METADATA_REQUIRED` | require per-request protocol metadata on stateless POSTs (SEP-2243) — default `false` |
+| `OPERATION_TIMEOUT_SECS` | how long one operation may run, `subscriptions/listen` aside — default `20`, the request timeout's; whole seconds from `1` to `3600`, or `0` ⇒ none. An overrun answers a JSON-RPC internal error whose `data.reason` is `timeout`. A timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, files one `warn` at boot |
 
 ## `social` — `<PREFIX>_SOCIAL__<PROVIDER>__*`
 

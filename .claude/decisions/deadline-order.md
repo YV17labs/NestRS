@@ -59,3 +59,18 @@ naming both values, beside the one for a deadline past the window, when the
 transport is built. A warning, not a refusal, for the reason the window's warn
 gives: the request is still bounded, and the fact supports no more. With the
 deadline off the gap is the one bound on a body, and nothing is said.
+
+## 2026-10-15 — a WebSocket message and an MCP operation take the request deadline's place
+
+A socket answers one message at a time, and an MCP operation answered on an
+event stream leaves its response head at once, so the request deadline reaches
+neither: a handler that never answered held its socket for the connection's
+four hours, or ran its tool until the client gave up. Each now has a deadline
+of its own at the request deadline's rung — `WsConfig::message_timeout` and
+`McpConfig::operation_timeout`, 20 seconds — above every net a handler waits
+under and inside the window, and a deployment that sets one past the window, or
+off, is told at boot as the request deadline's is. A `2026-07-28` stateless MCP
+request holds its head until the first message, so the request deadline already
+answered it; the operation deadline is the bound for every other shape. A
+GraphQL operation over the graphql-ws socket has none yet.
+

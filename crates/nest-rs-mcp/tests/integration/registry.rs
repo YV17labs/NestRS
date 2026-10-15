@@ -128,6 +128,46 @@ async fn shared_app() -> TestApp {
         .expect("two #[mcp] hosts on one path boot")
 }
 
+#[module(
+    imports = [
+        AlphaMcpModule,
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+            shutdown_timeout: std::time::Duration::from_secs(1),
+            ..nest_rs_http::HttpConfig::default()
+        }),
+    ],
+)]
+struct ShortWindowApp;
+
+/// The sentence a mount files for a deadline the window cannot hold.
+const OUTLASTS_THE_WINDOW: &str = "the operation timeout outlasts the shutdown window: an \
+                                   operation admitted just before a stop can be cut unanswered";
+
+#[tokio::test]
+async fn an_operation_deadline_past_the_shutdown_window_is_said_once_per_endpoint_at_boot() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<ShortWindowApp>()
+        .await
+        .expect("a short window boots");
+
+    let said = logs.expect_one(nest_rs_mcp::TARGET, OUTLASTS_THE_WINDOW);
+    assert_eq!(said.level, "warn");
+    assert_eq!(said.field("path").as_deref(), Some(SHARED));
+    assert_eq!(said.field("operation_timeout_secs").as_deref(), Some("20"));
+    assert_eq!(said.field("shutdown_timeout_secs").as_deref(), Some("1"));
+    drop(app);
+}
+
+#[tokio::test]
+async fn an_operation_deadline_inside_the_window_is_not_worth_a_word() {
+    let logs = LogCapture::install();
+    let _app = shared_app().await;
+    assert!(
+        logs.find(nest_rs_mcp::TARGET, OUTLASTS_THE_WINDOW)
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn two_modules_on_one_path_share_a_single_mount() {
     let app = shared_app().await;

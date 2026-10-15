@@ -40,8 +40,32 @@ McpModule::for_root(McpOptions {
 | `<PREFIX>_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
 | `<PREFIX>_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
 | `<PREFIX>_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
+| `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS` | `15` | Keep-alive interval on an event stream; `0` ⇒ none |
+| `<PREFIX>_MCP__SSE_RETRY_SECS` | `3` | `retry:` advertised on an event stream's priming event; `0` ⇒ none |
 | `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
 | `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
+| `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS` | `20` | How long one operation may run; whole seconds from `1` to `3600`, `0` ⇒ none |
+
+## The operation timeout
+
+The HTTP request timeout bounds a response's head, and most MCP operations
+answer theirs at once: a session's request, and a stateless one from a client
+older than `2026-07-28`, get an event stream that carries the result whenever
+the operation ends. So every operation but `subscriptions/listen`, which has
+no end of its own, runs under `operation_timeout` too. Past it the operation
+is dropped and its unit of work rolled back, and the client is answered a
+JSON-RPC internal error:
+
+```json
+{"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"the operation was not answered in time","data":{"code":"UNAVAILABLE","reason":"timeout"}}}
+```
+
+The `mcp.operation` line files `error`, and one `warn` on `nest_rs::mcp`
+names the method, the operation and the timeout with `reason="timeout"`. The
+default is the HTTP request timeout's, inside the 20-second shutdown window;
+a timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, is said once
+per endpoint at boot. A tool that legitimately runs longer raises the timeout
+and the window together.
 
 ## The host allowlist
 

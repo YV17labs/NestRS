@@ -324,6 +324,12 @@ together. The framework's own nets under a request — the authentication guard'
 the throttler's, the queue port's — wait `18` seconds, so a backend that hangs
 is named by what waited on it rather than by this `503`.
 
+The timeout bounds a request until its response head leaves, so the units an
+upgraded socket or an event stream carries past that point take timeouts of
+their own, at the same `20`-second default and with the same boot `warn`: a
+WebSocket message, [`<PREFIX>_WS__MESSAGE_TIMEOUT_SECS`](/websockets/#what-bounds-a-socket),
+and an MCP operation, [`<PREFIX>_MCP__OPERATION_TIMEOUT_SECS`](/mcp/configuration/#the-operation-timeout).
+
 ## Connections
 
 The transport accepts its connections itself, on [hyper](https://docs.rs/hyper),

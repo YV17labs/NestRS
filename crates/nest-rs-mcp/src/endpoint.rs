@@ -182,6 +182,7 @@ where
 
     let handler_context = context.clone();
     let handler_guard = guard.clone();
+    let operation_timeout = config.operation_timeout;
 
     // The stop, not the signal: rmcp ends every stream on this token, a POST's
     // answer included. A stateful session's operations miss it; the handler stops those.
@@ -198,6 +199,7 @@ where
                 handler_context.clone(),
                 unit_of_work.clone(),
                 detached.clone(),
+                operation_timeout,
             ))
         },
         Arc::new(LocalSessionManager::default()),

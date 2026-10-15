@@ -12,10 +12,12 @@
 //! | Notifications | yes | yes | no | no — nothing to commit or roll back on | yes |
 //! | Synchronous accessors (`get_info`, `get_tool`, …) | — | — | — | — | no — no work is dispatched |
 //!
-//! An operation files `ok` or `error`; `panic` when it unwinds (contained, the
-//! client answered with an internal error rather than left to its timeout); or
-//! `cancelled` when its client cancels it or the transport stops it. The line is
-//! filed by [`OperationLine`], so an end nobody saw still files one.
+//! An operation files `ok` or `error` — `error` too when it outlives
+//! `McpConfig::operation_timeout`, which every request but `subscriptions/listen`
+//! runs under; `panic` when it unwinds (contained, the client answered with an
+//! internal error rather than left to its timeout); or `cancelled` when its
+//! client cancels it or the transport stops it. The line is filed by
+//! [`OperationLine`], so an end nobody saw still files one.
 
 #![expect(
     deprecated,
@@ -25,6 +27,7 @@
 use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nest_rs_core::{Correlation, RequestContinuation, operation_log};
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
@@ -68,6 +71,8 @@ pub struct PropagatingHandler<H> {
     context: Option<Arc<dyn McpToolContext>>,
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
     detached: DetachedWork,
+    /// What one request operation may run for; `None` ⇒ no deadline.
+    operation_timeout: Option<Duration>,
 }
 
 impl<H> PropagatingHandler<H> {
@@ -77,6 +82,7 @@ impl<H> PropagatingHandler<H> {
         context: Option<Arc<dyn McpToolContext>>,
         unit_of_work: Option<Arc<dyn UnitOfWork>>,
         detached: DetachedWork,
+        operation_timeout: Option<Duration>,
     ) -> Self {
         Self {
             inner,
@@ -84,6 +90,7 @@ impl<H> PropagatingHandler<H> {
             context,
             unit_of_work,
             detached,
+            operation_timeout,
         }
     }
 
@@ -97,13 +104,19 @@ impl<H> PropagatingHandler<H> {
     /// it named, `None` where the protocol names nothing. `wrapped` is `false`
     /// for an operation that takes neither the registered context nor a unit of
     /// work. `stopped` resolves when the operation is to end before it settles,
-    /// with what the client is answered.
+    /// with what the client is answered; `timeout` cuts its body, never its
+    /// settle, so a commit is never cut.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one axis of the nesting the doc lists; a struct would only rename them"
+    )]
     async fn dispatch<T, F, S>(
         &self,
         method: &str,
         addressed: Option<&str>,
         ambient: McpAmbient,
         wrapped: bool,
+        timeout: Option<Duration>,
         stopped: S,
         inner: F,
     ) -> Result<T, McpError>
@@ -141,11 +154,16 @@ impl<H> PropagatingHandler<H> {
 
         // Inside the operation's own scope: rmcp's task carries no ambient
         // context for the attachments to extend.
+        let deadline = timeout.map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
         let spec = UnitSpec::new(
             crate::unit::OPERATION,
             ExecutorScope::Request,
             TransactionPolicy::PerUnit,
         );
+        let spec = match deadline {
+            Some((_, at)) => spec.with_deadline(at),
+            None => spec,
+        };
         let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(nest_rs_core::with_request_scope(
             scope,
             correlation,
@@ -153,9 +171,14 @@ impl<H> PropagatingHandler<H> {
                 unit,
                 spec,
                 async move {
-                    install_pending(attached, inner)
-                        .await
-                        .map(OperationValue::new)
+                    let body = install_pending(attached, inner);
+                    let answered = match deadline {
+                        Some((timeout, at)) => tokio::time::timeout_at(at, body)
+                            .await
+                            .unwrap_or_else(|_| Err(timed_out(method, addressed, timeout))),
+                        None => body.await,
+                    };
+                    answered.map(OperationValue::new)
                 },
                 |outcome| outcome.as_ref().is_ok_and(|value| !value.reports_error()),
                 |_| {
@@ -231,6 +254,30 @@ enum Ended<R, A> {
     /// It was stopped first, with the answer the stop gives.
     Stopped(A),
 }
+
+/// What an operation past its deadline is answered: an internal error in the
+/// class HTTP's request timeout answers (`UNAVAILABLE`), with `timeout` as its
+/// reason, said once at `warn` for the operator.
+fn timed_out(method: &str, operation: Option<&str>, timeout: Duration) -> McpError {
+    tracing::warn!(
+        target: crate::TARGET,
+        method,
+        operation,
+        reason = TIMEOUT_REASON,
+        operation_timeout_secs = timeout.as_secs(),
+        "mcp operation not answered within its deadline; it is cut",
+    );
+    McpError::internal_error(
+        "the operation was not answered in time",
+        Some(serde_json::json!({
+            "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
+            "reason": TIMEOUT_REASON,
+        })),
+    )
+}
+
+/// The `reason` a deadline's refusal carries, beside its `code`.
+const TIMEOUT_REASON: &str = "timeout";
 
 /// What rmcp is handed for an operation stopped before it settled — never a
 /// claim the work was done.
@@ -340,6 +387,7 @@ macro_rules! request_method {
                     addressed.as_deref(),
                     ambient,
                     true,
+                    self.operation_timeout,
                     async move {
                         cancelled.await;
                         Err(cancelled_before_completion())
@@ -509,6 +557,7 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
             None,
             ambient,
             false,
+            None,
             async move {
                 going_away.await;
                 Ok(())
@@ -585,6 +634,7 @@ mod tests {
             None,
             None,
             DetachedWork::new(),
+            None,
         );
         let mut request = InitializeRequestParams::default();
         request.protocol_version = THE_CALLER_ASKS_FOR;

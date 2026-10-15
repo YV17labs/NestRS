@@ -83,6 +83,15 @@ pub(crate) struct Serving {
 }
 
 pub(crate) async fn serve_on_loopback<M: Module + 'static>(window: Duration) -> Serving {
+    serve_under::<M>(HttpConfig {
+        shutdown_timeout: window,
+        ..HttpConfig::default()
+    })
+    .await
+}
+
+/// `M` served on a free loopback port by a transport built from `config`.
+pub(crate) async fn serve_under<M: Module + 'static>(config: HttpConfig) -> Serving {
     let app = App::builder()
         .module::<M>()
         .build()
@@ -95,8 +104,7 @@ pub(crate) async fn serve_on_loopback<M: Module + 'static>(window: Duration) -> 
     let mut transport = HttpTransport::from_config(&HttpConfig {
         host: "127.0.0.1".into(),
         port,
-        shutdown_timeout: window,
-        ..HttpConfig::default()
+        ..config
     })
     .expect("the config builds a transport");
     transport

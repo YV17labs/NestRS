@@ -840,3 +840,230 @@ async fn a_subscription_is_answered_its_final_result_at_the_shutdown_signal() {
         Some(nest_rs_core::operation_log::CANCELLED),
     );
 }
+
+const STALLED: &str = "/mcp/stalled";
+
+/// Set when `stalled`'s future is dropped, and once it has started.
+static STALLED_DROPPED: AtomicBool = AtomicBool::new(false);
+static STALLED_STARTED: Notify = Notify::const_new();
+
+#[mcp(path = "/mcp/stalled")]
+#[derive(Clone, Default)]
+struct StalledTools;
+
+#[tools]
+impl StalledTools {
+    #[tool(description = "Never answers.")]
+    #[public]
+    async fn stalled(&self) -> Result<String, McpError> {
+        let _dropped = SetOnDrop(&STALLED_DROPPED);
+        STALLED_STARTED.notify_one();
+        std::future::pending::<()>().await;
+        Ok("never".to_owned())
+    }
+}
+
+#[module(providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct StalledModule;
+
+/// The HTTP request timeout the stalled tool is served under: the floor.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// What the operation deadline answers past `McpConfig::operation_timeout`'s
+/// default, 20 seconds.
+const PAST_THE_OPERATION_DEADLINE: Duration = Duration::from_secs(21);
+
+async fn serve_stalled() -> crate::Serving {
+    crate::serve_under::<StalledModule>(nest_rs_http::HttpConfig {
+        request_timeout: Some(REQUEST_TIMEOUT),
+        ..nest_rs_http::HttpConfig::default()
+    })
+    .await
+}
+
+/// Reads the response stream until the JSON-RPC message answering `id` arrives.
+async fn answer_to(stream: &mut tokio::net::TcpStream, id: u64) -> serde_json::Value {
+    use tokio::io::AsyncReadExt as _;
+    let mut read = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let text = String::from_utf8_lossy(&read).into_owned();
+            if let Some(message) = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+                .find(|message| message["id"] == id)
+            {
+                return message;
+            }
+            let n = stream
+                .read(&mut chunk)
+                .await
+                .expect("the stream is readable");
+            assert!(n > 0, "the stream ended unanswered: {text:?}");
+            read.extend_from_slice(&chunk[..n]);
+        }
+    })
+    .await;
+    found.unwrap_or_else(|_| {
+        panic!(
+            "no answer to {id}: {:?}",
+            String::from_utf8_lossy(&read).into_owned()
+        )
+    })
+}
+
+/// The HTTP request timeout bounds a response head, and a `tools/call` answers
+/// its head at once with an event stream: the operation deadline bounds it.
+async fn assert_cut_at_the_operation_deadline(
+    logs: &LogCapture,
+    stream: &mut tokio::net::TcpStream,
+) {
+    tokio::time::timeout(Duration::from_secs(5), STALLED_STARTED.notified())
+        .await
+        .expect("the tool starts");
+    tokio::time::pause();
+    tokio::time::sleep(REQUEST_TIMEOUT * 2).await;
+    assert!(
+        !STALLED_DROPPED.load(Ordering::SeqCst),
+        "the request timeout does not reach an operation rmcp runs on its own task",
+    );
+    tokio::time::sleep(PAST_THE_OPERATION_DEADLINE - REQUEST_TIMEOUT * 2).await;
+    tokio::time::resume();
+
+    let answer = answer_to(stream, 7).await;
+    assert_eq!(
+        answer["error"]["code"], -32603,
+        "an internal error: {answer}"
+    );
+    assert_eq!(
+        answer["error"]["message"], "the operation was not answered in time",
+        "{answer}"
+    );
+    assert_eq!(answer["error"]["data"]["reason"], "timeout", "{answer}");
+    assert_eq!(answer["error"]["data"]["code"], "UNAVAILABLE", "{answer}");
+    assert!(
+        STALLED_DROPPED.load(Ordering::SeqCst),
+        "the operation was dropped at its deadline"
+    );
+    let line = operation_line(logs, "stalled").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+    );
+    let cut = logs.expect_one(
+        nest_rs_mcp::TARGET,
+        "mcp operation not answered within its deadline; it is cut",
+    );
+    assert_eq!(cut.level, "warn");
+    assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
+    assert_eq!(cut.field("operation").as_deref(), Some("stalled"));
+    assert_eq!(cut.field("operation_timeout_secs").as_deref(), Some("20"));
+}
+
+#[tokio::test]
+async fn a_session_tool_call_past_the_request_timeout_is_cut_at_the_operation_deadline() {
+    let logs = LogCapture::install();
+    let serving = serve_stalled().await;
+    let session = crate::open_raw_session(serving.port, STALLED).await;
+    let (mut stream, head) = crate::post(
+        serving.port,
+        STALLED,
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "stalled", "arguments": {} }
+        }),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the call is accepted: {head}"
+    );
+
+    assert_cut_at_the_operation_deadline(&logs, &mut stream).await;
+    serving.stop().await;
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
+        legacy_session_mode: false,
+        ..nest_rs_mcp::McpConfig::default()
+    })],
+    providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard],
+)]
+struct StatelessStalledModule;
+
+/// A legacy client with sessions turned off is served statelessly, its answer
+/// streamed after a head sent at once.
+#[tokio::test]
+async fn a_stateless_tool_call_past_the_request_timeout_is_cut_at_the_operation_deadline() {
+    let logs = LogCapture::install();
+    let serving = crate::serve_under::<StatelessStalledModule>(nest_rs_http::HttpConfig {
+        request_timeout: Some(REQUEST_TIMEOUT),
+        ..nest_rs_http::HttpConfig::default()
+    })
+    .await;
+    let (mut stream, head) = crate::post(
+        serving.port,
+        STALLED,
+        None,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "stalled", "arguments": {} }
+        }),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the call is accepted: {head}"
+    );
+
+    assert_cut_at_the_operation_deadline(&logs, &mut stream).await;
+    serving.stop().await;
+}
+
+/// A `2026-07-28` request holds its head until the operation's first message,
+/// so the request timeout reaches it first, and rmcp drops the operation with
+/// the response it can no longer send.
+#[tokio::test]
+async fn a_modern_tool_call_is_cut_by_the_request_timeout_before_it_answers() {
+    let logs = LogCapture::install();
+    let serving = serve_stalled().await;
+    let body = json!({
+        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": { "name": "stalled", "arguments": {}, "_meta": modern_meta() },
+    })
+    .to_string();
+    let request = format!(
+        "POST {STALLED} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
+         accept: application/json, text/event-stream\r\nmcp-protocol-version: {MODERN_VERSION}\r\n\
+         mcp-method: tools/call\r\nmcp-name: stalled\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len(),
+    );
+    let port = serving.port;
+    let exchanged = tokio::spawn(async move { crate::exchange(port, &request).await });
+    tokio::time::timeout(Duration::from_secs(5), STALLED_STARTED.notified())
+        .await
+        .expect("the tool starts");
+    tokio::time::pause();
+    tokio::time::sleep(REQUEST_TIMEOUT * 2).await;
+    tokio::time::resume();
+
+    let (_stream, head) = exchanged.await.expect("the exchange does not panic");
+    assert!(
+        head.starts_with("HTTP/1.1 503"),
+        "the request timeout answered: {head}"
+    );
+    let line = operation_line(&logs, "stalled").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert!(
+        STALLED_DROPPED.load(Ordering::SeqCst),
+        "the operation was dropped"
+    );
+    serving.stop().await;
+}

@@ -312,7 +312,13 @@ ordered — above every net a request waits under and its body's read gap,
 which it would otherwise answer for, and inside the shutdown window
 (`decisions/deadline-order.md`); a deployment past the window, or with the
 read gap at or past the deadline, is told at
-boot. **A command whose answer is the only record of what it claimed is
+boot. **An edge's per-unit deadline is `<unit>_timeout` in its config**, read
+from `<PREFIX>_<EDGE>__<UNIT>_TIMEOUT_SECS` with the unit's second segment —
+`HTTP__REQUEST_`, `WS__MESSAGE_`, `MCP__OPERATION_`, never a mechanism
+(`READ_TIMEOUT`) — on `nest_rs_http::UNIT_TIMEOUT_FLOOR`'s range; it cuts the
+unit's body inside its unit of work, so the settle is never cut, and a unit
+whose head leaves before its answer (a socket's message, an MCP operation on
+an event stream) needs its own, since the request timeout ends at the head. **A command whose answer is the only record of what it claimed is
 never cut** — a timeout does not undo it — so it waits on the socket's liveness
 instead (`queue.md`). **Every port method the framework awaits returns a
 `Result`, and the port, never the backend, decides the fail-closed answer**:

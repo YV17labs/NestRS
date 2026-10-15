@@ -8,6 +8,10 @@
 //! `<PREFIX>_HTTP__CORS_ORIGINS` is unset, and from what it lists once set.
 //! rmcp's `allowed_origins` stays empty, since it cannot say "the request's own
 //! origin".
+//!
+//! [`operation_timeout`](McpConfig::operation_timeout) bounds an operation the
+//! HTTP request timeout cannot reach: rmcp answers a session's request, and a
+//! legacy stateless one, with an event stream whose head leaves at once.
 
 use std::time::Duration;
 
@@ -16,6 +20,18 @@ use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 
 /// rmcp's own default POST body ceiling.
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// The HTTP request timeout's default, ordered the same way: inside the
+/// shutdown window, above every net an operation waits under.
+const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The operation deadline's range and the variable that sets it.
+const OPERATION_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "OPERATION_TIMEOUT_SECS",
+    "McpConfig::operation_timeout",
+    nest_rs_http::UNIT_TIMEOUT_FLOOR,
+    nest_rs_http::UNIT_TIMEOUT_CEILING,
+);
 
 /// The stream keep-alive's range, every server-sent stream's.
 const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
@@ -81,6 +97,17 @@ pub struct McpConfig {
     /// and later. Read from `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED`;
     /// defaults to `false`.
     pub stateless_protocol_metadata_required: bool,
+    /// Wall-clock deadline for one operation — `tools/call`, `prompts/get`,
+    /// `resources/read` and every other request a client sends — counted from
+    /// its dispatch; past it the operation is dropped and rolled back, and its
+    /// client is answered a JSON-RPC internal error whose `data.reason` is
+    /// `timeout`. `subscriptions/listen` has no end of its own and none.
+    /// `None` ⇒ no deadline. Read from `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS`,
+    /// whole seconds from 1 to 3600 or `0` for none — refused outside, from the
+    /// environment and from the pinned struct alike; defaults to 20 seconds,
+    /// the HTTP request timeout's. A deadline past the HTTP shutdown window, or
+    /// none, is said at boot with a `warn`.
+    pub operation_timeout: Option<Duration>,
 }
 
 impl Default for McpConfig {
@@ -94,6 +121,7 @@ impl Default for McpConfig {
             sse_retry: Some(Duration::from_secs(3)),
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
             stateless_protocol_metadata_required: false,
+            operation_timeout: Some(DEFAULT_OPERATION_TIMEOUT),
         }
     }
 }
@@ -111,6 +139,28 @@ impl McpConfig {
             // `allowed_origins` stays empty: the endpoint checks `Origin` before rmcp.
             .with_max_request_body_bytes(self.max_request_body_bytes)
             .with_stateless_protocol_metadata_required(self.stateless_protocol_metadata_required)
+    }
+
+    /// One boot `warn` for the endpoint at `path` when
+    /// [`operation_timeout`](Self::operation_timeout) is off or outlasts the
+    /// HTTP shutdown `window`: an operation admitted just before a stop can
+    /// then be cut unanswered. Not a refusal — a deployment may accept it
+    /// knowingly.
+    pub(crate) fn warn_when_operations_outlast_the_window(&self, window: Duration, path: &str) {
+        if self
+            .operation_timeout
+            .is_some_and(|timeout| timeout <= window)
+        {
+            return;
+        }
+        tracing::warn!(
+            target: crate::TARGET,
+            path,
+            operation_timeout_secs = self.operation_timeout.map_or(0, |timeout| timeout.as_secs()),
+            shutdown_timeout_secs = window.as_secs(),
+            "the operation timeout outlasts the shutdown window: an operation admitted just \
+             before a stop can be cut unanswered",
+        );
     }
 }
 
@@ -133,6 +183,9 @@ impl Config for McpConfig {
                 "STATELESS_PROTOCOL_METADATA_REQUIRED",
                 base.stateless_protocol_metadata_required,
             )?,
+            operation_timeout: OPERATION_TIMEOUT
+                .read_optional(env, base.operation_timeout)?
+                .map(|read| read.value),
         })
     }
 }
@@ -236,6 +289,63 @@ mod tests {
         assert!(
             pinned.contains("above the 3600s it must be at most"),
             "{pinned}"
+        );
+    }
+
+    #[test]
+    fn a_zero_operation_timeout_reads_as_none() {
+        let cfg = McpConfig::from_env(
+            &ConfigService::with_vars("mcp", [("OPERATION_TIMEOUT_SECS", "0")]),
+            McpConfig::default(),
+        )
+        .expect("no error");
+        assert_eq!(cfg.operation_timeout, None, "`0` is the off sentinel");
+    }
+
+    #[test]
+    fn the_operation_timeout_reads_whole_seconds_over_a_pinned_base() {
+        let pinned = McpConfig {
+            operation_timeout: Some(Duration::from_secs(5)),
+            ..McpConfig::default()
+        };
+        let kept = McpConfig::from_env(&ConfigService::with_vars("mcp", []), pinned.clone())
+            .expect("no error");
+        assert_eq!(kept.operation_timeout, Some(Duration::from_secs(5)));
+        let read = McpConfig::from_env(
+            &ConfigService::with_vars("mcp", [("OPERATION_TIMEOUT_SECS", "45")]),
+            pinned,
+        )
+        .expect("no error");
+        assert_eq!(read.operation_timeout, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn an_operation_timeout_outside_its_range_is_refused_naming_its_variable() {
+        let var = nest_rs_config::var_name("mcp", "OPERATION_TIMEOUT_SECS");
+        let refused = McpConfig::from_env(
+            &ConfigService::with_vars("mcp", [("OPERATION_TIMEOUT_SECS", "3601")]),
+            McpConfig::default(),
+        )
+        .expect_err("past an hour")
+        .to_string();
+        assert!(
+            refused.contains(&var)
+                && refused.contains("must be at most 3600 seconds, or 0 to turn it off"),
+            "{refused}"
+        );
+    }
+
+    /// The "default is ordered" half of the deadline rule, as HTTP's request
+    /// timeout holds it.
+    #[test]
+    fn the_default_operation_timeout_fits_the_default_shutdown_window() {
+        let timeout = McpConfig::default()
+            .operation_timeout
+            .expect("an operation is bounded by default");
+        let window = nest_rs_http::HttpConfig::default().shutdown_timeout;
+        assert!(
+            timeout <= window,
+            "{timeout:?} outlasts the {window:?} window"
         );
     }
 

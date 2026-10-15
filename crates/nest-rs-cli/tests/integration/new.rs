@@ -170,8 +170,20 @@ fn new_workspace_greenfield() {
     assert!(module.contains("features::hello"));
     assert!(module.contains("port: 3000"));
 
+    // The service URLs are read in development and test, so `nestrs run db up`
+    // and the e2e suites work out of the box; production reads none.
     let env = fs::read_to_string(root.join(".env")).unwrap();
     assert!(!env.contains("NESTRS_HTTP__PORT"));
+    assert!(!env.contains("://"), "{env}");
+    for profile in [".env.development", ".env.test"] {
+        let file = fs::read_to_string(root.join(profile)).unwrap();
+        assert!(file.contains("NESTRS_SEAORM__URL=postgres://"), "{file}");
+        assert!(file.contains("NESTRS_REDIS__URL=redis://"), "{file}");
+    }
+    assert!(
+        db_just.contains("export NESTRS_ENV := \"development\""),
+        "the db recipes read `.env.development`: {db_just}"
+    );
     assert_env_example_points_test_overrides_somewhere_loaded(&root);
 
     let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
@@ -330,10 +342,8 @@ fn new_workspace_app_scaffold() {
     assert!(dir.path().join(".gitignore").is_file());
     assert!(dir.path().join("compose.yml").is_file());
 
-    // The DB URL is active so `nestrs run db up` works out of the box.
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
     assert!(!env.contains("NESTRS_HTTP__PORT"));
-    assert!(env.contains("NESTRS_SEAORM__URL=postgres://"));
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
     assert!(module.contains("HttpConfig { port: 3000"));

@@ -76,6 +76,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
   - compose.yml
   - .env
   - .env.development
+  - .env.test
   - .env.example
   - .gitignore
   - rust-toolchain.toml
@@ -199,8 +200,10 @@ then fails with the manual install command instead of fetching anything.
 ## Build
 
 Release binaries land in `target/release/`. **`nestrs run start`** compiles and
-starts the server; use **`nestrs run build`** when you only need the artifact
-(Docker, CI, or copying the binary elsewhere).
+starts the server under the production profile, so it reads no
+`.env.development`: the database and queue URLs are the deployment's to set.
+Use **`nestrs run build`** when you only need the artifact (Docker, CI, or
+copying the binary elsewhere).
 
 ```bash
 nestrs run build              # default app (hello)

@@ -366,8 +366,13 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
                 !read(workspace, ".env").contains("ENV_PREFIX"),
                 "the prefix cannot come from `.env` — the runtime aborts on it",
             );
-            assert!(read(workspace, ".env").contains("ACME_SEAORM__URL="));
+            assert!(read(workspace, ".env.development").contains("ACME_SEAORM__URL="));
+            assert!(read(workspace, ".env.test").contains("ACME_SEAORM__URL="));
             assert!(read(workspace, ".env.development").contains("ACME_LOG="));
+            assert!(
+                read(workspace, "db.just").contains(r#"export ACME_ENV := "development""#),
+                "the db recipes declare the profile under the project's own prefix",
+            );
             for file in [".env.local", ".env.test"] {
                 assert!(
                     read(workspace, file).contains("\nACME_AUTHN__SECRET="),

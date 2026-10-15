@@ -89,16 +89,20 @@ pub(crate) fn prefix_vars(env_prefix: &str) -> Vec<(&'static str, String)> {
     ]
 }
 
-/// Queue the committed `.env` cascade (`.env`, `.env.development`, `.env.example`).
+/// Queue the committed `.env` cascade (`.env`, `.env.development`, `.env.test`,
+/// `.env.example`).
 ///
 /// Every key in those files is written through `{{env_prefix}}`, so a project
 /// created with `--env-prefix` gets a cascade its app actually reads.
 pub(crate) fn queue_env_files(s: &mut Scaffold, base: &Path, r: &Renderer) {
     s.create_if_missing(base.join(".env"), r.render(shared::ENV));
-    s.create_if_missing(
-        base.join(".env.development"),
-        r.render(shared::ENV_DEVELOPMENT),
-    );
+    for (file, profile) in [
+        (".env.development", shared::ENV_DEVELOPMENT),
+        (".env.test", shared::ENV_TEST),
+    ] {
+        let body = format!("{profile}\n{}", shared::DEV_SERVICES);
+        s.create_if_missing(base.join(file), r.render(&body));
+    }
     s.create_if_missing(base.join(".env.example"), r.render(shared::ENV_EXAMPLE));
 }
 

@@ -125,6 +125,37 @@ fn a_file_holding_nothing_is_not_set() {
     assert!(report.contains("ACME_REDIS__URL: not set"), "{report}");
 }
 
+/// A scaffold's plaintext service URLs are read in development and test, and
+/// in production by nothing: its committed `.env` holds none, and production
+/// reads no other file `nestrs new` writes.
+#[test]
+fn a_scaffolded_project_names_no_service_url_in_production() {
+    let dir = tempfile::tempdir().expect("an empty directory");
+    let created = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["new", "acme"])
+        .current_dir(dir.path())
+        .output()
+        .expect("nestrs new runs");
+    assert!(created.status.success(), "{created:?}");
+    let root = dir.path().join("acme");
+    let selector = Environment::var_name();
+    let urls = [var_name("SEAORM", "URL"), var_name("REDIS", "URL")];
+
+    let report = stdout(&doctor(&root, &[]));
+    for url in &urls {
+        assert!(report.contains(&format!("{url}: not set")), "{report}");
+    }
+    for profile in ["development", "test"] {
+        let report = stdout(&doctor(&root, &[(selector.as_str(), profile)]));
+        for url in &urls {
+            assert!(
+                report.contains(&format!("{url}: set")),
+                "{profile}: {report}"
+            );
+        }
+    }
+}
+
 /// An app started in the project opens a relative `_FILE` from the project, so
 /// doctor examining it from anywhere else does too.
 #[test]

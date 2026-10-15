@@ -135,7 +135,9 @@ extend the workspace.
 ## Run Postgres
 
 `nestrs new` scaffolds a `compose.yml` with Postgres and Redis, and the
-committed `.env` already points `<PREFIX>_SEAORM__URL` at it. The credentials
+committed `.env.development` and `.env.test` already point
+`<PREFIX>_SEAORM__URL` at it — never `.env`, which production reads too, so a
+deployment cannot fall back to a plaintext local URL. The credentials
 are the **workspace** name, not the app's — a workspace scaffolded with
 `nestrs new hello` gets `postgres://hello:hello@localhost:5432/hello`, whatever
 its apps are called. Bring the services up once:
@@ -153,7 +155,8 @@ INFO sea_orm_migration::migrator::exec: Migration 'm20260609_000000_create_post'
 `nestrs run db up` runs `Migrator::up` against `<PREFIX>_SEAORM__URL`. The
 binary resolves it through `connect_from_env`, which reads the same `.env`
 cascade the apps do — a tool and its app can never end up pointed at different
-databases.
+databases. `db.just` declares the development profile for every `db` recipe,
+as `nestrs run dev` does for the app.
 
 ## Transactions wrap mutating routes automatically
 

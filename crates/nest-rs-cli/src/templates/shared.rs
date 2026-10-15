@@ -17,6 +17,10 @@ components = ["clippy", "rustfmt", "llvm-tools-preview"]
 pub(crate) const DB_JUSTFILE: &str = r#"# Database lifecycle, exposed as `nestrs run db <verb>` (see `mod db` in the
 # Justfile). Recipes assume the nestrs `migrations` + `seed` crates.
 
+# Local migrations and seed run against `compose.yml`'s services, so they declare
+# the development profile, whose `.env.development` names them.
+export {{env_prefix}}_ENV := "development"
+
 # Bare `nestrs run db` lists these instead of running the first recipe.
 _default:
     @just --list db
@@ -47,14 +51,14 @@ reset: fresh seed
 
 /// `compose.yml` — Postgres + Redis for local development, shipped so a
 /// DB-backed feature works the moment you add one: `docker compose up -d`,
-/// then `nestrs run db up`. The committed `.env` points at these services on
-/// `localhost`. Delete it if your project never touches a database or a queue.
+/// then `nestrs run db up`. `.env.development` and `.env.test` point at these
+/// services on `localhost`. Delete it if your project never touches a database or a queue.
 pub(crate) const COMPOSE: &str = r#"# Local development services. Start them with:
 #
 #   docker compose up -d
 #
-# The committed `.env` points {{env_prefix}}_SEAORM__URL / {{env_prefix}}_REDIS__URL at these
-# on localhost. `nestrs run db up` then applies your migrations.
+# `.env.development` and `.env.test` point {{env_prefix}}_SEAORM__URL / {{env_prefix}}_REDIS__URL
+# at these on localhost. `nestrs run db up` then applies your migrations.
 
 services:
   postgres:
@@ -131,13 +135,10 @@ pub(crate) const ENV: &str = r#"# nestrs workspace — committed base config (`.
 # by field — so a deployment moves the port or turns on TLS without touching
 # the code.
 #
-# Postgres + Valkey as `compose.yml` exposes them on localhost. Start them with
-# `docker compose up -d`, then `nestrs run db up`. An app only connects if it
-# imports SeaOrmModule / RedisModule, so these are inert for a plain HTTP app.
-# Both run without TLS here, which the URLs say: Postgres's connection is
-# verified TLS unless `sslmode=disable` opens it.
-{{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}?sslmode=disable
-{{env_prefix}}_REDIS__URL=redis://localhost:6379
+# No database or queue URL here: this file is read in production too. The
+# plaintext URLs of `compose.yml`'s services live in `.env.development` and
+# `.env.test`, read only under those profiles; a deployment sets its own
+# {{env_prefix}}_SEAORM__URL and {{env_prefix}}_REDIS__URL, over TLS.
 #
 # Precedence (highest first):
 #   real env  >  pinned in `module.rs`  >  .env.<{{env_prefix}}_ENV>.local  >  .env.local
@@ -145,7 +146,7 @@ pub(crate) const ENV: &str = r#"# nestrs workspace — committed base config (`.
 "#;
 
 pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides, read only when the process declares
-# {{env_prefix}}_ENV=development (or dev) — `nestrs run dev` does it; an unset one runs as
+# {{env_prefix}}_ENV=development (or dev) — `nestrs run dev` and `nestrs run db` do; an unset one runs as
 # production and never reads this file. Setting it here would be too late and is
 # refused at boot.
 # Committed; layered on top of `.env`, below `.env.local` and the real environment.
@@ -154,6 +155,22 @@ pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-o
 {{env_prefix}}_LOG=debug
 {{env_prefix}}_LOG_FORMAT=text
 {{env_prefix}}_LOG_SOURCE_LOCATION=true
+"#;
+
+pub(crate) const ENV_TEST: &str = r#"# nestrs workspace — test-profile overrides, read only under {{env_prefix}}_ENV=test,
+# which the test harness declares for every suite.
+# Committed; layered on top of `.env`, below `.env.test.local` and the real environment.
+"#;
+
+/// `compose.yml`'s services, in plaintext, appended to the two profiles that
+/// run beside it: never in `.env`, which production reads.
+pub(crate) const DEV_SERVICES: &str = r#"# Postgres + Valkey as `compose.yml` exposes them on localhost. Start them with
+# `docker compose up -d`, then `nestrs run db up`. An app only connects if it
+# imports SeaOrmModule / RedisModule, so these are inert for a plain HTTP app.
+# Both run without TLS here, which the URLs say: Postgres's connection is
+# verified TLS unless `sslmode=disable` opens it.
+{{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}?sslmode=disable
+{{env_prefix}}_REDIS__URL=redis://localhost:6379
 "#;
 
 /// The file that *instructs* a developer to write `.env.local`, so it is where
@@ -169,7 +186,8 @@ pub(crate) const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-speci
 # machine-specific test override (a different Postgres port, say) goes in
 # `.env.test.local` — also git-ignored. See https://nestrs.dev/configuration/env-cascade/
 #
-# Uncomment when you add a database (https://nestrs.dev/configuration/).
+# `.env.development` already points at `compose.yml`'s services; uncomment to
+# reach yours elsewhere (https://nestrs.dev/configuration/).
 
 # {{env_prefix}}_SEAORM__URL=postgres://user:pass@localhost:5432/{{kebab}}?sslmode=disable
 # {{env_prefix}}_REDIS__URL=redis://localhost:6379

@@ -46,7 +46,7 @@ of that guarantee.
 
 ## The escape hatches
 
-The framework does not pretend the choke point is inescapable. Three
+The framework does not pretend the choke point is inescapable. Two
 paths reach the database around the ambient scope. Each exists for a
 reason, and each is a place a reviewer must look.
 
@@ -85,64 +85,59 @@ transaction per attempt. There is no caller, so there is no scope to
 inherit. That is correct for system work — and it means each processor
 is a tenant boundary you re-establish by hand.
 
-The pattern: carry the tenant id in the job payload, then filter on it
-yourself. The ambient row filter is a no-op here, so the `org_id`
-predicate is yours to add.
+The pattern: carry the tenant id in the job payload, and let the service
+the processor delegates to apply it. The ambient row filter is a no-op in a
+job, so the `org_id` is yours to stamp and yours to filter on.
 
 The payload carries the tenant id, and it is declared at the feature port
 beside the queue the processor consumes:
 
-```rust title="crates/features/src/posts/command.rs"
+```rust title="crates/features/src/notifications/command.rs (from the demo)"
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublishCommand {
-    pub post_id: Uuid,
+pub struct NotifyCommand {
     pub org_id: Uuid,
+    pub message: String,
 }
 
-#[queue(name = "posts.publish", job = PublishCommand)]
-pub struct PostsPublishQueue;
+#[queue(name = "notifications", job = NotifyCommand)]
+pub struct NotifyQueue;
 ```
 
-```rust title="crates/features/src/posts/queue/processor.rs"
+The processor reaches no data itself; it hands the job to its service:
+
+```rust title="crates/features/src/notifications/queue/processor.rs (from the demo)"
 #[processor]
-impl PostsPublishProcessor {
-    #[process(queue = PostsPublishQueue)]
-    async fn publish(&self, job: PublishCommand) -> Result<()> {
-        // No ambient ability — scope explicitly from the payload.
-        let post = post::Entity::find_by_id(job.post_id)
-            .filter(post::Column::OrgId.eq(job.org_id))
-            .one(&Repo::<post::Entity>::conn()?)
-            .await?;
-        // ...
+impl NotificationsProcessor {
+    #[process(queue = NotifyQueue, retries = 3)]
+    async fn notify(&self, job: NotifyCommand) -> Result<()> {
+        self.svc.persist(job).await?;
         Ok(())
     }
 }
 ```
 
-A processor has no caller, so it has no scope to inherit — the tenant
-boundary travels as data, in the job payload, and the `org_id` predicate
-is yours to write. Treat every `#[processor]` as its own boundary: a
-load-by-id with no tenant predicate is the bug to grep for.
+The service writes the row under the payload's tenant, through `Repo`:
 
-### 3. The Postgres RLS backstop
-
-For the highest-assurance deployments, add a defense-in-depth layer the
-application cannot bypass: a Postgres Row-Level Security policy keyed on
-`tenant_id`. Even an accidental unfiltered query — a stray `conn()`
-`find()`, a processor that forgot its `org_id` predicate — returns
-nothing, because the database itself refuses the rows.
-
-```sql title="the policy, in SQL"
-ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY tenant_isolation ON posts
-  USING (org_id = current_setting('app.current_org')::uuid);
+```rust title="crates/features/src/notifications/service.rs (from the demo, abridged)"
+pub async fn persist(&self, command: NotifyCommand) -> Result<(), ServiceError> {
+    let active = entity::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        org_id: Set(command.org_id),
+        message: Set(command.message),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+    };
+    let conn = Repo::<Notifications>::conn()?;
+    let model = Repo::<Notifications>::insert_unscoped(active, &conn).await?;
+    // …
+    Ok(())
+}
 ```
 
-You set `app.current_org` per connection from the authenticated org id.
-This is belt-and-suspenders: the application-layer filter is the primary
-control, and RLS is the floor under it. Frame it as insurance for the
-tenants who demand it, not a substitute for the guards above.
+A read a job makes goes the same way. `Repo::<E>::scoped(Action::Read)` in a
+job filters nothing, since no ability exists there, so the service adds the
+tenant itself: `.filter(Column::OrgId.eq(job.org_id))`. Treat every
+`#[processor]` as its own boundary: a service method a job calls that loads by
+id with no tenant predicate is the bug to grep for.
 
 ## Review checklist
 
@@ -155,13 +150,11 @@ read:
    Each injection should be a contextless path (a hook), never a request
    handler.
 3. **Confirm every `#[processor]` re-scopes.** Trace the tenant id from
-   the job payload into the query. A load-by-id with no `org_id`
-   predicate is the bug.
+   the job payload into the service's query. A load-by-id with no
+   `org_id` predicate is the bug.
 4. **Confirm every controller carries `#[use_guards(AuthnGuard,
    AuthzGuard)]`.** A missing binding fails closed to empty results, but
    a [negative-path test](/testing/negative-path/) pins it.
-5. **Confirm RLS policies exist** on tenant tables if you enabled the
-   backstop. A table with RLS disabled is a silent gap in the floor.
 
 <Aside type="caution">
 The most probable failure is not a missing guard — the framework makes
@@ -173,6 +166,16 @@ is covered by microsecond unit tests.
 </Aside>
 
 ## Limits
+
+**No database-side backstop exists in 7.0.** The framework sets no
+database session or transaction setting, so a Postgres Row-Level Security
+policy keyed on one has nothing to read. Setting one yourself per connection
+leaks: a pooled connection keeps its session setting after the request and
+serves the next tenant that checks it out. Closing the gap takes the framework
+setting the tenant inside every transaction it opens — local to that
+transaction — on every path that reads, the pool's included. Until it does,
+the application-layer filter above is the only control, and the checklist is
+how you hold it.
 
 Isolation of rows and fields is the framework's job. Everything a
 production tenant boundary also depends on remains yours: key management,

@@ -57,26 +57,33 @@ impl HeadlessApp {
         .await
     }
 
-    /// Configure and run a non-HTTP [`Transport`] on a cancellable background
-    /// task, returning a [`TransportHandle`] to observe then shut it down. It
-    /// serves under the app's stop token, so [`close`](Self::close) stops it;
-    /// a `serve` that fails is filed at `error` with its chain.
+    /// Configure a [`Transport`], have it [`listen`](Transport::listen), then
+    /// run it on a cancellable background task, returning a
+    /// [`TransportHandle`] to observe then shut it down: once this returns,
+    /// what it listens on accepts. It serves under the app's stop token, so
+    /// [`close`](Self::close) stops it; a `serve` that fails is filed at
+    /// `error` with its chain.
     pub async fn spawn_transport<T: Transport>(&self, mut transport: T) -> Result<TransportHandle> {
         self.configure_transport(&mut transport).await?;
+        transport.listen().await?;
         Ok(self.serve_transport(transport))
     }
 
     /// Configure `transport` against the container, refusing what a site it
-    /// composed refused, as [`App::run`] does.
+    /// composed refused and a stop it cannot bound, as [`App::run`] does.
     pub(crate) async fn configure_transport<T: Transport>(&self, transport: &mut T) -> Result<()> {
         transport.configure(self.container()).await?;
-        match nest_rs_core::__private::take_site_refusal(self.container()) {
-            Some(refusal) => Err(refusal),
-            None => Ok(()),
+        if let Some(refusal) = nest_rs_core::__private::take_site_refusal(self.container()) {
+            return Err(refusal);
         }
+        nest_rs_core::__private::check_stop_bound(
+            std::any::type_name::<T>(),
+            transport.stop_bound(),
+        )?;
+        Ok(())
     }
 
-    /// Serve a configured `transport` on the tracked background task.
+    /// Serve a configured, listening `transport` on the tracked background task.
     pub(crate) fn serve_transport<T: Transport>(&self, transport: T) -> TransportHandle {
         {
             let mut longest = self

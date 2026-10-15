@@ -57,7 +57,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::{AppLifecycle, Container};
+use nest_rs_core::{AppLifecycle, Container, Transport as _};
 use nest_rs_http::{HttpConfig, HttpTransport};
 use nest_rs_ws::WsEnvelope;
 use serde_json::Value;
@@ -74,37 +74,24 @@ use nest_rs_ws::CloseCode;
 /// How long [`WsSocket::next_frame`] waits before reporting silence.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long [`WsSocketBuilder::connect`] keeps retrying the handshake: the
-/// transport binds inside its own task, so the first attempt can land before
-/// the listener exists.
-const CONNECT_BUDGET: Duration = Duration::from_secs(5);
-
-/// Between handshake attempts.
-const CONNECT_BACKOFF: Duration = Duration::from_millis(20);
-
-/// Reserve a free local address by binding one, reading it back, and letting it
-/// go: [`HttpTransport`] binds inside `serve` and cannot report its port.
-fn reserve_addr() -> Result<SocketAddr> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .context("no free local port for the test transport")?;
-    let addr = listener.local_addr()?;
-    drop(listener);
-    Ok(addr)
-}
-
-/// Serve `app` on the transport `config` describes, at a reserved local
-/// address in place of its own, once its init phases ran.
+/// Serve `app` on the transport `config` describes, on a free loopback port
+/// in place of its own, once its init phases ran.
 pub(crate) async fn serve(app: HeadlessApp, config: &HttpConfig) -> Result<WsApp> {
     let served = async {
-        let addr = reserve_addr()?;
         let mut transport = HttpTransport::from_config(&HttpConfig {
-            host: addr.ip().to_string(),
-            port: addr.port(),
+            host: "127.0.0.1".into(),
+            port: 0,
             ..config.clone()
         })?;
-        // `App::run`'s order: nothing serves before the init phases ran.
+        // `App::run`'s order: nothing listens before the init phases ran.
         app.configure_transport(&mut transport).await?;
         app.init().await?;
+        let listening = transport.listen().await?;
+        let addr = listening
+            .addresses
+            .first()
+            .copied()
+            .context("the HTTP transport listens on no address")?;
         anyhow::Ok((app.serve_transport(transport), addr))
     }
     .await;
@@ -234,39 +221,29 @@ impl WsSocketBuilder {
         }
     }
 
-    /// Open the socket, reporting a refused handshake as an error; a TCP-level
-    /// refusal is retried while the transport finishes binding.
+    /// Open the socket, reporting a refused handshake as an error: the
+    /// transport already listens, so the first attempt is the only one.
     pub async fn try_connect(self) -> Result<WsSocket> {
-        let deadline = tokio::time::Instant::now() + CONNECT_BUDGET;
-        loop {
-            let mut request = self
-                .url
-                .as_str()
-                .into_client_request()
-                .with_context(|| format!("`{}` is not a websocket url", self.url))?;
-            for (name, value) in &self.headers {
-                request.headers_mut().insert(
-                    poem::http::HeaderName::from_bytes(name.as_bytes())
-                        .with_context(|| format!("`{name}` is not a header name"))?,
-                    // A test header is often a credential: named, never quoted.
-                    value.parse().with_context(|| {
-                        format!("header `{name}` holds a value that is not a header value")
-                    })?,
-                );
-            }
-            match tokio_tungstenite::connect_async(request).await {
-                Ok((stream, _)) => {
-                    return Ok(WsSocket {
-                        stream,
-                        timeout: self.timeout,
-                    });
-                }
-                Err(ClientError::Io(_)) if tokio::time::Instant::now() < deadline => {
-                    tokio::time::sleep(CONNECT_BACKOFF).await;
-                }
-                Err(err) => return Err(anyhow::anyhow!(err)),
-            }
+        let mut request = self
+            .url
+            .as_str()
+            .into_client_request()
+            .with_context(|| format!("`{}` is not a websocket url", self.url))?;
+        for (name, value) in &self.headers {
+            request.headers_mut().insert(
+                poem::http::HeaderName::from_bytes(name.as_bytes())
+                    .with_context(|| format!("`{name}` is not a header name"))?,
+                // A test header is often a credential: named, never quoted.
+                value.parse().with_context(|| {
+                    format!("header `{name}` holds a value that is not a header value")
+                })?,
+            );
         }
+        let (stream, _) = tokio_tungstenite::connect_async(request).await?;
+        Ok(WsSocket {
+            stream,
+            timeout: self.timeout,
+        })
     }
 }
 

@@ -195,7 +195,8 @@ pub mod __private {
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{
-        close_after, init_tearing_down_after, use_exception_filters_global, use_interceptors_global,
+        check_stop_bound, close_after, init_tearing_down_after, use_exception_filters_global,
+        use_interceptors_global,
     };
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,

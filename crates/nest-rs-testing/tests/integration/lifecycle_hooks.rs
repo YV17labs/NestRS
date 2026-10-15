@@ -589,6 +589,81 @@ async fn a_spawned_transport_that_fails_is_filed_at_error_with_its_chain() {
     );
 }
 
+/// Fails its `listen`, or states the stop it was built with.
+struct Refused {
+    listens: bool,
+    stop_bound: std::time::Duration,
+}
+
+static REFUSED_SERVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[async_trait::async_trait]
+impl nest_rs_core::Transport for Refused {
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(&mut self) -> anyhow::Result<nest_rs_core::Listening> {
+        if self.listens {
+            return Ok(nest_rs_core::Listening::default());
+        }
+        Err(anyhow::anyhow!("the address was already in use"))
+    }
+
+    async fn serve(
+        self: Box<Self>,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<()> {
+        REFUSED_SERVED.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        self.stop_bound
+    }
+}
+
+/// The harness spawns a transport as `App::run` boots one: its stop bound is
+/// held, and it listens before it serves.
+#[tokio::test]
+async fn a_spawned_transport_is_refused_an_unbounded_stop_and_listens_before_it_serves() {
+    let app = TestApp::builder()
+        .module::<ServesNothingModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+
+    let unbounded = app
+        .spawn_transport(Refused {
+            listens: true,
+            stop_bound: std::time::Duration::MAX,
+        })
+        .await
+        .err()
+        .expect("an unbounded stop is refused");
+    assert!(
+        unbounded
+            .downcast_ref::<nest_rs_core::UnboundedTransportError>()
+            .is_some(),
+        "{unbounded:#}"
+    );
+    let unbound = app
+        .spawn_transport(Refused {
+            listens: false,
+            stop_bound: std::time::Duration::ZERO,
+        })
+        .await
+        .err()
+        .expect("a listen that fails is the spawn's error");
+    assert_eq!(unbound.to_string(), "the address was already in use");
+    assert!(
+        !REFUSED_SERVED.load(Ordering::SeqCst),
+        "neither transport served"
+    );
+
+    app.close().await;
+}
+
 static WS_RELEASED: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]

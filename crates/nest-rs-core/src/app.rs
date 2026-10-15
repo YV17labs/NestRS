@@ -23,9 +23,8 @@ use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    LateFactoryError, LateOptionalDependencyError, OverriddenDependencyError,
-    UnboundedTransportError, UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError,
-    UnresolvedFactoryError,
+    LateFactoryError, LateOptionalDependencyError, OverriddenDependencyError, UnbuiltProviderError,
+    UnclaimedOverrideError, UnregisteredModuleError, UnresolvedFactoryError,
 };
 use crate::lifecycle::{HookFailure, HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
 use crate::millis::millis;
@@ -591,7 +590,7 @@ impl App {
             return Err(refusal);
         }
         for (name, transport) in &transports {
-            check_stop_bound(name, transport.stop_bound())?;
+            __private::check_stop_bound(name, transport.stop_bound())?;
         }
         let stop_bound = transports
             .iter()
@@ -737,21 +736,6 @@ impl App {
             None => Ok(()),
         }
     }
-}
-
-/// Refuse a transport whose stop the kernel cannot hold: past
-/// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND), `Duration::MAX` among them.
-pub(crate) fn check_stop_bound(
-    transport: &'static str,
-    bound: std::time::Duration,
-) -> Result<(), UnboundedTransportError> {
-    if bound <= crate::MAX_STOP_BOUND {
-        return Ok(());
-    }
-    Err(UnboundedTransportError {
-        transport,
-        stop_bound_ms: millis(bound),
-    })
 }
 
 /// Name every transport still serving past the way down's bound at `error`,
@@ -1270,6 +1254,23 @@ pub(crate) mod __private {
     use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
     use crate::interceptor::{GlobalInterceptors, InterceptorSpec};
     use crate::layer_chain::__private::check_specs_resolvable;
+
+    /// Refuse a transport whose stop the kernel cannot hold: past
+    /// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND), `Duration::MAX` among them — the
+    /// check [`App::run`] makes at the boot, for a harness that runs transports
+    /// itself.
+    pub fn check_stop_bound(
+        transport: &'static str,
+        bound: std::time::Duration,
+    ) -> Result<(), crate::UnboundedTransportError> {
+        if bound <= crate::MAX_STOP_BOUND {
+            return Ok(());
+        }
+        Err(crate::UnboundedTransportError {
+            transport,
+            stop_bound_ms: crate::millis::millis(bound),
+        })
+    }
 
     /// [`App::close`], once `stopped` resolves: the app turns `Draining` first,
     /// so what a harness serves under the app's stop token winds down before

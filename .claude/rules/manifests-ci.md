@@ -88,6 +88,9 @@ with all of this, or it is not shipped:
    upgrade). A guard whose one `check` serves every
    edge declares `impl<V: UnitView> GuardFor<V>` once and owes no feature
    (`ThrottlerGuard`).
+7. **A port's kit forwarded weakly**: the umbrella's `<subject>` feature
+   enables `nest-rs-testing?/<subject>`, so a driver's suite reaches the kit
+   beside `testing` alone and a build without `testing` compiles no harness.
 
 `demo/` is our `sample/`: a docs snippet with no counterpart in `demo/` or the
 owning crate's suite is undocumented.

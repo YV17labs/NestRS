@@ -37,6 +37,10 @@ schedule = ["nest-rs/schedule"]
 # `#[expose]`, `#[wire_enum]` and the entity every `#[authorize(Action, Entity)]`
 # witness names. `#[crud]` rides `http` and `seaorm` together.
 seaorm = ["nest-rs/seaorm"]
+# `queue_kit!` and `TestAuthority` beside `queue`, as a driver's suite reaches
+# them. Off by default for `redis-<port>`'s reason: it links the harness into
+# the fixtures, whose snapshots list a trait's implementors.
+testing = ["nest-rs/testing"]
 ws = ["nest-rs/ws"]
 
 # The suite pins the decorators' refusals; its fixtures name the crates a

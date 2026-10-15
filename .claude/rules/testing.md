@@ -68,8 +68,13 @@ nextest prints each test's time: compare before and after.
   that fails closed and logs nothing passes every response assertion.
 - **`wait_until` / `wait_for`** — a condition the test cannot await, failing at
   the caller's line past its bound, never a loop of its own.
-- **`TestAuthority`** (`tls` feature) — the certificates a TLS double presents
-  and a client trusts, issued in process. A double in front of a service ends
+- **`<subject>_kit!`** (the port's `<subject>` feature) — one test per case
+  a driver of that port owes, against the driver's backend through the seam
+  in `nest_rs_testing::<subject>`; named for the port (`queue_kit!`), never
+  a backend.
+- **`TestAuthority`** (`tls` feature, on under the umbrella's `testing`) —
+  the certificates a TLS double presents and a client trusts, issued in
+  process. A double in front of a service ends
   TLS on both sides — the test authority's certificate to the client, the
   system's trust to the service — so what it reads or holds back is the
   protocol, never a record; the client under test trusts both authorities.

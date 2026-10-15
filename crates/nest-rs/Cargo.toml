@@ -131,7 +131,10 @@ mcp = [
 ]
 # `#[processor]` folds pipes over the job payload and names the default job
 # timeout; neither is a crate a `#[process]` method names.
-queue = ["dep:nest-rs-queue", "worker", "pipes"]
+# A port forwards its kit weakly: beside `testing`, a queue driver's suite
+# reaches `queue_kit!` with no second manifest line, and a build without
+# `testing` compiles no harness.
+queue = ["dep:nest-rs-queue", "worker", "pipes", "nest-rs-testing?/queue"]
 # The one Redis connection (`RedisModule`, `RedisConnection`) and nothing else:
 # an app that sends its own commands, or a health check, compiles no port.
 redis = ["dep:nest-rs-redis"]
@@ -186,7 +189,9 @@ server-timing = ["dep:nest-rs-server-timing", "http"]
 # Mounts as the HTTP router's fallback; `#[derive(Embed)]` resolves through
 # `nest_rs::static_files::rust_embed`, so an embedded source needs no line of its own.
 static-files = ["dep:nest-rs-static-files", "http"]
-testing = ["dep:nest-rs-testing"]
+# `tls` carries `TestAuthority`, the certificates a TLS test double presents:
+# test-only like the rest, so always on here.
+testing = ["dep:nest-rs-testing", "nest-rs-testing/tls"]
 # Layer-System extension-point crates. Writing a custom `Guard` (the mandated
 # authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` — or a
 # worker provider — should not force a direct per-crate dep.

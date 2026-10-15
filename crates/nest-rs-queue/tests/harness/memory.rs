@@ -221,11 +221,11 @@ impl JobProducer for Memory {
         };
         let mut state = self.lock();
         for envelope in envelopes {
-            let job = envelope.id().clone();
-            if state.queue(queue.as_str()).holds_job(&job) {
+            if state.queue(queue.as_str()).holds_job(envelope.id()) {
                 continue;
             }
-            let entry = state.entry(Some(job), envelope.into_json().to_string().into_bytes());
+            let job = Some(envelope.id().clone());
+            let entry = state.entry(job, envelope.into_json().to_string().into_bytes());
             let queue = state.queue(queue.as_str());
             match due {
                 Some(due) => queue.delayed.push((due, entry)),

@@ -11,8 +11,8 @@
 //! not at all, and a push whose answer never came either filed every job or
 //! none. It skips a job its queue still holds, so a push sent again — by the
 //! client after a lost answer — files nothing twice. **A cancel is one script
-//! too**: it removes a job still waiting and
-//! everything it held, and refuses one a delivery runs.
+//! too**: it removes a job still waiting and everything it held, and refuses
+//! one a delivery runs.
 
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};

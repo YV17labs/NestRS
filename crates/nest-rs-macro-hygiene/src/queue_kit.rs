@@ -38,7 +38,7 @@ impl KitBackend for HygieneQueueKit {
 #[cfg(not(test))]
 nest_rs::testing::queue_kit!(HygieneQueueKit);
 
-/// The authority a TLS test double presents, under `testing` alone.
+/// The authority a TLS test double presents, reached through `testing`.
 pub fn hygiene_authority() -> TestAuthority {
     TestAuthority::new()
 }

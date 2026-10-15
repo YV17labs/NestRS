@@ -606,7 +606,8 @@ fn entry_millis(entry: &str) -> Option<u64> {
 }
 
 /// Say the entries of `method`'s queue deleted while a delivery held them —
-/// by hand, since no script deletes one still pending: their jobs are gone.
+/// by hand, since no script deletes one still pending: their jobs are gone,
+/// and nothing lets go of what they held but a cancel.
 fn said_vanished(method: &'static ProcessMethod, entries: &[impl AsRef<str>]) {
     if entries.is_empty() {
         return;
@@ -617,8 +618,8 @@ fn said_vanished(method: &'static ProcessMethod, entries: &[impl AsRef<str>]) {
         queue = method.queue(),
         vanished = backend_ids.len(),
         backend_ids = %backend_ids.join(","),
-        "queue entries deleted while delivered; their jobs are gone, and a unique key they \
-         held stays held until cancel_unique frees it",
+        "queue entries deleted while delivered; their jobs are gone but stay held, their ids \
+         and unique keys taken, until cancel or cancel_unique lets them go",
     );
 }
 

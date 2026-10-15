@@ -1090,7 +1090,8 @@ struct LongModule;
 
 /// An entry deleted by hand while a delivery holds it — no script deletes one
 /// still pending — is gone with its job: the renewal that meets it says so,
-/// naming the entry, rather than losing it in silence.
+/// naming the entry, rather than losing it in silence, and a cancel lets go of
+/// the job it leaves held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_entry_deleted_while_delivered_is_said() {
     let logs = nest_rs_testing::LogCapture::install_global();
@@ -1098,7 +1099,7 @@ async fn an_entry_deleted_while_delivered_is_said() {
     crate::forget(queue).await;
     let run = crate::this_run();
     let replica = crate::replica::<LongModule>().await;
-    replica
+    let pushed = replica
         .producer
         .push(LongQueue, LongCommand { run }, None)
         .await
@@ -1120,11 +1121,15 @@ async fn an_entry_deleted_while_delivered_is_said() {
         .query_async(&mut crate::connect().await)
         .await
         .expect("XDEL by hand");
-    let said = "queue entries deleted while delivered; their jobs are gone, and a unique key they held stays held until cancel_unique frees it";
+    let said = "queue entries deleted while delivered; their jobs are gone but stay held, their ids and unique keys taken, until cancel or cancel_unique lets them go";
     crate::wait_until(Duration::from_secs(4), || {
         !logs.find(nest_rs_queue::TARGET, said).is_empty()
     })
     .await;
+    assert!(
+        replica.producer.cancel(&pushed).await.expect("cancel"),
+        "the cancel lets go of the job its deleted entry left held"
+    );
     replica.worker.shutdown().await.expect("clean shutdown");
     let line = logs.expect_one(nest_rs_queue::TARGET, said);
     assert_eq!(line.level, "warn");

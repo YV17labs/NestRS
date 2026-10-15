@@ -93,24 +93,39 @@ fn reserve_addr() -> Result<SocketAddr> {
 }
 
 /// Serve `app` on the transport `config` describes, at a reserved local
-/// address in place of its own.
+/// address in place of its own, once its init phases ran.
 pub(crate) async fn serve(app: HeadlessApp, config: &HttpConfig) -> Result<WsApp> {
-    let addr = reserve_addr()?;
-    let transport = HttpTransport::from_config(&HttpConfig {
-        host: addr.ip().to_string(),
-        port: addr.port(),
-        ..config.clone()
-    })?;
-    let handle = app.spawn_transport(transport).await?;
-    app.init().await?;
-    Ok(WsApp {
-        app,
-        handle: Some(handle),
-        addr,
-    })
+    let served = async {
+        let addr = reserve_addr()?;
+        let mut transport = HttpTransport::from_config(&HttpConfig {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            ..config.clone()
+        })?;
+        // `App::run`'s order: nothing serves before the init phases ran.
+        app.configure_transport(&mut transport).await?;
+        app.init().await?;
+        anyhow::Ok((app.serve_transport(transport), addr))
+    }
+    .await;
+    match served {
+        Ok((handle, addr)) => Ok(WsApp {
+            app,
+            handle: Some(handle),
+            addr,
+        }),
+        Err(error) => {
+            app.close().await;
+            Err(error)
+        }
+    }
 }
 
 /// A booted app serving its HTTP surface on a real local port.
+///
+/// [`close`](Self::close) ends it as [`App::close`](nest_rs_core::App::close)
+/// does; dropping it instead detaches the transport, runs no shutdown hook and
+/// closes nothing.
 pub struct WsApp {
     app: HeadlessApp,
     handle: Option<TransportHandle>,
@@ -147,8 +162,15 @@ impl WsApp {
         }
     }
 
-    /// Stop the transport and await its exit, surfacing its error. Dropping the
-    /// [`WsApp`] instead detaches the task.
+    /// Stop the app as [`HeadlessApp::close`] does: the transport stops within
+    /// its bound, then the shutdown phases run, the resources close and the
+    /// container drops.
+    pub async fn close(self) {
+        self.app.close().await;
+    }
+
+    /// Stop the transport and await its exit, surfacing its error; the app
+    /// itself is not closed. Dropping the [`WsApp`] instead detaches the task.
     pub async fn shutdown(mut self) -> Result<()> {
         match self.handle.take() {
             Some(handle) => handle.shutdown().await,

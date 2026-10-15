@@ -123,7 +123,9 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql", "mcp"] }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 # `#[derive(SimpleObject)]` on the payload those two share.
 async-graphql.workspace = true
-tokio.workspace = true
+# `test-util` (not part of tokio's `full`) pauses time, so the close of a
+# transport that unwinds for seconds is asserted on a virtual clock.
+tokio = { workspace = true, features = ["test-util"] }
 # The config DI test boots a module wiring `ConfigModule::for_feature` and a
 # service injecting the loaded config; `nest-rs-config` is already a normal
 # dependency. `validator` backs the `#[config]` struct's `#[validate]` derive.

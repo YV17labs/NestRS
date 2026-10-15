@@ -1,13 +1,16 @@
 //! `#[hooks]` through the real macro: phase-tagged methods run dependencies
 //! first at init and in reverse at shutdown, bare and `Result`-returning
-//! alike, and a failing init hook aborts the boot; the harness runs them once
-//! and hands out the app's lifecycle.
+//! alike; a failing init hook aborts the boot and tears every host down; the
+//! harness runs them once, hands out the app's lifecycle, and closes the app,
+//! stopping what it spawned before any teardown and filing a spawned
+//! transport that fails.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::{App, AppLifecycle, AppState, hooks, injectable, module};
-use nest_rs_testing::TestApp;
+use anyhow::Context as _;
+use nest_rs_core::{App, AppLifecycle, AppState, StopCause, hooks, injectable, module, target};
+use nest_rs_testing::{LogCapture, TestApp};
 
 static LOG: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
@@ -208,13 +211,14 @@ impl Aservice {
 struct ChainModule;
 
 #[tokio::test]
-async fn hooks_run_dependencies_first_at_init_and_in_exact_reverse_at_shutdown() {
-    App::new::<ChainModule>()
-        .expect("boots")
-        .run()
-        .await
-        .expect("an app serving nothing stops at once");
+async fn hooks_run_dependencies_first_at_init_and_in_exact_reverse_when_the_harness_closes() {
+    let app = TestApp::for_module::<ChainModule>().await.expect("boots");
+    let lifecycle = Arc::clone(app.lifecycle());
 
+    app.close().await;
+
+    assert_eq!(lifecycle.state(), AppState::Draining);
+    assert_eq!(lifecycle.cause(), Some(StopCause::Closed));
     let log = CHAIN.lock().expect("log mutex is not poisoned").clone();
     assert_eq!(
         log,
@@ -387,6 +391,259 @@ async fn a_failed_bootstrap_hook_runs_every_hosts_destroy_hook_in_reverse() {
             "Svc::init",
             "Api::init",
             "Repo::bootstrap",
+            "Api::destroy",
+            "Svc::destroy",
+            "Repo::destroy",
+            "Db::destroy",
+        ],
+    );
+}
+
+static HEADLESS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+fn headless(entry: &'static str) {
+    HEADLESS
+        .lock()
+        .expect("log mutex is not poisoned")
+        .push(entry);
+}
+
+/// Serves until its token is cancelled, then takes `UNWINDS` to stop and
+/// records `"transport stopped"` through its log.
+struct Unwinding(fn(&'static str));
+
+const UNWINDS: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[async_trait::async_trait]
+impl nest_rs_core::Transport for Unwinding {
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(
+        self: Box<Self>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<()> {
+        cancel.cancelled().await;
+        tokio::time::sleep(UNWINDS).await;
+        (self.0)("transport stopped");
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        UNWINDS + std::time::Duration::from_secs(1)
+    }
+}
+
+#[injectable]
+struct Drained;
+
+#[hooks]
+impl Drained {
+    #[on_module_destroy]
+    async fn release(&self) {
+        headless("hook ran");
+    }
+}
+
+#[module(providers = [Drained])]
+struct DrainedModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_headless_close_stops_its_transports_within_their_bound_then_runs_the_hooks() {
+    use nest_rs_core::Transport as _;
+
+    let app = TestApp::builder()
+        .module::<DrainedModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+    app.init().await.expect("the init phases run");
+    let _serving = app
+        .spawn_transport(Unwinding(headless))
+        .await
+        .expect("the transport configures");
+    let started = tokio::time::Instant::now();
+
+    app.close().await;
+
+    let took = started.elapsed();
+    assert!(
+        took >= UNWINDS && took < Unwinding(headless).stop_bound(),
+        "the close waited for the transport to stop, within its bound: took {took:?}",
+    );
+    assert_eq!(
+        *HEADLESS.lock().expect("log mutex is not poisoned"),
+        ["transport stopped", "hook ran"],
+    );
+}
+
+static STOPPED_BEFORE_TEARDOWN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+fn stopped_before_teardown(entry: &'static str) {
+    STOPPED_BEFORE_TEARDOWN
+        .lock()
+        .expect("log mutex is not poisoned")
+        .push(entry);
+}
+
+#[injectable]
+struct RefusesToWarm;
+
+#[hooks]
+impl RefusesToWarm {
+    #[on_module_init]
+    async fn warm(&self) -> anyhow::Result<()> {
+        anyhow::bail!("the cache refused to warm")
+    }
+
+    #[on_module_destroy]
+    async fn release(&self) {
+        stopped_before_teardown("hook ran");
+    }
+}
+
+#[module(providers = [RefusesToWarm])]
+struct RefusesToWarmModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_headless_init_that_fails_stops_its_transports_before_the_shutdown_hooks_run() {
+    let app = TestApp::builder()
+        .module::<RefusesToWarmModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+    let _serving = app
+        .spawn_transport(Unwinding(stopped_before_teardown))
+        .await
+        .expect("the transport configures");
+
+    let error = app.init().await.expect_err("the init hook fails");
+
+    assert!(
+        format!("{error:#}").contains("the cache refused to warm"),
+        "{error:#}"
+    );
+    assert_eq!(
+        *STOPPED_BEFORE_TEARDOWN
+            .lock()
+            .expect("log mutex is not poisoned"),
+        ["transport stopped", "hook ran"],
+        "nothing the harness serves runs into the teardown",
+    );
+}
+
+/// Fails as soon as it serves, as a transport whose port was taken does.
+struct FailsToServe;
+
+#[async_trait::async_trait]
+impl nest_rs_core::Transport for FailsToServe {
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(
+        self: Box<Self>,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("the address was already in use")).context("the listener did not bind")
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
+#[module]
+struct ServesNothingModule;
+
+#[tokio::test]
+async fn a_spawned_transport_that_fails_is_filed_at_error_with_its_chain() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ServesNothingModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+    let _serving = app
+        .spawn_transport(FailsToServe)
+        .await
+        .expect("the transport configures");
+
+    app.close().await;
+
+    let failed = logs.expect_one(target::APP, "a transport the harness spawned failed");
+    assert_eq!(failed.level, "error");
+    assert!(
+        failed
+            .field("transport")
+            .is_some_and(|transport| transport.ends_with("FailsToServe")),
+        "{:?}",
+        failed.fields,
+    );
+    let error = failed.field("error").unwrap_or_default();
+    assert!(
+        error.contains("the listener did not bind")
+            && error.contains("the address was already in use"),
+        "the whole chain: {error}",
+    );
+}
+
+static WS_RELEASED: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+struct ReleasedOverWs;
+
+#[hooks]
+impl ReleasedOverWs {
+    #[on_module_destroy]
+    async fn release(&self) {
+        WS_RELEASED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[module(providers = [ReleasedOverWs])]
+struct ReleasedOverWsModule;
+
+#[tokio::test]
+async fn a_socket_harness_close_stops_its_transport_then_runs_the_hooks() {
+    let app = TestApp::builder()
+        .module::<ReleasedOverWsModule>()
+        .build_ws()
+        .await
+        .expect("boots on a local port");
+    let addr = app.addr();
+
+    app.close().await;
+
+    assert_eq!(WS_RELEASED.load(Ordering::SeqCst), 1);
+    assert!(
+        tokio::net::TcpStream::connect(addr).await.is_err(),
+        "the transport no longer listens"
+    );
+}
+
+mod the_harness_init_fails {
+    use std::sync::Mutex;
+
+    failed_boot_hosts!(HARNESS_FAILED_INIT, "Repo::init");
+}
+
+#[tokio::test]
+async fn a_harness_whose_init_fails_tears_every_host_down_before_it_returns() {
+    let Err(error) = TestApp::for_module::<the_harness_init_fails::BootModule>().await else {
+        panic!("the init hook fails the harness's boot");
+    };
+
+    assert!(
+        format!("{error:#}").contains("Repo::init refused"),
+        "{error:#}"
+    );
+    assert_eq!(
+        the_harness_init_fails::log(),
+        [
+            "Db::init",
+            "Repo::init",
             "Api::destroy",
             "Svc::destroy",
             "Repo::destroy",

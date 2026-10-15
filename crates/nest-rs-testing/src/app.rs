@@ -31,6 +31,9 @@ type TestEndpoint = BoxEndpoint<'static, Response>;
 
 /// A booted app plus a `poem` [`TestClient`] over its mounted endpoint, driving
 /// REST, GraphQL, OpenAPI and MCP through [`http`](Self::http) without a socket.
+///
+/// [`close`](Self::close) ends it as [`App::close`] does; dropping it instead
+/// runs no shutdown hook and closes nothing.
 pub struct TestApp {
     app: App,
     client: TestClient<TestEndpoint>,
@@ -66,9 +69,20 @@ impl TestApp {
 
     /// The app's [`AppLifecycle`]: in-process, it stays
     /// [`Starting`](nest_rs_core::AppState::Starting), since no transport
-    /// serves it.
+    /// serves it, until [`close`](Self::close) turns it
+    /// [`Draining`](nest_rs_core::AppState::Draining).
     pub fn lifecycle(&self) -> &Arc<AppLifecycle> {
         self.app.lifecycle()
+    }
+
+    /// Stop the app as [`App::close`] does: the shutdown phases in reverse, the
+    /// resources its modules opened closed, its container dropped — within the
+    /// shutdown hooks' budget.
+    pub async fn close(self) {
+        let TestApp { app, client } = self;
+        // The mounted endpoint holds the container too.
+        drop(client);
+        app.close().await;
     }
 }
 
@@ -194,28 +208,17 @@ impl TestAppBuilder {
     }
 
     /// Build the app, configure the HTTP transport and run the init phases —
-    /// once: they do not run again for this app.
+    /// once: they do not run again for this app. A boot that fails past the
+    /// build is closed as [`App::run`] closes it before the error returns.
     pub async fn build(self) -> Result<TestApp> {
         let app = self.inner.build().await?;
-        // A default transport would ignore every field the module configured,
-        // so the harness boots the one `App::run` resolves.
-        let mut transport = HttpTransport::from_config(&http_config(app.container()))?;
-        transport.configure(app.container()).await?;
-        // What `App::run` refuses after configuring, a route or gateway whose
-        // chain did not compose, the harness refuses too.
-        if let Some(refusal) = nest_rs_core::__private::take_site_refusal(app.container()) {
-            return Err(refusal);
+        match mount(&app).await {
+            Ok(client) => Ok(TestApp { app, client }),
+            Err(error) => {
+                app.close().await;
+                Err(error)
+            }
         }
-        app.init().await?;
-        let endpoint = transport
-            .take_endpoint()
-            .expect("HttpTransport::configure populates the endpoint");
-        Ok(TestApp {
-            app,
-            client: TestClient::new(
-                nest_rs_http::__private::poem_bridge::to_poem(endpoint).boxed(),
-            ),
-        })
     }
 
     /// Boot the app on a **real** local port and hand back a socket driver,
@@ -233,6 +236,27 @@ impl TestAppBuilder {
         let app = self.inner.build().await?;
         Ok(HeadlessApp::new(app))
     }
+}
+
+/// Configure the app's HTTP transport, run its init phases, and hand back a
+/// client over the endpoint it mounted.
+async fn mount(app: &App) -> Result<TestClient<TestEndpoint>> {
+    // A default transport would ignore every field the module configured,
+    // so the harness boots the one `App::run` resolves.
+    let mut transport = HttpTransport::from_config(&http_config(app.container()))?;
+    transport.configure(app.container()).await?;
+    // What `App::run` refuses after configuring, a route or gateway whose
+    // chain did not compose, the harness refuses too.
+    if let Some(refusal) = nest_rs_core::__private::take_site_refusal(app.container()) {
+        return Err(refusal);
+    }
+    app.init().await?;
+    let endpoint = transport
+        .take_endpoint()
+        .expect("HttpTransport::configure populates the endpoint");
+    Ok(TestClient::new(
+        nest_rs_http::__private::poem_bridge::to_poem(endpoint).boxed(),
+    ))
 }
 
 #[cfg(feature = "opentelemetry")]

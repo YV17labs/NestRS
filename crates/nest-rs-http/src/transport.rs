@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::header::{HeaderName, HeaderValue, SERVER};
-use nest_rs_core::{Container, Discovery, Transport};
+use nest_rs_core::{Container, Discovery, Listening, Transport};
 use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::HttpBootCheck;
@@ -24,7 +24,7 @@ use crate::problem::{Normalized, ResolvedErrors};
 use crate::route_template::RouteTemplate;
 use crate::routes::{HttpRoutes, Wrap};
 use crate::server::Server;
-use crate::tls::HttpTls;
+use crate::tls::{HttpTls, ListenerTls};
 use crate::versioning::VersionedEndpoint;
 
 /// The `Server` value a transport sends when [`HttpConfig::server_header`](crate::HttpConfig::server_header) is on.
@@ -138,6 +138,14 @@ pub struct HttpTransport {
     /// Shared with the edge, whose response bodies read it.
     drain: Arc<Drain>,
     endpoint: Option<BoxEndpoint>,
+    /// What [`listen`](Transport::listen) took, for `serve` to run on.
+    listening: Option<Listened>,
+}
+
+/// The socket `listen` bound and the TLS material it checked.
+struct Listened {
+    listener: tokio::net::TcpListener,
+    tls: Option<ListenerTls>,
 }
 
 fn normalize_global_prefix(raw: &str) -> Option<String> {
@@ -335,6 +343,7 @@ impl HttpTransport {
             detached: Vec::new(),
             drain: Arc::default(),
             endpoint: None,
+            listening: None,
         };
         cfg.warn_when_requests_outlast_the_window();
         cfg.warn_when_the_body_gap_reaches_the_budget();
@@ -695,6 +704,31 @@ impl Transport for HttpTransport {
         Ok(())
     }
 
+    /// Check the TLS material, then bind: material that cannot serve fails the
+    /// boot with the port never taken, and a port taken fails it before any
+    /// transport serves.
+    async fn listen(&mut self) -> Result<Listening> {
+        let tls = self
+            .tls
+            .take()
+            .map(HttpTls::into_listener)
+            .transpose()
+            .context("the configured TLS material cannot serve")?;
+        let listener = tokio::net::TcpListener::bind(&self.bind)
+            .await
+            .with_context(|| format!("the HTTP transport cannot listen on {}", self.bind))?;
+        let local = listener.local_addr()?;
+        tracing::debug!(
+            target: crate::target::HTTP,
+            addr = %local,
+            tls = tls.is_some(),
+            idle_timeout_secs = self.deadlines.idle.as_secs(),
+            "transport listening",
+        );
+        self.listening = Some(Listened { listener, tls });
+        Ok(Listening::on([local]))
+    }
+
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()> {
         #[expect(
             clippy::expect_used,
@@ -703,25 +737,11 @@ impl Transport for HttpTransport {
         let endpoint = self
             .endpoint
             .expect("HttpTransport::configure must run before serve");
+        let Listened { listener, tls } = self
+            .listening
+            .context("HttpTransport::listen must run before serve")?;
         let window = self.shutdown_timeout;
         let drain = self.drain;
-        // Checked before the bind: material that cannot serve fails the boot
-        // with the port never taken.
-        let tls = self
-            .tls
-            .map(HttpTls::into_listener)
-            .transpose()
-            .context("the configured TLS material cannot serve")?;
-        let listener = tokio::net::TcpListener::bind(&self.bind)
-            .await
-            .with_context(|| format!("the HTTP transport cannot listen on {}", self.bind))?;
-        tracing::info!(
-            target: crate::target::HTTP,
-            addr = %self.bind,
-            tls = tls.is_some(),
-            idle_timeout_secs = self.deadlines.idle.as_secs(),
-            "transport listening",
-        );
         let server = Server::new(
             listener,
             endpoint,
@@ -746,14 +766,16 @@ impl Transport for HttpTransport {
             }
         };
         server.run(signal).await;
-        // Last, so nothing a connection carried still runs when the shutdown hooks start.
+        // Last, so nothing a connection carried still runs when the shutdown
+        // hooks start; within the settle the cut streams used, never one more.
         DetachedWork::stop_at(&detached, drain.bound()).await;
         drain.report(window);
         Ok(())
     }
 
-    /// The window, then the settle `serve` spends stopping what its
-    /// self-mounts ran off their connections.
+    /// The window, then the one settle `serve` gives what it cut — the HTTP/2
+    /// streams and what its self-mounts ran off their connections — to
+    /// unwind.
     fn stop_bound(&self) -> Duration {
         self.shutdown_timeout + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
     }
@@ -970,13 +992,46 @@ mod tests {
     }
 
     #[test]
-    fn configured_tls_material_is_kept_for_serve_to_check() {
+    fn configured_tls_material_is_kept_for_listen_to_check() {
         let t = HttpTransport::from_config(&crate::HttpConfig {
             tls: Some(HttpTls::new(b"cert".to_vec(), b"key".to_vec())),
             ..Default::default()
         })
-        .expect("material is checked when serve binds, not here");
+        .expect("material is checked when listen binds, not here");
         assert!(t.tls.is_some());
+    }
+
+    #[tokio::test]
+    async fn listen_binds_and_reports_the_real_address() {
+        let mut t = HttpTransport::from_config(&crate::HttpConfig {
+            host: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        })
+        .expect("in range");
+        let listening = t.listen().await.expect("a loopback port");
+        let [address] = listening.addresses[..] else {
+            panic!("one address: {listening:?}");
+        };
+        assert!(address.ip().is_loopback());
+        assert_ne!(address.port(), 0);
+        assert!(t.listening.is_some(), "the bound socket is kept for serve");
+    }
+
+    #[tokio::test]
+    async fn serve_without_listen_is_an_error_not_a_bind() {
+        let mut t = defaults();
+        t.endpoint = Some(BoxEndpoint::new(crate::endpoint_fn(|_| async {
+            Ok(crate::Response::builder().body(""))
+        })));
+        let refused = Box::new(t)
+            .serve(CancellationToken::new())
+            .await
+            .expect_err("nothing was bound");
+        assert_eq!(
+            refused.to_string(),
+            "HttpTransport::listen must run before serve"
+        );
     }
 
     #[test]

@@ -156,16 +156,16 @@ pub(crate) async fn serve_module<M: nest_rs_core::Module + 'static>(config: Http
 /// [`serve_module`] for an app built as `builder` describes.
 async fn serve_app(builder: nest_rs_core::AppBuilder, config: HttpConfig) -> Serving {
     let app = builder.build().await.expect("module boots");
-    let port = free_port();
     let mut transport = crate::built(&HttpConfig {
         host: "127.0.0.1".into(),
-        port,
+        port: 0,
         ..config
     });
     transport
         .configure(app.container())
         .await
         .expect("transport configures");
+    let port = crate::listen(&mut transport).await;
     let cancel = CancellationToken::new();
     let task = tokio::spawn({
         let cancel = cancel.clone();
@@ -210,16 +210,11 @@ pub(crate) fn free_port() -> u16 {
     listener.local_addr().expect("the bound port").port()
 }
 
-/// Loopback, retrying while the listener comes up — `serve` binds on its own
-/// task, so the first connect can lose the race.
+/// Loopback, on a port the transport already listens on.
 pub(crate) async fn connect(port: u16) -> TcpStream {
-    for _ in 0..100 {
-        if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)).await {
-            return stream;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("the transport never came up on port {port}");
+    TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap_or_else(|error| panic!("the transport listens on port {port}: {error}"))
 }
 
 /// [`connect`] on a socket whose receive buffer is 4 KiB.
@@ -920,4 +915,268 @@ async fn a_converter_leaf_and_a_poem_leaf_both_upgrade() {
         }
         serving.cancel.cancel();
     }
+}
+
+/// Records that its `serve` ran, beside the HTTP transport.
+struct RecordsServe;
+
+static RECORDED_SERVE: AtomicBool = AtomicBool::new(false);
+
+#[async_trait]
+impl Transport for RecordsServe {
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+        RECORDED_SERVE.store(true, Ordering::SeqCst);
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// The port [`OnTakenPortModule`] asks for, taken by the test first.
+static TAKEN_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+struct OnTakenPortModule;
+
+impl nest_rs_core::Module for OnTakenPortModule {
+    fn register(builder: ContainerBuilder, _: nest_rs_core::Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(nest_rs_core::__private::TransportContribution {
+                name: "HttpTransport",
+                build: |_| {
+                    Ok(Box::new(HttpTransport::from_config(&HttpConfig {
+                        host: "127.0.0.1".into(),
+                        port: TAKEN_PORT.load(Ordering::SeqCst),
+                        ..HttpConfig::default()
+                    })?))
+                },
+            })
+            .provide_meta(nest_rs_core::__private::TransportContribution {
+                name: "RecordsServe",
+                build: |_| Ok(Box::new(RecordsServe)),
+            })
+    }
+}
+
+/// HTTP binds in `listen`: a port already taken fails the boot naming that
+/// step, and no transport ever serves.
+#[tokio::test]
+async fn listening_on_a_taken_port_fails_the_boot_before_any_transport_serves() {
+    let taken = StdTcpListener::bind(("127.0.0.1", 0)).expect("a loopback port");
+    TAKEN_PORT.store(
+        taken.local_addr().expect("the bound port").port(),
+        Ordering::SeqCst,
+    );
+
+    let refused = tokio::time::timeout(
+        PATIENCE,
+        App::new::<OnTakenPortModule>()
+            .expect("the module boots")
+            .run(),
+    )
+    .await
+    .expect("the boot stops at the listen")
+    .expect_err("the port is taken");
+
+    assert!(
+        matches!(
+            refused.downcast_ref::<nest_rs_core::BootStep>(),
+            Some(nest_rs_core::BootStep::Listen { transport }) if transport == "HttpTransport"
+        ),
+        "the boot error carries the listen step: {refused:#}"
+    );
+    assert!(
+        format!("{refused:#}").contains("the HTTP transport cannot listen on 127.0.0.1:"),
+        "{refused:#}"
+    );
+    assert!(
+        !RECORDED_SERVE.load(Ordering::SeqCst),
+        "no transport served"
+    );
+}
+
+/// Stops the app once it is ready, as a failing transport does.
+struct StopsOnceReady(Option<std::sync::Arc<nest_rs_core::AppLifecycle>>);
+
+#[async_trait]
+impl Transport for StopsOnceReady {
+    async fn configure(&mut self, container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        self.0 = container.get::<nest_rs_core::AppLifecycle>();
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        if let Some(lifecycle) = self.0 {
+            lifecycle.ready().await;
+        }
+        Err(anyhow::anyhow!("stopped once ready"))
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct OnPortZeroModule;
+
+impl nest_rs_core::Module for OnPortZeroModule {
+    fn register(builder: ContainerBuilder, _: nest_rs_core::Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(nest_rs_core::__private::TransportContribution {
+                name: "HttpTransport",
+                build: |_| {
+                    Ok(Box::new(HttpTransport::from_config(&HttpConfig {
+                        host: "127.0.0.1".into(),
+                        port: 0,
+                        ..HttpConfig::default()
+                    })?))
+                },
+            })
+            .provide_meta(nest_rs_core::__private::TransportContribution {
+                name: "StopsOnceReady",
+                build: |_| Ok(Box::new(StopsOnceReady(None))),
+            })
+    }
+}
+
+/// Bound on port `0`, the transport reports the port the system gave it: the
+/// `app ready` line carries it, and the debug line says it once bound.
+#[tokio::test]
+async fn bound_on_port_zero_the_ready_line_carries_the_real_port() {
+    let logs = LogCapture::install();
+
+    let stopped = tokio::time::timeout(
+        PATIENCE,
+        App::new::<OnPortZeroModule>()
+            .expect("the module boots")
+            .run(),
+    )
+    .await
+    .expect("the app stops once ready")
+    .expect_err("its second transport stops it");
+    assert!(
+        stopped.to_string().contains("stopped once ready"),
+        "{stopped:#}"
+    );
+
+    let ready = logs.expect_one(nest_rs_core::target::APP, "app ready");
+    let address = ready.field("addresses").unwrap_or_default();
+    let port: u16 = address
+        .strip_prefix("127.0.0.1:")
+        .and_then(|port| port.parse().ok())
+        .unwrap_or_else(|| panic!("one loopback address: {address:?}"));
+    assert_ne!(port, 0, "the real port, not the one asked for");
+    let listening = logs.expect_one(nest_rs_http::target::HTTP, "transport listening");
+    assert_eq!(listening.level, "debug");
+    assert_eq!(listening.field("addr").as_deref(), Some(address.as_str()));
+}
+
+/// Set once the blocking handler's drop has ended.
+static BLOCKING_DROPPED: AtomicBool = AtomicBool::new(false);
+
+/// Blocks its thread for longer than the settle when dropped: a handler whose
+/// cleanup cannot unwind in time.
+struct BlocksOnDrop;
+
+impl Drop for BlocksOnDrop {
+    fn drop(&mut self) {
+        std::thread::sleep(nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT * 3);
+        BLOCKING_DROPPED.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Told once the blocking handler runs.
+static BLOCKING: Notify = Notify::const_new();
+
+/// A self-mount whose handler never answers and blocks as it is dropped.
+struct BlockingMount;
+
+impl nest_rs_core::Discoverable for BlockingMount {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<BlockingMount, HttpEndpointMeta>(
+            HttpEndpointMeta::new(
+                &crate::PUBLIC_MOUNT,
+                "/blocking",
+                "blocking",
+                |_container, routes| {
+                    routes.route_any(
+                        "/blocking",
+                        nest_rs_http::endpoint_fn(|_| async {
+                            let _held = BlocksOnDrop;
+                            BLOCKING.notify_one();
+                            std::future::pending::<()>().await;
+                            Ok(nest_rs_http::Response::builder().body("never"))
+                        }),
+                    );
+                },
+            )
+            .owned_by("BlockingMount"),
+        )
+    }
+}
+
+#[module(providers = [BlockingMount, SettleA])]
+struct BlockingModule;
+
+/// An HTTP/2 stream whose handler blocks as it is cut and detached work that
+/// never unwinds share one settle: `serve` comes back within its stated
+/// `stop_bound`, never a settle past it. Real time on several workers, since
+/// a blocking drop holds a thread the paused clock would not move past.
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn a_blocking_stream_and_blocking_detached_work_end_within_the_stop_bound() {
+    let window = Duration::from_secs(1);
+    let config = HttpConfig {
+        shutdown_timeout: window,
+        ..HttpConfig::default()
+    };
+    let stop_bound = crate::built(&config).stop_bound();
+    let serving = serve_module::<BlockingModule>(config).await;
+
+    let mut detached = request(serving.port, "/settle-a").await;
+    let head = read_head(&mut detached).await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the detached unit started: {head}"
+    );
+    let socket = connect(serving.port).await;
+    let (client, connection) = h2::client::handshake(socket)
+        .await
+        .expect("the HTTP/2 preface is accepted");
+    tokio::spawn(connection);
+    let request = http::Request::get(format!("http://127.0.0.1:{}/blocking", serving.port))
+        .body(())
+        .expect("a request");
+    let _answer = client
+        .ready()
+        .await
+        .expect("a stream can open")
+        .send_request(request, true)
+        .expect("sent");
+    tokio::time::timeout(PATIENCE, BLOCKING.notified())
+        .await
+        .expect("the blocking handler runs");
+
+    let asked = std::time::Instant::now();
+    serving.cancel.cancel();
+    serving
+        .task
+        .await
+        .expect("serve does not panic")
+        .expect("serve stops cleanly");
+    let took = asked.elapsed();
+
+    assert!(
+        took < stop_bound + Duration::from_millis(250),
+        "serve came back within its stop bound {stop_bound:?}: took {took:?}",
+    );
+    assert!(
+        !BLOCKING_DROPPED.load(Ordering::SeqCst),
+        "the handler was still dropping: the settle was shared, not waited out"
+    );
 }

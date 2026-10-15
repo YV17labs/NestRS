@@ -75,6 +75,16 @@ where
     boot_on::<M>(HttpConfig::default()).await
 }
 
+/// Bind `transport` as the kernel's boot does, and the loopback port it took.
+pub(crate) async fn listen(transport: &mut HttpTransport) -> u16 {
+    let listening = transport.listen().await.expect("the transport listens");
+    listening
+        .addresses
+        .first()
+        .expect("the transport listens on one address")
+        .port()
+}
+
 /// The transport `config` describes, before `configure`.
 pub(crate) fn built(config: &HttpConfig) -> HttpTransport {
     HttpTransport::from_config(config).expect("the config is in range")

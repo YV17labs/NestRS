@@ -1,7 +1,6 @@
 //! A request does not end when its handler returns: a streamed body runs under
 //! the request's span and ambient context, and keeps its framing.
 
-use std::net::TcpListener as StdTcpListener;
 use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
@@ -163,19 +162,16 @@ async fn a_fixed_length_response_still_declares_its_length() {
         .build()
         .await
         .expect("module boots");
-    let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind an ephemeral port");
-    let port = listener.local_addr().expect("the bound port").port();
-    drop(listener);
-
     let mut transport = crate::built(&HttpConfig {
         host: "127.0.0.1".into(),
-        port,
+        port: 0,
         ..HttpConfig::default()
     });
     transport
         .configure(app.container())
         .await
         .expect("transport configures");
+    let port = crate::listen(&mut transport).await;
     let cancel = CancellationToken::new();
     let serving = tokio::spawn({
         let cancel = cancel.clone();

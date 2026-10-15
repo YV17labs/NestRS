@@ -188,7 +188,8 @@ async fn transport_for(port: u16, material: &Material, reload_secs: u64) -> Http
 }
 
 async fn serve(port: u16, material: &Material, reload_secs: u64) -> CancellationToken {
-    let transport = transport_for(port, material, reload_secs).await;
+    let mut transport = transport_for(port, material, reload_secs).await;
+    transport.listen().await.expect("the transport listens");
     let cancel = CancellationToken::new();
     let handle = cancel.clone();
     tokio::spawn(async move {
@@ -313,10 +314,10 @@ async fn material_that_cannot_serve_fails_the_boot_rather_than_binding() {
     // Leaf B's certificate beside leaf A's key: both parse, neither corresponds.
     material.write(cert_b(), key_a());
     let port = free_port();
-    let transport = transport_for(port, &material, 0).await;
+    let mut transport = transport_for(port, &material, 0).await;
 
-    let err = Box::new(transport)
-        .serve(CancellationToken::new())
+    let err = transport
+        .listen()
         .await
         .expect_err("a pair that cannot serve does not reach the listener");
     let msg = format!("{err:#}");

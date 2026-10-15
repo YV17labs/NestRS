@@ -5,8 +5,8 @@
 //! The transport carries it down with everything it serves:
 //! [`going_away`](DetachedWork::going_away) resolves at the signal, the work
 //! gets the window, and what still runs at the bound is dropped where it waits
-//! and given [`SHUTDOWN_SETTLE_TIMEOUT`] to unwind — once for every mount
-//! together.
+//! and given until [`SHUTDOWN_SETTLE_TIMEOUT`] past the bound to unwind — one
+//! settle for every mount and the HTTP/2 streams the transport cut together.
 //!
 //! [`SHUTDOWN_SETTLE_TIMEOUT`]: nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
 
@@ -78,9 +78,11 @@ impl DetachedWork {
         self.going_away.cancel();
     }
 
-    /// The transport's half of the way down, for every mount at once: let the
-    /// work finish until `bound`, then stop what still runs and wait
-    /// [`SHUTDOWN_SETTLE_TIMEOUT`] once for all of it.
+    /// The transport's half of the way down, once its connections ended, for
+    /// every mount at once: let the work finish until `bound`, then stop what
+    /// still runs and wait for all of it until [`SHUTDOWN_SETTLE_TIMEOUT`]
+    /// past `bound` — the settle the cut HTTP/2 streams already spent from —,
+    /// or past now without one.
     pub(crate) async fn stop_at(works: &[(String, DetachedWork)], bound: Option<Instant>) {
         for (_, work) in works {
             work.running.close();
@@ -101,12 +103,13 @@ impl DetachedWork {
                 running
             })
             .collect();
+        let settled = bound.unwrap_or_else(Instant::now) + SHUTDOWN_SETTLE_TIMEOUT;
         let unwound = join_all(works.iter().map(|(_, work)| work.running.wait()));
         #[expect(
             clippy::let_underscore_must_use,
             reason = "what the settle wait cut is read below, from the work still running"
         )]
-        let _ = tokio::time::timeout(SHUTDOWN_SETTLE_TIMEOUT, unwound).await;
+        let _ = tokio::time::timeout_at(settled, unwound).await;
         for ((path, work), stopped) in works.iter().zip(stopped) {
             let still_running = work.running.len();
             if stopped > 0 {

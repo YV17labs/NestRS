@@ -1,6 +1,4 @@
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -201,7 +199,7 @@ impl HttpTls {
                     key: self.key,
                     interval: Duration::from_secs(self.reload_secs),
                 };
-                Some(Box::pin(watcher.renew(resolver)) as Renewal)
+                Some(Renewal { watcher, resolver })
             }
             _ => None,
         };
@@ -212,8 +210,19 @@ impl HttpTls {
     }
 }
 
-/// The watch that swaps a renewed certificate into the listener; it never ends.
-pub(crate) type Renewal = Pin<Box<dyn Future<Output = ()> + Send>>;
+/// The watch that swaps a renewed certificate into the listener, held unstarted
+/// from the listen to the serve.
+pub(crate) struct Renewal {
+    watcher: Watcher,
+    resolver: Arc<ReloadingResolver>,
+}
+
+impl Renewal {
+    /// Run the watch; it never ends.
+    pub(crate) async fn run(self) {
+        self.watcher.renew(self.resolver).await;
+    }
+}
 
 /// The TLS half of the listener: the handshake, and the renewal to run beside it.
 pub(crate) struct ListenerTls {

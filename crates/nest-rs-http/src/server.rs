@@ -124,15 +124,15 @@ impl Server {
 
     /// Accept until `signal` resolves; then stop accepting, ask every
     /// connection to finish what it is answering, wait for them until the
-    /// drain's bound, and cut what is left, its HTTP/2 streams given the
-    /// settle to unwind.
+    /// drain's bound, and cut what is left, its HTTP/2 streams given until the
+    /// settle past the bound to unwind.
     pub(crate) async fn run(mut self, signal: impl Future<Output = ()>) {
         let mut signal = pin!(signal);
         let (acceptor, _renewal) = match self.tls.take() {
             Some(tls) => (
                 Some(tls.acceptor),
                 tls.renewal
-                    .map(|renewal| AbortOnDropHandle::new(tokio::spawn(renewal))),
+                    .map(|renewal| AbortOnDropHandle::new(tokio::spawn(renewal.run()))),
             ),
             None => (None, None),
         };
@@ -192,21 +192,24 @@ impl Server {
         drop(self.listener);
         shutdown.cancel();
         streams.close();
-        let ended = match self.drain.bound() {
+        let cut_at = match self.drain.bound() {
             Some(bound) => tokio::time::timeout_at(bound, join_all(&mut connections, &streams))
                 .await
-                .is_ok(),
+                .is_err()
+                .then_some(bound),
             None => {
                 join_all(&mut connections, &streams).await;
-                true
+                None
             }
         };
-        if !ended {
+        if let Some(bound) = cut_at {
             // Each socket drops past the bound, so the drain counts it as cut; an
             // HTTP/2 connection dropped resets its streams, which wakes their tasks.
             connections.abort_all();
             while connections.join_next().await.is_some() {}
-            if tokio::time::timeout(nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT, streams.wait())
+            // The settle the transport's detached work shares, from the bound.
+            let settled = bound + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
+            if tokio::time::timeout_at(settled, streams.wait())
                 .await
                 .is_err()
             {

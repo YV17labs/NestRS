@@ -20,7 +20,6 @@ mod registry;
 mod scope;
 mod unit;
 
-use std::net::TcpListener as StdTcpListener;
 use std::time::Duration;
 
 use nest_rs_core::{App, Layer, Module, Transport, UnitContext, injectable};
@@ -97,13 +96,9 @@ pub(crate) async fn serve_under<M: Module + 'static>(config: HttpConfig) -> Serv
         .build()
         .await
         .expect("the module boots");
-    let port = StdTcpListener::bind(("127.0.0.1", 0))
-        .and_then(|listener| listener.local_addr())
-        .expect("an ephemeral port")
-        .port();
     let mut transport = HttpTransport::from_config(&HttpConfig {
         host: "127.0.0.1".into(),
-        port,
+        port: 0,
         ..config
     })
     .expect("the config builds a transport");
@@ -111,6 +106,14 @@ pub(crate) async fn serve_under<M: Module + 'static>(config: HttpConfig) -> Serv
         .configure(app.container())
         .await
         .expect("the transport configures");
+    let port = transport
+        .listen()
+        .await
+        .expect("the transport listens")
+        .addresses
+        .first()
+        .expect("one loopback address")
+        .port();
     let cancel = CancellationToken::new();
     let task = tokio::spawn({
         let cancel = cancel.clone();
@@ -136,15 +139,11 @@ impl Serving {
     }
 }
 
-/// A fresh connection to the served port, retried while the listener comes up.
+/// A fresh connection to the port the transport listens on.
 async fn connect(port: u16) -> TcpStream {
-    for _ in 0..100 {
-        if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)).await {
-            return stream;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("the transport never came up on port {port}");
+    TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap_or_else(|error| panic!("the transport listens on port {port}: {error}"))
 }
 
 /// Write `request` on a fresh connection and read the response head, leaving

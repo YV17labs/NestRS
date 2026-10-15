@@ -18,16 +18,19 @@ pub struct HeadlessApp {
     app: App,
     /// Every transport [`spawn_transport`](Self::spawn_transport) started.
     transports: TaskTracker,
-    /// The longest [`Transport::stop_bound`] among them.
-    stop_bound: Mutex<Duration>,
+    /// Each of them still serving, with its [`Transport::stop_bound`].
+    serving: Serving,
 }
+
+/// The transports still serving, by name, each with its stop bound.
+type Serving = Arc<Mutex<Vec<(&'static str, Duration)>>>;
 
 impl HeadlessApp {
     pub(crate) fn new(app: App) -> Self {
         Self {
             app,
             transports: TaskTracker::new(),
-            stop_bound: Mutex::new(Duration::ZERO),
+            serving: Serving::default(),
         }
     }
 
@@ -46,13 +49,9 @@ impl HeadlessApp {
     /// started, within the longest of their stop bounds, then runs the
     /// teardown [`App::init`] runs.
     pub async fn init(&self) -> Result<()> {
-        let bound = *self
-            .stop_bound
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
         nest_rs_core::__private::init_tearing_down_after(
             &self.app,
-            stop_within(&self.transports, bound),
+            stop_within(&self.transports, &self.serving),
         )
         .await
     }
@@ -85,22 +84,23 @@ impl HeadlessApp {
 
     /// Serve a configured, listening `transport` on the tracked background task.
     pub(crate) fn serve_transport<T: Transport>(&self, transport: T) -> TransportHandle {
-        {
-            let mut longest = self
-                .stop_bound
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            *longest = (*longest).max(transport.stop_bound());
-        }
+        let name = std::any::type_name::<T>();
+        locked(&self.serving).push((name, transport.stop_bound()));
+        let serving = Arc::clone(&self.serving);
         let cancel = self.lifecycle().stopping();
         let token = cancel.clone();
         let join = self.transports.spawn(async move {
             let served = Box::new(transport).serve(token).await;
+            let mut still = locked(&serving);
+            if let Some(at) = still.iter().position(|(serves, _)| *serves == name) {
+                still.remove(at);
+            }
+            drop(still);
             // Its handle is often dropped unread: `close` awaits the tracker.
             if let Err(error) = &served {
                 nest_rs_core::tracing::error!(
                     target: nest_rs_core::target::APP,
-                    transport = std::any::type_name::<T>(),
+                    transport = name,
                     error = %nest_rs_core::error_message(&**error),
                     "a transport the harness spawned failed",
                 );
@@ -112,34 +112,45 @@ impl HeadlessApp {
 
     /// Stop the app as [`App::close`] does: it turns
     /// [`Draining`](nest_rs_core::AppState::Draining), the transports it spawned
-    /// stop within the longest of their stop bounds — one still serving past it
-    /// is abandoned at `warn` — then the shutdown phases run in reverse, the
-    /// resources close, and the container drops.
+    /// stop within the longest of their stop bounds plus
+    /// [`SHUTDOWN_SETTLE_TIMEOUT`](nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT) — one
+    /// still serving then is abandoned at `error`, as [`App::run`] abandons it
+    /// — then the shutdown phases run in reverse, the resources close, and the
+    /// container drops.
     pub async fn close(self) {
         let HeadlessApp {
             app,
             transports,
-            stop_bound,
+            serving,
         } = self;
-        let bound = stop_bound
-            .into_inner()
-            .unwrap_or_else(PoisonError::into_inner);
-        nest_rs_core::__private::close_after(app, stop_within(&transports, bound)).await;
+        nest_rs_core::__private::close_after(app, stop_within(&transports, &serving)).await;
     }
 }
 
+fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Wait for every tracked transport to return once the app's stop token fired,
-/// within `bound`; one still serving past it is abandoned at `warn`.
-async fn stop_within(transports: &TaskTracker, bound: Duration) {
+/// within the longest stop bound plus the settle, as [`App::run`] does; one
+/// still serving then is abandoned at `error`.
+async fn stop_within(transports: &TaskTracker, serving: &Serving) {
     transports.close();
-    if tokio::time::timeout(bound, transports.wait())
-        .await
-        .is_err()
-    {
-        nest_rs_core::tracing::warn!(
+    let longest = locked(serving)
+        .iter()
+        .map(|(_, bound)| *bound)
+        .max()
+        .unwrap_or_default();
+    let held = longest + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
+    if tokio::time::timeout(held, transports.wait()).await.is_ok() {
+        return;
+    }
+    for (transport, bound) in locked(serving).iter() {
+        nest_rs_core::tracing::error!(
             target: nest_rs_core::target::APP,
+            transport,
             stop_bound_ms = u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
-            "a transport the harness spawned was still serving past its stop bound: abandoned",
+            "transport did not stop within its declared bound: abandoned",
         );
     }
 }

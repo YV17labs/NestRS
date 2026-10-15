@@ -664,6 +664,59 @@ async fn a_spawned_transport_is_refused_an_unbounded_stop_and_listens_before_it_
     app.close().await;
 }
 
+/// Never returns from `serve`, its stop token ignored.
+struct IgnoresItsStop;
+
+#[async_trait::async_trait]
+impl nest_rs_core::Transport for IgnoresItsStop {
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(
+        self: Box<Self>,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(2)
+    }
+}
+
+/// The harness holds a spawned transport as the kernel does: to its bound
+/// plus the settle, then it is abandoned and named at `error`.
+#[tokio::test(start_paused = true)]
+async fn a_spawned_transport_that_ignores_its_stop_is_abandoned_at_its_bound_then_the_settle() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ServesNothingModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+    let _serving = app
+        .spawn_transport(IgnoresItsStop)
+        .await
+        .expect("the transport listens");
+    let started = tokio::time::Instant::now();
+
+    app.close().await;
+
+    let took = started.elapsed();
+    let held = std::time::Duration::from_secs(2) + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
+    assert!(
+        took >= held && took < held + std::time::Duration::from_millis(100),
+        "the close held the transport to its bound and the settle: took {took:?}",
+    );
+    let line = logs.expect_one(
+        target::APP,
+        "transport did not stop within its declared bound: abandoned",
+    );
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("stop_bound_ms").as_deref(), Some("2000"));
+}
+
 static WS_RELEASED: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]

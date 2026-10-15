@@ -373,7 +373,8 @@ first); one hook at a time. A provider orders its hooks after another's
 by injecting it — the graph is the only order, never a name or a priority
 (held by `nest-rs-core`'s lifecycle suite). The init phases run once per `App`, whether
 `init` or `run` reaches them first; an init hook that fails or panics aborts the
-boot naming it, and the app refuses its init again (`InitFailedError`).
+boot naming it, then the shutdown phases run for every host and the resources
+close, and the app refuses its init again (`InitFailedError`).
 The app's state and stop cause are `AppLifecycle`'s; the kernel alone moves
 them, and a loop a provider runs beside the app stops at its `stopping()`.
 Shutdown hooks are best-effort — a failure or panic is logged at
@@ -384,7 +385,9 @@ hook still starts and is polled once.
 
 **No `static` holds a provider**: a per-site cache keeps `Weak` handles and
 the container the strong ones (`SiteChains`), so what an app built goes with
-it.
+it. **Nor does a provider hold the container**, or a provider holding it, past
+the app: what needs one after the boot gives it back at its module's close
+(`HealthService`'s container, `EventBus`'s listeners).
 
 **A wait on the way down without a bound is a `SIGKILL` with nothing to say
 why.** So the way down is bounded end to end, and what still runs at a bound is
@@ -397,6 +400,12 @@ and the teardown in `way_down.rs`'s `//!`:
   so nothing it carried runs into the hooks; a unit blocking its thread cannot
   unwind and is named at `error`. What each edge owes is in `edges.md` and
   `queue.md`.
+- **A resource the framework opens closes after the shutdown hooks**, in
+  reverse, within their budget (`ContainerBuilder::provide_close`), and the
+  container then drops off the runtime thread within what is left of it: a
+  provider whose `Drop` blocks is abandoned with a line. Every end of an app —
+  `run`, `close`, a failed init — shares this tail; a build that fails runs
+  the closes, and what it built drops by ownership.
 - **Developer code on the way down gets a hook's budget** — a scheduled tick
   still running gets it *before* the hooks, so no tick runs through the hooks it
   may depend on.

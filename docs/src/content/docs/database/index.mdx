@@ -214,6 +214,11 @@ whose name does not resolve yet — is tried again within
 past the budget, the boot fails as unreachable, naming what the last attempt
 met.
 
+The pool closes when the app ends, after every shutdown hook: each connection
+gets Postgres's goodbye rather than a dropped socket, and one still checked out
+is waited for within what the hooks left of [the way
+down](/fundamentals/lifecycle/#the-way-down)'s five seconds.
+
 ## What the data layer hands you for free
 
 Importing `SeaOrmDatabaseModule` activates four invariants every handler in the

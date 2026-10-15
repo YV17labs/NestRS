@@ -287,6 +287,15 @@ fall. It reads the config with `ConfigModule::resolved`, whose refusal names
 the config when nothing resolved it: a factory returns it with `?`, a
 `register` files it with `builder.refuse(..)`.
 
+What the factory opens, the module closes. `provide_close` hands the kernel a
+close for the handle — a pool's goodbye to its server — which runs once the app
+ends, after every shutdown hook, last opened first, within what the hooks left
+of their five seconds; one still waiting then is abandoned at `warn`. Attach it
+in `collect`, beside its factory: a boot whose later factory fails still closes
+the handle, which a close attached in `register` would never reach. A handle
+the app seeded instead (a test's database) is the app's to close, and the
+kernel leaves it alone.
+
 ```rust title="crates/yourdb/src/module.rs"
 use std::any::TypeId;
 use std::sync::Arc;
@@ -321,6 +330,9 @@ impl DynamicModule for YourDbSetup {
             .provide_factory_after::</* YourHandle */, (YourConfig,), _, _>(|container| async move {
                 let config = ConfigModule::resolved::<YourConfig>(&container)?;
                 // Your code: build your pool / client from `config`.
+            })
+            .provide_close::</* YourHandle */, _, _>(|handle| async move {
+                // Your code: end every session the handle holds.
             })
             .provide_declared_factory_after::<Arc<dyn UnitOfWork>, (/* YourHandle */,), _, _>(
                 BACKEND_REMEDY,

@@ -189,6 +189,15 @@ deliberately:
   half-started server accepting traffic. `App::init()` and `App::run()`
   share the phases: whichever comes second skips them, and after an init
   that failed both return `InitFailedError` without running a hook again.
+- **A failed boot still tears down.** What the hooks that did run took — a
+  lease, a discovery registration, a connection — would otherwise leak until
+  it expired, so an init that fails, panics or is stopped by a signal runs the
+  three shutdown phases, in reverse, for **every** host, then closes the
+  resources, before it returns its own error. One `warn` on
+  `nest_rs::lifecycle` opens it, `the boot failed after init hooks ran:
+  running the shutdown hooks`, naming the failed hook. So write a shutdown
+  hook to tolerate an init that never ran: `if let Some(..)` on what the init
+  would have filled, never an `expect`.
 - **Shutdown is exhaustive.** The three teardown phases start every hook
   even if one fails or panics — either is logged at `error` on the
   `nest_rs::lifecycle` target, naming the hook, and the next hook still
@@ -229,13 +238,25 @@ build container             — Starting
 → transports stop              — each within its own window
 → on_module_destroy            ┐ exhaustive — every hook starts, errors and
 → before_application_shutdown  │ panics logged; five seconds between all of
-→ on_application_shutdown      ┘ them, what still waits then is abandoned
+→ on_application_shutdown      │ them, what still waits then is abandoned
+→ resources close              │ the pool's goodbye, last opened first
+→ the container drops          ┘ every provider's `Drop`, off the runtime thread
 ```
 
 Shutdown is triggered by `SIGINT` / `SIGTERM`, or by the first transport
 that errors. Either one turns the app `Draining`, which cancels the stop
 token every transport serves under; the teardown phases run once the
 last transport has stopped.
+
+**What a module opened, it closes.** A resource module attaches a close to the
+handle it opened — SeaORM's pool sends Postgres a goodbye on every connection
+rather than letting the sockets fall — and the closes run after every shutdown
+hook, so no hook finds its pool gone, the last opened first: a client a
+factory opened over a pool closes before the pool. Each runs by the hooks' rules: a failure is logged at `error`, one
+still waiting when the budget is spent is abandoned at `warn` naming it, and the
+next still starts. Then the container drops, on a thread of its own: a provider
+whose `Drop` blocks is abandoned at `warn` rather than holding the exit. A
+Valkey connection owes its server no goodbye, so Redis attaches none.
 
 ## Where the app stands
 
@@ -247,7 +268,7 @@ injects it like any other provider — and only the kernel moves it.
 | Method | Answers |
 |---|---|
 | `state()` | `AppState::Starting` from the start of the boot, `Ready` once the transports serve, `Draining` once a stop is asked |
-| `cause()` | `None` until the app drains, then why: `StopCause::Interrupt` (`SIGINT`, or Ctrl-C on Windows), `Terminate` (`SIGTERM`), `TransportFailed` (a transport returned an error, panicked, or stopped serving on its own) |
+| `cause()` | `None` until the app drains, then why: `StopCause::Interrupt` (`SIGINT`, or Ctrl-C on Windows), `Terminate` (`SIGTERM`), `TransportFailed` (a transport returned an error, panicked, or stopped serving on its own), `BootFailed` (a transport's `configure` or an init hook failed before it served), `Closed` (`App::close` ended an app that was not serving) |
 | `stopping()` | a `CancellationToken`, cancelled the instant the app turns `Draining` |
 | `ready().await` | `true` once the app is `Ready`, `false` once it drains, whether or not it served first |
 
@@ -319,6 +340,7 @@ by default they sum under the kill:
 |---|---|---|
 | The transports stop, together | each its own window, then half a second (`SHUTDOWN_SETTLE_TIMEOUT`) for what it stopped to unwind | 20.5 s, the longest |
 | The shutdown hooks run | `SHUTDOWN_HOOKS_TIMEOUT`, across all three phases | 5 s |
+| The resources close, then the container drops | what the hooks left of their budget | inside the 5 s |
 | Telemetry flushes | [`FLUSH_TIMEOUT`](/opentelemetry/), every provider at once | 3 s |
 | The runtime is torn down | what the hooks and the flush left of their budget | nothing past it |
 | The console writes what it still queues | [`CONSOLE_FLUSH_TIMEOUT`](/opentelemetry/logs/#a-console-that-stalls), under `#[nest_rs::main]` | 1 s |
@@ -412,7 +434,8 @@ down; another received during it — a second `Ctrl-C`, an orchestrator repeatin
 its `SIGTERM`, a signal after a failing transport began the way down, one while
 a boot step blocks its thread — exits immediately, with the same 130 or 143,
 after one `error` on `nest_rs::app` naming what it abandons (`step` is `boot`,
-`transports`, `shutdown hooks` or `exit`, beside what it waited on):
+`transports`, `shutdown hooks`, `resource closes` or `exit`, beside what it
+waited on):
 
 ```text frame="terminal"
 ERROR nest_rs::app: shutdown signal received on the way down: exiting at once, abandoning what still runs signal="SIGINT" exit_code=130 step="shutdown hooks" phase=OnModuleDestroy provider="CacheService" method="flush" origin="api::cache"
@@ -423,11 +446,41 @@ Nothing runs after that line but the
 queues, that line included, within its one second — no later hook, no telemetry
 flush — since exiting at once is what was asked.
 
+## Running without serving
+
+A migration, a one-shot command, a test: some programs boot the app to do one
+piece of work, never to serve. They take the same way up and the same way down,
+without the transports:
+
+```rust title="apps/blog/src/bin/reindex.rs"
+#[nest_rs::main]
+async fn main() -> anyhow::Result<()> {
+    let app = App::builder().module::<BlogModule>().build().await?;
+    app.init().await?;
+    let reindexed = match app.container().get::<SearchIndex>() {
+        Some(index) => index.rebuild().await,
+        None => Err(anyhow::anyhow!("BlogModule provides no SearchIndex")),
+    };
+    app.close().await;
+    reindexed
+}
+```
+
+`init()` runs the init phases once, as `run()` would. `close()` turns the app
+`Draining` with `StopCause::Closed`, runs the shutdown phases in reverse when
+the init ran, closes the resources and drops the container — the same tail as
+`run()`, inside the same five seconds. It returns nothing: what fails on the
+way down is logged, never handed back. An app dropped without `close()` runs
+none of it. Under `#[nest_rs::main]`, an app that is never served keeps running
+at the first signal, its `stopping()` cancelled, until it closes or a second
+signal exits it.
+
 <Aside type="tip">
-A test harness can drive the init phases without serving: `App::init()`
-runs `on_module_init` then `on_application_bootstrap` against the built
-container, once, so an e2e test exercises the same startup the server
-performs. `TestApp::builder().build()` has already run them.
+The test harness takes the same path: `TestApp::builder().build()` has run
+the init phases, and `TestApp`, `HeadlessApp` and `WsApp` each have a
+`close()` that tears the app down as `App::close` does — a `HeadlessApp`
+stops the transports it spawned first, within their stop bound — so a test
+can prove its shutdown hooks.
 </Aside>
 
 ## Common things a hook does

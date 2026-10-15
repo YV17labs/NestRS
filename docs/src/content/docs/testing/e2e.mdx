@@ -353,6 +353,31 @@ can own is the database. Two settings keep a suite apart:
   `config()` rewrites the suite's URL to that index. Redis ships sixteen, so the list is short: one
   database per test that starts a worker, not one per test.
 
+## Proving the way down
+
+A harness app is dropped at the end of its test, and a drop runs no shutdown
+hook and closes nothing. A test that proves a teardown — a hook that
+deregisters, a pool that says goodbye — ends the app with `close()`, which
+`TestApp`, `HeadlessApp` and `WsApp` each have and which tears down exactly as
+[`App::close`](/fundamentals/lifecycle/#running-without-serving) does:
+
+```rust title="apps/api/tests/e2e/lifecycle.rs"
+let app = TestApp::builder().module::<ApiModule>().build().await?;
+let lifecycle = app.lifecycle().clone();
+
+app.close().await;
+
+assert_eq!(lifecycle.cause(), Some(StopCause::Closed));
+```
+
+A `HeadlessApp` stops the transports it spawned first — they serve under the
+app's stop token — and waits for them within the longest of their stop bounds,
+so a worker's last job finishes before the hooks it may depend on run; its
+`init()` does the same before tearing down an init that fails, and a spawned
+transport whose `serve` fails is logged at `error` with its cause. A boot
+that fails inside `build()` — a transport's configuration, an init hook — is
+torn down before the error returns, as `App::run` tears it down.
+
 ## Test telemetry
 
 `with_test_telemetry()` installs console-only telemetry, honouring

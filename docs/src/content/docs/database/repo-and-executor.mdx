@@ -243,8 +243,9 @@ Both are for a *programmatic* boundary in a service, not for a job body (see
 ## The contextless-path exception
 
 A truly contextless path — a shutdown hook that runs after every transport
-has closed, a one-shot CLI command bootstrapped outside `App::run` — has
-no ambient executor to read. That is the one documented `Repo` bypass: inject
+has closed, a one-shot command run between `init()` and `close()`
+([running without serving](/fundamentals/lifecycle/#running-without-serving))
+— has no ambient executor to read. That is the one documented `Repo` bypass: inject
 an `Arc<DatabaseConnection>` and call SeaORM directly.
 
 ```rust title="crates/features/src/users/service.rs"

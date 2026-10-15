@@ -30,7 +30,7 @@ list every recipe.
 | Command | What it does |
 |---------|--------------|
 | `nestrs run dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `nestrs run dev api` |
-| `nestrs run start <app>` | Run an app in release mode, e.g. `nestrs run start api` |
+| `nestrs run start <app>` | Run an app in release mode, under the production profile, e.g. `nestrs run start api`. The assistant's resource URL is a loopback one, accepted only in development: `NESTRS_ENV=development nestrs run start assistant` |
 | `nestrs run build <app>` | Build one app in release (default `api`), e.g. `nestrs run build live` |
 | `nestrs run build --all` | Build release binaries for every app in the workspace |
 | `nestrs run test unit` | Run unit + integration + doctests (no DB) |

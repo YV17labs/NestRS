@@ -45,7 +45,9 @@ from the Redis binding, so each compiles and runs in the framework's suite.
 2. **File jobs.** Implement `JobProducer`. The port has refused every option
    your backend does not declare, minted each job's id and sealed each
    envelope; store the record as the bytes it gives you, keyed by
-   `envelope.id()`, and never read inside it:
+   `envelope.id()`, and never read inside it. Skip an envelope whose job your
+   storage still holds — waiting, held back or running — and answer `Ok` for
+   it, so a call sent again after its answer was lost files nothing twice:
 
    ```rust title="from nest-rs-queue's test backend, abridged"
    #[async_trait]
@@ -62,7 +64,11 @@ from the Redis binding, so each compiles and runs in the framework's suite.
        ) -> Result<(), QueueError> {
            // …
            for envelope in envelopes {
-               let entry = state.entry(envelope.into_json().to_string().into_bytes());
+               let job = envelope.id().clone();
+               if state.queue(queue.as_str()).holds_job(&job) {
+                   continue;
+               }
+               let entry = state.entry(Some(job), envelope.into_json().to_string().into_bytes());
                // …
            }
            // …
@@ -200,9 +206,9 @@ from the Redis binding, so each compiles and runs in the framework's suite.
 
    `purge` empties a queue, `lapse` makes every lease on it lapse with its
    holder and count unchanged, and `take` hands every delivery to another holder
-   that lapses at once — what a frozen worker meets. Checkpoint: eleven tests
+   that lapses at once — what a frozen worker meets. Checkpoint: twelve tests
    pass, among them a worker dying mid-attempt, a lease taken under a running
-   attempt, the stall limit and the drain.
+   attempt, the stall limit, the drain and an envelope enqueued twice.
 
 </Steps>
 
@@ -219,6 +225,8 @@ acknowledgement lost — and a `#[process]` handler is idempotent.
 - **A renewal that counts a delivery** spends the stall limit on a job that
   answered every time: once its worker dies after a few renewals, the next
   delivery is past `STALL_LIMIT` and dead-letters it without running.
+- **An enqueue filing an envelope whose job it still holds** runs that job
+  twice: the kit's case for an envelope enqueued again fails.
 - **A receive handing over more than it was asked** keeps no permit for the
   extra: the worker hands them back and says `queue backend handed over more
   deliveries than asked; …` at `error`.

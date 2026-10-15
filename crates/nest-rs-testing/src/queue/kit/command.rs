@@ -63,3 +63,6 @@ pub(crate) struct DelayQueue;
 
 #[queue(name = "nestrs-e2e-kit-trace", job = KitCommand)]
 pub(crate) struct TraceQueue;
+
+#[queue(name = "nestrs-e2e-kit-resend", job = KitCommand)]
+pub(crate) struct ResendQueue;

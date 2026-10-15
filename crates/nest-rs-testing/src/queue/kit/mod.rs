@@ -86,6 +86,7 @@ macro_rules! queue_kit {
             a_long_attempt_keeps_its_lease_and_runs_once,
             a_delayed_push_runs_once_its_delay_has_passed,
             a_job_runs_in_the_trace_that_pushed_it,
+            an_envelope_enqueued_again_while_its_job_is_held_is_filed_once,
         );
     };
     (@cases $backend:expr; $($case:ident),+ $(,)?) => {

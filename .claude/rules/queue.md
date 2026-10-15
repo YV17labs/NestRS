@@ -39,8 +39,11 @@ contract (`.claude/decisions/queue-redis-streams.md`).
   is non-exhaustive, and a variant added later reaches only a backend declaring
   the capability that names it, so no driver changes behaviour under it.
 - **A job is named by the port.** The push mints a `JobId` (UUID v7) and seals it
-  in the envelope; it keys everything kept about the job. A backend's own record
-  id reaches a line only as `backend_id`. The wait before a retry is
+  in the envelope; it keys everything kept about the job, so a backend files an
+  envelope whose id it still holds — waiting, held back, running — no second
+  time, and answers `Ok`: a call sent again after a lost answer is harmless,
+  and every driver owes it (`queue_kit!`). A backend's own record id reaches a
+  line only as `backend_id`. The wait before a retry is
   `nest_rs_core::Backoff`'s, seeded by the job id — jittered by a hash of the id
   and the attempt, never a random draw, so it is reproducible.
 - **A backend declares each capability it honours, one at a time** — never

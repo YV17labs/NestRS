@@ -9,7 +9,7 @@ use nest_rs_queue::{Queue, processor};
 
 use super::command::{
     Act, BudgetQueue, ConcurrencyQueue, DeathQueue, DelayQueue, DrainQueue, KitCommand, OnceQueue,
-    RenewalQueue, RetryQueue, StallQueue, TakenQueue, TraceQueue,
+    RenewalQueue, ResendQueue, RetryQueue, StallQueue, TakenQueue, TraceQueue,
 };
 use super::probe;
 
@@ -44,6 +44,7 @@ processors! {
     RenewalProcessor: renewal on RenewalQueue;
     DelayProcessor: delay on DelayQueue;
     TraceProcessor: trace on TraceQueue;
+    ResendProcessor: resend on ResendQueue;
 }
 
 /// Run one attempt at `job` on `queue` as its [`Act`] says, reporting it.

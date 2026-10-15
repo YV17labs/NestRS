@@ -59,6 +59,8 @@ struct Queue {
 
 struct Entry {
     id: u64,
+    /// The job the record carries, `None` for one no push of this release wrote.
+    job: Option<JobId>,
     record: Vec<u8>,
     /// How many times this record was handed over.
     count: u32,
@@ -113,7 +115,7 @@ impl Memory {
     /// File `record` as stored, due now — a record no push of this release wrote.
     pub(crate) fn file_raw(&self, queue: &str, record: Vec<u8>) {
         let mut state = self.lock();
-        let entry = state.entry(record);
+        let entry = state.entry(None, record);
         state.queue(queue).ready.push_back(entry);
         drop(state);
         self.inner.arrived.notify_waiters();
@@ -169,10 +171,11 @@ impl State {
         self.queues.entry(name.to_owned()).or_default()
     }
 
-    fn entry(&mut self, record: Vec<u8>) -> Entry {
+    fn entry(&mut self, job: Option<JobId>, record: Vec<u8>) -> Entry {
         self.next_entry += 1;
         Entry {
             id: self.next_entry,
+            job,
             record,
             count: 0,
         }
@@ -180,6 +183,14 @@ impl State {
 }
 
 impl Queue {
+    /// Whether the job `id` waits, is held back or runs here.
+    fn holds_job(&self, id: &JobId) -> bool {
+        let carries = |entry: &Entry| entry.job.as_ref() == Some(id);
+        self.ready.iter().any(carries)
+            || self.delayed.iter().any(|(_, entry)| carries(entry))
+            || self.pending.values().any(|pending| carries(&pending.entry))
+    }
+
     /// Whether `lease` is still the delivery holding its entry.
     fn holds(&self, lease: &MemoryLease) -> bool {
         self.pending.get(&lease.entry).is_some_and(|pending| {
@@ -210,7 +221,11 @@ impl JobProducer for Memory {
         };
         let mut state = self.lock();
         for envelope in envelopes {
-            let entry = state.entry(envelope.into_json().to_string().into_bytes());
+            let job = envelope.id().clone();
+            if state.queue(queue.as_str()).holds_job(&job) {
+                continue;
+            }
+            let entry = state.entry(Some(job), envelope.into_json().to_string().into_bytes());
             let queue = state.queue(queue.as_str());
             match due {
                 Some(due) => queue.delayed.push((due, entry)),
@@ -357,7 +372,7 @@ impl JobConsumer for MemoryConsumer {
             .and_then(|value| value.get("id").and_then(Value::as_str).map(str::to_owned))
             .and_then(|id| JobId::parse(&id).ok());
         let refile = |state: &mut State, record: &[u8], after: Duration| {
-            let entry = state.entry(record.to_vec());
+            let entry = state.entry(job.clone(), record.to_vec());
             let queue = state.queue(&lease.queue);
             if after.is_zero() {
                 queue.ready.push_back(entry);

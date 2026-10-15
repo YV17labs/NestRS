@@ -6,12 +6,12 @@ use nest_rs_core::{Module, module};
 
 use super::command::{
     BudgetQueue, ConcurrencyQueue, DeathQueue, DelayQueue, DrainQueue, OnceQueue, RenewalQueue,
-    RetryQueue, StallQueue, TakenQueue, TraceQueue,
+    ResendQueue, RetryQueue, StallQueue, TakenQueue, TraceQueue,
 };
 use super::processor::{
     BudgetProcessor, ConcurrencyProcessor, DeathProcessor, DelayProcessor, DrainProcessor,
-    OnceProcessor, RenewalProcessor, RetryProcessor, StallProcessor, TakenProcessor,
-    TraceProcessor,
+    OnceProcessor, RenewalProcessor, ResendProcessor, RetryProcessor, StallProcessor,
+    TakenProcessor, TraceProcessor,
 };
 
 /// The module a case's worker imports beside the backend's.
@@ -46,4 +46,5 @@ modules! {
     RenewalQueue => RenewalModule(RenewalProcessor);
     DelayQueue => DelayModule(DelayProcessor);
     TraceQueue => TraceModule(TraceProcessor);
+    ResendQueue => ResendModule(ResendProcessor);
 }

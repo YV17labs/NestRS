@@ -117,6 +117,11 @@ never delivered again. A second delivery happens only when a lease lapses under
 a worker: the worker crashed, froze past its lease, or was cut off from Redis
 for longer than it — and then the first delivery's writes land nowhere.
 
+A push is filed once per job, too. The script that files it skips a job its
+queue still holds — on the stream, running, or held back in `…:delayed` — so
+a push the client sends again after its answer was lost files nothing twice.
+Once the job ended, the same job is filed as a new one.
+
 <Aside type="caution">
 **Delivery is at least once, so a handler is idempotent.** A worker that
 crashes between a database commit and its outcome leaves the job to its lease,

@@ -112,9 +112,23 @@ end
     };
 }
 
+/// `held(job)`: whether the queue still holds a job — on the stream, waiting
+/// or running, or held back until it is due.
+///
+/// `KEYS` from 2: entries, due, delayed.
+macro_rules! held {
+    () => {
+        "local function held(job)
+  return redis.call('HGET', KEYS[2], job) or redis.call('HGET', KEYS[4], job)
+end
+"
+    };
+}
+
 /// File a push's jobs, unless one of them carries a unique key another job
 /// holds — then nothing is filed, and the answer is that job's position (from
-/// 0) and the holder's id. `0` once every job is filed.
+/// 0) and the holder's id. `0` once every job is filed. A job the queue still
+/// holds is skipped, so a push sent again files nothing twice.
 ///
 /// `KEYS`: jobs, entries, due, delayed, unique, claims, deferred.
 /// `ARGV`: how long the jobs are held back, in milliseconds (`0`: due now),
@@ -122,10 +136,11 @@ end
 const PUSH: &str = concat!(
     now!(),
     file!(),
+    held!(),
     "local after = tonumber(ARGV[1])
 for at = 2, #ARGV, 3 do
   local key = ARGV[at + 2]
-  if key ~= '' then
+  if key ~= '' and not held(ARGV[at]) then
     local holder = redis.call('HGET', KEYS[5], key)
     if holder then
       return {(at - 2) / 3, holder}
@@ -134,10 +149,12 @@ for at = 2, #ARGV, 3 do
 end
 for at = 2, #ARGV, 3 do
   local job, key = ARGV[at], ARGV[at + 2]
-  file(job, ARGV[at + 1], after)
-  if key ~= '' then
-    redis.call('HSET', KEYS[5], key, job)
-    redis.call('HSET', KEYS[6], job, key)
+  if not held(job) then
+    file(job, ARGV[at + 1], after)
+    if key ~= '' then
+      redis.call('HSET', KEYS[5], key, job)
+      redis.call('HSET', KEYS[6], job, key)
+    end
   end
 end
 return 0

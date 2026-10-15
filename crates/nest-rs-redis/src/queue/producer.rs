@@ -9,7 +9,9 @@
 //! anything is filed, then files every job — on the stream, or held back until
 //! Redis's clock says it is due — and claims its key, so a push lands whole or
 //! not at all, and a push whose answer never came either filed every job or
-//! none. **A cancel is one script too**: it removes a job still waiting and
+//! none. It skips a job its queue still holds, so a push sent again — by the
+//! client after a lost answer — files nothing twice. **A cancel is one script
+//! too**: it removes a job still waiting and
 //! everything it held, and refuses one a delivery runs.
 
 use std::collections::HashMap;

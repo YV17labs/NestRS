@@ -50,6 +50,13 @@ pub trait JobProducer: Send + Sync + 'static {
     /// atomic across envelopes: when it fails, some prefix of them may already be
     /// enqueued, and the error does not say how many.
     ///
+    /// **An envelope whose id the backend still holds is not filed again**: while
+    /// its job waits, is held back by a delay or a retry, or runs, the envelope is
+    /// skipped and the call answers `Ok` for it, its options unread — so a call
+    /// sent again after an answer that never came files nothing twice. An id the
+    /// backend let go of, its job ended, is filed again as a new job. Held by
+    /// `nest_rs_testing::queue_kit!`.
+    ///
     /// `envelopes` holds [`ENQUEUE_BATCH`] at most, and the port waits
     /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) for the answer before dropping the
     /// call: bound each round trip well inside it, and leave nothing a dropped call
@@ -57,7 +64,8 @@ pub trait JobProducer: Send + Sync + 'static {
     ///
     /// A backend declaring [`Capability::UniquePush`] refuses an envelope whose
     /// key another job on `queue` still holds with [`QueueError::UniqueKeyHeld`],
-    /// naming that job, and files nothing for it.
+    /// naming that job, and files nothing for it; the job holding it is never
+    /// the envelope's own, which is skipped as held.
     async fn enqueue(
         &self,
         queue: &QueueName,
@@ -131,9 +139,10 @@ pub trait JobProducerExt: JobProducer {
     ///
     /// A backend's failure is a failure to *answer*: the write may have reached
     /// the backend and its reply not come back, in which case the job is enqueued
-    /// and will run. A caller that retries such a failure enqueues it twice, unless
-    /// the push carries a unique key — the same at-least-once the worker's side
-    /// has, met at the push.
+    /// and will run. A caller that retries such a failure enqueues it twice — each
+    /// push mints a new id, so the backend cannot tell the second from a new job —
+    /// unless the push carries a unique key: the same at-least-once the worker's
+    /// side has, met at the push.
     async fn push<D, O>(
         &self,
         destination: D,

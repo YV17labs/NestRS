@@ -34,7 +34,7 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
 }
 
 /// The ambient ability's condition for `action` on `E`, alone.
-fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
+pub(crate) fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
     match current_ability() {
         Some(ability) => ability.condition_for::<E>(action),
         None if current_executor_scope() == Some(ExecutorScope::Job) => Condition::all(),

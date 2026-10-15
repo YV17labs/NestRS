@@ -13,7 +13,7 @@ use nest_rs_database::atomic;
 
 use crate::error::AtomicDbError;
 use crate::page::Page;
-use crate::repo::{Repo, pk_condition, scope_for};
+use crate::repo::{Repo, ability_scope, pk_condition};
 
 /// Build a fresh `ActiveModel` from a create-input DTO. Implemented by `#[expose]`
 /// for each `Create<Name>Input`.
@@ -314,7 +314,7 @@ where
         let conn = Repo::<Self::Entity>::conn()?;
         let entity = Self::entity_name();
         if let Some(model) = Repo::<Self::Entity>::unscoped_by_id(id)
-            .filter(scope_for::<Self::Entity>(action))
+            .filter(ability_scope::<Self::Entity>(action))
             .one(&conn)
             .await?
         {

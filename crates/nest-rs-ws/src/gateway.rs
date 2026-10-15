@@ -904,16 +904,13 @@ fn timed_out(conn_id: ConnId, event: &str, timeout: Duration) -> WsReply {
         "websocket message not answered within its deadline; it is cut",
     );
     WsReply::Error(crate::WsError::with_details(
-        MESSAGE_TIMED_OUT,
+        "the message was not answered in time",
         serde_json::json!({
             "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
             "reason": TIMEOUT_REASON,
         }),
     ))
 }
-
-/// The sentence a message past its deadline is answered with.
-const MESSAGE_TIMED_OUT: &str = "the message was not answered in time";
 
 /// The `reason` a deadline's refusal carries, beside its `code`.
 const TIMEOUT_REASON: &str = "timeout";

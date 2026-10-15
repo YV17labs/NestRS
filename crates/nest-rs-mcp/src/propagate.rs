@@ -102,21 +102,16 @@ impl<H> PropagatingHandler<H> {
     ///
     /// `method` is the JSON-RPC method, `addressed` the tool, prompt or resource
     /// it named, `None` where the protocol names nothing. `wrapped` is `false`
-    /// for an operation that takes neither the registered context nor a unit of
-    /// work. `stopped` resolves when the operation is to end before it settles,
-    /// with what the client is answered; `timeout` cuts its body, never its
-    /// settle, so a commit is never cut.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each is one axis of the nesting the doc lists; a struct would only rename them"
-    )]
+    /// for an operation that takes neither the registered context, a unit of
+    /// work nor the operation deadline, which cuts the body, never its settle,
+    /// so a commit is never cut. `stopped` resolves when the operation is to end
+    /// before it settles, with what the client is answered.
     async fn dispatch<T, F, S>(
         &self,
         method: &str,
         addressed: Option<&str>,
         ambient: McpAmbient,
         wrapped: bool,
-        timeout: Option<Duration>,
         stopped: S,
         inner: F,
     ) -> Result<T, McpError>
@@ -133,10 +128,14 @@ impl<H> PropagatingHandler<H> {
             span,
             correlation,
         } = ambient;
-        let (context, unit) = if wrapped {
-            (self.context.as_ref(), self.unit_of_work.as_ref())
+        let (context, unit, timeout) = if wrapped {
+            (
+                self.context.as_ref(),
+                self.unit_of_work.as_ref(),
+                self.operation_timeout,
+            )
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         // Its own unit of work: one session request carries many operations.
@@ -387,7 +386,6 @@ macro_rules! request_method {
                     addressed.as_deref(),
                     ambient,
                     true,
-                    self.operation_timeout,
                     async move {
                         cancelled.await;
                         Err(cancelled_before_completion())
@@ -557,7 +555,6 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
             None,
             ambient,
             false,
-            None,
             async move {
                 going_away.await;
                 Ok(())

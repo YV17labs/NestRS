@@ -873,8 +873,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 /// default, 20 seconds.
 const PAST_THE_OPERATION_DEADLINE: Duration = Duration::from_secs(21);
 
-async fn serve_stalled() -> crate::Serving {
-    crate::serve_under::<StalledModule>(nest_rs_http::HttpConfig {
+async fn serve_stalled<M: nest_rs_core::Module + 'static>() -> crate::Serving {
+    crate::serve_under::<M>(nest_rs_http::HttpConfig {
         request_timeout: Some(REQUEST_TIMEOUT),
         ..nest_rs_http::HttpConfig::default()
     })
@@ -965,7 +965,7 @@ async fn assert_cut_at_the_operation_deadline(
 #[tokio::test]
 async fn a_session_tool_call_past_the_request_timeout_is_cut_at_the_operation_deadline() {
     let logs = LogCapture::install();
-    let serving = serve_stalled().await;
+    let serving = serve_stalled::<StalledModule>().await;
     let session = crate::open_raw_session(serving.port, STALLED).await;
     let (mut stream, head) = crate::post(
         serving.port,
@@ -1000,11 +1000,7 @@ struct StatelessStalledModule;
 #[tokio::test]
 async fn a_stateless_tool_call_past_the_request_timeout_is_cut_at_the_operation_deadline() {
     let logs = LogCapture::install();
-    let serving = crate::serve_under::<StatelessStalledModule>(nest_rs_http::HttpConfig {
-        request_timeout: Some(REQUEST_TIMEOUT),
-        ..nest_rs_http::HttpConfig::default()
-    })
-    .await;
+    let serving = serve_stalled::<StatelessStalledModule>().await;
     let (mut stream, head) = crate::post(
         serving.port,
         STALLED,
@@ -1030,7 +1026,7 @@ async fn a_stateless_tool_call_past_the_request_timeout_is_cut_at_the_operation_
 #[tokio::test]
 async fn a_modern_tool_call_is_cut_by_the_request_timeout_before_it_answers() {
     let logs = LogCapture::install();
-    let serving = serve_stalled().await;
+    let serving = serve_stalled::<StalledModule>().await;
     let body = json!({
         "jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": { "name": "stalled", "arguments": {}, "_meta": modern_meta() },

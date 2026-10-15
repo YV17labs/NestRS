@@ -179,6 +179,8 @@ impl Module for ConfiguresSlowlyModule {
 }
 
 const FIRST_INIT_RAN: &str = "WAY-DOWN-CHILD FIRST INIT RAN";
+const FIRST_TORN_DOWN: &str = "WAY-DOWN-CHILD FIRST TORN DOWN";
+const WARMING_TORN_DOWN: &str = "WAY-DOWN-CHILD WARMING TORN DOWN";
 
 #[injectable]
 #[derive(Default)]
@@ -193,6 +195,15 @@ impl InitsFirst {
     #[on_module_init]
     async fn register(&self) {
         println!("{FIRST_INIT_RAN}");
+    }
+
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
+    #[on_module_destroy]
+    async fn deregister(&self) {
+        println!("{FIRST_TORN_DOWN}");
     }
 }
 
@@ -210,6 +221,15 @@ impl WarmsSlowly {
     async fn warm(&self) {
         println!("{READY}");
         tokio::time::sleep(WAITS_FOR).await;
+    }
+
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
+    #[on_module_destroy]
+    async fn evict(&self) {
+        println!("{WARMING_TORN_DOWN}");
     }
 }
 
@@ -462,6 +482,16 @@ fn a_signal_during_an_init_hook_stops_the_boot_naming_the_hook() {
     assert!(
         printed.iter().any(|line| line.contains(FIRST_INIT_RAN)),
         "another host's init hook ran first: {printed:#?}"
+    );
+    let torn_down: Vec<&String> = printed
+        .iter()
+        .filter(|line| line.contains(FIRST_TORN_DOWN) || line.contains(WARMING_TORN_DOWN))
+        .collect();
+    assert!(
+        torn_down.len() == 2
+            && torn_down[0].contains(WARMING_TORN_DOWN)
+            && torn_down[1].contains(FIRST_TORN_DOWN),
+        "the interrupted boot ran every host's shutdown hook, in reverse: {printed:#?}"
     );
 }
 

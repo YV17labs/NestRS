@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
 use crate::RequestScope;
+use crate::close::InstallRecord;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
 use crate::factory_inputs::FactoryInputs;
 use crate::layer_chain::__private::SiteChains;
@@ -495,6 +496,11 @@ pub struct ContainerBuilder {
     /// The providers a `#[module]`'s register step built while an optional
     /// dependency was absent, for the seal to refuse when it arrived later.
     absent_optionals: Vec<AbsentOptional>,
+    /// The types a test's override replaced, which the kernel never closes.
+    replaced: HashSet<TypeId>,
+    /// Every unkeyed type in the order its first registration installed it,
+    /// the reverse of which the closes run in.
+    installed: Vec<TypeId>,
 }
 
 /// A provider a `#[module]`'s register step built without some of its
@@ -612,6 +618,7 @@ impl ContainerBuilder {
     /// intentional swap path used by
     /// [`AppBuilder::override_value`](crate::AppBuilder::override_value).
     pub(crate) fn replace<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        self.replaced.insert(TypeId::of::<T>());
         self.providers
             .insert(ProviderKey::typed::<T>(), Arc::new(value));
         self
@@ -621,6 +628,7 @@ impl ContainerBuilder {
     /// override warning — the intentional swap path used by
     /// [`AppBuilder::override_arc`](crate::AppBuilder::override_arc).
     pub(crate) fn replace_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+        self.replaced.insert(TypeId::of::<T>());
         self.providers.insert(ProviderKey::typed::<T>(), value);
         self
     }
@@ -641,6 +649,7 @@ impl ContainerBuilder {
             }),
             Entry::Vacant(slot) => {
                 slot.insert(second);
+                self.installed.push(TypeId::of::<T>());
             }
         }
     }
@@ -653,6 +662,21 @@ impl ContainerBuilder {
             (None, Some(site)) => Origin::Import(*site),
             (None, None) => Origin::Seed,
         }
+    }
+
+    /// What the close step reads off the registrations so far: the order each
+    /// type was installed in, and the types the app handed in rather than a
+    /// module opening them — what it seeded before any root was entered, and
+    /// what a test's override replaced.
+    pub(crate) fn install_record(&self) -> InstallRecord {
+        let handed_in = self
+            .origins
+            .iter()
+            .filter(|(_, (origin, _))| matches!(origin, Origin::Seed))
+            .map(|(id, _)| *id)
+            .chain(self.replaced.iter().copied())
+            .collect();
+        InstallRecord::new(&self.installed, handed_in)
     }
 
     /// Second registrations of one unkeyed type, for the boot to refuse.
@@ -690,6 +714,7 @@ impl ContainerBuilder {
 
     /// Replace a trait-object provider without the duplicate check.
     pub(crate) fn replace_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
+        self.replaced.insert(TypeId::of::<Arc<T>>());
         self.providers
             .insert(ProviderKey::of(TypeId::of::<Arc<T>>()), Arc::new(value));
         self
@@ -760,6 +785,58 @@ impl ContainerBuilder {
         wire: fn(&Container) -> anyhow::Result<()>,
     ) -> Self {
         self.provide_meta(crate::wiring::WiringContribution::new(name, wire))
+    }
+
+    /// Close the `T` this module opened once the app ends: after every shutdown
+    /// hook, the `T` installed last closing first — a client a factory opened
+    /// over a pool closes before the pool, whatever the import order — within
+    /// what the hooks left of their budget
+    /// ([`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT)).
+    ///
+    /// The kernel resolves `T` from the final container; a `T` nothing
+    /// provides, or one the app was handed (a seed, a test's override), is not
+    /// the module's to close and is skipped. An error is filed at `error`, a
+    /// close still waiting when the budget is spent is abandoned at `warn`, and
+    /// the next close still starts.
+    ///
+    /// A close for a factory's output is attached in `collect`, beside its
+    /// factory: a boot whose later factory fails closes what the earlier ones
+    /// opened, and a `register` that boot never reaches would attach nothing.
+    /// A value `register` builds attaches its close there, as here:
+    ///
+    /// ```
+    /// use nest_rs_core::{App, ContainerBuilder, Module, Registering};
+    ///
+    /// struct Pool;
+    ///
+    /// impl Pool {
+    ///     async fn goodbye(&self) -> anyhow::Result<()> {
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// struct PoolModule;
+    ///
+    /// impl Module for PoolModule {
+    ///     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+    ///         builder
+    ///             .provide(Pool)
+    ///             .provide_close::<Pool, _, _>(|pool| async move { pool.goodbye().await })
+    ///     }
+    /// }
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// App::new::<PoolModule>()?.close().await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn provide_close<T, F, Fut>(self, close: F) -> Self
+    where
+        T: Any + Send + Sync,
+        F: Fn(Arc<T>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        self.provide_meta(crate::close::CloseContribution::new(close))
     }
 
     /// Refuse the boot from a `register`, which has no `Result` to return: the

@@ -30,6 +30,7 @@ use std::time::Duration;
 use crate::app::BootStep;
 use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::lifecycle::LifecyclePhase;
+use crate::millis::millis;
 
 /// Where the way down stands, for the line a signal exiting at once files —
 /// process-wide, as the signals are.
@@ -50,8 +51,10 @@ enum Step {
         method: &'static str,
         origin: &'static str,
     },
-    /// [`App::run`](crate::App::run) has returned; what remains is `main`'s
-    /// locals dropping and the runtime's teardown.
+    /// One resource's close, after every shutdown hook.
+    Close(String),
+    /// The app's teardown is done but for its container dropping; what remains
+    /// is that drop, `main`'s locals and the runtime's teardown.
     Exit,
 }
 
@@ -84,6 +87,10 @@ pub(crate) fn hook(
         method,
         origin,
     });
+}
+
+pub(crate) fn close(name: &str) {
+    set(Step::Close(name.to_owned()));
 }
 
 pub(crate) fn exit() {
@@ -135,6 +142,7 @@ fn exit_at_once(signal: Received) -> ! {
                 method,
                 origin,
             } => abandoning!(step = "shutdown hooks", ?phase, provider, method, origin),
+            Step::Close(close) => abandoning!(step = "resource closes", close = close.as_str()),
             Step::Exit => abandoning!(step = "exit"),
         }
     }
@@ -423,7 +431,7 @@ pub fn main<T, F: Future<Output = T>>(main: F) -> T {
     if !budget.is_zero() && started.elapsed() >= budget {
         tracing::warn!(
             target: crate::target::APP,
-            budget_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
+            budget_ms = millis(budget),
             "work still running as the runtime is torn down is abandoned: the exit no longer \
              waits for it",
         );

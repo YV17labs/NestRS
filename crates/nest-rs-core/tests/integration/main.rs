@@ -13,6 +13,7 @@
 mod access;
 mod app;
 mod app_lifecycle;
+mod close;
 mod container;
 mod discoverable;
 mod error_message;

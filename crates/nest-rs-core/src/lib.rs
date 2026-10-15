@@ -84,6 +84,7 @@ pub mod app;
 mod app_lifecycle;
 mod backoff;
 mod budget;
+mod close;
 pub mod container;
 pub(crate) mod cycle_guard;
 pub mod discoverable;
@@ -105,6 +106,7 @@ pub mod lifecycle;
 mod line_safe;
 #[cfg(feature = "logging")]
 pub mod logging;
+mod millis;
 pub mod module;
 mod net;
 mod opaque;
@@ -134,6 +136,7 @@ pub use app::{App, AppBuilder, BootStep};
 pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
 pub use backoff::{Backoff, Retries, process_seed};
 pub use budget::Budget;
+pub use close::CloseContribution;
 pub use container::{
     Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey, ProviderScope,
 };
@@ -190,7 +193,9 @@ pub mod __private {
         Pending, UnmaskedReply, carries_ambient, install_pending, with_ambient_from,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
-    pub use crate::app::__private::{use_exception_filters_global, use_interceptors_global};
+    pub use crate::app::__private::{
+        close_after, init_tearing_down_after, use_exception_filters_global, use_interceptors_global,
+    };
     pub use crate::container::__private::{
         StalledProvider, collect_dynamic_import, enter_import, leave_import,
         record_absent_optional, record_stall, refuse_site, register_dynamic_import, site_chains,

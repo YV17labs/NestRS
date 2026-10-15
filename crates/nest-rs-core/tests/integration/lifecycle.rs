@@ -693,3 +693,123 @@ async fn two_hosts_of_one_name_run_in_their_modules_import_order_in_every_build(
         ],
     );
 }
+
+#[injectable]
+#[derive(Default)]
+struct RegistersThenHangs;
+
+#[hooks]
+impl RegistersThenHangs {
+    #[on_module_init]
+    async fn register(&self) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("the discovery backend refused the lease"))
+    }
+
+    #[on_module_destroy]
+    async fn deregister(&self) {
+        std::future::pending::<()>().await;
+    }
+}
+
+#[module(providers = [RegistersThenHangs])]
+struct RegistersThenHangsModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_boot_tears_down_within_the_budget_and_returns_the_init_error() {
+    let logs = LogCapture::install();
+    let started = tokio::time::Instant::now();
+    let error = App::new::<RegistersThenHangsModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("the init hook failed the boot");
+    let took = started.elapsed();
+
+    assert!(
+        format!("{error:#}").contains("the discovery backend refused the lease"),
+        "the boot error, not the teardown's: {error:#}"
+    );
+    assert!(
+        took >= SHUTDOWN_HOOKS_TIMEOUT && took < SHUTDOWN_HOOKS_TIMEOUT + Duration::from_secs(1),
+        "the teardown waited on the hung hook for the budget and no longer, took {took:?}",
+    );
+    let opening = logs.expect_one(
+        target::LIFECYCLE,
+        "the boot failed after init hooks ran: running the shutdown hooks",
+    );
+    assert_eq!(opening.level, "warn");
+    assert_eq!(opening.field("phase").as_deref(), Some("OnModuleInit"));
+    assert_eq!(
+        opening.field("provider").as_deref(),
+        Some("RegistersThenHangs")
+    );
+    assert_eq!(opening.field("method").as_deref(), Some("register"));
+    assert!(
+        opening
+            .field("origin")
+            .is_some_and(|origin| origin.ends_with("::lifecycle")),
+        "{:?}",
+        opening.fields,
+    );
+    let abandoned = logs.expect_one(target::LIFECYCLE, ABANDONED);
+    assert_eq!(abandoned.field("method").as_deref(), Some("deregister"));
+}
+
+#[injectable]
+#[derive(Default)]
+struct Ledger;
+
+#[hooks]
+impl Ledger {
+    #[on_module_destroy]
+    async fn seal(&self) {}
+}
+
+#[injectable]
+struct Payouts {
+    #[inject]
+    _ledger: std::sync::Arc<Ledger>,
+}
+
+#[hooks]
+impl Payouts {
+    #[on_module_destroy]
+    async fn settle(&self) {}
+}
+
+#[module(providers = [Ledger, Payouts])]
+struct PayoutsModule;
+
+#[tokio::test]
+async fn each_shutdown_hook_is_named_at_debug_as_it_starts_in_reverse_host_order() {
+    let logs = LogCapture::install();
+    let app = App::new::<PayoutsModule>().expect("the module boots");
+    app.init().await.expect("the init phases drain");
+
+    app.close().await;
+
+    let ran: Vec<_> = logs
+        .find(target::LIFECYCLE, "running lifecycle hook")
+        .into_iter()
+        .filter(|event| event.field("phase").as_deref() == Some("OnModuleDestroy"))
+        .map(|event| {
+            assert_eq!(event.level, "debug");
+            assert!(
+                event
+                    .field("origin")
+                    .is_some_and(|origin| origin.ends_with("::lifecycle")),
+                "{:?}",
+                event.fields,
+            );
+            (event.field("provider"), event.field("method"))
+        })
+        .collect();
+    assert_eq!(
+        ran,
+        [
+            (Some("Payouts".to_owned()), Some("settle".to_owned())),
+            (Some("Ledger".to_owned()), Some("seal".to_owned())),
+        ],
+        "the dependent's hook first, as an operator reads the way down",
+    );
+}

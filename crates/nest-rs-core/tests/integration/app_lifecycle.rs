@@ -1,6 +1,7 @@
 //! Covers `src/app_lifecycle.rs` — where the app stands and why it stops, as a
-//! provider injecting `Arc<AppLifecycle>` reads it, and the signal that stops
-//! the process, read by a [`ChildProcess`] from a shutdown hook.
+//! provider injecting `Arc<AppLifecycle>` reads it, a boot that fails
+//! stopping it before its teardown, and the signal that stops the process,
+//! read by a [`ChildProcess`] from a shutdown hook.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -9,8 +10,8 @@ use anyhow::anyhow;
 use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::target;
 use nest_rs_core::{
-    App, AppLifecycle, AppState, Container, ContainerBuilder, Module, Registering, StopCause,
-    Transport, hooks, injectable, module,
+    App, AppLifecycle, AppState, Collecting, Container, ContainerBuilder, Module, Registering,
+    StopCause, Transport, hooks, injectable, module,
 };
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
@@ -200,6 +201,189 @@ async fn a_transport_that_fails_stops_the_app_for_that_cause_and_says_so_once() 
     assert_eq!(draining.level, "info");
     assert_eq!(draining.field("cause").as_deref(), Some("TransportFailed"));
     assert_eq!(draining.field("signal"), None);
+}
+
+/// What a shutdown hook or a close read of the stop cause once the app's
+/// `stopping()` fired, where it read it.
+static JOINED: Mutex<Vec<(&'static str, Option<StopCause>)>> = Mutex::new(Vec::new());
+
+fn joined() -> Vec<(&'static str, Option<StopCause>)> {
+    JOINED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// Wait for the app's stop, as a loop a provider runs beside the app does,
+/// then record the cause.
+async fn join_the_stop(at: &'static str, lifecycle: &AppLifecycle) {
+    lifecycle.stopping().cancelled().await;
+    JOINED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((at, lifecycle.cause()));
+}
+
+/// Held well under the shutdown hooks' budget: a teardown that never stopped
+/// the app would wait that budget out on the join.
+const JOINED_PROMPTLY: Duration = Duration::from_secs(1);
+
+#[injectable]
+struct JoinsOnDestroy {
+    #[inject]
+    lifecycle: Arc<AppLifecycle>,
+}
+
+#[hooks]
+impl JoinsOnDestroy {
+    #[on_module_init]
+    async fn start(&self) -> anyhow::Result<()> {
+        Err(anyhow!("the poller could not start"))
+    }
+
+    #[on_module_destroy]
+    async fn join(&self) {
+        join_the_stop("shutdown hook", &self.lifecycle).await;
+    }
+}
+
+#[module(providers = [JoinsOnDestroy])]
+struct JoinsOnDestroyModule;
+
+#[tokio::test(start_paused = true)]
+async fn an_init_hook_that_fails_stops_the_app_for_that_cause_before_the_shutdown_hooks_run() {
+    let started = tokio::time::Instant::now();
+
+    let error = App::new::<JoinsOnDestroyModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("the init hook failed the boot");
+
+    assert!(
+        format!("{error:#}").contains("the poller could not start"),
+        "{error:#}"
+    );
+    assert_eq!(joined(), [("shutdown hook", Some(StopCause::BootFailed))]);
+    assert!(
+        started.elapsed() < JOINED_PROMPTLY,
+        "the hook joining the stop was not held to the budget: took {:?}",
+        started.elapsed(),
+    );
+}
+
+/// A resource holding the app's lifecycle, whose close joins its stop.
+struct JoinsOnClose(Arc<AppLifecycle>);
+
+async fn close_joining(resource: Arc<JoinsOnClose>) -> anyhow::Result<()> {
+    join_the_stop("close", &resource.0).await;
+    Ok(())
+}
+
+/// Fails to configure, as a transport whose certificate cannot be read does.
+struct RefusesToConfigure;
+
+#[async_trait::async_trait]
+impl Transport for RefusesToConfigure {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Err(anyhow!("the certificate could not be read"))
+    }
+
+    async fn serve(self: Box<Self>, _stop: CancellationToken) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct ConfigureFailsModule;
+
+impl Module for ConfigureFailsModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        let Some(lifecycle) = builder.snapshot().get::<AppLifecycle>() else {
+            return builder.refuse(anyhow!("the handle is seeded before the register"));
+        };
+        builder
+            .provide(JoinsOnClose(lifecycle))
+            .provide_close::<JoinsOnClose, _, _>(close_joining)
+            .provide_meta(TransportContribution {
+                name: "RefusesToConfigure",
+                build: |_| Ok(Box::new(RefusesToConfigure)),
+            })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_transport_that_fails_to_configure_stops_the_app_for_that_cause_before_the_closes_run() {
+    let started = tokio::time::Instant::now();
+
+    let error = App::new::<ConfigureFailsModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("the transport failed the boot");
+
+    assert!(
+        format!("{error:#}").contains("the certificate could not be read"),
+        "{error:#}"
+    );
+    assert_eq!(joined(), [("close", Some(StopCause::BootFailed))]);
+    assert!(
+        started.elapsed() < JOINED_PROMPTLY,
+        "the close joining the stop was not held to the budget: took {:?}",
+        started.elapsed(),
+    );
+}
+
+struct Index;
+
+/// Opens a resource through a factory, attaching its close beside it, then
+/// fails a later factory.
+struct FactoryFailsModule;
+
+impl Module for FactoryFailsModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder
+            .provide_factory(|container: Container| async move {
+                let lifecycle = container
+                    .get::<AppLifecycle>()
+                    .ok_or_else(|| anyhow!("the handle is seeded before the factories"))?;
+                Ok(JoinsOnClose(lifecycle))
+            })
+            .provide_close::<JoinsOnClose, _, _>(close_joining)
+            .provide_factory_after::<Index, (JoinsOnClose,), _, _>(|_| async {
+                Err(anyhow!("the index is corrupt"))
+            })
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_build_that_fails_stops_the_app_for_that_cause_before_the_closes_run() {
+    let started = tokio::time::Instant::now();
+
+    let error = App::builder()
+        .module::<FactoryFailsModule>()
+        .build()
+        .await
+        .err()
+        .expect("the later factory failed the build");
+
+    assert!(
+        format!("{error:#}").contains("the index is corrupt"),
+        "{error:#}"
+    );
+    assert_eq!(joined(), [("close", Some(StopCause::BootFailed))]);
+    assert!(
+        started.elapsed() < JOINED_PROMPTLY,
+        "the close joining the stop was not held to the budget: took {:?}",
+        started.elapsed(),
+    );
 }
 
 const CHILD_TEST: &str = "app_lifecycle::app_lifecycle_child_process";

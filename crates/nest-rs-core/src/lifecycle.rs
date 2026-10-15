@@ -15,6 +15,7 @@ use crate::access::positions;
 use crate::app::BootStep;
 use crate::app_lifecycle::AppLifecycle;
 use crate::container::Container;
+use crate::millis::millis;
 use crate::panic;
 
 /// How long the shutdown hooks may run, all of them together, before what still
@@ -27,6 +28,7 @@ use crate::panic;
 /// |---|---|---|
 /// | the transports stop, together | each its own: the HTTP window then [`SHUTDOWN_SETTLE_TIMEOUT`], the Redis worker's drain window, the scheduler's tick bound then the settle | 20.5 s, the longest |
 /// | the shutdown hooks run | this budget, across all three phases | 5 s |
+/// | resources close, then the container drops | what the hooks left of this budget | inside the 5 s |
 /// | telemetry flushes | `nest_rs_opentelemetry`'s flush bound, every provider at once | 3 s |
 /// | the runtime is torn down | what remains of this budget, under `#[nest_rs::main]` | nothing past it |
 /// | the console writes what it queues | `nest_rs_core::logging::CONSOLE_FLUSH_TIMEOUT`, under `#[nest_rs::main]` | 1 s |
@@ -87,6 +89,7 @@ pub(crate) mod __private {
     use crate::container::Container;
 
     /// One lifecycle hook submitted to the link-time registry by `#[hooks]`.
+    #[derive(Debug)]
     pub struct LifecycleHook {
         /// The phase this hook runs in.
         pub phase: LifecyclePhase,
@@ -198,13 +201,21 @@ fn report_inert_hook(container: &Container, hook: &LifecycleHook, phase: Lifecyc
     );
 }
 
+/// An init hook that failed, panicked or was interrupted: the hook, for the
+/// line opening the teardown, and the error the boot returns.
+#[derive(Debug)]
+pub(crate) struct HookFailure {
+    pub(crate) hook: &'static LifecycleHook,
+    pub(crate) error: anyhow::Error,
+}
+
 /// Init-phase runner: aborts on the first error or panic, and at a stop asked
 /// while a hook waits.
 pub(crate) async fn run_phase(
     container: &Container,
     lifecycle: &AppLifecycle,
     phase: LifecyclePhase,
-) -> anyhow::Result<()> {
+) -> Result<(), HookFailure> {
     for hook in hooks_for(phase, container) {
         if !(hook.present)(container) {
             report_inert_hook(container, hook, phase);
@@ -224,13 +235,14 @@ pub(crate) async fn run_phase(
             method: hook.method,
             origin: hook.origin,
         };
-        match lifecycle
+        let error = match lifecycle
             .boot(&step, panic::contain((hook.run)(container)))
-            .await?
+            .await
         {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => return Err(err.context(format!("{step} failed"))),
-            Err(payload) => {
+            Ok(Ok(Ok(()))) => continue,
+            Err(interrupted) => interrupted.into(),
+            Ok(Ok(Err(err))) => err.context(format!("{step} failed")),
+            Ok(Err(payload)) => {
                 crate::contained_panic!(
                     target: crate::target::LIFECYCLE,
                     payload.as_ref(),
@@ -240,9 +252,10 @@ pub(crate) async fn run_phase(
                     method = hook.method,
                     origin = hook.origin,
                 );
-                anyhow::bail!("{step} panicked");
+                anyhow::anyhow!("{step} panicked")
             }
-        }
+        };
+        return Err(HookFailure { hook, error });
     }
     Ok(())
 }
@@ -259,6 +272,14 @@ pub(crate) async fn run_phase_lenient(
             report_inert_hook(container, hook, phase);
             continue;
         }
+        tracing::debug!(
+            target: crate::target::LIFECYCLE,
+            ?phase,
+            provider = hook.provider,
+            method = hook.method,
+            origin = hook.origin,
+            "running lifecycle hook",
+        );
         crate::way_down::hook(phase, hook.provider, hook.method, hook.origin);
         let started = Instant::now();
         // `timeout_at` polls the hook before its timer, so past the deadline
@@ -289,8 +310,8 @@ pub(crate) async fn run_phase_lenient(
                 provider = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
-                waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                budget_ms = u64::try_from(SHUTDOWN_HOOKS_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                waited_ms = millis(started.elapsed()),
+                budget_ms = millis(SHUTDOWN_HOOKS_TIMEOUT),
                 "shutdown hook abandoned: the shutdown hooks' budget was spent while it waited, \
                  and the hooks after it still start",
             ),

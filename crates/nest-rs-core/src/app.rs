@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 use crate::access::{
     Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, dependency_order,
@@ -16,6 +17,7 @@ use crate::access::{
     unbuilt_cause, validate_access_graph, validate_keyed_access_graph,
 };
 use crate::app_lifecycle::{AppLifecycle, StopCause};
+use crate::close::InstallRecord;
 use crate::container::{AbsentOptional, ProviderKey, ProviderScope, Stall};
 use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
@@ -24,7 +26,8 @@ use crate::error::{
     LateFactoryError, LateOptionalDependencyError, UnbuiltProviderError, UnregisteredModuleError,
     UnresolvedFactoryError,
 };
-use crate::lifecycle::{HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
+use crate::lifecycle::{HookFailure, HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
+use crate::millis::millis;
 use crate::module::Module;
 use crate::net::check_budgets;
 use crate::transport::{Transport, TransportContribution};
@@ -36,6 +39,9 @@ pub struct App {
     container: Container,
     lifecycle: Arc<AppLifecycle>,
     init: tokio::sync::Mutex<Init>,
+    /// The order its types were installed in, and what the app handed in
+    /// rather than a module opening it: what the closes read.
+    installed: InstallRecord,
 }
 
 /// Where the app's init phases stand: they run once per [`App`], and an init
@@ -44,7 +50,11 @@ pub struct App {
 enum Init {
     NotRun,
     Done,
+    /// An init that never finished: hooks may have run, none was torn down.
     Failed,
+    /// An init that failed and ran the teardown, within this deadline: what
+    /// remains is the container's drop.
+    TornDown(Instant),
 }
 
 /// The step of the boot a stop interrupted.
@@ -273,23 +283,29 @@ impl App {
             TypeId::of::<Composition>(),
         ]);
         let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-        let builder = seal(
-            builder,
+        let sealed = seal(
+            &builder,
             &descriptors,
             &[(TypeId::of::<M>(), root)],
             &global,
             &HashSet::new(),
         )?;
-        let container = builder.build();
+        let installed = builder.install_record();
+        let container = sealed.provide(builder).build();
         crate::wiring::wire(&container)?;
-        Ok(Self::assembled(container, lifecycle))
+        Ok(Self::assembled(container, lifecycle, installed))
     }
 
-    fn assembled(container: Container, lifecycle: Arc<AppLifecycle>) -> Self {
+    fn assembled(
+        container: Container,
+        lifecycle: Arc<AppLifecycle>,
+        installed: InstallRecord,
+    ) -> Self {
         Self {
             container,
             lifecycle,
             init: tokio::sync::Mutex::new(Init::NotRun),
+            installed,
         }
     }
 
@@ -318,22 +334,49 @@ impl App {
     /// finished, both return [`InitFailedError`] without running a hook. A stop
     /// asked while a hook waits drops it there and returns
     /// [`BootInterruptedError`](crate::BootInterruptedError).
+    ///
+    /// An init that fails, panics or is interrupted tears the app down before
+    /// it returns: the app turns [`Draining`](crate::AppState::Draining), every
+    /// shutdown hook runs, in reverse, then the resources close — within
+    /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT) — and the init's
+    /// error is still what it returns.
     pub async fn init(&self) -> Result<()> {
+        self.init_tearing_down_after(std::future::ready(())).await
+    }
+
+    /// [`init`](Self::init), the teardown of an init that fails waiting for
+    /// `stopped` once the app turned `Draining`.
+    async fn init_tearing_down_after(&self, stopped: impl Future<Output = ()>) -> Result<()> {
         let mut init = self.init.lock().await;
         match *init {
             Init::Done => return Ok(()),
-            Init::Failed => return Err(InitFailedError.into()),
+            Init::Failed | Init::TornDown(_) => return Err(InitFailedError.into()),
             Init::NotRun => {}
         }
         // Failed until the phases return: a caller dropping this future while
         // a hook waits leaves it so, and no hook that finished runs again.
         *init = Init::Failed;
-        self.init_phases().await?;
-        *init = Init::Done;
-        Ok(())
+        let Err(failed) = self.init_phases().await else {
+            *init = Init::Done;
+            return Ok(());
+        };
+        tracing::warn!(
+            target: crate::target::LIFECYCLE,
+            phase = ?failed.hook.phase,
+            provider = failed.hook.provider,
+            method = failed.hook.method,
+            origin = failed.hook.origin,
+            "the boot failed after init hooks ran: running the shutdown hooks",
+        );
+        self.lifecycle.drain(StopCause::BootFailed);
+        stopped.await;
+        let deadline = hooks_budget();
+        self.shut_down(true, deadline).await;
+        *init = Init::TornDown(deadline);
+        Err(failed.error)
     }
 
-    async fn init_phases(&self) -> Result<()> {
+    async fn init_phases(&self) -> Result<(), HookFailure> {
         run_phase(
             &self.container,
             &self.lifecycle,
@@ -348,6 +391,69 @@ impl App {
         .await
     }
 
+    /// The shutdown phases when `hooks`, then the resources' closes, under
+    /// `deadline`.
+    async fn shut_down(&self, hooks: bool, deadline: Instant) {
+        if hooks {
+            for phase in [
+                LifecyclePhase::OnModuleDestroy,
+                LifecyclePhase::BeforeApplicationShutdown,
+                LifecyclePhase::OnApplicationShutdown,
+            ] {
+                run_phase_lenient(&self.container, phase, deadline).await;
+            }
+        }
+        crate::close::close_all(&self.container, &self.installed, deadline).await;
+    }
+
+    /// Stop an app that is not serving: it turns
+    /// [`Draining`](crate::AppState::Draining) with
+    /// [`StopCause::Closed`], runs the shutdown phases in reverse when its init
+    /// ran, closes the resources its modules opened, then drops its container —
+    /// all within [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT).
+    ///
+    /// It is how a program that runs work rather than serving ends — a
+    /// migration, a one-shot command, a test. A failure on the way is filed by
+    /// the rules the shutdown hooks follow, never returned. An app dropped
+    /// without `close` runs none of it.
+    ///
+    /// ```
+    /// use nest_rs_core::{App, module};
+    ///
+    /// #[module]
+    /// struct ReportModule;
+    ///
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// let app = App::builder().module::<ReportModule>().build().await?;
+    /// app.init().await?;
+    /// // … the work, with what `app.container()` provides …
+    /// app.close().await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn close(self) {
+        self.lifecycle.drain(StopCause::Closed);
+        self.wind_down().await;
+    }
+
+    /// The tail every end of an app shares: the shutdown phases when an init
+    /// ran and nothing tore it down yet, the closes, then the container's
+    /// drop, under the hooks' one deadline.
+    async fn wind_down(mut self) {
+        let deadline = match *self.init.get_mut() {
+            Init::TornDown(deadline) => deadline,
+            init => {
+                let deadline = hooks_budget();
+                self.shut_down(!matches!(init, Init::NotRun), deadline)
+                    .await;
+                deadline
+            }
+        };
+        crate::way_down::exit();
+        drop_within(self, deadline).await;
+    }
+
     /// Configure each transport against the container, run the init lifecycle
     /// hooks unless [`init`](Self::init) already did, then run all transports
     /// concurrently under the app's stop token. The app is
@@ -360,15 +466,31 @@ impl App {
     /// misordered guard chain) fails the boot here, before any hook runs; a
     /// stop asked while a transport configures or an init hook waits stops the
     /// boot there ([`BootInterruptedError`](crate::BootInterruptedError)).
-    /// Once the transports have stopped, the shutdown hooks run within
+    /// Once the transports have stopped, the shutdown hooks run, then the
+    /// resources the modules opened close and the container drops, all within
     /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT); a hook that
-    /// fails or panics is reported and the rest still run.
+    /// fails or panics is reported and the rest still run. A boot that fails
+    /// gets the same teardown — the shutdown hooks only when an init hook ran —
+    /// and its error is still what `run` returns.
     ///
     /// Each transport bounds its own stop ([`Transport::stop_bound`]); the
     /// `way down bounded` boot line files the longest beside the hooks' budget.
     /// A signal received once the way down has begun exits at once (130 /
     /// 143). Transports come only from imported modules.
     pub async fn run(self) -> Result<()> {
+        let served = self.boot_and_serve().await;
+        if served.is_err() {
+            // A boot that stopped short of serving; one that served and failed
+            // already drains for its transport.
+            self.lifecycle.drain(StopCause::BootFailed);
+        }
+        self.wind_down().await;
+        served
+    }
+
+    /// `run` up to the shutdown phases: boot what remains of the boot, serve,
+    /// and return once every transport has stopped.
+    async fn boot_and_serve(&self) -> Result<()> {
         tracing::info!(
             target: crate::target::APP,
             version = env!("CARGO_PKG_VERSION"),
@@ -409,8 +531,8 @@ impl App {
             .unwrap_or_default();
         tracing::info!(
             target: crate::target::APP,
-            stop_bound_ms = u64::try_from(stop_bound.as_millis()).unwrap_or(u64::MAX),
-            hooks_budget_ms = u64::try_from(crate::SHUTDOWN_HOOKS_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+            stop_bound_ms = millis(stop_bound),
+            hooks_budget_ms = millis(crate::SHUTDOWN_HOOKS_TIMEOUT),
             "way down bounded",
         );
 
@@ -478,22 +600,32 @@ impl App {
         // them joins on `stopping()` would hold it to the budget.
         self.lifecycle.drain(StopCause::TransportFailed);
 
-        // The three phases share one deadline, which `way_down::main` reads too.
-        let deadline = tokio::time::Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT;
-        crate::way_down::hooks_deadline(crate::SHUTDOWN_HOOKS_TIMEOUT);
-        for phase in [
-            LifecyclePhase::OnModuleDestroy,
-            LifecyclePhase::BeforeApplicationShutdown,
-            LifecyclePhase::OnApplicationShutdown,
-        ] {
-            run_phase_lenient(&self.container, phase, deadline).await;
-        }
-        crate::way_down::exit();
-
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+}
+
+/// Start the shutdown hooks' budget, which the shutdown phases, the closes and
+/// the container's drop share, and record it for `#[nest_rs::main]`'s teardown.
+fn hooks_budget() -> Instant {
+    crate::way_down::hooks_deadline(crate::SHUTDOWN_HOOKS_TIMEOUT);
+    Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT
+}
+
+/// Drop `owned` — what holds the last of a container — on the blocking pool,
+/// waiting for it until `deadline`: a provider whose `Drop` blocks is
+/// abandoned at `warn` rather than holding the exit.
+async fn drop_within<T: Send + 'static>(owned: T, deadline: Instant) {
+    let dropping = tokio::task::spawn_blocking(move || drop(owned));
+    // A `Drop` that panics is filed by the process hook as it unwinds.
+    if tokio::time::timeout_at(deadline, dropping).await.is_err() {
+        tracing::warn!(
+            target: crate::target::APP,
+            budget_ms = millis(crate::SHUTDOWN_HOOKS_TIMEOUT),
+            "a provider was still dropping when the shutdown hooks' budget ran out: abandoned",
+        );
     }
 }
 
@@ -688,7 +820,9 @@ impl AppBuilder {
     /// ([`FactoryFailedError`]), and the first wiring's
     /// ([`WiringFailedError`](crate::WiringFailedError)); a stop asked while a
     /// factory waits drops it there and returns
-    /// [`BootInterruptedError`](crate::BootInterruptedError).
+    /// [`BootInterruptedError`](crate::BootInterruptedError). A boot that
+    /// fails closes what the factories already opened
+    /// ([`ContainerBuilder::provide_close`]) before it returns.
     pub async fn build(self) -> Result<App> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
@@ -698,73 +832,124 @@ impl AppBuilder {
             modules,
             overrides,
         } = self;
+        let (container, installed) = match assemble(&mut builder, &lifecycle, &modules, overrides)
+            .await
+        {
+            Ok(assembled) => assembled,
+            Err(error) => {
+                close_unserved(&lifecycle, &builder.snapshot(), &builder.install_record()).await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = crate::wiring::wire(&container) {
+            close_unserved(&lifecycle, &container, &installed).await;
+            return Err(error.into());
+        }
+        Ok(App::assembled(container, lifecycle, installed))
+    }
+}
 
-        builder = builder
-            .provide_arc(Arc::clone(&lifecycle))
-            .enter_phase(Phase::Collect);
-        for hooks in &modules {
-            builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
-        }
-        check_contested_declarations(&builder)?;
-        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-        let roots: Vec<(TypeId, &'static str)> =
-            modules.iter().map(|h| (h.type_id, h.name)).collect();
-        let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
-        let reached = reachable_descriptors(&descriptors, &ids);
-        // Refused as soon as the resource exists, before a later factory's I/O
-        // fails on something else first.
-        check_budgets(&builder, &reached, None)?;
-        // A seed supplying a factory's output type skips it. The next to run is
-        // the first whose `after` types are present or provided by nothing still
-        // queued; only a cycle leaves nothing runnable.
-        let mut pending = builder.take_factories();
-        while !pending.is_empty() {
-            let ready = pending.iter().position(|queued| {
-                queued.after.iter().all(|dep| {
-                    builder.contains(*dep)
-                        || !pending.iter().any(|other| other.provides.contains(dep))
-                })
-            });
-            let Some(index) = ready else {
-                return Err(FactoryCycleError {
-                    type_names: pending.iter().map(|queued| queued.name).collect(),
-                }
-                .into());
-            };
-            let queued = pending.remove(index);
-            let output = if builder.contains(queued.id()) {
-                None
-            } else {
-                let type_name = queued.name;
-                let factory = (queued.factory)(builder.snapshot());
-                let register = lifecycle
-                    .boot(&BootStep::Factory { type_name }, factory)
-                    .await?
-                    .map_err(|source| FactoryFailedError { type_name, source })?;
-                Some(register)
-            };
-            builder = builder.install(queued.queued_by, output.into_iter().chain(queued.derives));
-            check_budgets(&builder, &reached, Some(&queued.provides))?;
-        }
-        // Seeded after register, yet global infrastructure for the access graph.
-        let mut global = builder.provider_ids();
-        global.insert(TypeId::of::<ReachableProviders>());
-        global.insert(TypeId::of::<ProviderOrder>());
-        global.insert(TypeId::of::<Composition>());
-        let global_keyed: HashSet<ProviderKey> = builder.keyed_provider_keys();
-        builder = builder.enter_phase(Phase::Register);
-        for hooks in &modules {
-            builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
-        }
-        check_register_phase(&mut builder)?;
-        for ov in overrides {
-            builder = ov(builder);
-        }
+/// The four phases and the seal, on `slot`, returning the container with what
+/// the app handed in: on an error, the slot keeps what registered so far, for
+/// the boot to close what the factories opened.
+async fn assemble(
+    slot: &mut ContainerBuilder,
+    lifecycle: &Arc<AppLifecycle>,
+    modules: &[ModuleHooks],
+    overrides: Vec<Registrar>,
+) -> Result<(Container, InstallRecord)> {
+    let mut builder = std::mem::take(slot)
+        .provide_arc(Arc::clone(lifecycle))
+        .enter_phase(Phase::Collect);
+    for hooks in modules {
+        builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
+    }
+    *slot = builder;
+    check_contested_declarations(slot)?;
+    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+    let roots: Vec<(TypeId, &'static str)> = modules.iter().map(|h| (h.type_id, h.name)).collect();
+    let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
+    let reached = reachable_descriptors(&descriptors, &ids);
+    // Refused as soon as the resource exists, before a later factory's I/O
+    // fails on something else first.
+    check_budgets(slot, &reached, None)?;
+    // A seed supplying a factory's output type skips it. The next to run is
+    // the first whose `after` types are present or provided by nothing still
+    // queued; only a cycle leaves nothing runnable.
+    let mut pending = slot.take_factories();
+    while !pending.is_empty() {
+        let ready = pending.iter().position(|queued| {
+            queued.after.iter().all(|dep| {
+                slot.contains(*dep) || !pending.iter().any(|other| other.provides.contains(dep))
+            })
+        });
+        let Some(index) = ready else {
+            return Err(FactoryCycleError {
+                type_names: pending.iter().map(|queued| queued.name).collect(),
+            }
+            .into());
+        };
+        let queued = pending.remove(index);
+        let output = if slot.contains(queued.id()) {
+            None
+        } else {
+            let type_name = queued.name;
+            let factory = (queued.factory)(slot.snapshot());
+            let register = lifecycle
+                .boot(&BootStep::Factory { type_name }, factory)
+                .await?
+                .map_err(|source| FactoryFailedError { type_name, source })?;
+            Some(register)
+        };
+        *slot = std::mem::take(slot)
+            .install(queued.queued_by, output.into_iter().chain(queued.derives));
+        check_budgets(slot, &reached, Some(&queued.provides))?;
+    }
+    // Seeded after register, yet global infrastructure for the access graph.
+    let mut global = slot.provider_ids();
+    global.insert(TypeId::of::<ReachableProviders>());
+    global.insert(TypeId::of::<ProviderOrder>());
+    global.insert(TypeId::of::<Composition>());
+    let global_keyed: HashSet<ProviderKey> = slot.keyed_provider_keys();
+    let mut builder = std::mem::take(slot).enter_phase(Phase::Register);
+    for hooks in modules {
+        builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
+    }
+    *slot = builder;
+    check_register_phase(slot)?;
+    for ov in overrides {
+        *slot = ov(std::mem::take(slot));
+    }
 
-        let builder = seal(builder, &descriptors, &roots, &global, &global_keyed)?;
-        let container = builder.build();
-        crate::wiring::wire(&container)?;
-        Ok(App::assembled(container, lifecycle))
+    let sealed = seal(slot, &descriptors, &roots, &global, &global_keyed)?;
+    let installed = slot.install_record();
+    Ok((sealed.provide(std::mem::take(slot)).build(), installed))
+}
+
+/// Close what a boot that never became an app opened, within the shutdown
+/// hooks' budget: no hook ran, but a factory's pool is open. What was built
+/// then drops by ownership, as the error returns.
+async fn close_unserved(lifecycle: &AppLifecycle, opened: &Container, installed: &InstallRecord) {
+    lifecycle.drain(StopCause::BootFailed);
+    crate::close::close_all(opened, installed, hooks_budget()).await;
+}
+
+/// The seeds the seal hands the container: what the transports and the hook
+/// runners read.
+struct Sealed {
+    reachable: ReachableProviders,
+    order: ProviderOrder,
+    composition: Composition,
+    hook_order: HookOrder,
+}
+
+impl Sealed {
+    fn provide(self, builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+            .provide(self.reachable)
+            .provide(self.order)
+            .provide(self.composition)
+            .provide(self.hook_order)
     }
 }
 
@@ -775,12 +960,12 @@ impl AppBuilder {
 /// budget against the nets reaching it, and the seeds the transports and the
 /// hook runners read.
 fn seal(
-    builder: ContainerBuilder,
+    builder: &ContainerBuilder,
     descriptors: &[&ModuleDescriptor],
     roots: &[(TypeId, &'static str)],
     global: &HashSet<TypeId>,
     global_keyed: &HashSet<ProviderKey>,
-) -> Result<ContainerBuilder> {
+) -> Result<Sealed> {
     let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
     validate_access_graph(
         descriptors,
@@ -797,20 +982,18 @@ fn seal(
     }
     // After the access graph, whose remedy names the owning module
     // (`.claude/decisions/boot-refusal-order.md`).
-    check_singleton_cycles(&builder, descriptors, &ids, &scopes)?;
+    check_singleton_cycles(builder, descriptors, &ids, &scopes)?;
     let reached = reachable_descriptors(descriptors, &ids);
-    check_unbuilt_providers(&builder, &reached)?;
-    check_late_optionals(&builder, &reached)?;
-    check_budgets(&builder, &reached, None)?;
+    check_unbuilt_providers(builder, &reached)?;
+    check_late_optionals(builder, &reached)?;
+    check_budgets(builder, &reached, None)?;
     let order = provider_order(descriptors, &ids);
-    let reachable = ReachableProviders(reachable_provider_ids(&order, global));
-    let composition = Composition::from_descriptors(descriptors, roots);
-    let hook_order = HookOrder::new(dependency_order(descriptors, &ids));
-    Ok(builder
-        .provide(reachable)
-        .provide(ProviderOrder::new(order))
-        .provide(composition)
-        .provide(hook_order))
+    Ok(Sealed {
+        reachable: ReachableProviders(reachable_provider_ids(&order, global)),
+        order: ProviderOrder::new(order),
+        composition: Composition::from_descriptors(descriptors, roots),
+        hook_order: HookOrder::new(dependency_order(descriptors, &ids)),
+    })
 }
 
 fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'static str> {
@@ -822,10 +1005,33 @@ fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'stat
 /// `app` is public: its tier-2 items live here, reached only through the
 /// crate's `__private`.
 pub(crate) mod __private {
-    use super::AppBuilder;
+    use std::future::Future;
+
+    use super::{App, AppBuilder};
+    use crate::app_lifecycle::StopCause;
     use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
     use crate::interceptor::{GlobalInterceptors, InterceptorSpec};
     use crate::layer_chain::__private::check_specs_resolvable;
+
+    /// [`App::close`], once `stopped` resolves: the app turns `Draining` first,
+    /// so what a harness serves under the app's stop token winds down before
+    /// the shutdown hooks run, as it does under [`App::run`].
+    pub async fn close_after(app: App, stopped: impl Future<Output = ()>) {
+        app.lifecycle.drain(StopCause::Closed);
+        stopped.await;
+        app.wind_down().await;
+    }
+
+    /// [`App::init`], an init that fails awaiting `stopped` once the app
+    /// turned `Draining`, before its teardown: what a harness serves under the
+    /// app's stop token winds down before the shutdown hooks run, as no
+    /// transport serves before [`App::run`]'s init.
+    pub async fn init_tearing_down_after(
+        app: &App,
+        stopped: impl Future<Output = ()>,
+    ) -> anyhow::Result<()> {
+        app.init_tearing_down_after(stopped).await
+    }
 
     /// List `specs` as the interceptors every unit runs at the handler stage,
     /// first listed outermost; one no imported module provides fails the boot

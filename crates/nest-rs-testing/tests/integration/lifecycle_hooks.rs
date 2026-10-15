@@ -229,3 +229,168 @@ async fn hooks_run_dependencies_first_at_init_and_in_exact_reverse_at_shutdown()
         "named against the alphabet and listed against the dependencies, the injections decide",
     );
 }
+
+/// Hosts `Db ← Repo ← Svc` and an unrelated `Api`, each with an init and a
+/// destroy hook, recording into `$log`; `$fails` names the one hook that fails.
+macro_rules! failed_boot_hosts {
+    ($log:ident, $fails:literal) => {
+        static $log: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+        fn ran(entry: &'static str) -> anyhow::Result<()> {
+            $log.lock().expect("log mutex is not poisoned").push(entry);
+            if entry == $fails {
+                anyhow::bail!("{entry} refused");
+            }
+            Ok(())
+        }
+
+        #[nest_rs_core::injectable]
+        pub(super) struct Db;
+
+        #[nest_rs_core::hooks]
+        impl Db {
+            #[on_module_init]
+            async fn init(&self) -> anyhow::Result<()> {
+                ran("Db::init")
+            }
+
+            #[on_module_destroy]
+            async fn destroy(&self) -> anyhow::Result<()> {
+                ran("Db::destroy")
+            }
+        }
+
+        #[nest_rs_core::injectable]
+        pub(super) struct Repo {
+            #[inject]
+            _db: std::sync::Arc<Db>,
+        }
+
+        #[nest_rs_core::hooks]
+        impl Repo {
+            #[on_module_init]
+            async fn init(&self) -> anyhow::Result<()> {
+                ran("Repo::init")
+            }
+
+            #[on_application_bootstrap]
+            async fn bootstrap(&self) -> anyhow::Result<()> {
+                ran("Repo::bootstrap")
+            }
+
+            #[on_module_destroy]
+            async fn destroy(&self) -> anyhow::Result<()> {
+                ran("Repo::destroy")
+            }
+        }
+
+        #[nest_rs_core::injectable]
+        pub(super) struct Svc {
+            #[inject]
+            _repo: std::sync::Arc<Repo>,
+        }
+
+        #[nest_rs_core::hooks]
+        impl Svc {
+            #[on_module_init]
+            async fn init(&self) -> anyhow::Result<()> {
+                ran("Svc::init")
+            }
+
+            #[on_module_destroy]
+            async fn destroy(&self) -> anyhow::Result<()> {
+                ran("Svc::destroy")
+            }
+        }
+
+        #[nest_rs_core::injectable]
+        pub(super) struct Api;
+
+        #[nest_rs_core::hooks]
+        impl Api {
+            #[on_module_init]
+            async fn init(&self) -> anyhow::Result<()> {
+                ran("Api::init")
+            }
+
+            #[on_module_destroy]
+            async fn destroy(&self) -> anyhow::Result<()> {
+                ran("Api::destroy")
+            }
+        }
+
+        #[nest_rs_core::module(providers = [Svc, Repo, Db, Api])]
+        pub(super) struct BootModule;
+
+        pub(super) fn log() -> Vec<&'static str> {
+            $log.lock().expect("log mutex is not poisoned").clone()
+        }
+    };
+}
+
+mod an_init_hook_fails {
+    use std::sync::Mutex;
+
+    failed_boot_hosts!(FAILED_INIT, "Svc::init");
+}
+
+#[tokio::test]
+async fn a_failed_init_hook_runs_every_hosts_destroy_hook_in_reverse_and_run_returns_its_error() {
+    let error = App::new::<an_init_hook_fails::BootModule>()
+        .expect("boots")
+        .run()
+        .await
+        .expect_err("the init hook's error is the run's");
+
+    assert!(
+        format!("{error:#}").contains("Svc::init refused"),
+        "{error:#}"
+    );
+    assert_eq!(
+        an_init_hook_fails::log(),
+        [
+            "Db::init",
+            "Repo::init",
+            "Svc::init",
+            "Api::destroy",
+            "Svc::destroy",
+            "Repo::destroy",
+            "Db::destroy",
+        ],
+        "every present host is torn down, `Api` included, its init never having run",
+    );
+}
+
+mod a_bootstrap_hook_fails {
+    use std::sync::Mutex;
+
+    failed_boot_hosts!(FAILED_BOOTSTRAP, "Repo::bootstrap");
+}
+
+#[tokio::test]
+async fn a_failed_bootstrap_hook_runs_every_hosts_destroy_hook_in_reverse() {
+    let error = App::new::<a_bootstrap_hook_fails::BootModule>()
+        .expect("boots")
+        .run()
+        .await
+        .expect_err("the bootstrap hook's error is the run's");
+
+    assert!(
+        format!("{error:#}").contains("Repo::bootstrap refused"),
+        "{error:#}"
+    );
+    assert_eq!(
+        a_bootstrap_hook_fails::log(),
+        [
+            "Db::init",
+            "Repo::init",
+            "Svc::init",
+            "Api::init",
+            "Repo::bootstrap",
+            "Api::destroy",
+            "Svc::destroy",
+            "Repo::destroy",
+            "Db::destroy",
+        ],
+    );
+}

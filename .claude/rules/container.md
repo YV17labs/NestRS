@@ -274,7 +274,9 @@ questions shape a port:
   a `module.rs`, and it may name the first-party binding as the remedy. *By type
   parameter* (`AuthnGuard<S: Strategy>`): two instantiations are two types, so
   no arbitration is owed. *By configuration*: the import opens the gate and
-  configuration decides which members are active, zero to all.
+  configuration decides which members are active, zero to all — or, for a
+  delegated port, which of its library's backends: the URL's scheme
+  (storage's `s3://`, `memory:///`).
 
 **A port promises only what every backend it ships holds**; a looser backend
 either does not declare the capability, or the port is worded loosely enough and

@@ -1,6 +1,6 @@
 # nest-rs-storage
 
-S3-compatible object storage for NestRS: a thin, injectable `Storage` client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) over the `object_store` crate. The AWS-S3 driver ships wired and runs against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style; the GCS, Azure, fs and memory drivers sit behind the same client.
+Object storage for NestRS: an injectable `Storage` client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) over the `object_store` crate. One URL names the store and its scheme picks the backend — `s3://<bucket>[/<prefix>]` for AWS S3 and the servers speaking its API (tested against RustFS over TLS), `memory:///` for development and tests — and the boot proves the bucket answers before the app serves.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

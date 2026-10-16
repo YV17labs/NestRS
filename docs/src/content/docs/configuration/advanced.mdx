@@ -227,8 +227,15 @@ impl Config for StorageConfig {
     fn defaults() -> Self {
         let safe = Self::default();
         if Environment::from_env().is_deployed() { return safe; }
-        // Development and test: the dev container's pair, plain HTTP allowed.
-        Self { access_key: "nestrs".into(), secret_key: "nestrs".into(), allow_http: true, ..safe }
+        // Development and test: the dev container's bucket and pair, plain HTTP allowed.
+        Self {
+            url: "s3://nestrs".into(),
+            endpoint: Some("https://rustfs:9000".into()),
+            access_key: "nestrs".into(),
+            secret_key: "nestrs".into(),
+            allow_http: true,
+            ..safe
+        }
     }
 
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> { /* … */ }

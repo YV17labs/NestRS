@@ -622,15 +622,18 @@ mod tests {
             !present(real(&[]), &test, "NESTRS_SEAORM__URL"),
             "test skips .env.local"
         );
-        std::fs::write(dir.join(".env.development"), "NESTRS_STORAGE__BUCKET=dev\n")
-            .expect("write");
+        std::fs::write(
+            dir.join(".env.development"),
+            "NESTRS_STORAGE__URL=s3://dev\n",
+        )
+        .expect("write");
         let unset = cascade_text(&dir, "NESTRS", real(&[]));
         assert!(
             present(real(&[]), &unset, "NESTRS_REDIS__URL"),
             "an undeclared process reads .env.production"
         );
         assert!(
-            !present(real(&[]), &unset, "NESTRS_STORAGE__BUCKET"),
+            !present(real(&[]), &unset, "NESTRS_STORAGE__URL"),
             "and never .env.development"
         );
         assert!(present(real(&[]), &unset, "NESTRS_SEAORM__URL"));

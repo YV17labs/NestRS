@@ -35,7 +35,7 @@ types leak.
 | the crate that *binds* the port | delegates to | which already drives |
 |---|---|---|
 | `nest-rs-seaorm` | `sea-orm` | PostgreSQL, the one engine nestrs builds it for |
-| `nest-rs-storage` | `object_store` | S3, GCS, Azure, local filesystem, in-memory |
+| `nest-rs-storage` | `object_store` | S3, GCS, Azure, local filesystem, in-memory — of which the store's URL opens `s3` and `memory` |
 
 Note which column the crate names sit in. The question is answered by whoever
 **binds** the port, never by the crate that declares it — `nest-rs-database`
@@ -239,16 +239,14 @@ the crate's module docs — so start from the page rather than from docs.rs:
 | `Strategy` | [security / authentication](/security/authentication/) |
 | `SocialProvider` | [security / social login](/security/authentication/social-login/) |
 
-**`nest-rs-storage` is a different case, and the honest statement is that it is
-not extensible today.** It delegates to `object_store`, which drives S3, GCS,
-Azure, the local filesystem and memory — but this crate pins the S3 driver
-concretely, and every `StorageConfig` field is S3's own (`endpoint`, `region`,
-`access_key`, `bucket`, …). Reaching another backend is a change inside the
-crate, not something you can do from your app. Three shipped surfaces still say
-otherwise — the crate docs, the `Storage` type's own documentation, and the
-crates.io description — and this page is the one that is right. If you need
-another backend, say so on the issue tracker: that is the signal that decides
-whether the driver surface gets opened.
+**`nest-rs-storage` is the delegated case at its plainest.** There is no
+driver trait to implement: the store's URL picks the `object_store` backend —
+`s3://` for AWS S3 and the servers speaking its API, `memory:///` for
+development and tests — as a Redis URL's scheme picks its topology. This
+release opens those two. Another backend `object_store` drives (`gs://`,
+`az://`, `file://`) is a scheme the crate learns, added in a minor without an
+API change for the features that inject `Storage`; if you need one, say so on
+the issue tracker — that is the signal that decides it.
 
 ## Going further
 

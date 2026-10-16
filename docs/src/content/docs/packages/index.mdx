@@ -59,7 +59,7 @@ Each transport is a module you import in `AppModule`. HTTP-shaped surfaces
 |---|---|---|---|
 | [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database) | `database` | The unit-of-work port every edge runs through — `UnitOfWork`, `run_unit` and the ambient executor any driver implements | [Database](/database/) · [Writing a driver](/database/writing-a-driver/) |
 | [`nest-rs-seaorm`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) | `seaorm` | First-class SeaORM integration — `SeaOrmDatabaseModule`, `Repo`, transactions, dataloaders, and `#[expose]`: one entity declaration for GraphQL + OpenAPI + CRUD | [Database](/database/) · [CRUD](/database/crud/) · [Relations](/graphql/relations/) |
-| [`nest-rs-storage`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-storage) | `storage` | S3-compatible object storage — injectable `Storage`, presigned URLs, via `object_store` | [Storage](/storage/) |
+| [`nest-rs-storage`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-storage) | `storage` | Object storage whose URL picks the backend, `s3://` or `memory:///` — injectable `Storage`, presigned URLs, via `object_store` | [Storage](/storage/) |
 
 ## Security
 

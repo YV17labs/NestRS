@@ -40,7 +40,10 @@ the library when it is the surface (`nest-rs-seaorm`); never for a capability.
 A **port** defines a contract *and the semantics that travel with it*; an
 **adapter**, named for a vendor, carries only the transport and depends on the
 port, which names no vendor. A library already multi-backend (sea-orm,
-object_store) is wrapped, never abstracted.
+object_store) is wrapped, never abstracted; when it is a port's default
+implementation, the port keeps the capability's name and its URL's scheme picks
+the library's backend (`nest-rs-storage`: `s3://`, `memory:///`) — no driver
+trait, no `<Vendor><Port>Module`.
 
 | Shape | Example | Role | Variables |
 |---|---|---|---|

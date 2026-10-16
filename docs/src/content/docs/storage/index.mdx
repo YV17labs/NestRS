@@ -1,6 +1,6 @@
 ---
 title: Storage
-description: S3-compatible object storage — an injectable Storage client with presigned URLs, built on object_store and ready for any S3/MinIO/RustFS server.
+description: Object storage — an injectable Storage client whose URL picks the backend, s3:// or memory://, proved at boot, with presigned URLs.
 sidebar:
   order: 1
 ---
@@ -8,19 +8,17 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 Object storage shares the rest of the framework's shape. `Storage` is a
-regular `#[injectable]` provider: inject it, call a handful of async
-methods. It hands clients short-lived **presigned URLs** so bytes never
-transit your API, and reads or writes objects server-side for workers
-that transform them.
+regular provider: inject it, call a handful of async methods. One URL names the
+store — `s3://media` in production, `memory:///` in your tests — and the boot
+proves the bucket answers before your app serves a request. The client hands
+out short-lived **presigned URLs**, so bytes never transit your API, and reads
+or writes objects server-side for workers that transform them.
 
 The client ships in **`nest-rs-storage`**, built on
-[`object_store`](https://docs.rs/object_store) — the generic
-object-store abstraction maintained under Apache Arrow. It is
-**multi-driver** (S3, GCS, Azure, local filesystem, in-memory) behind
-one trait, with presigning in a separate `Signer` trait the S3 driver
-implements. The AWS-S3 driver is wired by default and speaks to real
-AWS S3 as well as any S3-compatible server (MinIO, RustFS) in path- or
-virtual-host style.
+[`object_store`](https://docs.rs/object_store) — the object-store library
+maintained under Apache Arrow. object_store already abstracts the vendor, so
+nestrs adds no driver trait over it: the URL's scheme picks the object_store
+backend, the way a Redis URL's scheme picks its topology.
 
 <Aside type="note">
 `object_store` is reqwest/rustls-based — no `aws-runtime` / `aws-sdk-*`
@@ -37,91 +35,68 @@ cargo add nest-rs --features storage
 ## Wire it in
 
 `StorageModule` owns its `StorageConfig` (namespace `storage`, loaded
-from `<PREFIX>_STORAGE__*`) and registers `Storage` as a singleton
-provider. Import it where a feature needs storage:
+from `<PREFIX>_STORAGE__*`), opens the store at boot and registers `Storage`
+as a singleton provider. Import it where a feature needs storage:
 
-```rust title="crates/features/src/media/module.rs"
+```rust title="crates/features/src/audio/module.rs"
 use nest_rs::core::module;
 use nest_rs::storage::StorageModule;
 
-use crate::media::MediaService;
+use crate::audio::AudioService;
 
-#[module(imports = [StorageModule], providers = [MediaService])]
-pub struct MediaModule;
+#[module(imports = [StorageModule], providers = [AudioService])]
+pub struct AudioModule;
 ```
 
-The `media` slice below (a post **cover-image** upload) is the canonical
-storage shape.
+Then name the store:
 
-## Configuration
-
-Every field is settable via `<PREFIX>_STORAGE__*` env **or** a pinned
-`StorageConfig` — the framework-wide dual-path config rule. Pin it at the
-composition root; the deployment's variables still overlay it per field, so a
-bucket in the source does not freeze the credentials against the deployment:
-
-```rust title="apps/api/src/module.rs"
-use nest_rs::config::Config;
-use nest_rs::storage::{StorageConfig, StorageModule};
-
-StorageModule::for_root(StorageConfig {
-    bucket: "acme-media".into(),
-    ..StorageConfig::defaults()
-}),
+```bash title=".env"
+NESTRS_STORAGE__URL=s3://nestrs
+NESTRS_STORAGE__ENDPOINT=https://rustfs:9000
 ```
 
-`StorageConfig::defaults()` is the profile's base, the one the bare import
-starts from. `..Default::default()` is the production-safe value in every
-profile — no credential, no plain HTTP — so the pair then comes from the
-deployment even in development: a pinned config reads the process environment,
-never `.env`.
+## Name the store
 
-Importing the bare `StorageModule` — what a feature module does — leaves the
-whole config to the environment.
+The URL's scheme picks the backend, and a path after the bucket confines every
+key under it:
 
-Two defaults below are **profile-dependent**, and both differences are
-security ones: only a declared development or test profile adds the dev
-container's credentials and allows plain HTTP, so an unset key elsewhere — a
-process that declares no `<PREFIX>_ENV` included — fails boot by name instead of
-authenticating with a public default.
-
-| Key | Default | Meaning |
+| URL | Backend | Presigns |
 |---|---|---|
-| `ENDPOINT` | `https://rustfs:9000` | S3 endpoint; empty ⇒ real AWS S3 |
-| `TLS_CA_CERT` | unset | the authorities the endpoint's certificate must chain to, replacing the system's (`TLS_CA_CERT_FILE` for a path) |
-| `TLS_CERT` / `TLS_KEY` | unset | refused: `object_store` presents no client certificate, so setting one fails the boot |
-| `REGION` | `us-east-1` | region |
-| `ACCESS_KEY` / `SECRET_KEY` | `nestrs` in dev/test, **none otherwise** | static credentials |
-| `BUCKET` | `nestrs` | target bucket |
-| `FORCE_PATH_STYLE` | `true` | `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
-| `ALLOW_HTTP` | `true` in dev/test, **`false` otherwise** | reach the endpoint over plain `http://` — see the caution below |
-| `OPERATION_TIMEOUT_SECS` | `15` | the most a call waits for S3's answer, retries included |
-| `READ_TIMEOUT_SECS` | `30` | the most a download waits for its next bytes while it is read |
+| `s3://<bucket>[/<prefix>]` | AWS S3, or a server speaking its API at `ENDPOINT` | yes |
+| `memory:///[<prefix>]` | a store in this process's memory — development and tests | no |
 
-So a staging or production deployment poses three keys at minimum: an
-`https://` `ENDPOINT` of its own (the default names the dev container's
-RustFS), `ACCESS_KEY` and `SECRET_KEY`.
+`s3://media/tenants/acme` stores `covers/a.png` at `tenants/acme/covers/a.png`
+in the bucket, and lists it back as `covers/a.png`. Any other scheme — `file`,
+`gs`, `az` — fails the boot naming the scheme and what this release opens; the
+URL itself is never quoted, since a pasted one may carry a credential.
 
-### How long a call waits
+`memory:///` is the cheapest level to test storage at: a `TestApp` booting it
+needs no server, and every call runs as in production but presigning, which
+answers `StorageError::Unsupported`. A staging or production profile refuses
+it, since a restart loses every object — and so does a process that declares
+no `<PREFIX>_ENV`. Beside it, every S3 setting the deployment sets (`ENDPOINT`,
+`REGION`, the keys, `TLS_CA_CERT`…) fails the boot naming that variable,
+rather than being read by nothing.
 
-The two bounds are the AWS SDK's. A call waits for S3's answer within
-`OPERATION_TIMEOUT_SECS`, every retry included, and past it fails with its
-own error, `the call did not end within 15s, every retry included — the budget
-<PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS sets` — under a handler, before the
-HTTP edge's 20-second timeout answers a bare `503` in its place. That error is
-for an S3 that never answers: a call whose attempts keep failing stops
-retrying once half the budget is spent and fails on S3's own error, its last
-cause included. An upload's
-body is part of its request: `put_bytes` moves within the budget, and
-`put_stream` ships 5 MiB parts that each do, so a body of any size moves in
-parts. A download's body is a transfer, never cut for its size nor for its
-reader's pauses — a slow client behind a streamed response: one that sends
-nothing for `READ_TIMEOUT_SECS` while it is read is cut and resumed from the
-byte it stopped at, provided the object is still the version it started on, and
-fails naming the variable when the resumed body sends nothing within it. A
-connection that breaks mid-body is resumed the same way, however long the
-download has run; each resume is a `warn` on `nest_rs::storage` naming the key
-and what stopped the body.
+### At boot
+
+The store is proved before any provider is built. An `s3://` bucket answers one
+page of its listing under the URL's prefix, within `OPERATION_TIMEOUT_SECS`:
+
+- a bucket that does not exist fails the boot at once, naming
+  `<PREFIX>_STORAGE__URL`;
+- a certificate the client does not trust fails it at once, saying which
+  authority to install or name in `TLS_CA_CERT`;
+- a store that refuses to list — its credentials, or a policy without
+  `s3:ListBucket` — boots on with one `warn` on `nest_rs::storage` naming the
+  credential variables. A least-privilege policy is no reason to stop an app;
+  grant `s3:ListBucket` on the prefix to silence the line;
+- anything else is retried within the budget, each attempt a `warn`, then
+  fails the boot as unreachable with its last cause.
+
+`memory:///` proves at once. The suite runs against RustFS 1.0 over TLS; AWS S3
+and the other servers speaking its API answer the same requests, but no test of
+ours runs against them.
 
 ## Presigned uploads
 
@@ -129,7 +104,7 @@ The canonical flow keeps bytes off the API. A handler injects `Storage`
 and returns a signed `PUT` URL; the client uploads straight to the
 object store; a later call reads the object's metadata to finalize.
 
-```rust title="crates/features/src/media/service.rs"
+```rust title="crates/features/src/audio/service.rs"
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -137,131 +112,159 @@ use nest_rs::core::injectable;
 use nest_rs::storage::{Result, Storage};
 
 #[injectable]
-pub struct MediaService {
+pub struct AudioService {
     #[inject]
     storage: Arc<Storage>,
 }
 
-impl MediaService {
-    /// Hand the client a short-lived URL to PUT the cover image directly.
-    pub async fn request_cover_upload(&self, key: &str) -> Result<String> {
+impl AudioService {
+    /// Hand the client a short-lived URL to PUT the original directly.
+    pub async fn request_upload(&self, key: &str) -> Result<String> {
         self.storage.presign_put(key, Duration::from_secs(900)).await
     }
 
     /// After the client uploads, read the size back to finalize the record.
     /// `None` ⇒ the client never completed the upload.
-    pub async fn confirm_cover_upload(&self, key: &str) -> Result<Option<i64>> {
+    pub async fn confirm_upload(&self, key: &str) -> Result<Option<i64>> {
         Ok(self.storage.head(key).await?.map(|info| info.byte_size))
     }
 }
 ```
 
-<Aside type="caution">
-`head` reports the object's **size** but not its `Content-Type`:
-`object_store`'s `ObjectMeta` does not carry it, so `ObjectMetadata` exposes
-only the byte size. Keep the mime type you were given at
-upload-request time rather than reading it back. `put_bytes` still
-*sets* the content type on write — only the `head` read-back path
-lacks it.
-</Aside>
+`head` reports the object's size but not its `Content-Type`: `object_store`'s
+`ObjectMeta` does not carry it, so keep the type you were given at
+upload-request time. `put_bytes` still *sets* it on write.
 
 ## Server-side read and write
 
-Workers that transform objects (e.g. generating a WebP variant) read
-and write bytes directly:
+Workers that transform objects read and write bytes directly:
 
-```rust title="crates/features/src/media/service.rs"
-let original = self.storage.get_bytes(key).await?;   // -> bytes::Bytes
-let webp = transcode(&original)?;
+```rust title="crates/features/src/audio/queue/processor.rs"
+let original = self.storage.get_bytes(&key).await?;   // -> bytes::Bytes
+let transcoded = transcode(&original)?;
 self.storage
-    .put_bytes(&variant_key, webp, "image/webp")
+    .put_bytes(&format!("transcoded/{file}"), transcoded, "audio/mpeg")
     .await?;
 ```
 
 `presign_get` is the counterpart to `presign_put` for serving private
 originals: a short-lived signed `GET` URL the client fetches directly.
 
+### How long a call waits
+
+A call waits for the store's answer within `OPERATION_TIMEOUT_SECS`, every
+retry included, and past it fails with its own error, `the call did not end
+within 15s, every retry included — the budget
+<PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS sets` — under a handler, before the
+HTTP edge's 20-second timeout answers a bare `503` in its place. A call whose
+attempts keep failing stops retrying once half the budget is spent and fails on
+the store's own error. An upload's body is part of its request: `put_bytes`
+moves within the budget, and `put_stream` ships 5 MiB parts that each do. A
+download's body is a transfer, never cut for its size nor for its reader's
+pauses: one that sends nothing for `READ_TIMEOUT_SECS` while it is read is cut
+and resumed from the byte it stopped at, provided the object is still the
+version it started on, and fails naming the variable when the resumed body
+sends nothing within it. Each resume is a `warn` on `nest_rs::storage` naming
+the key and what stopped the body.
+
 ## API
 
 | Method | Purpose |
 |---|---|
-| `bucket_name() -> &str` | the configured bucket |
+| `connect(&config)` | open and prove a store outside the container — a tool, a test |
+| `url() -> &str` | the store's URL, shown without what a URL may carry beside its bucket and prefix |
 | `presign_put(key, expires) -> String` | signed `PUT` URL for direct client upload |
 | `presign_get(key, expires) -> String` | signed `GET` URL for serving private originals |
 | `head(key) -> Option<ObjectMetadata>` | object size; `None` if absent |
 | `get_bytes(key) -> Bytes` | download full bytes (server-side) |
 | `get_stream(key) -> impl Stream<Item = Result<Bytes>>` | download chunk by chunk, never buffering the whole object |
-| `list(prefix) -> impl Stream<Item = Result<ObjectEntry>>` | the keys under a prefix, streamed page by page; `""` lists the bucket |
+| `list(prefix) -> impl Stream<Item = Result<ObjectEntry>>` | the keys under a prefix, streamed page by page; `""` lists every key the URL reaches |
 | `put_bytes(key, bytes, content_type)` | upload bytes — takes anything `Into<Bytes>`, so the `Bytes` from `get_bytes` composes without a copy |
 | `put_stream(key, content_type, stream)` | upload from a stream of `std::io::Result<Bytes>` as a multipart upload, one 5 MiB part at a time |
 | `delete(key)` | remove an object; an absent key succeeds, so retention sweeps and failed-upload cleanup are idempotent |
 
-That is the whole surface.
-
 `list` matches on path segments, so `posts/cover` returns `posts/cover/a.png`
-and never `posts/cover-2.png`, and each `ObjectEntry` carries the key, the byte
-size and a `std::time::SystemTime`. `put_stream` aborts its multipart upload on
-any failure — the store's or your stream's — so an interrupted upload leaves no
+and never `posts/cover-2.png`. `put_stream` aborts its multipart upload on any
+failure — the store's or your stream's — so an interrupted upload leaves no
 billable parts behind.
 
 `StorageError` is **not** a `ResponseError`: an infrastructure error does not
-get to pick its own HTTP status, so `?`-ing one straight out of a handler does
-not compile. Wrap it in the feature's own error, which is where the status
-belongs:
-
-```rust title="crates/features/src/media/error.rs"
-use nest_rs::http::poem::error::ResponseError;
-use nest_rs::http::poem::http::StatusCode;
-use nest_rs::storage::StorageError;
-
-#[derive(Debug, thiserror::Error)]
-pub enum MediaError {
-    #[error("media storage operation failed")]
-    Storage(#[from] StorageError),
-}
-
-impl ResponseError for MediaError {
-    fn status(&self) -> StatusCode { StatusCode::INTERNAL_SERVER_ERROR }
-}
-```
-
-The handler then returns `Result<_, MediaError>` and `?` works. See
+get to pick its own HTTP status, so wrap it in the feature's own error, which is
+where the status belongs — see
 [`audio/error.rs`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
-for the shape with a `ProblemDetails` body and the `error` log.
+for the shape with a `ProblemDetails` body and the `error` log. Its sentences
+name the store and the operation, never a key: a key often carries user input,
+so the chain object_store's own errors add is said by their kind, without the
+key or the URL they quote. The library's error stays the source, read with
+`downcast_ref::<object_store::Error>()`. A `StorageError` converts into
+`std::io::Error`, so a `get_stream` feeds a streamed response body directly.
 
-A `StorageError` does convert into `std::io::Error`, so a `get_stream` feeds
-`poem::Body::from_bytes_stream` directly:
+## Configuration
 
-```rust title="crates/features/src/media/http/controller.rs"
-let Some(stream) = self.storage.get_stream(key).await.ok() else {
-    return Ok(ProblemDetails::not_found().into_response());
-};
-Ok(Response::builder().body(Body::from_bytes_stream(stream)))
+Every field is settable via `<PREFIX>_STORAGE__*` env **or** a pinned
+`StorageConfig` — the framework-wide dual-path config rule:
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::config::Config;
+use nest_rs::storage::{StorageConfig, StorageModule};
+
+StorageModule::for_root(StorageConfig {
+    url: "s3://acme-media".into(),
+    ..StorageConfig::defaults()
+}),
 ```
+
+`StorageConfig::defaults()` is the profile's base, the one the bare import
+starts from. `..Default::default()` is the production-safe value in every
+profile — no store, no credential, no plain HTTP — so the rest comes from the
+deployment. Only a declared development or test profile names the dev
+container's bucket and credentials and allows plain HTTP; an unset key elsewhere
+fails the boot by name instead of reaching a default.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `URL` | `s3://nestrs` in dev/test, **none otherwise** | the store, whose scheme picks the backend |
+| `ENDPOINT` | `https://rustfs:9000` in dev/test, **unset otherwise** | S3 only: the server's endpoint; unset ⇒ AWS |
+| `TLS_CA_CERT` | unset | S3 only: the authorities the endpoint's certificate must chain to, replacing the system's (`TLS_CA_CERT_FILE` for a path) |
+| `TLS_CERT` / `TLS_KEY` | unset | refused: `object_store` presents no client certificate, so setting one fails the boot |
+| `REGION` | `us-east-1` | S3 only: the region requests are signed for |
+| `ACCESS_KEY` / `SECRET_KEY` | `nestrs` in dev/test, **none otherwise** | S3 only: static credentials |
+| `FORCE_PATH_STYLE` | `true` | S3 only: `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
+| `ALLOW_HTTP` | `true` in dev/test, **`false` otherwise** | S3 only: reach the endpoint over plain `http://` — see the caution below |
+| `OPERATION_TIMEOUT_SECS` | `15` | the most a call, and the boot's proof, wait for the store, retries included |
+| `READ_TIMEOUT_SECS` | `30` | the most a download waits for its next bytes while it is read |
+
+So a staging or production deployment sets three keys at minimum —
+`URL`, `ACCESS_KEY` and `SECRET_KEY` — and `ENDPOINT` unless it is AWS.
 
 <Aside type="caution">
 `ALLOW_HTTP=false` — its value outside a declared development or test
 profile, and in every profile for a config pinned over `..Default::default()`
 — refuses a plain-`http://` endpoint **at boot**, naming
-`<PREFIX>_STORAGE__ENDPOINT`. It
-covers presigned URLs too: signing is a local computation, so a plaintext
-endpoint would otherwise hand clients a working URL carrying the SigV4
-signature. Point it at an `https://` endpoint, or set
+`<PREFIX>_STORAGE__ENDPOINT`. It covers presigned URLs too: signing is a local
+computation, so a plaintext endpoint would otherwise hand clients a working URL
+carrying the SigV4 signature. Point it at an `https://` endpoint, or set
 `<PREFIX>_STORAGE__ALLOW_HTTP=true` to opt in deliberately.
 </Aside>
 
-## Another backend
+## Limits
 
-Because the seam is the `object_store` traits, pointing `Storage` at
-GCS, Azure, the local filesystem, or in-memory is a builder change
-inside the crate — not an API change for the features that inject it.
-The S3 driver is the default because it also covers every S3-compatible
-server.
+- **Two backends.** `s3` and `memory` open in this release; `file`, `gs` and
+  `az` are refused until someone needs them.
+- **Static keys only.** Ambient AWS credentials — an instance profile, IRSA,
+  EKS Pod Identity — are not read: object_store reads them only from `AWS_*`
+  variables, which would bypass the `<PREFIX>_STORAGE__*` namespace.
+- **One store per app.** Named stores, `Storage<I>` beside the default, wait
+  for a seam that keeps a generic module's providers in the access graph
+  ([instances](/fundamentals/providers/#instances--one-resource-opened-twice)); the default store's spelling
+  stays when they arrive.
+- **Redirects are object_store's.** The framework's outbound clients follow no
+  redirect; object_store follows S3's, and offers no option to refuse them.
 
 ## Reference
 
 - `crates/nest-rs-storage/` — `Storage`, `ObjectMetadata`, `ObjectEntry`,
-  `StorageConfig`, `StorageModule`.
+  `StorageConfig`, `StorageModule`, `StorageError`.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
   — presigns an upload URL, and the worker reads the stored object and writes
   a derived one.

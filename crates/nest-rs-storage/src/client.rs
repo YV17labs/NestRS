@@ -1,62 +1,43 @@
 use std::any::TypeId;
 use std::future::Future;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use http::Method;
-use nest_rs_config::{ConfigService, Namespaced};
-use nest_rs_core::{
-    Budget, Container, ContainerBuilder, Discoverable, ProviderResidency, TaskContext,
-};
-use object_store::aws::{AmazonS3, AmazonS3Builder};
+use nest_rs_config::ConfigModule;
+use nest_rs_core::{Budget, ContainerBuilder, Discoverable, ProviderResidency, TaskContext};
 use object_store::path::Path;
 use object_store::signer::Signer;
 use object_store::{
-    Attribute, Attributes, BackoffConfig, ClientOptions, MultipartUpload, ObjectStore,
-    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, RetryConfig,
+    Attribute, Attributes, MultipartUpload, ObjectStoreExt, PutMultipartOptions, PutOptions,
+    PutPayload,
 };
 
-use crate::config::{OPERATION_TIMEOUT, READ_TIMEOUT, StorageConfig};
+use crate::config::{OPERATION_TIMEOUT, StorageConfig};
 use crate::error::{Result, StorageError};
+use crate::store::Store;
 use crate::transfer::download;
-
-/// The longest a dial to S3 waits — DNS, TCP and the TLS handshake; never
-/// scaled down with the budget, since a dial cut shorter never connects.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Retries stop at half of `budget` and back off at most an eighth, so a call
-/// whose attempts keep failing ends on S3's own error before the budget cuts it.
-fn retries_within(budget: Duration) -> RetryConfig {
-    let max_backoff = budget / 8;
-    RetryConfig {
-        backoff: BackoffConfig {
-            init_backoff: BackoffConfig::default().init_backoff.min(max_backoff),
-            max_backoff,
-            ..BackoffConfig::default()
-        },
-        retry_timeout: budget / 2,
-        ..RetryConfig::default()
-    }
-}
 
 /// Bytes buffered before a multipart part is shipped: S3 requires every part
 /// but the last to be at least 5 MiB.
 pub const MULTIPART_PART_SIZE: usize = 5 * 1024 * 1024;
 
-/// Thin, injectable S3-compatible object-store client built lazily from
-/// [`StorageConfig`] over the [`object_store`] crate.
+/// The injectable object-store client: the store [`StorageConfig::url`] names,
+/// opened over the [`object_store`] backend its scheme picks and proved when
+/// it opens.
 ///
-/// Every call waits on S3 within [`StorageConfig::operation_timeout`], and a
-/// download, while it is read, for its next bytes within
+/// Every call waits on the store within [`StorageConfig::operation_timeout`],
+/// and a download, while it is read, for its next bytes within
 /// [`StorageConfig::read_timeout`].
 pub struct Storage {
     config: Arc<StorageConfig>,
-    store: OnceLock<Arc<AmazonS3>>,
+    store: Store,
 }
 
 // Registered by hand rather than by `#[injectable]` for what the decorator
-// cannot say: the client's budget, held under every net reaching it.
+// cannot say: the store opened by `StorageModule`'s factory, and the client's
+// budget, held under every net reaching it.
 impl Discoverable for Storage {
     fn dependencies() -> Vec<TypeId> {
         vec![TypeId::of::<StorageConfig>()]
@@ -75,7 +56,21 @@ impl Discoverable for Storage {
     }
 
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        let storage = Self::from_container(&builder.snapshot());
+        let container = builder.snapshot();
+        let config = match ConfigModule::resolved::<StorageConfig>(&container) {
+            Ok(config) => config,
+            Err(unresolved) => return builder.refuse(unresolved),
+        };
+        let Some(store) = container.get::<Store>() else {
+            return builder.refuse(anyhow::anyhow!(
+                "Storage: the object store was not opened — import `StorageModule`, whose \
+                 factory opens it"
+            ));
+        };
+        let storage = Self {
+            config,
+            store: Store::clone(&store),
+        };
         builder.provide(storage).provide_meta(Budget::of::<Self>(
             "the object store",
             format!(
@@ -100,123 +95,47 @@ impl ProviderResidency for Storage {
 }
 
 impl Storage {
-    /// Construct directly from a config, bypassing the DI container.
-    pub fn new(config: Arc<StorageConfig>) -> Self {
-        Self {
-            config,
-            store: OnceLock::new(),
-        }
+    /// Open the store `config` names and prove it: an `s3://` bucket answers a
+    /// listing of its prefix within the operation budget, or the client is
+    /// refused naming what to change — what the boot does for an app
+    /// importing [`StorageModule`](crate::StorageModule).
+    pub async fn connect(config: &StorageConfig) -> Result<Self> {
+        Ok(Self {
+            store: Store::open(config).await?,
+            config: Arc::new(config.clone()),
+        })
     }
 
-    /// Construct this provider by resolving its config from the container —
-    /// what the register phase calls.
-    fn from_container(container: &Container) -> Self {
-        #[expect(
-            clippy::expect_used,
-            reason = "the register phase builds a provider only once its `dependencies` are registered"
-        )]
-        let config = container
-            .get::<StorageConfig>()
-            .expect("Storage.config: no provider registered for this dependency");
-        Self::new(config)
-    }
-
-    /// The S3 driver, built once on first use.
-    fn store(&self) -> Result<&Arc<AmazonS3>> {
-        if let Some(store) = self.store.get() {
-            return Ok(store);
-        }
-        // For a hand-built `Storage::new`: `object_store`'s `with_allow_http`
-        // gates transfers only, so presigning would mint a plaintext signed URL.
-        if crate::config::is_plaintext(&self.config.endpoint) && !self.config.allow_http {
-            return Err(StorageError::PlaintextEndpoint {
-                endpoint: nest_rs_config::endpoint_shown(&self.config.endpoint),
-            });
-        }
-        // A config handed to `new` skipped `from_env`, and the ranges with it.
-        for (bounds, value) in [
-            (OPERATION_TIMEOUT, self.config.operation_timeout),
-            (READ_TIMEOUT, self.config.read_timeout),
-        ] {
-            bounds
-                .check("storage", bounds.field(), value)
-                .map_err(|source| {
-                    StorageError::Init(object_store::Error::Generic {
-                        store: "S3",
-                        source: Box::new(source),
-                    })
-                })?;
-        }
-        // One `ClientOptions` value: `with_client_options` replaces the whole
-        // set, so a builder call made before it would be undone.
-        let mut options = ClientOptions::new()
-            .with_allow_http(self.config.allow_http)
-            // `object_store`'s default timeout bounds an attempt's body too,
-            // cutting a download for its size; the budget and `download` do.
-            .with_timeout_disabled()
-            .with_connect_timeout(CONNECT_TIMEOUT);
-        // A config handed to `new` skipped `from_env`, and its refusals with it.
-        crate::config::refuse_tls(
-            &ConfigService::for_namespace(StorageConfig::NAMESPACE),
-            &self.config.endpoint,
-            &self.config.tls,
-        )
-        .map_err(|source| {
-            StorageError::Init(object_store::Error::Generic {
-                store: "S3",
-                source: Box::new(source),
-            })
-        })?;
-        // Only the authorities `authorities_pem` hands over — the system's
-        // unless the deployment named others — so every client the framework
-        // opens trusts through one read of the store.
-        let authorities =
-            object_store::Certificate::from_pem_bundle(self.config.tls.authorities_pem())
-                .map_err(StorageError::Init)?;
-        options = authorities.into_iter().fold(
-            options.with_no_system_certificates(true),
-            ClientOptions::with_root_certificate,
-        );
-        let built = AmazonS3Builder::new()
-            .with_client_options(options)
-            .with_retry(retries_within(self.config.operation_timeout))
-            .with_endpoint(&self.config.endpoint)
-            .with_region(&self.config.region)
-            .with_access_key_id(&self.config.access_key)
-            .with_secret_access_key(&self.config.secret_key)
-            .with_bucket_name(&self.config.bucket)
-            .with_virtual_hosted_style_request(!self.config.force_path_style)
-            .build()
-            .map_err(StorageError::Init)?;
-        // A racing thread may have won: `get_or_init` keeps its client.
-        Ok(self.store.get_or_init(|| Arc::new(built)))
-    }
-
-    /// The configured bucket every key in this client is addressed within.
-    pub fn bucket_name(&self) -> &str {
-        &self.config.bucket
+    /// The store's URL, shown without what a URL may carry beside its bucket
+    /// and prefix.
+    pub fn url(&self) -> &str {
+        &self.store.url
     }
 
     /// Sign a short-lived URL for `method` against `key`.
     async fn presigned_url(&self, method: Method, key: &str, expires: Duration) -> Result<String> {
-        let label = method.to_string();
+        let signer = self.store.signer()?;
         let url = self
-            .answered(self.store()?.signed_url(method, &Path::from(key), expires))
+            .answered(signer.signed_url(method.clone(), &self.store.rooted(key), expires))
             .await
             .map_err(|source| StorageError::Presign {
-                method: label,
-                source,
+                method,
+                store: self.store.shown.to_string(),
+                source: Box::new(source),
             })?;
         Ok(url.to_string())
     }
 
     /// Presigned `PUT` URL the client uploads bytes to directly; the content
-    /// type is not signed, so the uploading client sets it.
+    /// type is not signed, so the uploading client sets it. A backend that
+    /// cannot sign — `memory` — answers [`StorageError::Unsupported`].
     pub async fn presign_put(&self, key: &str, expires: Duration) -> Result<String> {
         self.presigned_url(Method::PUT, key, expires).await
     }
 
-    /// Presigned `GET` URL — for serving private originals on demand.
+    /// Presigned `GET` URL — for serving private originals on demand. A
+    /// backend that cannot sign — `memory` — answers
+    /// [`StorageError::Unsupported`].
     pub async fn presign_get(&self, key: &str, expires: Duration) -> Result<String> {
         self.presigned_url(Method::GET, key, expires).await
     }
@@ -226,12 +145,18 @@ impl Storage {
     /// `object_store` does not report the stored `Content-Type`: a caller that
     /// needs it keeps the one it supplied at upload.
     pub async fn head(&self, key: &str) -> Result<Option<ObjectMetadata>> {
-        match self.answered(self.store()?.head(&Path::from(key))).await {
+        match self
+            .answered(self.store.objects.head(&Path::from(key)))
+            .await
+        {
             Ok(meta) => Ok(Some(ObjectMetadata {
                 byte_size: meta.size as i64,
             })),
             Err(object_store::Error::NotFound { .. }) => Ok(None),
-            Err(e) => Err(StorageError::Head(e)),
+            Err(e) => Err(StorageError::Head {
+                store: self.store.shown.to_string(),
+                source: Box::new(e),
+            }),
         }
     }
 
@@ -264,7 +189,7 @@ impl Storage {
         Ok(self.transfer(key).await?.1)
     }
 
-    /// The object at `key`'s size, and its bytes as S3 sends them.
+    /// The object at `key`'s size, and its bytes as the store sends them.
     async fn transfer(
         &self,
         key: &str,
@@ -272,17 +197,19 @@ impl Storage {
         u64,
         impl futures_util::Stream<Item = Result<Bytes>> + Send + 'static + use<>,
     )> {
-        let store = self.store()?;
         let path = Path::from(key);
         let first = self
-            .answered(store.get(&path))
+            .answered(self.store.objects.get(&path))
             .await
-            .map_err(StorageError::Get)?;
+            .map_err(|source| StorageError::Get {
+                store: self.store.shown.to_string(),
+                source: Box::new(source),
+            })?;
         let size = first.range.end - first.range.start;
         Ok((
             size,
             download(
-                Arc::clone(store) as Arc<dyn ObjectStore>,
+                self.store.clone(),
                 path,
                 first,
                 self.config.read_timeout,
@@ -292,7 +219,8 @@ impl Storage {
     }
 
     /// List the objects stored under `prefix`, one entry at a time, fetching
-    /// the next page as the stream is consumed. Pass `""` for the whole bucket.
+    /// the next page as the stream is consumed. Pass `""` for every key the
+    /// store's URL reaches; a key is read relative to the URL's own prefix.
     ///
     /// `prefix` matches on **path segments**, not on characters: `posts/cover`
     /// is a prefix of `posts/cover/a.png` but not of `posts/cover-2.png`. The
@@ -300,16 +228,23 @@ impl Storage {
     pub fn list(
         &self,
         prefix: &str,
-    ) -> Result<impl futures_util::Stream<Item = Result<ObjectEntry>> + Send + 'static + use<>>
-    {
+    ) -> impl futures_util::Stream<Item = Result<ObjectEntry>> + Send + 'static + use<> {
         use futures_util::StreamExt;
-        let budget = self.config.operation_timeout;
-        let pages = self.store()?.list(Some(&Path::from(prefix)));
+        let (budget, backend, shown) = (
+            self.config.operation_timeout,
+            self.store.backend,
+            self.store.shown.clone(),
+        );
+        let prefix = Path::from(prefix);
+        let pages = self
+            .store
+            .objects
+            .list((!prefix.as_ref().is_empty()).then_some(&prefix));
         let entries = Box::pin(futures_util::stream::unfold(
             Some(pages),
             move |pages| async move {
                 let mut pages = pages?;
-                let entry = match bounded(budget, pages.next()).await {
+                let entry = match bounded(budget, backend, pages.next()).await {
                     Ok(None) => return None,
                     Ok(Some(entry)) => entry,
                     Err(unanswered) => return Some((Err(unanswered), None)),
@@ -317,14 +252,17 @@ impl Storage {
                 Some((entry, Some(pages)))
             },
         ));
-        Ok(entries.map(|meta| match meta {
+        entries.map(move |meta| match meta {
             Ok(meta) => Ok(ObjectEntry {
                 key: meta.location.as_ref().to_string(),
                 byte_size: meta.size as i64,
                 last_modified: meta.last_modified.into(),
             }),
-            Err(e) => Err(StorageError::List(e)),
-        }))
+            Err(e) => Err(StorageError::List {
+                store: shown.to_string(),
+                source: Box::new(e),
+            }),
+        })
     }
 
     /// Upload bytes (e.g. a media worker writes a WebP variant).
@@ -341,11 +279,12 @@ impl Storage {
             ..Default::default()
         };
         self.answered(
-            self.store()?
+            self.store
+                .objects
                 .put_opts(&Path::from(key), bytes.into().into(), opts),
         )
         .await
-        .map_err(StorageError::Put)?;
+        .map_err(|e| self.put_failed(e))?;
         Ok(())
     }
 
@@ -370,11 +309,16 @@ impl Storage {
             ..Default::default()
         };
         let mut upload = UploadGuard::new(
-            self.answered(self.store()?.put_multipart_opts(&Path::from(key), opts))
-                .await
-                .map_err(StorageError::Put)?,
+            self.answered(
+                self.store
+                    .objects
+                    .put_multipart_opts(&Path::from(key), opts),
+            )
+            .await
+            .map_err(|e| self.put_failed(e))?,
             key,
             self.config.operation_timeout,
+            self.store.backend,
         );
 
         let mut stream = std::pin::pin!(stream);
@@ -399,7 +343,7 @@ impl Storage {
                 .put_part(PutPayload::from_iter(pending.drain(..)));
             if let Err(e) = self.answered(part).await {
                 upload.abort().await;
-                return Err(StorageError::Put(e));
+                return Err(self.put_failed(e));
             }
             pending_len = 0;
         }
@@ -409,11 +353,11 @@ impl Storage {
         let tail = upload.get().put_part(PutPayload::from_iter(pending));
         if let Err(e) = self.answered(tail).await {
             upload.abort().await;
-            return Err(StorageError::Put(e));
+            return Err(self.put_failed(e));
         }
         if let Err(e) = self.answered(upload.get().complete()).await {
             upload.abort().await;
-            return Err(StorageError::Put(e));
+            return Err(self.put_failed(e));
         }
         upload.finished();
         Ok(())
@@ -422,27 +366,42 @@ impl Storage {
     /// Delete an object. Absent keys succeed, so retention sweeps and
     /// failed-upload cleanup are idempotent.
     pub async fn delete(&self, key: &str) -> Result<()> {
-        match self.answered(self.store()?.delete(&Path::from(key))).await {
+        match self
+            .answered(self.store.objects.delete(&Path::from(key)))
+            .await
+        {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
-            Err(e) => Err(StorageError::Delete(e)),
+            Err(e) => Err(StorageError::Delete {
+                store: self.store.shown.to_string(),
+                source: Box::new(e),
+            }),
         }
     }
 
-    /// `call`'s answer, or S3's error once the operation budget elapses.
+    /// An upload's failure, naming the store.
+    fn put_failed(&self, error: object_store::Error) -> StorageError {
+        StorageError::Put {
+            store: self.store.shown.to_string(),
+            source: Box::new(error),
+        }
+    }
+
+    /// `call`'s answer, or the store's error once the operation budget elapses.
     async fn answered<T>(
         &self,
         call: impl Future<Output = object_store::Result<T>>,
     ) -> object_store::Result<T> {
-        bounded(self.config.operation_timeout, call)
+        bounded(self.config.operation_timeout, self.store.backend, call)
             .await
             .and_then(|answer| answer)
     }
 }
 
-/// `call`'s output, or once `budget` elapses a store error naming the budget
-/// and what sets it.
+/// `call`'s output, or once `budget` elapses an error of the `backend` store
+/// naming the budget and what sets it.
 pub(crate) async fn bounded<F: Future>(
     budget: Duration,
+    backend: &'static str,
     call: F,
 ) -> object_store::Result<F::Output> {
     #[expect(
@@ -452,7 +411,7 @@ pub(crate) async fn bounded<F: Future>(
     tokio::time::timeout(budget, call)
         .await
         .map_err(|_| object_store::Error::Generic {
-            store: "S3",
+            store: backend,
             source: Box::new(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 format!(
@@ -476,17 +435,26 @@ struct UploadGuard {
     /// its `trace_id`. Captured at `new`: a dropped future may not drop on the
     /// task that owned it.
     context: TaskContext,
-    /// How long the abort waits for S3, as every other call of the upload does.
+    /// How long the abort waits for the store, as every other call of the
+    /// upload does.
     budget: Duration,
+    /// The backend the upload goes to.
+    backend: &'static str,
 }
 
 impl UploadGuard {
-    fn new(upload: Box<dyn MultipartUpload>, key: &str, budget: Duration) -> Self {
+    fn new(
+        upload: Box<dyn MultipartUpload>,
+        key: &str,
+        budget: Duration,
+        backend: &'static str,
+    ) -> Self {
         Self {
             upload: Some(upload),
             key: key.to_owned(),
             context: TaskContext::current(),
             budget,
+            backend,
         }
     }
 
@@ -505,7 +473,7 @@ impl UploadGuard {
     /// before returning.
     async fn abort(&mut self) {
         if let Some(mut upload) = self.upload.take() {
-            abort_upload(&mut upload, &self.key, self.budget).await;
+            abort_upload(&mut upload, &self.key, self.budget, self.backend).await;
         }
     }
 
@@ -522,7 +490,7 @@ impl Drop for UploadGuard {
         };
         let key = std::mem::take(&mut self.key);
         let context = self.context.clone();
-        let budget = self.budget;
+        let (budget, backend) = (self.budget, self.backend);
         // A `Drop` cannot prove it runs in a runtime, and panicking while
         // unwinding would replace a billing leak with a crash.
         let runtime = tokio::runtime::Handle::try_current();
@@ -543,7 +511,7 @@ impl Drop for UploadGuard {
         });
         if let Ok(handle) = runtime {
             handle.spawn(context.carry(async move {
-                abort_upload(&mut upload, &key, budget).await;
+                abort_upload(&mut upload, &key, budget, backend).await;
             }));
         }
     }
@@ -553,8 +521,13 @@ impl Drop for UploadGuard {
 ///
 /// Both outcomes are logged: `object_store` cannot list multipart uploads, so
 /// the event is the only trace of whether the parts were discarded.
-async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str, budget: Duration) {
-    match bounded(budget, upload.abort())
+async fn abort_upload(
+    upload: &mut Box<dyn MultipartUpload>,
+    key: &str,
+    budget: Duration,
+    backend: &'static str,
+) {
+    match bounded(budget, backend, upload.abort())
         .await
         .and_then(|aborted| aborted)
     {
@@ -574,17 +547,19 @@ async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str, budget: 
 
 /// Result of a [`Storage::head`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ObjectMetadata {
-    /// The object's size in bytes, as reported by S3.
+    /// The object's size in bytes, as the store reports it.
     pub byte_size: i64,
 }
 
 /// One object yielded by [`Storage::list`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ObjectEntry {
-    /// The object's key, as addressed within the bucket.
+    /// The object's key, relative to the prefix of the store's URL.
     pub key: String,
-    /// The object's size in bytes, as reported by S3.
+    /// The object's size in bytes, as the store reports it.
     pub byte_size: i64,
     /// When the object was last written.
     pub last_modified: SystemTime,
@@ -592,24 +567,30 @@ pub struct ObjectEntry {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
 
-    #[test]
-    fn the_last_backoff_ends_within_the_budget_whatever_the_budget() {
-        for budget in [
-            Duration::from_millis(1),
-            Duration::from_secs(1),
-            StorageConfig::default().operation_timeout,
-            Duration::from_secs(60 * 60),
-        ] {
-            let retries = retries_within(budget);
-            assert!(retries.backoff.init_backoff <= retries.backoff.max_backoff);
-            assert!(
-                retries.retry_timeout + retries.backoff.max_backoff < budget,
-                "{budget:?}"
-            );
+    impl Storage {
+        /// A client over the store `config` names, opened without its proof,
+        /// for the tests of what a call does once it is open.
+        fn unproved(config: StorageConfig) -> Self {
+            Self {
+                store: Store::built(&config).expect("the store builds").0,
+                config: Arc::new(config),
+            }
+        }
+    }
+
+    /// An `s3://` config reaching `endpoint` with a pair of its own.
+    fn s3_at(endpoint: &str, allow_http: bool) -> StorageConfig {
+        StorageConfig {
+            url: "s3://bucket".into(),
+            endpoint: Some(endpoint.into()),
+            access_key: "AKIATEST".into(),
+            secret_key: "test-secret".into(),
+            allow_http,
+            ..StorageConfig::default()
         }
     }
 
@@ -644,6 +625,7 @@ mod tests {
                 Box::new(NeverUploaded(Arc::clone(&aborted))),
                 "uploads/abandoned",
                 Duration::from_secs(1),
+                "s3",
             ));
             assert!(
                 !aborted.load(Ordering::SeqCst),
@@ -682,6 +664,7 @@ mod tests {
             Box::new(NeverUploaded(Arc::clone(&aborted))),
             "uploads/cancelled",
             Duration::from_secs(1),
+            "s3",
         ));
         // The abort is spawned: yield, bounded, until it lands.
         for _ in 0..100 {
@@ -708,202 +691,143 @@ mod tests {
         );
     }
 
-    /// An S3 store on loopback presenting a certificate `authority` issued,
-    /// counting every request it reads and answering each `404`.
-    async fn store_presenting(
-        authority: &nest_rs_testing::TestAuthority,
-    ) -> (String, Arc<AtomicUsize>) {
-        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("a port");
-        let addr = listener.local_addr().expect("its address");
-        let acceptor = authority.server(&["127.0.0.1"]).acceptor(None);
-        let requests = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&requests);
-        tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                let (acceptor, counted) = (acceptor.clone(), Arc::clone(&counted));
-                tokio::spawn(async move {
-                    let Ok(mut tls) = acceptor.accept(stream).await else {
-                        return;
-                    };
-                    let mut head = Vec::new();
-                    let mut buf = [0_u8; 4096];
-                    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
-                        match tls.read(&mut buf).await {
-                            Ok(0) | Err(_) => return,
-                            Ok(read) => head.extend_from_slice(&buf[..read]),
-                        }
-                    }
-                    counted.fetch_add(1, Ordering::SeqCst);
-                    let answer =
-                        b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
-                    if tls.write_all(answer).await.is_ok() {
-                        tls.shutdown().await.ok();
-                    }
-                });
-            }
-        });
-        (format!("https://{addr}"), requests)
-    }
-
-    /// The double's certificate chains to an authority the system does not
-    /// hold, so a client trusting the system's sends it nothing; trusting
-    /// that authority, the same call reaches it.
     #[tokio::test]
-    async fn a_store_whose_certificate_no_trusted_authority_signed_is_sent_nothing() {
-        let authority = nest_rs_testing::TestAuthority::new();
-        let (endpoint, requests) = store_presenting(&authority).await;
-        let storage = |tls| {
-            Storage::new(Arc::new(StorageConfig {
-                endpoint: endpoint.clone(),
-                access_key: "AKIATEST".into(),
-                secret_key: "test-secret".into(),
-                operation_timeout: Duration::from_secs(1),
-                tls,
-                ..Default::default()
-            }))
+    async fn a_plaintext_endpoint_is_refused_when_http_is_disallowed_naming_the_opt_in() {
+        let Err(refused) = Storage::connect(&s3_at("http://k:s3cr3t@minio:9000", false)).await
+        else {
+            panic!("a plaintext presigned URL must never be minted");
         };
-
-        let refused = storage(nest_rs_config::ClientTls::default())
-            .head("k")
-            .await
-            .expect_err("a certificate no trusted authority signed is not talked to");
-        let rendered = nest_rs_core::error_message(&refused);
-        assert_eq!(
-            requests.load(Ordering::SeqCst),
-            0,
-            "no request crossed the failed handshake: {rendered}"
-        );
         assert!(
-            rendered.contains("UnknownIssuer"),
-            "refused for the certificate, not another reason: {rendered}"
+            matches!(refused, StorageError::PlaintextEndpoint { .. }),
+            "got {refused:?}",
         );
-
-        let found = storage(authority.client_tls())
-            .head("k")
-            .await
-            .expect("the authority the deployment named is trusted");
-        assert!(found.is_none(), "the double answers 404");
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
-    }
-
-    fn client(endpoint: &str, allow_http: bool) -> Storage {
-        Storage::new(Arc::new(StorageConfig {
-            endpoint: endpoint.into(),
-            allow_http,
-            ..Default::default()
-        }))
-    }
-
-    #[tokio::test]
-    async fn presigning_refuses_a_plaintext_endpoint_when_http_is_disallowed() {
-        let storage = client("http://minio.internal:9000", false);
-        for signed in [
-            storage
-                .presign_put("k", Duration::from_secs(900))
-                .await
-                .err(),
-            storage
-                .presign_get("k", Duration::from_secs(900))
-                .await
-                .err(),
-        ] {
-            let err = signed.expect("a plaintext presigned URL must never be minted");
-            assert!(
-                matches!(err, StorageError::PlaintextEndpoint { .. }),
-                "got {err:?}",
-            );
-            assert!(
-                err.to_string()
-                    .contains(&nest_rs_config::var_name("storage", "ALLOW_HTTP"))
-            );
-        }
-    }
-
-    /// A hand-built config's endpoint may carry a credential in its
-    /// userinfo; the refusal shows the endpoint without it.
-    #[tokio::test]
-    async fn the_plaintext_refusal_shows_the_endpoint_without_its_userinfo() {
-        let err = client("http://k:s3cr3t@minio:9000", false)
-            .presign_get("k", Duration::from_secs(900))
-            .await
-            .expect_err("a plaintext presigned URL must never be minted")
-            .to_string();
-        assert!(err.contains("http://minio:9000/"), "{err}");
-        assert!(!err.contains("s3cr3t"), "{err}");
+        let shown = refused.to_string();
+        assert!(
+            shown.contains(&nest_rs_config::var_name("storage", "ALLOW_HTTP"))
+                && shown.contains("http://minio:9000/")
+                && !shown.contains("s3cr3t"),
+            "{shown}"
+        );
     }
 
     #[tokio::test]
     async fn presigning_over_an_encrypted_endpoint_is_untouched() {
         // Signing is local: no server is needed.
-        let storage = client("https://s3.example", false);
-        storage
+        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let signed = storage
             .presign_get("k", Duration::from_secs(900))
             .await
             .expect("https is always allowed");
+        assert!(
+            signed.starts_with("https://s3.example/bucket/k?"),
+            "{signed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_presigned_key_is_addressed_under_the_urls_prefix() {
+        let storage = Storage::unproved(StorageConfig {
+            url: "s3://bucket/tenants/acme".into(),
+            ..s3_at("https://s3.example", false)
+        });
+        let signed = storage
+            .presign_put("covers/a.png", Duration::from_secs(900))
+            .await
+            .expect("signing is local");
+        assert!(
+            signed.starts_with("https://s3.example/bucket/tenants/acme/covers/a.png?"),
+            "{signed}"
+        );
     }
 
     /// A config built in code skips `from_env`: the client refuses what the
     /// read would have, before anything is signed or sent.
     #[tokio::test]
-    async fn a_hand_built_client_refuses_tls_material_it_cannot_use() {
+    async fn a_client_built_in_code_refuses_what_the_boot_refuses_naming_the_variables() {
         let issued = nest_rs_testing::TestAuthority::new().client("nestrs-test-client");
         let inline = |pem: &str| nest_rs_config::Material {
             bytes: pem.as_bytes().to_vec(),
             path: None,
         };
-        for (tls, names) in [
+        for (config, names) in [
             (
-                nest_rs_config::ClientTls::new(
-                    None,
-                    Some(nest_rs_config::TlsIdentity::new(
-                        inline(&issued.cert),
-                        inline(&issued.key),
-                    )),
-                ),
+                StorageConfig {
+                    tls: nest_rs_config::ClientTls::new(
+                        None,
+                        Some(nest_rs_config::TlsIdentity::new(
+                            inline(&issued.cert),
+                            inline(&issued.key),
+                        )),
+                    ),
+                    ..s3_at("https://s3.example", false)
+                },
                 "TLS_CERT",
             ),
             (
-                nest_rs_config::ClientTls::new(Some(inline("no certificate")), None),
+                StorageConfig {
+                    tls: nest_rs_config::ClientTls::new(Some(inline("no certificate")), None),
+                    ..s3_at("https://s3.example", false)
+                },
                 "TLS_CA_CERT",
             ),
+            (
+                StorageConfig {
+                    operation_timeout: Duration::ZERO,
+                    ..s3_at("https://s3.example", false)
+                },
+                "OPERATION_TIMEOUT_SECS",
+            ),
+            (
+                StorageConfig {
+                    secret_key: String::new(),
+                    ..s3_at("https://s3.example", false)
+                },
+                "SECRET_KEY",
+            ),
+            (
+                StorageConfig {
+                    url: "gs://bucket".into(),
+                    ..s3_at("https://s3.example", false)
+                },
+                "URL",
+            ),
         ] {
-            let storage = Storage::new(Arc::new(StorageConfig {
-                endpoint: "https://s3.example".into(),
-                tls,
-                ..Default::default()
-            }));
-            let err = storage
-                .presign_get("k", Duration::from_secs(900))
-                .await
-                .expect_err("material the client cannot use mints nothing");
-            let shown = nest_rs_core::error_message(&err);
+            let Err(refused) = Storage::connect(&config).await else {
+                panic!("{names}: a config the boot refuses opens nothing");
+            };
+            let shown = nest_rs_core::error_message(&refused);
             assert!(
-                matches!(err, StorageError::Init(_))
-                    && shown.contains(&nest_rs_config::var_name("storage", names)),
-                "{shown}"
+                matches!(refused, StorageError::Init(_))
+                    && (shown.contains(&nest_rs_config::var_name("storage", names))
+                        || shown.contains("StorageConfig::operation_timeout")),
+                "{names}: {shown}"
             );
         }
     }
 
     #[tokio::test]
-    async fn listing_and_streamed_uploads_refuse_a_plaintext_endpoint_too() {
-        let storage = client("http://minio.internal:9000", false);
-        let listed = storage.list("").err();
-        let uploaded = storage
-            .put_stream("k", "text/plain", futures_util::stream::empty())
+    async fn memory_signs_nothing_and_says_which_backend_cannot() {
+        nest_rs_testing::load_project_env();
+        let storage = Storage::connect(&StorageConfig {
+            url: "memory:///".into(),
+            ..StorageConfig::default()
+        })
+        .await
+        .expect("memory opens in a test profile");
+        let refused = storage
+            .presign_get("k", Duration::from_secs(60))
             .await
-            .err();
-        for refused in [listed, uploaded] {
-            let err = refused.expect("a plaintext endpoint must never be addressed");
-            assert!(
-                matches!(err, StorageError::PlaintextEndpoint { .. }),
-                "got {err:?}",
-            );
-        }
+            .expect_err("no signer");
+        assert!(
+            matches!(
+                refused,
+                StorageError::Unsupported {
+                    operation: "presign",
+                    backend: "memory"
+                }
+            ),
+            "{refused:?}"
+        );
     }
 
     /// An S3 that accepts every connection and never answers. The clock stops
@@ -962,7 +886,7 @@ mod tests {
     #[tokio::test]
     async fn a_store_that_answered_before_the_cut_is_not_said_to_have_been_silent() {
         let budget = StorageConfig::default().operation_timeout;
-        let storage = client(&store_answering_once().await, true);
+        let storage = Storage::unproved(s3_at(&store_answering_once().await, true));
         let refused = tokio::time::timeout(budget * 2, storage.head("k"))
             .await
             .expect("cut within the budget")
@@ -983,24 +907,16 @@ mod tests {
             .and_then(|listener| listener.local_addr())
             .expect("a port nothing listens on once its listener is dropped");
         let budget = Duration::from_secs(1);
-        let storage = Storage::new(Arc::new(StorageConfig {
-            endpoint: format!("http://{closed}"),
-            allow_http: true,
+        let storage = Storage::unproved(StorageConfig {
             operation_timeout: budget,
-            ..StorageConfig::default()
-        }));
-        // The client is built on first use, reading the system's authorities
-        // once per process — not the call's to wait out. Signing is local.
-        storage
-            .presign_get("k", budget)
-            .await
-            .expect("the client builds");
+            ..s3_at(&format!("http://{closed}"), true)
+        });
         let started = tokio::time::Instant::now();
         let refused = storage.head("k").await.expect_err("nothing listens");
         let chain = nest_rs_core::error_message(&refused);
         assert!(started.elapsed() < budget, "{:?}", started.elapsed());
         assert!(
-            !chain.contains("did not end within") && chain.contains("retries"),
+            !chain.contains("did not end within") && chain.contains("could not connect"),
             "{chain}"
         );
     }
@@ -1022,7 +938,7 @@ mod tests {
         ("list", |s| {
             Box::pin(async move {
                 use futures_util::StreamExt;
-                s.list("")?.next().await.transpose().map(drop)
+                s.list("").next().await.transpose().map(drop)
             })
         }),
         ("put_bytes", |s| {
@@ -1037,18 +953,20 @@ mod tests {
         ("delete", |s| Box::pin(async move { s.delete("k").await })),
     ];
 
+    /// The client is opened before the clock is read, so what the call waits
+    /// is the budget alone: the dial before the clock stops is the only real
+    /// time it holds.
     #[tokio::test]
     async fn every_call_s3_never_answers_fails_at_the_operation_budget_naming_it() {
         let budget = StorageConfig::default().operation_timeout;
         for (name, call) in CALLS {
-            let storage = client(&silent_store().await, true);
+            let storage = Storage::unproved(s3_at(&silent_store().await, true));
             let sent = tokio::time::Instant::now();
             let refused = tokio::time::timeout(budget * 2, call(storage))
                 .await
                 .unwrap_or_else(|_| panic!("{name}: no answer within twice the budget"))
                 .expect_err("a store that never answers returns nothing");
             let chain = nest_rs_core::error_message(&refused);
-            // The handshake before the clock stopped took real time.
             let waited = sent.elapsed();
             assert!(
                 waited >= budget && waited < budget + Duration::from_secs(1),
@@ -1064,24 +982,6 @@ mod tests {
             );
             tokio::time::resume();
         }
-    }
-
-    #[tokio::test]
-    async fn a_hand_built_client_refuses_a_zero_budget_naming_its_field() {
-        let storage = Storage::new(Arc::new(StorageConfig {
-            operation_timeout: Duration::ZERO,
-            ..Default::default()
-        }));
-        let refused = storage
-            .head("k")
-            .await
-            .expect_err("refused before any call");
-        assert!(matches!(refused, StorageError::Init(_)), "{refused:?}");
-        let chain = nest_rs_core::error_message(&refused);
-        assert!(
-            chain.contains("StorageConfig::operation_timeout"),
-            "{chain}"
-        );
     }
 
     // `Body::from_bytes_stream` fed from `get_stream` needs `E: Into<std::io::Error>`.

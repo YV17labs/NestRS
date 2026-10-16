@@ -1,5 +1,7 @@
 //! `nest-rs-storage`'s suite against a live S3-compatible server over TLS: the
-//! dev container's RustFS, or the one `<PREFIX>_STORAGE__ENDPOINT` names.
+//! dev container's RustFS and its `nestrs` bucket, which the environment
+//! creates as it does the database, or the store `<PREFIX>_STORAGE__URL` and
+//! `<PREFIX>_STORAGE__ENDPOINT` name.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -9,6 +11,7 @@
 )]
 
 mod client;
+mod store;
 mod transfer;
 
 use std::net::SocketAddr;
@@ -38,41 +41,35 @@ fn config() -> StorageConfig {
     StorageConfig::load().expect("the suite's storage config resolves")
 }
 
-/// The store's endpoint: the documented `<PREFIX>_STORAGE__ENDPOINT` override, or
-/// the dev container's RustFS when it is unset.
+/// The store's endpoint, which `<PREFIX>_STORAGE__ENDPOINT` names, or the
+/// test profile names the dev container's RustFS.
 fn endpoint() -> String {
-    config().endpoint
+    config()
+        .endpoint
+        .expect("the suite's store names an S3-compatible server")
 }
 
-fn storage() -> Storage {
-    Storage::new(Arc::new(config()))
+/// A client of the suite's store, opened and proved.
+async fn storage() -> Storage {
+    Storage::connect(&config())
+        .await
+        .expect("the suite's store opens")
 }
 
 /// A client reaching the store through the proxy at `proxy`, with `config`'s
 /// other settings, trusting the test authority the proxy's certificate is of.
-fn proxied(proxy: SocketAddr, config: StorageConfig) -> Storage {
-    Storage::new(Arc::new(StorageConfig {
-        endpoint: nest_rs_testing::url_at(&endpoint(), proxy),
+/// The proof of its bucket takes the proxy's first connection.
+async fn proxied(proxy: SocketAddr, config: StorageConfig) -> Storage {
+    Storage::connect(&StorageConfig {
+        endpoint: Some(nest_rs_testing::url_at(
+            &config.endpoint.clone().expect("an endpoint"),
+            proxy,
+        )),
         tls: AUTHORITY.client_tls(),
         ..config
-    }))
-}
-
-/// Best-effort bucket creation: a presigned PUT on the bucket root is an S3
-/// `CreateBucket`, and a 409 means it already exists.
-#[expect(
-    clippy::print_stderr,
-    reason = "the bucket's state is shown for a reader of a failing run; the round-trip is the assertion"
-)]
-async fn ensure_bucket(s: &Storage, http: &reqwest::Client) {
-    let url = s
-        .presign_put("", Duration::from_secs(60))
-        .await
-        .expect("presign bucket-root PUT");
-    match http.put(&url).send().await {
-        Ok(resp) => eprintln!("ensure_bucket: {} ({})", resp.status(), s.bucket_name()),
-        Err(e) => eprintln!("ensure_bucket: request error (ignored): {e}"),
-    }
+    })
+    .await
+    .expect("the store opens through the proxy")
 }
 
 /// A key no other run can collide with — the bucket is shared with every other
@@ -115,9 +112,11 @@ enum Then {
     Close,
 }
 
-/// A proxy to the store carrying its `n`th connection, from 0, as `carry(n)`
-/// says — ending TLS on both sides, so what it carries is HTTP. Returns its
-/// address and the count of connections it took.
+/// A proxy to the store carrying the `n`th connection of a client's calls,
+/// from 0, as `carry(n)` says — ending TLS on both sides, so what it carries is
+/// HTTP. The connection before them, the proof of the bucket a client opens
+/// with, is carried whole and not counted. Returns its address and the count
+/// of the calls' connections it took.
 async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, Arc<AtomicUsize>) {
     let parsed = reqwest::Url::parse(&endpoint()).expect("the storage endpoint parses");
     let host = parsed
@@ -130,7 +129,6 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
             .port_or_known_default()
             .expect("the storage endpoint has a port"),
     );
-    let acceptor = PROXY.acceptor(None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the proxy");
@@ -138,52 +136,58 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
     let taken = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&taken);
     tokio::spawn(async move {
+        let (proof, _) = listener.accept().await.expect("accept the proof");
+        let at = (host.clone(), upstream.clone());
+        tokio::spawn(carried(proof, at, Carry::default()));
         loop {
             let (client, _) = listener.accept().await.expect("accept");
             let carry = carry(counted.fetch_add(1, Ordering::SeqCst));
-            let acceptor = acceptor.clone();
-            let (host, upstream) = (host.clone(), upstream.clone());
-            tokio::spawn(async move {
-                let Ok(client) = acceptor.accept(client).await else {
-                    return;
-                };
-                let server = tokio::net::TcpStream::connect(&upstream)
-                    .await
-                    .expect("reach the store");
-                let name = ServerName::try_from(host).expect("the store's host is a name");
-                let server = system_connector()
-                    .connect(name, server)
-                    .await
-                    .expect("a TLS handshake with the store");
-                let (mut client_read, mut client_write) = tokio::io::split(client);
-                let (mut server_read, mut server_write) = tokio::io::split(server);
-                tokio::spawn(async move {
-                    let _ = paced(
-                        &mut client_read,
-                        &mut server_write,
-                        carry.request_pace,
-                        None,
-                    )
-                    .await;
-                });
-                let ended = paced(
-                    &mut server_read,
-                    &mut client_write,
-                    carry.answer_pace,
-                    carry.answer_ends.map(|(until, _)| until),
-                )
-                .await;
-                if ended && matches!(carry.answer_ends, Some((_, Then::Hold))) {
-                    std::future::pending::<()>().await;
-                }
-                // A split stream's half closes nothing when dropped: the
-                // connection ends here, as a broken one does.
-                let _ = client_write.shutdown().await;
-                drop((server_read, client_write));
-            });
+            let at = (host.clone(), upstream.clone());
+            tokio::spawn(carried(client, at, carry));
         }
     });
     (addr, taken)
+}
+
+/// One connection of a [`proxy`]'s, ending TLS from `client` and opening it to
+/// the store `at` (its host, and its address), carried as `carry` says.
+async fn carried(client: tokio::net::TcpStream, (host, upstream): (String, String), carry: Carry) {
+    let Ok(client) = PROXY.acceptor(None).accept(client).await else {
+        return;
+    };
+    let server = tokio::net::TcpStream::connect(&upstream)
+        .await
+        .expect("reach the store");
+    let name = ServerName::try_from(host).expect("the store's host is a name");
+    let server = system_connector()
+        .connect(name, server)
+        .await
+        .expect("a TLS handshake with the store");
+    let (mut client_read, mut client_write) = tokio::io::split(client);
+    let (mut server_read, mut server_write) = tokio::io::split(server);
+    tokio::spawn(async move {
+        let _ = paced(
+            &mut client_read,
+            &mut server_write,
+            carry.request_pace,
+            None,
+        )
+        .await;
+    });
+    let ended = paced(
+        &mut server_read,
+        &mut client_write,
+        carry.answer_pace,
+        carry.answer_ends.map(|(until, _)| until),
+    )
+    .await;
+    if ended && matches!(carry.answer_ends, Some((_, Then::Hold))) {
+        std::future::pending::<()>().await;
+    }
+    // A split stream's half closes nothing when dropped: the connection ends
+    // here, as a broken one does.
+    let _ = client_write.shutdown().await;
+    drop((server_read, client_write));
 }
 
 /// Copy `from` into `to`, `pace` bytes every 10 ms when set, up to `until`.

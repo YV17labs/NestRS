@@ -11,7 +11,7 @@ use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 
-use crate::{Carry, config, ensure_bucket, proxied, proxy, storage, unique};
+use crate::{Carry, config, proxied, proxy, storage, unique};
 
 /// What the client logs about an interrupted upload's parts, copied: exported,
 /// a wording change would break the API.
@@ -74,9 +74,8 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Events {
 
 #[tokio::test]
 async fn presign_put_get_round_trip() {
-    let s = storage();
+    let s = storage().await;
     let http = reqwest::Client::new();
-    ensure_bucket(&s, &http).await;
 
     let key = unique("hello.txt");
     let key = key.as_str();
@@ -149,9 +148,8 @@ async fn presign_put_get_round_trip() {
 
 #[tokio::test]
 async fn put_stream_uploads_in_parts_and_keeps_the_content_type() {
-    let s = storage();
+    let s = storage().await;
     let http = reqwest::Client::new();
-    ensure_bucket(&s, &http).await;
 
     let key = unique("stream.mp3");
     // Past the 5 MiB part size, so the upload ships two parts.
@@ -217,8 +215,7 @@ async fn put_stream_uploads_in_parts_and_keeps_the_content_type() {
 
 #[tokio::test]
 async fn a_failing_source_surfaces_its_own_error_and_leaves_no_object_or_parts_behind() {
-    let s = storage();
-    ensure_bucket(&s, &reqwest::Client::new()).await;
+    let s = storage().await;
 
     let prefix = unique("aborted");
     let key = format!("{prefix}/interrupted.mp3");
@@ -261,7 +258,7 @@ async fn a_failing_source_surfaces_its_own_error_and_leaves_no_object_or_parts_b
         s.head(&key).await.expect("head").is_none(),
         "an interrupted upload must not materialize an object",
     );
-    let mut listing = std::pin::pin!(s.list(&prefix).expect("list"));
+    let mut listing = std::pin::pin!(s.list(&prefix));
     assert!(
         listing.next().await.is_none(),
         "and nothing is listed under {prefix}",
@@ -282,8 +279,7 @@ async fn a_failing_source_surfaces_its_own_error_and_leaves_no_object_or_parts_b
 
 #[tokio::test]
 async fn a_successful_streamed_upload_discards_nothing() {
-    let s = storage();
-    ensure_bucket(&s, &reqwest::Client::new()).await;
+    let s = storage().await;
 
     let key = unique("completed.mp3");
     let chunk = vec![3u8; 512 * 1024];
@@ -315,8 +311,7 @@ async fn a_successful_streamed_upload_discards_nothing() {
 
 #[tokio::test]
 async fn list_streams_exactly_the_objects_under_a_prefix() {
-    let s = storage();
-    ensure_bucket(&s, &reqwest::Client::new()).await;
+    let s = storage().await;
 
     let prefix = unique("listing");
     let inside = [
@@ -335,7 +330,7 @@ async fn list_streams_exactly_the_objects_under_a_prefix() {
         .expect("put_bytes outside");
 
     let mut entries = Vec::new();
-    let mut listing = std::pin::pin!(s.list(&prefix).expect("list"));
+    let mut listing = std::pin::pin!(s.list(&prefix));
     while let Some(entry) = listing.next().await {
         entries.push(entry.expect("list entry"));
     }
@@ -364,14 +359,13 @@ async fn list_streams_exactly_the_objects_under_a_prefix() {
     }
     s.delete(&outside).await.expect("delete outside");
 
-    let mut swept = std::pin::pin!(s.list(&prefix).expect("list after delete"));
+    let mut swept = std::pin::pin!(s.list(&prefix));
     assert!(swept.next().await.is_none(), "prefix is empty after delete");
 }
 
 #[tokio::test]
 async fn a_cancelled_upload_discards_its_parts_instead_of_leaving_them_billed() {
-    let s = storage();
-    ensure_bucket(&s, &reqwest::Client::new()).await;
+    let s = storage().await;
 
     let prefix = unique("cancelled");
     let key = format!("{prefix}/interrupted.mp3");
@@ -433,8 +427,7 @@ async fn a_cancelled_upload_discards_its_parts_instead_of_leaving_them_billed() 
 
 #[tokio::test]
 async fn an_upload_moving_slower_than_the_read_bound_completes() {
-    let direct = storage();
-    ensure_bucket(&direct, &reqwest::Client::new()).await;
+    let direct = storage().await;
     let key = unique("paced.bin");
     let body: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
     // 16 KiB every 10 ms: the megabyte takes well over three read bounds.
@@ -449,7 +442,8 @@ async fn an_upload_moving_slower_than_the_read_bound_completes() {
             read_timeout: Duration::from_millis(200),
             ..config()
         },
-    );
+    )
+    .await;
 
     paced
         .put_bytes(&key, body.clone(), "application/octet-stream")

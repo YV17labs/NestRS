@@ -1,21 +1,33 @@
-//! S3-compatible object storage for nestrs.
+//! Object storage for nestrs.
 //!
-//! A thin, injectable [`Storage`] client over the
-//! [`object_store`](https://docs.rs/object_store) crate's
-//! [`AmazonS3`](object_store::aws::AmazonS3) driver.
+//! An injectable [`Storage`] client over the
+//! [`object_store`](https://docs.rs/object_store) crate, whose backend the
+//! store's URL picks — [`StorageConfig::url`], read from
+//! `<PREFIX>_STORAGE__URL`:
+//!
+//! - `s3://<bucket>[/<prefix>]` — AWS S3, or a server speaking its API at
+//!   [`StorageConfig::endpoint`]; presigning included;
+//! - `memory:///[<prefix>]` — a store in this process, for development and
+//!   tests, refused in a staging or production profile since a restart loses
+//!   it; it signs nothing.
+//!
+//! No other scheme opens in this release, and storage is no port a third
+//! party implements: object_store already abstracts the vendor, so a backend
+//! is chosen by URL, never by a trait of this crate's.
 //!
 //! ## Usage
 //!
 //! Import [`StorageModule`] at the composition root. It owns its
-//! [`StorageConfig`] (namespace `storage`, loaded from `<PREFIX>_STORAGE__*`) and
-//! registers [`Storage`] as an injectable provider:
+//! [`StorageConfig`] (namespace `storage`, loaded from `<PREFIX>_STORAGE__*`),
+//! opens the store at boot and registers [`Storage`] as an injectable
+//! provider:
 //!
 //! ```
 //! # use std::sync::Arc;
-//! # use std::time::Duration;
 //! # use nest_rs_core::{injectable, module};
 //! # use nest_rs_testing::TestApp;
-//! use nest_rs_storage::{Storage, StorageModule};
+//! use futures_util::TryStreamExt;
+//! use nest_rs_storage::{Storage, StorageConfig, StorageModule};
 //!
 //! // in a feature service:
 //! #[injectable]
@@ -24,15 +36,22 @@
 //!     storage: Arc<Storage>,
 //! }
 //!
-//! #[module(imports = [StorageModule], providers = [UploadsService])]
+//! #[module(
+//!     imports = [StorageModule::for_root(StorageConfig {
+//!         url: "memory:///uploads".into(),
+//!         ..StorageConfig::default()
+//!     })],
+//!     providers = [UploadsService],
+//! )]
 //! struct UploadsModule;
 //! # #[nest_rs_core::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let app = TestApp::builder().module::<UploadsModule>().build_headless().await?;
 //! # let UploadsService { storage } = &*app.container().get::<UploadsService>().expect("provided");
 //!
-//! let url = storage.presign_put("uploads/abc", Duration::from_secs(900)).await?;
-//! assert!(url.contains("/uploads/abc?") && url.contains("X-Amz-Expires=900"));
+//! storage.put_bytes("abc.txt", "hello", "text/plain").await?;
+//! let keys: Vec<String> = storage.list("").map_ok(|entry| entry.key).try_collect().await?;
+//! assert_eq!(keys, ["abc.txt"]);
 //! # Ok(())
 //! # }
 //! ```
@@ -51,15 +70,33 @@
 //! - [`Storage::list`] — the objects under a prefix, streamed as
 //!   [`ObjectEntry`] values.
 //!
+//! ## At boot
+//!
+//! The store is proved before any provider is built: an `s3://` bucket answers
+//! one page of its listing under the URL's prefix within
+//! [`StorageConfig::operation_timeout`]. A bucket that does not exist, or a
+//! certificate the client does not accept, refuses the boot at once; a store
+//! that refuses to list — its credentials, or a policy granting no
+//! `s3:ListBucket` — boots with one `warn`; anything else is retried within
+//! the budget, then refused as unreachable.
+//!
 //! ## How long a call waits
 //!
-//! A call waits for S3's answer within [`StorageConfig::operation_timeout`],
-//! every retry included, and past it fails naming the budget;
-//! [`put_stream`](Storage::put_stream) ships parts that each fit it. A
-//! download's body is never cut for its size: one that sends nothing for
-//! [`StorageConfig::read_timeout`] is resumed from where it stopped, and fails
-//! naming the bound when the resumed body sends nothing within it. The boot
-//! refuses an operation timeout at or past a net reaching the client.
+//! A call waits for the store's answer within
+//! [`StorageConfig::operation_timeout`], every retry included, and past it
+//! fails naming the budget; [`put_stream`](Storage::put_stream) ships parts
+//! that each fit it. A download's body is never cut for its size: one that
+//! sends nothing for [`StorageConfig::read_timeout`] is resumed from where it
+//! stopped, and fails naming the bound when the resumed body sends nothing
+//! within it. The boot refuses an operation timeout at or past a net reaching
+//! the client.
+//!
+//! ## What an error says
+//!
+//! A [`StorageError`] names the store and the operation, never a key, and
+//! keeps object_store's error as its source; its chain, through
+//! [`error_message`](fn@nest_rs_core::error_message), says object_store's links
+//! by their kind, without the key or the URL their own sentences quote.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -67,10 +104,12 @@
 /// This crate's span target — Object storage operations.
 pub const TARGET: &str = "nest_rs::storage";
 
+mod backend;
 mod client;
 mod config;
 mod error;
 mod module;
+mod store;
 mod transfer;
 
 pub use client::{ObjectEntry, ObjectMetadata, Storage};

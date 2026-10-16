@@ -3220,6 +3220,8 @@ dependencies = [
 name = "nest-rs-storage"
 version = "7.0.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "bytes",
  "futures-util",
  "http",
@@ -3229,6 +3231,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]

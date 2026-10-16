@@ -76,7 +76,6 @@ jobs:
       CERTS: /tmp/nestrs-certs
       NESTRS_SEAORM__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
       NESTRS_REDIS__URL: rediss://localhost:6379
-      NESTRS_STORAGE__ENDPOINT: https://localhost:9000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

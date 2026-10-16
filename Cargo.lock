@@ -3283,6 +3283,7 @@ dependencies = [
 name = "nest-rs-storage"
 version = "7.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bytes",
  "figment",
@@ -3300,6 +3301,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

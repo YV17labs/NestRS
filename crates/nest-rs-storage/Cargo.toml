@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "S3-compatible object storage for NestRS: a thin, injectable Storage client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) built on the `object_store` crate. The AWS-S3 driver ships wired and runs against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style; the GCS, Azure, fs and memory drivers sit behind the same client."
+description = "Object storage for NestRS: an injectable Storage client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) over the `object_store` crate, whose backend the store's URL picks — s3:// for AWS S3 and servers speaking its API, memory:/// for development and tests — proved at boot."
 keywords = ["framework", "nestrs", "storage", "s3", "object-store"]
 categories = ["web-programming", "filesystem"]
 
@@ -17,8 +17,17 @@ nest-rs-core.workspace = true
 # certificate must chain to.
 nest-rs-config = { workspace = true, features = ["tls"] }
 # The object-store abstraction. `aws` brings the `AmazonS3` driver, which
-# implements both `ObjectStore` and the `Signer` trait used for presigning.
+# implements both `ObjectStore` and the `Signer` trait used for presigning;
+# `memory` and `prefix` need no feature.
 object_store.workspace = true
+# `<PREFIX>_STORAGE__URL` is parsed here into its backend, bucket and prefix:
+# object_store's own parser would build an S3 client from the URL alone.
+url.workspace = true
+# The boot's proof reads each answer's status through an `HttpService` of its
+# own, an `#[async_trait]` trait of object_store's.
+async-trait.workspace = true
+# A `register` files its refusal as the container's `anyhow::Error`.
+anyhow.workspace = true
 # `signed_url` takes a `reqwest::Method`, which is a re-export of `http::Method`
 # (http 1.x). Depending on `http` directly keeps us decoupled from whichever
 # reqwest minor object_store pins internally.
@@ -55,9 +64,6 @@ nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # The suite's proxy names the store it dials over TLS, to stop an answer where
 # its body starts.
 rustls.workspace = true
-# `object_store::MultipartUpload` is an `#[async_trait]` trait, so a test double
-# for it has to be written under the same attribute.
-async-trait.workspace = true
 # The nets a call can run under: the authentication guard's around a strategy
 # injecting `Storage`, and the HTTP edge's default request timeout, which the
 # default operation budget sits below.

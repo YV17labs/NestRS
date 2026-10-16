@@ -5,27 +5,27 @@
 //! between two reads of a body, so it cuts a reader that pauses.
 
 use std::ops::Range;
-use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use futures_util::{Stream, StreamExt};
 use object_store::path::Path;
-use object_store::{GetOptions, GetRange, GetResult, ObjectStore};
+use object_store::{GetOptions, GetRange, GetResult};
 
 use crate::client::bounded;
 use crate::config::READ_TIMEOUT;
 use crate::error::{Result, StorageError};
+use crate::store::Store;
 
-/// The object at `path` from the answer `first` S3 gave, read within
+/// The object at `path` from the answer `first` the store gave, read within
 /// `read_timeout` per wait for its next bytes.
 ///
 /// A body that stalls or breaks is resumed with a ranged `GET` of what is still
 /// owed, fenced on the object's `ETag` so a version written since is refused;
 /// a resumed body that stops before its first byte fails the download.
 pub(crate) fn download(
-    store: Arc<dyn ObjectStore>,
+    store: Store,
     path: Path,
     first: GetResult,
     read_timeout: Duration,
@@ -50,7 +50,7 @@ pub(crate) fn download(
 
 /// One download in flight.
 struct Transfer {
-    store: Arc<dyn ObjectStore>,
+    store: Store,
     path: Path,
     /// The version every resumed request is fenced on.
     e_tag: Option<String>,
@@ -78,15 +78,19 @@ impl Transfer {
                 Ok(None) => return None,
                 Err(_) if self.owed.is_empty() => return None,
                 Ok(Some(Err(error))) => error,
-                Err(_) => stalled(self.read_timeout),
+                Err(_) => stalled(self.read_timeout, self.store.backend),
             };
             if let Err(error) = self.resume(stopped).await {
-                return Some((Err(StorageError::Get(error)), None));
+                let failed = StorageError::Get {
+                    store: self.store.shown.to_string(),
+                    source: Box::new(error),
+                };
+                return Some((Err(failed), None));
             }
         }
     }
 
-    /// Replace a body that stopped on `stopped` with S3's answer for what is
+    /// Replace a body that stopped on `stopped` with the store's answer for what is
     /// still owed — or end the download on `stopped` when a resumed body
     /// stopped before its first byte, or no `ETag` fences a resume.
     async fn resume(&mut self, stopped: object_store::Error) -> object_store::Result<()> {
@@ -106,7 +110,8 @@ impl Transfer {
         };
         let answer = bounded(
             self.operation_timeout,
-            self.store.get_opts(&self.path, options),
+            self.store.backend,
+            self.store.objects.get_opts(&self.path, options),
         )
         .await??;
         // Checked here too, as object_store checks its own resumes: a store
@@ -114,9 +119,10 @@ impl Transfer {
         if answer.meta.e_tag.as_deref() != Some(e_tag.as_str()) {
             return Err(object_store::Error::Precondition {
                 path: self.path.to_string(),
-                source: "the object changed while it was read, so the rest of another version \
-                         is not spliced onto what was read"
-                    .into(),
+                source: Box::new(std::io::Error::other(
+                    "the object changed while it was read, so the rest of another version is \
+                     not spliced onto what was read",
+                )),
             });
         }
         self.body = answer.into_stream();
@@ -127,9 +133,9 @@ impl Transfer {
 
 /// The error a download ends on when its body stays silent past the read
 /// bound, naming the bound and what sets it.
-fn stalled(read_timeout: Duration) -> object_store::Error {
+fn stalled(read_timeout: Duration, backend: &'static str) -> object_store::Error {
     object_store::Error::Generic {
-        store: "S3",
+        store: backend,
         source: Box::new(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
             format!(
@@ -146,8 +152,8 @@ mod tests {
     use futures_util::stream::BoxStream;
     use object_store::memory::InMemory;
     use object_store::{
-        CopyOptions, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStoreExt,
-        PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        CopyOptions, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
 
     use super::*;
@@ -227,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_resume_answered_from_a_version_written_since_is_refused_not_spliced() {
-        let store = Arc::new(FenceIgnoring(InMemory::new()));
+        let store = std::sync::Arc::new(FenceIgnoring(InMemory::new()));
         let path = Path::from("k");
         store
             .put(&path, PutPayload::from(vec![1_u8; 100]))
@@ -261,7 +267,7 @@ mod tests {
             .expect("a version written while the first is read");
 
         let read: Vec<Result<Bytes>> = download(
-            store,
+            Store::over(store),
             path,
             first,
             Duration::from_secs(1),

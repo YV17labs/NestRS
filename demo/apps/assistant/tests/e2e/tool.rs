@@ -51,7 +51,6 @@ async fn mcp_endpoint_refuses_an_unauthenticated_request() {
 #[tokio::test]
 async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
     let (_db, app) = boot().await;
-    ensure_bucket().await;
     let auth = bearer();
 
     let session = open_session(app.http(), SHARED_ENDPOINT, Some(&auth)).await;
@@ -86,6 +85,7 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
     );
 
     storage_client()
+        .await
         .put_bytes(
             &format!("transcoded/{file}"),
             b"derived bytes".to_vec(),

@@ -10,9 +10,6 @@ mod posts_tool;
 mod shared_endpoint;
 mod tool;
 
-use std::sync::Arc;
-use std::time::Duration;
-
 use assistant::AssistantModule;
 use nest_rs::authn::AuthnConfig;
 use nest_rs::config::Config;
@@ -137,16 +134,9 @@ pub(crate) fn bearer() -> String {
     bearer_for(ORG_ID)
 }
 
-pub(crate) fn storage_client() -> Storage {
+pub(crate) async fn storage_client() -> Storage {
     let config = StorageConfig::load().expect("storage config parses from env");
-    Storage::new(Arc::new(config))
-}
-
-pub(crate) async fn ensure_bucket() {
-    if let Ok(url) = storage_client()
-        .presign_put("", Duration::from_secs(60))
+    Storage::connect(&config)
         .await
-    {
-        let _ = reqwest::Client::new().put(&url).send().await;
-    }
+        .expect("the dev container's bucket opens")
 }

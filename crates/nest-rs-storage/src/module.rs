@@ -1,15 +1,20 @@
-//! Wires the shared [`Storage`] provider and its [`StorageConfig`].
+//! Wires the shared [`Storage`] provider, the store it opens at boot, and its
+//! [`StorageConfig`].
+
+use std::any::TypeId;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::module;
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, module};
 
 use crate::client::Storage;
 use crate::config::StorageConfig;
+use crate::store::Store;
 
-/// Provides the S3 [`Storage`](crate::Storage) client from [`StorageConfig`].
-/// Import it to inject `Storage` for presigned URLs, uploads and metadata reads.
+/// Provides the [`Storage`](crate::Storage) client over the store
+/// [`StorageConfig::url`] names, opened and proved at boot. Import it to inject
+/// `Storage` for presigned URLs, uploads and metadata reads.
 #[module(
-    imports = [ConfigModule::for_feature::<StorageConfig>()],
+    imports = [ConfigModule::for_feature::<StorageConfig>(), StorageOpening::import()],
     providers = [Storage],
 )]
 pub struct StorageModule;
@@ -22,11 +27,37 @@ impl StorageModule {
     }
 }
 
-/// [`DynamicModule`](nest_rs_core::DynamicModule) returned by
+/// [`DynamicModule`] returned by
 /// [`StorageModule::for_root`]: resolves
 /// [`StorageConfig`] (env over the pinned base), then brings the base
 /// [`StorageModule`] wiring.
 pub type StorageSetup = ConfigSetup<StorageModule, StorageConfig>;
+
+/// The import of [`StorageModule`]'s that opens the store in the factory
+/// phase, once the config resolved — so the boot proves it before any
+/// provider is built. Its output is this crate's alone: `Storage`, which a
+/// module lists, is what the access graph gates.
+struct StorageOpening;
+
+impl StorageOpening {
+    /// The import, as `#[module]` takes a configured one.
+    fn import() -> Self {
+        Self
+    }
+}
+
+impl DynamicModule for StorageOpening {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.provide_factory_after::<Store, (StorageConfig,), _, _>(|container| async move {
+            let config = ConfigModule::resolved::<StorageConfig>(&container)?;
+            Ok(Store::open(&config).await?)
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -78,12 +109,11 @@ mod tests {
     )]
     struct GuardedStorageModule;
 
-    /// A seed is held to the checks a read passes, so it carries the pair the
-    /// struct default holds none of.
-    fn seeded() -> StorageConfig {
+    /// The in-process store, which a test profile opens with no server.
+    fn in_memory() -> StorageConfig {
+        nest_rs_testing::load_project_env();
         StorageConfig {
-            access_key: "AKIASEEDED".into(),
-            secret_key: "seeded-secret".into(),
+            url: "memory:///".into(),
             ..StorageConfig::default()
         }
     }
@@ -93,7 +123,7 @@ mod tests {
         let Err(refused) = App::builder()
             .provide(StorageConfig {
                 operation_timeout: AUTHENTICATE_TIMEOUT,
-                ..seeded()
+                ..in_memory()
             })
             .module::<GuardedStorageModule>()
             .build()
@@ -124,22 +154,18 @@ mod tests {
     #[tokio::test]
     async fn the_default_client_boots_beside_the_authentication_guard() {
         App::builder()
-            .provide(seeded())
+            .provide(in_memory())
             .module::<GuardedStorageModule>()
             .build()
             .await
             .expect("the default budget sits under every net");
     }
 
-    /// Pinned bucket for the test below, as a real import site — the pair
-    /// with it, since a pin reads no `.env` and the struct default holds none.
+    /// A store pinned for the test below, as a real import site.
     fn pinned_storage() -> StorageSetup {
         StorageModule::for_root(StorageConfig {
-            bucket: "pinned-bucket".into(),
-            region: "eu-west-3".into(),
-            access_key: "AKIAPINNED".into(),
-            secret_key: "pinned-secret".into(),
-            ..StorageConfig::default()
+            url: "memory:///pinned".into(),
+            ..in_memory()
         })
     }
 
@@ -154,6 +180,7 @@ mod tests {
             path: None,
         };
         StorageModule::for_root(StorageConfig {
+            url: "s3://bucket".into(),
             access_key: "AKIAPINNED".into(),
             secret_key: "pinned-secret".into(),
             tls: nest_rs_config::ClientTls::new(
@@ -197,10 +224,13 @@ mod tests {
 
         let cfg: Option<Arc<StorageConfig>> = app.container().get();
         assert_eq!(
-            cfg.expect("pinned StorageConfig resolves").bucket,
-            "pinned-bucket",
+            cfg.expect("pinned StorageConfig resolves").url,
+            "memory:///pinned",
         );
         let storage: Option<Arc<Storage>> = app.container().get();
-        assert!(storage.is_some(), "for_root still provides the client");
+        assert_eq!(
+            storage.expect("for_root still provides the client").url(),
+            "memory:///pinned",
+        );
     }
 }

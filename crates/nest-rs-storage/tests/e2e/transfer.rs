@@ -9,13 +9,12 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use nest_rs_storage::{Storage, StorageConfig};
 
-use crate::{Carry, Then, Until, config, ensure_bucket, proxied, proxy, storage, unique};
+use crate::{Carry, Then, Until, config, proxied, proxy, storage, unique};
 
 /// A megabyte no two offsets of which share a byte pattern for long, stored
 /// under a key of its own.
 async fn stored(label: &str) -> (Storage, String, Vec<u8>) {
-    let direct = storage();
-    ensure_bucket(&direct, &reqwest::Client::new()).await;
+    let direct = storage().await;
     let key = unique(label);
     let body: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
     direct
@@ -41,7 +40,7 @@ async fn a_download_stalled_mid_body_is_cut_at_the_read_bound_and_resumed() {
     })
     .await;
     let bound = Duration::from_millis(300);
-    let proxied = proxied(proxy, reading_within(bound));
+    let proxied = proxied(proxy, reading_within(bound)).await;
 
     let started = Instant::now();
     let got = tokio::time::timeout(Duration::from_secs(10), proxied.get_bytes(&key))
@@ -66,7 +65,7 @@ async fn a_download_stalled_mid_body_is_cut_at_the_read_bound_and_resumed() {
 async fn a_reader_pausing_past_the_read_bound_is_never_cut() {
     let (direct, key, body) = stored("paused.bin").await;
     let (proxy, connections) = proxy(|_| Carry::default()).await;
-    let proxied = proxied(proxy, reading_within(Duration::from_millis(200)));
+    let proxied = proxied(proxy, reading_within(Duration::from_millis(200))).await;
 
     let mut stream = pin!(proxied.get_stream(&key).await.expect("get_stream"));
     let mut got = Vec::new();
@@ -102,7 +101,7 @@ async fn a_resumed_download_stalled_before_its_first_byte_fails_naming_the_read_
         ..Carry::default()
     })
     .await;
-    let proxied = proxied(proxy, reading_within(Duration::from_millis(300)));
+    let proxied = proxied(proxy, reading_within(Duration::from_millis(300))).await;
 
     let refused = tokio::time::timeout(Duration::from_secs(10), proxied.get_bytes(&key))
         .await
@@ -120,8 +119,7 @@ async fn a_resumed_download_stalled_before_its_first_byte_fails_naming_the_read_
 
 #[tokio::test]
 async fn an_empty_object_reads_as_no_bytes() {
-    let direct = storage();
-    ensure_bucket(&direct, &reqwest::Client::new()).await;
+    let direct = storage().await;
     let key = unique("empty.bin");
     direct
         .put_bytes(&key, Vec::new(), "application/octet-stream")
@@ -157,7 +155,8 @@ async fn a_download_broken_past_the_retries_is_resumed_and_says_so() {
             operation_timeout: budget,
             ..config()
         },
-    );
+    )
+    .await;
     let logs = nest_rs_testing::LogCapture::install();
 
     let got = proxied

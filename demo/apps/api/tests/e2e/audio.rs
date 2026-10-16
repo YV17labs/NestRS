@@ -1,12 +1,9 @@
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use features::audio::AudioQueueModule;
-use nest_rs::config::Config;
 use nest_rs::core::module;
 use nest_rs::queue::{QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::storage::{Storage, StorageConfig};
 use nest_rs::testing::TestApp;
 use poem::http::{StatusCode, header};
 use poem::test::{TestForm, TestFormField};
@@ -75,25 +72,10 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
 )]
 struct AudioWorkerHarness;
 
-pub(crate) fn storage_client() -> Storage {
-    let config = StorageConfig::load().expect("storage config parses from env");
-    Storage::new(Arc::new(config))
-}
-
-async fn ensure_bucket(http: &reqwest::Client) {
-    if let Ok(url) = storage_client()
-        .presign_put("", Duration::from_secs(60))
-        .await
-    {
-        let _ = http.put(&url).send().await;
-    }
-}
-
 #[tokio::test]
 async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
     let (_db, app) = boot_on(RedisDatabase::AudioUpload).await;
     let http = reqwest::Client::new();
-    ensure_bucket(&http).await;
 
     let worker = TestApp::builder()
         .module::<AudioWorkerHarness>()
@@ -199,8 +181,6 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
 #[tokio::test]
 async fn audio_multipart_upload_and_streamed_download_round_trip() {
     let (_db, app) = boot_on(RedisDatabase::AudioMultipart).await;
-    let http = reqwest::Client::new();
-    ensure_bucket(&http).await;
 
     let worker = TestApp::builder()
         .module::<AudioWorkerHarness>()

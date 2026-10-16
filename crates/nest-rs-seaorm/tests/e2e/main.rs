@@ -23,6 +23,7 @@ mod lazy;
 mod lifecycle_hooks;
 mod mcp;
 mod module;
+mod mutual_tls;
 mod public_visitor;
 mod relational_authz;
 mod scope;

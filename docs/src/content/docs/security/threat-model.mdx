@@ -73,9 +73,10 @@ before any request, login or credential crosses.
 | OTLP exporter | the system's store, for an `https://` endpoint | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` |
 
 A client certificate goes to Postgres through the URL's `sslcert` and
-`sslkey`, which sqlx presents; it is the one no suite yet proves against
-a server requiring it — the development Postgres signs in by password —
-so a deployment relying on it proves it in its own environment first.
+`sslkey`, which sqlx presents. The everyday development Postgres and CI's
+sign in by password, so the suite presenting one — and one omitting it,
+refused at once — runs in a dev container environment of its own,
+`postgres-mutual-tls`, by hand when the connection's TLS changes.
 
 A refused certificate fails the call or the boot — never a fallback to
 an unverified connection. Redis, the JWK Set and the client

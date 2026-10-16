@@ -150,3 +150,18 @@ ran green on the Cluster environment after it, every job counted once, beside
 the whole Redis suite on the Sentinel and Cluster environments. The test keeps
 asserting once: a second run left would be a delivery the slot's move lost,
 Valkey's, and is still a defect to find.
+
+**2026-10-17, a Postgres requiring a client certificate is an environment of
+its own:** the dev container's Postgres and CI's sign in by password, so the
+client certificate sqlx presents had no live proof. A `cert` line in the
+everyday `pg_hba.conf` would need `ssl_ca_file` on the server's command line:
+the running server would refuse the reload, and once restarted without being
+recreated, refuse to start. So `postgres-mutual-tls` layers on `base.yml`,
+reconfigures the one `postgres` service — same hostname, so the certificate
+and its authority stay as issued — on a data volume of its own, and lets
+`nestrs_certificate` in on the dev container's certificate alone
+(`pg_ident.conf`), every other role keeping its password. `nest-rs-seaorm`'s
+`mutual_tls` tests present it and omit it; `test.just` leaves them out unless
+its `postgres` line names that environment. Refused: a second Postgres
+service under a new hostname, for the reissue named above; `ALTER SYSTEM` or a
+role created on the everyday volume, which is the developer's data.

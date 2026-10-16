@@ -17,12 +17,20 @@ redis := "binary_id(nest-rs-redis::e2e)"
 elsewhere := redis + " and test(/(^|::)(standalone|sentinel|cluster)::/) and not test(/(^|::)" + topology + "::/)"
 alone := redis + " and test(/(^|::)" + topology + "::(failover|mutual_tls)::/)"
 
+# The Postgres nest-rs-seaorm's e2e runs on: the dev container's one server,
+# which asks no client certificate. With the `postgres-mutual-tls` dev
+# container open, uncomment its line: the `mutual_tls` tests, which need a
+# server letting a role in on a certificate alone, run there and nowhere else.
+postgres := "server"
+# postgres := "mutual-tls"
+unasked := if postgres == "mutual-tls" { "none()" } else { "binary_id(nest-rs-seaorm::e2e) and test(/^mutual_tls::/)" }
+
 # Every test: unit, integration, e2e and the doc examples
 all: && doc
     #!/usr/bin/env bash
     set -euo pipefail
     export NESTRS_REDIS__URL='{{redis_url}}'
-    {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}})'
+    {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
     # A failover moves the primaries every other test runs on, and a node
     # requiring a client certificate refuses their connections: last, one at a time.
     if [ "{{topology}}" != standalone ]; then
@@ -42,7 +50,7 @@ e2e:
     #!/usr/bin/env bash
     set -euo pipefail
     export NESTRS_REDIS__URL='{{redis_url}}'
-    {{nextest}} -E 'binary(e2e) and not ({{elsewhere}}) and not ({{alone}})'
+    {{nextest}} -E 'binary(e2e) and not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
     if [ "{{topology}}" != standalone ]; then
         {{nextest}} --test-threads 1 -E '{{alone}}'
     fi

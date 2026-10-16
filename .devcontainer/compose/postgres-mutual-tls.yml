@@ -1,0 +1,32 @@
+# Postgres asking every client for a certificate and letting one role in on it
+# alone: `nestrs_certificate`, which the certificate the dev container presents
+# maps to (`pg_ident.conf`), while every other role keeps its password. Layered
+# on `base.yml` by the `postgres-mutual-tls` dev container, on a data volume of
+# its own, so the everyday database is never read or written here.
+# `nest-rs-seaorm`'s `mutual_tls` tests run on it: set `postgres` to
+# `mutual-tls` in `test.just`.
+
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/postgres/server.pem
+      - -c
+      - ssl_key_file=/certs/postgres/server.key
+      - -c
+      - ssl_ca_file=/certs/ca.pem
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - ident_file=/etc/postgresql/pg_ident.conf
+    volumes:
+      - postgres-mutual-tls-data:/var/lib/postgresql
+      - ../config/postgres/pg_hba.mutual-tls.conf:/etc/postgresql/pg_hba.conf:ro
+      - ../config/postgres/pg_ident.conf:/etc/postgresql/pg_ident.conf:ro
+      - ../config/postgres/mutual-tls.sql:/docker-entrypoint-initdb.d/mutual-tls.sql:ro
+
+volumes:
+  postgres-mutual-tls-data:

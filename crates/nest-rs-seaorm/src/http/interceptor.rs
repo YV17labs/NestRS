@@ -6,7 +6,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nest_rs_core::Layer;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
-use nest_rs_http::__private::poem_bridge::response_to_poem;
 use nest_rs_http::RequestDeadline;
 use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
@@ -69,7 +68,7 @@ impl Interceptor for DbContext {
         let cut = async move {
             tokio::time::timeout_at(at, next.run(req))
                 .await
-                .unwrap_or_else(|_| Ok(response_to_poem(deadline.timed_out())))
+                .unwrap_or_else(|_| Ok(deadline.timed_out().into()))
         };
         run_unit(
             Some(&self.unit),

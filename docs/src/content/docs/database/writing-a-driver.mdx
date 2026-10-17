@@ -287,10 +287,9 @@ impl Interceptor for YourDbContext {
         }
         let handler = async move {
             match deadline {
-                Some(deadline) => match tokio::time::timeout_at(deadline.at(), next.run(req)).await {
-                    Ok(answered) => answered,
-                    Err(_) => Err(Error::from_status(StatusCode::SERVICE_UNAVAILABLE)),
-                },
+                Some(deadline) => tokio::time::timeout_at(deadline.at(), next.run(req))
+                    .await
+                    .unwrap_or_else(|_| Ok(deadline.timed_out().into())),
                 None => next.run(req).await,
             }
         };
@@ -309,7 +308,9 @@ impl Interceptor for YourDbContext {
 The edge hands every request its `RequestDeadline` when a request timeout is
 set. Taking it over is what keeps the edge's own timer from cutting your
 commit: it then waits your settle net past the deadline, and answers `500`
-only for a commit that never answered.
+only for a commit that never answered. A handler you cut answers
+`deadline.timed_out()`, the `503` with `Retry-After` the edge gives itself,
+logged once at `warn`.
 
 ## Step 4 — The Module
 

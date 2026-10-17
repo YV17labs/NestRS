@@ -171,6 +171,14 @@ pub fn response_to_poem(response: Response) -> poem::Response {
     )
 }
 
+/// A nestrs response answered by a layer still written on poem, such as a
+/// unit layer answering [`RequestDeadline::timed_out`](crate::RequestDeadline::timed_out).
+impl From<Response> for poem::Response {
+    fn from(response: Response) -> Self {
+        response_to_poem(response)
+    }
+}
+
 /// A poem error as nestrs's: an [`HttpError`] that crossed into poem comes
 /// back whole, with what poem's side added to it; any other answers as poem
 /// renders it, its `set_data` values kept inside it — they reach the response,

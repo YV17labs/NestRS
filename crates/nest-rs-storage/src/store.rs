@@ -91,7 +91,8 @@ impl Store {
                 (confined(InMemory::new(), prefix), None, prefix, url.clone())
             }
             Backend::S3 { bucket, prefix } => {
-                let s3 = s3(config, bucket, ReqwestConnector::default())?;
+                let retries = retries_within(config.operation_timeout);
+                let s3 = s3(config, bucket, ReqwestConnector::default(), retries)?;
                 let shown = match &config.endpoint {
                     Some(endpoint) => format!("{url} at {}", endpoint_shown(endpoint)),
                     None => url.clone(),
@@ -146,8 +147,14 @@ fn confined<S: ObjectStore>(store: S, prefix: &Path) -> Arc<dyn ObjectStore> {
     }
 }
 
-/// The S3 client `config` describes for `bucket`, dialing through `connector`.
-fn s3<C: HttpConnector>(config: &StorageConfig, bucket: &str, connector: C) -> Result<AmazonS3> {
+/// The S3 client `config` describes for `bucket`, dialing through `connector`
+/// and retrying a failed request as `retries` says.
+fn s3<C: HttpConnector>(
+    config: &StorageConfig,
+    bucket: &str,
+    connector: C,
+    retries: RetryConfig,
+) -> Result<AmazonS3> {
     let endpoint = config.endpoint.as_deref().unwrap_or_default();
     // `object_store`'s `with_allow_http` gates transfers only, so presigning
     // would mint a plaintext signed URL.
@@ -176,7 +183,7 @@ fn s3<C: HttpConnector>(config: &StorageConfig, bucket: &str, connector: C) -> R
     let mut builder = AmazonS3Builder::new()
         .with_http_connector(connector)
         .with_client_options(options)
-        .with_retry(retries_within(config.operation_timeout))
+        .with_retry(retries)
         .with_region(&config.region)
         .with_access_key_id(&config.access_key)
         .with_secret_access_key(&config.secret_key)
@@ -201,7 +208,8 @@ enum Listed {
 
 /// Prove the bucket answers one page of its listing under `prefix` within
 /// the operation budget, through a client of its own that reads each answer's
-/// status: object_store does not say a listing's.
+/// status: object_store does not say a listing's. That client never retries,
+/// so each attempt's failure is classified the moment it is met.
 async fn proved(config: &StorageConfig, bucket: &str, prefix: &Path, shown: &str) -> Result<()> {
     let status = Arc::new(Mutex::new(None));
     let probe = s3(
@@ -209,6 +217,10 @@ async fn proved(config: &StorageConfig, bucket: &str, prefix: &Path, shown: &str
         bucket,
         Witnessed {
             status: Arc::clone(&status),
+        },
+        RetryConfig {
+            max_retries: 0,
+            ..RetryConfig::default()
         },
     )?;
     let budget = config.operation_timeout;
@@ -260,7 +272,8 @@ async fn proved(config: &StorageConfig, bucket: &str, prefix: &Path, shown: &str
 }
 
 /// What one failed listing met: a refusal every attempt would repeat, a
-/// store that refused the credentials, or a failure that may clear.
+/// store that refused the credentials, or a failure that may clear — no
+/// answer, or a status the store answers while it recovers.
 fn classify(
     error: object_store::Error,
     answered: Option<StatusCode>,
@@ -275,6 +288,20 @@ fn classify(
         Some(StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED) => {
             return Ok(Listed::Forbidden(error));
         }
+        Some(status) if status.is_redirection() => format!(
+            "the store answered {status}, sending the bucket elsewhere — set {} to the bucket's \
+             region, or {} and {} to the store that serves it",
+            env.var_name("REGION"),
+            env.var_name("ENDPOINT"),
+            env.var_name("FORCE_PATH_STYLE"),
+        ),
+        Some(status) if !(status.is_success() || may_clear(status)) => format!(
+            "the store answered {status}, as it would every attempt — check that {}, {} and {} \
+             are the store's",
+            env.var_name("REGION"),
+            env.var_name("ENDPOINT"),
+            env.var_name("FORCE_PATH_STYLE"),
+        ),
         None if ClientTls::negotiation_failed(&error) => {
             ClientTls::remedy(env, "the object store", "ENDPOINT", &error)
         }
@@ -285,6 +312,16 @@ fn classify(
         reason,
         source: Box::new(error),
     }))
+}
+
+/// Whether a store answering `status` may answer otherwise on a later attempt:
+/// it is failing, timed out or throttling.
+fn may_clear(status: StatusCode) -> bool {
+    status.is_server_error()
+        || matches!(
+            status,
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+        )
 }
 
 /// What the proof of `store` reports, said on this crate's target.
@@ -539,7 +576,7 @@ mod tests {
             .await
             .expect_err("a certificate no trusted authority signed is not talked to");
         assert!(
-            started.elapsed() < Duration::from_secs(2),
+            started.elapsed() < Duration::from_millis(500),
             "{:?}",
             started.elapsed()
         );
@@ -552,6 +589,55 @@ mod tests {
             matches!(refused, StorageError::Refused { .. })
                 && chain.contains(&nest_rs_config::var_name("storage", "TLS_CA_CERT"))
                 && chain.contains("UnknownIssuer"),
+            "{chain}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_redirect_without_a_location_refuses_at_once_naming_the_region_and_the_endpoint() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let (endpoint, heard) = store_presenting(&authority, 301).await;
+        let started = tokio::time::Instant::now();
+        let refused = Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
+            .await
+            .expect_err("a store sending the bucket elsewhere is not proved");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(heard.lines().len(), 1, "never retried");
+        let chain = nest_rs_core::error_message(&refused);
+        assert!(
+            matches!(refused, StorageError::Refused { .. })
+                && chain.contains("the store answered 301 Moved Permanently")
+                && chain.contains(&nest_rs_config::var_name("storage", "REGION"))
+                && chain.contains(&nest_rs_config::var_name("storage", "ENDPOINT"))
+                && chain.contains(&nest_rs_config::var_name("storage", "FORCE_PATH_STYLE"))
+                && chain.contains("redirected without a location"),
+            "{chain}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_status_every_attempt_would_meet_refuses_at_once_saying_it() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let (endpoint, heard) = store_presenting(&authority, 400).await;
+        let started = tokio::time::Instant::now();
+        let refused = Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
+            .await
+            .expect_err("a store answering 400 is not proved");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(heard.lines().len(), 1, "never retried");
+        let chain = nest_rs_core::error_message(&refused);
+        assert!(
+            matches!(refused, StorageError::Refused { .. })
+                && chain.contains("the store answered 400 Bad Request, as it would every attempt")
+                && chain.contains(&nest_rs_config::var_name("storage", "REGION")),
             "{chain}"
         );
     }

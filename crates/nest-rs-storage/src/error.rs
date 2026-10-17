@@ -173,8 +173,8 @@ nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
 
 /// `said`, followed by what the links from `link` down say without quoting a
 /// URL: an I/O error (a refused connection, a TLS certificate, the client's
-/// own budget), the HTTP client's kind of failure, and the status the store
-/// answered with — never its body, which may name the key.
+/// own budget), the HTTP client's kind of failure, and what the store answered
+/// — never its body, which may name the key.
 fn below(mut link: Option<&(dyn Error + 'static)>, said: String) -> String {
     let mut sentence = said;
     while let Some(current) = link {
@@ -186,7 +186,7 @@ fn below(mut link: Option<&(dyn Error + 'static)>, said: String) -> String {
         let part = if let Some(http) = current.downcast_ref::<object_store::client::HttpError>() {
             Some(http_kind(http.kind()).to_owned())
         } else {
-            status(&current.to_string())
+            answered(&current.to_string())
         };
         if let Some(part) = part {
             sentence.push_str(": ");
@@ -210,13 +210,20 @@ fn http_kind(kind: object_store::client::HttpErrorKind) -> &'static str {
     }
 }
 
-/// The status a store's error answer carried, read off object_store's sentence
-/// for it, whose type is not reachable: `Server returned non-2xx status code:
-/// 404 Not Found: <body>`.
-fn status(sentence: &str) -> Option<String> {
-    let rest = sentence.strip_prefix("Server returned non-2xx status code: ")?;
-    let code = rest.split(':').next().unwrap_or_default().trim();
-    Some(format!("the store answered {code}"))
+/// What the store answered, read off object_store's sentence for a failed
+/// request, whose type (`client::retry::RequestError`) is not reachable: its
+/// constant part, and a status without the body that follows it.
+fn answered(sentence: &str) -> Option<String> {
+    if let Some(rest) = sentence.strip_prefix("Server returned non-2xx status code: ") {
+        let code = rest.split(':').next().unwrap_or_default().trim();
+        return Some(format!("the store answered {code}"));
+    }
+    if sentence.starts_with("Server returned error response: ") {
+        return Some("the store answered an error inside a successful answer".to_owned());
+    }
+    sentence
+        .starts_with("Received redirect without LOCATION")
+        .then(|| "the store redirected without a location, the sign of a wrong region".to_owned())
 }
 
 #[cfg(test)]
@@ -279,9 +286,25 @@ mod tests {
     #[test]
     fn a_status_is_read_without_the_body_that_follows() {
         assert_eq!(
-            status("Server returned non-2xx status code: 404 Not Found: <Key>ada</Key>").as_deref(),
+            answered("Server returned non-2xx status code: 404 Not Found: <Key>ada</Key>")
+                .as_deref(),
             Some("the store answered 404 Not Found")
         );
-        assert_eq!(status("Error performing GET https://s3/bucket/ada"), None);
+        assert_eq!(answered("Error performing GET https://s3/bucket/ada"), None);
+    }
+
+    #[test]
+    fn what_the_store_answered_is_said_by_its_constant_part_never_its_body() {
+        assert_eq!(
+            answered(
+                "Received redirect without LOCATION, this normally indicates an incorrectly \
+                 configured region"
+            )
+            .as_deref(),
+            Some("the store redirected without a location, the sign of a wrong region")
+        );
+        let said = answered("Server returned error response: <Key>ada</Key><Code>SlowDown</Code>")
+            .expect("an error inside a successful answer is said");
+        assert!(!said.contains("ada"), "{said}");
     }
 }

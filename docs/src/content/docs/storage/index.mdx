@@ -66,7 +66,9 @@ key under it:
 | `memory:///[<prefix>]` | a store in this process's memory — development and tests | no |
 
 `s3://media/tenants/acme` stores `covers/a.png` at `tenants/acme/covers/a.png`
-in the bucket, and lists it back as `covers/a.png`. Any other scheme — `file`,
+in the bucket, and lists it back as `covers/a.png`. A prefix a URL would have to
+encode — a space, `%`, a letter beyond ASCII — fails the boot, since keys would
+land beside it. Any other scheme — `file`,
 `gs`, `az` — fails the boot naming the scheme and what this release opens; the
 URL itself is never quoted, since a pasted one may carry a credential.
 
@@ -76,7 +78,11 @@ answers `StorageError::Unsupported`. A staging or production profile refuses
 it, since a restart loses every object — and so does a process that declares
 no `<PREFIX>_ENV`. Beside it, every S3 setting the deployment sets (`ENDPOINT`,
 `REGION`, the keys, `TLS_CA_CERT`…) fails the boot naming that variable,
-rather than being read by nothing.
+rather than being read by nothing — `.env` included, which a test reads too.
+So a test whose `.env` names an S3 store opens memory either by blanking, in
+`.env.test`, each S3 key `.env` sets (an empty value is unset), or by pinning
+it: `StorageModule::for_root(StorageConfig { url: "memory:///".into(),
+..Default::default() })`.
 
 ### At boot
 
@@ -87,12 +93,16 @@ page of its listing under the URL's prefix, within `OPERATION_TIMEOUT_SECS`:
   `<PREFIX>_STORAGE__URL`;
 - a certificate the client does not trust fails it at once, saying which
   authority to install or name in `TLS_CA_CERT`;
+- a status every attempt would meet — a redirect, the sign of a wrong region,
+  or a `400` — fails it at once, naming the status and the variables that shape
+  the request: `REGION`, `ENDPOINT`, `FORCE_PATH_STYLE`;
 - a store that refuses to list — its credentials, or a policy without
   `s3:ListBucket` — boots on with one `warn` on `nest_rs::storage` naming the
   credential variables. A least-privilege policy is no reason to stop an app;
   grant `s3:ListBucket` on the prefix to silence the line;
-- anything else is retried within the budget, each attempt a `warn`, then
-  fails the boot as unreachable with its last cause.
+- anything else — no answer, a `5xx`, a `408` or a `429` — is retried within
+  the budget, each attempt a `warn`, then fails the boot as unreachable with
+  its last cause.
 
 `memory:///` proves at once. The suite runs against RustFS 1.0 over TLS; AWS S3
 and the other servers speaking its API answer the same requests, but no test of

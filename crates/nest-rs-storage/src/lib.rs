@@ -74,11 +74,12 @@
 //!
 //! The store is proved before any provider is built: an `s3://` bucket answers
 //! one page of its listing under the URL's prefix within
-//! [`StorageConfig::operation_timeout`]. A bucket that does not exist, or a
-//! certificate the client does not accept, refuses the boot at once; a store
-//! that refuses to list — its credentials, or a policy granting no
-//! `s3:ListBucket` — boots with one `warn`; anything else is retried within
-//! the budget, then refused as unreachable.
+//! [`StorageConfig::operation_timeout`]. A bucket that does not exist, a
+//! certificate the client does not accept, or a status every attempt would
+//! meet (a redirect, a `400`) refuses the boot at once; a store that refuses
+//! to list — its credentials, or a policy granting no `s3:ListBucket` — boots
+//! with one `warn`; anything else — no answer, a `5xx`, a `408` or a `429` —
+//! is retried within the budget, then refused as unreachable.
 //!
 //! ## How long a call waits
 //!

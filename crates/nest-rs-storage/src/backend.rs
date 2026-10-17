@@ -41,6 +41,9 @@ pub(crate) enum Unopened {
     Extra(&'static str),
     /// A `memory://` URL naming a host.
     MemoryHost,
+    /// A prefix holding a character a URL carries percent-encoded, which
+    /// object_store would encode a second time.
+    EncodedPrefix,
 }
 
 impl std::fmt::Display for Unopened {
@@ -67,6 +70,10 @@ impl std::fmt::Display for Unopened {
             Self::MemoryHost => {
                 f.write_str("names a host after memory://, which takes none — memory:///")
             }
+            Self::EncodedPrefix => f.write_str(
+                "names a prefix holding a character a URL encodes, such as a space, `%` or a \
+                 letter beyond ASCII — name the prefix without one",
+            ),
         }
     }
 }
@@ -94,6 +101,11 @@ impl Backend {
         }
         if parsed.query().is_some() || parsed.fragment().is_some() {
             return Err(Unopened::Extra("a query or a fragment"));
+        }
+        // The parser hands the path back percent-encoded, and `Path` encodes
+        // `%` again: a key the app writes would never land under it.
+        if parsed.path().contains('%') {
+            return Err(Unopened::EncodedPrefix);
         }
         let prefix = Path::from(parsed.path().trim_matches('/'));
         let host = parsed.host_str().unwrap_or_default();
@@ -158,6 +170,20 @@ mod tests {
             })
         );
         assert_eq!(Backend::parse("memory://host/"), Err(Unopened::MemoryHost));
+    }
+
+    #[test]
+    fn a_prefix_a_url_encodes_is_refused_since_keys_would_land_beside_it() {
+        for url in [
+            "s3://media/ada lovelace/x",
+            "s3://media/ada%20lovelace",
+            "s3://media/caf\u{e9}",
+            "memory:///a b",
+        ] {
+            let refused = Backend::parse(url).expect_err("refused");
+            assert_eq!(refused, Unopened::EncodedPrefix, "{url}");
+            assert!(!refused.to_string().contains("lovelace"), "{refused}");
+        }
     }
 
     #[test]

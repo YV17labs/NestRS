@@ -15,6 +15,7 @@ mod atomic;
 mod create;
 mod database;
 mod error;
+mod events;
 mod executor;
 #[cfg(feature = "graphql")]
 mod graphql;

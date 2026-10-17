@@ -678,10 +678,8 @@ impl App {
                 Ok((task, _)) => *task,
                 Err(join_err) => join_err.id(),
             };
-            let transport = serving
-                .remove(&ended)
-                .map_or_else(|| Arc::from("<unknown>"), |(name, _)| name);
-            let transport = &*transport;
+            let removed = serving.remove(&ended);
+            let transport = removed.as_ref().map_or("<unknown>", |(name, _)| &**name);
             crate::way_down::transports(still_serving(&serving));
             let failed = match res.map(|(_, served)| served) {
                 Ok(Ok(Ok(()))) if stopping.is_cancelled() => None,

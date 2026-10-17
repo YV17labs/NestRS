@@ -82,6 +82,22 @@ async fn wiring<M: Module>(seeds: Seeds) -> Wiring {
     Wiring::of(app.container())
 }
 
+/// `refused` is a contest naming `root`'s imports at `first` and `second`.
+fn names_both_imports(refused: &anyhow::Error, root: &str, [first, second]: [usize; 2]) {
+    let contested = refused
+        .downcast_ref::<ContestedDeclarationError>()
+        .unwrap_or_else(|| panic!("{root}: not the contest: {refused:#}"));
+    assert!(
+        contested
+            .first
+            .ends_with(&format!("at `imports[{first}]` of `{root}`"))
+            && contested
+                .second
+                .ends_with(&format!("at `imports[{second}]` of `{root}`")),
+        "{root}: both imports are named: {contested}",
+    );
+}
+
 /// `M`'s boot is refused as a contest naming its two imports, `M`'s first
 /// and second, before any factory runs.
 async fn contested<M: Module>(seeds: Seeds, root: &str) {
@@ -92,18 +108,7 @@ async fn contested<M: Module>(seeds: Seeds, root: &str) {
     else {
         panic!("{root} must not boot: two imports declare one value");
     };
-    let contested = refused
-        .downcast_ref::<ContestedDeclarationError>()
-        .unwrap_or_else(|| panic!("{root}: not the contest: {refused:#}"));
-    assert!(
-        contested
-            .first
-            .ends_with(&format!("at `imports[0]` of `{root}`"))
-            && contested
-                .second
-                .ends_with(&format!("at `imports[1]` of `{root}`")),
-        "{root}: both imports are named: {contested}",
-    );
+    names_both_imports(&refused, root, [0, 1]);
 }
 
 /// A row of the table: the setup unpinned, pinned, and — where the module is a
@@ -440,18 +445,7 @@ fn a_redis_instance_pinned_twice_names_both_imports_and_two_instances_never_cont
             "RedisInstanceTwicePinned",
         ),
     ] {
-        let contested = refused
-            .downcast_ref::<ContestedDeclarationError>()
-            .unwrap_or_else(|| panic!("{root}: not the contest: {refused:#}"));
-        assert!(
-            contested
-                .first
-                .ends_with(&format!("at `imports[0]` of `{root}`"))
-                && contested
-                    .second
-                    .ends_with(&format!("at `imports[1]` of `{root}`")),
-            "{contested}"
-        );
+        names_both_imports(&refused, root, [0, 1]);
     }
     let refused = declarations_of::<RedisEachInstancePinnedOnce>();
     assert!(
@@ -462,17 +456,9 @@ fn a_redis_instance_pinned_twice_names_both_imports_and_two_instances_never_cont
 
 #[test]
 fn a_redis_binding_pinned_twice_names_both_imports() {
-    let refused = declarations_of::<RedisQueueTwicePinned>();
-    let contested = refused
-        .downcast_ref::<ContestedDeclarationError>()
-        .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
-    assert!(
-        contested
-            .first
-            .ends_with("at `imports[1]` of `RedisQueueTwicePinned`")
-            && contested
-                .second
-                .ends_with("at `imports[2]` of `RedisQueueTwicePinned`"),
-        "{contested}"
+    names_both_imports(
+        &declarations_of::<RedisQueueTwicePinned>(),
+        "RedisQueueTwicePinned",
+        [1, 2],
     );
 }

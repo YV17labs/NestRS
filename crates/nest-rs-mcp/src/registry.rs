@@ -236,15 +236,9 @@ fn resolve_identity(
     let host = declaring.first();
     crate::identity::resolve(
         host.map(|meta| meta.identity()),
-        declared_server(container).as_deref(),
+        container.get::<McpIdentity>().as_deref(),
     )
     .map_err(|err| err.report(path, host.map_or("<none>", |meta| meta.host())))
-}
-
-/// The app's own [`McpIdentity`], if it declared one through
-/// [`McpOptions::server`](crate::McpOptions::server) — once: a second fails the boot.
-fn declared_server(container: &Container) -> Option<Arc<McpIdentity>> {
-    container.get::<McpIdentity>()
 }
 
 /// Every host contributing to `path`, in registration order.

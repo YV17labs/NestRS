@@ -210,6 +210,39 @@ let locale = ambient::<Locale>();
 Reading is not deciding: a service may read who the caller is this way, as it
 reads a `Ctx<T>`, but an authorization decision still belongs in a guard.
 
+## Worked example — a transport of your own
+
+What serves an app — the HTTP server, the queue worker, the scheduler — is a
+`Transport`, and your package can ship one: a metrics scrape port, a tail of a
+change feed, a consumer of a broker. Its module attaches it with
+`provide_transport`, and `App::run` builds it from the assembled container,
+configures it, has it listen and serves it beside the others:
+
+```rust title="crates/yourpkg/src/module.rs"
+use nest_rs::core::{ContainerBuilder, Module, Registering};
+
+pub struct MetricsModule;
+
+impl Module for MetricsModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|container| MetricsPort::from_container(container))
+    }
+}
+```
+
+The boot lines name it `MetricsPort`, read off its type. The builder takes a
+function, not a closure holding a value: what your transport needs comes from
+the container, where the app's `for_root` value has already landed. It binds
+what it serves in `listen`, never in `serve`, and states a finite
+`stop_bound`, the longest it takes to stop once told to.
+
+A transport adds no edge — the edges are the framework's — so it does one of
+three things: it serves infrastructure no caller identifies, it carries system
+work into an edge that exists (publishing an event, pushing a job) under the
+actor `Correlation::continued` carries, or, when it is request-shaped and must
+authenticate, it rides HTTP as a self-mount whose guards decide. Your
+transport's own code never makes an authentication or authorization decision.
+
 ## Worked example — a social provider
 
 `nest-rs-social` ships an open provider contract. You publish an independent

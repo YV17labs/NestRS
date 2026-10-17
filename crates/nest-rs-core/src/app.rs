@@ -69,12 +69,12 @@ pub enum BootStep {
     },
     /// A transport's [`configure`](Transport::configure).
     Configure {
-        /// The transport, as its module names it.
+        /// The transport, by its short type name.
         transport: String,
     },
     /// A transport's [`listen`](Transport::listen), once every init hook ran.
     Listen {
-        /// The transport, as its module names it.
+        /// The transport, by its short type name.
         transport: String,
     },
     /// An init lifecycle hook.
@@ -568,15 +568,15 @@ impl App {
             crate::way_down::watch_app(&self.lifecycle);
         }
 
-        let mut transports: Vec<(&'static str, Box<dyn Transport>)> = Vec::new();
+        let mut transports: Vec<(Arc<str>, Box<dyn Transport>)> = Vec::new();
         for contribution in Discovery::new(&self.container).meta::<TransportContribution>() {
-            let name = contribution.meta.name;
+            let name: Arc<str> = Arc::from(contribution.meta.name());
             let built =
-                crate::panic::contain(async { (contribution.meta.build)(&self.container) }).await;
-            let transport = unwound(name, None, built)?;
+                crate::panic::contain(async { contribution.meta.build(&self.container) }).await;
+            let transport = unwound(&name, None, built)?;
             tracing::info!(
                 target: crate::target::APP,
-                transport = contribution.meta.name,
+                transport = &*name,
                 "attached module-contributed transport",
             );
             transports.push((name, transport));
@@ -584,7 +584,7 @@ impl App {
 
         for (name, transport) in transports.iter_mut() {
             let step = BootStep::Configure {
-                transport: (*name).to_owned(),
+                transport: name.to_string(),
             };
             let configured = self
                 .lifecycle
@@ -593,7 +593,7 @@ impl App {
                     crate::panic::contain(transport.configure(&self.container)),
                 )
                 .await?;
-            unwound(name, Some(&step), configured)?;
+            unwound(name, Some(&step), configured).context(step)?;
         }
         // A site composed at `configure` (a route, a gateway) refuses here, its
         // mount having no `Result` to fail with.
@@ -618,7 +618,7 @@ impl App {
         let mut addresses: Vec<String> = Vec::new();
         for (name, transport) in transports.iter_mut() {
             let step = BootStep::Listen {
-                transport: (*name).to_owned(),
+                transport: name.to_string(),
             };
             let listened = self
                 .lifecycle
@@ -628,7 +628,7 @@ impl App {
             addresses.extend(listening.addresses.iter().map(ToString::to_string));
         }
 
-        let names: Vec<&'static str> = transports.iter().map(|(name, _)| *name).collect();
+        let names: Vec<&str> = transports.iter().map(|(name, _)| &**name).collect();
         self.lifecycle
             .turn_ready(&names.join(", "), &addresses.join(", "));
         self.serve_all(transports, stop_bound).await
@@ -639,7 +639,7 @@ impl App {
     /// have passed: what still serves then is abandoned.
     async fn serve_all(
         &self,
-        transports: Vec<(&'static str, Box<dyn Transport>)>,
+        transports: Vec<(Arc<str>, Box<dyn Transport>)>,
         stop_bound: Duration,
     ) -> Result<()> {
         let mut join = JoinSet::new();
@@ -678,7 +678,10 @@ impl App {
                 Ok((task, _)) => *task,
                 Err(join_err) => join_err.id(),
             };
-            let transport = serving.remove(&ended).map_or("<unknown>", |(name, _)| name);
+            let transport = serving
+                .remove(&ended)
+                .map_or_else(|| Arc::from("<unknown>"), |(name, _)| name);
+            let transport = &*transport;
             crate::way_down::transports(still_serving(&serving));
             let failed = match res.map(|(_, served)| served) {
                 Ok(Ok(Ok(()))) if stopping.is_cancelled() => None,
@@ -741,7 +744,7 @@ impl App {
 /// What a transport's boot step returned, or, when it panicked, the panic filed
 /// once at `error` and the boot's error naming the transport.
 fn unwound<T>(
-    transport: &'static str,
+    transport: &str,
     step: Option<&BootStep>,
     outcome: Result<Result<T>, Box<dyn Any + Send>>,
 ) -> Result<T> {
@@ -758,23 +761,23 @@ fn unwound<T>(
 }
 
 /// Each transport still serving, by its task: its name and stop bound.
-type Serving = HashMap<tokio::task::Id, (&'static str, Duration)>;
+type Serving = HashMap<tokio::task::Id, (Arc<str>, Duration)>;
 
 /// Name every transport still serving past the way down's bound at `error`,
 /// and the first, by name, as the app's error.
 fn abandon(serving: &Serving) -> anyhow::Error {
-    let mut abandoned: Vec<(&'static str, Duration)> = serving.values().copied().collect();
+    let mut abandoned: Vec<&(Arc<str>, Duration)> = serving.values().collect();
     abandoned.sort_unstable();
     for (transport, bound) in &abandoned {
         tracing::error!(
             target: crate::target::APP,
-            transport,
+            transport = &**transport,
             stop_bound_ms = millis(*bound),
             "transport did not stop within its declared bound: abandoned",
         );
     }
     crate::way_down::transports(Vec::new());
-    let first = abandoned.first().map_or("<unknown>", |(name, _)| name);
+    let first = abandoned.first().map_or("<unknown>", |(name, _)| &**name);
     anyhow!("transport `{first}` did not stop within its declared bound")
 }
 
@@ -1234,8 +1237,8 @@ fn seal(
     })
 }
 
-fn still_serving(serving: &Serving) -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = serving.values().map(|(name, _)| *name).collect();
+fn still_serving(serving: &Serving) -> Vec<Arc<str>> {
+    let mut names: Vec<Arc<str>> = serving.values().map(|(name, _)| Arc::clone(name)).collect();
     names.sort_unstable();
     names
 }
@@ -1256,14 +1259,14 @@ pub(crate) mod __private {
     /// check [`App::run`] makes at the boot, for a harness that runs transports
     /// itself.
     pub fn check_stop_bound(
-        transport: &'static str,
+        transport: &str,
         bound: std::time::Duration,
     ) -> Result<(), crate::UnboundedTransportError> {
         if bound <= crate::MAX_STOP_BOUND {
             return Ok(());
         }
         Err(crate::UnboundedTransportError {
-            transport,
+            transport: transport.to_owned(),
             stop_bound_ms: crate::millis::millis(bound),
         })
     }
@@ -1332,8 +1335,6 @@ pub(crate) mod __private {
 
 #[cfg(test)]
 mod tests {
-    use tokio_util::sync::CancellationToken;
-
     use super::*;
     use crate::module::{Collecting, Registering};
 
@@ -2133,43 +2134,6 @@ mod tests {
             .await
             .expect("build succeeds");
         assert_eq!(app.container().get::<Doubled>().unwrap().0, 2);
-    }
-
-    struct NullTransport;
-    #[async_trait::async_trait]
-    impl Transport for NullTransport {
-        async fn configure(&mut self, _: &Container) -> Result<()> {
-            Ok(())
-        }
-        async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()> {
-            cancel.cancelled().await;
-            Ok(())
-        }
-        fn stop_bound(&self) -> std::time::Duration {
-            std::time::Duration::ZERO
-        }
-    }
-
-    struct WithTransportModule;
-    impl Module for WithTransportModule {
-        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-            builder.provide_meta(TransportContribution {
-                name: "NullTransport",
-                build: |_| Ok(Box::new(NullTransport)),
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn module_contributes_a_transport_via_meta() {
-        let app = App::builder()
-            .module::<WithTransportModule>()
-            .build()
-            .await
-            .expect("build succeeds");
-        let contributions = Discovery::new(app.container()).meta::<TransportContribution>();
-        assert_eq!(contributions.len(), 1);
-        assert_eq!(contributions[0].meta.name, "NullTransport");
     }
 
     // A module queuing its factory from `register`: the collect phase every

@@ -265,7 +265,8 @@ Anything a third party could plug an implementation into owes a written
 contract: the trait, the seam that makes an implementation reachable, and the
 sentence for more than one. **If it cannot be written, the concern is not
 swappable — say so in the crate's `//!`**; a client with no trait and no
-sentence is a closed door that looks open. The unit is the **port**, never the
+sentence is a closed door that looks open. A third-party transport is
+supported (`ContainerBuilder::provide_transport`); it adds no edge. The unit is the **port**, never the
 crate housing it (`nest-rs-authn` holds the `Strategy` port beside `JwtService`,
 shared infrastructure). Ports & Adapters is `architecture.md`; two independent
 questions shape a port:

@@ -3,7 +3,6 @@
 //! `#[process]` method over the queue backend a binding bound.
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering};
 
 use crate::{QueueConfig, QueueWorker};
@@ -34,16 +33,13 @@ impl Module for QueueModule {
     // Registered once however many modules import it, so two importers attach
     // one worker, never two pools of permits running each method twice over.
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "QueueWorker",
-            build: |_| Ok(Box::new(QueueWorker::new())),
-        })
+        builder.provide_transport(|_| Ok(QueueWorker::new()))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::{App, Container, Discovery, LateFactoryError};
+    use nest_rs_core::{App, Container, Discovery, LateFactoryError, TransportContribution};
 
     use super::*;
 
@@ -76,6 +72,6 @@ mod tests {
             .build();
         let contributions = Discovery::new(&container).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
-        assert_eq!(contributions[0].meta.name, "QueueWorker");
+        assert_eq!(contributions[0].meta.name(), "QueueWorker");
     }
 }

@@ -3,7 +3,6 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering};
 
 use crate::config::HttpConfig;
@@ -37,12 +36,9 @@ impl DynamicModule for HttpSetup {
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "HttpTransport",
-            build: |c| {
-                let cfg = ConfigModule::resolved::<HttpConfig>(c)?;
-                Ok(Box::new(HttpTransport::from_config(&cfg)?))
-            },
+        builder.provide_transport(|c| {
+            let cfg = ConfigModule::resolved::<HttpConfig>(c)?;
+            HttpTransport::from_config(&cfg)
         })
     }
 }

@@ -30,7 +30,7 @@ type Serving = Arc<Mutex<Vec<Spawned>>>;
 /// A transport still serving: its name and stop bound, and its task, aborted
 /// once abandoned.
 struct Spawned {
-    name: &'static str,
+    name: Arc<str>,
     stop_bound: Duration,
     task: AbortHandle,
 }
@@ -113,7 +113,7 @@ impl HeadlessApp {
             return Err(refusal);
         }
         nest_rs_core::__private::check_stop_bound(
-            std::any::type_name::<T>(),
+            &nest_rs_core::__private::short_type_name::<T>(),
             transport.stop_bound(),
         )?;
         Ok(())
@@ -121,11 +121,13 @@ impl HeadlessApp {
 
     /// Serve a configured, listening `transport` on the tracked background task.
     pub(crate) fn serve_transport<T: Transport>(&self, transport: T) -> TransportHandle {
-        let name = std::any::type_name::<T>();
+        // Named as `App::run` names a transport: by its short type name.
+        let name: Arc<str> = nest_rs_core::__private::short_type_name::<T>().into();
         let stop_bound = transport.stop_bound();
         let serving = Arc::clone(&self.serving);
         let cancel = self.lifecycle().stopping();
         let token = cancel.clone();
+        let spawned = Arc::clone(&name);
         // Held across the spawn, so the task cannot leave the list before it joins it.
         let mut still = locked(&self.serving);
         let join = self.transports.spawn(async move {
@@ -138,7 +140,7 @@ impl HeadlessApp {
                 Ok(Err(error)) => {
                     nest_rs_core::tracing::error!(
                         target: nest_rs_core::target::APP,
-                        transport = name,
+                        transport = &*spawned,
                         error = %nest_rs_core::error_message(&*error),
                         "a transport the harness spawned failed",
                     );
@@ -149,9 +151,9 @@ impl HeadlessApp {
                         target: nest_rs_core::target::APP,
                         payload.as_ref(),
                         "a transport the harness spawned panicked",
-                        transport = name,
+                        transport = &*spawned,
                     );
-                    Err(anyhow!("transport `{name}` panicked"))
+                    Err(anyhow!("transport `{spawned}` panicked"))
                 }
             }
         });
@@ -204,7 +206,7 @@ async fn stop_within(transports: &TaskTracker, serving: &Serving) {
     for spawned in locked(serving).drain(..) {
         nest_rs_core::tracing::error!(
             target: nest_rs_core::target::APP,
-            transport = spawned.name,
+            transport = &*spawned.name,
             stop_bound_ms = u64::try_from(spawned.stop_bound.as_millis()).unwrap_or(u64::MAX),
             "transport did not stop within its declared bound: abandoned",
         );

@@ -43,7 +43,7 @@ enum Step {
     /// An app's boot, waiting on this step; `None` between two.
     Boot(Option<BootStep>),
     /// The transports, which these have not returned from yet.
-    Transports(Vec<&'static str>),
+    Transports(Vec<Arc<str>>),
     /// One shutdown hook.
     Hook {
         phase: LifecyclePhase,
@@ -71,7 +71,7 @@ pub(crate) fn boot_step(step: Option<&BootStep>) {
     set(Step::Boot(step.cloned()));
 }
 
-pub(crate) fn transports(running: Vec<&'static str>) {
+pub(crate) fn transports(running: Vec<Arc<str>>) {
     set(Step::Transports(running));
 }
 

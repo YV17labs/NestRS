@@ -42,6 +42,19 @@
 //! each trait, so a bound host runs too; one the boot finds absent carries
 //! [`INERT_HOST_HINT`].
 //!
+//! # Transports
+//!
+//! What serves the app — the HTTP server, the queue worker, the scheduler — is
+//! a [`Transport`] a module attaches with
+//! [`ContainerBuilder::provide_transport`], and [`App::run`] builds,
+//! configures, listens and serves each one. A third-party transport is
+//! supported, and it adds no edge: the edges are the framework's. So it serves
+//! infrastructure no caller identifies (a metrics port), carries system work
+//! into an edge that exists (an event published, a job pushed) under the actor
+//! [`Correlation::continued`] carries, or, when it is request-shaped and must
+//! authenticate, rides HTTP as a self-mount, whose guards decide. Transport
+//! code makes no authentication or authorization decision of its own.
+//!
 //! # One pipeline
 //!
 //! [`Interceptor`] and [`ExceptionFilter`] name no edge. An edge that
@@ -182,7 +195,7 @@ pub use trace_context::{
     Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,
     current_span_id, current_trace_id, current_traceparent, current_tracestate,
 };
-pub use transport::{Listening, MAX_STOP_BOUND, Transport};
+pub use transport::{Listening, MAX_STOP_BOUND, Transport, TransportContribution};
 pub use unit_context::{Peer, UnitContext, UnitView};
 pub use wiring::WiringContribution;
 
@@ -239,7 +252,6 @@ pub mod __private {
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,
     };
-    pub use crate::transport::__private::TransportContribution;
     pub use crate::type_name::short_type_name;
     pub use crate::unit_context::{new_unit_context, take_pending};
     pub use crate::way_down::main;

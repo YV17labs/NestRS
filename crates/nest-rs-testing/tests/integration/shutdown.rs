@@ -20,7 +20,7 @@ const KUBERNETES_DEFAULT_GRACE: Duration = Duration::from_secs(30);
 /// moved constant sends its author to every page that quotes the figure.
 const STATED_WAY_DOWN: Duration = Duration::from_millis(29_500);
 
-/// Every transport a module can contribute, at its defaults.
+/// Every transport the framework attaches, at its defaults.
 fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
     [
         (

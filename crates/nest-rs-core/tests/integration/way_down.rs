@@ -5,7 +5,6 @@
 
 use std::time::Duration;
 
-use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::{
     App, BootInterruptedError, Container, ContainerBuilder, Module, Registering, Transport, hooks,
     injectable, module,
@@ -72,10 +71,7 @@ struct NeverStopsModule;
 
 impl Module for NeverStopsModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "NeverStops",
-            build: |_| Ok(Box::new(NeverStops)),
-        })
+        builder.provide_transport(|_| Ok(NeverStops))
     }
 }
 
@@ -83,10 +79,7 @@ struct ServesUntilStoppedModule;
 
 impl Module for ServesUntilStoppedModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "ServesUntilStopped",
-            build: |_| Ok(Box::new(ServesUntilStopped)),
-        })
+        builder.provide_transport(|_| Ok(ServesUntilStopped))
     }
 }
 
@@ -171,10 +164,7 @@ struct ConfiguresSlowlyModule;
 
 impl Module for ConfiguresSlowlyModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "ConfiguresSlowly",
-            build: |_| Ok(Box::new(ConfiguresSlowly)),
-        })
+        builder.provide_transport(|_| Ok(ConfiguresSlowly))
     }
 }
 
@@ -211,10 +201,7 @@ struct ListensSlowlyModule;
 
 impl Module for ListensSlowlyModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "ListensSlowly",
-            build: |_| Ok(Box::new(ListensSlowly)),
-        })
+        builder.provide_transport(|_| Ok(ListensSlowly))
     }
 }
 

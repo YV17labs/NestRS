@@ -1,7 +1,6 @@
 //! The activation seam: import [`ScheduleModule`] and the framework attaches
 //! the [`Scheduler`] to the app at boot.
 
-use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::{ContainerBuilder, Module, Registering};
 
 use crate::Scheduler;
@@ -20,9 +19,6 @@ impl Module for ScheduleModule {
     // Registered once however many modules import it, so two importers attach
     // one scheduler, not two firing every tick twice.
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "Scheduler",
-            build: |_| Ok(Box::new(Scheduler::new())),
-        })
+        builder.provide_transport(|_| Ok(Scheduler::new()))
     }
 }

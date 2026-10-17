@@ -226,8 +226,8 @@ pub struct BootInterruptedError {
      ceiling: a transport's stop is bounded: declare its drain window"
 )]
 pub struct UnboundedTransportError {
-    /// The transport, as its module names it.
-    pub transport: &'static str,
+    /// The transport, by its short type name.
+    pub transport: String,
     /// The bound it states, in milliseconds, saturated at `u64::MAX`.
     pub stop_bound_ms: u64,
 }

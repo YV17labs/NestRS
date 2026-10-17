@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::target;
 use nest_rs_core::{
     App, AppLifecycle, AppState, Collecting, Container, ContainerBuilder, Listening, Module,
@@ -105,10 +104,7 @@ struct ReadsOnceReadyModule;
 
 impl Module for ReadsOnceReadyModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "ReadsOnceReady",
-            build: |_| Ok(Box::new(ReadsOnceReady(None))),
-        })
+        builder.provide_transport(|_| Ok(ReadsOnceReady(None)))
     }
 }
 
@@ -183,14 +179,8 @@ struct FailingBesideServingModule;
 impl Module for FailingBesideServingModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
-            .provide_meta(TransportContribution {
-                name: "ServesUntilStopped",
-                build: |_| Ok(Box::new(ServesUntilStopped)),
-            })
-            .provide_meta(TransportContribution {
-                name: "Failing",
-                build: |_| Ok(Box::new(Failing)),
-            })
+            .provide_transport(|_| Ok(ServesUntilStopped))
+            .provide_transport(|_| Ok(Failing))
     }
 }
 
@@ -326,10 +316,7 @@ impl Module for ConfigureFailsModule {
         builder
             .provide(JoinsOnClose(lifecycle))
             .provide_close::<JoinsOnClose, _, _>(close_joining)
-            .provide_meta(TransportContribution {
-                name: "RefusesToConfigure",
-                build: |_| Ok(Box::new(RefusesToConfigure)),
-            })
+            .provide_transport(|_| Ok(RefusesToConfigure))
     }
 }
 
@@ -443,10 +430,7 @@ struct AnnouncesReadyModule;
 
 impl Module for AnnouncesReadyModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "AnnouncesReady",
-            build: |_| Ok(Box::new(AnnouncesReady(None))),
-        })
+        builder.provide_transport(|_| Ok(AnnouncesReady(None)))
     }
 }
 

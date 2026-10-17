@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::panic::{FIELD, LOCATION_FIELD};
 use nest_rs_core::target;
 use nest_rs_core::{
@@ -26,10 +25,7 @@ struct FailingModule;
 
 impl Module for FailingModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "Failing",
-            build: |_| Ok(Box::new(Failing)),
-        })
+        builder.provide_transport(|_| Ok(Failing))
     }
 }
 
@@ -55,10 +51,7 @@ struct PanickingModule;
 
 impl Module for PanickingModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "Panicking",
-            build: |_| Ok(Box::new(Panicking)),
-        })
+        builder.provide_transport(|_| Ok(Panicking))
     }
 }
 
@@ -107,14 +100,8 @@ struct FailsTwiceModule;
 impl Module for FailsTwiceModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
-            .provide_meta(TransportContribution {
-                name: "FailsItsStop",
-                build: |_| Ok(Box::new(FailsItsStop)),
-            })
-            .provide_meta(TransportContribution {
-                name: "Failing",
-                build: |_| Ok(Box::new(Failing)),
-            })
+            .provide_transport(|_| Ok(FailsItsStop))
+            .provide_transport(|_| Ok(Failing))
     }
 }
 
@@ -208,10 +195,11 @@ fn a_transport_that_panics_is_one_line_without_its_value_and_the_app_s_error_nam
     );
 }
 
-struct Stated(Duration);
+/// States a stop bound of `MS` milliseconds: one type per bound.
+struct Stated<const MS: u64>;
 
 #[async_trait::async_trait]
-impl Transport for Stated {
+impl<const MS: u64> Transport for Stated<MS> {
     async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
         Ok(())
     }
@@ -221,7 +209,7 @@ impl Transport for Stated {
     }
 
     fn stop_bound(&self) -> Duration {
-        self.0
+        Duration::from_millis(MS)
     }
 }
 
@@ -230,14 +218,8 @@ struct TwoBoundsModule;
 impl Module for TwoBoundsModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
-            .provide_meta(TransportContribution {
-                name: "Short",
-                build: |_| Ok(Box::new(Stated(Duration::from_millis(2_500)))),
-            })
-            .provide_meta(TransportContribution {
-                name: "Long",
-                build: |_| Ok(Box::new(Stated(Duration::from_secs(41)))),
-            })
+            .provide_transport(|_| Ok(Stated::<2_500>))
+            .provide_transport(|_| Ok(Stated::<41_000>))
     }
 }
 
@@ -1038,14 +1020,8 @@ struct ListensThenRefusesModule;
 impl Module for ListensThenRefusesModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
-            .provide_meta(TransportContribution {
-                name: "ListensThenServes",
-                build: |_| Ok(Box::new(ListensThenServes)),
-            })
-            .provide_meta(TransportContribution {
-                name: "RefusesToListen",
-                build: |_| Ok(Box::new(RefusesToListen)),
-            })
+            .provide_transport(|_| Ok(ListensThenServes))
+            .provide_transport(|_| Ok(RefusesToListen))
     }
 }
 
@@ -1111,10 +1087,7 @@ struct PanicsToListenModule;
 
 impl Module for PanicsToListenModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "PanicsToListen",
-            build: |_| Ok(Box::new(PanicsToListen)),
-        })
+        builder.provide_transport(|_| Ok(PanicsToListen))
     }
 }
 
@@ -1191,11 +1164,30 @@ impl Transport for PanicsToConfigure {
     }
 }
 
-/// Opens [`Opened`], then contributes the transport `build` builds as `name`.
-fn opens_then_panics(
+/// Never built: its `build` panics, as one reading settings that are not
+/// there does.
+struct PanicsAsBuilt;
+
+#[async_trait::async_trait]
+impl Transport for PanicsAsBuilt {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        listen_boot("the panicked transport served");
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// Opens [`Opened`], then attaches the transport `build` builds.
+fn opens_then_panics<T: Transport>(
     builder: ContainerBuilder,
-    name: &'static str,
-    build: fn(&Container) -> anyhow::Result<Box<dyn Transport>>,
+    build: fn(&Container) -> anyhow::Result<T>,
 ) -> ContainerBuilder {
     builder
         .provide(Opened)
@@ -1203,16 +1195,14 @@ fn opens_then_panics(
             listen_boot("resource closed");
             Ok(())
         })
-        .provide_meta(TransportContribution { name, build })
+        .provide_transport(build)
 }
 
 struct ConfigurePanicsModule;
 
 impl Module for ConfigurePanicsModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        opens_then_panics(builder, "PanicsToConfigure", |_| {
-            Ok(Box::new(PanicsToConfigure))
-        })
+        opens_then_panics(builder, |_| Ok(PanicsToConfigure))
     }
 }
 
@@ -1220,7 +1210,7 @@ struct BuildPanicsModule;
 
 impl Module for BuildPanicsModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        opens_then_panics(builder, "PanicsAsBuilt", |_| {
+        opens_then_panics::<PanicsAsBuilt>(builder, |_| {
             panic!("the transport's settings were never read")
         })
     }
@@ -1257,9 +1247,16 @@ async fn boot_panicking<M: Module>() -> (anyhow::Error, nest_rs_testing::Capture
 async fn a_transport_that_panics_as_it_configures_fails_the_boot_and_the_resources_close() {
     let (refused, line) = boot_panicking::<ConfigurePanicsModule>().await;
 
+    assert!(
+        matches!(
+            refused.downcast_ref::<nest_rs_core::BootStep>(),
+            Some(nest_rs_core::BootStep::Configure { transport }) if transport == "PanicsToConfigure"
+        ),
+        "the boot error carries the configure step: {refused:#}"
+    );
     assert_eq!(
-        refused.to_string(),
-        "transport `PanicsToConfigure` panicked"
+        nest_rs_core::error_message(refused.as_ref()),
+        "the `configure` of transport `PanicsToConfigure`: transport `PanicsToConfigure` panicked",
     );
     assert_eq!(
         line.field("transport").as_deref(),
@@ -1285,6 +1282,60 @@ async fn a_transport_that_panics_as_it_is_built_fails_the_boot_and_the_resources
     assert_eq!(
         line.field(FIELD).as_deref(),
         Some("the transport's settings were never read")
+    );
+}
+
+/// Fails its `configure`, as a transport whose routes do not compose does.
+struct RefusesToConfigure;
+
+#[async_trait::async_trait]
+impl Transport for RefusesToConfigure {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Err(anyhow!("two routes claim `/posts`"))
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        listen_boot("the refused transport served");
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct ConfigureFailsModule;
+
+impl Module for ConfigureFailsModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|_| Ok(RefusesToConfigure))
+    }
+}
+
+/// A `configure` that fails fails the boot naming the step, as a `listen`
+/// that fails does.
+#[tokio::test]
+async fn a_transport_that_fails_to_configure_fails_the_boot_naming_the_step() {
+    let refused = tokio::time::timeout(
+        Duration::from_secs(5),
+        App::new::<ConfigureFailsModule>()
+            .expect("the module boots")
+            .run(),
+    )
+    .await
+    .expect("the boot stops at the configure")
+    .expect_err("the configure failed the boot");
+
+    assert!(
+        matches!(
+            refused.downcast_ref::<nest_rs_core::BootStep>(),
+            Some(nest_rs_core::BootStep::Configure { transport }) if transport == "RefusesToConfigure"
+        ),
+        "the boot error carries the configure step: {refused:#}"
+    );
+    assert_eq!(
+        nest_rs_core::error_message(refused.as_ref()),
+        "the `configure` of transport `RefusesToConfigure`: two routes claim `/posts`",
     );
 }
 
@@ -1331,15 +1382,31 @@ struct EndsBesideServingModule;
 impl Module for EndsBesideServingModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
-            .provide_meta(TransportContribution {
-                name: "ServesUntilStopped",
-                build: |_| Ok(Box::new(ServesUntilStopped)),
-            })
-            .provide_meta(TransportContribution {
-                name: "EndsAtOnce",
-                build: |_| Ok(Box::new(EndsAtOnce)),
-            })
+            .provide_transport(|_| Ok(ServesUntilStopped))
+            .provide_transport(|_| Ok(EndsAtOnce))
     }
+}
+
+struct AttachesServesUntilStopped;
+
+impl Module for AttachesServesUntilStopped {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|_| Ok(ServesUntilStopped))
+    }
+}
+
+/// The public seam is the whole of it: a module attaches its transport, and
+/// the record the kernel reads names it by its type.
+#[test]
+fn a_module_attaches_a_transport_the_kernel_names_by_its_type() {
+    let app = App::new::<AttachesServesUntilStopped>().expect("the module boots");
+    let attached =
+        nest_rs_core::Discovery::new(app.container()).meta::<nest_rs_core::TransportContribution>();
+    let names: Vec<&str> = attached
+        .iter()
+        .map(|contribution| contribution.meta.name())
+        .collect();
+    assert_eq!(names, ["ServesUntilStopped"]);
 }
 
 const ENDED_EARLY: &str = "transport stopped serving before the app was asked to stop";
@@ -1394,14 +1461,8 @@ struct IgnoresItsStopModule;
 impl Module for IgnoresItsStopModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
-            .provide_meta(TransportContribution {
-                name: "IgnoresItsStop",
-                build: |_| Ok(Box::new(IgnoresItsStop(IGNORED_BOUND))),
-            })
-            .provide_meta(TransportContribution {
-                name: "Failing",
-                build: |_| Ok(Box::new(Failing)),
-            })
+            .provide_transport(|_| Ok(IgnoresItsStop(IGNORED_BOUND)))
+            .provide_transport(|_| Ok(Failing))
     }
 }
 
@@ -1460,14 +1521,11 @@ async fn run_declaring(bound: Duration) -> anyhow::Error {
     static BOUND: std::sync::Mutex<Duration> = std::sync::Mutex::new(Duration::ZERO);
     impl Module for DeclaresModule {
         fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-            builder.provide_meta(TransportContribution {
-                name: "Declares",
-                build: |_| {
-                    let bound = *BOUND
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    Ok(Box::new(Declares(bound)))
-                },
+            builder.provide_transport(|_| {
+                let bound = *BOUND
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                Ok(Declares(bound))
             })
         }
     }

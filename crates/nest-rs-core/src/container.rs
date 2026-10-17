@@ -774,6 +774,76 @@ impl ContainerBuilder {
         self
     }
 
+    /// Attach a transport this module serves through: [`App::run`](crate::App::run)
+    /// builds it from the assembled container with `build`, configures it, has
+    /// it listen, and serves it until the app stops. Its boot lines name it by
+    /// its short type name, read off `T`.
+    ///
+    /// `build` is a function, never a closure holding a value: what the
+    /// transport needs is read from the container, where the module's
+    /// `for_root` value has landed — as HTTP reads its `HttpConfig`.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use nest_rs_core::{App, Container, ContainerBuilder, Discovery, Module, Registering, Transport, TransportContribution, async_trait};
+    /// use tokio_util::sync::CancellationToken;
+    ///
+    /// struct MetricsPort;
+    ///
+    /// #[async_trait]
+    /// impl Transport for MetricsPort {
+    ///     async fn configure(&mut self, _: &Container) -> anyhow::Result<()> {
+    ///         Ok(())
+    ///     }
+    ///
+    ///     async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+    ///         cancel.cancelled().await;
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn stop_bound(&self) -> Duration {
+    ///         Duration::from_secs(1)
+    ///     }
+    /// }
+    ///
+    /// struct MetricsModule;
+    ///
+    /// impl Module for MetricsModule {
+    ///     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+    ///         builder.provide_transport(|_| Ok(MetricsPort))
+    ///     }
+    /// }
+    ///
+    /// let app = App::new::<MetricsModule>()?;
+    /// let attached = Discovery::new(app.container()).meta::<TransportContribution>();
+    /// assert_eq!(attached[0].meta.name(), "MetricsPort");
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// A closure capturing a value is refused at compile time:
+    ///
+    /// ```compile_fail
+    /// # use std::time::Duration;
+    /// # use nest_rs_core::{Container, Transport, async_trait};
+    /// # #[derive(Clone)]
+    /// # struct MetricsPort;
+    /// # #[async_trait]
+    /// # impl Transport for MetricsPort {
+    /// #     async fn configure(&mut self, _: &Container) -> anyhow::Result<()> { Ok(()) }
+    /// #     async fn serve(self: Box<Self>, _: tokio_util::sync::CancellationToken) -> anyhow::Result<()> { Ok(()) }
+    /// #     fn stop_bound(&self) -> Duration { Duration::ZERO }
+    /// # }
+    /// let captured = MetricsPort;
+    /// let _ = Container::builder().provide_transport(move |_| Ok(captured.clone()));
+    /// ```
+    pub fn provide_transport<T: crate::Transport>(
+        self,
+        build: fn(&Container) -> anyhow::Result<T>,
+    ) -> Self {
+        self.provide_meta(crate::TransportContribution::new(build))
+    }
+
     /// Fill the registry `name` from the assembled container once, through
     /// `wire`, after the seal and before any transport is built or any lifecycle
     /// hook runs — so a hook already reads it full.

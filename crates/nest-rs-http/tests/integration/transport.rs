@@ -948,20 +948,14 @@ struct OnTakenPortModule;
 impl nest_rs_core::Module for OnTakenPortModule {
     fn register(builder: ContainerBuilder, _: nest_rs_core::Registering<Self>) -> ContainerBuilder {
         builder
-            .provide_meta(nest_rs_core::__private::TransportContribution {
-                name: "HttpTransport",
-                build: |_| {
-                    Ok(Box::new(HttpTransport::from_config(&HttpConfig {
-                        host: "127.0.0.1".into(),
-                        port: TAKEN_PORT.load(Ordering::SeqCst),
-                        ..HttpConfig::default()
-                    })?))
-                },
+            .provide_transport(|_| {
+                HttpTransport::from_config(&HttpConfig {
+                    host: "127.0.0.1".into(),
+                    port: TAKEN_PORT.load(Ordering::SeqCst),
+                    ..HttpConfig::default()
+                })
             })
-            .provide_meta(nest_rs_core::__private::TransportContribution {
-                name: "RecordsServe",
-                build: |_| Ok(Box::new(RecordsServe)),
-            })
+            .provide_transport(|_| Ok(RecordsServe))
     }
 }
 
@@ -1029,20 +1023,14 @@ struct OnPortZeroModule;
 impl nest_rs_core::Module for OnPortZeroModule {
     fn register(builder: ContainerBuilder, _: nest_rs_core::Registering<Self>) -> ContainerBuilder {
         builder
-            .provide_meta(nest_rs_core::__private::TransportContribution {
-                name: "HttpTransport",
-                build: |_| {
-                    Ok(Box::new(HttpTransport::from_config(&HttpConfig {
-                        host: "127.0.0.1".into(),
-                        port: 0,
-                        ..HttpConfig::default()
-                    })?))
-                },
+            .provide_transport(|_| {
+                HttpTransport::from_config(&HttpConfig {
+                    host: "127.0.0.1".into(),
+                    port: 0,
+                    ..HttpConfig::default()
+                })
             })
-            .provide_meta(nest_rs_core::__private::TransportContribution {
-                name: "StopsOnceReady",
-                build: |_| Ok(Box::new(StopsOnceReady(None))),
-            })
+            .provide_transport(|_| Ok(StopsOnceReady(None)))
     }
 }
 

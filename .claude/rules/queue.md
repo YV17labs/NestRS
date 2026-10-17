@@ -216,7 +216,7 @@ keys is `queue/layout.rs`'s `//!`.
 `#[scheduled]` orchestrates methods tagged with exactly one of `#[every]`,
 `#[cron]` (optional `tz`) and `#[after]`; every literal, `tz` included, is
 checked at compile time, and only `CronExpression` presets resolve at boot. The
-scheduler is a `Transport` through `TransportContribution`.
+scheduler is a `Transport` attached with `ContainerBuilder::provide_transport`.
 
 - **A tick has no retry** — its retry is the next occurrence — and **a replica
   runs one occurrence of a job at a time**; an occurrence falling inside a run is

@@ -10,6 +10,7 @@ use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta};
 use crate::config::GraphqlConfig;
 use crate::context::{ENDPOINT, OperationBridge};
 use crate::endpoint::GetEndpoint;
+use crate::operation_units::OperationUnits;
 use crate::resolver::{build_schema, check_operations};
 use crate::subscription::SubscriptionEndpoint;
 use crate::view::GraphqlView;
@@ -153,20 +154,15 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 }
             }
             let bridge = Arc::new(OperationBridge::new(container.clone()));
-            let schema = crate::redact::Redacted(schema);
+            let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
+            let units = OperationUnits::new(crate::redact::Redacted(schema), binding.clone());
             let method = poem::post(crate::context::ContextEndpoint::new(
-                schema.clone(),
+                units.clone(),
                 Arc::clone(&bridge),
                 options.max_batch_size,
             ))
             .get(GetEndpoint::new(
-                SubscriptionEndpoint::new(
-                    schema,
-                    bridge,
-                    &options,
-                    mounted.clone(),
-                    container.get_dyn::<dyn nest_rs_database::UnitOfWork>(),
-                ),
+                SubscriptionEndpoint::new(units, bridge, &options, mounted.clone(), binding),
                 options.playground.then(|| {
                     async_graphql::http::playground_source(
                         async_graphql::http::GraphQLPlaygroundConfig::new(options.path.as_str())

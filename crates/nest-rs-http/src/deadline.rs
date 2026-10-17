@@ -45,6 +45,12 @@ impl RequestDeadline {
         self.0.at
     }
 
+    /// The request timeout the deadline was set from: the budget a cut
+    /// reports.
+    pub fn timeout(&self) -> Duration {
+        self.0.timeout
+    }
+
     /// A unit of work takes the cut over: it cuts its body at [`at`](Self::at)
     /// and settles within `settle_net` of it, which the edge then waits.
     pub fn hand_to_unit(&self, settle_net: Duration) {

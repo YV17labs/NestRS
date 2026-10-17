@@ -27,6 +27,7 @@ mod loader;
 mod module;
 mod opaque;
 mod operation;
+mod operation_units;
 mod redact;
 mod resolver;
 mod scope;

@@ -14,6 +14,7 @@ mod error;
 mod expose;
 mod http;
 mod module;
+mod savepoint;
 
 /// The principal the suite's authentication stand-ins attach: a caller with no
 /// identity of its own.

@@ -205,7 +205,7 @@ pub use cors::HttpCors;
 pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
-pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, endpoint_fn};
+pub use endpoint::{BoxEndpoint, CarriedUnits, Endpoint, HttpEndpointMeta, endpoint_fn};
 pub use endpoint_guards::{CarriedView, EndpointGuards, GuardList};
 pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError};
 pub use fallback::HttpFallbackMeta;
@@ -252,7 +252,7 @@ pub mod __private {
 
     pub use crate::controller::{SchemaFn, schema_of};
     pub use crate::deprecation::deprecated_route;
-    pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by, with_data};
+    pub use crate::endpoint::{OriginCheck, carried_units, checks_origin, guarded_by, with_data};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
     pub use crate::error::OriginRefused;
     pub use crate::guard_stage::{

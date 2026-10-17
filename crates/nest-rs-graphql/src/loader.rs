@@ -9,6 +9,7 @@
 //! of its shutdown window.
 
 use std::any::TypeId;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use async_graphql::async_trait::async_trait;
@@ -40,12 +41,16 @@ inventory::collect!(GraphqlLoaderRegistration);
 /// carries into a [`Batch`](Continuation::Batch) — its trace, the caller's
 /// ability, the pool rather than its transaction — whichever field triggered
 /// it. Built where the request seeds its loaders, before any field runs, it
-/// holds the request's span, so the export files a batch where its lines do.
+/// holds the span of the unit whose identity the batch carries — the request's,
+/// outside the operation's own — so the export files a batch where its lines
+/// do.
 pub fn batch_spawner(
     batches: &DetachedWork,
 ) -> impl Fn(crate::BoxFuture<'static, ()>) + Send + Sync + 'static {
     let batches = batches.clone();
-    let span = tracing::Span::current();
+    let span = SEEDING
+        .with_borrow(Option::clone)
+        .unwrap_or_else(tracing::Span::current);
     move |batch| {
         let batch = match RequestContinuation::capture(Continuation::Batch) {
             Some(carried) => Either::Left(carried.scope(batch)),
@@ -61,6 +66,33 @@ pub fn batch_spawner(
 
 /// The per-request seeding step of one reachable dataloader.
 type LoaderSeed = fn(&Container, &DetachedWork, Request) -> Request;
+
+/// The span a request's batches run in, put in its data by the operation's
+/// unit before it opens its own: a batch carries its outermost unit's
+/// identity, so it runs in that unit's span, never the operation's.
+pub(crate) struct BatchSpan(pub(crate) tracing::Span);
+
+thread_local! {
+    /// The [`BatchSpan`] of the request whose loaders are being seeded, for the
+    /// spawners built there; set around the seeding alone, which is synchronous.
+    static SEEDING: RefCell<Option<tracing::Span>> = const { RefCell::new(None) };
+}
+
+/// Holds a request's [`BatchSpan`] in [`SEEDING`] while its loaders are
+/// seeded, and restores what was held before on drop, even on a panic.
+struct Seeding(Option<tracing::Span>);
+
+impl Seeding {
+    fn hold(span: Option<tracing::Span>) -> Self {
+        Self(SEEDING.replace(span))
+    }
+}
+
+impl Drop for Seeding {
+    fn drop(&mut self) {
+        SEEDING.set(self.0.take());
+    }
+}
 
 /// Seeds every discovered DataLoader into each GraphQL request.
 pub(crate) struct LoaderExtensionFactory {
@@ -145,8 +177,18 @@ impl Extension for LoaderExtension {
         mut request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
-        for seed in self.seeds.iter() {
-            request = seed(&self.container, &self.batches, request);
+        let held = request
+            .data
+            .get(&TypeId::of::<BatchSpan>())
+            .and_then(|held| held.downcast_ref::<BatchSpan>())
+            .map(|held| held.0.clone());
+        {
+            // An ancestor of the current span cannot be entered again, so the
+            // spawners read it off the seeding instead.
+            let _seeding = Seeding::hold(held);
+            for seed in self.seeds.iter() {
+                request = seed(&self.container, &self.batches, request);
+            }
         }
         next.run(ctx, request).await
     }

@@ -14,10 +14,10 @@ categories = ["web-programming", "asynchronous"]
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-graphql-macros.workspace = true
-# The ORM-agnostic ambient-executor seam. Every GraphQL operation is a POST, so
-# the HTTP boundary hands even a pure query a transaction; the endpoint routes
-# an operation it has proven read-only onto `Executor::non_transactional`
-# instead. No ORM is named — with no executor installed the lookup is a no-op.
+# The ORM-agnostic unit-of-work port: each operation runs as a unit of its own
+# through the binding the mount resolves (`run_unit`), and each mutation root
+# field in an `atomic` block of it. No ORM is named — with no binding an
+# operation runs bare.
 nest-rs-database.workspace = true
 # `GraphqlModule` owns its `#[config]` `GraphqlConfig` (namespace `graphql`),
 # loaded from `NESTRS_GRAPHQL__*`; `validator` backs its `#[validate]` derive.

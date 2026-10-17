@@ -289,7 +289,8 @@ impl HttpEndpointMeta {
     /// Declare that this surface's request carries units whose view is `V` —
     /// GraphQL operations, MCP operations — so the
     /// [`EndpointGuards<V, _>`](crate::EndpointGuards) the app's modules declare
-    /// join the pool at its request.
+    /// join the pool at its request, and the request itself runs on the pool
+    /// ([`CarriedUnits`]): each unit it carries settles its own work.
     pub fn carries<V: CarriedView>(mut self) -> Self {
         self.carried = Some(Carried {
             view: TypeId::of::<V>(),
@@ -354,6 +355,63 @@ impl HttpEndpointMeta {
     /// dependencies from `container`.
     pub fn mount(&self, container: &Container, routes: &mut HttpRoutes) {
         (self.mount)(container, routes);
+    }
+}
+
+/// In the extensions of a request addressed to a self-mount whose request
+/// carries units of its own ([`HttpEndpointMeta::carries`]: `/graphql`,
+/// `/mcp`), put there by the transport alone, below the error-resolution band
+/// (`70`): the layer running the request's unit of work, in the data-context
+/// band (`#[interceptor(priority = -10)]`), runs it on the pool, since each
+/// unit the request carries settles its own work and cuts its own body. A wrap
+/// at or above `70` — the global interceptor pool, `#[interceptor]`'s default
+/// band — folds outside the mark and never sees it.
+///
+/// ```
+/// use nest_rs_http::{CarriedUnits, Request};
+///
+/// /// The policy a request's own unit takes.
+/// fn on_the_pool(req: &Request) -> bool {
+///     req.extensions().get::<CarriedUnits>().is_some() || req.method().is_safe()
+/// }
+///
+/// let write = Request::builder().method(nest_rs_http::Method::POST).finish();
+/// assert!(!on_the_pool(&write), "a write no self-mount carries");
+/// ```
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct CarriedUnits;
+
+/// The mark the transport puts on a request, for a sibling crate's test of a
+/// layer that reads it.
+pub fn carried_units() -> CarriedUnits {
+    CarriedUnits
+}
+
+/// `inner`, every request addressed at or below one of `mounts` marked
+/// [`CarriedUnits`] first: a self-mount answers its whole subtree, and a
+/// template `also_mounts` declared matches as a route.
+pub(crate) struct MarkCarriedUnits<E> {
+    inner: E,
+    mounts: Vec<String>,
+}
+
+impl<E> MarkCarriedUnits<E> {
+    /// `mounts` are the paths as a client addresses them, global prefix included.
+    pub(crate) fn new(inner: E, mounts: Vec<String>) -> Self {
+        Self { inner, mounts }
+    }
+}
+
+impl<E: Endpoint> Endpoint for MarkCarriedUnits<E> {
+    fn call(&self, mut req: Request) -> impl Future<Output = Result<Response>> + Send {
+        let path = req.uri().path();
+        if self.mounts.iter().any(|mount| {
+            crate::fallback::is_under(path, mount) || crate::versioning::route_matches(path, mount)
+        }) {
+            req.extensions_mut().insert(CarriedUnits);
+        }
+        self.inner.call(req)
     }
 }
 
@@ -450,6 +508,31 @@ mod tests {
     impl nest_rs_core::UnitView for Socket {}
 
     impl CarriedView for Socket {}
+
+    #[tokio::test]
+    async fn a_request_at_or_below_a_mount_carrying_units_is_marked_and_no_other() {
+        let marked = MarkCarriedUnits::new(
+            endpoint_fn(|req: Request| async move {
+                let marked = req.extensions().get::<CarriedUnits>().is_some();
+                Ok(Response::builder().body(if marked { "marked" } else { "plain" }))
+            }),
+            vec!["/api/graphql".to_owned(), "/hooks/{id}".to_owned()],
+        );
+        for (path, expected) in [
+            ("/api/graphql", "marked"),
+            ("/api/graphql/stream", "marked"),
+            ("/hooks/7", "marked"),
+            ("/api/graphqlx", "plain"),
+            ("/api", "plain"),
+            ("/graphql", "plain"),
+        ] {
+            let req = Request::builder()
+                .uri(path.parse::<http::Uri>().unwrap())
+                .finish();
+            let body = marked.call(req).await.unwrap().into_body();
+            assert_eq!(body.into_string().await.unwrap(), expected, "{path}");
+        }
+    }
 
     #[test]
     fn a_self_mount_declares_its_guards_its_carried_units_and_its_origin_check() {

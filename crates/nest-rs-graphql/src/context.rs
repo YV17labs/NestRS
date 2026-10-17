@@ -7,7 +7,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_graphql::parser::types::{DocumentOperations, OperationType};
 use async_graphql::{BatchRequest, Data, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
 use nest_rs_core::__private::serde::Serialize;
@@ -19,11 +18,12 @@ use nest_rs_http::__private::poem_bridge::{
     request_from_poem, response_from_poem, response_to_poem,
 };
 use nest_rs_http::__private::{EndpointGuardsMeta, with_view};
-use nest_rs_http::{HeaderValue, Request, Response, StatusCode};
+use nest_rs_http::{HeaderValue, Request, RequestDeadline, Response, StatusCode};
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 use poem::{Endpoint, Error, FromRequest, IntoResponse, RequestBody, Result};
 
 use crate::module::GraphqlModule;
+use crate::operation_units::OperationUnits;
 use crate::view::GraphqlView;
 
 /// A per-request forwarder, submitted via `inventory`, attaching values from
@@ -106,10 +106,11 @@ pub(crate) struct OperationBridge {
 }
 
 /// The `/graphql` endpoint: `async_graphql_poem::GraphQL`'s GET / POST / batch
-/// handling with every seed folded over the request first. The `multipart/mixed`
-/// incremental-delivery path (`@defer` / `@stream`) is not reproduced.
+/// handling with every seed folded over the request first, each operation run
+/// as its own unit. The `multipart/mixed` incremental-delivery path (`@defer` /
+/// `@stream`) is not reproduced.
 pub(crate) struct ContextEndpoint<E> {
-    executor: E,
+    units: OperationUnits<E>,
     bridge: Arc<OperationBridge>,
     max_batch_size: usize,
 }
@@ -202,9 +203,13 @@ pub fn connection_data(container: &Container, req: &Request, data: Data) -> Data
 }
 
 impl<E> ContextEndpoint<E> {
-    pub(crate) fn new(executor: E, bridge: Arc<OperationBridge>, max_batch_size: usize) -> Self {
+    pub(crate) fn new(
+        units: OperationUnits<E>,
+        bridge: Arc<OperationBridge>,
+        max_batch_size: usize,
+    ) -> Self {
         Self {
-            executor,
+            units,
             bridge,
             max_batch_size,
         }
@@ -271,40 +276,6 @@ pub(crate) fn fold_variables<T: Serialize + DeserializeOwned>(
             nest_rs_core::DecodeError::new(&err),
         ))
     })
-}
-
-/// Whether **every** operation definition in **every** request of the batch is
-/// a `query`, the only shape safe to run outside the request transaction.
-///
-/// Conservative: a `mutation` or `subscription` definition anywhere answers
-/// `false` even when `operationName` selects a query, and so does a parse
-/// failure — a misread mutation would run with no atomicity. The parse is cached
-/// for the executor ([`GqlRequest::parsed_query`]).
-fn is_read_only(batch: &mut BatchRequest) -> bool {
-    let requests: &mut [GqlRequest] = match batch {
-        BatchRequest::Single(request) => std::slice::from_mut(request),
-        BatchRequest::Batch(requests) => requests.as_mut_slice(),
-    };
-    requests
-        .iter_mut()
-        .all(|request| match request.parsed_query() {
-            Ok(document) => match &document.operations {
-                DocumentOperations::Single(op) => op.node.ty == OperationType::Query,
-                DocumentOperations::Multiple(ops) => {
-                    ops.values().all(|op| op.node.ty == OperationType::Query)
-                }
-            },
-            Err(_) => false,
-        })
-}
-
-/// Run `fut` on a non-transactional handle when the ambient executor can hand
-/// one out ([`nest_rs_database::Executor::non_transactional`]).
-async fn without_transaction<F: Future>(fut: F) -> F::Output {
-    match nest_rs_database::current_executor().and_then(|executor| executor.non_transactional()) {
-        Some(executor) => nest_rs_database::with_request_executor(executor, fut).await,
-        None => fut.await,
-    }
 }
 
 /// The request's GraphQL batch, or the answer to a body that is not one.
@@ -461,22 +432,19 @@ impl<E: Executor> ContextEndpoint<E> {
             Ok(batch) => batch,
             Err(resp) => return Ok(*resp),
         };
-        let mut batch = match batch {
+        let batch = match batch {
             BatchRequest::Single(r) => BatchRequest::Single(self.bridge.seed(req, r)),
             BatchRequest::Batch(rs) => {
                 BatchRequest::Batch(rs.into_iter().map(|r| self.bridge.seed(req, r)).collect())
             }
         };
-        let read_only = is_read_only(&mut batch);
-        let executed = async {
-            response_from_poem(
-                GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response(),
-            )
-        };
-        Ok(match read_only {
-            true => without_transaction(executed).await,
-            false => executed.await,
-        })
+        let executed = self
+            .units
+            .execute_batch_within(batch, req.extensions().get::<RequestDeadline>())
+            .await;
+        Ok(response_from_poem(
+            GraphQLBatchResponse(executed).into_response(),
+        ))
     }
 }
 
@@ -578,72 +546,6 @@ mod tests {
     use nest_rs_core::__private::serde;
 
     use super::*;
-
-    fn single(query: &str) -> BatchRequest {
-        BatchRequest::Single(GqlRequest::new(query))
-    }
-
-    fn batch(queries: &[&str]) -> BatchRequest {
-        BatchRequest::Batch(queries.iter().map(|q| GqlRequest::new(*q)).collect())
-    }
-
-    #[test]
-    fn a_query_is_read_only() {
-        assert!(is_read_only(&mut single("query { me { id } }")));
-    }
-
-    #[test]
-    fn an_anonymous_shorthand_operation_is_read_only() {
-        assert!(is_read_only(&mut single("{ me { id } }")));
-    }
-
-    #[test]
-    fn an_introspection_query_is_read_only() {
-        assert!(is_read_only(&mut single("{ __schema { types { name } } }")));
-    }
-
-    #[test]
-    fn a_mutation_is_not_read_only() {
-        assert!(!is_read_only(&mut single("mutation { createUser { id } }")));
-    }
-
-    #[test]
-    fn a_subscription_is_not_read_only() {
-        assert!(!is_read_only(&mut single(
-            "subscription { userAdded { id } }"
-        )));
-    }
-
-    #[test]
-    fn a_document_holding_a_mutation_beside_the_selected_query_is_not_read_only() {
-        let request =
-            GqlRequest::new("query Read { me { id } } mutation Write { createUser { id } }")
-                .operation_name("Read");
-        assert!(!is_read_only(&mut BatchRequest::Single(request)));
-    }
-
-    #[test]
-    fn a_batch_of_queries_is_read_only() {
-        assert!(is_read_only(&mut batch(&["{ me { id } }", "query { a }"])));
-    }
-
-    #[test]
-    fn a_batch_holding_one_mutation_is_not_read_only() {
-        assert!(!is_read_only(&mut batch(&[
-            "{ me { id } }",
-            "mutation { bump }",
-        ])));
-    }
-
-    #[test]
-    fn an_unparsable_query_is_not_read_only() {
-        assert!(!is_read_only(&mut single("{{{")));
-    }
-
-    #[test]
-    fn a_field_named_like_a_mutation_stays_read_only() {
-        assert!(is_read_only(&mut single("{ mutationLog { id } }")));
-    }
 
     /// Variables whose JSON form cannot be written.
     struct Unwritable;

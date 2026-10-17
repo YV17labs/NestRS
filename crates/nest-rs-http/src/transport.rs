@@ -15,7 +15,7 @@ use crate::controller::HttpControllerMeta;
 use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::edge::EdgeEndpoint;
-use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta};
+use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, MarkCarriedUnits};
 use crate::endpoint_guards::{RequestStage, check_declarations_reached, request_stage};
 use crate::error::RouteError;
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
@@ -529,6 +529,9 @@ impl Transport for HttpTransport {
         let origins = OriginPolicy::from_container(container);
         let mut endpoint_owner: HashMap<String, String> = HashMap::new();
         let mut carried: Vec<TypeId> = Vec::new();
+        // As a client addresses them: the wraps run before the router strips
+        // the global prefix.
+        let mut carrying: Vec<String> = Vec::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
             let owner = format!("{} endpoint {}", d.meta.label(), d.meta.owner());
             // Nested whole at its path; what it routes below is its own template.
@@ -583,7 +586,14 @@ impl Transport for HttpTransport {
             // registers its entries as they are.
             let site = format!("the {} request at {}", d.meta.label(), d.meta.path());
             let handler = d.meta.handler();
-            carried.extend(d.meta.carried().map(|units| units.view));
+            if let Some(units) = d.meta.carried() {
+                carried.push(units.view);
+                carrying.extend(
+                    d.meta
+                        .paths()
+                        .map(|path| join_path(prefix.as_deref().unwrap_or(""), path)),
+                );
+            }
             let guarded: Option<Wrap> = match request_stage(container, &d.meta, &site)? {
                 RequestStage::Open => {
                     if handler.posture() == Posture::Gated && d.meta.carried().is_none() {
@@ -718,6 +728,11 @@ impl Transport for HttpTransport {
             let inner = below.iter().fold(BoxEndpoint::new(router), |inner, meta| {
                 meta.wrap(container, inner)
             });
+            // Outside the unit-of-work band, which reads the mark.
+            let inner = match carrying.is_empty() {
+                true => inner,
+                false => BoxEndpoint::new(MarkCarriedUnits::new(inner, carrying)),
+            };
             let endpoint = above
                 .iter()
                 .fold(BoxEndpoint::new(ResolvedErrors(inner)), |endpoint, meta| {

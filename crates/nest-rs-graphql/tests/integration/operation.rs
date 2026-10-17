@@ -201,13 +201,14 @@ async fn a_field_resolver_over_many_parents_files_no_line_of_its_own() {
     let served = lines(&logs);
     assert_eq!(served.len(), 1, "one line, the root field's: {served:#?}");
     assert_eq!(served[0].field("operation").as_deref(), Some("notes"));
-    assert!(
+    assert_eq!(
         logs.find(
             nest_rs_core::operation_log::TARGET,
             nest_rs_graphql::unit::OPERATION.name(),
         )
-        .is_empty(),
-        "the document operation is not a root field's name",
+        .len(),
+        1,
+        "one line for the document's operation, which names no root field",
     );
     let field_spans = logs
         .spans()

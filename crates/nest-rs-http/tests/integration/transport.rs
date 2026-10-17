@@ -1191,3 +1191,80 @@ async fn a_blocking_stream_and_blocking_detached_work_are_named_and_never_waited
     assert_eq!(detached.field("still_running").as_deref(), Some("1"));
     release.send(()).expect("the drop is waiting");
 }
+
+/// The units the `/units` self-mount's request carries.
+struct Units;
+
+impl nest_rs_core::UnitView for Units {}
+
+impl nest_rs_http::CarriedView for Units {}
+
+/// A self-mount whose request carries units of its own, as `/graphql` does,
+/// beside a route and a wrap in the unit-of-work band that says whether the
+/// request it saw was marked.
+struct CarryingMount;
+
+impl nest_rs_core::Discoverable for CarryingMount {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
+        use nest_rs_http::{BoxEndpoint, CarriedUnits, Endpoint, HeaderValue, endpoint_fn};
+
+        builder
+            .attach_meta::<CarryingMount, HttpEndpointMeta>(
+                HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/units", "units", |_c, routes| {
+                    routes.route_any_poem("/units", poem::endpoint::make_sync(|_| "units"));
+                })
+                .carries::<Units>()
+                .owned_by("CarryingMount"),
+            )
+            .provide_meta(HttpEndpointWrap::with_priority(
+                endpoint_wrap_priority::DATA_CONTEXT,
+                |_container, inner: BoxEndpoint| {
+                    BoxEndpoint::new(endpoint_fn(move |req: nest_rs_http::Request| {
+                        let marked = req.extensions().get::<CarriedUnits>().is_some();
+                        let inner = inner.clone();
+                        async move {
+                            let mut resp = inner.call(req).await?;
+                            resp.headers_mut().insert(
+                                "x-carried-units",
+                                HeaderValue::from_static(if marked { "yes" } else { "no" }),
+                            );
+                            Ok(resp)
+                        }
+                    }))
+                },
+            ))
+    }
+}
+
+#[controller(path = "/plain")]
+struct PlainController;
+
+#[routes]
+impl PlainController {
+    #[post("/")]
+    async fn plain(&self) -> &'static str {
+        "plain"
+    }
+}
+
+#[module(providers = [CarryingMount, PlainController])]
+struct CarryingModule;
+
+#[tokio::test]
+async fn a_request_to_a_mount_carrying_units_is_marked_before_the_unit_of_work_band() {
+    for prefix in [None, Some("/api")] {
+        let client = crate::boot_on::<CarryingModule>(HttpConfig {
+            global_prefix: prefix.map(Into::into),
+            ..HttpConfig::default()
+        })
+        .await;
+        let at = |path: &str| format!("{}{path}", prefix.unwrap_or(""));
+        let carried = client.post(at("/units")).send().await;
+        carried.assert_status_is_ok();
+        carried.assert_header("x-carried-units", "yes");
+        let plain = client.post(at("/plain")).send().await;
+        plain.assert_status_is_ok();
+        plain.assert_header("x-carried-units", "no");
+    }
+}

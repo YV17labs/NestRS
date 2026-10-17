@@ -15,7 +15,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_graphql::http::{ALL_WEBSOCKET_PROTOCOLS, ClientMessage, WebSocketProtocols, WsMessage};
-use async_graphql::parser::types::{DocumentOperations, OperationType};
+use async_graphql::parser::types::OperationType;
 use async_graphql::{Data, Executor};
 use async_graphql_poem::GraphQLProtocol;
 use futures_util::future::Either;
@@ -34,15 +34,20 @@ use crate::context::{ENDPOINT, OperationBridge, fold_variables, variable_pipe_er
 use nest_rs_http::__private::with_view;
 use nest_rs_pipes::{GlobalPipe, PipeError};
 
-/// The composed schema as a bare [`Executor`], as the mount serves it: a
-/// graphql-ws driver ([`async_graphql::http::WebSocket`]) takes an executor,
-/// not a URL, so a test subscriber needs this.
+/// The composed schema as a bare [`Executor`], as the mount serves it — each
+/// operation run as its own unit: a graphql-ws driver
+/// ([`async_graphql::http::WebSocket`]) takes an executor, not a URL, so a
+/// test subscriber needs this.
 pub fn compose_schema(container: Container, config: &GraphqlConfig) -> impl Executor + 'static {
-    crate::redact::Redacted(crate::resolver::build_schema(
-        container,
-        config,
-        &DetachedWork::new(),
-    ))
+    let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
+    crate::operation_units::OperationUnits::new(
+        crate::redact::Redacted(crate::resolver::build_schema(
+            container,
+            config,
+            &DetachedWork::new(),
+        )),
+        binding,
+    )
 }
 
 /// Keep or drop one masked subscription item, called per item by the
@@ -522,26 +527,12 @@ enum Operation {
 }
 
 impl Operation {
-    /// Read off the request's document, parsed once (async-graphql caches it).
-    /// One that does not parse is answered at once, so it is an [`Operation::Answer`].
+    /// Read off the operation the request selects, as the engine selects it.
+    /// One that selects none is answered at once, so it is an [`Operation::Answer`].
     fn of(request: &mut async_graphql::Request) -> Self {
-        let selected = request.operation_name.clone();
-        let Ok(document) = request.parsed_query() else {
-            return Self::Answer;
-        };
-        let ty = match &document.operations {
-            DocumentOperations::Single(operation) => Some(operation.node.ty),
-            DocumentOperations::Multiple(operations) => selected.as_deref().and_then(|name| {
-                operations
-                    .iter()
-                    .find(|(candidate, _)| candidate.as_str() == name)
-                    .map(|(_, operation)| operation.node.ty)
-            }),
-        };
-        if ty == Some(OperationType::Subscription) {
-            Self::Subscription
-        } else {
-            Self::Answer
+        match crate::operation_units::selected_type(request) {
+            Some(OperationType::Subscription) => Self::Subscription,
+            _ => Self::Answer,
         }
     }
 }
@@ -1263,6 +1254,14 @@ mod tests {
 
     fn bounds() -> SocketBounds {
         SocketBounds::of(&GraphqlConfig::default())
+    }
+
+    /// The engine runs a document's one operation without its name, so the
+    /// socket's end must complete it like any other subscription.
+    #[test]
+    fn a_lone_named_subscription_sent_without_its_name_is_a_subscription() {
+        let mut named = async_graphql::Request::new("subscription Ticks { x }");
+        assert_eq!(Operation::of(&mut named), Operation::Subscription);
     }
 
     #[tokio::test]

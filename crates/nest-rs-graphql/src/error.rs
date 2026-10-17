@@ -113,7 +113,7 @@ fn answered(problem: &Problem, error: &(dyn StdError + 'static)) -> Error {
 }
 
 /// A problem in GraphQL's form.
-fn rendered(problem: &Problem) -> Error {
+pub(crate) fn rendered(problem: &Problem) -> Error {
     let code = problem.code().as_str();
     let retry_after = problem.retry_after();
     Error::new(problem.client_message()).extend_with(move |_, e| {

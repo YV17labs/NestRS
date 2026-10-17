@@ -1,4 +1,5 @@
 use poem::http::header;
+use sea_orm::{ActiveModelTrait, Set};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -451,5 +452,90 @@ async fn graphql_validation_errors_name_the_offending_fields() {
     assert!(
         !rejected.to_string().contains("Validation error:"),
         "`validator`'s raw debug payload must not reach the wire: {rejected}",
+    );
+}
+
+#[tokio::test]
+async fn a_publish_the_database_refuses_answers_in_band_and_leaves_the_post_a_draft() {
+    let logs = nest_rs::testing::LogCapture::install();
+    let (db, app) = boot().await;
+    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org = create_org(&app, &bootstrap, "GqlRefused").await;
+    let admin = format!("Bearer {}", token_for(&org, "admin").await);
+    let author_id =
+        Uuid::parse_str(&create_user(&app, &admin, "Author", "author@gqlrefused.test").await)
+            .expect("valid user uuid");
+    let author = format!("Bearer {}", token_with_sub(&org, "admin", author_id).await);
+    let post = create_post(&app, &author, "Refused", "Once").await;
+    features::posts::publication::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        post_id: Set(Uuid::parse_str(&post).expect("valid post uuid")),
+        actor_id: Set(Uuid::now_v7()),
+        published_at: Set(nest_rs::seaorm::now()),
+    }
+    .insert(db.connection().as_ref())
+    .await
+    .expect("seed the conflicting publication row");
+
+    let refused = graphql(
+        &app,
+        &author,
+        &format!("mutation {{ publishPost(id: \"{post}\") {{ status }} }}"),
+    )
+    .await;
+
+    assert_eq!(
+        refused["data"]["publishPost"],
+        serde_json::Value::Null,
+        "{refused}"
+    );
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "CONFLICT",
+        "{refused}"
+    );
+    let read = graphql(
+        &app,
+        &author,
+        &format!("{{ post(id: \"{post}\") {{ status }} }}"),
+    )
+    .await;
+    assert_eq!(read["data"]["post"]["status"], "DRAFT", "{read}");
+    let filed: Vec<String> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.level == "error")
+        .map(|event| format!("{} {}", event.target, event.message))
+        .collect();
+    assert_eq!(filed, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_document_whose_field_is_refused_still_commits_its_other_fields() {
+    let (_db, app) = boot().await;
+    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+
+    let reply = graphql(
+        &app,
+        &admin,
+        r#"mutation { kept: createOrg(input: {name: "GqlKept"}) { id } refused: createOrg(input: {name: ""}) { id } }"#,
+    )
+    .await;
+
+    assert_eq!(reply["errors"][0]["path"], json!(["refused"]), "{reply}");
+    let kept = reply["data"]["kept"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the kept field answered: {reply}"))
+        .to_owned();
+    let member = format!("Bearer {}", token_for(&kept, "admin").await);
+    let got = app
+        .http()
+        .get(format!("/orgs/{kept}"))
+        .header(header::AUTHORIZATION, &member)
+        .send()
+        .await;
+    got.assert_status_is_ok();
+    assert_eq!(
+        got.json().await.value().object().get("name").string(),
+        "GqlKept"
     );
 }

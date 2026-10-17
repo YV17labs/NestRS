@@ -1,11 +1,12 @@
-//! Safe or mutating is read off the HTTP method alone; `/graphql` steps a
-//! query-only batch back onto the pool through `Executor::non_transactional`.
+//! Safe or mutating is read off the HTTP method; a request whose self-mount
+//! carries units of its own (`/graphql`, `/mcp`) runs on the pool.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
+use nest_rs_http::CarriedUnits;
 use nest_rs_http::RequestDeadline;
 use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
@@ -26,6 +27,11 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 /// at the deadline, answered `503` with `Retry-After` since nothing it ran
 /// committed, and a commit is never cut — one past the deadline answers the
 /// handler's status, and one that never answers is a `500`.
+///
+/// A request to a surface whose operations are units of their own — a GraphQL
+/// operation, an MCP operation — runs on the pool whatever its method: its
+/// guards read there, each operation settles its own work, and the cut is left
+/// to the edge or to the operations.
 #[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
@@ -47,13 +53,19 @@ impl Layer for DbContext {}
 #[async_trait]
 impl Interceptor for DbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        let policy = if is_safe(req.method()) {
+        let carries_units = req.extensions().get::<CarriedUnits>().is_some();
+        let policy = if carries_units || is_safe(req.method()) {
             TransactionPolicy::Pool
         } else {
             TransactionPolicy::PerUnit
         };
         let spec = UnitSpec::new(nest_rs_http::unit::REQUEST, ExecutorScope::Request, policy);
-        let Some(deadline) = req.extensions().get::<RequestDeadline>().cloned() else {
+        let deadline = req
+            .extensions()
+            .get::<RequestDeadline>()
+            .filter(|_| !carries_units)
+            .cloned();
+        let Some(deadline) = deadline else {
             return run_unit(
                 Some(&self.unit),
                 spec,
@@ -298,6 +310,55 @@ mod tests {
             started.elapsed(),
             Duration::from_secs(1),
             "answered at the deadline, its rollback left to the driver"
+        );
+    }
+
+    /// A binding recording the policy of every unit it opens.
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<TransactionPolicy>>);
+
+    impl UnitOfWork for Recording {
+        fn open(&self, spec: &UnitSpec) -> std::result::Result<Box<dyn OpenUnit>, Unhonoured> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(spec.policy);
+            Ok(Box::new(Settling {
+                takes: Duration::ZERO,
+                answer: Settlement::Settled,
+            }))
+        }
+
+        fn settle_net(&self) -> Duration {
+            Duration::from_secs(16)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_request_carrying_units_runs_on_the_pool_and_leaves_its_cut_to_them() {
+        let started = Instant::now();
+        let (mut req, deadline) = posted_under_a_deadline();
+        req.extensions_mut()
+            .insert(nest_rs_http::__private::carried_units());
+        let recording = Arc::new(Recording::default());
+        let ctx = DbContext {
+            unit: Arc::clone(&recording) as Arc<dyn UnitOfWork>,
+        };
+        let answered = answering_after(Duration::from_secs(3))
+            .interceptor(ctx)
+            .call(req)
+            .await;
+        assert_eq!(status_of(answered), StatusCode::CREATED);
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(3),
+            "not cut here: the units it carries cut their own bodies"
+        );
+        assert_eq!(deadline.unit_net(), None, "nor taken over");
+        assert_eq!(
+            *recording.0.lock().unwrap(),
+            [TransactionPolicy::Pool],
+            "a POST, yet its own unit is the pool"
         );
     }
 

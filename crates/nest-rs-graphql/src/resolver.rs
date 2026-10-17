@@ -552,6 +552,16 @@ macro_rules! discovered_root {
                     members: build_members(container, $kind),
                 }
             }
+
+            /// The first member that resolves the field.
+            async fn resolve_members(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
+                for member in &self.members {
+                    if let Some(value) = member.resolve_field(ctx).await? {
+                        return Ok(Some(value));
+                    }
+                }
+                Ok(None)
+            }
         }
 
         impl OutputType for $name {
@@ -578,12 +588,7 @@ macro_rules! discovered_root {
             }
 
             async fn resolve_field(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
-                for member in &self.members {
-                    if let Some(value) = member.resolve_field(ctx).await? {
-                        return Ok(Some(value));
-                    }
-                }
-                Ok(None)
+                self.resolve_root_field(ctx).await
             }
 
             /// First member that answers: `check_operations` leaves only
@@ -612,6 +617,20 @@ discovered_root!(
     GraphqlResolverKind::Mutation,
     "Mutation"
 );
+
+impl DiscoveredQuery {
+    async fn resolve_root_field(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
+        self.resolve_members(ctx).await
+    }
+}
+
+impl DiscoveredMutation {
+    /// Each mutation root field in an atomic block of its operation's unit, so
+    /// a field that errs rolls back alone.
+    async fn resolve_root_field(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
+        crate::operation_units::in_atomic_block(ctx, self.resolve_members(ctx)).await
+    }
+}
 
 /// The discovered `Subscription` root — [`discovered_root!`]'s streaming
 /// sibling; [`SubscriptionType`] shares no method with `ContainerType`.

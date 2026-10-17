@@ -42,6 +42,11 @@ pub(crate) fn presenting(cert: &str, key: &str) -> ClientTls {
     ClientTls::new(None, Some(TlsIdentity::new(inline(cert), inline(key))))
 }
 
+/// The default instance, as a link's lines and refusals name it.
+pub(crate) fn unnamed() -> crate::instance::RedisInstance {
+    crate::instance::RedisInstance::of::<nest_rs_core::Unnamed>()
+}
+
 /// `url` under `budget`, everything else at its default.
 pub(crate) fn config(url: &str, budget: Duration) -> RedisConfig {
     RedisConfig {

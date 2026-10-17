@@ -6,8 +6,10 @@
 //! ambient environment.
 
 use nest_rs_config::unclaimed::{MISSPELLED_CONFIG_NAMESPACE, UNREAD_CONFIG_VARIABLE};
-use nest_rs_config::{Config, ConfigService, Environment, config, var_name};
-use nest_rs_core::EnvPrefix;
+use nest_rs_config::{
+    Config, ConfigModule, ConfigService, Environment, ForInstance, config, var_name,
+};
+use nest_rs_core::{Container, EnvPrefix};
 use nest_rs_testing::{CapturedEvent, LogCapture};
 
 #[config(namespace = "unclaimed_keys")]
@@ -73,6 +75,54 @@ impl Config for EnvShapedConfig {
             prefix: env.get("PREFIX")?.unwrap_or(base.prefix),
         })
     }
+}
+
+/// A vendor's config, read once per instance an app opens.
+#[config(namespace = "unclaimed_vendor")]
+#[derive(Clone, Default)]
+struct VendorConfig {
+    max_connections: u64,
+}
+
+impl Config for VendorConfig {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+        Ok(Self {
+            max_connections: env
+                .parse("MAX_CONNECTIONS")?
+                .unwrap_or(base.max_connections),
+        })
+    }
+}
+
+/// A named instance of [`VendorConfig`], whose namespace is
+/// `unclaimed_vendor__spare`.
+#[nest_rs_core::instance]
+struct Spare;
+
+/// Another vendor's config, which no module opens per instance.
+#[config(namespace = "unclaimed_single")]
+#[derive(Clone, Default)]
+struct SingleConfig {
+    max_connections: u64,
+}
+
+impl Config for SingleConfig {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+        Ok(Self {
+            max_connections: env
+                .parse("MAX_CONNECTIONS")?
+                .unwrap_or(base.max_connections),
+        })
+    }
+}
+
+/// Register the instance [`Spare`] of [`VendorConfig`], as its module's
+/// `collect` does before any factory reads a config.
+fn register_spare() {
+    let _ = ConfigModule::provide_feature(
+        ForInstance::<Spare, VendorConfig>::default(),
+        Container::builder(),
+    );
 }
 
 /// The events `message` filed for `variable`.
@@ -682,6 +732,56 @@ fn a_misspelled_namespace_is_reported_with_the_namespace_linked() {
             Some(var_name("unclaimed__member", "URL"))
         );
         assert_silent(&logs, &sibling);
+        Ok(())
+    });
+}
+
+/// A named instance's variable is that instance's, though the default instance
+/// was read first and its keys checked before the instance's read: under the
+/// vendor's namespace it is one segment and a near miss away from a key read
+/// there.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_named_instance_s_variable_is_its_own_though_the_default_was_read_first() {
+    figment::Jail::expect_with(|jail| {
+        let spare = var_name("unclaimed_vendor__spare", "MAX_CONNECTIONS");
+        jail.set_env(&spare, "3");
+        let logs = LogCapture::install();
+
+        register_spare();
+        VendorConfig::load().expect("the default instance loads");
+
+        assert_silent(&logs, &spare);
+        Ok(())
+    });
+}
+
+/// An instance owns its namespace under its own vendor alone: a vendor no
+/// module opens per instance still reports the marker's segment as a key
+/// nothing read.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_variable_under_a_vendor_no_instance_opens_is_reported_though_a_marker_matches() {
+    figment::Jail::expect_with(|jail| {
+        let stray = var_name("unclaimed_single", "SPARE__MAX_CONNECTIONS");
+        jail.set_env(&stray, "3");
+        let logs = LogCapture::install();
+
+        register_spare();
+        SingleConfig::load().expect("the config loads");
+
+        assert_eq!(
+            reports(&logs, UNREAD_CONFIG_VARIABLE, &stray).len(),
+            1,
+            "{:#?}",
+            logs.events()
+        );
         Ok(())
     });
 }

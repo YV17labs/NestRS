@@ -1,5 +1,6 @@
 //! `RedisQueueModule` binds the **portable** names — `Arc<dyn JobProducer>` and
-//! the `BoundConsumer` — over the one connection, bare import or `for_root`.
+//! the `BoundConsumer` — over the default instance's connection, bare import or
+//! `for_root`.
 
 use std::sync::Arc;
 

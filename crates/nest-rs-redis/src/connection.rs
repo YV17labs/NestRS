@@ -1,6 +1,7 @@
-//! [`RedisConnection`] — the one connection every binding in this crate shares
-//! to reach Redis, opened once by [`RedisModule`](crate::RedisModule) over the
-//! link the topology its URL declares needs: one server
+//! [`RedisConnection`] — an instance's connection, which every binding over
+//! that instance shares to reach Redis, opened once per instance by
+//! [`RedisModule`](crate::RedisModule) over the link the topology its URL
+//! declares needs: one server
 //! ([`StandaloneLink`]), the primary the sentinels name ([`SentinelLink`]), or
 //! a Cluster's nodes ([`ClusterLink`]).
 //!
@@ -14,8 +15,8 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_config::{ClientTls, Namespaced};
-use nest_rs_core::{Attempt, Backoff, Proving, Unproved, prove};
+use nest_rs_config::ClientTls;
+use nest_rs_core::{Attempt, Backoff, Instance, Proving, Unnamed, Unproved, prove};
 use redis::AsyncConnectionConfig;
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster_routing::Slot;
@@ -29,16 +30,29 @@ use redis::{
 use crate::cluster::{ClusterLink, SlotLink};
 use crate::config::CONNECT_TIMEOUT;
 use crate::error::RedisError;
+use crate::instance::RedisInstance;
 use crate::script::{Invocation, RedisScript};
 use crate::sentinel::SentinelLink;
 use crate::standalone::StandaloneLink;
 use crate::url::{NodeAddr, RedisUrl};
 use crate::{RedisConfig, tls};
 
-/// The sentence every binding's boot error appends when the connection is
-/// missing.
-pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered — import \
-     RedisModule::for_root(None), which opens the one Redis connection every Redis binding shares";
+/// The sentence every binding's boot error appends when the connection of the
+/// instance `I` is missing.
+pub(crate) fn connection_remedy<I: Instance>() -> String {
+    if I::NAME.is_empty() {
+        return "RedisConnection is not registered — import RedisModule::for_root(None), which \
+                opens the Redis connection every binding of the default instance shares"
+            .to_owned();
+    }
+    let marker = nest_rs_core::__private::short_type_name::<I>();
+    format!(
+        "RedisConnection<{marker}> is not registered — import \
+         RedisModule::for_root(({marker}, None)), which opens the Redis connection every binding \
+         of the instance `{}` shares",
+        I::NAME,
+    )
+}
 
 /// How many times one call loads its script, at most: a `SCRIPT FLUSH` or a
 /// failover landing between a load and the call that follows it would
@@ -65,22 +79,47 @@ const SCRIPT_LOADS: u32 = 3;
 /// `redis::Client` of your own for those. Non-blocking, atomic operations (a
 /// `Script`, `INCR`, `GET`/`SET`, an atomic pipeline) are the intended traffic;
 /// on a Cluster, a script or a pipeline names keys of one hash slot.
-#[derive(Clone)]
-pub struct RedisConnection {
+///
+/// `I` is the instance it serves: [`Unnamed`], the default, unless the app
+/// opened another with `RedisModule::for_root((Cache, cfg))` and injects
+/// `Arc<RedisConnection<Cache>>`. Every line it files carries the instance as
+/// `instance`, and every refusal names that instance's variables.
+pub struct RedisConnection<I = Unnamed> {
     /// The link every clone shares.
-    link: Link,
+    link: Link<I>,
     /// How long a command on this handle waits for its answer.
     budget: Duration,
 }
 
-/// The link a connection reaches Valkey through, one per topology.
-#[derive(Clone)]
-enum Link {
+impl<I> Clone for RedisConnection<I> {
+    fn clone(&self) -> Self {
+        Self {
+            link: self.link.clone(),
+            budget: self.budget,
+        }
+    }
+}
+
+/// The link a connection reaches Valkey through, one per topology. A
+/// Cluster's is generic over the instance: `redis` opens each node's
+/// connection through a static constructor, which only a type reaches.
+enum Link<I> {
     Standalone(Arc<StandaloneLink>),
     Sentinel(Arc<SentinelLink>),
-    Cluster(Arc<ClusterLink>),
+    Cluster(Arc<ClusterLink<I>>),
     /// A Cluster's link dedicated to one slot's primary.
-    Slot(Arc<SlotLink>),
+    Slot(Arc<SlotLink<I>>),
+}
+
+impl<I> Clone for Link<I> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Standalone(link) => Self::Standalone(Arc::clone(link)),
+            Self::Sentinel(link) => Self::Sentinel(Arc::clone(link)),
+            Self::Cluster(link) => Self::Cluster(Arc::clone(link)),
+            Self::Slot(link) => Self::Slot(Arc::clone(link)),
+        }
+    }
 }
 
 /// The shortest the socket waits before it probes, or before it gives up on
@@ -92,8 +131,9 @@ const LIVENESS_FLOOR: Duration = Duration::from_secs(1);
 pub(crate) const RECONNECT_FACTOR: f32 = 2.0;
 
 impl RedisConnection {
-    /// Open the connection to the Redis `config` names and prove it answers,
-    /// giving up after [`connect_timeout`](RedisConfig::connect_timeout).
+    /// Open the default instance's connection to the Redis `config` names and
+    /// prove it answers, giving up after
+    /// [`connect_timeout`](RedisConfig::connect_timeout).
     ///
     /// The URL's scheme declares the topology: `redis://` and `rediss://` one
     /// server; `redis-sentinel://` and `rediss-sentinel://` the primary the
@@ -129,30 +169,40 @@ impl RedisConnection {
     /// the last one, as a server that is not ready rather than one that cannot
     /// be reached. A `rediss://` URL pointed at a plaintext Redis runs out the
     /// budget as an unreachable one does.
+    ///
+    /// A named instance's connection is opened by `RedisModule::for_root((Cache,
+    /// cfg))`, whose refusals name `<PREFIX>_REDIS__CACHE__*`.
     pub async fn connect(config: &RedisConfig) -> Result<Self, RedisError> {
+        Self::open(config).await
+    }
+}
+
+impl<I: Instance> RedisConnection<I> {
+    /// [`connect`](RedisConnection::connect), for the instance `I`: its lines
+    /// carry `I`'s name and its refusals name `I`'s variables.
+    pub(crate) async fn open(config: &RedisConfig) -> Result<Self, RedisError> {
+        let instance = RedisInstance::of::<I>();
         let budget = CONNECT_TIMEOUT
             .check(
-                RedisConfig::NAMESPACE,
+                instance.namespace(),
                 CONNECT_TIMEOUT.field(),
                 config.connect_timeout,
             )
             .map_err(RedisError::Budget)?;
-        let link = match RedisUrl::parse(&config.url)? {
-            RedisUrl::Standalone(info) => {
-                Link::Standalone(StandaloneLink::connect(info, &config.tls, budget).await?)
-            }
+        let link = match RedisUrl::parse(&config.url, &instance)? {
+            RedisUrl::Standalone(info) => Link::Standalone(
+                StandaloneLink::connect(info, &config.tls, instance, budget).await?,
+            ),
             RedisUrl::Sentinel(url) => {
-                Link::Sentinel(SentinelLink::connect(url, &config.tls, budget).await?)
+                Link::Sentinel(SentinelLink::connect(url, &config.tls, instance, budget).await?)
             }
             RedisUrl::Cluster(url) => {
-                Link::Cluster(ClusterLink::connect(url, &config.tls, budget).await?)
+                Link::Cluster(ClusterLink::connect(url, &config.tls, instance, budget).await?)
             }
         };
         Ok(Self { link, budget })
     }
-}
 
-impl RedisConnection {
     /// A connection of its own to the same Redis, opened from the same settings
     /// — for a command that blocks on `key`, which on the shared link would
     /// stall every other caller — its commands waiting this handle's budget: a
@@ -191,13 +241,14 @@ impl RedisConnection {
 
     /// The connection's [`Budget`](nest_rs_core::Budget), declared by
     /// [`RedisModule`](crate::RedisModule) and by each binding beside its net,
-    /// so a connection seeded without the module is held too.
+    /// so a connection seeded without the module is held too. Its setting is
+    /// the instance's own variable.
     pub(crate) fn declared_budget() -> nest_rs_core::Budget {
         nest_rs_core::Budget::of::<Self>(
             "the Redis connection",
             format!(
                 "{}, or `{}` in code",
-                nest_rs_config::var_name(RedisConfig::NAMESPACE, CONNECT_TIMEOUT.key()),
+                RedisInstance::of::<I>().connect_timeout_var(),
                 CONNECT_TIMEOUT.field(),
             ),
             |conn| Some(conn.budget()),
@@ -217,13 +268,13 @@ impl RedisConnection {
             .provide_meta(nest_rs_core::Net::over::<Self>(port, net))
     }
 
-    /// The connection [`RedisModule`](crate::RedisModule) opened, for
-    /// `binding`'s factory.
+    /// The connection [`RedisModule`](crate::RedisModule) opened for the
+    /// instance `I`, for `binding`'s factory.
     pub(crate) fn of(container: &nest_rs_core::Container, binding: &str) -> anyhow::Result<Self> {
         container
             .get::<Self>()
             .map(|conn| (*conn).clone())
-            .ok_or_else(|| anyhow::anyhow!("{binding}: {CONNECTION_REMEDY}"))
+            .ok_or_else(|| anyhow::anyhow!("{binding}: {}", connection_remedy::<I>()))
     }
 
     /// Run `invocation`, loading its script on the server that ran it each time
@@ -273,7 +324,7 @@ impl RedisConnection {
     }
 }
 
-impl ConnectionLike for RedisConnection {
+impl<I: Instance> ConnectionLike for RedisConnection<I> {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         let budget = self.budget;
         let link = &self.link;
@@ -315,16 +366,18 @@ impl ConnectionLike for RedisConnection {
     }
 }
 
-/// What the proof of a link on `endpoint` reports, said on `nest_rs::redis`:
-/// every failure that may clear, a budget cut, and a link opened after
-/// retrying.
-pub(crate) fn said<E: std::error::Error + 'static>(
-    endpoint: &str,
+/// What the proof of `instance`'s link on `endpoint` reports, said on
+/// `nest_rs::redis`: every failure that may clear, a budget cut, and a link
+/// opened after retrying.
+pub(crate) fn said<'a, E: std::error::Error + 'static>(
+    instance: &'a RedisInstance,
+    endpoint: &'a str,
     budget: Duration,
-) -> impl FnMut(Proving<'_, E>) + '_ {
+) -> impl FnMut(Proving<'_, E>) + 'a {
     move |proving| match proving {
         Proving::Retrying { attempt, error } => tracing::warn!(
             target: crate::TARGET,
+            instance = instance.name(),
             endpoint = %endpoint,
             attempt,
             error = %nest_rs_core::error_message(error),
@@ -333,6 +386,7 @@ pub(crate) fn said<E: std::error::Error + 'static>(
         // One final warn, so a hung DNS or a black-holed port is said.
         Proving::TimedOut { attempt } => tracing::warn!(
             target: crate::TARGET,
+            instance = instance.name(),
             endpoint = %endpoint,
             attempt,
             timeout_secs = budget.as_secs_f64(),
@@ -340,6 +394,7 @@ pub(crate) fn said<E: std::error::Error + 'static>(
         ),
         Proving::Proved { attempts } if attempts > 1 => tracing::info!(
             target: crate::TARGET,
+            instance = instance.name(),
             endpoint = %endpoint,
             attempts,
             "connected to redis after retrying",
@@ -348,11 +403,12 @@ pub(crate) fn said<E: std::error::Error + 'static>(
     }
 }
 
-/// The proof of a link on `endpoint` within `budget`: [`prove`] over
-/// [`Backoff::RECONNECT`]'s curve drawn from `seed` — every replica's own, so
-/// replicas that lost Valkey together do not dial it again together — each
-/// attempt [`said`].
+/// The proof of `instance`'s link on `endpoint` within `budget`: [`prove`]
+/// over [`Backoff::RECONNECT`]'s curve drawn from `seed` — every replica's
+/// own, so replicas that lost Valkey together do not dial it again together —
+/// each attempt [`said`].
 pub(crate) async fn proved<T, E, F, Fut>(
+    instance: &RedisInstance,
     budget: Duration,
     endpoint: &str,
     seed: u64,
@@ -367,16 +423,17 @@ where
         budget,
         Backoff::RECONNECT,
         seed,
-        said(endpoint, budget),
+        said(instance, endpoint, budget),
         attempt,
     )
     .await
 }
 
-/// The boot error of a server that answered or failed on every attempt until
-/// the budget was spent: not ready when its last failure was an answer,
-/// unreachable otherwise.
+/// The boot error of `instance`'s server that answered or failed on every
+/// attempt until the budget was spent: not ready when its last failure was an
+/// answer, unreachable otherwise.
 pub(crate) fn spent(
+    instance: &RedisInstance,
     endpoint: String,
     budget: Duration,
     attempts: u32,
@@ -387,26 +444,33 @@ pub(crate) fn spent(
             endpoint,
             budget,
             attempts,
+            connect_timeout_var: instance.connect_timeout_var(),
             source,
         },
         source => RedisError::Unreachable {
             endpoint,
             budget,
             attempts,
+            url_var: instance.url_var(),
+            connect_timeout_var: instance.connect_timeout_var(),
             source,
         },
     }
 }
 
-/// The boot error a proof of `endpoint` that ended without its link ends in.
+/// The boot error a proof of `instance`'s `endpoint` that ended without its
+/// link ends in.
 pub(crate) fn unproved(
     unproved: Unproved<redis::RedisError, RedisError>,
+    instance: &RedisInstance,
     endpoint: &str,
     budget: Duration,
 ) -> RedisError {
     match unproved {
         Unproved::Refused(refusal) => refusal,
-        Unproved::Spent { attempts, last } => spent(endpoint.to_owned(), budget, attempts, last),
+        Unproved::Spent { attempts, last } => {
+            spent(instance, endpoint.to_owned(), budget, attempts, last)
+        }
     }
 }
 
@@ -414,6 +478,7 @@ pub(crate) fn unproved(
 /// a Cluster's seed — with `settings`, encrypted when `certificates` are
 /// given.
 pub(crate) fn node_client(
+    instance: &RedisInstance,
     node: &NodeAddr,
     settings: RedisConnectionInfo,
     certificates: Option<&redis::TlsCertificates>,
@@ -424,10 +489,11 @@ pub(crate) fn node_client(
         .into_connection_info()
         .map_err(|source| RedisError::InvalidUrl {
             endpoint: endpoint.clone(),
+            url_var: instance.url_var(),
             source,
         })?
         .set_redis_settings(settings);
-    open_client(info, certificates, &endpoint, budget)
+    open_client(instance, info, certificates, &endpoint, budget)
 }
 
 /// `node`'s address, encrypted or not — verified whenever it is.
@@ -447,6 +513,7 @@ pub(crate) fn node_addr(node: &NodeAddr, encrypted: bool) -> ConnectionAddr {
 /// The client of `info`, its sockets set for `budget`, encrypted with
 /// `certificates` when given. Nothing is dialled.
 pub(crate) fn open_client(
+    instance: &RedisInstance,
     info: ConnectionInfo,
     certificates: Option<&redis::TlsCertificates>,
     endpoint: &str,
@@ -456,13 +523,14 @@ pub(crate) fn open_client(
     match certificates {
         None => redis::Client::open(info).map_err(|source| RedisError::InvalidUrl {
             endpoint: endpoint.to_owned(),
+            url_var: instance.url_var(),
             source,
         }),
         Some(certificates) => {
             redis::Client::build_with_tls(info, certificates.clone()).map_err(|source| {
                 RedisError::TlsRefused {
                     endpoint: endpoint.to_owned(),
-                    reason: tls::unusable_material(),
+                    reason: tls::unusable_material(instance),
                     source: Some(source),
                 }
             })
@@ -470,16 +538,17 @@ pub(crate) fn open_client(
     }
 }
 
-/// What one failed dial or proof met: a refusal every attempt would repeat, or
-/// a failure that may clear.
+/// What one failed dial or proof of `instance`'s link met: a refusal every
+/// attempt would repeat, or a failure that may clear.
 pub(crate) fn classify(
+    instance: &RedisInstance,
     source: redis::RedisError,
     endpoint: &str,
     database: i64,
 ) -> Attempt<redis::RedisError, RedisError> {
     if ClientTls::negotiation_failed(&source) {
         return Attempt::Refused(RedisError::TlsRefused {
-            reason: tls::remedy(&source),
+            reason: tls::remedy(instance, &source),
             endpoint: endpoint.to_owned(),
             source: Some(source),
         });
@@ -488,12 +557,14 @@ pub(crate) fn classify(
         return Attempt::Refused(RedisError::DatabaseRefused {
             endpoint: endpoint.to_owned(),
             database,
+            url_var: instance.url_var(),
             source,
         });
     }
     if refused(&source) {
         return Attempt::Refused(RedisError::Refused {
             endpoint: endpoint.to_owned(),
+            url_var: instance.url_var(),
             source,
         });
     }
@@ -534,8 +605,13 @@ pub(crate) fn demoted<T: Replies>(outcome: &Result<T, redis::RedisError>) -> boo
 }
 
 /// `call`, or once `budget` elapses the timeout redis itself reports, so
-/// `redis::RedisError::is_timeout` reads both the same way.
-async fn bounded<F: Future>(budget: Duration, call: F) -> Result<F::Output, redis::RedisError> {
+/// `redis::RedisError::is_timeout` reads both the same way, naming
+/// `instance`'s budget.
+async fn bounded<F: Future>(
+    instance: &RedisInstance,
+    budget: Duration,
+    call: F,
+) -> Result<F::Output, redis::RedisError> {
     #[expect(
         clippy::map_err_ignore,
         reason = "Elapsed carries nothing the timeout's own message does not say"
@@ -545,18 +621,23 @@ async fn bounded<F: Future>(budget: Duration, call: F) -> Result<F::Output, redi
             std::io::ErrorKind::TimedOut,
             format!(
                 "Redis did not answer within {budget:?}, the budget {} sets",
-                nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+                instance.connect_timeout_var(),
             ),
         ))
     })
 }
 
-/// `call`, a command's own outcome, answered or failed within `budget`.
-pub(crate) async fn answered<T, F>(budget: Duration, call: F) -> Result<T, redis::RedisError>
+/// `call`, a command's own outcome on `instance`'s link, answered or failed
+/// within `budget`.
+pub(crate) async fn answered<T, F>(
+    instance: &RedisInstance,
+    budget: Duration,
+    call: F,
+) -> Result<T, redis::RedisError>
 where
     F: Future<Output = Result<T, redis::RedisError>>,
 {
-    bounded(budget, call).await?
+    bounded(instance, budget, call).await?
 }
 
 /// Whether an attempt failed in a way every attempt will repeat.
@@ -669,7 +750,7 @@ mod tests {
     use crate::testing::{
         CLIENT, SERVER, answer, config, dropping_then_refusing_listener, inline,
         mutual_tls_listener, presenting, sentinel_listener, silent_listener, tls_listener,
-        trusting_the_authority,
+        trusting_the_authority, unnamed,
     };
 
     #[test]
@@ -1089,7 +1170,7 @@ mod tests {
     async fn refused_dials(seed: u64, budget: Duration) -> (Vec<Duration>, RedisError) {
         let started = tokio::time::Instant::now();
         let mut made = Vec::new();
-        let ended = proved(budget, "127.0.0.1:9", seed, |_| {
+        let ended = proved(&unnamed(), budget, "127.0.0.1:9", seed, |_| {
             made.push(started.elapsed());
             async {
                 Err::<(), _>(Attempt::Failed(redis::RedisError::from(
@@ -1099,7 +1180,7 @@ mod tests {
         })
         .await
         .expect_err("a dial refused every time never opens");
-        (made, unproved(ended, "127.0.0.1:9", budget))
+        (made, unproved(ended, &unnamed(), "127.0.0.1:9", budget))
     }
 
     #[tokio::test(start_paused = true)]
@@ -1331,11 +1412,132 @@ mod tests {
         assert!(settings.keepalive().is_some(), "{settings:?}");
     }
 
+    #[nest_rs_core::instance]
+    struct Cache;
+
+    /// What `open` of the instance `Cache` refuses `config` with.
+    async fn refused_for_the_cache(config: RedisConfig) -> RedisError {
+        match RedisConnection::<Cache>::open(&config).await {
+            Ok(_) => panic!("{config:?} must not connect"),
+            Err(refused) => refused,
+        }
+    }
+
+    /// Every refusal names the variables of the instance that failed, never the
+    /// default's.
+    #[tokio::test]
+    async fn a_named_instance_s_refusals_name_its_own_variables() {
+        let cache = |key| nest_rs_config::var_name("redis__cache", key);
+        let default = |key| nest_rs_config::var_name("redis", key);
+        let mut plaintext = config("redis://127.0.0.1:9/", Duration::from_secs(5));
+        plaintext.tls = trusting_the_authority();
+        for (case, refused, named) in [
+            (
+                "a zero budget",
+                refused_for_the_cache(config("redis://127.0.0.1:9/", Duration::ZERO)).await,
+                vec![cache("CONNECT_TIMEOUT_SECS")],
+            ),
+            (
+                "RESP3",
+                refused_for_the_cache(config(
+                    "redis://127.0.0.1:9/?protocol=resp3",
+                    Duration::from_secs(5),
+                ))
+                .await,
+                vec![cache("URL")],
+            ),
+            (
+                "a skipped verification",
+                refused_for_the_cache(config(
+                    "rediss://127.0.0.1:9/#insecure",
+                    Duration::from_secs(5),
+                ))
+                .await,
+                vec![cache("URL"), cache("TLS_CA_CERT")],
+            ),
+            (
+                "material beside a plaintext URL",
+                refused_for_the_cache(plaintext).await,
+                vec![cache("URL"), cache("TLS_CA_CERT"), cache("TLS_KEY")],
+            ),
+        ] {
+            let rendered = refused.to_string();
+            for variable in named {
+                assert!(rendered.contains(&variable), "{case}: {rendered}");
+            }
+            for variable in ["URL", "CONNECT_TIMEOUT_SECS", "TLS_CA_CERT", "TLS_KEY"] {
+                assert!(!rendered.contains(&default(variable)), "{case}: {rendered}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_named_instance_s_unreachable_server_is_said_and_refused_as_that_instance() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let refused =
+            refused_for_the_cache(config("redis://127.0.0.1:9/", Duration::from_millis(700))).await;
+        assert!(
+            matches!(refused, RedisError::Unreachable { .. }),
+            "{refused}"
+        );
+        let rendered = refused.to_string();
+        assert!(
+            rendered.contains(&nest_rs_config::var_name("redis__cache", "URL"))
+                && rendered.contains(&nest_rs_config::var_name(
+                    "redis__cache",
+                    "CONNECT_TIMEOUT_SECS"
+                )),
+            "{rendered}"
+        );
+        let retries = logs.find(
+            crate::TARGET,
+            "redis unreachable — retrying within the connect budget",
+        );
+        assert!(!retries.is_empty(), "{:#?}", logs.events());
+        for event in retries {
+            assert_eq!(event.field("instance").as_deref(), Some("cache"));
+        }
+    }
+
+    #[test]
+    fn a_missing_connection_sends_the_binding_to_its_instance_s_import() {
+        assert!(
+            connection_remedy::<Unnamed>().contains("import RedisModule::for_root(None)"),
+            "{}",
+            connection_remedy::<Unnamed>()
+        );
+        let named = connection_remedy::<Cache>();
+        assert!(
+            named.starts_with("RedisConnection<Cache> is not registered")
+                && named.contains("import RedisModule::for_root((Cache, None))")
+                && named.contains("the instance `cache`"),
+            "{named}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_named_instance_s_command_timeout_names_its_budget() {
+        let error = bounded(
+            &crate::instance::RedisInstance::of::<Cache>(),
+            Duration::from_millis(50),
+            std::future::pending::<()>(),
+        )
+        .await
+        .expect_err("a call that never answers is ended by the budget");
+        assert!(
+            error.to_string().contains(&nest_rs_config::var_name(
+                "redis__cache",
+                "CONNECT_TIMEOUT_SECS"
+            )),
+            "{error}"
+        );
+    }
+
     #[tokio::test]
     async fn a_command_that_never_answers_fails_at_the_budget_as_a_timeout() {
         let budget = Duration::from_millis(150);
         let started = Instant::now();
-        let error = bounded(budget, std::future::pending::<()>())
+        let error = bounded(&unnamed(), budget, std::future::pending::<()>())
             .await
             .expect_err("a call that never answers is ended by the budget");
 

@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::RedisConnection;
 use crate::script::RedisScript;
 use async_trait::async_trait;
+use nest_rs_core::{Instance, Unnamed};
 use nest_rs_throttler::{Decision, Throttle, ThrottlerStore, ThrottlerStoreError};
 
 /// Every key this binding writes: `nestrs:throttler:buckets:<subject>`, one per
@@ -58,16 +59,16 @@ return {count, ttl}
 /// Redis-backed [`ThrottlerStore`]. Construct via [`RedisThrottler::new`] or let
 /// [`RedisThrottlerModule`](crate::RedisThrottlerModule) wire it over the shared
 /// [`RedisConnection`]. It counts and nothing else — which limit applies is the
-/// port's policy, carried by the guard.
-pub struct RedisThrottler {
-    conn: RedisConnection,
+/// port's policy, carried by the guard. `I` is the instance it counts on.
+pub struct RedisThrottler<I = Unnamed> {
+    conn: RedisConnection<I>,
     script: RedisScript,
 }
 
-impl RedisThrottler {
+impl<I: Instance> RedisThrottler<I> {
     /// `conn` is the app's shared Redis connection (reused, not reopened —
     /// every hit goes over its multiplexed socket, bounded by its budget).
-    pub fn new(conn: RedisConnection) -> Self {
+    pub fn new(conn: RedisConnection<I>) -> Self {
         Self {
             conn,
             script: RedisScript::new(WINDOW_SCRIPT),
@@ -84,7 +85,7 @@ impl RedisThrottler {
 }
 
 #[async_trait]
-impl ThrottlerStore for RedisThrottler {
+impl<I: Instance> ThrottlerStore for RedisThrottler<I> {
     async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
         // Redis refuses an expiry whose instant overflows its `i64` milliseconds,
         // which `Throttle::new` lets a window reach.
@@ -107,6 +108,21 @@ impl ThrottlerStore for RedisThrottler {
         };
         Ok(Decision::denied(retry_after))
     }
+
+    fn name(&self) -> &'static str {
+        store_name::<I>()
+    }
+}
+
+/// The store's type path, its instance argument added for a named one only, so
+/// an app with one Redis reads the spelling it always has.
+fn store_name<I: Instance>() -> &'static str {
+    let named = std::any::type_name::<RedisThrottler<I>>();
+    if I::NAME.is_empty() {
+        named.split_once('<').map_or(named, |(bare, _)| bare)
+    } else {
+        named
+    }
 }
 
 #[cfg(test)]
@@ -123,5 +139,25 @@ mod tests {
     fn a_bucket_carries_the_subject_verbatim() {
         let subject = "3f9c0e7a51d24b8896c1f0aa7d42e913";
         assert_eq!(bucket(subject), format!("{BUCKETS}:{subject}"));
+    }
+
+    #[nest_rs_core::instance]
+    struct Cache;
+
+    #[test]
+    fn the_default_instance_s_store_is_named_by_its_bare_path_and_a_named_one_s_by_its_instance() {
+        assert_eq!(
+            store_name::<Unnamed>(),
+            "nest_rs_redis::throttler::store::RedisThrottler"
+        );
+        assert_eq!(
+            store_name::<Cache>(),
+            std::any::type_name::<RedisThrottler<Cache>>()
+        );
+        assert!(
+            store_name::<Cache>().ends_with("::Cache>"),
+            "{}",
+            store_name::<Cache>()
+        );
     }
 }

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use nest_rs_config::{
     Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor,
-    Namespaced, Result, Setting, config,
+    Result, config,
 };
 
 /// The Redis a declared development or test profile's [`Config::defaults`]
@@ -112,7 +112,7 @@ impl Config for RedisConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let connect_timeout = CONNECT_TIMEOUT.read(env, base.connect_timeout)?.value;
         Ok(Self {
-            url: resolve_url(env.setting("URL")?, base.url)?,
+            url: resolve_url(env, base.url)?,
             connect_timeout,
             tls: ClientTls::from_env(env, base.tls)?,
         })
@@ -120,16 +120,16 @@ impl Config for RedisConfig {
 }
 
 /// The deployment's URL, else the base's — a pin, or the profile's loopback —
-/// refusing a blank one under the spelling that set it, or the variable when
-/// neither holds one.
-fn resolve_url(setting: Option<Setting>, base: String) -> Result<String> {
-    match setting {
+/// refusing a blank one under the spelling that set it, or the variable of the
+/// instance `env` reads when neither holds one.
+fn resolve_url(env: &ConfigService, base: String) -> Result<String> {
+    match env.setting("URL")? {
         Some(setting) if setting.value.trim().is_empty() => {
             Err(setting.refuse("is blank — it must hold the Redis URL"))
         }
         Some(setting) => Ok(setting.value),
         None if base.trim().is_empty() => Err(ConfigError::unset(
-            RedisConfig::NAMESPACE,
+            env.namespace(),
             "URL",
             "`RedisConfig::defaults()` holds the loopback in a declared development or test \
              profile alone, `RedisConfig::default()` never, and a config pinned in code reads \
@@ -141,6 +141,8 @@ fn resolve_url(setting: Option<Setting>, base: String) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::Namespaced;
+
     use super::*;
 
     #[test]
@@ -187,10 +189,13 @@ mod tests {
 
     #[test]
     fn a_pin_over_the_struct_default_without_a_url_is_refused_in_every_profile() {
-        for profile in ["development", "test", "staging", "production", ""] {
+        for (profile, namespace) in ["development", "test", "staging", "production", ""]
+            .into_iter()
+            .flat_map(|profile| [(profile, "redis"), (profile, "redis__cache")])
+        {
             let refused = in_profile(profile, || {
                 RedisConfig::from_env(
-                    &ConfigService::with_vars("redis", []),
+                    &ConfigService::with_vars(namespace, []),
                     RedisConfig {
                         connect_timeout: Duration::from_secs(7),
                         ..RedisConfig::default()
@@ -200,8 +205,8 @@ mod tests {
             .expect_err("a pin over `Default` holds no URL to dial")
             .to_string();
             assert!(
-                refused.contains(&nest_rs_config::var_name("redis", "URL")),
-                "{profile:?}: {refused}"
+                refused.contains(&nest_rs_config::var_name(namespace, "URL")),
+                "{profile:?}, {namespace}: {refused}"
             );
             assert!(
                 refused.contains(
@@ -229,22 +234,24 @@ mod tests {
 
     #[test]
     fn an_undeclared_environment_requires_the_url() {
-        let refused = in_profile("", || {
-            RedisConfig::from_env(
-                &ConfigService::with_vars("redis", []),
-                RedisConfig::defaults(),
-            )
-        })
-        .expect_err("a process that declares no profile runs as production")
-        .to_string();
-        assert!(
-            refused.contains(&format!(
-                "{}: must be set, inline or through {} — ",
-                nest_rs_config::var_name("redis", "URL"),
-                nest_rs_config::var_name("redis", "URL_FILE"),
-            )),
-            "the refusal names both spellings of the variable: {refused}"
-        );
+        for namespace in ["redis", "redis__cache"] {
+            let refused = in_profile("", || {
+                RedisConfig::from_env(
+                    &ConfigService::with_vars(namespace, []),
+                    RedisConfig::defaults(),
+                )
+            })
+            .expect_err("a process that declares no profile runs as production")
+            .to_string();
+            assert!(
+                refused.contains(&format!(
+                    "{}: must be set, inline or through {} — ",
+                    nest_rs_config::var_name(namespace, "URL"),
+                    nest_rs_config::var_name(namespace, "URL_FILE"),
+                )),
+                "the refusal names both spellings of the instance's variable: {refused}"
+            );
+        }
     }
 
     #[test]

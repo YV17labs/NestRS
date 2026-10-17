@@ -19,7 +19,10 @@
 //! this binary does not know, and no near miss of one it does, is another
 //! binary's. A key holding `__` under a known namespace is a sub-namespace
 //! another binary links (`redis__queue` under `redis`), reported only as a near
-//! miss of a key read here.
+//! miss of a key read here. A named instance's namespace (`redis__cache`, for
+//! `RedisModule::for_root((Cache, None))`) is claimed when its module registers
+//! it, before any read, so a variable under it is never judged by the vendor's
+//! keys.
 //!
 //! A name with no `__` after the prefix holds no namespace: it is reported only
 //! when it equals, separators and case aside, a name this process reads — the
@@ -125,6 +128,9 @@ struct Ledger {
     read: BTreeSet<String>,
     /// Namespaces in which a `from_env` returned, so every key it reads is known.
     complete: BTreeSet<String>,
+    /// Namespaces a named instance registered for this boot ([`claim`]), each
+    /// an owner before its read.
+    claimed: BTreeSet<String>,
     /// Namespaces whose unread keys were looked for.
     keys_checked: BTreeSet<String>,
     /// Variables already reported — the once-per-variable guarantee.
@@ -137,6 +143,7 @@ impl Ledger {
             known: BTreeSet::new(),
             read: BTreeSet::new(),
             complete: BTreeSet::new(),
+            claimed: BTreeSet::new(),
             keys_checked: BTreeSet::new(),
             reported: BTreeSet::new(),
         }
@@ -163,6 +170,7 @@ impl Ledger {
             .iter()
             .copied()
             .chain(self.read.iter().map(String::as_str))
+            .chain(self.claimed.iter().map(String::as_str))
             .collect();
         let owners: Vec<&str> = owners.into_iter().collect();
         let read: Vec<&str> = self.read.iter().map(String::as_str).collect();
@@ -211,6 +219,16 @@ pub(crate) fn witness(name: &str) {
     let mut ledger = LEDGER.lock().unwrap_or_else(PoisonError::into_inner);
     if !ledger.known.contains(name) {
         ledger.known.insert(name.to_owned());
+    }
+}
+
+/// Record that a named instance registered `namespace`, its derived one: the
+/// variables under it are that instance's, though the read that judges them
+/// comes after the vendor's own.
+pub(crate) fn claim(namespace: &str) {
+    let mut ledger = LEDGER.lock().unwrap_or_else(PoisonError::into_inner);
+    if !ledger.claimed.contains(namespace) {
+        ledger.claimed.insert(namespace.to_owned());
     }
 }
 
@@ -276,8 +294,8 @@ fn environment_names() -> BTreeSet<String> {
 
 /// The variables under `namespace` that name a key nothing read.
 ///
-/// A variable a longer linked namespace owns (`redis__queue` under `redis`) is
-/// that namespace's to judge. A key holding `__` is a sub-namespace this binary
+/// A variable a longer owned namespace holds (`redis__queue` under `redis`, or
+/// a registered instance's `redis__cache`) is that namespace's to judge. A key holding `__` is a sub-namespace this binary
 /// does not link — another binary's — and is reported only as a near miss.
 fn unread_keys(
     namespace: &str,

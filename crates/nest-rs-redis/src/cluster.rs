@@ -10,11 +10,12 @@
 //! boot as at it: a node refusing the client's certificate refuses it after the
 //! handshake, around the first command, which [`tls::hello`] hears.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ClientTls;
-use nest_rs_core::{Attempt, Backoff, process_seed};
+use nest_rs_core::{Attempt, Backoff, Instance, process_seed};
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster::{ClusterClient, ClusterClientBuilder};
 use redis::cluster_async::{ClusterConnection, Connect};
@@ -31,19 +32,22 @@ use crate::connection::{
     answered, classify, dial, node_addr, node_client, proved, socket, unproved,
 };
 use crate::error::RedisError;
+use crate::instance::RedisInstance;
 use crate::script::RedisScript;
 use crate::url::{ClusterUrl, NodeAddr, listed};
 use crate::{RedisTopology, tls};
 
-/// The link to a Cluster's nodes.
-pub(crate) struct ClusterLink {
+/// The link to a Cluster's nodes, for the instance `I`.
+pub(crate) struct ClusterLink<I> {
     plan: Arc<Plan>,
-    connection: ClusterConnection<ClusterNode>,
+    connection: ClusterConnection<ClusterNode<I>>,
 }
 
 /// What opening a cluster connection needs, shared by a link and every link
 /// it dedicates.
 struct Plan {
+    /// The instance the link serves, which its lines and refusals name.
+    instance: RedisInstance,
     seeds: Vec<NodeAddr>,
     /// Every seed's address, as an error names them.
     listed: String,
@@ -52,18 +56,20 @@ struct Plan {
     budget: Duration,
 }
 
-impl ClusterLink {
+impl<I: Instance> ClusterLink<I> {
     /// Open the link to the Cluster `url`'s seeds belong to, proved within
     /// `budget`: a seed says it serves a Cluster, and every primary answers a
     /// `PING`.
     pub(crate) async fn connect(
         url: ClusterUrl,
         tls: &ClientTls,
+        instance: RedisInstance,
         budget: Duration,
     ) -> Result<Arc<Self>, RedisError> {
         let listed = listed(&url.seeds);
-        let certificates = tls::material(tls, url.tls, &listed)?;
+        let certificates = tls::material(&instance, tls, url.tls, &listed)?;
         let plan = Arc::new(Plan {
+            instance,
             seeds: url.seeds,
             listed,
             settings: url.settings,
@@ -72,19 +78,20 @@ impl ClusterLink {
         });
         let client = plan.client().map_err(|source| RedisError::InvalidUrl {
             endpoint: plan.listed.clone(),
+            url_var: plan.instance.url_var(),
             source,
         })?;
-        let connection = proved(budget, &plan.listed, process_seed(), |_| {
+        let connection = proved(&plan.instance, budget, &plan.listed, process_seed(), |_| {
             plan.prove(&client)
         })
         .await
-        .map_err(|ended| unproved(ended, &plan.listed, budget))?;
+        .map_err(|ended| unproved(ended, &plan.instance, &plan.listed, budget))?;
         Ok(Arc::new(Self { plan, connection }))
     }
 
     /// A link of its own to the primary serving `key`'s slot, for a command
     /// that blocks on that key.
-    pub(crate) async fn dedicated(&self, key: &str) -> Result<Arc<SlotLink>, redis::RedisError> {
+    pub(crate) async fn dedicated(&self, key: &str) -> Result<Arc<SlotLink<I>>, redis::RedisError> {
         SlotLink::open(
             Arc::clone(&self.plan),
             self.connection.clone(),
@@ -100,7 +107,12 @@ impl ClusterLink {
         cmd: &Cmd,
         budget: Duration,
     ) -> Result<Value, redis::RedisError> {
-        answered(budget, self.connection.clone().req_packed_command(cmd)).await
+        answered(
+            &self.plan.instance,
+            budget,
+            self.connection.clone().req_packed_command(cmd),
+        )
+        .await
     }
 
     /// Send `count` replies' worth of `pipeline` from `offset` within `budget`.
@@ -112,6 +124,7 @@ impl ClusterLink {
         budget: Duration,
     ) -> Result<Vec<Value>, redis::RedisError> {
         answered(
+            &self.plan.instance,
             budget,
             self.connection
                 .clone()
@@ -139,6 +152,7 @@ impl ClusterLink {
             )),
         };
         answered(
+            &self.plan.instance,
             budget,
             self.connection
                 .clone()
@@ -160,6 +174,7 @@ impl Plan {
     async fn dial(&self, node: &NodeAddr) -> Result<MultiplexedConnection, redis::RedisError> {
         let endpoint = node.to_string();
         let client = node_client(
+            &self.instance,
             node,
             self.settings.clone(),
             self.certificates.as_ref(),
@@ -178,7 +193,7 @@ impl Plan {
             Ok(connection)
         }
         .await;
-        tls::observe_refusal(&endpoint, &opened);
+        tls::observe_refusal(&self.instance, &endpoint, &opened);
         opened
     }
 
@@ -220,19 +235,19 @@ impl Plan {
     /// The seed's proof runs on a connection of its own: `redis` reports a
     /// failed cluster connection by its text alone, so a refusal every attempt
     /// would repeat is read here, where its cause is still typed.
-    async fn prove(
+    async fn prove<I: Instance>(
         &self,
         client: &ClusterClient,
-    ) -> Result<ClusterConnection<ClusterNode>, Attempt<redis::RedisError, RedisError>> {
+    ) -> Result<ClusterConnection<ClusterNode<I>>, Attempt<redis::RedisError, RedisError>> {
         self.prove_a_seed().await?;
         let connection = client
-            .get_async_generic_connection::<ClusterNode>()
+            .get_async_generic_connection::<ClusterNode<I>>()
             .await
             .map_err(Attempt::Failed)?;
         redis::cmd("PING")
             .query_async::<()>(&mut connection.clone())
             .await
-            .map_err(|error| classify(error, &self.listed, self.settings.db()))?;
+            .map_err(|error| classify(&self.instance, error, &self.listed, self.settings.db()))?;
         Ok(connection)
     }
 
@@ -243,6 +258,7 @@ impl Plan {
         for seed in &self.seeds {
             let endpoint = seed.to_string();
             let client = node_client(
+                &self.instance,
                 seed,
                 self.settings.clone(),
                 self.certificates.as_ref(),
@@ -253,19 +269,22 @@ impl Plan {
                 let mut node = dial(&client, self.budget).await?;
                 tls::hello(&client, &mut node, self.budget).await
             };
-            match answered(self.budget, proof).await {
+            match answered(&self.instance, self.budget, proof).await {
                 Ok(hello) if hello.serves == RedisTopology::Cluster => return Ok(()),
                 Ok(hello) => {
                     return Err(Attempt::Refused(RedisError::TopologyMismatch {
                         endpoint,
                         declared: RedisTopology::Cluster,
                         serves: hello.serves,
+                        url_var: self.instance.url_var(),
                     }));
                 }
-                Err(error) => match classify(error, &endpoint, self.settings.db()) {
-                    refused @ Attempt::Refused(_) => return Err(refused),
-                    Attempt::Failed(error) => last = Some(error),
-                },
+                Err(error) => {
+                    match classify(&self.instance, error, &endpoint, self.settings.db()) {
+                        refused @ Attempt::Refused(_) => return Err(refused),
+                        Attempt::Failed(error) => last = Some(error),
+                    }
+                }
             }
         }
         Err(Attempt::Failed(last.unwrap_or_else(|| {
@@ -290,25 +309,26 @@ fn millis(duration: Duration) -> u64 {
 /// which asks the Cluster again which node serves the slot. An `ASK` — the
 /// slot being moved key by key — is followed for that command alone, as the
 /// cluster connection follows it.
-pub(crate) struct SlotLink {
+pub(crate) struct SlotLink<I> {
     plan: Arc<Plan>,
     /// The cluster connection that names the slot's primary, and opens a link
     /// afresh.
-    cluster: ClusterConnection<ClusterNode>,
+    cluster: ClusterConnection<ClusterNode<I>>,
     connection: MultiplexedConnection,
 }
 
-impl SlotLink {
+impl<I: Instance> SlotLink<I> {
     /// Open a connection to the primary the Cluster names for `slot` now.
     async fn open(
         plan: Arc<Plan>,
-        mut cluster: ClusterConnection<ClusterNode>,
+        mut cluster: ClusterConnection<ClusterNode<I>>,
         slot: Slot,
     ) -> Result<Arc<Self>, redis::RedisError> {
         let routing = RoutingInfo::SingleNode(SingleNodeRoutingInfo::SpecificNode(
             Route::with_slot(slot, SlotAddr::Master),
         ));
         let slots = answered(
+            &plan.instance,
             plan.budget,
             cluster.route_command(redis::cmd("CLUSTER").arg("SLOTS").clone(), routing),
         )
@@ -319,7 +339,7 @@ impl SlotLink {
                 "no primary serves the slot yet",
             ))
         })?;
-        let connection = answered(plan.budget, plan.dial(&primary)).await?;
+        let connection = answered(&plan.instance, plan.budget, plan.dial(&primary)).await?;
         Ok(Arc::new(Self {
             plan,
             cluster,
@@ -345,7 +365,7 @@ impl SlotLink {
         cmd: &Cmd,
         budget: Duration,
     ) -> Result<Value, redis::RedisError> {
-        answered(budget, async {
+        answered(&self.plan.instance, budget, async {
             let reply = self.connection.clone().send_packed_command(cmd).await;
             match asked(&reply) {
                 Some(target) => self.ask(&target, cmd).await,
@@ -365,6 +385,7 @@ impl SlotLink {
         budget: Duration,
     ) -> Result<Vec<Value>, redis::RedisError> {
         answered(
+            &self.plan.instance,
             budget,
             self.connection
                 .clone()
@@ -458,15 +479,22 @@ fn primary_of(slots: &Value, slot: Slot) -> Option<NodeAddr> {
 /// command over the connection is held to its own besides.
 const NODE_REFUSAL_BOUND: Duration = Duration::from_secs(2);
 
-/// One Cluster node's connection, opened announcing no client library, its
-/// `HELLO` answered.
+/// One Cluster node's connection for the instance `I`, opened announcing no
+/// client library, its `HELLO` answered.
 ///
 /// `redis` gives a Cluster no setting to skip `CLIENT SETINFO` on its nodes;
-/// its generic connection is the one seam reaching each node's handshake.
-#[derive(Clone)]
-pub(crate) struct ClusterNode(MultiplexedConnection);
+/// its generic connection is the one seam reaching each node's handshake. It
+/// opens a node through a static constructor, so the instance a refusal names
+/// is a type parameter.
+pub(crate) struct ClusterNode<I>(MultiplexedConnection, PhantomData<fn() -> I>);
 
-impl Connect for ClusterNode {
+impl<I> Clone for ClusterNode<I> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+
+impl<I: Instance> Connect for ClusterNode<I> {
     fn connect_with_config<'a, T>(info: T, config: AsyncConnectionConfig) -> RedisFuture<'a, Self>
     where
         T: IntoConnectionInfo + Send + 'a,
@@ -484,13 +512,13 @@ impl Connect for ClusterNode {
                 Ok(connection)
             }
             .await;
-            tls::observe_refusal(&endpoint, &opened);
-            opened.map(Self)
+            tls::observe_refusal(&RedisInstance::of::<I>(), &endpoint, &opened);
+            opened.map(|connection| Self(connection, PhantomData))
         })
     }
 }
 
-impl ConnectionLike for ClusterNode {
+impl<I: Instance> ConnectionLike for ClusterNode<I> {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         self.0.req_packed_command(cmd)
     }
@@ -512,7 +540,13 @@ impl ConnectionLike for ClusterNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{REFUSED, dropping_then_refusing_listener, trusting_the_authority};
+    use crate::testing::{
+        REFUSED, dropping_then_refusing_listener, trusting_the_authority, unnamed,
+    };
+    use nest_rs_core::Unnamed;
+
+    #[nest_rs_core::instance]
+    struct Cache;
 
     /// The loopback node `addr` serves, and a plan reaching it over TLS that
     /// trusts the test authority and presents no certificate.
@@ -522,12 +556,18 @@ mod tests {
             port: addr.port(),
         };
         let plan = Plan {
+            instance: unnamed(),
             seeds: vec![node.clone()],
             listed: node.to_string(),
             // What a Cluster URL's settings say: no client library announced.
             settings: RedisConnectionInfo::default().set_skip_set_lib_name(),
-            certificates: tls::material(&trusting_the_authority(), true, &node.to_string())
-                .expect("the authority is usable"),
+            certificates: tls::material(
+                &unnamed(),
+                &trusting_the_authority(),
+                true,
+                &node.to_string(),
+            )
+            .expect("the authority is usable"),
             budget: Duration::from_secs(5),
         };
         (node, plan)
@@ -539,16 +579,28 @@ mod tests {
         outcome: Result<T, redis::RedisError>,
         logs: &nest_rs_testing::LogCapture,
     ) {
+        refused_and_said_for(outcome, logs, "", "redis");
+    }
+
+    /// [`refused_and_said`] for the instance `name`, whose variables sit under
+    /// `namespace`.
+    fn refused_and_said_for<T>(
+        outcome: Result<T, redis::RedisError>,
+        logs: &nest_rs_testing::LogCapture,
+        name: &str,
+        namespace: &str,
+    ) {
         let Err(refused) = outcome else {
             panic!("a node requiring a client certificate must refuse a client presenting none");
         };
         assert!(ClientTls::negotiation_failed(&refused), "{refused}");
         let said = logs.find(crate::TARGET, REFUSED);
         assert_eq!(said.len(), 1, "{:#?}", logs.events());
+        assert_eq!(said[0].field("instance").as_deref(), Some(name));
         assert!(
             said[0].field("reason").is_some_and(|reason| {
                 reason.contains("requires a client certificate")
-                    && reason.contains(&nest_rs_config::var_name("redis", "TLS_CERT"))
+                    && reason.contains(&nest_rs_config::var_name(namespace, "TLS_CERT"))
             }),
             "{:?}",
             said[0].fields
@@ -569,14 +621,14 @@ mod tests {
         refused_and_said(outcome, &logs);
     }
 
-    /// A node the cluster connection opens or reopens: the same refusal,
-    /// heard on its first command.
-    #[tokio::test]
-    async fn a_node_the_cluster_connection_opens_is_heard_refusing_the_certificate() {
-        let logs = nest_rs_testing::LogCapture::install();
+    /// What the cluster connection of the instance `I` meets opening a node
+    /// that refuses the certificate after the handshake.
+    async fn a_refusing_node_opened_for<I: Instance>() -> Result<ClusterNode<I>, redis::RedisError>
+    {
         let (refusing, serving) = dropping_then_refusing_listener().await;
         let (node, plan) = plan_reaching(refusing);
         let info = node_client(
+            &unnamed(),
             &node,
             plan.settings.clone(),
             plan.certificates.as_ref(),
@@ -586,9 +638,31 @@ mod tests {
         .get_connection_info()
         .clone();
 
-        let outcome = ClusterNode::connect_with_config(info, AsyncConnectionConfig::new()).await;
+        let outcome =
+            ClusterNode::<I>::connect_with_config(info, AsyncConnectionConfig::new()).await;
         serving.abort();
-        refused_and_said(outcome, &logs);
+        outcome
+    }
+
+    /// A node the cluster connection opens or reopens: the same refusal,
+    /// heard on its first command.
+    #[tokio::test]
+    async fn a_node_the_cluster_connection_opens_is_heard_refusing_the_certificate() {
+        let logs = nest_rs_testing::LogCapture::install();
+        refused_and_said(a_refusing_node_opened_for::<Unnamed>().await, &logs);
+    }
+
+    /// The node a named instance's cluster connection opens names that
+    /// instance, and its variables, though `redis` hands it no link.
+    #[tokio::test]
+    async fn a_node_of_a_named_instance_is_heard_refusing_naming_the_instance() {
+        let logs = nest_rs_testing::LogCapture::install();
+        refused_and_said_for(
+            a_refusing_node_opened_for::<Cache>().await,
+            &logs,
+            "cache",
+            "redis__cache",
+        );
     }
 
     fn bulk(text: &str) -> Value {

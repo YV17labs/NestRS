@@ -8,19 +8,23 @@ use thiserror::Error;
 ///
 /// Every variant names the endpoint as the address the client dials — never the
 /// URL, which may embed a password, and every one of these strings reaches logs
-/// and stderr.
+/// and stderr. A variable a sentence names is the failing instance's, held
+/// rendered in the variant — `<PREFIX>_REDIS__URL` for the default instance,
+/// `<PREFIX>_REDIS__CACHE__URL` for `Cache` — never a value. Such a field is
+/// the variable's key, lowercased and its unit dropped, then `_var`
+/// (`CONNECT_TIMEOUT_SECS` is `connect_timeout_var`), or `_vars` for a group of
+/// keys sharing a prefix (`tls_vars`).
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RedisError {
     /// The URL could not configure a connection — malformed, or a scheme the
     /// client does not speak. Refused at once, never retried.
-    #[error(
-        "invalid Redis URL {endpoint}: check {url_var}",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
-    )]
+    #[error("invalid Redis URL {endpoint}: check {url_var}")]
     InvalidUrl {
         /// The address the client dials, never the URL.
         endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
         /// Why the client rejected it.
         #[source]
         source: redis::RedisError,
@@ -30,12 +34,13 @@ pub enum RedisError {
     /// RESP2 replies.
     #[error(
         "the Redis URL for {endpoint} asks for RESP3 (`protocol=resp3`), which nestrs does not \
-         speak to Redis: remove it from {url_var}",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
+         speak to Redis: remove it from {url_var}"
     )]
     UnsupportedProtocol {
         /// The address the client dials, never the URL.
         endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
     },
 
     /// The connect budget is outside the range its variable is held to — a
@@ -53,15 +58,17 @@ pub enum RedisError {
         "the Redis queue lease ({lease:?}) must be more than one and a half times the Redis \
          budget ({budget:?}): a renewal is sent a third into the lease and may wait out the \
          whole budget, so a shorter lease lapses while Redis still answers — raise {lease_var} \
-         or lower {timeout_var}",
-        lease_var = ::nest_rs_config::var_name("redis__queue", crate::queue::LEASE.key()),
-        timeout_var = ::nest_rs_config::var_name("redis", crate::config::CONNECT_TIMEOUT.key()),
+         or lower {connect_timeout_var}"
     )]
     BudgetPastLease {
         /// The connect budget.
         budget: std::time::Duration,
         /// The queue binding's lease.
         lease: std::time::Duration,
+        /// The lease's variable, under the instance the queue binds.
+        lease_var: String,
+        /// The connect budget's variable.
+        connect_timeout_var: String,
     },
 
     /// A `rediss://` URL carrying `#insecure`, which asks the client to accept
@@ -70,13 +77,15 @@ pub enum RedisError {
     #[error(
         "the Redis URL for {endpoint} asks to skip certificate verification (`#insecure`), which is \
          refused: remove it from the URL — {url_var}, or `RedisConfig::url` pinned in code — and \
-         trust the authority that signed Redis's certificate with {ca_var}",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
-        ca_var = ::nest_rs_config::spellings("redis", "TLS_CA_CERT"),
+         trust the authority that signed Redis's certificate with {tls_ca_cert_var}"
     )]
     UnverifiedTls {
         /// The address the client dials, never the URL.
         endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// The trusted authorities' variable, both spellings.
+        tls_ca_cert_var: String,
     },
 
     /// TLS material configured beside a URL whose scheme does not encrypt —
@@ -86,16 +95,16 @@ pub enum RedisError {
         "TLS material is configured for Redis at {endpoint}, but the URL's scheme does not \
          encrypt, so the material would go unused and the connection unencrypted: point {url_var} \
          at ports serving TLS with `rediss://`, `rediss-sentinel://` or `rediss-cluster://`, or \
-         remove the material — {ca_var}, {cert_var} and {key_var}, their _FILE forms, or \
-         `RedisConfig::tls` pinned in code",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
-        ca_var = ::nest_rs_config::var_name("redis", "TLS_CA_CERT"),
-        cert_var = ::nest_rs_config::var_name("redis", "TLS_CERT"),
-        key_var = ::nest_rs_config::var_name("redis", "TLS_KEY"),
+         remove the material — {tls_vars}, their _FILE forms, or `RedisConfig::tls` pinned in \
+         code"
     )]
     PlaintextUrl {
         /// The address the client dials, never the URL.
         endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// The material's three variables, listed.
+        tls_vars: String,
     },
 
     /// The TLS settings could not carry a connection: material no handshake
@@ -118,13 +127,12 @@ pub enum RedisError {
     /// Redis answered, and refused in a way every attempt would repeat —
     /// credentials, an ACL denying the proof, a protocol it does not speak. Fails
     /// at once, with Redis's answer as the source.
-    #[error(
-        "Redis at {endpoint} refused the connection: check {url_var}",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
-    )]
+    #[error("Redis at {endpoint} refused the connection: check {url_var}")]
     Refused {
         /// The address the client dials, never the URL.
         endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
         /// What Redis answered.
         #[source]
         source: redis::RedisError,
@@ -137,14 +145,15 @@ pub enum RedisError {
     #[error(
         "Redis at {endpoint} refused to select database {database}, the index {url_var} ends \
          in — its answer follows: the index must be below the server's `databases`, a \
-         Cluster node's `cluster-databases` (one unless set), and an ACL user needs `+select`",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
+         Cluster node's `cluster-databases` (one unless set), and an ACL user needs `+select`"
     )]
     DatabaseRefused {
         /// The address the client dials, never the URL.
         endpoint: String,
         /// The database index the URL names.
         database: i64,
+        /// The URL's variable, both spellings.
+        url_var: String,
         /// What Redis answered.
         #[source]
         source: redis::RedisError,
@@ -157,8 +166,7 @@ pub enum RedisError {
     #[error(
         "the Redis URL declares the {declared} topology, but {endpoint} serves the {serves} one: \
          name a server of its own with rediss://, a Sentinel deployment's sentinels with \
-         rediss-sentinel://, and a Cluster's nodes with rediss-cluster:// in {url_var}",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
+         rediss-sentinel://, and a Cluster's nodes with rediss-cluster:// in {url_var}"
     )]
     TopologyMismatch {
         /// The address the client dialled, never the URL.
@@ -167,14 +175,14 @@ pub enum RedisError {
         declared: crate::RedisTopology,
         /// The topology the server serves.
         serves: crate::RedisTopology,
+        /// The URL's variable, both spellings.
+        url_var: String,
     },
 
     /// No sentinel the URL names answered within the connect budget.
     #[error(
         "no Valkey Sentinel of {sentinels} answered within {budget:?} ({attempts} attempt(s)): \
-         check {url_var}, or widen the budget with {timeout_var}",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
-        timeout_var = ::nest_rs_config::var_name("redis", crate::config::CONNECT_TIMEOUT.key()),
+         check {url_var}, or widen the budget with {connect_timeout_var}"
     )]
     SentinelUnreachable {
         /// The sentinels the URL names, never the URL.
@@ -183,6 +191,10 @@ pub enum RedisError {
         budget: std::time::Duration,
         /// How many times every sentinel was asked.
         attempts: u32,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// The connect budget's variable.
+        connect_timeout_var: String,
         /// The last sentinel's failure, when one failed outright.
         #[source]
         source: Option<redis::RedisError>,
@@ -193,8 +205,7 @@ pub enum RedisError {
     #[error(
         "the Valkey Sentinels {sentinels} know no primary named `{service_name}` within \
          {budget:?} ({attempts} attempt(s)): set `sentinelServiceName` in {url_var} to the name \
-         they monitor it under",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
+         they monitor it under"
     )]
     PrimaryUnknown {
         /// The sentinels that answered, never the URL.
@@ -205,6 +216,8 @@ pub enum RedisError {
         budget: std::time::Duration,
         /// How many times every sentinel was asked.
         attempts: u32,
+        /// The URL's variable, both spellings.
+        url_var: String,
     },
 
     /// The connect budget elapsed with Redis answering every attempt, last with
@@ -212,9 +225,8 @@ pub enum RedisError {
     /// threshold, a failover in progress, a code this client does not know.
     #[error(
         "Redis at {endpoint} answered but was not ready within {budget:?} ({attempts} \
-         attempt(s)) — its last answer follows; widen the budget with {timeout_var} if it \
-         clears on its own",
-        timeout_var = ::nest_rs_config::var_name("redis", crate::config::CONNECT_TIMEOUT.key()),
+         attempt(s)) — its last answer follows; widen the budget with {connect_timeout_var} if it \
+         clears on its own"
     )]
     Unready {
         /// The address the client dials, never the URL.
@@ -223,6 +235,8 @@ pub enum RedisError {
         budget: std::time::Duration,
         /// How many connect attempts were made inside it.
         attempts: u32,
+        /// The connect budget's variable.
+        connect_timeout_var: String,
         /// Redis's last answer.
         #[source]
         source: redis::RedisError,
@@ -231,9 +245,7 @@ pub enum RedisError {
     /// The connect budget elapsed with the backend still unreachable.
     #[error(
         "could not reach Redis at {endpoint} within {budget:?} ({attempts} attempt(s)): \
-         check {url_var}, or widen the budget with {timeout_var}",
-        url_var = ::nest_rs_config::spellings("redis", "URL"),
-        timeout_var = ::nest_rs_config::var_name("redis", crate::config::CONNECT_TIMEOUT.key()),
+         check {url_var}, or widen the budget with {connect_timeout_var}"
     )]
     Unreachable {
         /// The address the client dials, never the URL.
@@ -242,6 +254,10 @@ pub enum RedisError {
         budget: std::time::Duration,
         /// How many connect attempts were made inside it.
         attempts: u32,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// The connect budget's variable.
+        connect_timeout_var: String,
         /// The last transport failure, when the budget ran out after an
         /// outright error rather than mid-attempt.
         #[source]

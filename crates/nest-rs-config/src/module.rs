@@ -62,6 +62,9 @@ impl ConfigModule {
         config: impl Into<ForInstance<I, C>>,
         builder: ContainerBuilder,
     ) -> ContainerBuilder {
+        if !I::NAME.is_empty() {
+            crate::unclaimed::claim(&crate::instance_namespace::<I>(C::NAMESPACE));
+        }
         // A seed skips the factory below, never the checks its read runs.
         let builder = nest_rs_core::__private::check_seed(
             builder,
@@ -132,8 +135,68 @@ impl ConfigModule {
     pub fn resolved<C: Config>(
         container: &Container,
     ) -> std::result::Result<Arc<C>, ConfigNotResolvedError> {
-        container.get::<C>().ok_or(ConfigNotResolvedError {
+        Self::resolved_for::<Unnamed, C>(container)
+    }
+
+    /// [`resolved`](Self::resolved) for the instance `I`: the `C` this boot
+    /// resolved for it, held as `I::Of<C>` — the config itself for the default
+    /// instance, `Instanced<I, C>` for a named one, either borrowed as `C`. A
+    /// binding generic over the instance it binds names `I::Of<C>` among its
+    /// factory's inputs and reads it here.
+    ///
+    /// ```
+    /// # use std::borrow::Borrow;
+    /// # use std::marker::PhantomData;
+    /// # use nest_rs_config::{Config, ConfigModule, ConfigService, ForInstance, config};
+    /// # use nest_rs_core::{App, Collecting, ContainerBuilder, Instance, Module, Registering, instance, module};
+    /// # #[config(namespace = "bucket_for")]
+    /// # #[derive(Clone, Debug, Default)]
+    /// # pub struct BucketConfig {
+    /// #     pub name: String,
+    /// # }
+    /// # impl Config for BucketConfig {
+    /// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+    /// #         Ok(base)
+    /// #     }
+    /// # }
+    /// pub struct Bucket<I>(String, PhantomData<fn() -> I>);
+    ///
+    /// pub struct BucketModule<I>(PhantomData<fn() -> I>);
+    ///
+    /// impl<I: Instance> Module for BucketModule<I> {
+    ///     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+    ///         builder
+    ///     }
+    ///
+    ///     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+    ///         ConfigModule::provide_feature(ForInstance::<I, BucketConfig>::default(), builder)
+    ///             .provide_factory_after::<Bucket<I>, (I::Of<BucketConfig>,), _, _>(
+    ///                 |container| async move {
+    ///                     let held = ConfigModule::resolved_for::<I, BucketConfig>(&container)?;
+    ///                     let config: &BucketConfig = (*held).borrow();
+    ///                     Ok(Bucket(config.name.clone(), PhantomData))
+    ///                 },
+    ///             )
+    ///     }
+    /// }
+    ///
+    /// #[instance]
+    /// pub struct Uploads;
+    /// # #[module(imports = [BucketModule::<Uploads>])]
+    /// # struct AppModule;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// #     let app = App::builder().module::<AppModule>().build().await?;
+    /// #     assert!(app.container().get::<Bucket<Uploads>>().is_some());
+    /// #     Ok(())
+    /// # }
+    /// ```
+    pub fn resolved_for<I: Instance, C: Config>(
+        container: &Container,
+    ) -> std::result::Result<Arc<I::Of<C>>, ConfigNotResolvedError> {
+        container.get::<I::Of<C>>().ok_or(ConfigNotResolvedError {
             type_name: std::any::type_name::<C>(),
+            instance: I::NAME,
         })
     }
 
@@ -429,6 +492,7 @@ mod tests {
                 panic!("an empty container resolved no config");
             };
             assert_eq!(refused.type_name, std::any::type_name::<SeamConfig>());
+            assert_eq!(refused.instance, "");
             assert_eq!(
                 refused.to_string(),
                 format!(
@@ -437,6 +501,43 @@ mod tests {
                      does not name it among its inputs",
                     std::any::type_name::<SeamConfig>()
                 )
+            );
+        }
+
+        #[nest_rs_core::instance]
+        struct Archive;
+
+        #[test]
+        fn a_named_instance_s_config_no_factory_resolved_is_refused_naming_the_instance() {
+            let empty = Container::builder().build();
+            let Err(refused) = ConfigModule::resolved_for::<Archive, SeamConfig>(&empty) else {
+                panic!("an empty container resolved no config");
+            };
+            assert_eq!(refused.instance, "archive");
+            assert!(
+                refused.to_string().starts_with(&format!(
+                    "`{}` of the instance `archive` was read before any factory resolved it",
+                    std::any::type_name::<SeamConfig>()
+                )),
+                "{refused}"
+            );
+        }
+
+        #[test]
+        fn a_named_instance_s_config_is_read_where_the_container_holds_it() {
+            let container = Container::builder()
+                .provide(nest_rs_core::Instanced::<Archive, SeamConfig>::from(
+                    SeamConfig {
+                        bucket: "archived".into(),
+                    },
+                ))
+                .build();
+            let held = ConfigModule::resolved_for::<Archive, SeamConfig>(&container)
+                .unwrap_or_else(|refused| panic!("{refused}"));
+            assert_eq!(held.bucket, "archived");
+            assert!(
+                ConfigModule::resolved::<SeamConfig>(&container).is_err(),
+                "the default instance is another"
             );
         }
 

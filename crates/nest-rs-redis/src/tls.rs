@@ -13,22 +13,19 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{ClientTls, ConfigService, Namespaced};
+use nest_rs_config::ClientTls;
 use redis::aio::MultiplexedConnection;
 
+use crate::RedisError;
+use crate::instance::RedisInstance;
 use crate::topology::Hello;
-use crate::{RedisConfig, RedisError};
 
-/// The reader whose namespace every Redis TLS sentence names.
-fn names() -> ConfigService {
-    ConfigService::for_namespace(RedisConfig::NAMESPACE)
-}
-
-/// The material every connection a URL opens is built with: `None` over
-/// plaintext. Material beside a plaintext URL is refused, since it would go
-/// unused, and so is material no handshake could use — before anything is
-/// dialled.
+/// The material every connection `instance`'s URL opens is built with: `None`
+/// over plaintext. Material beside a plaintext URL is refused, since it would
+/// go unused, and so is material no handshake could use — before anything is
+/// dialled; each refusal names the instance's variables.
 pub(crate) fn material(
+    instance: &RedisInstance,
     tls: &ClientTls,
     encrypted: bool,
     endpoint: &str,
@@ -37,11 +34,13 @@ pub(crate) fn material(
         if !tls.is_empty() {
             return Err(RedisError::PlaintextUrl {
                 endpoint: endpoint.to_owned(),
+                url_var: instance.url_var(),
+                tls_vars: instance.tls_vars(),
             });
         }
         return Ok(None);
     }
-    tls.check(&names())
+    tls.check(&instance.reader())
         .map_err(|refused| RedisError::TlsRefused {
             endpoint: endpoint.to_owned(),
             reason: refused.to_string(),
@@ -60,13 +59,14 @@ pub(crate) fn material(
     }))
 }
 
-/// Say `endpoint`'s TLS refusal at `warn` — the one line every topology says
-/// it in, with what to change.
-pub(crate) fn say_refused(endpoint: &str, error: &redis::RedisError) {
+/// Say `instance`'s TLS refusal by `endpoint` at `warn` — the one line every
+/// topology says it in, with what to change.
+pub(crate) fn say_refused(instance: &RedisInstance, endpoint: &str, error: &redis::RedisError) {
     tracing::warn!(
         target: crate::TARGET,
+        instance = instance.name(),
         endpoint = %endpoint,
-        reason = %remedy(error),
+        reason = %remedy(instance, error),
         error = %nest_rs_core::error_message(error),
         "redis refused a reopened tls connection",
     );
@@ -76,9 +76,10 @@ pub(crate) fn say_refused(endpoint: &str, error: &redis::RedisError) {
 static REFUSING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
     std::sync::LazyLock::new(Default::default);
 
-/// Say what opening a connection to `endpoint` met, when TLS refused it: once,
-/// until a connection to it opens again.
+/// Say what opening a connection of `instance`'s to `endpoint` met, when TLS
+/// refused it: once, until a connection to it opens again.
 pub(crate) fn observe_refusal<T>(
+    instance: &RedisInstance,
     endpoint: &str,
     opened: &std::result::Result<T, redis::RedisError>,
 ) {
@@ -91,7 +92,7 @@ pub(crate) fn observe_refusal<T>(
         }
         Err(error) if ClientTls::negotiation_failed(error) => {
             if refusing.insert(endpoint.to_owned()) {
-                say_refused(endpoint, error);
+                say_refused(instance, endpoint, error);
             }
         }
         Err(_) => {}
@@ -151,33 +152,40 @@ pub(crate) async fn refusal(client: &redis::Client, budget: Duration) -> Option<
 /// Why the client refused material [`ClientTls::check`] let through: both
 /// parse the same PEM with the same parsers, so this is a client the check
 /// did not foresee.
-pub(crate) fn unusable_material() -> String {
-    let names = names();
+pub(crate) fn unusable_material(instance: &RedisInstance) -> String {
     format!(
         "{}, {} and {} could not build a client, although they passed the boot's check",
-        names.spellings("TLS_CA_CERT"),
-        names.spellings("TLS_CERT"),
-        names.spellings("TLS_KEY"),
+        instance.spellings("TLS_CA_CERT"),
+        instance.spellings("TLS_CERT"),
+        instance.spellings("TLS_KEY"),
     )
 }
 
-/// What to change about a failed negotiation, naming the setting; rustls's own
-/// reason travels as the error's source.
-pub(crate) fn remedy(error: &(dyn std::error::Error + 'static)) -> String {
-    ClientTls::remedy(&names(), "Redis", "URL", error)
+/// What to change about a failed negotiation of `instance`'s, naming its
+/// setting; rustls's own reason travels as the error's source.
+pub(crate) fn remedy(
+    instance: &RedisInstance,
+    error: &(dyn std::error::Error + 'static),
+) -> String {
+    ClientTls::remedy(&instance.reader(), "Redis", "URL", error)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::testing::{AUTHORITY, mutual_tls_listener, trusting_the_authority};
+    use crate::testing::{AUTHORITY, mutual_tls_listener, trusting_the_authority, unnamed};
 
     #[test]
     fn a_tls_clients_material_leaves_a_process_default_provider_installed() {
         assert!(rustls::crypto::CryptoProvider::get_default().is_none());
-        material(&ClientTls::default(), true, "redis.internal:6380")
-            .expect("nothing set is the system's authorities");
+        material(
+            &unnamed(),
+            &ClientTls::default(),
+            true,
+            "redis.internal:6380",
+        )
+        .expect("nothing set is the system's authorities");
         assert!(
             rustls::crypto::CryptoProvider::get_default().is_some(),
             "a provider is installed for `redis` to build with"
@@ -186,7 +194,8 @@ mod tests {
 
     #[test]
     fn the_material_reaches_the_client_as_set() {
-        let Ok(Some(certificates)) = material(&trusting_the_authority(), true, "x:1") else {
+        let Ok(Some(certificates)) = material(&unnamed(), &trusting_the_authority(), true, "x:1")
+        else {
             panic!("an authority is material for an encrypted URL");
         };
         assert_eq!(
@@ -195,7 +204,10 @@ mod tests {
         );
         assert!(certificates.client_tls.is_none());
         assert!(
-            matches!(material(&ClientTls::default(), false, "x:1"), Ok(None)),
+            matches!(
+                material(&unnamed(), &ClientTls::default(), false, "x:1"),
+                Ok(None)
+            ),
             "and plaintext carries none"
         );
     }
@@ -209,15 +221,23 @@ mod tests {
     async fn the_first_hello_hears_a_client_certificate_refused_before_it_was_sent() {
         let (addr, serving) = mutual_tls_listener().await;
         let url = format!("rediss://{addr}/");
-        let Ok(crate::url::RedisUrl::Standalone(info)) = crate::url::RedisUrl::parse(&url) else {
+        let Ok(crate::url::RedisUrl::Standalone(info)) =
+            crate::url::RedisUrl::parse(&url, &unnamed())
+        else {
             panic!("{url} is a URL of one server");
         };
         let budget = Duration::from_secs(2);
         let endpoint = addr.to_string();
-        let certificates =
-            material(&trusting_the_authority(), true, &endpoint).expect("the authority is usable");
-        let client = crate::connection::open_client(info, certificates.as_ref(), &endpoint, budget)
-            .expect("a client opens");
+        let certificates = material(&unnamed(), &trusting_the_authority(), true, &endpoint)
+            .expect("the authority is usable");
+        let client = crate::connection::open_client(
+            &unnamed(),
+            info,
+            certificates.as_ref(),
+            &endpoint,
+            budget,
+        )
+        .expect("a client opens");
         let landed = || async {
             let connection = crate::connection::dial(&client, budget)
                 .await
@@ -242,7 +262,7 @@ mod tests {
         };
         assert!(ClientTls::negotiation_failed(&refused), "{refused}");
         assert!(
-            remedy(&refused).contains("requires a client certificate"),
+            remedy(&unnamed(), &refused).contains("requires a client certificate"),
             "{refused}"
         );
     }

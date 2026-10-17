@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
+use nest_rs_core::Instance;
 use nest_rs_queue::{
     Ask, CheckpointStore, Delivery, Disposition, JobConsumer, JobId, LeaseHold, Prepared,
     ProcessMethod, QueueBackend, QueueError, Received,
@@ -75,9 +76,9 @@ pub(crate) struct Lease {
 
 /// One queue this worker drains: its keys, the connection its blocking read
 /// waits on, and when its upkeeps last ran.
-struct Drained {
+struct Drained<I> {
     keys: QueueKeys,
-    reading: AsyncMutex<Option<RedisConnection>>,
+    reading: AsyncMutex<Option<RedisConnection<I>>>,
     reclaimed: Mutex<Option<Instant>>,
     /// Where the next look for lapsed leases starts: `-`, or `(` and the last
     /// entry the previous look read.
@@ -85,34 +86,32 @@ struct Drained {
     swept: Mutex<Option<Instant>>,
 }
 
-impl Drained {
-    /// Whether `every` has passed since `last`, marking now when it has.
-    fn due(last: &Mutex<Option<Instant>>, every: Duration) -> bool {
-        let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
-        let now = Instant::now();
-        if last.is_some_and(|at| now.duration_since(at) < every) {
-            return false;
-        }
-        *last = Some(now);
-        true
+/// Whether `every` has passed since `last`, marking now when it has.
+fn due(last: &Mutex<Option<Instant>>, every: Duration) -> bool {
+    let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
+    let now = Instant::now();
+    if last.is_some_and(|at| now.duration_since(at) < every) {
+        return false;
     }
+    *last = Some(now);
+    true
 }
 
 /// The Redis queue's consumer, bound by
 /// [`RedisQueueModule`](crate::RedisQueueModule) for the port's worker.
-pub(crate) struct RedisQueueConsumer {
-    conn: RedisConnection,
+pub(crate) struct RedisQueueConsumer<I> {
+    conn: RedisConnection<I>,
     lease: Duration,
     /// This worker's consumer name in every queue's group: a UUID v7, which
     /// also says when it started.
     name: String,
     /// Each queue drained, by the name of the method draining it — set once by
     /// `prepare`.
-    drained: OnceLock<HashMap<&'static str, Arc<Drained>>>,
+    drained: OnceLock<HashMap<&'static str, Arc<Drained<I>>>>,
 }
 
-impl RedisQueueConsumer {
-    pub(crate) fn new(conn: RedisConnection, lease: Duration) -> Self {
+impl<I: Instance> RedisQueueConsumer<I> {
+    pub(crate) fn new(conn: RedisConnection<I>, lease: Duration) -> Self {
         Self {
             conn,
             lease,
@@ -121,7 +120,7 @@ impl RedisQueueConsumer {
         }
     }
 
-    fn drained(&self, method: &'static ProcessMethod) -> Result<&Arc<Drained>, QueueError> {
+    fn drained(&self, method: &'static ProcessMethod) -> Result<&Arc<Drained<I>>, QueueError> {
         self.drained
             .get()
             .and_then(|drained| drained.get(method.name()))
@@ -137,7 +136,7 @@ impl RedisQueueConsumer {
     async fn reclaim(
         &self,
         method: &'static ProcessMethod,
-        drained: &Drained,
+        drained: &Drained<I>,
         max: u32,
     ) -> Result<Vec<Delivery<Lease>>, QueueError> {
         let from = drained
@@ -194,7 +193,7 @@ impl RedisQueueConsumer {
     /// first on the queue's own connection.
     async fn read(
         &self,
-        drained: &Drained,
+        drained: &Drained<I>,
         max: u32,
         wait: Duration,
     ) -> Result<Vec<Delivery<Lease>>, QueueError> {
@@ -294,7 +293,7 @@ impl RedisQueueConsumer {
     }
 }
 
-impl JobConsumer for RedisQueueConsumer {
+impl<I: Instance> JobConsumer for RedisQueueConsumer<I> {
     type Lease = Lease;
 
     fn backend(&self) -> &'static QueueBackend {
@@ -357,7 +356,7 @@ impl JobConsumer for RedisQueueConsumer {
             max = taken;
             admitted = Some(taken);
         }
-        let mut deliveries = if Drained::due(&drained.reclaimed, RECLAIM_EVERY) {
+        let mut deliveries = if due(&drained.reclaimed, RECLAIM_EVERY) {
             self.reclaim(method, drained, max).await?
         } else {
             Vec::new()
@@ -481,7 +480,7 @@ impl JobConsumer for RedisQueueConsumer {
             .await
             .map_err(QueueError::backend)?;
         said_lost(method, &lost);
-        if Drained::due(&drained.swept, SWEEP_EVERY) {
+        if due(&drained.swept, SWEEP_EVERY) {
             let swept: i64 = self
                 .conn
                 .invoke(
@@ -550,7 +549,10 @@ impl JobConsumer for RedisQueueConsumer {
 
 /// Make `keys`' group, from the stream's first entry — so jobs pushed before
 /// any worker started are read — unless it is there already.
-async fn create_group(conn: &mut RedisConnection, keys: &QueueKeys) -> Result<(), QueueError> {
+async fn create_group<I: Instance>(
+    conn: &mut RedisConnection<I>,
+    keys: &QueueKeys,
+) -> Result<(), QueueError> {
     let created: Result<(), redis::RedisError> = redis::cmd("XGROUP")
         .arg("CREATE")
         .arg(&keys.jobs)

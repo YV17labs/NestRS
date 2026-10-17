@@ -10,6 +10,7 @@ use std::fmt;
 use redis::{ConnectionAddr, ConnectionInfo, ErrorKind, IntoConnectionInfo, RedisConnectionInfo};
 
 use crate::RedisError;
+use crate::instance::RedisInstance;
 
 /// Where Valkey listens unless the URL says otherwise.
 const NODE_PORT: u16 = 6379;
@@ -120,11 +121,46 @@ impl Several {
 }
 
 impl RedisUrl {
-    /// `raw` read apart, or refused naming what to change — never quoting it.
-    pub(crate) fn parse(raw: &str) -> Result<Self, RedisError> {
+    /// `raw` read apart, or refused naming what to change in `instance`'s
+    /// variables — never quoting it.
+    pub(crate) fn parse(raw: &str, instance: &RedisInstance) -> Result<Self, RedisError> {
         match scheme(raw).as_deref().and_then(Several::of) {
             Some((several, tls)) => parse_several(raw, several, tls),
             None => parse_standalone(raw),
+        }
+        .map_err(|refused| refused.named(raw, instance))
+    }
+}
+
+/// Why a URL is refused, before the refusal names the instance's variables.
+enum Refusal {
+    /// The URL cannot configure a connection, for the reason the client gives.
+    Invalid(redis::RedisError),
+    /// It asks for RESP3.
+    Resp3,
+    /// It asks to skip certificate verification.
+    Unverified,
+}
+
+impl Refusal {
+    /// The refusal of `raw`, naming `instance`'s variables.
+    fn named(self, raw: &str, instance: &RedisInstance) -> RedisError {
+        let endpoint = address(raw);
+        match self {
+            Self::Invalid(source) => RedisError::InvalidUrl {
+                endpoint,
+                url_var: instance.url_var(),
+                source,
+            },
+            Self::Resp3 => RedisError::UnsupportedProtocol {
+                endpoint,
+                url_var: instance.url_var(),
+            },
+            Self::Unverified => RedisError::UnverifiedTls {
+                endpoint,
+                url_var: instance.url_var(),
+                tls_ca_cert_var: instance.spellings("TLS_CA_CERT"),
+            },
         }
     }
 }
@@ -132,86 +168,69 @@ impl RedisUrl {
 /// A URL the `redis` client reads on its own, refusing what this crate does not
 /// speak: RESP3, a skipped verification, a host no certificate can name, and a
 /// parameter that names several hosts.
-fn parse_standalone(raw: &str) -> Result<RedisUrl, RedisError> {
-    let info = raw
-        .into_connection_info()
-        .map_err(|source| invalid(raw, source))?;
+fn parse_standalone(raw: &str) -> Result<RedisUrl, Refusal> {
+    let info = raw.into_connection_info().map_err(Refusal::Invalid)?;
     if ::url::Url::parse(raw).is_ok_and(|url| {
         url.query_pairs()
             .any(|(key, _)| SEVERAL_HOSTS.contains(&key.as_ref()))
     }) {
         return Err(refusal(
-            raw,
             "a URL of one server names no other host",
             "name a Sentinel deployment with rediss-sentinel://, or a Cluster's nodes with \
              rediss-cluster://",
         ));
     }
     if info.redis_settings().protocol() != redis::ProtocolVersion::RESP2 {
-        return Err(RedisError::UnsupportedProtocol {
-            endpoint: address(raw),
-        });
+        return Err(Refusal::Resp3);
     }
     if let ConnectionAddr::TcpTls { host, insecure, .. } = info.addr() {
         if *insecure {
-            return Err(RedisError::UnverifiedTls {
-                endpoint: address(raw),
-            });
+            return Err(Refusal::Unverified);
         }
-        nameable(raw, host)?;
+        nameable(host)?;
     }
     let settings = info.redis_settings().clone().set_skip_set_lib_name();
     Ok(RedisUrl::Standalone(info.set_redis_settings(settings)))
 }
 
 /// A URL naming several hosts, read as the scheme declares.
-fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, RedisError> {
+fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Refusal> {
     let url = ::url::Url::parse(raw)
-        .map_err(|error| refusal(raw, "the URL does not parse", error.to_string()))?;
+        .map_err(|error| refusal("the URL does not parse", error.to_string()))?;
     match url.fragment() {
         None => {}
         Some("insecure") => {
-            return Err(RedisError::UnverifiedTls {
-                endpoint: address(raw),
-            });
+            return Err(Refusal::Unverified);
         }
         Some(_) => {
             return Err(refusal(
-                raw,
                 "the URL carries a fragment",
                 "a URL naming several hosts reads none",
             ));
         }
     }
-    let first = authority(&url, several.default_port()).ok_or_else(|| {
-        refusal(
-            raw,
-            "the URL names no host",
-            "write the first host after `//`",
-        )
-    })?;
-    let settings = settings(&url).map_err(|source| invalid(raw, source))?;
+    let first = authority(&url, several.default_port())
+        .ok_or_else(|| refusal("the URL names no host", "write the first host after `//`"))?;
+    let settings = settings(&url).map_err(Refusal::Invalid)?;
     let mut hosts = vec![first];
     let (mut service_name, mut username, mut password) = (None, None, None);
     for (key, value) in url.query_pairs() {
         match (key.as_ref(), several) {
             (NODE, _) => hosts.push(node(&value, several.default_port()).ok_or_else(|| {
                 refusal(
-                    raw,
                     "a `node` is a host and its port",
                     "write node=host or node=host:port, with no credentials, path or query",
                 )
             })?),
-            (SERVICE_NAME, Several::Sentinel) => once(raw, &mut service_name, SERVICE_NAME, value)?,
+            (SERVICE_NAME, Several::Sentinel) => once(&mut service_name, SERVICE_NAME, value)?,
             (SENTINEL_USERNAME, Several::Sentinel) => {
-                once(raw, &mut username, SENTINEL_USERNAME, value)?;
+                once(&mut username, SENTINEL_USERNAME, value)?;
             }
             (SENTINEL_PASSWORD, Several::Sentinel) => {
-                once(raw, &mut password, SENTINEL_PASSWORD, value)?;
+                once(&mut password, SENTINEL_PASSWORD, value)?;
             }
             (other, _) => {
                 return Err(refusal(
-                    raw,
                     "the URL names a parameter it does not take",
                     format!("`{other}`: {} takes {}", url.scheme(), several.parameters()),
                 ));
@@ -220,7 +239,7 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Red
     }
     if tls {
         for host in &hosts {
-            nameable(raw, &host.host)?;
+            nameable(&host.host)?;
         }
     }
     match several {
@@ -234,7 +253,6 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Red
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| {
                     refusal(
-                        raw,
                         "a Sentinel URL names its primary",
                         format!("set `{SERVICE_NAME}` to the name the sentinels monitor it under"),
                     )
@@ -243,7 +261,6 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Red
             match (username, password) {
                 (Some(_), None) => {
                     return Err(refusal(
-                        raw,
                         "a sentinel user is authenticated with its password",
                         format!("set `{SENTINEL_PASSWORD}` beside `{SENTINEL_USERNAME}`"),
                     ));
@@ -321,14 +338,12 @@ fn settings(url: &::url::Url) -> Result<RedisConnectionInfo, redis::RedisError> 
 
 /// Keep `value` for `key`, refusing a second one.
 fn once(
-    raw: &str,
     kept: &mut Option<String>,
     key: &str,
     value: std::borrow::Cow<'_, str>,
-) -> Result<(), RedisError> {
+) -> Result<(), Refusal> {
     if kept.replace(value.into_owned()).is_some() {
         return Err(refusal(
-            raw,
             "a parameter is given more than once",
             format!("`{key}` is given more than once"),
         ));
@@ -337,25 +352,19 @@ fn once(
 }
 
 /// Refuse a TLS host no certificate can name, as the handshake parses it.
-fn nameable(raw: &str, host: &str) -> Result<(), RedisError> {
+fn nameable(host: &str) -> Result<(), Refusal> {
     rustls::pki_types::ServerName::try_from(host)
         .map(|_| ())
-        .map_err(|error| invalid(raw, error.into()))
+        .map_err(|error| Refusal::Invalid(error.into()))
 }
 
-/// `raw` refused for what `description` and `detail` say.
-fn refusal(raw: &str, description: &'static str, detail: impl Into<String>) -> RedisError {
-    invalid(
-        raw,
-        redis::RedisError::from((ErrorKind::InvalidClientConfig, description, detail.into())),
-    )
-}
-
-fn invalid(raw: &str, source: redis::RedisError) -> RedisError {
-    RedisError::InvalidUrl {
-        endpoint: address(raw),
-        source,
-    }
+/// A URL refused for what `description` and `detail` say.
+fn refusal(description: &'static str, detail: impl Into<String>) -> Refusal {
+    Refusal::Invalid(redis::RedisError::from((
+        ErrorKind::InvalidClientConfig,
+        description,
+        detail.into(),
+    )))
 }
 
 /// The addresses a URL names, for a diagnostic: the hosts the client dials,
@@ -415,7 +424,8 @@ mod tests {
     }
 
     fn parsed(raw: &str) -> RedisUrl {
-        RedisUrl::parse(raw).unwrap_or_else(|error| panic!("{raw} parses: {error}"))
+        RedisUrl::parse(raw, &crate::testing::unnamed())
+            .unwrap_or_else(|error| panic!("{raw} parses: {error}"))
     }
 
     fn sentinel(raw: &str) -> SentinelUrl {
@@ -442,7 +452,7 @@ mod tests {
     /// The refusal of `raw`, rendered with its cause, which must not quote
     /// anything after the scheme.
     fn refused(raw: &str) -> (RedisError, String) {
-        let Err(error) = RedisUrl::parse(raw) else {
+        let Err(error) = RedisUrl::parse(raw, &crate::testing::unnamed()) else {
             panic!("{raw} is refused")
         };
         let rendered = nest_rs_core::error_message(&error);

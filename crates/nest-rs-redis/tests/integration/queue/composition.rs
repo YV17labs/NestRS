@@ -10,6 +10,8 @@ use nest_rs_queue::{
 };
 use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueModule};
 
+use crate::module::Cache;
+
 static ELSEWHERE: QueueBackend = QueueBackend::new("elsewhere", Capabilities::NONE);
 
 /// Another backend's producer — what a second queue binding would declare.
@@ -147,5 +149,40 @@ async fn the_binding_registered_without_its_collect_fails_the_boot_naming_its_co
     assert_eq!(
         crate::registered_alone::<RedisQueueModule>().await,
         std::any::type_name::<nest_rs_redis::RedisQueueConfig>()
+    );
+}
+
+/// A queue on a named instance reads its config under that instance.
+#[tokio::test]
+async fn a_binding_of_a_named_instance_reads_its_config_under_that_instance() {
+    assert_eq!(
+        crate::registered_alone::<RedisQueueModule<Cache>>().await,
+        std::any::type_name::<nest_rs_core::Instanced<Cache, nest_rs_redis::RedisQueueConfig>>()
+    );
+}
+
+#[module(imports = [
+    RedisModule::for_root(RedisConfig::default()),
+    RedisModule::for_root((Cache, RedisConfig::default())),
+    RedisQueueModule,
+    RedisQueueModule::<Cache>,
+])]
+struct QueueOnTwoInstancesModule;
+
+/// One binding per port, whichever instances the bindings run on.
+#[tokio::test]
+async fn a_queue_on_each_of_two_instances_fails_the_boot_naming_the_remedy() {
+    let Err(error) = App::builder()
+        .module::<QueueOnTwoInstancesModule>()
+        .build()
+        .await
+    else {
+        panic!("two queue bindings must not boot, whatever their instances");
+    };
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("contested declaration")
+            && rendered.contains(nest_rs_queue::BACKEND_REMEDY),
+        "{rendered}",
     );
 }

@@ -181,13 +181,27 @@ impl ConfigError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
-    "`{type_name}` was read before any factory resolved it: the module owning it is not \
-     imported, or is imported in a `register` alone, or the factory reading it does not name it \
-     among its inputs"
+    "`{type_name}`{of_instance} was read before any factory resolved it: the module owning it is \
+     not imported, or is imported in a `register` alone, or the factory reading it does not name \
+     it among its inputs",
+    of_instance = of_instance(instance),
 )]
 pub struct ConfigNotResolvedError {
     /// The config type that was read.
     pub type_name: &'static str,
+    /// The instance it was read for, as its namespace names it — empty for the
+    /// default one ([`ConfigModule::resolved_for`](crate::ConfigModule::resolved_for)).
+    pub instance: &'static str,
+}
+
+/// The words naming a named instance after its config's type; none for the
+/// default one.
+fn of_instance(instance: &str) -> String {
+    if instance.is_empty() {
+        String::new()
+    } else {
+        format!(" of the instance `{instance}`")
+    }
 }
 
 /// `message` without the values a decoder quoted in it.

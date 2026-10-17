@@ -1,7 +1,8 @@
 //! `nest-rs-redis`'s suite against the dev container's Redis; what needs none
 //! is in `integration`, and the doubles both use in `harness`. One module per
 //! concern in `src/`: [`connection`] for the shared connection's boot, bound and
-//! recovery, [`tls`] for `rediss://`, [`throttler`] for the cross-process
+//! recovery, [`module`] for a named instance beside the default one, [`tls`]
+//! for `rediss://`, [`throttler`] for the cross-process
 //! rate-limit store, [`queue`] for the queue binding — where a queue lives, run
 //! by users confined to the framework's keys as the docs prescribe them, its
 //! producer and its consumer under the port's worker, the behaviour kit every
@@ -32,6 +33,7 @@ mod connection;
 mod correlation;
 #[path = "../harness/mod.rs"]
 mod harness;
+mod module;
 mod queue;
 mod schedule;
 mod sentinel;
@@ -130,6 +132,8 @@ const DB_TLS_REFUSED_REOPEN: u8 = 13;
 /// Claims only: every scheduler the `schedule` tests boot claims here, so the
 /// key layout is asserted over the whole database.
 const DB_SCHEDULE: u8 = 14;
+/// Also the `cache` instance of [`module`]'s test, whose one key expires with
+/// its window: the select test only proves a connection.
 const DB_SELECT_RETRIED: u8 = 15;
 
 /// On the TLS Redis — another server, which only the framework's suite uses —

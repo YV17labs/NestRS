@@ -3,6 +3,7 @@
 //! still holds the job.
 
 use async_trait::async_trait;
+use nest_rs_core::Instance;
 use nest_rs_queue::{CheckpointStore, QueueError};
 use serde_json::Value;
 
@@ -15,8 +16,8 @@ use crate::RedisConnection;
 /// The checkpoint of the job one delivery runs, fenced on that delivery: a
 /// worker whose lease lapsed under it writes nothing over the progress of the
 /// delivery that took the job.
-pub(crate) struct RedisCheckpoint {
-    conn: RedisConnection,
+pub(crate) struct RedisCheckpoint<I> {
+    conn: RedisConnection<I>,
     jobs: String,
     checkpoints: String,
     worker: String,
@@ -24,9 +25,9 @@ pub(crate) struct RedisCheckpoint {
     job: String,
 }
 
-impl RedisCheckpoint {
+impl<I: Instance> RedisCheckpoint<I> {
     pub(crate) fn new(
-        conn: RedisConnection,
+        conn: RedisConnection<I>,
         keys: &QueueKeys,
         worker: String,
         lease: Lease,
@@ -44,7 +45,7 @@ impl RedisCheckpoint {
 }
 
 #[async_trait]
-impl CheckpointStore for RedisCheckpoint {
+impl<I: Instance> CheckpointStore for RedisCheckpoint<I> {
     async fn load(&self) -> Result<Option<Value>, QueueError> {
         let saved: Option<Vec<u8>> = redis::cmd("HGET")
             .arg(&self.checkpoints)

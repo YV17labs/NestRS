@@ -210,8 +210,10 @@ impl ConfigService {
         var_name(&self.namespace, key)
     }
 
-    /// The namespace this reader resolves keys in, as it was given.
-    pub(crate) fn namespace(&self) -> &str {
+    /// The namespace this reader resolves keys in, as it was given — a named
+    /// instance's own (`redis__cache`) when it reads one, so a sentence a
+    /// `from_env` builds names the variables it read.
+    pub fn namespace(&self) -> &str {
         &self.namespace
     }
 

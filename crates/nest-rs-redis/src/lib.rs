@@ -1,6 +1,7 @@
-//! Redis for nestrs — one crate, one connection, one binding per port.
+//! Redis for nestrs — one crate, one connection per instance, one binding per
+//! port.
 //!
-//! [`RedisModule::for_root`] opens the one [`RedisConnection`]
+//! [`RedisModule::for_root`] opens the default instance's [`RedisConnection`]
 //! (`<PREFIX>_REDIS__*`) over the [`RedisTopology`] the URL's scheme declares —
 //! one server (`rediss://`), the primary Sentinel names (`rediss-sentinel://`),
 //! or a Cluster (`rediss-cluster://`), every connection encrypted and verified
@@ -21,6 +22,14 @@
 //!
 //! A binding pulls its port's crate, which an app using Redis for another port
 //! does not compile.
+//!
+//! An app opening a second Valkey — the queue's refuses `allkeys-*` eviction, a
+//! cache's lives by it — names it with an instance marker:
+//! `RedisModule::for_root((Cache, None))` reads `<PREFIX>_REDIS__CACHE__*` and
+//! provides `RedisConnection<Cache>`, and a binding over a named instance is a
+//! typed import, `RedisScheduleModule::<Locks>`. Every refusal names the
+//! failing instance's variables, and every line the connection files carries
+//! it as `instance`.
 //!
 //! The connection attaches no close to the app's way down: a Valkey or Redis
 //! connection owes its server no goodbye — `QUIT` is deprecated since Redis
@@ -47,6 +56,7 @@ mod cluster;
 mod config;
 mod connection;
 mod error;
+mod instance;
 mod millis;
 mod module;
 #[cfg(feature = "queue")]

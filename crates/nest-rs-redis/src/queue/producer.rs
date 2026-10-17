@@ -19,6 +19,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::SystemTime;
 
 use async_trait::async_trait;
+use nest_rs_core::{Instance, Unnamed};
 use nest_rs_queue::{
     Delay, Envelope, JobId, JobProducer, PushOptions, QueueBackend, QueueError, QueueName,
 };
@@ -45,11 +46,20 @@ const _: () = assert!(
 /// `Arc<dyn JobProducer>`; a `Clone` shares the underlying connection.
 ///
 /// It honours every capability the crate's backend declaration names: a delay,
-/// a unique key, a cancel by receipt or by unique key.
-#[derive(Clone)]
-pub struct RedisQueueProducer {
-    conn: RedisConnection,
+/// a unique key, a cancel by receipt or by unique key. `I` is the instance it
+/// pushes to.
+pub struct RedisQueueProducer<I = Unnamed> {
+    conn: RedisConnection<I>,
     keys: Arc<KeptKeys>,
+}
+
+impl<I> Clone for RedisQueueProducer<I> {
+    fn clone(&self) -> Self {
+        Self {
+            conn: self.conn.clone(),
+            keys: Arc::clone(&self.keys),
+        }
+    }
 }
 
 /// Every key of each queue pushed to, spelled once, for at most [`KEYS_KEPT`]
@@ -76,9 +86,9 @@ impl KeptKeys {
     }
 }
 
-impl RedisQueueProducer {
+impl<I: Instance> RedisQueueProducer<I> {
     /// A producer over the app's shared connection (reused, never reopened).
-    pub fn new(conn: RedisConnection) -> Self {
+    pub fn new(conn: RedisConnection<I>) -> Self {
         Self {
             conn,
             keys: Arc::default(),
@@ -113,7 +123,7 @@ impl RedisQueueProducer {
 }
 
 #[async_trait]
-impl JobProducer for RedisQueueProducer {
+impl<I: Instance> JobProducer for RedisQueueProducer<I> {
     fn backend(&self) -> &'static QueueBackend {
         &BACKEND
     }

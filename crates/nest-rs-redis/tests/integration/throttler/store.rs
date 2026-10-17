@@ -11,7 +11,7 @@ use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{App, Handler, Posture, module};
 use nest_rs_guards::Guard;
 use nest_rs_http::__private::check_request;
-use nest_rs_redis::{RedisConfig, RedisModule, RedisThrottler, RedisThrottlerModule};
+use nest_rs_redis::{RedisConfig, RedisModule, RedisThrottlerModule};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule, ThrottlerSetup};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -142,7 +142,7 @@ async fn a_redis_that_stops_denies_with_one_line_from_the_guard_and_none_from_th
     assert_eq!(said.level, "warn");
     assert_eq!(
         said.field("store").as_deref(),
-        Some(std::any::type_name::<RedisThrottler>()),
+        Some("nest_rs_redis::throttler::store::RedisThrottler"),
     );
     assert!(said.field("error").is_some(), "{:?}", said.fields);
     let others: Vec<_> = logs

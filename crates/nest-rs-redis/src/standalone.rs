@@ -20,6 +20,7 @@ use crate::connection::{
     unproved,
 };
 use crate::error::RedisError;
+use crate::instance::RedisInstance;
 use crate::{RedisTopology, tls};
 
 /// The link to one server, and what opening it again needs.
@@ -30,6 +31,8 @@ pub(crate) struct StandaloneLink {
     /// The client the link was opened from, which a reopened or dedicated one
     /// is opened from too: same address, same TLS material and verification.
     client: redis::Client,
+    /// The instance the link serves, which its lines and timeouts name.
+    instance: RedisInstance,
     endpoint: String,
     /// The connect budget, which bounds opening the link again.
     budget: Duration,
@@ -44,16 +47,17 @@ impl StandaloneLink {
     pub(crate) async fn connect(
         info: ConnectionInfo,
         tls: &ClientTls,
+        instance: RedisInstance,
         budget: Duration,
     ) -> Result<Arc<Self>, RedisError> {
         let endpoint = info.addr().to_string();
-        let client = client(info, tls, &endpoint, budget)?;
+        let client = client(&instance, info, tls, &endpoint, budget)?;
         let database = client.get_connection_info().redis_settings().db();
-        let manager = proved(budget, &endpoint, process_seed(), |_| {
-            prove(&client, budget, &endpoint, database)
+        let manager = proved(&instance, budget, &endpoint, process_seed(), |_| {
+            prove(&instance, &client, budget, &endpoint, database)
         })
         .await
-        .map_err(|ended| unproved(ended, &endpoint, budget))?;
+        .map_err(|ended| unproved(ended, &instance, &endpoint, budget))?;
         let refusals = matches!(
             client.get_connection_info().addr(),
             ConnectionAddr::TcpTls { .. }
@@ -61,18 +65,22 @@ impl StandaloneLink {
         .then(|| {
             Arc::new(TlsRefusals {
                 client: client.clone(),
+                instance: instance.clone(),
                 endpoint: endpoint.clone(),
                 budget,
                 reported: AtomicBool::new(false),
                 diagnosing: AtomicBool::new(false),
             })
         });
-        Ok(Self::new(manager, client, endpoint, budget, refusals))
+        Ok(Self::new(
+            manager, client, instance, endpoint, budget, refusals,
+        ))
     }
 
     fn new(
         manager: ConnectionManager,
         client: redis::Client,
+        instance: RedisInstance,
         endpoint: String,
         budget: Duration,
         refusals: Option<Arc<TlsRefusals>>,
@@ -80,6 +88,7 @@ impl StandaloneLink {
         Arc::new(Self {
             manager: RwLock::new((0, manager)),
             client,
+            instance,
             endpoint,
             budget,
             refusals,
@@ -93,6 +102,7 @@ impl StandaloneLink {
         Ok(Self::new(
             manager,
             self.client.clone(),
+            self.instance.clone(),
             self.endpoint.clone(),
             self.budget,
             self.refusals.clone(),
@@ -106,7 +116,7 @@ impl StandaloneLink {
         budget: Duration,
     ) -> Result<Value, redis::RedisError> {
         let (opening, mut manager) = self.manager();
-        let outcome = answered(budget, manager.send_packed_command(cmd)).await;
+        let outcome = answered(&self.instance, budget, manager.send_packed_command(cmd)).await;
         self.observe(opening, &outcome);
         outcome
     }
@@ -122,6 +132,7 @@ impl StandaloneLink {
     ) -> Result<Vec<Value>, redis::RedisError> {
         let (opening, mut manager) = self.manager();
         let outcome = answered(
+            &self.instance,
             budget,
             manager.send_packed_commands(pipeline, offset, count),
         )
@@ -138,6 +149,7 @@ impl StandaloneLink {
     /// A manager of its own from the link's client, opened within the budget.
     async fn open_manager(&self) -> Result<ConnectionManager, redis::RedisError> {
         answered(
+            &self.instance,
             self.budget,
             ConnectionManager::new_with_config(self.client.clone(), manager_config(self.budget)),
         )
@@ -178,6 +190,7 @@ impl StandaloneLink {
                         drop(kept);
                         tracing::warn!(
                             target: crate::TARGET,
+                            instance = link.instance.name(),
                             endpoint = %link.endpoint,
                             "redis connection opened again: the server it reached answered as a \
                              read-only replica",
@@ -186,6 +199,7 @@ impl StandaloneLink {
                 }
                 Err(error) => tracing::warn!(
                     target: crate::TARGET,
+                    instance = link.instance.name(),
                     endpoint = %link.endpoint,
                     error = %nest_rs_core::error_message(&error),
                     "redis connection answered as a read-only replica and not opened again; \
@@ -207,6 +221,7 @@ struct TlsRefusals {
     /// The client the link is opened from, so the diagnosing handshake is the
     /// one the client keeps failing: same address, same material.
     client: redis::Client,
+    instance: RedisInstance,
     endpoint: String,
     budget: Duration,
     reported: AtomicBool,
@@ -229,7 +244,7 @@ impl TlsRefusals {
 
     fn report(&self, error: &redis::RedisError) {
         if !self.reported.swap(true, Ordering::Relaxed) {
-            tls::say_refused(&self.endpoint, error);
+            tls::say_refused(&self.instance, &self.endpoint, error);
         }
     }
 
@@ -256,14 +271,15 @@ impl TlsRefusals {
 /// the material beside it reach every connection it opens. Nothing is dialled:
 /// each refusal here is one every attempt would repeat.
 fn client(
+    instance: &RedisInstance,
     info: ConnectionInfo,
     tls: &ClientTls,
     endpoint: &str,
     budget: Duration,
 ) -> Result<redis::Client, RedisError> {
     let encrypted = matches!(info.addr(), ConnectionAddr::TcpTls { .. });
-    let certificates = tls::material(tls, encrypted, endpoint)?;
-    open_client(info, certificates.as_ref(), endpoint, budget)
+    let certificates = tls::material(instance, tls, encrypted, endpoint)?;
+    open_client(instance, info, certificates.as_ref(), endpoint, budget)
 }
 
 /// One boot attempt: a connection of its own, proved a server of its own by
@@ -274,12 +290,13 @@ fn client(
 /// before the kept connection opens, so an attempt needs one of the server's
 /// `maxclients` slots, not two.
 async fn prove(
+    instance: &RedisInstance,
     client: &redis::Client,
     budget: Duration,
     endpoint: &str,
     database: i64,
 ) -> Result<ConnectionManager, Attempt<redis::RedisError, RedisError>> {
-    let classified = |source| classify(source, endpoint, database);
+    let classified = |source| classify(instance, source, endpoint, database);
     let mut proof = dial(client, budget).await.map_err(classified)?;
     let hello = tls::hello(client, &mut proof, budget)
         .await
@@ -289,6 +306,7 @@ async fn prove(
             endpoint: endpoint.to_owned(),
             declared: RedisTopology::Standalone,
             serves: hello.serves,
+            url_var: instance.url_var(),
         }));
     }
     redis::cmd("PING")
@@ -331,7 +349,7 @@ fn manager_config(budget: Duration) -> ConnectionManagerConfig {
 mod tests {
     use super::*;
     use crate::testing::{
-        REFUSED, answer, config, mutual_tls_listener, tls_listener, trusting_the_authority,
+        REFUSED, answer, config, mutual_tls_listener, tls_listener, trusting_the_authority, unnamed,
     };
     use crate::url::{RedisUrl, address};
 
@@ -352,11 +370,13 @@ mod tests {
     /// [`refusals_within`], with `tls`'s material.
     fn refusals_with(url: &str, budget: Duration, tls: &ClientTls) -> Arc<TlsRefusals> {
         let endpoint = address(url);
-        let Ok(RedisUrl::Standalone(info)) = RedisUrl::parse(url) else {
+        let Ok(RedisUrl::Standalone(info)) = RedisUrl::parse(url, &unnamed()) else {
             panic!("{url} is a URL of one server");
         };
         Arc::new(TlsRefusals {
-            client: client(info, tls, &endpoint, budget).expect("the URL opens a client"),
+            client: client(&unnamed(), info, tls, &endpoint, budget)
+                .expect("the URL opens a client"),
+            instance: unnamed(),
             endpoint,
             budget,
             reported: AtomicBool::new(false),
@@ -418,6 +438,11 @@ mod tests {
         assert_eq!(
             reported[0].field("endpoint").as_deref(),
             Some("redis.internal:6380")
+        );
+        assert_eq!(
+            reported[0].field("instance").as_deref(),
+            Some(""),
+            "the default instance names none"
         );
         assert!(
             reported[0].field("reason").is_some_and(
@@ -482,12 +507,17 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let (addr, serving) = mutual_tls_listener().await;
         let url = format!("rediss://{addr}/");
-        let Ok(RedisUrl::Standalone(info)) = RedisUrl::parse(&url) else {
+        let Ok(RedisUrl::Standalone(info)) = RedisUrl::parse(&url, &unnamed()) else {
             panic!("{url} is a URL of one server");
         };
 
-        let outcome =
-            StandaloneLink::connect(info, &trusting_the_authority(), Duration::from_secs(60)).await;
+        let outcome = StandaloneLink::connect(
+            info,
+            &trusting_the_authority(),
+            unnamed(),
+            Duration::from_secs(60),
+        )
+        .await;
         serving.abort();
 
         let Err(error) = outcome else {

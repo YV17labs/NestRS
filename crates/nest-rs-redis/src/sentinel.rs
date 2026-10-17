@@ -24,6 +24,7 @@ use tokio::sync::Notify;
 
 use crate::connection::{Replies, answered, classify, demoted, dial, node_client, proved, spent};
 use crate::error::{RedisError, SentinelMiss};
+use crate::instance::RedisInstance;
 use crate::url::{NodeAddr, SentinelUrl, listed};
 use crate::{RedisTopology, tls};
 
@@ -49,6 +50,8 @@ struct Current {
 /// What finding the primary needs, shared by a link and every link it
 /// dedicates.
 struct Sentinels {
+    /// The instance the link serves, which its lines and refusals name.
+    instance: RedisInstance,
     /// Each sentinel's client, and its address.
     sentinels: Vec<(redis::Client, String)>,
     /// Every sentinel's address, as an error names them.
@@ -70,16 +73,18 @@ impl SentinelLink {
     pub(crate) async fn connect(
         url: SentinelUrl,
         tls: &ClientTls,
+        instance: RedisInstance,
         budget: Duration,
     ) -> Result<Arc<Self>, RedisError> {
         let listed = listed(&url.sentinels);
-        let certificates = tls::material(tls, url.tls, &listed)?;
+        let certificates = tls::material(&instance, tls, url.tls, &listed)?;
         let sentinels = url
             .sentinels
             .iter()
             .map(|sentinel| {
                 let endpoint = sentinel.to_string();
                 let client = node_client(
+                    &instance,
                     sentinel,
                     url.sentinel_settings.clone(),
                     certificates.as_ref(),
@@ -89,6 +94,7 @@ impl SentinelLink {
             })
             .collect::<Result<Vec<_>, RedisError>>()?;
         let sentinels = Arc::new(Sentinels {
+            instance,
             sentinels,
             listed,
             service_name: url.service_name,
@@ -98,12 +104,15 @@ impl SentinelLink {
             first: AtomicUsize::new(0),
             said: AtomicBool::new(false),
         });
-        let (connection, primary) =
-            proved(budget, &sentinels.listed, process_seed(), |remaining| {
-                sentinels.resolve(remaining)
-            })
-            .await
-            .map_err(|ended| sentinels.unproved(ended))?;
+        let (connection, primary) = proved(
+            &sentinels.instance,
+            budget,
+            &sentinels.listed,
+            process_seed(),
+            |remaining| sentinels.resolve(remaining),
+        )
+        .await
+        .map_err(|ended| sentinels.unproved(ended))?;
         Ok(Self::opened(sentinels, connection, primary))
     }
 
@@ -143,7 +152,7 @@ impl SentinelLink {
         budget: Duration,
     ) -> Result<Value, redis::RedisError> {
         let mut opening = None;
-        let outcome = answered(budget, async {
+        let outcome = answered(&self.sentinels.instance, budget, async {
             let (at, mut connection) = self.connection().await;
             opening = Some(at);
             connection.send_packed_command(cmd).await
@@ -163,7 +172,7 @@ impl SentinelLink {
         budget: Duration,
     ) -> Result<Vec<Value>, redis::RedisError> {
         let mut opening = None;
-        let outcome = answered(budget, async {
+        let outcome = answered(&self.sentinels.instance, budget, async {
             let (at, mut connection) = self.connection().await;
             opening = Some(at);
             connection
@@ -258,12 +267,14 @@ impl SentinelLink {
                     if previous == primary {
                         tracing::info!(
                             target: crate::TARGET,
+                            instance = this.sentinels.instance.name(),
                             primary = %primary,
                             "redis connection to the primary the sentinels name opened again",
                         );
                     } else {
                         tracing::warn!(
                             target: crate::TARGET,
+                            instance = this.sentinels.instance.name(),
                             primary = %primary,
                             previous = %previous,
                             "redis connection follows the new primary the sentinels name",
@@ -299,7 +310,13 @@ impl Sentinels {
             let at = (first + turn) % count;
             let (client, endpoint) = &self.sentinels[at];
             let remaining = deadline.saturating_duration_since(Instant::now());
-            match answered(share.min(remaining), self.ask(client, endpoint)).await {
+            match answered(
+                &self.instance,
+                share.min(remaining),
+                self.ask(client, endpoint),
+            )
+            .await
+            {
                 Ok(Answer::Primary(primary)) => {
                     self.first.store(at, Ordering::Relaxed);
                     return self.open_primary(&primary, deadline).await;
@@ -310,9 +327,10 @@ impl Sentinels {
                         endpoint: endpoint.clone(),
                         declared: RedisTopology::Sentinel,
                         serves,
+                        url_var: self.instance.url_var(),
                     }));
                 }
-                Err(error) => match classify(error, endpoint, 0) {
+                Err(error) => match classify(&self.instance, error, endpoint, 0) {
                     Attempt::Refused(refusal) => return Err(Attempt::Refused(refusal)),
                     Attempt::Failed(error) => last = Some(error),
                 },
@@ -332,7 +350,7 @@ impl Sentinels {
         endpoint: &str,
     ) -> Result<Answer, redis::RedisError> {
         let opened = dial(client, self.budget).await;
-        tls::observe_refusal(endpoint, &opened);
+        tls::observe_refusal(&self.instance, endpoint, &opened);
         let mut sentinel = opened?;
         let hello = tls::hello(client, &mut sentinel, self.budget).await?;
         if hello.serves != RedisTopology::Sentinel {
@@ -363,11 +381,12 @@ impl Sentinels {
                 source,
             })
         };
-        let failed = |error| match classify(error, &endpoint, database) {
+        let failed = |error| match classify(&self.instance, error, &endpoint, database) {
             Attempt::Refused(refusal) => Attempt::Refused(refusal),
             Attempt::Failed(error) => missed(Some(error)),
         };
         let client = node_client(
+            &self.instance,
             primary,
             self.primary_settings.clone(),
             self.certificates.as_ref(),
@@ -375,13 +394,17 @@ impl Sentinels {
         )
         .map_err(Attempt::Refused)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let opened = answered(remaining, dial(&client, self.budget)).await;
-        tls::observe_refusal(&endpoint, &opened);
+        let opened = answered(&self.instance, remaining, dial(&client, self.budget)).await;
+        tls::observe_refusal(&self.instance, &endpoint, &opened);
         let mut connection = opened.map_err(failed)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let hello = answered(remaining, tls::hello(&client, &mut connection, self.budget))
-            .await
-            .map_err(failed)?;
+        let hello = answered(
+            &self.instance,
+            remaining,
+            tls::hello(&client, &mut connection, self.budget),
+        )
+        .await
+        .map_err(failed)?;
         if !hello.primary {
             // The sentinels still name a node a failover demoted, or one that
             // is no primary yet.
@@ -391,6 +414,7 @@ impl Sentinels {
         // holds on all of them.
         let remaining = deadline.saturating_duration_since(Instant::now());
         answered(
+            &self.instance,
             remaining,
             redis::cmd("PING").query_async::<()>(&mut connection),
         )
@@ -411,14 +435,17 @@ impl Sentinels {
                 service_name: self.service_name.clone(),
                 budget: self.budget,
                 attempts,
+                url_var: self.instance.url_var(),
             },
             SentinelMiss::Primary { endpoint, source } => {
-                spent(endpoint, self.budget, attempts, source)
+                spent(&self.instance, endpoint, self.budget, attempts, source)
             }
             SentinelMiss::Unreachable(source) => RedisError::SentinelUnreachable {
                 sentinels: self.listed.clone(),
                 budget: self.budget,
                 attempts,
+                url_var: self.instance.url_var(),
+                connect_timeout_var: self.instance.connect_timeout_var(),
                 source,
             },
         }
@@ -435,6 +462,7 @@ impl Sentinels {
         if first {
             tracing::warn!(
                 target: crate::TARGET,
+                instance = self.instance.name(),
                 sentinels = %self.listed,
                 error = %error,
                 "redis primary not found again through the sentinels yet; retrying",
@@ -442,6 +470,7 @@ impl Sentinels {
         } else {
             tracing::debug!(
                 target: crate::TARGET,
+                instance = self.instance.name(),
                 sentinels = %self.listed,
                 error = %error,
                 "redis primary still not found again through the sentinels",

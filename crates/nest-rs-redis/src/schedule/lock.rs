@@ -2,6 +2,7 @@
 //! [`RedisConnection`]: one atomic `SET … NX PX` per occurrence.
 
 use async_trait::async_trait;
+use nest_rs_core::{Instance, Unnamed};
 use nest_rs_schedule::{Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError};
 
 use crate::RedisConnection;
@@ -28,16 +29,24 @@ fn claim_key(token: &str) -> String {
 /// connection's own `PING` (and `SELECT`, when the URL names a database) is the
 /// whole of what a Redis ACL has to allow the schedule. Atomic, so two replicas
 /// cannot both win; expiring with the port's hold. A failure skips the
-/// occurrence: it is fired **at most once**.
-#[derive(Clone)]
-pub struct RedisOccurrenceLock {
-    conn: RedisConnection,
+/// occurrence: it is fired **at most once**. `I` is the instance it claims on.
+pub struct RedisOccurrenceLock<I = Unnamed> {
+    conn: RedisConnection<I>,
     holder: String,
 }
 
-impl RedisOccurrenceLock {
+impl<I> Clone for RedisOccurrenceLock<I> {
+    fn clone(&self) -> Self {
+        Self {
+            conn: self.conn.clone(),
+            holder: self.holder.clone(),
+        }
+    }
+}
+
+impl<I: Instance> RedisOccurrenceLock<I> {
     /// A lock over the app's shared connection (reused, never reopened).
-    pub fn new(conn: RedisConnection) -> Self {
+    pub fn new(conn: RedisConnection<I>) -> Self {
         Self {
             conn,
             holder: holder(),
@@ -46,7 +55,7 @@ impl RedisOccurrenceLock {
 }
 
 #[async_trait]
-impl OccurrenceLock for RedisOccurrenceLock {
+impl<I: Instance> OccurrenceLock for RedisOccurrenceLock<I> {
     async fn claim(&self, occurrence: &Occurrence) -> Result<OccurrenceClaim, OccurrenceLockError> {
         // `OK` when this call created the key, nil when a replica already held it;
         // read as Redis's own reply, so an answer that is neither never fires.

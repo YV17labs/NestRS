@@ -158,3 +158,50 @@ it to the fence that crate already scrapes, so the two cannot drift.
 `#[instance]`, the generic-module refusal) and the config half (`ForInstance`,
 `instance_namespace`, per-instance `provide_feature` and `setup`) landed with
 `feat/named-instances-kernel`; Redis and the removal of string keys follow.
+
+## 2026-10-17 — Redis is the first instance-capable adapter; where it departs
+
+**The instance reaches the connection's type, all the way to a Cluster's
+node.** `redis` opens each Cluster node through a static constructor
+(`cluster_async::Connect`), with no value of ours in reach, so the line a node
+files when it refuses the client's certificate can name its instance only
+through a type. `RedisConnection<I>` therefore holds a link generic over `I`,
+and a binding's store holding it is generic too — `RedisQueueProducer<I>`,
+`RedisThrottler<I>`, `RedisOccurrenceLock<I>`, each defaulted, each built from
+the connection it is handed, so `::new(conn)` infers it. Everything below the
+Cluster's node — the link of one server, Sentinel's, the proofs and the
+refusals — carries the instance as a value instead, read once at the open: a
+helper generic over the marker would be compiled again per instance for no
+caller. A store's default `ThrottlerStore::name` is its type name, and now
+reads its instance (`RedisThrottler<Cache>`).
+
+**`RedisConnection::connect` stays the default instance's.** A second public
+constructor generic over the instance would make the bare call ambiguous
+(`impl RedisConnection<Unnamed>` beside `impl<I> RedisConnection<I>`); a named
+instance's connection is opened by `RedisModule::for_root((Cache, x))`, the one
+seam, and seeded by its config (`Instanced<Cache, RedisConfig>`) in a test.
+
+**A refusal holds its instance's variable names rendered** (`url_var`,
+`connect_timeout_var`, … on `RedisError`), not a namespace to render later: a variant
+reads the same wherever it is displayed, and the variant says which variable a
+reader changes.
+
+**The instance-aware read is `ConfigModule::resolved_for::<I, C>`**, beside
+`resolved::<C>`, which keeps its turbofish callers and reads the default
+instance through it. It hands back `Arc<I::Of<C>>`, borrowed as `C`, and its
+refusal names the instance (`ConfigNotResolvedError::instance`).
+
+**The unclaimed-variable report knows an instance's namespace from its
+registration.** The kernel's entry traced it as needing no change; run, it
+reported `<PREFIX>_REDIS__CACHE__CONNECT_TIMEOUT_SECS` under `redis` as a near
+miss of `CONNECT_TIMEOUT_SECS`, since the default instance's keys are checked
+when its read completes, before the cache's read. `ConfigModule::provide_feature`
+now claims a named instance's namespace when a module registers it, before any
+read, so it owns its variables from the first report, as `redis__queue` does
+under `redis`. Refused: every linked marker crossed with every linked config —
+one `#[instance] struct Cache` would then silence `seaorm__cache`, under a
+vendor that opens no instance.
+
+**Status (2026-10-17):** Redis — the connection, its three bindings and every
+refusal and line — is instance-capable; storage keeps one disk (above), and
+the removal of string keys follows.

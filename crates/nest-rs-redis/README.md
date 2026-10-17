@@ -1,6 +1,6 @@
 # nest-rs-redis
 
-Redis as one integration home: `RedisModule` opens the one shared connection (`<PREFIX>_REDIS__*`) to one Valkey server, a Sentinel deployment's primary or a Cluster — the URL's scheme says which, `rediss…://` for TLS, always verified — and one binding per port sits beside it, each a feature of its own — `RedisQueueModule` (the job queue on Redis Streams: the portable `dyn JobProducer`, and the consumer the queue port's worker runs), `RedisThrottlerModule` (the rate-limit store shared across replicas), and `RedisScheduleModule` (the occurrence lock a scheduled job declared `replicas = "one"` claims through, so each occurrence fires on one replica).
+Redis as one integration home: `RedisModule` opens the shared connection (`<PREFIX>_REDIS__*`, and `<PREFIX>_REDIS__CACHE__*` for a second Valkey named `#[instance] struct Cache`) to one Valkey server, a Sentinel deployment's primary or a Cluster — the URL's scheme says which, `rediss…://` for TLS, always verified — and one binding per port sits beside it, each a feature of its own — `RedisQueueModule` (the job queue on Redis Streams: the portable `dyn JobProducer`, and the consumer the queue port's worker runs), `RedisThrottlerModule` (the rate-limit store shared across replicas), and `RedisScheduleModule` (the occurrence lock a scheduled job declared `replicas = "one"` claims through, so each occurrence fires on one replica).
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

@@ -123,3 +123,90 @@ impl SessionManager for BoundedSessions {
         self.inner.event_store()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn one_place() -> BoundedSessions {
+        BoundedSessions::new(SessionConfig::default(), 1)
+    }
+
+    #[tokio::test]
+    async fn a_session_past_the_cap_is_refused_by_the_manager_itself() {
+        let sessions = one_place();
+        sessions
+            .create_session()
+            .await
+            .expect("the first session takes the one place");
+
+        assert!(
+            matches!(sessions.create_session().await, Err(SessionsError::Full)),
+            "the manager refuses past the cap even when no pre-check ran",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_restored_session_takes_a_place_like_a_created_one() {
+        let sessions = one_place();
+        let restored = sessions
+            .restore_session(SessionId::from("stored"))
+            .await
+            .expect("a restore under the cap is let in");
+        assert!(matches!(restored, RestoreOutcome::Restored(_)));
+
+        assert!(
+            matches!(sessions.create_session().await, Err(SessionsError::Full)),
+            "the restored session holds the one place",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_restore_of_an_unknown_session_past_the_cap_is_refused() {
+        let sessions = one_place();
+        sessions
+            .create_session()
+            .await
+            .expect("the first session takes the one place");
+
+        assert!(matches!(
+            sessions.restore_session(SessionId::from("stored")).await,
+            Err(SessionsError::Full),
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_restore_of_a_session_already_present_takes_no_place() {
+        let sessions = one_place();
+        let (id, _transport) = sessions
+            .create_session()
+            .await
+            .expect("the first session takes the one place");
+
+        assert!(
+            matches!(
+                sessions.restore_session(id).await,
+                Ok(RestoreOutcome::AlreadyPresent),
+            ),
+            "a session in memory is answered present, not refused, at the cap",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_closed_session_frees_its_place() {
+        let sessions = one_place();
+        let (id, _transport) = sessions
+            .create_session()
+            .await
+            .expect("the first session takes the one place");
+        sessions
+            .close_session(&id)
+            .await
+            .expect("the session closes");
+
+        sessions
+            .create_session()
+            .await
+            .expect("the freed place takes a new session");
+    }
+}

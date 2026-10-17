@@ -47,11 +47,11 @@ impl UsersService {
         password: &str,
     ) -> Result<entity::Model, AuthError> {
         burn_verify(password);
-        let conn = Repo::<Users>::conn().map_err(|e| store_unavailable(email, e))?;
+        let conn = Repo::<Users>::conn().map_err(store_unavailable)?;
         let user = find_by_email(email, &conn)
             .await
-            .map_err(|e| store_unavailable(email, e))?;
-        verify_credentials(email, user, password).map_err(AuthError::from)
+            .map_err(store_unavailable)?;
+        verify_credentials(user, password).map_err(AuthError::from)
     }
 
     pub async fn register_with_password(
@@ -290,15 +290,8 @@ async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Mo
         .await
 }
 
-fn redact_email(email: &str) -> String {
-    match email.split_once('@') {
-        Some((_, domain)) => format!("***@{domain}"),
-        None => "***".to_owned(),
-    }
-}
-
-fn store_unavailable(email: &str, err: DbErr) -> AuthError {
-    tracing::error!(target: crate::users::TARGET, identity = %redact_email(email), error = %error_message(&err), "credential lookup failed");
+fn store_unavailable(err: DbErr) -> AuthError {
+    tracing::error!(target: crate::users::TARGET, error = %error_message(&err), "credential lookup failed");
     AuthError::unavailable_because("the credential store is unreachable", None, err)
 }
 
@@ -319,30 +312,29 @@ pub(crate) fn prepare_new_user(
 }
 
 pub(crate) fn verify_credentials(
-    email: &str,
     user: Option<entity::Model>,
     password: &str,
 ) -> Result<entity::Model, CredentialError> {
     let Some(user) = user else {
         burn_verify(password);
-        tracing::warn!(target: crate::users::TARGET, identity = %redact_email(email), reason = "unknown_email", "login failed");
+        tracing::warn!(target: crate::users::TARGET, reason = "unknown_email", "login failed");
         return Err(CredentialError);
     };
 
     let Some(ref hash) = user.password_hash else {
         burn_verify(password);
-        tracing::warn!(target: crate::users::TARGET, identity = %redact_email(email), reason = "no_password_set", "login failed");
+        tracing::warn!(target: crate::users::TARGET, user_id = %user.id, reason = "no_password_set", "login failed");
         return Err(CredentialError);
     };
 
     match verify_password(hash.as_str(), password) {
         Ok(true) => Ok(user),
         Ok(false) => {
-            tracing::warn!(target: crate::users::TARGET, identity = %redact_email(email), reason = "bad_password", "login failed");
+            tracing::warn!(target: crate::users::TARGET, user_id = %user.id, reason = "bad_password", "login failed");
             Err(CredentialError)
         }
         Err(e) => {
-            tracing::error!(target: crate::users::TARGET, identity = %redact_email(email), error = %error_message(&e), reason = "unverifiable_hash", "login failed");
+            tracing::error!(target: crate::users::TARGET, user_id = %user.id, error = %error_message(&e), reason = "unverifiable_hash", "login failed");
             Err(CredentialError)
         }
     }
@@ -590,14 +582,13 @@ mod tests {
 
     #[test]
     fn verify_credentials_rejects_absent_user_with_opaque_error() {
-        let err = verify_credentials("ghost@example.com", None, "anything")
-            .expect_err("no user ⇒ CredentialError");
+        let err = verify_credentials(None, "anything").expect_err("no user ⇒ CredentialError");
         assert_eq!(err.to_string(), "invalid credentials");
     }
 
     #[test]
     fn verify_credentials_rejects_user_without_a_password_hash() {
-        let err = verify_credentials("ada@example.com", Some(user_row(None)), "hunter2")
+        let err = verify_credentials(Some(user_row(None)), "hunter2")
             .expect_err("no hash ⇒ CredentialError");
         assert_eq!(err.to_string(), "invalid credentials");
     }
@@ -605,9 +596,35 @@ mod tests {
     #[test]
     fn verify_credentials_rejects_wrong_password() {
         let hash = hash_password("hunter2").expect("hash");
-        let err = verify_credentials("ada@example.com", Some(user_row(Some(hash))), "wrong")
+        let err = verify_credentials(Some(user_row(Some(hash))), "wrong")
             .expect_err("wrong password ⇒ CredentialError");
         assert_eq!(err.to_string(), "invalid credentials");
+    }
+
+    #[test]
+    fn a_refused_login_logs_the_account_never_the_address_typed() {
+        let logs = nest_rs::testing::LogCapture::install();
+        let row = user_row(None);
+        let id = row.id.to_string();
+        let domain = row
+            .email
+            .rsplit_once('@')
+            .map(|(_, domain)| domain.to_owned())
+            .expect("an address has a domain");
+        verify_credentials(None, "anything").expect_err("no user ⇒ CredentialError");
+        verify_credentials(Some(row), "anything").expect_err("no hash ⇒ CredentialError");
+
+        let refused = logs.find(crate::users::TARGET, "login failed");
+        assert_eq!(refused.len(), 2, "{:#?}", logs.events());
+        for event in &refused {
+            assert!(
+                !format!("{:?}", event.fields).contains(&domain),
+                "{:?}",
+                event.fields
+            );
+        }
+        assert_eq!(refused[0].field("user_id"), None);
+        assert_eq!(refused[1].field("user_id"), Some(id));
     }
 
     #[test]
@@ -615,8 +632,7 @@ mod tests {
         let hash = hash_password("hunter2").expect("hash");
         let row = user_row(Some(hash));
         let id = row.id;
-        let ok = verify_credentials("ada@example.com", Some(row), "hunter2")
-            .expect("correct password ⇒ Ok");
+        let ok = verify_credentials(Some(row), "hunter2").expect("correct password ⇒ Ok");
         assert_eq!(ok.id, id);
     }
 
@@ -740,12 +756,8 @@ mod tests {
 
     #[test]
     fn verify_credentials_rejects_user_with_malformed_stored_hash() {
-        let err = verify_credentials(
-            "ada@example.com",
-            Some(user_row(Some("not-a-real-hash".into()))),
-            "hunter2",
-        )
-        .expect_err("bad stored hash ⇒ CredentialError");
+        let err = verify_credentials(Some(user_row(Some("not-a-real-hash".into()))), "hunter2")
+            .expect_err("bad stored hash ⇒ CredentialError");
         assert_eq!(err.to_string(), "invalid credentials");
     }
 }

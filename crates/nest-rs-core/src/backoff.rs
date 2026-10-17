@@ -41,6 +41,12 @@ pub struct Backoff {
 }
 
 impl Backoff {
+    /// The wait between two attempts to open or reopen a resource the
+    /// framework opens — a Redis link, the Postgres pool, the object store: a
+    /// quarter of a second, doubling up to two, so a boot budget holds several
+    /// attempts and every resource comes back alike after an outage.
+    pub const RECONNECT: Self = Self::new(Duration::from_millis(250), Duration::from_secs(2));
+
     /// The backoff waiting about `first` after a first failure, doubling up to
     /// `ceiling`. A `first` past `ceiling` is held to it: neither panics nor
     /// errs, so a value read at runtime is safe.
@@ -51,6 +57,16 @@ impl Backoff {
             first
         };
         Self { first, ceiling }
+    }
+
+    /// About how long the first failure waits, before its jitter.
+    pub const fn first(&self) -> Duration {
+        self.first
+    }
+
+    /// The longest the curve grows to, before its jitter.
+    pub const fn ceiling(&self) -> Duration {
+        self.ceiling
     }
 
     /// The wait after failed attempt number `attempt`, drawn from `seed`.

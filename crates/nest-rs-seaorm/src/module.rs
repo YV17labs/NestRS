@@ -175,10 +175,6 @@ pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
     connect(&config, config.connect_options()?).await
 }
 
-/// The wait between two attempts to open the pool: the Redis connection's
-/// curve, so both come back alike after an outage.
-const CONNECT_RETRY: Backoff = Backoff::new(Duration::from_millis(250), Duration::from_secs(2));
-
 /// Open a pool with `options`, which `config` built and checked, proved within
 /// its connect budget through [`prove`]: what every attempt would meet —
 /// credentials or a database Postgres refuses, TLS that fails — refuses the
@@ -207,7 +203,7 @@ async fn connect(
     );
     prove(
         budget,
-        CONNECT_RETRY,
+        Backoff::RECONNECT,
         process_seed(),
         said(&endpoint, budget),
         |_| {

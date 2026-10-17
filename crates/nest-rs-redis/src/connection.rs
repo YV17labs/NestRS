@@ -85,16 +85,16 @@ enum Link {
 
 /// Backoff before the first retry; doubles up to [`MAX_RETRY_BACKOFF`] and is
 /// always clamped to what is left of the budget.
-pub(crate) const FIRST_RETRY_BACKOFF: Duration = Duration::from_millis(250);
+pub(crate) const FIRST_RETRY_BACKOFF: Duration = Backoff::RECONNECT.first();
 
 /// Ceiling for the doubling backoff, so a boot budget fits several attempts;
 /// every link's reopening backoff takes it too.
-pub(crate) const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(2);
+pub(crate) const MAX_RETRY_BACKOFF: Duration = Backoff::RECONNECT.ceiling();
 
 /// The wait between two attempts to open or reopen a link, jittered from a
 /// seed — every replica's own, so replicas that lost Valkey together do not
 /// dial it again together.
-pub(crate) const RECONNECT: Backoff = Backoff::new(FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF);
+pub(crate) const RECONNECT: Backoff = Backoff::RECONNECT;
 
 /// The shortest the socket waits before it probes, or before it gives up on
 /// what it sent: the kernel counts the first in whole seconds and refuses zero.

@@ -111,6 +111,43 @@ pub use nest_rs_exception_filters as exception_filters;
 #[cfg(feature = "storage")]
 pub use nest_rs_storage as storage;
 
+// What codegen appends after an expansion reaching a feature an attribute
+// pulls in (`#[authorize]`, `#[crud]`), with the sentence naming it. Written
+// out pair by pair: a `#[macro_export]` a macro produces is unreachable by an
+// absolute path inside its own crate.
+
+#[cfg(feature = "authz")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_authz {
+    ($($sentence:tt)*) => {};
+}
+
+#[cfg(not(feature = "authz"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_authz {
+    ($sentence:literal) => {
+        ::core::compile_error!($sentence);
+    };
+}
+
+#[cfg(feature = "seaorm")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_seaorm {
+    ($($sentence:tt)*) => {};
+}
+
+#[cfg(not(feature = "seaorm"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_seaorm {
+    ($sentence:literal) => {
+        ::core::compile_error!($sentence);
+    };
+}
+
 /// The everyday import — covers the decorators and types an app reaches for
 /// on every controller, service, and module.
 ///

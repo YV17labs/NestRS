@@ -25,7 +25,9 @@ all-features = true
 ## the defect this matrix exists to prevent. Emissions that depend on an
 ## attribute the developer writes themselves (`#[authorize]` → authz,
 ## `#[crud]` → seaorm) are their own feature: one more feature, never one more
-## dependency line.
+## dependency line. Each is a row of codegen's crate table naming its
+## attribute, and a `__requires_<feature>` pair in `src/lib.rs` that turns a
+## missing feature into a sentence naming it.
 ##
 ## `dep?/feat` (weak) forwards a binding only when both sides are already on —
 ## an HTTP-only build never compiles the GraphQL stack through those edges.
@@ -100,15 +102,15 @@ seaorm = [
 # `#[resolver]` names the guard chain and the pipe fold unconditionally
 # (`resolver.rs`), so `graphql` owns them rather than inheriting them from a
 # feature the developer might not enable.
-# `authz` is strong, not `?`: a GraphQL posture is **mandatory**, so
-# `#[operations]` emits `::nest_rs_authz::class_gate` and
-# `::nest_rs_authz::graphql::masked_value_for` on every operation it expands, and `#[expose(..., graphql)]` emits
-# `::nest_rs_authz::masked_output_ambient` in the relation loader. Under the weak
-# form the crate stayed off and `::nest_rs::authz` did not resolve.
+# `authz` is the developer's, as on every edge: `#[operations]` emits
+# `::nest_rs_authz` — the class gate, the response mask — only for an
+# operation carrying `#[authorize]` (a `#[public]` one names none), and
+# `#[expose(..., graphql)]` rides `seaorm`, which enables it. A GraphQL gateway
+# with no database compiles no sea-orm; a decorator whose `#[authorize]` needs
+# the feature says so (`__requires_authz`).
 graphql = [
     "dep:nest-rs-graphql",
     "http",
-    "authz",
     "nest-rs-testing?/graphql",
     "nest-rs-seaorm?/graphql",
     "nest-rs-authz?/graphql",

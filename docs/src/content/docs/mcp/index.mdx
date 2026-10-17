@@ -35,7 +35,9 @@ The `mcp` feature pulls the HTTP transport the endpoint mounts on and the guard
 surface that gates it: the transport runs the global pool and the endpoint's
 guards at every `/mcp` request, so `/mcp` is gated by them instead of staying
 deny-all.
-None of that is a line you write.
+None of that is a line you write. Add `authz` when a tool carries
+`#[authorize]`, or `seaorm`, which implies it; the decorator names the feature
+when it is missing.
 
 `rmcp` is not a dependency either, and it is not an import: `#[tools]` emits
 the SDK's own macros inside generated code that carries its own scope. That keeps

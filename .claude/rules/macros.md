@@ -30,7 +30,11 @@ path — `::anyhow`, `::tracing`, `::uuid` resolve against the consumer's extern
 prelude and break every app that lacks that direct dependency. Routing through
 the umbrella is also what dissolves the cycles: `nest-rs-guards` sits below
 the transports, `nest-rs-authz` and `nest-rs-seaorm` above them, and only
-`::nest_rs::` sits above all of them.
+`::nest_rs::` sits above all of them. One place roots them:
+`nest_rs_codegen::reroot`, which every decorator calls on its finished
+expansion, and which follows a path an attribute pulled in (`#[authorize]`,
+`#[crud]`) with the umbrella's check for its feature, under the `cfg`s around
+that path.
 
 **A seam that is not public API lives in its crate's `__private`** — one inline
 `#[doc(hidden)] pub mod __private` of `pub use` in `lib.rs` — reached as

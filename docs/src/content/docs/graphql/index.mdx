@@ -26,9 +26,10 @@ cargo add nest-rs --features graphql,seaorm,authz
 ```
 
 One line in the feature crate's manifest. `graphql` alone runs a resolver over a
-hand-written service; add `seaorm` when the resolver binds an entity, `authz`
-when an operation carries `#[authorize]` — features you enable because *your*
-code says so.
+hand-written service and compiles no database; add `seaorm` when the resolver
+binds an entity, `authz` when an operation carries `#[authorize]` — features you
+enable because *your* code says so, and that the decorator names when one is
+missing.
 
 `#[operations]` builds on async-graphql's own `#[Object]`, and a third-party
 macro expands against *your* prelude — so the decorator pins that expansion to

@@ -132,4 +132,14 @@ impl HygieneVersionedController {
     async fn create(&self) -> String {
         "created".into()
     }
+
+    /// A versioned mount arm is one statement holding braces: the `authz`
+    /// check stays under the route's `#[cfg]`, so `http` alone builds.
+    #[cfg(feature = "seaorm")]
+    #[get("/count")]
+    #[version("2")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn count(&self) -> String {
+        "0".into()
+    }
 }

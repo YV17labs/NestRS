@@ -198,6 +198,18 @@ error[E0433]: failed to resolve: could not find `seaorm` in `nest_rs`
 
 Add the feature named in the note to the `nest-rs` line — never a second crate.
 
+A feature an *attribute* pulls into a decorator's expansion — `authz` for
+`#[authorize]`, `seaorm` for `#[crud]` — is named by the decorator itself,
+before rustc's own errors, and its message ends on the line to paste, its
+version elided here for the same reason:
+
+```text frame="terminal"
+error: `#[authorize]` expands into `nest_rs::authz`, which this build does not
+       enable. Add the feature to Cargo.toml:
+
+           nest-rs = { version = "…", features = ["authz"] }
+```
+
 The `nest-rs-*` crates stay published and keep their names — they are separate
 compilation units, which is what makes an unused capability free. They are not
 the entry point, and renaming the `nest-rs` dependency is unsupported: the same

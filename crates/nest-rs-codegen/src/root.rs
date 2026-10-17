@@ -11,12 +11,18 @@
 //!
 //! The walk sees the developer's own item too, so a hand-written
 //! `::nest_rs_http::X` there is re-rooted as well; it resolves either way.
+//!
+//! A crate an expansion reaches only because the developer wrote an attribute
+//! (`#[authorize]`, `#[crud]`) ships behind a feature the umbrella may lack, so
+//! [`reroot`] follows the expansion with the umbrella's `__requires_<feature>!`
+//! for it: nothing when the feature is on, the sentence naming it when it is off.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use proc_macro_crate::{Error, FoundCrate, crate_name};
-use proc_macro2::{Group, Ident, Literal, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Spacing, Span, TokenStream, TokenTree};
 use quote::quote;
 
 /// How the call site reaches the umbrella, when it can reach it at all.
@@ -44,6 +50,10 @@ struct FrameworkCrate {
     path: &'static str,
     /// The umbrella feature that ships it; `None` for the kernel, always there.
     feature: Option<&'static str>,
+    /// The attribute whose expansion reaches this crate when no decorator's
+    /// own does, so its feature is the developer's to enable; `None` for a
+    /// crate every decorator emitting it ships with.
+    gated_by: Option<&'static str>,
 }
 
 const fn row(lib: &'static str, path: &'static str, feature: &'static str) -> FrameworkCrate {
@@ -51,6 +61,23 @@ const fn row(lib: &'static str, path: &'static str, feature: &'static str) -> Fr
         lib,
         path,
         feature: Some(feature),
+        gated_by: None,
+    }
+}
+
+/// A crate an expansion reaches only through `attribute`, written by the
+/// developer on a decorator that otherwise ships without it.
+const fn gated(
+    lib: &'static str,
+    path: &'static str,
+    feature: &'static str,
+    attribute: &'static str,
+) -> FrameworkCrate {
+    FrameworkCrate {
+        lib,
+        path,
+        feature: Some(feature),
+        gated_by: Some(attribute),
     }
 }
 
@@ -65,11 +92,17 @@ const FRAMEWORK: &[FrameworkCrate] = &[
         lib: "nest_rs_core",
         path: "core",
         feature: None,
+        gated_by: None,
     },
     row("nest_rs_http", "http", "http"),
     row("nest_rs_config", "config", "config"),
     row("nest_rs_database", "database", "database"),
-    row("nest_rs_seaorm", "seaorm", "seaorm"),
+    gated(
+        "nest_rs_seaorm",
+        "seaorm",
+        "seaorm",
+        "`#[crud]` or `#[authorize(…, bind = …)]`",
+    ),
     row("nest_rs_graphql", "graphql", "graphql"),
     row("nest_rs_ws", "ws", "ws"),
     row("nest_rs_mcp", "mcp", "mcp"),
@@ -78,7 +111,7 @@ const FRAMEWORK: &[FrameworkCrate] = &[
     row("nest_rs_schedule", "schedule", "schedule"),
     row("nest_rs_events", "events", "events"),
     row("nest_rs_authn", "authn", "authn"),
-    row("nest_rs_authz", "authz", "authz"),
+    gated("nest_rs_authz", "authz", "authz", "`#[authorize]`"),
     row("nest_rs_oauth_client", "oauth::client", "oauth-client"),
     row(
         "nest_rs_oauth_resource",
@@ -149,31 +182,149 @@ fn root_prefix(u: &Umbrella) -> TokenStream {
 /// to the path the call site can actually resolve.
 ///
 /// Inside the framework's own crates the tokens come back untouched and a
-/// `compile_error!` names the missing dependency instead. Call it once, on what
-/// a decorator is about to return.
+/// `compile_error!` names the missing dependency instead. Behind the umbrella,
+/// a crate only an attribute pulls in (`#[authorize]`, `#[crud]`) is followed
+/// by the umbrella's check for its feature, an item: the output belongs in
+/// item or associated-item position. Call it once, on what a decorator is
+/// about to return.
 pub fn reroot(tokens: TokenStream) -> TokenStream {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
 
     let Some(u) = umbrella() else {
         // One walk for both jobs, so a root only inside a `crate = "…"` reports.
         let mut found = Vec::new();
-        walk(&trees, None, "", false, &mut found);
+        walk(&trees, None, "", false, &[], &mut found);
         let mut out = TokenStream::from_iter(trees);
-        out.extend(missing_dependency_error(found));
+        out.extend(missing_dependency_error(
+            found.into_iter().map(|root| root.krate).collect(),
+        ));
         return out;
     };
 
-    let prefix = root_prefix(u);
-    let prefix: Vec<TokenTree> = prefix.into_iter().collect();
+    let prefix: Vec<TokenTree> = root_prefix(u).into_iter().collect();
+    rerooted(trees, &prefix)
+}
+
+/// `trees` with every framework root under `prefix`, followed by the
+/// umbrella's `__requires_<feature>!` for each attribute-gated crate reached.
+fn rerooted(trees: Vec<TokenTree>, prefix: &[TokenTree]) -> TokenStream {
     // The text form the derive-relocation attributes parse — `crate = "…"`
     // takes the path as a string, so it cannot reuse the tokens.
     let prefix_text: String = prefix.iter().map(ToString::to_string).collect();
 
-    let mut sink = Vec::new();
-    match walk(&trees, Some(&prefix), &prefix_text, false, &mut sink) {
+    let mut found = Vec::new();
+    let mut out = match walk(&trees, Some(prefix), &prefix_text, false, &[], &mut found) {
         Some(rewritten) => TokenStream::from_iter(rewritten),
         None => TokenStream::from_iter(trees),
+    };
+    out.extend(feature_checks(found, prefix));
+    out
+}
+
+/// One `<umbrella>::__requires_<feature>! { "…" }` per attribute-gated crate in
+/// `found`, under the `#[cfg]`s enclosing the paths that reach it: the umbrella
+/// expands it to nothing when it ships the feature, and to the sentence as a
+/// compile error when it does not. A method compiled out takes its check with
+/// it, as it takes its wrapper.
+///
+/// Every caller of [`reroot`] is an attribute or a derive, whose output sits in
+/// item position, where an invocation expanding to nothing is legal.
+fn feature_checks(found: Vec<Root>, prefix: &[TokenTree]) -> TokenStream {
+    let mut checks: Vec<(&'static FrameworkCrate, String, Vec<TokenStream>)> = found
+        .into_iter()
+        .filter(|root| root.krate.gated_by.is_some())
+        .map(|root| {
+            let key = root.cfgs.iter().map(ToString::to_string).collect();
+            (root.krate, key, root.cfgs)
+        })
+        .collect();
+    checks.sort_by(|a, b| (a.0.lib, &a.1).cmp(&(b.0.lib, &b.1)));
+    checks.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    // A crate one path reaches unconditionally is checked once, unconditionally.
+    let unconditional: Vec<&'static str> = checks
+        .iter()
+        .filter(|(_, key, _)| key.is_empty())
+        .map(|(krate, ..)| krate.lib)
+        .collect();
+    checks.retain(|(krate, key, _)| key.is_empty() || !unconditional.contains(&krate.lib));
+    checks
+        .into_iter()
+        .filter_map(|(krate, _, cfgs)| {
+            let (feature, attribute) = (krate.feature?, krate.gated_by?);
+            let check = Ident::new(
+                &format!("__requires_{}", feature.replace('-', "_")),
+                Span::call_site(),
+            );
+            let sentence = missing_feature_message(krate.path, feature, attribute);
+            let prefix = prefix.iter();
+            Some(quote! { #(#[#cfgs])* #(#prefix)* :: #check ! { #sentence } })
+        })
+        .collect()
+}
+
+/// A framework crate a walk met, with the `cfg`s enclosing the path that
+/// reaches it, outermost first.
+struct Root {
+    krate: &'static FrameworkCrate,
+    cfgs: Vec<TokenStream>,
+}
+
+/// What of an outer attribute's content decides whether its item is compiled:
+/// `cfg(…)` whole, `cfg_attr(P, …)` kept to its `cfg(…)`s, nothing else.
+fn cfg_part(attribute: &Group) -> Option<TokenStream> {
+    let trees: Vec<TokenTree> = attribute.stream().into_iter().collect();
+    let [TokenTree::Ident(name), TokenTree::Group(args)] = trees.as_slice() else {
+        return None;
+    };
+    if args.delimiter() != Delimiter::Parenthesis {
+        return None;
     }
+    if name == "cfg" {
+        return Some(attribute.stream());
+    }
+    if name != "cfg_attr" {
+        return None;
+    }
+    let mut parts = split_on_commas(args.stream()).into_iter();
+    let predicate = parts.next()?;
+    let cfgs: Vec<TokenStream> = parts
+        .filter(|part| {
+            matches!(
+                part.clone().into_iter().collect::<Vec<_>>().as_slice(),
+                [TokenTree::Ident(cfg), TokenTree::Group(_)] if cfg == "cfg"
+            )
+        })
+        .collect();
+    if cfgs.is_empty() {
+        return None;
+    }
+    Some(quote!(#name(#predicate, #(#cfgs),*)))
+}
+
+/// `stream`'s top-level comma-separated parts, an empty one dropped.
+fn split_on_commas(stream: TokenStream) -> Vec<TokenStream> {
+    let mut parts = vec![TokenStream::new()];
+    for tree in stream {
+        match &tree {
+            TokenTree::Punct(p) if p.as_char() == ',' => parts.push(TokenStream::new()),
+            _ => parts
+                .last_mut()
+                .into_iter()
+                .for_each(|part| part.extend([tree.clone()])),
+        }
+    }
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+/// What a build lacking `feature` says of an expansion `attribute` pulled into
+/// `nest_rs::<path>`, ending on the umbrella line that enables it.
+fn missing_feature_message(path: &str, feature: &str, attribute: &str) -> String {
+    format!(
+        "{attribute} expands into `nest_rs::{path}`, which this build does not enable. \
+         Add the feature to Cargo.toml:\n\n    {}",
+        install_line(&[feature])
+    )
 }
 
 /// One walk, two jobs: re-root when `prefix` is `Some`, and record every root
@@ -185,17 +336,37 @@ pub fn reroot(tokens: TokenStream) -> TokenStream {
 /// `in_crate_attr` marks the inside of a `#[serde(…)]` / `#[schemars(…)]`
 /// group, the only place a path is carried as a string literal. Outside one,
 /// literals are left alone without stringifying them.
+///
+/// `scope` holds the `cfg`s enclosing `trees`. A `#[cfg]` met here covers what
+/// follows it up to the end of its item or statement: a `;`, or a `{ … }` at
+/// this level that [`closes_run`].
 fn walk(
     trees: &[TokenTree],
     prefix: Option<&[TokenTree]>,
     prefix_text: &str,
     in_crate_attr: bool,
-    found: &mut Vec<&'static FrameworkCrate>,
+    scope: &[TokenStream],
+    found: &mut Vec<Root>,
 ) -> Option<Vec<TokenTree>> {
     let mut out: Option<Vec<TokenTree>> = None;
+    let mut pending: Vec<TokenStream> = Vec::new();
+    // Where the item or statement `pending` covers opens: its first `#[cfg]`.
+    let mut run_start = 0;
     let mut i = 0;
 
     while i < trees.len() {
+        if let (TokenTree::Punct(hash), Some(TokenTree::Group(attribute))) =
+            (&trees[i], trees.get(i + 1))
+            && hash.as_char() == '#'
+            && attribute.delimiter() == Delimiter::Bracket
+            && let Some(cfg) = cfg_part(attribute)
+        {
+            if pending.is_empty() {
+                run_start = i;
+            }
+            pending.push(cfg);
+        }
+
         // Only a *rooted* path is rewritten: a bare `nest_rs_core` may be a
         // local binding. What precedes the `::` is deliberately not inspected:
         // `impl`/`dyn`/`as` open a path, and `->`, `=>` and `>` all end in `>`
@@ -203,7 +374,10 @@ fn walk(
         if let Some(ident) = segment_at(trees, i)
             && let Some(krate) = framework_crate(&ident.to_string())
         {
-            found.push(krate);
+            found.push(Root {
+                krate,
+                cfgs: enclosing(scope, &pending),
+            });
             if let Some(prefix) = prefix {
                 // Keeps the replaced root's span, or errors move to the attribute.
                 let span = trees[i].span();
@@ -239,7 +413,12 @@ fn walk(
             TokenTree::Group(g) => {
                 let inner: Vec<TokenTree> = g.stream().into_iter().collect();
                 let nested = in_crate_attr || carries_a_crate_path(&inner);
-                match walk(&inner, prefix, prefix_text, nested, found) {
+                let cfgs = if pending.is_empty() {
+                    Cow::Borrowed(scope)
+                } else {
+                    Cow::Owned(enclosing(scope, &pending))
+                };
+                match walk(&inner, prefix, prefix_text, nested, &cfgs, found) {
                     Some(rewritten) => {
                         let mut rebuilt =
                             Group::new(g.delimiter(), TokenStream::from_iter(rewritten));
@@ -253,16 +432,32 @@ fn walk(
                         }
                     }
                 }
+                if g.delimiter() == Delimiter::Brace
+                    && !pending.is_empty()
+                    && closes_run(trees, run_start, i)
+                {
+                    pending.clear();
+                }
             }
             TokenTree::Literal(lit) if in_crate_attr => {
-                match prefix.and_then(|_| rewrite_path_literal(lit, prefix_text, found)) {
-                    Some(rewritten) => out
-                        .get_or_insert_with(|| trees[..i].to_vec())
-                        .push(TokenTree::Literal(rewritten)),
+                let root = split_path_literal(lit);
+                if let Some((krate, _)) = &root {
+                    found.push(Root {
+                        krate,
+                        cfgs: enclosing(scope, &pending),
+                    });
+                }
+                match root.filter(|_| prefix.is_some()) {
+                    Some((krate, tail)) => {
+                        out.get_or_insert_with(|| trees[..i].to_vec())
+                            .push(TokenTree::Literal(rerooted_literal(
+                                lit,
+                                prefix_text,
+                                krate,
+                                &tail,
+                            )))
+                    }
                     None => {
-                        if prefix.is_none() {
-                            record_literal_root(lit, found);
-                        }
                         if let Some(buf) = out.as_mut() {
                             buf.push(trees[i].clone());
                         }
@@ -270,6 +465,9 @@ fn walk(
                 }
             }
             other => {
+                if matches!(other, TokenTree::Punct(p) if p.as_char() == ';') {
+                    pending.clear();
+                }
                 if let Some(buf) = out.as_mut() {
                     buf.push(other.clone());
                 }
@@ -279,6 +477,37 @@ fn walk(
     }
 
     out
+}
+
+/// Whether the `{ … }` at `brace` ends the item or statement whose attributes
+/// open at `start`. A `let` runs on to its `;`; anything else ends at a brace
+/// that nothing after it continues, so `else`, `as`, an operator or another
+/// group keeps it open (`if match v { … } { … } else { … }`). Reading too far
+/// only drops a check from a build; stopping short would refuse one.
+fn closes_run(trees: &[TokenTree], start: usize, brace: usize) -> bool {
+    let mut first = start;
+    while let (Some(TokenTree::Punct(hash)), Some(TokenTree::Group(attribute))) =
+        (trees.get(first), trees.get(first + 1))
+        && hash.as_char() == '#'
+        && attribute.delimiter() == Delimiter::Bracket
+    {
+        first += 2;
+    }
+    if matches!(trees.get(first), Some(TokenTree::Ident(word)) if word == "let") {
+        return false;
+    }
+    match trees.get(brace + 1) {
+        None | Some(TokenTree::Literal(_)) => true,
+        Some(TokenTree::Ident(next)) => next != "else" && next != "as",
+        Some(TokenTree::Punct(next)) => matches!(next.as_char(), '#' | ',' | ';' | ':'),
+        Some(TokenTree::Group(_)) => false,
+    }
+}
+
+/// The `cfg`s enclosing what a walk meets: its scope's, then those met at its
+/// own level.
+fn enclosing(scope: &[TokenStream], pending: &[TokenStream]) -> Vec<TokenStream> {
+    scope.iter().chain(pending).cloned().collect()
 }
 
 /// Whether this group carries a `crate = ` override spelled as a string.
@@ -317,51 +546,42 @@ fn missing_dependency_message(mut found: Vec<&'static FrameworkCrate>) -> Option
 
     // The kernel names no feature — it always ships with the umbrella — so it
     // counts as missing without one.
-    let features: Vec<String> = found
-        .iter()
-        .filter_map(|krate| krate.feature)
-        .map(|feature| format!("\"{feature}\""))
-        .collect();
+    let features: Vec<&str> = found.iter().filter_map(|krate| krate.feature).collect();
+    Some(format!(
+        "this nestrs decorator expands into the framework, which this crate cannot reach. \
+         Add to Cargo.toml:\n\n    {}",
+        install_line(&features)
+    ))
+}
+
+/// The `nest-rs` line enabling `features`, at the `major.minor` this crate
+/// ships in lockstep with the umbrella.
+fn install_line(features: &[&str]) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let req = version
         .rsplit_once('.')
         .map_or(version, |(major_minor, _)| major_minor);
-    let line = if features.is_empty() {
-        format!("nest-rs = \"{req}\"")
-    } else {
-        format!(
-            "nest-rs = {{ version = \"{req}\", features = [{}] }}",
-            features.join(", ")
-        )
-    };
-    Some(format!(
-        "this nestrs decorator expands into the framework, which this crate cannot reach. \
-         Add to Cargo.toml:\n\n    {line}"
-    ))
+    if features.is_empty() {
+        return format!("nest-rs = \"{req}\"");
+    }
+    let features: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
+    format!(
+        "nest-rs = {{ version = \"{req}\", features = [{}] }}",
+        features.join(", ")
+    )
 }
 
-/// A string literal holding a framework root's `::nest_rs_<concern>::…` path,
-/// re-rooted.
-///
-/// `None` for every other literal: the match is anchored at a leading `::`.
-fn rewrite_path_literal(
+/// `lit`, a string holding `krate`'s `::nest_rs_<concern>…` path followed by
+/// `tail`, re-rooted under `prefix_text`.
+fn rerooted_literal(
     lit: &Literal,
     prefix_text: &str,
-    found: &mut Vec<&'static FrameworkCrate>,
-) -> Option<Literal> {
-    let (krate, tail) = split_path_literal(lit)?;
-    found.push(krate);
+    krate: &FrameworkCrate,
+    tail: &str,
+) -> Literal {
     let mut out = Literal::string(&format!("{prefix_text}::{}{tail}", krate.path));
     out.set_span(lit.span());
-    Some(out)
-}
-
-/// The diagnostic path's half of [`rewrite_path_literal`] — record the root
-/// without building a replacement.
-fn record_literal_root(lit: &Literal, found: &mut Vec<&'static FrameworkCrate>) {
-    if let Some((krate, _)) = split_path_literal(lit) {
-        found.push(krate);
-    }
+    out
 }
 
 fn split_path_literal(lit: &Literal) -> Option<(&'static FrameworkCrate, String)> {
@@ -400,7 +620,7 @@ mod tests {
         let prefix: Vec<TokenTree> = quote!(::nest_rs).into_iter().collect();
         let trees: Vec<TokenTree> = input.into_iter().collect();
         let mut found = Vec::new();
-        match walk(&trees, Some(&prefix), "::nest_rs", false, &mut found) {
+        match walk(&trees, Some(&prefix), "::nest_rs", false, &[], &mut found) {
             Some(out) => TokenStream::from_iter(out).to_string(),
             None => TokenStream::from_iter(trees).to_string(),
         }
@@ -409,8 +629,166 @@ mod tests {
     fn roots_seen(input: TokenStream) -> Vec<&'static FrameworkCrate> {
         let trees: Vec<TokenTree> = input.into_iter().collect();
         let mut found = Vec::new();
-        walk(&trees, None, "", false, &mut found);
-        found
+        walk(&trees, None, "", false, &[], &mut found);
+        found.into_iter().map(|root| root.krate).collect()
+    }
+
+    /// `input` rerooted at `::nest_rs`, its feature checks included.
+    fn checked(input: TokenStream) -> String {
+        let prefix: Vec<TokenTree> = quote!(::nest_rs).into_iter().collect();
+        rerooted(input.into_iter().collect(), &prefix).to_string()
+    }
+
+    /// The umbrella's check for `feature`, under `cfgs`.
+    fn check(feature: &str, cfgs: TokenStream) -> String {
+        let krate = FRAMEWORK
+            .iter()
+            .find(|krate| krate.feature == Some(feature))
+            .expect("a framework feature");
+        let sentence = missing_feature_message(
+            krate.path,
+            feature,
+            krate.gated_by.expect("an attribute-gated crate"),
+        );
+        let macro_name = Ident::new(&format!("__requires_{feature}"), Span::call_site());
+        quote!(#cfgs ::nest_rs::#macro_name! { #sentence }).to_string()
+    }
+
+    #[test]
+    fn an_attribute_gated_crate_is_checked_once_after_the_expansion() {
+        let out = checked(quote! {
+            fn read(ctx: &Ctx) -> Result<(), Error> {
+                ::nest_rs_authz::class_gate::<::nest_rs_authz::Read, Note>(ctx)?;
+                ::nest_rs_authz::graphql::masked_value_for::<::nest_rs_authz::Read, Note, _>(ctx, 0)
+            }
+        });
+        assert!(out.ends_with(&check("authz", quote!())), "{out}");
+        assert_eq!(out.matches("__requires_").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn a_crate_every_decorator_ships_with_is_not_checked() {
+        let out = checked(quote!(
+            fn f() -> ::nest_rs_http::Response {}
+        ));
+        assert!(!out.contains("__requires_"), "{out}");
+    }
+
+    #[test]
+    fn a_crate_named_in_a_crate_attribute_is_checked_too() {
+        let out = checked(quote!(
+            #[serde(crate = "::nest_rs_seaorm::__private::serde")]
+            struct Note;
+        ));
+        assert!(out.ends_with(&check("seaorm", quote!())), "{out}");
+    }
+
+    #[test]
+    fn a_check_travels_with_the_cfg_around_its_path() {
+        let out = checked(quote! {
+            impl NotesResolver {
+                #[cfg(feature = "admin")]
+                fn purge(&self) {
+                    ::nest_rs_authz::class_gate::<Delete, Note>(ctx)?;
+                }
+            }
+        });
+        assert!(
+            out.ends_with(&check("authz", quote!(#[cfg(feature = "admin")]))),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_cfg_attr_travels_as_its_cfg_alone() {
+        let out = checked(quote! {
+            #[cfg_attr(all(), cfg(any()), allow(dead_code))]
+            fn hidden() { ::nest_rs_authz::X }
+        });
+        assert!(
+            out.ends_with(&check("authz", quote!(#[cfg_attr(all(), cfg(any()))]))),
+            "{out}"
+        );
+
+        let out = checked(quote! {
+            #[cfg_attr(test, derive(Debug))]
+            struct Shown(::nest_rs_authz::X);
+        });
+        assert!(out.ends_with(&check("authz", quote!())), "{out}");
+    }
+
+    #[test]
+    fn a_cfg_ends_with_its_item() {
+        let out = checked(quote! {
+            #[cfg(feature = "admin")]
+            use std::fmt::Debug;
+            fn read() { ::nest_rs_authz::X }
+        });
+        assert!(out.ends_with(&check("authz", quote!())), "{out}");
+    }
+
+    #[test]
+    fn a_path_outside_every_cfg_supersedes_the_checks_under_one() {
+        let out = checked(quote! {
+            #[cfg(feature = "admin")]
+            fn purge() { ::nest_rs_authz::X }
+            #[cfg(feature = "audit")]
+            fn audit() { ::nest_rs_authz::X }
+            fn read() { ::nest_rs_authz::X }
+        });
+        assert!(out.ends_with(&check("authz", quote!())), "{out}");
+        assert_eq!(out.matches("__requires_").count(), 1, "{out}");
+    }
+
+    /// `#[routes]`' mount arm for a `#[version]`-ed route.
+    #[test]
+    fn a_cfg_covers_its_let_statement_past_the_braces_inside_it() {
+        let out = checked(quote! {
+            #[cfg(feature = "admin")]
+            let () = if match __version {
+                ::core::option::Option::Some(__v) => { ["2"].contains(&__v) }
+                ::core::option::Option::None => true,
+            } {
+                __routes.route_poem(Method::GET, &__path, ::nest_rs_authz::http::Authorize::new(ep));
+            };
+        });
+        assert!(
+            out.ends_with(&check("authz", quote!(#[cfg(feature = "admin")]))),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_cfg_covers_an_if_statement_through_its_else_and_no_further() {
+        let out = checked(quote! {
+            #[cfg(feature = "admin")]
+            if ready { serve() } else { ::nest_rs_authz::X }
+        });
+        assert!(
+            out.ends_with(&check("authz", quote!(#[cfg(feature = "admin")]))),
+            "{out}"
+        );
+
+        let out = checked(quote! {
+            #[cfg(feature = "admin")]
+            if ready { serve() } else { serve() }
+            let _ = ::nest_rs_authz::X;
+        });
+        assert!(out.ends_with(&check("authz", quote!())), "{out}");
+    }
+
+    #[test]
+    fn the_feature_sentence_names_the_attribute_the_concern_and_the_line() {
+        let message = missing_feature_message("authz", "authz", "`#[authorize]`");
+        let version = env!("CARGO_PKG_VERSION");
+        let (major_minor, _) = version.rsplit_once('.').expect("a semver version");
+        for part in [
+            "`#[authorize]`",
+            "`nest_rs::authz`",
+            &format!(r#"nest-rs = {{ version = "{major_minor}", features = ["authz"] }}"#),
+        ] {
+            assert!(message.contains(part), "{message}");
+        }
     }
 
     #[test]
@@ -589,7 +967,7 @@ mod tests {
         .collect();
         let prefix: Vec<TokenTree> = quote!(::nest_rs).into_iter().collect();
         let mut found = Vec::new();
-        assert!(walk(&trees, Some(&prefix), "::nest_rs", false, &mut found).is_none());
+        assert!(walk(&trees, Some(&prefix), "::nest_rs", false, &[], &mut found).is_none());
         assert!(found.is_empty());
     }
 }

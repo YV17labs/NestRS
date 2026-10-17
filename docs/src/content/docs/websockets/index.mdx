@@ -34,7 +34,9 @@ cargo add nest-rs --features ws
 
 `#[input]` on a typed payload carries its `serde` derives and routes them back
 through the framework, and `nest_rs::ws::tracing` is the gateway's logger — so
-the manifest stops at one line. `nestrs g ws <feature>` writes it.
+the manifest stops at one line. `nestrs g ws <feature>` writes it. Add `authz`
+when a message carries `#[authorize]`, or `seaorm`, which implies it; the
+decorator names the feature when it is missing.
 
 ## A one-event gateway
 

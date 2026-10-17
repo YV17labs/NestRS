@@ -1,0 +1,9 @@
+error: `#[authorize]` expands into `nest_rs::authz`, which this build does not enable. Add the feature to Cargo.toml:
+
+           nest-rs = { version = "7.0", features = ["authz"] }
+  --> tests/integration/diagnostics/graphql/alone/authorize_without_authz.rs:13:1
+   |
+13 | #[operations]
+   | ^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `::nest_rs::__requires_authz` which comes from the expansion of the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)

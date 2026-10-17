@@ -1,0 +1,29 @@
+error: `#[authorize]` expands into `nest_rs::authz`, which this build does not enable. Add the feature to Cargo.toml:
+
+           nest-rs = { version = "7.0", features = ["authz"] }
+  --> tests/integration/diagnostics/graphql/alone/crud_without_seaorm.rs:27:1
+   |
+27 | #[crud(service = svc, entity = Note, output = NoteView, ops = [get])]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `::nest_rs::__requires_authz` which comes from the expansion of the attribute macro `::nest_rs::graphql::operations` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `#[authorize]` expands into `nest_rs::authz`, which this build does not enable. Add the feature to Cargo.toml:
+
+           nest-rs = { version = "7.0", features = ["authz"] }
+  --> tests/integration/diagnostics/graphql/alone/crud_without_seaorm.rs:27:1
+   |
+27 | #[crud(service = svc, entity = Note, output = NoteView, ops = [get])]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `::nest_rs::__requires_authz` which comes from the expansion of the attribute macro `crud` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `#[crud]` or `#[authorize(…, bind = …)]` expands into `nest_rs::seaorm`, which this build does not enable. Add the feature to Cargo.toml:
+
+           nest-rs = { version = "7.0", features = ["seaorm"] }
+  --> tests/integration/diagnostics/graphql/alone/crud_without_seaorm.rs:27:1
+   |
+27 | #[crud(service = svc, entity = Note, output = NoteView, ops = [get])]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `::nest_rs::__requires_seaorm` which comes from the expansion of the attribute macro `crud` (in Nightly builds, run with -Z macro-backtrace for more info)

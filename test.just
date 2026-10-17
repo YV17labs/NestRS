@@ -25,12 +25,18 @@ postgres := "server"
 # postgres := "mutual-tls"
 unasked := if postgres == "mutual-tls" { "none()" } else { "binary_id(nest-rs-seaorm::e2e) and test(/^mutual_tls::/)" }
 
+# What a decorator says in a build lacking the features an attribute pulls
+# in: the refusal suite on `graphql` alone, which the workspace's one feature
+# union cannot reach.
+graphql_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --features graphql --test integration --no-fail-fast"
+
 # Every test: unit, integration, e2e and the doc examples
 all: && doc
     #!/usr/bin/env bash
     set -euo pipefail
     export NESTRS_REDIS__URL='{{redis_url}}'
     {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
+    {{graphql_alone}}
     # A failover moves the primaries every other test runs on, and a node
     # requiring a client certificate refuses their connections: last, one at a time.
     if [ "{{topology}}" != standalone ]; then
@@ -44,6 +50,7 @@ unit:
 # The in-process suites under each crate's `tests/`, no service needed
 integration:
     {{nextest}} -E 'kind(test) and not binary(e2e)'
+    {{graphql_alone}}
 
 # The `tests/e2e` suites, against Postgres, Valkey and S3
 e2e:

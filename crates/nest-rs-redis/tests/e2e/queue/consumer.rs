@@ -187,13 +187,7 @@ async fn a_job_that_ended_leaves_no_record_but_its_dead_letter() {
         "no record of either job is left but the dead letter",
     );
     assert_eq!(crate::filed(queue).await, 0, "and the stream is empty");
-    let dead: Vec<(String, Vec<(String, String)>)> = redis::cmd("XRANGE")
-        .arg(crate::key_of(queue, "dead"))
-        .arg("-")
-        .arg("+")
-        .query_async(&mut crate::connect().await)
-        .await
-        .expect("XRANGE");
+    let dead = crate::entries_of(queue, "dead").await;
     let fields = &dead[0].1;
     let field = |name: &str| {
         fields
@@ -789,21 +783,11 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
         .push(RefiledQueue, RefiledCommand { run }, None)
         .await
         .expect("enqueue");
-    let dead = || async {
-        let entries: Vec<(String, Vec<(String, String)>)> = redis::cmd("XRANGE")
-            .arg(crate::key_of(queue, "dead"))
-            .arg("-")
-            .arg("+")
-            .query_async(&mut crate::connect().await)
-            .await
-            .expect("XRANGE");
-        entries
-    };
     crate::wait_for(Duration::from_secs(10), || async {
-        !dead().await.is_empty()
+        !crate::entries_of(queue, "dead").await.is_empty()
     })
     .await;
-    let letters = dead().await;
+    let letters = crate::entries_of(queue, "dead").await;
     assert_eq!(letters.len(), 1, "the job dead-lettered once");
 
     FIXED.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -816,7 +800,10 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
 
     assert_eq!(REFILED.of(run).len(), 2, "it ran once more");
     assert_eq!(REFILED.finished(run), 1, "and completed");
-    assert!(dead().await.is_empty(), "the dead letter is gone");
+    assert!(
+        crate::entries_of(queue, "dead").await.is_empty(),
+        "the dead letter is gone"
+    );
     assert_eq!(crate::filed(queue).await, 0);
     crate::forget(queue).await;
 }

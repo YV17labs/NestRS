@@ -1108,6 +1108,18 @@ async fn field_of(queue: &str, structure: &str, field: &str) -> Option<String> {
         .expect("HGET")
 }
 
+/// Every entry of the stream `structure` of `queue`, oldest first: its id and
+/// its fields.
+async fn entries_of(queue: &str, structure: &str) -> Vec<(String, Vec<(String, String)>)> {
+    redis::cmd("XRANGE")
+        .arg(key_of(queue, structure))
+        .arg("-")
+        .arg("+")
+        .query_async(&mut connect().await)
+        .await
+        .expect("XRANGE")
+}
+
 /// Every key the queue named `queue` holds, sorted.
 async fn keys_of(queue: &str) -> Vec<String> {
     let mut keys: Vec<String> = redis::cmd("KEYS")

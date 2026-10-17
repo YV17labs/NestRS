@@ -176,14 +176,8 @@ struct RelayModule;
 /// The record `queue`'s stream holds for the job carrying `run`, when it holds
 /// one.
 async fn filed_for(queue: &str, run: u64) -> Option<serde_json::Value> {
-    let entries: Vec<(String, Vec<(String, String)>)> = redis::cmd("XRANGE")
-        .arg(crate::key_of(queue, "jobs"))
-        .arg("-")
-        .arg("+")
-        .query_async(&mut crate::connect().await)
+    crate::entries_of(queue, "jobs")
         .await
-        .expect("XRANGE");
-    entries
         .into_iter()
         .flat_map(|(_, fields)| fields)
         .filter(|(field, _)| field == "record")

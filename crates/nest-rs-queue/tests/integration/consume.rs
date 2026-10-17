@@ -2075,9 +2075,5 @@ async fn a_baggage_past_the_limits_is_dropped_once_and_quoted_nowhere() {
             .is_some_and(|hint| hint.contains("64 list-members")),
         "{event:#?}"
     );
-    assert!(
-        !format!("{:?}", logs.events()).contains("SECRET"),
-        "no event quotes the baggage: {:#?}",
-        logs.events(),
-    );
+    assert_never_quoted(&logs, "SECRET");
 }

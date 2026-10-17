@@ -49,6 +49,8 @@ impl nest_rs::authn::PrincipalIdentity for Claims {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs::authn::PrincipalIdentity;
+
     use super::*;
 
     fn claims(roles: Vec<Role>) -> Claims {
@@ -63,7 +65,6 @@ mod tests {
 
     #[test]
     fn actor_id_is_the_sub_claim() {
-        use nest_rs::authn::PrincipalIdentity;
         let with_sub = claims(vec![]);
         assert_eq!(with_sub.actor_id(), Some(Uuid::nil().to_string()));
         let mut subjectless = claims(vec![]);
@@ -73,7 +74,6 @@ mod tests {
 
     #[test]
     fn tenant_id_is_the_org_id_claim() {
-        use nest_rs::authn::PrincipalIdentity;
         let org_id = Uuid::now_v7();
         let member = Claims {
             org_id,
@@ -145,7 +145,6 @@ mod tests {
 
     #[test]
     fn a_token_with_no_scope_claim_is_delegated_nothing() {
-        use nest_rs::authn::PrincipalIdentity;
         let bare = claims(vec![Role::Admin]);
         assert_eq!(
             bare.scopes(),

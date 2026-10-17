@@ -397,8 +397,7 @@ pub async fn attempt(
     } else {
         Cow::Borrowed(&delivery.message)
     };
-    let mut carried = Carried::default();
-    let (payload, inherited, minted_trace, unversioned, unusable) = match newer {
+    let (payload, inherited, minted_trace, unversioned, unusable, carried) = match newer {
         // Past its patience: nothing is opened, and the job's own trace is
         // what its dead letter is filed in.
         Some(_) => (
@@ -407,6 +406,7 @@ pub async fn attempt(
             false,
             false,
             Unusable::default(),
+            Carried::default(),
         ),
         None => match envelope::open(message, delivery.queue.as_str()) {
             Ok(Opened::Sealed {
@@ -414,13 +414,24 @@ pub async fn attempt(
                 correlation,
                 minted,
                 unusable,
-                carried: crossed,
-            }) => {
-                carried = crossed;
-                (Ok(payload), correlation, minted, false, unusable)
-            }
-            Ok(Opened::Unversioned(value)) => (Ok(value), None, false, true, Unusable::default()),
-            Err(refused) => (Err(refused), None, false, false, Unusable::default()),
+                carried,
+            }) => (Ok(payload), correlation, minted, false, unusable, carried),
+            Ok(Opened::Unversioned(value)) => (
+                Ok(value),
+                None,
+                false,
+                true,
+                Unusable::default(),
+                Carried::default(),
+            ),
+            Err(refused) => (
+                Err(refused),
+                None,
+                false,
+                false,
+                Unusable::default(),
+                Carried::default(),
+            ),
         },
     };
     let input = match (newer, payload) {

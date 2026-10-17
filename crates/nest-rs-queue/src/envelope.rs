@@ -511,15 +511,16 @@ impl Unusable {
         } else if self.tracestate {
             effects.push("continues its trace without the vendor state beside it");
         }
-        match self.baggage {
-            Some(BaggageRefusal::Malformed) => {
-                effects.push("runs without its baggage, which W3C Baggage's grammar does not read");
-            }
-            Some(BaggageRefusal::Oversized) => effects.push(
-                "runs without its baggage, which holds more than the 64 list-members or 8192 \
-                 bytes W3C Baggage has every platform carry",
-            ),
-            None => {}
+        if let Some(refusal) = self.baggage {
+            effects.push(match refusal {
+                BaggageRefusal::Malformed => {
+                    "runs without its baggage, which W3C Baggage's grammar does not read"
+                }
+                BaggageRefusal::Oversized => {
+                    "runs without its baggage, which holds more than the 64 list-members or 8192 \
+                     bytes W3C Baggage has every platform carry"
+                }
+            });
         }
         if self.actor_id {
             effects.push("runs for no actor");
@@ -581,17 +582,16 @@ pub(crate) fn open<'a>(value: Cow<'a, Value>, queue: &str) -> Result<Opened<'a>,
     let minted = map.get(TRACE_MINTED) == Some(&Value::Bool(true)) && parent.is_some();
     let actor = map.get(ACTOR_ID);
     let actor_id = actor.and_then(usable_actor);
-    let tenant = match map.get(TENANT_ID) {
-        Some(tenant) => Some(tenant.as_str().and_then(TenantId::new).ok_or_else(|| {
-            JobError::abort(format!(
-                "the job envelope on queue `{queue}` carries a `tenant_id` naming no tenant; a \
-                 job runs for the tenant it was pushed for or not at all, and the push never \
-                 writes such a key, so the record was written around the producer or damaged",
-            ))
-        })?),
-        None => None,
-    };
-    let baggage = map.get(BAGGAGE).map(usable_baggage);
+    let tenant = map.get(TENANT_ID);
+    let tenant_id = tenant.and_then(Value::as_str).and_then(TenantId::new);
+    if tenant.is_some() && tenant_id.is_none() {
+        return Err(JobError::abort(format!(
+            "the job envelope on queue `{queue}` carries a `tenant_id` naming no tenant; a \
+             job runs for the tenant it was pushed for or not at all, and the push never \
+             writes such a key, so the record was written around the producer or damaged",
+        )));
+    }
+    let baggage = map.get(BAGGAGE).map(usable_baggage).transpose();
     let unusable = Unusable {
         id: map.get(ID).is_some_and(|id| usable_id(id).is_none()),
         attempt: map
@@ -600,17 +600,15 @@ pub(crate) fn open<'a>(value: Cow<'a, Value>, queue: &str) -> Result<Opened<'a>,
         traceparent: traceparent.is_some() && parent.is_none(),
         // A vendor state means something only beside the trace it rides with.
         tracestate: parent.is_some() && tracestate.is_some_and(unusable_tracestate),
-        baggage: baggage
-            .as_ref()
-            .and_then(|baggage| baggage.as_ref().err().copied()),
+        baggage: baggage.as_ref().err().copied(),
         actor_id: actor.is_some() && actor_id.is_none(),
         unique_key: map
             .get(UNIQUE_KEY)
             .is_some_and(|key| usable_unique_key(key).is_none()),
     };
     let carried = Carried {
-        tenant,
-        baggage: baggage.and_then(Result::ok),
+        tenant: tenant_id,
+        baggage: baggage.ok().flatten(),
     };
     // The actor is inherited, never re-derived, and survives a missing or
     // corrupt `traceparent`: the audit identity is not the trace's to lose.

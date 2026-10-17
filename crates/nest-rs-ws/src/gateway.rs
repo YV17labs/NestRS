@@ -6,16 +6,17 @@ use async_trait::async_trait;
 use futures_util::FutureExt as _;
 use futures_util::future::Either;
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::__private::install_pending;
+use nest_rs_core::__private::{install_pending, new_unit_context};
 use nest_rs_core::{
-    Container, Continuation, Correlation, RequestContinuation, RequestScope, operation_log,
+    Container, Continuation, Correlation, Handler, Peer, RequestContinuation, RequestScope,
+    operation_log,
 };
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_http::__private::OriginPolicy;
 use nest_rs_http::__private::poem_bridge::{request_from_poem, response_to_poem};
 use nest_rs_http::DetachedWork;
 use nest_rs_http::ResponseError as _;
-use nest_rs_pipes::GlobalPipe;
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 use tracing::Instrument;
 
 use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketConfig};
@@ -27,6 +28,7 @@ use crate::context::{BoxFuture, Captured, SocketContext};
 use crate::envelope::WsEnvelope;
 use crate::guard::EventLayerTable;
 use crate::server::{ConnId, Registry, WsClient, WsServer};
+use crate::view::WsView;
 
 /// Per-connection message dispatcher a gateway implements, emitted by
 /// `#[messages]`. The gateway is a singleton; hooks take `&self` and the
@@ -757,6 +759,24 @@ impl Drop for UnitLine<'_> {
     }
 }
 
+/// Hand the global pipes a message's `data`, as the unit its event's `handler`
+/// declares, and keep what they made of it; an event no handler serves meets
+/// none, since nothing would read what they made.
+fn fold_data(
+    pipes: &[Arc<dyn GlobalPipe>],
+    handler: &'static Handler,
+    client: &WsClient,
+    event: &'static str,
+    data: &mut serde_json::Value,
+) -> Result<(), PipeError> {
+    let mut view = WsView::piped(client.clone(), event);
+    let peer = Peer::new(None, Some(client.id()));
+    let cx = new_unit_context(handler, &mut view, Some(peer), None);
+    pipes
+        .iter()
+        .try_for_each(|pipe| pipe.transform(&cx, ArgumentKind::Data, data))
+}
+
 /// Decode, guard and dispatch one text message, as one unit of work. Per-message
 /// guards run **inside** [`SocketContext::around`] and the unit, so they see the
 /// ambient values (`current_ability()`) the handler does, and a denied message
@@ -787,10 +807,11 @@ async fn handle_text<G: Gateway>(
             Err(frame) => return WsReply::Error(frame),
         };
         // Guards see the raw value; global data pipes run after them.
-        for pipe in wiring.pipes.iter() {
-            if let Err(err) = pipe.transform_ws_data(event_ref, &mut data) {
-                return WsReply::pipe_error(event_ref, "data", err);
-            }
+        if !wiring.pipes.is_empty()
+            && let Some((event, handler)) = guards.handler(event_ref)
+            && let Err(err) = fold_data(&wiring.pipes, handler, client, event, &mut data)
+        {
+            return WsReply::pipe_error(event_ref, "data", err);
         }
         install_pending(attached, gateway.dispatch(client, event_ref, data)).await
     };

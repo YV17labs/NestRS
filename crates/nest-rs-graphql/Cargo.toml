@@ -23,7 +23,7 @@ nest-rs-database.workspace = true
 # loaded from `NESTRS_GRAPHQL__*`; `validator` backs its `#[validate]` derive.
 nest-rs-config.workspace = true
 # The `/graphql` endpoint round-trips operation variables through JSON to run
-# global variable pipes (`transform_graphql_variables`) over them.
+# the global pipes over them (`ArgumentKind::Variables`).
 serde_json.workspace = true
 validator.workspace = true
 # GraphqlModule self-mounts over HTTP via HttpEndpointMeta — this crate serves

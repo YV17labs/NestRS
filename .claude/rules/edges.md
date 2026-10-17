@@ -178,7 +178,7 @@ executions; it chooses the **site**, by the family's nature:
 | Family | Global scope runs at | Controller / handler scope runs at |
 |---|---|---|
 | Guard | the route shaper; a `Gated` self-mount's edge; the in-band operation guard; the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
-| Pipe | the route shaper; `/graphql` POST variables and WS `data` at their endpoint — a graphql-ws operation runs none | the route shaper; per argument on the other edges |
+| Pipe | the route shaper; `/graphql` variables (a POST or a graphql-ws operation) and WS `data` at their endpoint | the route shaper; per argument on the other edges |
 | Exception filter | the route, closest to the handler | the route |
 | Interceptor | the transport edge — sees 404s, denials and self-mounts, before authentication | around the handler, inside the guards |
 | Filter | the transport edge | around the handler, inside the guards |
@@ -326,10 +326,12 @@ router parses. The rewrite is skipped when nothing is versioned.
   forces: HTTP wraps the extractor (`nest_rs_http::Piped`), the others wrap the
   wire value (`nest_rs_pipes::Piped`, inside `Parameters<…>` on MCP). Global
   pipes register in `nest-rs-pipes`, beside their contract, and run over an
-  HTTP body, `/graphql` POST variables and a WS message's `data`, each edge
-  resolving the pool once at mount; MCP and queues have none, and an operation
-  on the graphql-ws socket, a subscription included, runs none yet. Reusable
-  pipes are framework primitives — never define one in an app.
+  HTTP body, `/graphql` variables — a POST's, or an operation's on the
+  graphql-ws socket, a subscription included — and a WS message's `data`,
+  each edge resolving the pool once at mount; MCP and queues have none. One
+  entry, `GlobalPipe::transform(cx, ArgumentKind, input)`: the unit's context
+  says which site, the kind which input, so an edge adds a kind, never a
+  method. Reusable pipes are framework primitives — never define one in an app.
 - **WS is not a `Transport`**: an upgrade is an HTTP `GET`, so a gateway
   self-mounts on `HttpTransport` and inherits its port, CORS and TLS. One
   envelope, `{event, data}`. A handler returns at most a `Result` around a

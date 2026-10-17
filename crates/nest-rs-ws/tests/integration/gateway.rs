@@ -3,10 +3,12 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_pipes::{GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, Valid, pipe};
+use nest_rs_pipes::{
+    ArgumentKind, GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, Valid, pipe,
+};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
-use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, async_trait, gateway, messages};
+use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, async_trait, gateway, messages};
 use poem::http::{StatusCode, header};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -1563,13 +1565,30 @@ struct ShoutPipe;
 
 impl Layer for ShoutPipe {}
 
+/// What each pipe call was handed: the input, the unit's edge, the site's
+/// address, and the event the view holds.
+type Seen = (
+    ArgumentKind,
+    Option<nest_rs_core::Edge>,
+    &'static str,
+    Option<String>,
+);
+
+static PIPED: std::sync::Mutex<Vec<Seen>> = std::sync::Mutex::new(Vec::new());
+
 impl GlobalPipe for ShoutPipe {
-    fn transform_ws_data(
+    fn transform(
         &self,
-        event: &str,
+        cx: &nest_rs_core::UnitContext<'_>,
+        argument: ArgumentKind,
         value: &mut serde_json::Value,
     ) -> Result<(), PipeError> {
-        if event == "boom" {
+        let event = cx.switch_to::<WsView>().map(|view| view.event().to_owned());
+        PIPED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((argument, cx.edge(), cx.handler().address(), event));
+        if cx.handler().address() == "boom" {
             return Err(PipeError::new("no boom allowed"));
         }
         if let Some(msg) = value.get("msg").and_then(serde_json::Value::as_str) {
@@ -1626,6 +1645,33 @@ async fn a_global_pipe_folds_over_each_messages_data_and_its_refusal_is_a_frame(
             "data": { "error": "invalid data for `boom`: no boom allowed" },
         }),
         "the pipe's refusal answers in place of the handler",
+    );
+
+    socket
+        .send("unknown", serde_json::json!({ "msg": "x" }))
+        .await;
+    let _unknown = socket.next_envelope().await;
+    assert_eq!(
+        PIPED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+        [
+            (
+                ArgumentKind::Data,
+                Some(nest_rs_core::Edge::Ws),
+                "say",
+                Some("say".to_owned()),
+            ),
+            (
+                ArgumentKind::Data,
+                Some(nest_rs_core::Edge::Ws),
+                "boom",
+                Some("boom".to_owned()),
+            ),
+        ],
+        "a call per declared event, on its data, as the message's unit; none for an \
+         event no handler serves",
     );
 
     app.shutdown().await.expect("the transport stops cleanly");

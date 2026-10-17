@@ -1,0 +1,110 @@
+---
+title: Global pipes
+description: One pipe over every request body, GraphQL operation's variables and WebSocket message's data — registered once, handed the unit it shapes.
+sidebar:
+  order: 7.5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A global pipe shapes input across the whole app at once: register it in
+`main`, and every route, `/graphql` operation and WebSocket message runs it
+before anything decodes its input. It reads the raw JSON through one method,
+`transform`, which is handed the unit's context and the kind of input it holds.
+
+```rust title="crates/features/src/pipes/trim_strings.rs"
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::pipes::{ArgumentKind, GlobalPipe, PipeError};
+use serde_json::Value;
+
+#[injectable]
+#[derive(Default)]
+pub struct TrimStrings;
+
+impl Layer for TrimStrings {}
+
+impl GlobalPipe for TrimStrings {
+    fn transform(
+        &self,
+        _cx: &UnitContext<'_>,
+        argument: ArgumentKind,
+        input: &mut Value,
+    ) -> Result<(), PipeError> {
+        if argument != ArgumentKind::Body {
+            return Ok(());
+        }
+        if let Some(fields) = input.as_object_mut() {
+            for field in fields.values_mut() {
+                if let Value::String(text) = field {
+                    *text = text.trim().to_owned();
+                }
+            }
+        }
+        Ok(())
+    }
+}
+```
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features pipes
+```
+
+The `http` feature turns it on, and `http` is a default.
+
+## Wire it in
+
+Unlike a per-argument [pipe](/fundamentals/pipes/), a global pipe is a
+provider: `#[injectable]`, listed in a module's `providers`, called with
+`&self`. The app lists it once:
+
+```rust title="apps/blog/src/main.rs"
+use nest_rs::pipes::{AppBuilderPipesExt, pipe};
+use features::pipes::TrimStrings;
+
+App::builder()
+    .use_pipes_global([pipe::<TrimStrings>()])
+    .module::<BlogModule>()
+```
+
+A pipe in the pool that no imported module provides fails the boot, naming
+it, whether or not the app serves HTTP.
+
+## What a pipe is handed
+
+`argument` says which input `input` is — read off NestJS's
+`ArgumentMetadata.type`, since a unit's name cannot say it (the `/graphql`
+request is an `http.request` like a route):
+
+| `ArgumentKind` | The input | Where it runs | A refusal answers |
+|---|---|---|---|
+| `Body` | an HTTP request's JSON body | every route, after its guards; `#[no_pipes]` opts a route out | a `400` problem |
+| `Variables` | a `/graphql` operation's variables | at the endpoint, before any resolver — a POST, or an operation sent over the graphql-ws socket, a subscription included | a GraphQL error; on the socket, the protocol's `error` for that operation, which never starts |
+| `Data` | a WebSocket message's `data` | after the message's guards, before its handler | an error frame for the event |
+
+`cx` is the unit's context, as a guard's is: `cx.edge()` and `cx.handler()`
+say which site the input is for, `cx.reflector()` reads its `#[meta]`, and
+`cx.switch_to::<HttpView>()` reaches the request a body or a `/graphql`
+operation came in — over the graphql-ws socket, the request that opened it;
+`WsView` gives a message's event. The input itself is the argument, never the
+view's.
+
+The pool runs once per type however often it is listed, the first listed
+first. `ArgumentKind` is `#[non_exhaustive]`: match it with a fallback arm, as
+an edge may hand a new kind in a minor release.
+
+## Limits
+
+- An HTTP body that is not JSON reaches no pipe.
+- MCP tool arguments and queue payloads take no global pipe: bind a
+  per-argument pipe there (`Valid<T>`, `Piped<P, T>`).
+- A WebSocket message whose event no handler serves meets no pipe: nothing
+  would read what it made.
+- A pipe reads and writes a `serde_json::Value`, the one place the framework
+  passes one through: the input is not decoded yet, so there is no type to hand.
+
+## Going further
+
+- [Pipes](/fundamentals/pipes/) — the per-argument binding, on every edge.
+- [Guards](/fundamentals/guards/) — the same `UnitContext`, run before the pipes.

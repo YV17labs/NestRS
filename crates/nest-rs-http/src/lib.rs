@@ -251,7 +251,7 @@ pub mod __private {
     pub use crate::response::IntoResult;
     pub use crate::route_shaper::{RouteShaper, ShapedRoute, refused_route, wrap_route_shaper};
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
-    pub use crate::view::{put_poem, take_poem};
+    pub use crate::view::{put_poem, take_poem, with_view};
     pub use nest_rs_guards::__private::global_guards_active;
     pub use nest_rs_pipes::PipeSpec;
 

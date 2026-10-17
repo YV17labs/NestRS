@@ -62,10 +62,9 @@ impl GlobalSpecs for PipeSpecs {
 /// The example on [`pipe`](fn@pipe) registers through it.
 pub trait AppBuilderPipesExt: Sized {
     /// Register `specs` as the global pipe pool, folded over every JSON HTTP
-    /// body (a route opts out with `#[no_pipes]`), every `/graphql` POST
-    /// operation's variables and every WebSocket message's `data`. An
-    /// operation sent over the graphql-ws socket, a subscription included,
-    /// runs none of it: bind a per-argument pipe there.
+    /// body (a route opts out with `#[no_pipes]`), every `/graphql`
+    /// operation's variables, sent in a POST or over the graphql-ws socket,
+    /// and every WebSocket message's `data`.
     fn use_pipes_global<I>(self, specs: I) -> Self
     where
         I: IntoIterator<Item = PipeSpec>;

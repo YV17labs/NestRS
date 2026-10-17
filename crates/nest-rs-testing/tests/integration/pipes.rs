@@ -1,11 +1,12 @@
 //! Pipe effectiveness across the three scopes — **handler**, **controller**
-//! and **global** — plus the `#[no_pipes]` opt-out and the `TypeId` dedup.
+//! and **global** — plus the `#[no_pipes]` opt-out, the `TypeId` dedup, and
+//! what a pipe is handed on a route: the body, as the route's unit.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_http::{controller, routes};
-use nest_rs_pipes::{GlobalPipe, PipeError, pipe};
+use nest_rs_core::{Edge, Layer, UnitContext, injectable, module};
+use nest_rs_http::{HttpView, controller, routes};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError, pipe};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::web::Json;
@@ -32,7 +33,13 @@ struct StripPassword;
 impl Layer for StripPassword {}
 
 impl GlobalPipe for StripPassword {
-    fn transform_body(&self, value: &mut Value) -> Result<(), PipeError> {
+    fn transform(
+        &self,
+        _cx: &UnitContext<'_>,
+        argument: ArgumentKind,
+        value: &mut Value,
+    ) -> Result<(), PipeError> {
+        assert_eq!(argument, ArgumentKind::Body, "a route hands its body");
         COUNTER.fetch_add(1, Ordering::SeqCst);
         if let Some(map) = value.as_object_mut() {
             map.remove("password");
@@ -113,7 +120,52 @@ impl DupCtrlMethod {
     }
 }
 
+/// What one pipe call was handed: the input, the unit's edge, the site's
+/// address, and the matched route the view holds.
+type Seen = (ArgumentKind, Option<Edge>, &'static str, Option<String>);
+
+static SEEN: std::sync::Mutex<Vec<Seen>> = std::sync::Mutex::new(Vec::new());
+
+/// Records what it is handed, and changes nothing.
+#[injectable]
+#[derive(Default)]
+struct RecordingPipe;
+
+impl Layer for RecordingPipe {}
+
+impl GlobalPipe for RecordingPipe {
+    fn transform(
+        &self,
+        cx: &UnitContext<'_>,
+        argument: ArgumentKind,
+        _value: &mut Value,
+    ) -> Result<(), PipeError> {
+        let route = cx
+            .switch_to::<HttpView>()
+            .and_then(HttpView::route)
+            .map(str::to_owned);
+        SEEN.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((argument, cx.edge(), cx.handler().address(), route));
+        Ok(())
+    }
+}
+
+#[controller(path = "/recorded")]
+struct RecordedScope;
+
+#[routes]
+impl RecordedScope {
+    #[post("/echo/{id}")]
+    #[use_pipes(RecordingPipe)]
+    async fn echo_recorded(&self, body: Json<Value>) -> Json<Value> {
+        Json(body.0)
+    }
+}
+
 #[module(providers = [
+    RecordingPipe,
+    RecordedScope,
     StripPassword,
     GlobalScope,
     ControllerScope,
@@ -263,5 +315,32 @@ async fn same_pipe_at_all_three_scopes_runs_once() {
         counter(),
         1,
         "global + controller + method pipe declaration still executes exactly once",
+    );
+}
+
+#[tokio::test]
+async fn a_pipe_on_a_route_is_handed_the_body_as_the_routes_unit() {
+    let app = TestApp::for_module::<PipesModule>().await.expect("boots");
+
+    let resp = app
+        .http()
+        .post("/recorded/echo/7")
+        .body_json(&payload())
+        .send()
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let seen = SEEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        seen,
+        [(
+            ArgumentKind::Body,
+            Some(Edge::Http),
+            "/echo/{id}",
+            Some("/recorded/echo/{id}".to_owned()),
+        )],
+        "one call, on the route's body, with the route's handler and view",
     );
 }

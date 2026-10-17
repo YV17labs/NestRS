@@ -32,8 +32,9 @@ use nest_rs_http::ResponseError as _;
 use tracing::Instrument;
 
 use crate::config::GraphqlConfig;
-use crate::context::OperationBridge;
-use nest_rs_http::__private::install_attached;
+use crate::context::{ENDPOINT, OperationBridge, fold_variables, variable_pipe_error};
+use nest_rs_http::__private::{install_attached, with_view};
+use nest_rs_pipes::{GlobalPipe, PipeError};
 
 /// The composed schema as a bare [`Executor`], as the mount serves it: a
 /// graphql-ws driver ([`async_graphql::http::WebSocket`]) takes an executor,
@@ -347,6 +348,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         let websocket = WebSocket::from_request(&upgrade, &mut body).await?;
         let protocol = GraphQLProtocol::from_request(&upgrade, &mut body).await?;
         let req = request_from_poem(upgrade);
+        let pipes = SocketPipes::of(&self.bridge, &req);
         // What the upgrade's guards attached reaches the socket the way it
         // reaches a POST: forwarded by the seeds, carried by the connection.
         // Never the upgrade's scope nor its transaction: the socket's own
@@ -383,7 +385,8 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // A local slot, since the guard scopes a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
-                    let served = serve_socket(stream, executor, protocol.0, data, end, bounds);
+                    let served =
+                        serve_socket(stream, executor, protocol.0, data, end, bounds, pipes);
                     ended = Some(match bounds.max_connection {
                         // A peer that stopped reading cannot hold the socket past
                         // the ceiling plus the close grace.
@@ -436,8 +439,9 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
 ///
 /// At `end`, [`Inbound`] hands the engine a `stop` per running subscription,
 /// so the engine writes each `complete` in the negotiated protocol's wording.
-/// A `subscribe` past the operation cap never reaches the engine: this loop
-/// answers it the protocol's `error` for its id.
+/// A `subscribe` past the operation cap, or one whose variables a global pipe
+/// refuses, never reaches the engine: this loop answers it the protocol's
+/// `error` for its id.
 async fn serve_socket<E: Executor>(
     stream: WebSocketStream,
     executor: E,
@@ -445,9 +449,10 @@ async fn serve_socket<E: Executor>(
     data: Data,
     end: impl Future<Output = Ending> + Send + 'static,
     bounds: SocketBounds,
+    pipes: Option<SocketPipes>,
 ) -> Ended {
     let (mut sink, socket) = stream.split();
-    let inbound = Inbound::new(socket, end, bounds);
+    let inbound = Inbound::new(socket, end, bounds, pipes);
     let started = Arc::clone(&inbound.started);
     let ending = Arc::clone(&inbound.ending);
     let refusal = Arc::clone(&inbound.refusal);
@@ -456,8 +461,8 @@ async fn serve_socket<E: Executor>(
         async_graphql::http::WebSocket::from_message_stream(executor, inbound, protocol)
             .connection_data(data);
     loop {
-        if let Some(id) = withheld.take() {
-            if let Err(error) = sink.send(Message::Text(operation_refused(&id))).await {
+        if let Some(frame) = withheld.take() {
+            if let Err(error) = sink.send(Message::Text(frame)).await {
                 return stopped_writing(&error);
             }
             continue;
@@ -588,19 +593,20 @@ fn completed_id(frame: &str) -> Option<String> {
     }
 }
 
-/// The `subscribe` past the operation cap that waits for the socket's loop to
-/// answer it. The peer's half reads nothing more while one waits, so one at
-/// most ever does.
+/// The `subscribe` refused before it ran — past the operation cap, or by a
+/// global pipe — that waits for the socket's loop to answer it. The peer's
+/// half reads nothing more while one waits, so one at most ever does.
 #[derive(Default)]
 struct Withheld {
-    id: Mutex<Option<String>>,
+    /// The protocol's `error` message answering it.
+    frame: Mutex<Option<String>>,
     /// Wakes the loop, which the engine never would: it saw no message.
     ready: tokio::sync::Notify,
 }
 
 impl Withheld {
-    fn hold(&self, id: String) {
-        *self.slot() = Some(id);
+    fn hold(&self, frame: String) {
+        *self.slot() = Some(frame);
         self.ready.notify_one();
     }
 
@@ -613,21 +619,65 @@ impl Withheld {
     }
 
     fn slot(&self) -> std::sync::MutexGuard<'_, Option<String>> {
-        self.id
+        self.frame
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
-/// The protocol's `error` message for an operation refused past the cap, which
-/// ends that operation alone; the id is the protocol's correlation key.
-fn operation_refused(id: &str) -> String {
+/// The protocol's `error` message for an operation refused before it ran,
+/// which ends that operation alone; the id is the protocol's correlation key.
+fn operation_refused(id: &str, errors: serde_json::Value) -> String {
     serde_json::json!({
         "type": "error",
         "id": id,
-        "payload": [{ "message": TOO_MANY_OPERATIONS }],
+        "payload": errors,
     })
     .to_string()
+}
+
+/// The global pipes a socket's operations meet, and the view they read them
+/// through: the head of the request that opened the socket, which serves the
+/// socket's guards for its whole lifetime and so cannot be lent per operation.
+pub(crate) struct SocketPipes {
+    pipes: Arc<[Arc<dyn GlobalPipe>]>,
+    opened: nest_rs_http::Request,
+}
+
+impl SocketPipes {
+    /// The pool `bridge` resolved at mount, over the head of `req` — `None`
+    /// when the pool is empty, so a socket with no pipe copies nothing.
+    fn of(bridge: &OperationBridge, req: &nest_rs_http::Request) -> Option<Self> {
+        let pipes = bridge.pipes();
+        if pipes.is_empty() {
+            return None;
+        }
+        let mut opened = nest_rs_http::Request::builder()
+            .method(req.method().clone())
+            .uri(req.uri().clone());
+        if let Some(peer) = req.peer_addr() {
+            opened = opened.peer_addr(peer);
+        }
+        let mut opened = opened.finish();
+        *opened.headers_mut() = req.headers().clone();
+        Some(Self {
+            pipes: Arc::clone(pipes),
+            opened,
+        })
+    }
+
+    /// Hand the pipes `operation`'s variables, as the `/graphql` mount's unit,
+    /// and put back what they made of them.
+    fn fold(
+        &mut self,
+        operation: &mut async_graphql::Request,
+    ) -> std::result::Result<(), PipeError> {
+        let pipes = &self.pipes;
+        operation.variables = with_view(&ENDPOINT, &mut self.opened, |cx| {
+            fold_variables(cx, &operation.variables, pipes)
+        })?;
+        Ok(())
+    }
 }
 
 /// The peer's half of a socket, as the protocol engine reads it, tracking which
@@ -649,6 +699,8 @@ struct Inbound<S> {
     max_operations: Option<usize>,
     withheld: Arc<Withheld>,
     refusal: Arc<OnceLock<Refusal>>,
+    /// The global pipes each operation's variables go through, if any.
+    pipes: Option<SocketPipes>,
 }
 
 impl<S> Inbound<S> {
@@ -656,6 +708,7 @@ impl<S> Inbound<S> {
         socket: S,
         end: impl Future<Output = Ending> + Send + 'static,
         bounds: SocketBounds,
+        pipes: Option<SocketPipes>,
     ) -> Self {
         Self {
             socket,
@@ -667,6 +720,7 @@ impl<S> Inbound<S> {
             max_operations: bounds.max_operations,
             withheld: Arc::default(),
             refusal: Arc::default(),
+            pipes,
         }
     }
 
@@ -771,8 +825,28 @@ where
                                     max_socket_operations = max,
                                     "subscribe refused: the socket runs its maximum of operations",
                                 );
-                                this.withheld.hold(std::mem::take(id));
+                                this.withheld.hold(operation_refused(
+                                    id,
+                                    serde_json::json!([{ "message": TOO_MANY_OPERATIONS }]),
+                                ));
                                 return Poll::Pending;
+                            }
+                            if let Some(pipes) = this.pipes.as_mut() {
+                                // Developer code runs outside the lock.
+                                drop(started);
+                                if let Err(refused) = pipes.fold(payload) {
+                                    tracing::debug!(
+                                        target: crate::TARGET,
+                                        reason = "global_pipe",
+                                        "subscribe refused: a global pipe refused its variables",
+                                    );
+                                    this.withheld.hold(operation_refused(
+                                        id,
+                                        serde_json::json!([variable_pipe_error(&refused)]),
+                                    ));
+                                    return Poll::Pending;
+                                }
+                                started = lock(&this.started);
                             }
                             started.insert(id.clone(), Operation::of(payload));
                         }
@@ -1243,6 +1317,7 @@ mod tests {
                 Ending::GoingAway
             },
             bounds(),
+            None,
         );
         let ending = Arc::clone(&inbound.ending);
         for _ in 0..4 {
@@ -1291,6 +1366,7 @@ mod tests {
                 Ending::GoingAway
             },
             bounds(),
+            None,
         );
         let started = Arc::clone(&inbound.started);
         for _ in 0..3 {

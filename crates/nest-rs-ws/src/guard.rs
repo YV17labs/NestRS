@@ -71,6 +71,16 @@ impl EventLayerTable {
         self.by_event.insert(event, chain);
     }
 
+    /// The event a handler serves under `event`, and the unit its message is
+    /// declared as — `None` for an event no handler serves, or one whose
+    /// chain did not compose.
+    pub fn handler(&self, event: &str) -> Option<(&'static str, &'static Handler)> {
+        match self.by_event.get_key_value(event)? {
+            (&event, EventChain::Composed { handler, .. }) => Some((event, *handler)),
+            (_, EventChain::Refused) => None,
+        }
+    }
+
     /// Run every guard in the chain for `event` on its message, in order: what
     /// they attached and the message's `data` back when they all admit it — at
     /// once for an event with no chain — the first refusal's frame otherwise.

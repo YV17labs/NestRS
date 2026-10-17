@@ -3,7 +3,8 @@
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex, PoisonError};
 
-use nest_rs_core::{UnitContext, UnitView};
+use nest_rs_core::__private::new_unit_context;
+use nest_rs_core::{Handler, UnitContext, UnitView};
 use nest_rs_guards::Denial;
 
 use crate::request::Request;
@@ -82,6 +83,20 @@ impl HttpView {
     pub fn route(&self) -> Option<&str> {
         self.request.route()
     }
+}
+
+/// `f`'s answer over a unit context on `request`'s view, as the unit `handler`
+/// declares — what a fold an endpoint runs on its request, a global pipe,
+/// reads. The request is the view's while `f` runs, then back in place.
+pub fn with_view<R>(
+    handler: &'static Handler,
+    request: &mut Request,
+    f: impl FnOnce(&UnitContext<'_>) -> R,
+) -> R {
+    let mut view = HttpView::new(std::mem::replace(request, Request::builder().finish()));
+    let answer = f(&new_unit_context(handler, &mut view, None, None));
+    *request = view.into_request();
+    answer
 }
 
 /// `view`'s request as poem's, taken out of it for a reader still typed on

@@ -15,14 +15,16 @@ use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Handler};
 use nest_rs_guards::__private::{resolve_global_guards, validate_guard_chain};
 use nest_rs_guards::{Denial, Guard, GuardSpec};
-use nest_rs_pipes::{GlobalPipe, PipeSpec, PipeSpecs};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec, PipeSpecs};
 use poem::error::ReadBodyError;
 use poem::{Body, Endpoint, Request, Response, Result};
 use serde_json::Value;
 
 use crate::error::BodyError;
 use crate::guard_stage::denial_to_http_response;
+use crate::poem_bridge::{request_from_poem, request_to_poem};
 use crate::shaper::GateFn;
+use crate::view::with_view;
 
 /// HTTP per-route shaper: the deduped guard stage, the route's class gates and
 /// the deduped pipe chain, wrapped around the route's inner endpoint, which
@@ -79,7 +81,7 @@ where
         if !self.pipes.is_empty() {
             // Boxed on purpose: inlining `apply_body_pipes`' large state machine
             // would bloat every route's future, which poem boxes per request.
-            Box::pin(apply_body_pipes(&mut req, &self.pipes)).await?;
+            Box::pin(apply_body_pipes(self.handler, &mut req, &self.pipes)).await?;
         }
 
         self.inner.call(req).await
@@ -251,10 +253,11 @@ fn stopped_by_the_edge(err: &ReadBodyError) -> bool {
     )
 }
 
-/// Read the JSON body, run every pipe in order, write the rewritten body
-/// back into the request. No-op when the body is missing / not JSON / no
-/// pipe rejects.
+/// Read the JSON body, hand it to every pipe in order as the route's unit,
+/// write the rewritten body back into the request. No-op when the body is
+/// missing / not JSON / no pipe rejects.
 async fn apply_body_pipes(
+    handler: &'static Handler,
     req: &mut Request,
     pipes: &[ResolvedLayer<dyn GlobalPipe>],
 ) -> Result<()> {
@@ -296,17 +299,24 @@ async fn apply_body_pipes(
             return Ok(());
         }
     };
-    for entry in pipes {
-        if let Err(err) = entry.layer.transform_body(&mut value) {
-            // A `400` RFC 9457 problem: the pipe message as `detail`, field-level
-            // errors as an `errors` extension member.
-            let mut problem =
-                crate::ProblemDetails::bad_request().with_detail(err.message().to_owned());
-            if let Some(details) = err.into_details() {
-                problem = problem.with_extension("errors", details);
-            }
-            return Err(poem::Error::from(problem));
+    // The body is out of the request while the pipes read it, so the view holds
+    // the head alone.
+    let mut request = request_from_poem(std::mem::take(req));
+    let folded = with_view(handler, &mut request, |cx| {
+        pipes
+            .iter()
+            .try_for_each(|entry| entry.layer.transform(cx, ArgumentKind::Body, &mut value))
+    });
+    *req = request_to_poem(request);
+    if let Err(err) = folded {
+        // A `400` RFC 9457 problem: the pipe message as `detail`, field-level
+        // errors as an `errors` extension member.
+        let mut problem =
+            crate::ProblemDetails::bad_request().with_detail(err.message().to_owned());
+        if let Some(details) = err.into_details() {
+            problem = problem.with_extension("errors", details);
         }
+        return Err(poem::Error::from(problem));
     }
     // A re-serialization failure must not hand the handler an empty body
     // silently — fail the request instead.
@@ -467,7 +477,7 @@ mod tests {
         let logs = LogCapture::install();
         let mut req = request_with_a_failing_body();
 
-        let err = apply_body_pipes(&mut req, &pipe())
+        let err = apply_body_pipes(&ROUTE, &mut req, &pipe())
             .await
             .expect_err("a body that cannot be read is not a body the pipes ran on");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST,);
@@ -492,7 +502,7 @@ mod tests {
             .content_type("application/json")
             .body(Body::from_bytes(vec![b'x'; 64 * 1024 * 1024].into()));
 
-        let err = apply_body_pipes(&mut req, &pipe())
+        let err = apply_body_pipes(&ROUTE, &mut req, &pipe())
             .await
             .expect_err("a body past the limit is refused");
         assert_eq!(err.status(), StatusCode::PAYLOAD_TOO_LARGE,);

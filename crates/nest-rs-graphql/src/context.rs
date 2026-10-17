@@ -12,16 +12,20 @@ use async_graphql::{BatchRequest, Data, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
 use nest_rs_core::__private::serde::Serialize;
 use nest_rs_core::__private::serde::de::DeserializeOwned;
-use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler};
-use nest_rs_core::{Container, Handler, Posture, ReachableProviders};
+use nest_rs_core::__private::{
+    HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler, install_pending,
+};
+use nest_rs_core::{Container, Handler, Posture, ReachableProviders, UnitContext};
 use nest_rs_guards::__private::{resolve_global_chain, split_at_covered};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::poem_bridge::{
     request_from_poem, response_from_poem, response_to_poem,
 };
-use nest_rs_http::__private::{check_request_chain, denial_to_http_response, install_attached};
+use nest_rs_http::__private::{
+    attached_pending, check_request_chain, denial_to_http_response, with_view,
+};
 use nest_rs_http::{HeaderValue, Request, Response, StatusCode};
-use nest_rs_pipes::{GlobalPipe, PipeError};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 use poem::{Endpoint, Error, FromRequest, IntoResponse, RequestBody, Result};
 
 use crate::module::GraphqlModule;
@@ -120,8 +124,7 @@ type ContextSeed = fn(&Request, &Container, GqlRequest) -> GqlRequest;
 
 /// What both `/graphql` endpoints — POST and graphql-ws — need from the
 /// container, resolved **once** at mount so the two cannot enforce different
-/// postures. The global pipes are the exception: the graphql-ws engine takes
-/// its operations without them.
+/// postures, nor run different global pipes.
 pub(crate) struct OperationBridge {
     pub(crate) container: Container,
     /// The global pool's guards listed before the first one the bridge covers.
@@ -131,7 +134,7 @@ pub(crate) struct OperationBridge {
     bridge: Option<Arc<dyn GraphqlOperationGuard>>,
     /// The rest of the pool, minus what the bridge covers.
     tail: Vec<ResolvedLayer<dyn Guard>>,
-    /// The global pipes folded over each POST operation's variables.
+    /// The global pipes folded over each operation's variables.
     pipes: Arc<[Arc<dyn GlobalPipe>]>,
     /// The seeds that fire for this app, module-gated once at mount.
     seeds: Arc<[ContextSeed]>,
@@ -198,6 +201,11 @@ impl OperationBridge {
         }
     }
 
+    /// The global pipes each operation's variables go through.
+    pub(crate) fn pipes(&self) -> &Arc<[Arc<dyn GlobalPipe>]> {
+        &self.pipes
+    }
+
     /// Run the request's guards — the pool, the bridge where it covers — on
     /// `req`, keeping what they attach on it; the refusal's answer otherwise.
     pub(crate) async fn before(&self, req: &mut Request) -> Result<(), Response> {
@@ -259,40 +267,45 @@ impl<E> ContextEndpoint<E> {
         }
     }
 
-    /// Run the global pipes over each operation's variables; a refusal returns
-    /// a GraphQL error response.
+    /// Hand the global pipes each operation's variables, as the `/graphql`
+    /// request's unit; a refusal returns a GraphQL error response.
     fn pipe_variables(
         &self,
+        req: &mut Request,
         batch: BatchRequest,
     ) -> std::result::Result<BatchRequest, Box<Response>> {
         let pipes = &self.bridge.pipes;
         if pipes.is_empty() {
             return Ok(batch);
         }
-        let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Box<Response>> {
-            r.variables = fold_variables(&r.variables, pipes)?;
-            Ok(r)
-        };
-        match batch {
-            BatchRequest::Single(r) => Ok(BatchRequest::Single(apply(r)?)),
-            BatchRequest::Batch(rs) => {
-                let mut out = std::vec::Vec::with_capacity(rs.len());
-                for r in rs {
-                    out.push(apply(r)?);
+        with_view(&ENDPOINT, req, |cx| {
+            let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Box<Response>> {
+                r.variables = fold_variables(cx, &r.variables, pipes)
+                    .map_err(|err| variable_pipe_error_response(&err))?;
+                Ok(r)
+            };
+            match batch {
+                BatchRequest::Single(r) => Ok(BatchRequest::Single(apply(r)?)),
+                BatchRequest::Batch(rs) => {
+                    let mut out = std::vec::Vec::with_capacity(rs.len());
+                    for r in rs {
+                        out.push(apply(r)?);
+                    }
+                    Ok(BatchRequest::Batch(out))
                 }
-                Ok(BatchRequest::Batch(out))
             }
-        }
+        })
     }
 }
 
-/// Fold `pipes` over `variables` through the JSON form a pipe reads; a pipe's
-/// refusal, and variables that do not survive the round trip, answer as a
-/// GraphQL error.
-fn fold_variables<T: Serialize + DeserializeOwned>(
+/// Fold `pipes` over `variables` through the JSON form a pipe reads, as the
+/// unit `cx` belongs to; a pipe's refusal, and variables that do not survive
+/// the round trip, as the [`PipeError`] a GraphQL error answers.
+pub(crate) fn fold_variables<T: Serialize + DeserializeOwned>(
+    cx: &UnitContext<'_>,
     variables: &T,
     pipes: &[Arc<dyn GlobalPipe>],
-) -> std::result::Result<T, Box<Response>> {
+) -> std::result::Result<T, PipeError> {
     let mut value = serde_json::to_value(variables).map_err(|err| {
         let err = nest_rs_core::DecodeError::new(&err);
         tracing::error!(
@@ -300,21 +313,20 @@ fn fold_variables<T: Serialize + DeserializeOwned>(
             error = %err,
             "graphql variables could not be written as JSON for the global pipes",
         );
-        variable_pipe_error_response(&PipeError::new(format!(
+        PipeError::new(format!(
             "the operation variables could not be read as JSON: {err}",
-        )))
+        ))
     })?;
     for pipe in pipes {
-        pipe.transform_graphql_variables(&mut value)
-            .map_err(|err| variable_pipe_error_response(&err))?;
+        pipe.transform(cx, ArgumentKind::Variables, &mut value)?;
     }
     // A pipe may rewrite the variables into a shape that is no longer a
     // GraphQL variables object.
     serde_json::from_value(value).map_err(|err| {
-        variable_pipe_error_response(&PipeError::new(format!(
+        PipeError::new(format!(
             "variable pipe produced an invalid variables object: {}",
             nest_rs_core::DecodeError::new(&err),
-        )))
+        ))
     })
 }
 
@@ -454,14 +466,23 @@ fn refused(reason: &str, status: StatusCode) -> Response {
         .body(serde_json::to_vec(&body).unwrap_or_default())
 }
 
-/// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
-/// with an `errors` array, field-level errors under `extensions.errors`.
-fn variable_pipe_error_response(err: &PipeError) -> Box<Response> {
+/// A variable-pipe `PipeError` as one GraphQL error: its message, field-level
+/// errors under `extensions.errors`.
+pub(crate) fn variable_pipe_error(err: &PipeError) -> serde_json::Value {
     let mut error = serde_json::json!({ "message": err.message() });
     if let Some(details) = err.details() {
         error["extensions"] = serde_json::json!({ crate::FIELD_ERRORS_EXTENSION: details });
     }
-    let body = serde_json::json!({ "data": serde_json::Value::Null, "errors": [error] });
+    error
+}
+
+/// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
+/// with an `errors` array holding [`variable_pipe_error`].
+fn variable_pipe_error_response(err: &PipeError) -> Box<Response> {
+    let body = serde_json::json!({
+        "data": serde_json::Value::Null,
+        "errors": [variable_pipe_error(err)],
+    });
     Box::new(
         Response::builder()
             .status(StatusCode::OK)
@@ -481,7 +502,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
         }
         // The rest of the request runs under what its guards attached: the
         // seeds forward it, the operations read it.
-        install_attached(&req, self.answer(&req, body))
+        install_pending(attached_pending(&req), self.answer(&mut req, body))
             .await
             .map(response_to_poem)
     }
@@ -489,7 +510,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 
 impl<E: Executor> ContextEndpoint<E> {
     /// Read, pipe, seed and execute the request its guards admitted.
-    async fn answer(&self, req: &Request, mut body: RequestBody) -> Result<Response> {
+    async fn answer(&self, req: &mut Request, mut body: RequestBody) -> Result<Response> {
         let batch = match read_batch(req, &mut body).await {
             Ok(batch) => batch,
             Err(refusal) => return Ok(refusal),
@@ -500,7 +521,7 @@ impl<E: Executor> ContextEndpoint<E> {
         {
             return Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
         }
-        let batch = match self.pipe_variables(batch) {
+        let batch = match self.pipe_variables(req, batch) {
             Ok(batch) => batch,
             Err(resp) => return Ok(*resp),
         };
@@ -719,24 +740,21 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn variables_that_cannot_be_read_as_json_answer_the_pipe_error_not_null() {
-        let Err(refusal) = fold_variables(&Unwritable, &[]) else {
+    #[test]
+    fn variables_that_cannot_be_read_as_json_answer_the_pipe_error_not_null() {
+        let mut request = Request::builder().finish();
+        let Err(refusal) = with_view(&ENDPOINT, &mut request, |cx| {
+            fold_variables(cx, &Unwritable, &[])
+        }) else {
             panic!("the pipes would run over `null` in place of the variables");
         };
-        assert_eq!(refusal.status(), StatusCode::OK);
-        let body = refusal
-            .into_body()
-            .into_bytes()
-            .await
-            .expect("the refusal's body");
-        let body: serde_json::Value = serde_json::from_slice(&body).expect("a JSON body");
-        assert_eq!(body["data"], serde_json::Value::Null, "{body}");
-        let message = body["errors"][0]["message"].as_str().unwrap_or_default();
+        let message = refusal.message();
         assert!(
             message.starts_with("the operation variables could not be read as JSON"),
-            "{body}",
+            "{message}",
         );
-        assert!(!message.contains("sk_live"), "never the value: {body}");
+        assert!(!message.contains("sk_live"), "never the value: {message}");
+        let error = variable_pipe_error(&refusal);
+        assert_eq!(error["message"], message, "{error}");
     }
 }

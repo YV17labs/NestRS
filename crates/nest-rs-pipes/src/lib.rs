@@ -28,7 +28,7 @@ mod registry;
 mod validate;
 
 pub use error::PipeError;
-pub use global::GlobalPipe;
+pub use global::{ArgumentKind, GlobalPipe};
 pub use pipe::Pipe;
 pub use piped::{Piped, Valid};
 pub use pipes::{

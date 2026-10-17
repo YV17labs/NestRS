@@ -28,6 +28,16 @@ impl WsView {
         }
     }
 
+    /// The view of `event`'s message arrived on `client`, whose `data` the
+    /// global pipes hold while they read it.
+    pub(crate) fn piped(client: WsClient, event: &'static str) -> Self {
+        Self {
+            client,
+            event,
+            data: None,
+        }
+    }
+
     /// The message's `data` back, for the handler, once the checks are over.
     pub(crate) fn take_data(&mut self) -> serde_json::Value {
         self.data.take().unwrap_or_default()
@@ -43,7 +53,7 @@ impl WsView {
         self.event
     }
 
-    /// The message's `data`, until the handler takes it.
+    /// The message's `data`, until the global pipes or the handler take it.
     pub fn data(&self) -> Option<&serde_json::Value> {
         self.data.as_ref()
     }

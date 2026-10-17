@@ -5,6 +5,7 @@
 //! between two reads of a body, so it cuts a reader that pauses.
 
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -25,7 +26,7 @@ use crate::store::Store;
 /// owed, fenced on the object's `ETag` so a version written since is refused;
 /// a resumed body that stops before its first byte fails the download.
 pub(crate) fn download(
-    store: Store,
+    store: Arc<Store>,
     path: Path,
     first: GetResult,
     read_timeout: Duration,
@@ -50,7 +51,7 @@ pub(crate) fn download(
 
 /// One download in flight.
 struct Transfer {
-    store: Store,
+    store: Arc<Store>,
     path: Path,
     /// The version every resumed request is fenced on.
     e_tag: Option<String>,
@@ -82,7 +83,7 @@ impl Transfer {
             };
             if let Err(error) = self.resume(stopped).await {
                 let failed = StorageError::Get {
-                    store: self.store.shown.to_string(),
+                    store: self.store.shown.clone(),
                     source: Box::new(error),
                 };
                 return Some((Err(failed), None));
@@ -233,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_resume_answered_from_a_version_written_since_is_refused_not_spliced() {
-        let store = std::sync::Arc::new(FenceIgnoring(InMemory::new()));
+        let store = Arc::new(FenceIgnoring(InMemory::new()));
         let path = Path::from("k");
         store
             .put(&path, PutPayload::from(vec![1_u8; 100]))
@@ -267,7 +268,7 @@ mod tests {
             .expect("a version written while the first is read");
 
         let read: Vec<Result<Bytes>> = download(
-            Store::over(store),
+            Arc::new(Store::over(store)),
             path,
             first,
             Duration::from_secs(1),

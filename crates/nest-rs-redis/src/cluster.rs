@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ClientTls;
-use nest_rs_core::{Attempt, process_seed};
+use nest_rs_core::{Attempt, Backoff, process_seed};
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster::{ClusterClient, ClusterClientBuilder};
 use redis::cluster_async::{ClusterConnection, Connect};
@@ -28,8 +28,7 @@ use redis::{
 };
 
 use crate::connection::{
-    FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, answered, classify, dial, node_addr, node_client,
-    proved, socket, unproved,
+    answered, classify, dial, node_addr, node_client, proved, socket, unproved,
 };
 use crate::error::RedisError;
 use crate::script::RedisScript;
@@ -196,8 +195,8 @@ impl Plan {
             .connection_timeout(self.budget)
             .response_timeout(self.budget)
             .overall_response_timeout(None)
-            .min_retry_wait(millis(FIRST_RETRY_BACKOFF))
-            .max_retry_wait(millis(MAX_RETRY_BACKOFF))
+            .min_retry_wait(millis(Backoff::RECONNECT.first()))
+            .max_retry_wait(millis(Backoff::RECONNECT.ceiling()))
             .tcp_settings(socket(self.budget))
             .use_protocol(redis::ProtocolVersion::RESP2);
         if let Some(certificates) = &self.certificates {

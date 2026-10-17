@@ -11,13 +11,13 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use nest_rs_config::ClientTls;
-use nest_rs_core::{Attempt, Retries, process_seed};
+use nest_rs_core::{Attempt, Backoff, Retries, process_seed};
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, ConnectionAddr, ConnectionInfo, Pipeline, Value};
 
 use crate::connection::{
-    FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT, RECONNECT_FACTOR, Replies, answered,
-    classify, demoted, dial, open_client, proved, refused, unproved,
+    RECONNECT_FACTOR, Replies, answered, classify, demoted, dial, open_client, proved, refused,
+    unproved,
 };
 use crate::error::RedisError;
 use crate::{RedisTopology, tls};
@@ -302,7 +302,7 @@ async fn prove(
     let mut kept = ConnectionManager::new_with_config(client.clone(), manager_config(budget))
         .await
         .map_err(classified)?;
-    let mut retries = Retries::new(RECONNECT, process_seed());
+    let mut retries = Retries::new(Backoff::RECONNECT, process_seed());
     loop {
         match redis::cmd("PING").query_async::<()>(&mut kept).await {
             Ok(()) => return Ok(kept),
@@ -322,9 +322,9 @@ fn manager_config(budget: Duration) -> ConnectionManagerConfig {
     ConnectionManagerConfig::new()
         .set_connection_timeout(Some(budget))
         .set_response_timeout(None)
-        .set_min_delay(FIRST_RETRY_BACKOFF)
+        .set_min_delay(Backoff::RECONNECT.first())
         .set_exponent_base(RECONNECT_FACTOR)
-        .set_max_delay(MAX_RETRY_BACKOFF)
+        .set_max_delay(Backoff::RECONNECT.ceiling())
 }
 
 #[cfg(test)]

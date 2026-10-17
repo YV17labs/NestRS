@@ -45,22 +45,21 @@ pub(crate) fn retries_within(budget: Duration) -> RetryConfig {
 
 /// The opened store: what every call goes through, what signs, and how a
 /// sentence names it.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct Store {
     /// Every key's store, confined under the URL's prefix.
     pub(crate) objects: Arc<dyn ObjectStore>,
     /// What presigns, on a backend that can; it addresses the bucket's root,
     /// so a key is joined to [`prefix`](Self::prefix) first.
-    signer: Option<Arc<AmazonS3>>,
+    signer: Option<AmazonS3>,
     /// The prefix every key is addressed under.
     prefix: Path,
     /// The URL's scheme, naming the backend.
     pub(crate) backend: &'static str,
     /// The URL, as [`endpoint_shown`] shows it.
-    pub(crate) url: Arc<str>,
-    /// The store as every sentence names it: the URL, and an S3 endpoint;
-    /// shared, since every download carries it.
-    pub(crate) shown: Arc<str>,
+    pub(crate) url: String,
+    /// The store as every sentence names it: the URL, and an S3 endpoint.
+    pub(crate) shown: String,
 }
 
 impl Store {
@@ -86,36 +85,33 @@ impl Store {
         let backend = config
             .backend()
             .map_err(|refused| StorageError::Init(Box::new(refused)))?;
-        let url: Arc<str> = endpoint_shown(&config.url).into();
-        let store = match &backend {
-            Backend::Memory { prefix } => Self {
-                objects: confined(InMemory::new(), prefix),
-                signer: None,
-                prefix: prefix.clone(),
-                backend: backend.scheme(),
-                shown: Arc::clone(&url),
-                url,
-            },
+        let url = endpoint_shown(&config.url);
+        let (objects, signer, prefix, shown) = match &backend {
+            Backend::Memory { prefix } => {
+                (confined(InMemory::new(), prefix), None, prefix, url.clone())
+            }
             Backend::S3 { bucket, prefix } => {
                 let s3 = s3(config, bucket, ReqwestConnector::default())?;
-                Self {
-                    objects: confined(s3.clone(), prefix),
-                    signer: Some(Arc::new(s3)),
-                    prefix: prefix.clone(),
-                    backend: backend.scheme(),
-                    shown: match &config.endpoint {
-                        Some(endpoint) => format!("{url} at {}", endpoint_shown(endpoint)).into(),
-                        None => Arc::clone(&url),
-                    },
-                    url,
-                }
+                let shown = match &config.endpoint {
+                    Some(endpoint) => format!("{url} at {}", endpoint_shown(endpoint)),
+                    None => url.clone(),
+                };
+                (confined(s3.clone(), prefix), Some(s3), prefix, shown)
             }
+        };
+        let store = Self {
+            objects,
+            signer,
+            prefix: prefix.clone(),
+            backend: backend.scheme(),
+            url,
+            shown,
         };
         Ok((store, backend))
     }
 
     /// What presigns, or the refusal of a backend that cannot.
-    pub(crate) fn signer(&self) -> Result<&Arc<AmazonS3>> {
+    pub(crate) fn signer(&self) -> Result<&AmazonS3> {
         self.signer.as_ref().ok_or(StorageError::Unsupported {
             operation: "presign",
             backend: self.backend,
@@ -130,8 +126,8 @@ impl Store {
             signer: None,
             prefix: Path::default(),
             backend: "memory",
-            url: Arc::from("memory:///"),
-            shown: Arc::from("memory:///"),
+            url: "memory:///".to_owned(),
+            shown: "memory:///".to_owned(),
         }
     }
 

@@ -32,7 +32,7 @@ pub const MULTIPART_PART_SIZE: usize = 5 * 1024 * 1024;
 /// [`StorageConfig::read_timeout`].
 pub struct Storage {
     config: Arc<StorageConfig>,
-    store: Store,
+    store: Arc<Store>,
 }
 
 // Registered by hand rather than by `#[injectable]` for what the decorator
@@ -67,19 +67,17 @@ impl Discoverable for Storage {
                  factory opens it"
             ));
         };
-        let storage = Self {
-            config,
-            store: Store::clone(&store),
-        };
-        builder.provide(storage).provide_meta(Budget::of::<Self>(
-            "the object store",
-            format!(
-                "{}, or `{}` in code",
-                nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
-                OPERATION_TIMEOUT.field(),
-            ),
-            |storage| Some(storage.config.operation_timeout),
-        ))
+        builder
+            .provide(Self { config, store })
+            .provide_meta(Budget::of::<Self>(
+                "the object store",
+                format!(
+                    "{}, or `{}` in code",
+                    nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
+                    OPERATION_TIMEOUT.field(),
+                ),
+                |storage| Some(storage.config.operation_timeout),
+            ))
     }
 
     fn __nestrs_register_overridden(builder: ContainerBuilder) -> ContainerBuilder {
@@ -101,7 +99,7 @@ impl Storage {
     /// importing [`StorageModule`](crate::StorageModule).
     pub async fn connect(config: &StorageConfig) -> Result<Self> {
         Ok(Self {
-            store: Store::open(config).await?,
+            store: Arc::new(Store::open(config).await?),
             config: Arc::new(config.clone()),
         })
     }
@@ -120,7 +118,7 @@ impl Storage {
             .await
             .map_err(|source| StorageError::Presign {
                 method,
-                store: self.store.shown.to_string(),
+                store: self.store.shown.clone(),
                 source: Box::new(source),
             })?;
         Ok(url.to_string())
@@ -154,7 +152,7 @@ impl Storage {
             })),
             Err(object_store::Error::NotFound { .. }) => Ok(None),
             Err(e) => Err(StorageError::Head {
-                store: self.store.shown.to_string(),
+                store: self.store.shown.clone(),
                 source: Box::new(e),
             }),
         }
@@ -202,14 +200,14 @@ impl Storage {
             .answered(self.store.objects.get(&path))
             .await
             .map_err(|source| StorageError::Get {
-                store: self.store.shown.to_string(),
+                store: self.store.shown.clone(),
                 source: Box::new(source),
             })?;
         let size = first.range.end - first.range.start;
         Ok((
             size,
             download(
-                self.store.clone(),
+                Arc::clone(&self.store),
                 path,
                 first,
                 self.config.read_timeout,
@@ -230,10 +228,10 @@ impl Storage {
         prefix: &str,
     ) -> impl futures_util::Stream<Item = Result<ObjectEntry>> + Send + 'static + use<> {
         use futures_util::StreamExt;
-        let (budget, backend, shown) = (
+        let (budget, backend, store) = (
             self.config.operation_timeout,
             self.store.backend,
-            self.store.shown.clone(),
+            Arc::clone(&self.store),
         );
         let prefix = Path::from(prefix);
         let pages = self
@@ -259,7 +257,7 @@ impl Storage {
                 last_modified: meta.last_modified.into(),
             }),
             Err(e) => Err(StorageError::List {
-                store: shown.to_string(),
+                store: store.shown.clone(),
                 source: Box::new(e),
             }),
         })
@@ -372,7 +370,7 @@ impl Storage {
         {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(e) => Err(StorageError::Delete {
-                store: self.store.shown.to_string(),
+                store: self.store.shown.clone(),
                 source: Box::new(e),
             }),
         }
@@ -381,7 +379,7 @@ impl Storage {
     /// An upload's failure, naming the store.
     fn put_failed(&self, error: object_store::Error) -> StorageError {
         StorageError::Put {
-            store: self.store.shown.to_string(),
+            store: self.store.shown.clone(),
             source: Box::new(error),
         }
     }
@@ -576,7 +574,7 @@ mod tests {
         /// for the tests of what a call does once it is open.
         fn unproved(config: StorageConfig) -> Self {
             Self {
-                store: Store::built(&config).expect("the store builds").0,
+                store: Arc::new(Store::built(&config).expect("the store builds").0),
                 config: Arc::new(config),
             }
         }

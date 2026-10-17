@@ -17,14 +17,12 @@ use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use nest_rs_config::ClientTls;
-use nest_rs_core::{Attempt, Retries, Unproved, process_seed};
+use nest_rs_core::{Attempt, Backoff, Retries, Unproved, process_seed};
 use redis::aio::MultiplexedConnection;
 use redis::{Cmd, ErrorKind, Pipeline, RedisConnectionInfo, Value};
 use tokio::sync::Notify;
 
-use crate::connection::{
-    RECONNECT, Replies, answered, classify, demoted, dial, node_client, proved, spent,
-};
+use crate::connection::{Replies, answered, classify, demoted, dial, node_client, proved, spent};
 use crate::error::{RedisError, SentinelMiss};
 use crate::url::{NodeAddr, SentinelUrl, listed};
 use crate::{RedisTopology, tls};
@@ -241,7 +239,7 @@ impl SentinelLink {
     }
 
     async fn reopen(link: Weak<Self>) {
-        let mut retries = Retries::new(RECONNECT, process_seed());
+        let mut retries = Retries::new(Backoff::RECONNECT, process_seed());
         loop {
             let Some(this) = link.upgrade() else {
                 return;

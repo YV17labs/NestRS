@@ -83,19 +83,6 @@ enum Link {
     Slot(Arc<SlotLink>),
 }
 
-/// Backoff before the first retry; doubles up to [`MAX_RETRY_BACKOFF`] and is
-/// always clamped to what is left of the budget.
-pub(crate) const FIRST_RETRY_BACKOFF: Duration = Backoff::RECONNECT.first();
-
-/// Ceiling for the doubling backoff, so a boot budget fits several attempts;
-/// every link's reopening backoff takes it too.
-pub(crate) const MAX_RETRY_BACKOFF: Duration = Backoff::RECONNECT.ceiling();
-
-/// The wait between two attempts to open or reopen a link, jittered from a
-/// seed — every replica's own, so replicas that lost Valkey together do not
-/// dial it again together.
-pub(crate) const RECONNECT: Backoff = Backoff::RECONNECT;
-
 /// The shortest the socket waits before it probes, or before it gives up on
 /// what it sent: the kernel counts the first in whole seconds and refuses zero.
 const LIVENESS_FLOOR: Duration = Duration::from_secs(1);
@@ -362,7 +349,9 @@ pub(crate) fn said<E: std::error::Error + 'static>(
 }
 
 /// The proof of a link on `endpoint` within `budget`: [`prove`] over
-/// [`RECONNECT`]'s curve drawn from `seed`, each attempt [`said`].
+/// [`Backoff::RECONNECT`]'s curve drawn from `seed` — every replica's own, so
+/// replicas that lost Valkey together do not dial it again together — each
+/// attempt [`said`].
 pub(crate) async fn proved<T, E, F, Fut>(
     budget: Duration,
     endpoint: &str,
@@ -374,7 +363,14 @@ where
     Fut: Future<Output = Result<T, Attempt<E, RedisError>>>,
     E: std::error::Error + 'static,
 {
-    prove(budget, RECONNECT, seed, said(endpoint, budget), attempt).await
+    prove(
+        budget,
+        Backoff::RECONNECT,
+        seed,
+        said(endpoint, budget),
+        attempt,
+    )
+    .await
 }
 
 /// The boot error of a server that answered or failed on every attempt until
@@ -1116,7 +1112,7 @@ mod tests {
         for made in [&one, &other] {
             let waits: Vec<Duration> = made.windows(2).map(|pair| pair[1] - pair[0]).collect();
             for (failed, wait) in waits.iter().take(3).enumerate() {
-                let curve = FIRST_RETRY_BACKOFF * (1 << failed);
+                let curve = Backoff::RECONNECT.first() * (1 << failed);
                 assert!(
                     *wait >= curve.mul_f64(0.8) && *wait <= curve.mul_f64(1.2),
                     "wait {failed}: {wait:?} against {curve:?} in {made:?}",
@@ -1125,7 +1121,7 @@ mod tests {
             assert!(
                 waits
                     .iter()
-                    .all(|wait| *wait <= MAX_RETRY_BACKOFF.mul_f64(1.2)),
+                    .all(|wait| *wait <= Backoff::RECONNECT.ceiling().mul_f64(1.2)),
                 "{waits:?}"
             );
             assert!(made.last().is_some_and(|last| *last < budget), "{made:?}");
@@ -1141,7 +1137,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let started = Instant::now();
         // Port 9 is `discard` — reserved and never listening, so every attempt
-        // is refused at once. The budget sits above `FIRST_RETRY_BACKOFF` (250ms)
+        // is refused at once. The budget sits above `Backoff::RECONNECT`'s first wait (250ms)
         // so the loop retries at least once before it expires.
         let Err(err) = RedisConnection::connect(&config(
             "redis://alice:s3cr3t@127.0.0.1:9/0",

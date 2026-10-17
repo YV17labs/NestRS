@@ -67,10 +67,9 @@ impl Interceptor for DbContext {
         deadline.hand_to_unit(self.unit.settle_net());
         let at = deadline.at();
         let cut = async move {
-            match tokio::time::timeout_at(at, next.run(req)).await {
-                Ok(answered) => answered,
-                Err(_) => Ok(response_to_poem(deadline.timed_out())),
-            }
+            tokio::time::timeout_at(at, next.run(req))
+                .await
+                .unwrap_or_else(|_| Ok(response_to_poem(deadline.timed_out())))
         };
         run_unit(
             Some(&self.unit),
@@ -183,11 +182,6 @@ mod tests {
         answer: Settlement,
     }
 
-    struct SettlingUnit {
-        takes: Duration,
-        answer: Settlement,
-    }
-
     struct Nowhere;
 
     impl Executor for Nowhere {
@@ -198,7 +192,7 @@ mod tests {
 
     impl UnitOfWork for Settling {
         fn open(&self, _: &UnitSpec) -> std::result::Result<Box<dyn OpenUnit>, Unhonoured> {
-            Ok(Box::new(SettlingUnit {
+            Ok(Box::new(Self {
                 takes: self.takes,
                 answer: self.answer,
             }))
@@ -209,7 +203,7 @@ mod tests {
         }
     }
 
-    impl OpenUnit for SettlingUnit {
+    impl OpenUnit for Settling {
         fn executor(&self) -> Arc<dyn Executor> {
             Arc::new(Nowhere)
         }

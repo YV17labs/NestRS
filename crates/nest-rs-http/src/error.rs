@@ -405,7 +405,7 @@ impl HttpError {
         let problem = nest_rs_core::__private::find_in_chain::<Problem>(chain);
         let withheld = match problem {
             Some(problem) => nest_rs_core::__private::withheld(problem, chain),
-            None => withheld_behind(self.0.status, chain),
+            None => Withheld::behind(self.0.status.as_u16(), chain),
         };
         if let Some(withheld) = withheld {
             file(withheld);
@@ -426,23 +426,6 @@ pub(crate) fn failed(said: &str) {
         error = %said,
         "request failed",
     );
-}
-
-/// What a `5xx` status answered for `chain` keeps from the client, with no
-/// problem in the chain to say it: as core's `withheld` classes a problem's.
-pub(crate) fn withheld_behind(
-    status: StatusCode,
-    chain: &(dyn Error + 'static),
-) -> Option<Withheld> {
-    if !status.is_server_error() {
-        return None;
-    }
-    let said = nest_rs_core::error_message(chain);
-    Some(if status == StatusCode::SERVICE_UNAVAILABLE {
-        Withheld::Unavailable(said)
-    } else {
-        Withheld::Failed(said)
-    })
 }
 
 /// File what an answer withheld: a failure at `error`, a `503` — the server

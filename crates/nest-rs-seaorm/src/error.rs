@@ -145,6 +145,12 @@ impl ServiceError {
             _ => None,
         }
     }
+
+    /// Whether Postgres cancelled the statement at its bound: a `503`, said at
+    /// `warn`, where any other `Db` is a `500`.
+    fn is_unavailable(&self) -> bool {
+        matches!(self, Self::Db(err) if DbOutcome::of(err) == DbOutcome::Unavailable)
+    }
 }
 
 /// A response mask's decode failure, said without the row's values: what the
@@ -260,15 +266,11 @@ impl DbOutcome {
     pub fn of(err: &DbErr) -> Self {
         match err {
             DbErr::RecordNotUpdated | DbErr::RecordNotFound(_) => Self::NotFound,
-            _ if server_error(err).is_some_and(|server| server.is_unique_violation()) => {
-                Self::Conflict
-            }
-            _ if server_error(err)
-                .is_some_and(|server| server.code().as_deref() == Some(CANCELLED)) =>
-            {
-                Self::Unavailable
-            }
-            _ => Self::Internal,
+            _ => match server_error(err) {
+                Some(server) if server.is_unique_violation() => Self::Conflict,
+                Some(server) if server.code().as_deref() == Some(CANCELLED) => Self::Unavailable,
+                _ => Self::Internal,
+            },
         }
     }
 }
@@ -409,9 +411,7 @@ impl nest_rs_core::ToProblem for ServiceError {
             Self::Conflict(_) => Problem::new(409, code::CONFLICT),
             Self::Forbidden(_) => Problem::new(403, code::FORBIDDEN),
             Self::NotFound(_) => Problem::new(404, code::NOT_FOUND),
-            Self::Db(err) if DbOutcome::of(err) == DbOutcome::Unavailable => {
-                Problem::new(503, code::UNAVAILABLE)
-            }
+            Self::Db(_) if self.is_unavailable() => Problem::new(503, code::UNAVAILABLE),
             Self::Db(_) | Self::Masking { .. } | Self::Internal { .. } => return None,
         };
         Some(problem.with_detail(self.to_string()))
@@ -589,7 +589,7 @@ mod http {
     use poem::http::StatusCode;
     use poem::{IntoResponse, Response};
 
-    use super::{DbOutcome, ServiceError};
+    use super::ServiceError;
 
     impl ResponseError for ServiceError {
         fn status(&self) -> StatusCode {
@@ -600,9 +600,7 @@ mod http {
                 ServiceError::Conflict(_) => StatusCode::CONFLICT,
                 ServiceError::Forbidden(_) => StatusCode::FORBIDDEN,
                 ServiceError::NotFound(_) => StatusCode::NOT_FOUND,
-                ServiceError::Db(err) if DbOutcome::of(err) == DbOutcome::Unavailable => {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }
+                ServiceError::Db(_) if self.is_unavailable() => StatusCode::SERVICE_UNAVAILABLE,
                 ServiceError::Db(_)
                 | ServiceError::Masking { .. }
                 | ServiceError::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -638,23 +636,22 @@ mod http {
             ServiceError::Internal { .. } => "internal",
             _ => return,
         };
-        if let ServiceError::Db(e) = err
-            && DbOutcome::of(e) == DbOutcome::Unavailable
-        {
+        let said = nest_rs_core::error_message(err);
+        if err.is_unavailable() {
             tracing::warn!(
                 target: crate::target::ORM,
                 kind,
-                error = %nest_rs_core::error_message(err),
+                error = %said,
                 "service error surfaced as 503",
             );
-            return;
+        } else {
+            tracing::error!(
+                target: crate::target::ORM,
+                kind,
+                error = %said,
+                "service error surfaced as 500",
+            );
         }
-        tracing::error!(
-            target: crate::target::ORM,
-            kind,
-            error = %nest_rs_core::error_message(err),
-            "service error surfaced as 500",
-        );
     }
 
     /// A `#[crud]` operation's failure as its status, with an empty body: `409`

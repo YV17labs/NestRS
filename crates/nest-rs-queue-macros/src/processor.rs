@@ -432,13 +432,9 @@ fn attempt_parameter(method: &syn::ImplItemFn) -> syn::Result<Option<usize>> {
         let FnArg::Typed(typed) = input else {
             continue;
         };
-        let Type::Path(path) = &*typed.ty else {
-            continue;
-        };
-        let Some(last) = path.path.segments.last() else {
-            continue;
-        };
-        if last.ident != "Attempt" || !last.arguments.is_none() {
+        let is_attempt = matches!(&*typed.ty, Type::Path(path) if path.path.segments.last()
+            .is_some_and(|last| last.ident == "Attempt" && last.arguments.is_none()));
+        if !is_attempt {
             continue;
         }
         if found.is_some() {

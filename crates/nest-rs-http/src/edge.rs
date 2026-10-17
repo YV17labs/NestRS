@@ -46,6 +46,18 @@ use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::{response_body, trace_context};
 
+/// What a request whose unit of work did not settle within its `net` past the
+/// deadline is answered: a `500` without `Retry-After`, since what it wrote may
+/// have landed, said once at `error`.
+fn unsettled(net: Duration) -> Response {
+    tracing::error!(
+        target: crate::target::HTTP,
+        net_ms = crate::server::millis(net),
+        "request's unit of work did not settle within its net; its writes may have landed",
+    );
+    ProblemDetails::internal().into_response()
+}
+
 /// What a body read that stopped is answered with: `413` past the cap, `408`
 /// past the gap bound. The `408` closes an HTTP/1 connection, as RFC 9110
 /// §15.5.9 asks — the unread rest leaves it unusable; HTTP/2 ends that stream
@@ -273,17 +285,7 @@ impl<E: Endpoint> EdgeEndpoint<E> {
                                 match tokio::time::timeout_at(deadline.at() + net, &mut inner).await
                                 {
                                     Ok(result) => result,
-                                    Err(_) => {
-                                        tracing::error!(
-                                            target: crate::target::HTTP,
-                                            net_ms = u64::try_from(net.as_millis())
-                                                .unwrap_or(u64::MAX),
-                                            "request's unit of work did not settle within its \
-                                             net; its writes may have landed",
-                                        );
-                                        return self
-                                            .finish(ProblemDetails::internal().into_response());
-                                    }
+                                    Err(_) => return self.finish(unsettled(net)),
                                 }
                             }
                         },

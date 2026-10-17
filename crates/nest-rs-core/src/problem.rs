@@ -317,15 +317,10 @@ pub(crate) mod __private {
     /// whole chain when the answer is a `5xx` and `error` is more than the bare
     /// problem, else `None`.
     pub fn withheld(problem: &Problem, error: &(dyn Error + 'static)) -> Option<Withheld> {
-        if !problem.is_server_error() || error.is::<Problem>() {
+        if error.is::<Problem>() {
             return None;
         }
-        let said = crate::error_message(error);
-        Some(if problem.status() == 503 {
-            Withheld::Unavailable(said)
-        } else {
-            Withheld::Failed(said)
-        })
+        Withheld::behind(problem.status(), error)
     }
 
     /// The chain a `5xx` answer keeps from its client, and the level the edge
@@ -337,6 +332,21 @@ pub(crate) mod __private {
         /// The server could not serve the unit in time (a `503`) — a statement
         /// cancelled at its bound, a backend past its net: filed at `warn`.
         Unavailable(String),
+    }
+
+    impl Withheld {
+        /// What a `status` answer keeps from the client when `error` is behind
+        /// it: `error`'s whole chain for a `5xx`, else `None`.
+        pub fn behind(status: u16, error: &(dyn Error + 'static)) -> Option<Self> {
+            (status >= 500).then(|| {
+                let said = crate::error_message(error);
+                if status == 503 {
+                    Self::Unavailable(said)
+                } else {
+                    Self::Failed(said)
+                }
+            })
+        }
     }
 }
 

@@ -351,7 +351,7 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
         .cloned();
     let withheld = source.and_then(|chain| match &problem {
         Some(problem) => nest_rs_core::__private::withheld(problem, chain),
-        None => crate::error::withheld_behind(err.status(), chain),
+        None => nest_rs_core::__private::Withheld::behind(err.status().as_u16(), chain),
     });
     let sentence = err.to_string();
     let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();

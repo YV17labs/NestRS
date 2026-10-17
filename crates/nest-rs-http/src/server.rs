@@ -444,7 +444,7 @@ fn send_stalled(error: &(dyn std::error::Error + 'static)) -> bool {
 }
 
 /// `duration` in whole milliseconds, for a log field.
-fn millis(duration: Duration) -> u64 {
+pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 

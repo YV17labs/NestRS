@@ -49,11 +49,18 @@ a typed 4xx body from a `thiserror`-derived error. See
 [Repo and executor](/database/repo-and-executor/) for the full sequence,
 including the escape-on-spawn case.
 
+`/graphql` and `/mcp` are the exceptions to the method rule: their requests
+carry operations that are units of their own, so the request itself runs on the
+pool — its guards read there — whatever its method, and each operation settles
+its own work.
+
 Every other edge runs the same unit of work, through the same binding, and
 commits on its own outcome — you list nothing for it:
 
 | Unit | Commits when |
 |---|---|
+| GraphQL query | nothing to commit: it runs on the pool |
+| GraphQL mutation | it executed; each root field kept only when its answer carries no error ([below](#graphql-one-unit-per-operation)) |
 | WebSocket message | the reply is not an error frame |
 | WebSocket connect or disconnect hook | the hook ran to its end |
 | MCP operation | it answered `Ok`, with no `isError: true` in the tool's result |
@@ -61,6 +68,43 @@ commits on its own outcome — you list nothing for it:
 
 A read is a touch: a message or a tool that only reads still opens the
 transaction on its first query, and commits it.
+
+### GraphQL: one unit per operation
+
+A GraphQL response always answers `200`, so the status line cannot say what
+committed. Each operation of the document is a unit of its own instead, and a
+mutation's root fields each run in a savepoint of it:
+
+```graphql
+mutation {
+  a: createPost(input: { title: "first" }) { id }   # kept
+  b: createPost(input: { title: "" }) { id }        # errs: rolled back alone
+  c: createPost(input: { title: "third" }) { id }   # kept
+}
+```
+
+- **A query** runs on the pool, its own unit, opening no transaction.
+- **A mutation** is one transaction, opened on its first statement. Its root
+  fields resolve one after the other, each inside an
+  [atomic block](#atomic-blocks): a field whose answer carries an error — its
+  own, or one a field below it reported, a masked non-null field included — rolls
+  back its writes and drops the events it emitted, and the operation's other
+  fields commit. The field's error reaches the client as the resolver wrote
+  it: a unique violation is its `CONFLICT`, never an empty `500`.
+- **A field that never touches the database sends nothing**: its savepoint is
+  as lazy as the transaction around it.
+- **A batch** holding a mutation runs its operations one at a time, in
+  document order, so its units never hold several pooled connections at
+  once; a batch of queries runs them all at once.
+- **Over graphql-ws** each query and mutation is a unit of its own too, opened
+  inside the socket's; a subscription keeps the connection's pool.
+- **When an operation's commit cannot be honoured** — it failed, or did not
+  answer within its net — the operation answers `data: null` and one opaque
+  `INTERNAL` error: a response never reports a write that did not land.
+- **Under a request timeout**, a request holding a mutation takes the deadline
+  over: an operation still running there is cut inside its unit, rolled back
+  and answered `UNAVAILABLE` in band, while one already committing is waited
+  for. A request of queries alone is cut as any request is, `503`.
 
 ### A deadline cuts the body, never the commit
 

@@ -99,7 +99,7 @@ Three scopes coexist:
 
 | Scope    | Installed by                                          | What it carries                       |
 |----------|-------------------------------------------------------|---------------------------------------|
-| Request  | an HTTP request, a WS message or hook, an MCP operation | Pool on safe routes, txn otherwise    |
+| Request  | an HTTP request, a GraphQL operation, a WS message or hook, an MCP operation | Pool on safe routes and queries, txn otherwise |
 | Job      | a queue attempt, a scheduled tick                     | One transaction per attempt (or pool) |
 | Unscoped | nothing                                               | `Repo::conn()` errors                 |
 
@@ -147,6 +147,10 @@ handler
   ↓
 DbContext (response)   ──→ commit on 2xx/3xx, rollback otherwise
 ```
+
+A request to `/graphql` or `/mcp` runs on the pool whatever its method: each
+operation it carries is a unit of its own
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
 A safe method gets the pool, no transaction overhead. A mutating method
 opens a `DatabaseTransaction`, runs the handler against it, and commits

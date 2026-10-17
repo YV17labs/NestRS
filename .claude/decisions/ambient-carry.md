@@ -127,3 +127,19 @@ whose `tenant_id` names none is refused rather than run for none. A package
 value whose `carry` lets it into an envelope still crosses nothing, since the
 envelope writes no key for it; a key of its own is a wire change, decided like
 one.
+
+**2026-10-17 — the GraphQL operation is a unit, and its batches stay on the
+pool.** Each operation of a GraphQL document now runs as a unit of its own,
+nested in its request (or its socket), and a mutation's root fields each in an
+atomic block of it. Its loaders are seeded inside the operation, so the
+spawner reads the span to hold off the operation's unit rather than off the
+current span: a batch keeps the outermost unit's identity, and runs in that
+unit's span. The planned exception — a mutation operation's batches on its own
+transaction, joined before the field's block settles — does not land with
+it, and moves to 7.x, changing no API. Two things stand in its way beyond the
+join: a statement issued from inside a block on the operation's executor is
+refused, so a batch would run on the field's block, which a spawned task
+cannot share while the field awaits it; and a request-scoped DataLoader caches
+what it read, so a row a rolled-back field wrote would be served to the next
+field from the cache. Closing it takes a loader cache scoped to the block and
+a spawner that joins its batches before the block settles.

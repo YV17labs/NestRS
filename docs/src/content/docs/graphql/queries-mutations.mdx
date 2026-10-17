@@ -210,6 +210,12 @@ $ curl -sX POST http://localhost:3000/graphql -d \
 makes one usable as a return type. Both come from `async-graphql`
 (re-exported by `nest-rs-graphql`).
 
+Each operation runs as a unit of work of its own: a query on the pool, a
+mutation in one transaction. Its root fields resolve one after the other, each
+in a savepoint, so a field that answers an error rolls back what it wrote —
+and drops the events it emitted — while the other fields of the operation
+commit ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+
 ## Reading the request context
 
 A resolver method takes an optional `ctx: &Context<'_>` first

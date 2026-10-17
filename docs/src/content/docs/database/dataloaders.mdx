@@ -186,7 +186,8 @@ never one field's, and its lines and spans sit in the request's span, not
 under the field that asked first. Its executor is the **pool**, never the
 request transaction — a batch runs beside the request, and a write inside a
 loader would race the commit. So a relation resolved in a mutation's own
-response reads the state before the mutation. Loaders are reads.
+response reads the rows as they stood before the mutation's transaction: a
+row the mutation wrote is not there yet. Loaders are reads.
 
 ## Going further
 

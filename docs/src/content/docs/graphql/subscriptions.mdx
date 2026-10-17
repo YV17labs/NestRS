@@ -183,6 +183,11 @@ socket. When it elapses the server ends the socket, so the peer
 re-upgrades, which re-runs the guard chain and re-checks the token's
 `exp`. Set it to `0` to disable the ceiling.
 
+A query or a mutation sent over the socket is a unit of its own, as on
+`POST`: a mutation opens its transaction inside the socket's pool unit and
+settles it before its answer is sent, its root fields each in a savepoint
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+
 The server ends a socket the protocol's way, at the ceiling and at the
 shutdown signal alike: each subscription still running gets a `complete`, a
 query or a mutation sent over the socket is answered first, then the socket

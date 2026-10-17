@@ -84,7 +84,7 @@ listeners each open a unit of their own through that binding) — and is dropped
 on a task handed to
 `TaskContext`, a connection's next message and a job's envelope, where a write
 opens a unit of its own. The ability crosses everywhere but a job's envelope.
-One exception is planned: a mutation operation's batches will run on the
+One exception is planned for 7.x: a mutation operation's batches on the
 operation's own transaction, joined before the field's savepoint settles.
 
 **The executor** is installed by each edge running its unit of work through
@@ -95,7 +95,10 @@ with none bound a unit runs bare and `Repo` fails closed. A driver implements
 that one trait and serves every edge; an app lists no data context. Each edge
 commits on its own unit's outcome: an HTTP request on 2xx/3xx without a
 `MappedError` (a safe method runs on the pool, the unit opened by the
-`DbContext` interceptor in the innermost band); a WS message unless it answers
+`DbContext` interceptor in the innermost band, and so does a request carrying
+units of its own, `/graphql` and `/mcp`); a GraphQL operation once it executed,
+each mutation root field in a savepoint of it rolled back when its answer
+carries an error (`.claude/decisions/graphql-transactions.md`); a WS message unless it answers
 an error frame, a connection hook unless it unwound; an MCP operation on `Ok`
 with no tool error in band (`isError`); a queue attempt, a tick and a
 listener call on `Ok`. A
@@ -136,11 +139,11 @@ deadline**: opened through the binding its emitter ran under
 `transactional = false`, its `Err` rolled back and filed at `error` while the
 chain goes on — so an event a listener emits waits for that listener's commit.
 
-- **Waits:** every unit of its own — a mutating HTTP request and the GraphQL
-  mutation riding it, a WS message or connection hook, an MCP operation, a
-  queue attempt, a scheduled tick, a listener call.
-- **Runs at once:** a pool — a safe request, a read-only GraphQL batch, a
-  subscription, `transactional = false`.
+- **Waits:** every unit of its own — a mutating HTTP request, a GraphQL
+  operation (a savepoint per mutation root field), a WS message or connection
+  hook, an MCP operation, a queue attempt, a scheduled tick, a listener call.
+- **Runs at once:** a pool — a safe request, a GraphQL query, a subscription,
+  `transactional = false`.
 - **Not waited for:** a transaction the caller opened itself (`Executor::Txn`,
   or one held privately like `retry_on_conflict`'s) — its commit is the
   caller's, so the caller emits after its own `commit`. Inside a unit of

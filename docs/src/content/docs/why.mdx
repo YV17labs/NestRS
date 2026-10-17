@@ -186,7 +186,8 @@ error the framework prevents, not a bug a code reviewer has to catch.
 A mutating HTTP request installs a transactional [executor](/database/repo-and-executor/)
 before the handler runs. The service reaches the database only through
 [`Repo`](/database/repo-and-executor/), which picks up that executor
-automatically — commit on `2xx`/`3xx`, rollback otherwise. Worker contexts
+automatically — commit on `2xx`/`3xx`, rollback otherwise. A GraphQL mutation
+is one transaction whose fields each roll back alone, and worker contexts
 install a per-attempt transaction on the same code path.
 
 ```rust title="crates/features/src/users/service.rs"

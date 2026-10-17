@@ -233,13 +233,10 @@ may. Anything else is a `500` — `"internal error"` under
 server named. The server's own message never reaches the client or the log,
 since it quotes the input it refused.
 
-GraphQL mutations carry one exception today. A statement a mutation runs on the
-request's own transaction — a generated `update_*` or `delete_*`, or a service
-your own mutation calls — leaves that transaction unable to commit once the
-database refuses it, so the whole request answers an HTTP `500`
-(`problem+json`, no GraphQL body) instead of the class. A generated `create_*`
-runs its insert on a savepoint of its own and answers its class, and the REST
-twin answers every class.
+On GraphQL every mutation root field runs in a savepoint of its operation's
+transaction, so a refused statement rolls back that field alone: the field
+answers its class, and the operation's other fields commit
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
 ## Bound mutations
 

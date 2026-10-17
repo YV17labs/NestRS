@@ -34,7 +34,8 @@ A driver implements the port rather than consuming it, so it takes `database` wi
   edge's own outcome — one transaction per unit by default, the pool on
   `transactional = false` and on a safe HTTP method.
 - A request interceptor that runs each HTTP request through it.
-- Optionally, the atomic block `nest_rs::database::atomic` runs on.
+- Optionally, the atomic block `nest_rs::database::atomic` runs on — which a
+  GraphQL mutation needs.
 - A `SafeLink` that says your store's errors without the values its server
   quotes.
 
@@ -254,32 +255,39 @@ queue attempt, a tick — runs unscoped, which is correct for system work.
 
 Every edge but HTTP opens its units through your binding on its own. Until the
 HTTP edge runs its request unit itself, your driver registers the interceptor
-that does, in the innermost band, so a guard that denies a request has run
-before anything opens:
+that does, in the innermost band — `priority = -10`, `DbContext`'s — so a guard
+that denies a request has run before anything opens:
 
 ```rust title="crates/yourdb/src/interceptor.rs"
 use std::sync::Arc;
 use nest_rs::core::async_trait;
-use nest_rs::core::{Layer, injectable};
+use nest_rs::core::Layer;
 use nest_rs::database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs::http::poem::http::{Method, StatusCode};
-use nest_rs::http::RequestDeadline;
+use nest_rs::http::{CarriedUnits, RequestDeadline, interceptor};
 use nest_rs::http::poem::{Error, Request, Response, Result};
 use nest_rs::interceptors::{Interceptor, Next};
 
-#[injectable]
+#[interceptor(priority = -10)]
 pub struct YourDbContext {
     #[inject]
     unit: Arc<dyn UnitOfWork>,
 }
 
-// `Interceptor` has `Layer` as a supertrait — an empty impl is enough
-// unless the layer needs a `priority`.
 impl Layer for YourDbContext {}
 
 #[async_trait]
 impl Interceptor for YourDbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+        // `/graphql` and `/mcp`: each operation the request carries is a unit
+        // of its own, which settles its own work and cuts its own body.
+        if req.extensions().get::<CarriedUnits>().is_some() {
+            let spec = UnitSpec::new(nest_rs::http::unit::REQUEST, ExecutorScope::Request, TransactionPolicy::Pool);
+            return run_unit(Some(&self.unit), spec, next.run(req), |_| true, |_| {
+                Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+            })
+            .await;
+        }
         let policy = match *req.method() {
             Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => TransactionPolicy::Pool,
             _ => TransactionPolicy::PerUnit,
@@ -310,6 +318,16 @@ impl Interceptor for YourDbContext {
     }
 }
 ```
+
+A request the transport marks `CarriedUnits` — one to `/graphql` or `/mcp` —
+runs on the pool whatever its method: its guards read there, each GraphQL or
+MCP operation opens its own unit through your binding, and a GraphQL mutation
+runs each root field in an [atomic block](#step-6--atomic-blocks-optional) of
+it. The transport marks the request below the error-resolution band (70), so
+the band is part of the contract: at `#[interceptor]`'s default, 100, your
+interceptor would never see the mark, and would run every `/graphql` POST in a
+transaction of its own, its deadline cut wrapped around the operations'
+commits.
 
 The edge hands every request its `RequestDeadline` when a request timeout is
 set. Taking it over is what keeps the edge's own timer from cutting your
@@ -428,8 +446,11 @@ an operator searches for, and drop every message. `nest-rs-seaorm` says a
 `nest_rs::database::atomic(work)` asks the ambient executor for a block through
 `Executor::atomic`. The default answers `None`, and `atomic` then refuses with
 `AtomicError::Unsupported` without running the work — fail-closed, so a driver
-that offers no block loses nothing but the feature. To offer one, return an
-`AtomicBlock`: an executor of yours that the block runs on, settled once.
+that offers no block loses the feature, and every GraphQL mutation with it: each
+of its root fields runs in a block, and a field that cannot have one answers
+the opaque `INTERNAL` rather than commit a failed field's writes. To offer one,
+return an `AtomicBlock`: an executor of yours that the block runs on, settled
+once.
 
 ```rust title="crates/yourdb/src/executor.rs"
 use std::future::Future;

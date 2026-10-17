@@ -227,7 +227,8 @@ slice inherits, without writing any of them:
 - **Row-level filtering.** Every `Repo` read runs with the caller's
   `Ability::condition_for` ANDed in. A row outside scope is invisible.
 - **Transparent transactions.** Mutating routes run inside a transaction
-  committed on 2xx/3xx, rolled back otherwise.
+  committed on 2xx/3xx, rolled back otherwise; a GraphQL mutation is one
+  transaction whose fields each roll back alone.
 - **Same code path for safe routes and workers.** Pool executor under the
   hood, no method change.
 - **Audited choke point.** Controllers, resolvers, dataloader code call

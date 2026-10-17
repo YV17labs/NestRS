@@ -433,8 +433,6 @@ mod tests {
         }]
     }
 
-    /// A JSON request whose body stream dies mid-read — a client that hung up,
-    /// or a proxy that closed the connection after the headers.
     fn json_post(body: impl Into<Body>) -> Request {
         Request::builder()
             .method(Method::POST)
@@ -446,6 +444,8 @@ mod tests {
             .body(body)
     }
 
+    /// A JSON request whose body stream dies mid-read — a client that hung up,
+    /// or a proxy that closed the connection after the headers.
     fn request_with_a_failing_body() -> Request {
         let stream = futures_util::stream::once(async {
             Err::<bytes::Bytes, _>(std::io::Error::other("the client hung up mid-body"))

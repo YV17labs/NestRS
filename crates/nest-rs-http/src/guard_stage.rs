@@ -263,12 +263,12 @@ fn problem_response(denial: &Denial) -> Response {
     // RFC 6750 §3/§3.1: a rejected credential names its code. Not gated on the
     // status: `insufficient_scope` lives at `403`, and `bearer_error` is already
     // `None` wherever no challenge is due.
-    match (denial.bearer_error(), denial.required_scopes()) {
-        (Some(crate::challenge::INSUFFICIENT_SCOPE), required) if !required.is_empty() => {
-            crate::challenge::stamp_insufficient_scope(&mut response, required);
+    match denial.bearer_error() {
+        Some(crate::challenge::INSUFFICIENT_SCOPE) => {
+            crate::challenge::stamp_insufficient_scope(&mut response, denial.required_scopes());
         }
-        (Some(code), _) => crate::challenge::stamp_bearer_error(&mut response, code),
-        (None, _) => {}
+        Some(code) => crate::challenge::stamp_bearer_error(&mut response, code),
+        None => {}
     }
     // RFC 6585 §4 for a rate limit, RFC 9110 §15.6.4 for an unavailable
     // dependency: the wait, in delay-seconds, whenever it is known.

@@ -66,20 +66,15 @@ pub fn stamp_bearer_error(res: &mut Response, code: &str) {
 /// a quoted string could not carry, leaves the challenge without the attribute.
 pub(crate) fn stamp_insufficient_scope(res: &mut Response, scopes: &[String]) {
     let well_formed = !scopes.is_empty() && scopes.iter().all(|scope| is_scope_token(scope));
-    if !well_formed {
+    if well_formed
+        && let Ok(value) = HeaderValue::try_from(format!(
+            r#"{BEARER} error="{INSUFFICIENT_SCOPE}", scope="{}""#,
+            scopes.join(" ")
+        ))
+    {
+        res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
+    } else {
         stamp_bearer_error(res, INSUFFICIENT_SCOPE);
-        return;
-    }
-    let challenge = format!(
-        r#"{BEARER} error="{INSUFFICIENT_SCOPE}", scope="{}""#,
-        scopes.join(" ")
-    );
-    match HeaderValue::try_from(challenge) {
-        Ok(value) => {
-            res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
-        }
-        // Unreachable: every scope was checked against the grammar above.
-        Err(_) => stamp_bearer_error(res, INSUFFICIENT_SCOPE),
     }
 }
 
@@ -88,7 +83,7 @@ fn is_scope_token(scope: &str) -> bool {
     !scope.is_empty()
         && scope
             .bytes()
-            .all(|b| b == 0x21 || (0x23..=0x5b).contains(&b) || (0x5d..=0x7e).contains(&b))
+            .all(|b| matches!(b, 0x21 | 0x23..=0x5B | 0x5D..=0x7E))
 }
 
 /// [`stamp_bearer_error`] on a head's headers, whichever response holds them.

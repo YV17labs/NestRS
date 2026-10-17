@@ -37,7 +37,7 @@ use nest_rs_filters::{Filter, FilterChain, FilterSpecs};
 use nest_rs_http::__private::poem_bridge::{from_poem, to_poem};
 use nest_rs_http::__private::refused_route;
 use nest_rs_http::{BoxEndpoint, Endpoint, MappedError, Request, Response, endpoint_fn};
-use poem::{EndpointExt, Response as PoemResponse};
+use poem::Response as PoemResponse;
 
 use crate::interceptor::{Interceptor, InterceptorChain};
 use crate::registry::InterceptorSpecs;
@@ -131,19 +131,16 @@ where
     // An empty stage inside a non-empty stack is a cheap pass-through branch
     // in its runner — boxing once here beats naming all eight stage
     // combinations.
-    RouteEndpoint::Layered(BoxEndpoint::new(from_poem(
-        InterceptorChain::new(
-            FilterChain::new(
-                ExceptionFiltersEndpoint {
-                    inner: to_poem(endpoint),
-                    chain: exception_filters,
-                },
-                filters,
-            ),
-            interceptors,
-        )
-        .boxed(),
-    )))
+    RouteEndpoint::Layered(BoxEndpoint::new(from_poem(InterceptorChain::new(
+        FilterChain::new(
+            ExceptionFiltersEndpoint {
+                inner: to_poem(endpoint),
+                chain: exception_filters,
+            },
+            filters,
+        ),
+        interceptors,
+    ))))
 }
 
 /// Compose the full exception-filter pool (global + controller + method,

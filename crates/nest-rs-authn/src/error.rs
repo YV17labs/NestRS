@@ -226,16 +226,13 @@ impl AuthError {
         if let Self::Failed(detail) = self {
             tracing::warn!(target: crate::TARGET, detail = %detail, "authentication failed");
         }
-        let response = Response::builder().status(StatusCode::UNAUTHORIZED);
         // The challenge is composed from constants, so it always encodes.
-        match HeaderValue::try_from(self.challenge()) {
-            Ok(challenge) => response.header(header::WWW_AUTHENTICATE, challenge),
-            Err(_) => response.header(
-                header::WWW_AUTHENTICATE,
-                HeaderValue::from_static(nest_rs_http::challenge::BEARER),
-            ),
-        }
-        .body(body)
+        let challenge = HeaderValue::try_from(self.challenge())
+            .unwrap_or_else(|_| HeaderValue::from_static(nest_rs_http::challenge::BEARER));
+        Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header(header::WWW_AUTHENTICATE, challenge)
+            .body(body)
     }
 
     /// The `WWW-Authenticate` value this failure answers with.

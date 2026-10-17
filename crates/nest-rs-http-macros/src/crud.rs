@@ -58,6 +58,15 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         }
     };
 
+    let access_refused: TokenStream2 = quote! {
+        ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
+            ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::FORBIDDEN),
+        ),
+        ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
+            ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::NOT_FOUND),
+        ),
+    };
+
     let mut generated: Vec<ImplItem> = Vec::new();
 
     if ops.list && !existing.contains("list") {
@@ -140,12 +149,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         ::core::result::Result::Ok(::nest_rs_http::Json(#output::from(&__m)))
                     }
-                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::FORBIDDEN),
-                    ),
-                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::NOT_FOUND),
-                    ),
+                    #access_refused
                 }
             }
         });
@@ -230,12 +234,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                         ::core::result::Result::Ok(::nest_rs_http::Json(#output::from(&__row)))
                     }
-                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::FORBIDDEN),
-                    ),
-                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::NOT_FOUND),
-                    ),
+                    #access_refused
                 }
             }
         });
@@ -269,12 +268,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                             .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                         ::core::result::Result::Ok(())
                     }
-                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::FORBIDDEN),
-                    ),
-                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::NOT_FOUND),
-                    ),
+                    #access_refused
                 }
             }
         });

@@ -42,7 +42,7 @@ macro_rules! into_inner {
     };
 }
 
-into_inner!(Json<T>, Path<T>, Query<T>, Form<T>, Header<T>,);
+into_inner!(Json<T>, Path<T>, Query<T>, Form<T>, Header<T>);
 
 /// A pipe's refusal, as the `400` problem every edge's rejection is.
 fn rejection(err: PipeError) -> ProblemDetails {

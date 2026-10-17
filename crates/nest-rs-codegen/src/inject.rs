@@ -516,10 +516,8 @@ fn lifetimes_static(tokens: TokenStream2) -> TokenStream2 {
                 if tick.as_char() == '\'' && tick.spacing() == Spacing::Joint =>
             {
                 out.push(TokenTree::Punct(tick));
-                if let Some(TokenTree::Ident(name)) = tokens.peek() {
-                    let span = name.span();
-                    tokens.next();
-                    out.push(TokenTree::Ident(Ident::new("static", span)));
+                if let Some(name) = tokens.next_if(|next| matches!(next, TokenTree::Ident(_))) {
+                    out.push(TokenTree::Ident(Ident::new("static", name.span())));
                 }
             }
             TokenTree::Group(group) => {

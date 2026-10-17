@@ -485,11 +485,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         // The compiler selects the arming type, so this crate needs no authz
         // dependency and a renamed import still arms.
-        let probe_types: Vec<Type> = authorize_ty
-            .iter()
-            .cloned()
-            .chain(param_types(&inputs))
-            .collect();
+        let param_types = param_types(&inputs);
+        let probe_types: Vec<Type> = authorize_ty.iter().chain(&param_types).cloned().collect();
         let shaper_selection = shaper_selection(&probe_types);
 
         let handler = RouteHandler {
@@ -501,7 +498,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             filters,
             interceptors,
             probe_types,
-            param_types: param_types(&inputs),
+            param_types,
             named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
             has_extractors: !inputs.is_empty(),
             handler: nest_rs_codegen::handler_ref(&self_ty, &method_name),

@@ -103,8 +103,8 @@ async fn create(&self, Valid(input): Valid<Json<CreateUser>>)
 
 <Aside type="note">
 The data-layer HTTP mapping lives behind the `http` feature of
-`nest-rs-seaorm`, so a worker or MCP-only app importing the crate
-without that feature never links poem.
+`nest-rs-seaorm`, which only the umbrella's `http` turns on: a worker built
+with `queue,seaorm` and no `http` links no HTTP stack.
 </Aside>
 
 ### When a feature defines its own error type

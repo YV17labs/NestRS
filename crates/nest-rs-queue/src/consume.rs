@@ -17,7 +17,7 @@ use tracing::Instrument;
 
 use crate::capability::unsupported;
 use crate::checkpoint::CheckpointCell;
-use crate::envelope::{self, Opened, Unusable};
+use crate::envelope::{self, Carried, Opened, Unusable};
 use crate::inventory::{HandlerContext, JobHandler};
 use crate::{
     Attempt, CheckpointStore, Envelope, JobError, JobId, ProcessMethod, QueueBackend, QueueName,
@@ -397,6 +397,7 @@ pub async fn attempt(
     } else {
         Cow::Borrowed(&delivery.message)
     };
+    let mut carried = Carried::default();
     let (payload, inherited, minted_trace, unversioned, unusable) = match newer {
         // Past its patience: nothing is opened, and the job's own trace is
         // what its dead letter is filed in.
@@ -413,7 +414,11 @@ pub async fn attempt(
                 correlation,
                 minted,
                 unusable,
-            }) => (Ok(payload), correlation, minted, false, unusable),
+                carried: crossed,
+            }) => {
+                carried = crossed;
+                (Ok(payload), correlation, minted, false, unusable)
+            }
             Ok(Opened::Unversioned(value)) => (Ok(value), None, false, true, Unusable::default()),
             Err(refused) => (Err(refused), None, false, false, Unusable::default()),
         },
@@ -480,10 +485,11 @@ pub async fn attempt(
         timeout,
     };
     let retry_after = backoff::retry_after(&delivery.id, attempt);
-    // The ambient context too: a job the body pushes seals *this* trace, and
-    // every line below reads its trace ids off it, not off the span.
+    // The ambient context too: a job the body pushes seals *this* trace and
+    // what crossed with the job, and every line below reads its trace ids off
+    // it, not off the span.
     let scope = Arc::new(RequestScope::new(container));
-    let outcome = with_request_scope(Some(scope), correlation, async move {
+    let unit = carried.install(async move {
         tracing::debug!(target: TARGET, attempt, "job started");
         // Said once per delivery: a retry is not a second legacy job.
         if first_opening {
@@ -509,10 +515,19 @@ pub async fn attempt(
                 );
             }
         }
-        run(method.handler(), input, context, identity, last, retry_after).await
-    })
-    .instrument(span)
-    .await;
+        run(
+            method.handler(),
+            input,
+            context,
+            identity,
+            last,
+            retry_after,
+        )
+        .await
+    });
+    let outcome = with_request_scope(Some(scope), correlation, unit)
+        .instrument(span)
+        .await;
     if matches!(outcome, AttemptOutcome::Retry { .. }) {
         delivery.attempt = attempt.saturating_add(1);
     }

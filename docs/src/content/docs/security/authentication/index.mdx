@@ -162,6 +162,14 @@ for an anonymous caller. It is an **audit** identity and never an authorization
 input: what a caller may *do* is the ambient `Ability`, decided in a guard. See
 [Correlation](/fundamentals/correlation/).
 
+A principal bound to a tenant declares it beside, with `fn tenant_id(&self) ->
+Option<String>`, read off the verified credential — a claim its issuer signed,
+never a header the caller sends beside it. The tenant is the opposite of the
+actor: an **authorization** input. The guard makes it ambient for the request
+and seals it into every job the request pushes, and
+`nest_rs::core::current_tenant_id()` reads it back in a service or a
+processor. See [Multi-tenant SaaS](/security/multi-tenant-saas/).
+
 ## One return type — principal or error
 
 ```rust title="nest_rs::authn::Strategy"

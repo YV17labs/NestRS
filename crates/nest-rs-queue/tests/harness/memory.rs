@@ -121,6 +121,16 @@ impl Memory {
         self.inner.arrived.notify_waiters();
     }
 
+    /// The records `queue` holds ready to run, as stored.
+    pub(crate) fn ready(&self, queue: &str) -> Vec<Value> {
+        self.lock()
+            .queue(queue)
+            .ready
+            .iter()
+            .map(|entry| serde_json::from_slice(&entry.record).expect("a push files JSON"))
+            .collect()
+    }
+
     /// The dead letters of `queue`.
     pub(crate) fn dead(&self, queue: &str) -> Vec<Dead> {
         self.lock().queue(queue).dead.clone()

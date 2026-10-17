@@ -116,3 +116,14 @@ for runs inside its emitter, on the emitter's executor. Where it departs:
   `RequestContinuation::current` cloned the running context whole; in one
   map a whole clone would hold the transaction, so it gave way to
   `RequestContinuation::capture`.
+
+**2026-10-17 — the envelope carries.** A push now seals what crosses into a
+job: each ambient value through its own `carry` for `Envelope`, and of what
+crosses, the envelope writes its own keys — the tenant as `tenant_id`, the
+baggage a job came with as `baggage` — then the consumer makes them ambient
+again around the attempt. The tenant's `carry` crosses everywhere, the
+envelope included: a job runs for the tenant it was pushed for, and a record
+whose `tenant_id` names none is refused rather than run for none. A package
+value whose `carry` lets it into an envelope still crosses nothing, since the
+envelope writes no key for it; a key of its own is a wire change, decided like
+one.

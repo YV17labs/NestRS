@@ -122,6 +122,7 @@ pub mod request_scope;
 mod site;
 mod stderr_lines;
 pub mod target;
+mod tenant;
 #[cfg(test)]
 mod testing;
 pub mod trace_context;
@@ -176,6 +177,7 @@ pub use proof::{Attempt, Proving, Unproved, prove};
 pub use request_scope::{
     RequestContinuation, RequestScope, TaskContext, current_request_scope, with_request_scope,
 };
+pub use tenant::current_tenant_id;
 pub use trace_context::{
     Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,
     current_span_id, current_trace_id, current_traceparent, current_tracestate,
@@ -232,6 +234,7 @@ pub mod __private {
     pub use crate::site::{
         GlobalLayers, Shape, Site, SiteDeclaration, SiteLayers, UnitChains, declare_site,
     };
+    pub use crate::tenant::TenantId;
     pub use crate::trace_context::__private::{
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,

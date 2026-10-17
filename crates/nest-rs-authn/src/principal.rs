@@ -1,8 +1,10 @@
-//! [`PrincipalIdentity`] — the audit identity every principal exposes.
+//! [`PrincipalIdentity`] — what every principal says about itself: its audit
+//! identity, the tenant it acts within, and the scopes its credential carries.
 //!
 //!
 //! The framework records `actor_id` on the request span when authentication
-//! succeeds, so every downstream event inherits it.
+//! succeeds, so every downstream event inherits it, and makes the tenant
+//! ambient for the request and every job it pushes.
 
 /// Stable audit identifier of a principal — the value recorded as the
 /// request span's `actor_id` field. Return `None` when the principal
@@ -12,6 +14,19 @@ pub trait PrincipalIdentity {
     /// The principal's stable audit id, or `None` for an anonymous/machine
     /// principal with no subject.
     fn actor_id(&self) -> Option<String>;
+
+    /// The tenant this principal acts within, or `None` (the default) for one
+    /// bound to no tenant.
+    ///
+    /// Unlike [`actor_id`](Self::actor_id), an authorization input: the
+    /// guard makes it ambient for the request and every continuation of it,
+    /// and every job the request pushes runs for it —
+    /// [`current_tenant_id`](nest_rs_core::current_tenant_id) reads it back. Read it off the
+    /// verified credential alone, a claim its issuer signed, never off what
+    /// the caller sends beside it. An empty id names no tenant.
+    fn tenant_id(&self) -> Option<String> {
+        None
+    }
 
     /// The OAuth scopes this credential was granted, or `None` when the
     /// principal is not scope-aware.

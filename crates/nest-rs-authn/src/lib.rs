@@ -1,9 +1,11 @@
 //! Authentication for nestrs — establishing *who* the caller is, and nothing
 //! else.
 //!
-//! [`Strategy`] turns a request into a principal; [`AuthnGuard`] runs one and
+//! [`Strategy`] turns a request into a principal; [`AuthnGuard`] runs one,
 //! records the resulting [`actor_id`](PrincipalIdentity::actor_id) as the audit
-//! identity every downstream event inherits. [`JwtService`] signs and verifies —
+//! identity every downstream event inherits, and makes the
+//! [`tenant_id`](PrincipalIdentity::tenant_id) it names ambient for the request
+//! and every job it pushes. [`JwtService`] signs and verifies —
 //! against a secret, an EdDSA key, or the JWK Set an external issuer publishes;
 //! [`hash_password`] / [`verify_password`] cover the local-credential case.
 //! The product wiring that binds them — the concrete claims type, the user

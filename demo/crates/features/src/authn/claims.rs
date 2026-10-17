@@ -38,6 +38,10 @@ impl nest_rs::authn::PrincipalIdentity for Claims {
         self.sub.map(|sub| sub.to_string())
     }
 
+    fn tenant_id(&self) -> Option<String> {
+        Some(self.org_id.to_string())
+    }
+
     fn scopes(&self) -> Option<&[String]> {
         Some(&self.scopes)
     }
@@ -65,6 +69,22 @@ mod tests {
         let mut subjectless = claims(vec![]);
         subjectless.sub = None;
         assert_eq!(subjectless.actor_id(), None);
+    }
+
+    #[test]
+    fn tenant_id_is_the_org_id_claim() {
+        use nest_rs::authn::PrincipalIdentity;
+        let org_id = Uuid::now_v7();
+        let member = Claims {
+            org_id,
+            ..claims(vec![Role::User])
+        };
+        assert_eq!(member.tenant_id(), Some(org_id.to_string()));
+        let machine = Claims {
+            sub: None,
+            ..member
+        };
+        assert_eq!(machine.tenant_id(), Some(org_id.to_string()));
     }
 
     #[test]

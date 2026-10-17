@@ -3,6 +3,7 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
+use nest_rs_core::__private::TenantId;
 use nest_rs_core::trace_context::field;
 use nest_rs_core::{
     Container, ContainerBuilder, Discoverable, Layer, Net, Posture, ProviderResidency, Unanswered,
@@ -21,8 +22,9 @@ use crate::strategy::{AUTHENTICATE_TIMEOUT, Strategy};
 const TRANSPORT: &str = "http";
 
 /// The authentication guard: runs a [`Strategy`] on the request, attaches the
-/// resulting principal — and its granted scopes — for the rest of the request,
-/// and records `actor_id` on the span. Generic over the
+/// resulting principal — its granted scopes and the tenant it acts within
+/// beside it — for the rest of the request, and records `actor_id` on the
+/// span. Generic over the
 /// strategy `S`. Bind it via `#[use_guards]` / `use_guards_global`; on a
 /// `#[public]` route it authenticates opportunistically but never rejects, and
 /// on an in-band endpoint (`/graphql`) it admits an anonymous request while
@@ -180,6 +182,12 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                 // absence is what turns scope gating off.
                 if let Some(scopes) = crate::PrincipalIdentity::scopes(&principal) {
                     cx.attach(GrantedScopes::new(scopes));
+                }
+                // The tenant comes off the verified principal and nothing else.
+                if let Some(tenant) =
+                    crate::PrincipalIdentity::tenant_id(&principal).and_then(TenantId::new)
+                {
+                    cx.attach(tenant);
                 }
                 cx.attach(principal);
                 Ok(())

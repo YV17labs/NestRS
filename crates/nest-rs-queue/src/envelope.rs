@@ -2,10 +2,14 @@
 //! alone; the format is specified on [`Envelope`].
 
 use std::borrow::Cow;
+use std::future::Future;
+use std::sync::Arc;
 
-use nest_rs_core::{Correlation, TraceParent, TraceState};
+use nest_rs_core::__private::{Pending, TenantId, install_pending};
+use nest_rs_core::{AmbientValue, Continuation, Correlation, TraceParent, TraceState};
 use serde_json::{Map, Value, json};
 
+use crate::baggage::{Baggage, BaggageRefusal};
 use crate::push_options::check_unique_key;
 use crate::{JobError, JobId};
 
@@ -22,9 +26,14 @@ const PAYLOAD: &str = "payload";
 const TRACEPARENT: &str = "traceparent";
 /// Vendor state, forwarded untouched as W3C Trace Context requires.
 const TRACESTATE: &str = "tracestate";
+/// W3C Baggage the job carried in, written back on every push it makes.
+const BAGGAGE: &str = "baggage";
 /// Who the enqueue was being served for; absent for a scheduled tick, a boot
 /// task or an anonymous caller.
 const ACTOR_ID: &str = "actor_id";
+/// The tenant the enqueue was being served for, which the job runs for; absent
+/// where it was served for none.
+const TENANT_ID: &str = "tenant_id";
 /// The [`JobId`] the push minted. Absent from a record no push of this release
 /// wrote, which then runs under an id minted for its delivery.
 const ID: &str = "id";
@@ -37,14 +46,16 @@ const UNIQUE_KEY: &str = "unique_key";
 /// attempt; absent means it is the producer's.
 const TRACE_MINTED: &str = "trace_minted";
 /// Every key an envelope may carry: an object with any other is no envelope.
-const KEYS: [&str; 9] = [
+const KEYS: [&str; 11] = [
     VERSION,
     ID,
     ATTEMPT,
     PAYLOAD,
     TRACEPARENT,
     TRACESTATE,
+    BAGGAGE,
     ACTOR_ID,
+    TENANT_ID,
     UNIQUE_KEY,
     TRACE_MINTED,
 ];
@@ -64,7 +75,9 @@ const KEYS: [&str; 9] = [
 ///   "payload": { "…the developer's payload…": true },
 ///   "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 ///   "tracestate": "rojo=00f067aa0ba902b7",
+///   "baggage": "region=eu",
 ///   "actor_id": "…",
+///   "tenant_id": "…",
 ///   "unique_key": "…"
 /// }
 /// ```
@@ -82,6 +95,17 @@ const KEYS: [&str; 9] = [
 ///
 /// `traceparent` and `tracestate` are W3C Trace Context's, verbatim: the
 /// producer's span becomes the job's parent. `actor_id` is nestrs' own key.
+///
+/// `tenant_id` is nestrs' own key too: the tenant the push was served for,
+/// which the job runs for. Unlike the actor it is an authorization input, so
+/// a record whose `tenant_id` names no tenant is refused rather than run for
+/// none.
+///
+/// `baggage` is W3C Baggage's, carried and never trusted: a list within the
+/// specification's limits — 64 list-members, 8192 bytes — is kept as it was
+/// written and sealed into every job the attempt pushes; any other is dropped,
+/// with a `warn` that never quotes it, and the job runs without it. No push
+/// writes one of its own.
 ///
 /// # What a later version keeps
 ///
@@ -133,7 +157,7 @@ impl Envelope {
 }
 
 /// Wrap a serialized payload in the wire envelope, stamped with the ambient
-/// correlation.
+/// correlation and what the running unit carries into a job.
 ///
 /// With no ambient context — a job enqueued from `main` — one is minted.
 pub(crate) fn seal(payload: Value, id: JobId, unique_key: Option<&str>) -> Envelope {
@@ -156,7 +180,18 @@ pub(crate) fn seal(payload: Value, id: JobId, unique_key: Option<&str>) -> Envel
     if let Some(actor_id) = correlation.actor_id() {
         sealed[ACTOR_ID] = Value::String(actor_id.to_owned());
     }
+    if let Some(tenant) = crossing::<TenantId>() {
+        sealed[TENANT_ID] = Value::String(tenant.as_str().to_owned());
+    }
+    if let Some(baggage) = crossing::<Baggage>() {
+        sealed[BAGGAGE] = Value::String(baggage.as_str().to_owned());
+    }
     Envelope { json: sealed, id }
+}
+
+/// The running unit's `T`, as it crosses into a job's envelope.
+fn crossing<T: AmbientValue>() -> Option<Arc<T>> {
+    nest_rs_core::ambient::<T>()?.carry(Continuation::Envelope)
 }
 
 /// What a stored record says about the job it carries, read without opening
@@ -202,8 +237,8 @@ pub(crate) fn newer_version(value: &Value) -> Option<u64> {
 }
 
 /// The trace a newer release's envelope carries, when it spells `traceparent`
-/// — and the `tracestate` beside it — as this release does. The actor is never
-/// read: an audit identity is not one to guess.
+/// — and the `tracestate` beside it — as this release does. The actor, the
+/// tenant and the baggage are never read: no identity is one to guess.
 pub(crate) fn newer_trace(value: &Value) -> Option<Correlation> {
     newer_version(value)?;
     let map = value.as_object()?;
@@ -242,6 +277,14 @@ fn usable_unique_key(value: &Value) -> Option<String> {
 /// refuses to record one.
 fn usable_actor(value: &Value) -> Option<&str> {
     value.as_str().filter(|actor| !actor.is_empty())
+}
+
+/// A `baggage` a job can carry on, or why it cannot.
+fn usable_baggage(value: &Value) -> Result<Baggage, BaggageRefusal> {
+    value
+        .as_str()
+        .ok_or(BaggageRefusal::Malformed)
+        .and_then(Baggage::parse)
 }
 
 /// Whether a `tracestate` beside a usable `traceparent` is lost: a list naming a
@@ -314,6 +357,12 @@ pub(crate) fn retry(
         if continued && map.get(TRACESTATE).is_some_and(unusable_tracestate) {
             map.remove(TRACESTATE);
         }
+        if map
+            .get(BAGGAGE)
+            .is_some_and(|baggage| usable_baggage(baggage).is_err())
+        {
+            map.remove(BAGGAGE);
+        }
     }
     if !continued && let Some(minted) = minted {
         map.insert(
@@ -361,6 +410,8 @@ pub(crate) enum Opened<'a> {
         minted: bool,
         /// The keys the envelope carried and this consumer could not use.
         unusable: Unusable,
+        /// What crossed with the job, to make ambient for its attempt.
+        carried: Carried,
     },
     /// A value that is no envelope at all, decoded as the payload itself.
     Unversioned(Cow<'a, Value>),
@@ -382,6 +433,29 @@ impl std::fmt::Debug for Opened<'_> {
     }
 }
 
+/// What crossed with a job into its attempt: the tenant it runs for and the
+/// baggage it carries on.
+#[derive(Debug, Default)]
+pub(crate) struct Carried {
+    tenant: Option<TenantId>,
+    baggage: Option<Baggage>,
+}
+
+impl Carried {
+    /// `fut`, with what crossed made ambient, in one install — none when
+    /// nothing did.
+    pub(crate) fn install<F: Future>(self, fut: F) -> impl Future<Output = F::Output> {
+        let mut pending = Pending::default();
+        if let Some(tenant) = self.tenant {
+            pending.attach(Arc::new(tenant));
+        }
+        if let Some(baggage) = self.baggage {
+            pending.attach(Arc::new(baggage));
+        }
+        install_pending(pending, fut)
+    }
+}
+
 /// Which of an envelope's keys were present and unusable.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Unusable {
@@ -389,6 +463,8 @@ pub(crate) struct Unusable {
     pub(crate) attempt: bool,
     pub(crate) traceparent: bool,
     pub(crate) tracestate: bool,
+    /// Why the baggage was dropped.
+    pub(crate) baggage: Option<BaggageRefusal>,
     pub(crate) actor_id: bool,
     pub(crate) unique_key: bool,
 }
@@ -399,6 +475,7 @@ impl Unusable {
             || self.attempt
             || self.traceparent
             || self.tracestate
+            || self.baggage.is_some()
             || self.actor_id
             || self.unique_key
     }
@@ -410,6 +487,7 @@ impl Unusable {
             (self.attempt, ATTEMPT),
             (self.traceparent, TRACEPARENT),
             (self.tracestate, TRACESTATE),
+            (self.baggage.is_some(), BAGGAGE),
             (self.actor_id, ACTOR_ID),
             (self.unique_key, UNIQUE_KEY),
         ]
@@ -432,6 +510,16 @@ impl Unusable {
             effects.push("runs under a trace of its own");
         } else if self.tracestate {
             effects.push("continues its trace without the vendor state beside it");
+        }
+        match self.baggage {
+            Some(BaggageRefusal::Malformed) => {
+                effects.push("runs without its baggage, which W3C Baggage's grammar does not read");
+            }
+            Some(BaggageRefusal::Oversized) => effects.push(
+                "runs without its baggage, which holds more than the 64 list-members or 8192 \
+                 bytes W3C Baggage has every platform carry",
+            ),
+            None => {}
         }
         if self.actor_id {
             effects.push("runs for no actor");
@@ -493,6 +581,17 @@ pub(crate) fn open<'a>(value: Cow<'a, Value>, queue: &str) -> Result<Opened<'a>,
     let minted = map.get(TRACE_MINTED) == Some(&Value::Bool(true)) && parent.is_some();
     let actor = map.get(ACTOR_ID);
     let actor_id = actor.and_then(usable_actor);
+    let tenant = match map.get(TENANT_ID) {
+        Some(tenant) => Some(tenant.as_str().and_then(TenantId::new).ok_or_else(|| {
+            JobError::abort(format!(
+                "the job envelope on queue `{queue}` carries a `tenant_id` naming no tenant; a \
+                 job runs for the tenant it was pushed for or not at all, and the push never \
+                 writes such a key, so the record was written around the producer or damaged",
+            ))
+        })?),
+        None => None,
+    };
+    let baggage = map.get(BAGGAGE).map(usable_baggage);
     let unusable = Unusable {
         id: map.get(ID).is_some_and(|id| usable_id(id).is_none()),
         attempt: map
@@ -501,10 +600,17 @@ pub(crate) fn open<'a>(value: Cow<'a, Value>, queue: &str) -> Result<Opened<'a>,
         traceparent: traceparent.is_some() && parent.is_none(),
         // A vendor state means something only beside the trace it rides with.
         tracestate: parent.is_some() && tracestate.is_some_and(unusable_tracestate),
+        baggage: baggage
+            .as_ref()
+            .and_then(|baggage| baggage.as_ref().err().copied()),
         actor_id: actor.is_some() && actor_id.is_none(),
         unique_key: map
             .get(UNIQUE_KEY)
             .is_some_and(|key| usable_unique_key(key).is_none()),
+    };
+    let carried = Carried {
+        tenant,
+        baggage: baggage.and_then(Result::ok),
     };
     // The actor is inherited, never re-derived, and survives a missing or
     // corrupt `traceparent`: the audit identity is not the trace's to lose.
@@ -528,6 +634,7 @@ pub(crate) fn open<'a>(value: Cow<'a, Value>, queue: &str) -> Result<Opened<'a>,
         correlation,
         minted,
         unusable,
+        carried,
     })
 }
 
@@ -740,6 +847,19 @@ mod tests {
                 panic!("{bare} is not an envelope");
             };
             assert_eq!(*value, bare, "nothing is reshaped");
+        }
+    }
+
+    #[test]
+    fn a_tenant_and_a_baggage_are_keys_of_the_envelope() {
+        for envelope in [
+            json!({ "v": 1, "payload": { "clip": 1 }, "tenant_id": "acme" }),
+            json!({ "v": 1, "payload": { "clip": 1 }, "baggage": "region=eu" }),
+        ] {
+            let Opened::Sealed { payload, .. } = opened(envelope.clone()) else {
+                panic!("{envelope} is an envelope");
+            };
+            assert_eq!(*payload, json!({ "clip": 1 }), "{envelope}");
         }
     }
 
@@ -963,6 +1083,171 @@ mod tests {
             assert_eq!(json[key], sealed[key], "`{key}` travels unchanged");
         }
         assert_eq!(identify(&json).attempt, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_retried_record_keeps_its_tenant_and_its_baggage() {
+        let id = JobId::mint();
+        let sealed = under(
+            Correlation::minted(None),
+            carrying(Some("acme"), Some("region=eu"), async {
+                seal(json!({ "clip": 1 }), id.clone(), None)
+            }),
+        )
+        .await
+        .into_json();
+
+        let json = retry(&sealed, &id, 2, None, true).into_json();
+        assert_eq!(json[TENANT_ID], json!("acme"));
+        assert_eq!(json[BAGGAGE], json!("region=eu"));
+    }
+
+    #[test]
+    fn a_retried_record_files_no_baggage_its_delivery_dropped() {
+        let id = JobId::mint();
+        let stored = json!({ "v": 1, "payload": {}, "baggage": "not baggage" });
+        assert!(
+            retry(&stored, &id, 2, None, true)
+                .into_json()
+                .get(BAGGAGE)
+                .is_none(),
+            "said once, never filed again",
+        );
+        assert_eq!(
+            retry(&stored, &id, 2, None, false).into_json()[BAGGAGE],
+            json!("not baggage"),
+            "kept until its delivery has said it",
+        );
+    }
+
+    /// `fut`, run carrying the tenant and the baggage given, as an attempt
+    /// that opened them does.
+    fn carrying<F: Future>(
+        tenant: Option<&str>,
+        baggage: Option<&str>,
+        fut: F,
+    ) -> impl Future<Output = F::Output> {
+        Carried {
+            tenant: tenant.map(|tenant| TenantId::new(tenant).expect("a tenant")),
+            baggage: baggage.map(|baggage| Baggage::parse(baggage).expect("a W3C Baggage list")),
+        }
+        .install(fut)
+    }
+
+    /// What the attempt `envelope` opens to reads as its tenant.
+    async fn tenant_of(envelope: Value) -> Option<String> {
+        let Opened::Sealed { carried, .. } = opened(envelope.clone()) else {
+            panic!("{envelope} is an envelope");
+        };
+        carried
+            .install(async { nest_rs_core::current_tenant_id() })
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_push_under_a_tenant_seals_it_and_the_job_runs_for_it() {
+        let sealed = under(
+            Correlation::minted(None),
+            carrying(Some("acme"), None, async {
+                seal(json!({ "clip": 1 }), JobId::mint(), None)
+            }),
+        )
+        .await
+        .into_json();
+        assert_eq!(sealed[TENANT_ID], json!("acme"));
+        assert_eq!(tenant_of(sealed).await.as_deref(), Some("acme"));
+    }
+
+    #[tokio::test]
+    async fn a_push_for_no_tenant_and_no_baggage_seals_neither() {
+        let sealed = under(Correlation::minted(Some("alice")), async {
+            seal(json!({ "clip": 1 }), JobId::mint(), None)
+        })
+        .await
+        .into_json();
+        assert!(sealed.get(TENANT_ID).is_none(), "{sealed}");
+        assert!(
+            sealed.get(BAGGAGE).is_none(),
+            "no push writes one of its own"
+        );
+        assert_eq!(tenant_of(sealed).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_tenant_survives_a_missing_or_unusable_trace_context() {
+        for envelope in [
+            json!({ "v": 1, "payload": {}, "tenant_id": "acme" }),
+            json!({ "v": 1, "payload": {}, "tenant_id": "acme", "traceparent": "corrupt" }),
+        ] {
+            assert_eq!(
+                tenant_of(envelope.clone()).await.as_deref(),
+                Some("acme"),
+                "{envelope}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tenant_naming_no_tenant_is_refused_without_being_quoted() {
+        for tenant in [json!(""), json!(7), json!(null), json!({ "org": "SECRET" })] {
+            let refused = open(
+                Cow::Owned(json!({ "v": 1, "payload": {}, "tenant_id": tenant })),
+                "audio",
+            )
+            .expect_err("a job runs for the tenant it was pushed for or not at all");
+            assert!(!refused.retryable, "a record never changes on retry");
+            let said = refused.to_string();
+            assert!(
+                said.contains("`tenant_id`") && said.contains("`audio`"),
+                "{said}"
+            );
+            assert!(!said.contains("SECRET"), "{said}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_valid_baggage_rides_into_every_push_the_job_makes() {
+        let raw = "userId=alice%40example.com;ttl=60, region = eu";
+        let Opened::Sealed {
+            carried, unusable, ..
+        } = opened(json!({ "v": 1, "payload": {}, "baggage": raw }))
+        else {
+            panic!("an envelope");
+        };
+        assert!(!unusable.any(), "{unusable:?}");
+        let pushed = under(
+            Correlation::minted(None),
+            carried.install(async { seal(json!({}), JobId::mint(), None) }),
+        )
+        .await
+        .into_json();
+        assert_eq!(pushed[BAGGAGE], json!(raw), "propagated as it was written");
+    }
+
+    #[test]
+    fn an_unusable_baggage_is_dropped_saying_why_and_never_what() {
+        let oversized = vec!["SECRET=1"; 65].join(",");
+        for (baggage, refusal) in [
+            (json!("SECRET"), BaggageRefusal::Malformed),
+            (json!(7), BaggageRefusal::Malformed),
+            (json!(oversized), BaggageRefusal::Oversized),
+        ] {
+            let Opened::Sealed {
+                carried, unusable, ..
+            } = opened(json!({ "v": 1, "payload": {}, "baggage": baggage }))
+            else {
+                panic!("an envelope");
+            };
+            assert_eq!(unusable.baggage, Some(refusal));
+            assert_eq!(unusable.keys(), "baggage");
+            let hint = unusable.hint();
+            assert!(hint.contains("runs without its baggage"), "{hint}");
+            assert!(!hint.contains("SECRET"), "{hint}");
+            assert!(
+                carried.baggage.is_none(),
+                "nothing crosses but a valid list"
+            );
+        }
     }
 
     #[test]

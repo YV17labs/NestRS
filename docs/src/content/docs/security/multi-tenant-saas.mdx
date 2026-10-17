@@ -78,19 +78,39 @@ Both are deliberate seams for system-level work, not the default path.
 Feature code that reaches for either owes a comment saying why the scope
 does not apply, and a reviewer who confirms it.
 
-### 2. Worker and queue jobs run unscoped by definition
+### 2. Worker and queue jobs run for a tenant, never under an ability
 
 A `#[processor]` runs with **no ambient ability** — and, by default, in one
-transaction per attempt. There is no caller, so there is no scope to
-inherit. That is correct for system work — and it means each processor
-is a tenant boundary you re-establish by hand.
+transaction per attempt. A job is system work with no caller to scope, so the
+row filter is a no-op there: nothing a job reads or writes is filtered for you.
 
-The pattern: carry the tenant id in the job payload, and let the service
-the processor delegates to apply it. The ambient row filter is a no-op in a
-job, so the `org_id` is yours to stamp and yours to filter on.
+What a job keeps is the tenant it was pushed for. Your claims name it once,
+off the verified token:
 
-The payload carries the tenant id, and it is declared at the feature port
-beside the queue the processor consumes:
+```rust title="crates/features/src/authn/claims.rs (from the demo, abridged)"
+impl nest_rs::authn::PrincipalIdentity for Claims {
+    // …
+    fn tenant_id(&self) -> Option<String> {
+        Some(self.org_id.to_string())
+    }
+    // …
+}
+```
+
+The authentication guard makes that tenant ambient for the request. Every job
+the request pushes seals it into its envelope beside the actor, and the worker
+restores it, so `nest_rs::core::current_tenant_id()` answers in a processor
+what it answered in the request that pushed the job. The ambient tenant comes
+from a verified principal or a sealed envelope and nothing else — never a
+header — and a record whose `tenant_id` names no tenant is dead-lettered
+rather than run for none. An envelope is as trusted as
+[whoever can write the queue's keys](/queue/delivery/#where-a-queue-lives), so
+the Redis rules that allow it are part of your tenant isolation.
+
+A job's own facts still travel in its payload. The demo's publish notification
+belongs to the org of the post that was published — a fact the event names, in
+an org the publish was already scoped to — so its payload carries it, declared
+at the feature port beside the queue:
 
 ```rust title="crates/features/src/notifications/command.rs (from the demo)"
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,7 +136,7 @@ impl NotificationsProcessor {
 }
 ```
 
-The service writes the row under the payload's tenant, through `Repo`:
+The service writes the row under the payload's org, through `Repo`:
 
 ```rust title="crates/features/src/notifications/service.rs (from the demo, abridged)"
 pub async fn persist(&self, command: NotifyCommand) -> Result<(), ServiceError> {
@@ -133,11 +153,12 @@ pub async fn persist(&self, command: NotifyCommand) -> Result<(), ServiceError> 
 }
 ```
 
-A read a job makes goes the same way. `Repo::<E>::scoped(Action::Read)` in a
-job filters nothing, since no ability exists there, so the service adds the
-tenant itself: `.filter(Column::OrgId.eq(job.org_id))`. Treat every
-`#[processor]` as its own boundary: a service method a job calls that loads by
-id with no tenant predicate is the bug to grep for.
+A read a job makes filters on its tenant itself. `Repo::<E>::scoped(Action::Read)`
+in a job filters nothing, since no ability exists there, so the service adds
+`.filter(Column::OrgId.eq(tenant))` with the tenant `current_tenant_id()`
+answers — and refuses when it answers `None`. Treat every `#[processor]` as its
+own boundary: a service method a job calls that loads by id with no tenant
+predicate is the bug to grep for.
 
 ## Review checklist
 
@@ -149,9 +170,9 @@ read:
 2. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
    Each injection should be a contextless path (a hook), never a request
    handler.
-3. **Confirm every `#[processor]` re-scopes.** Trace the tenant id from
-   the job payload into the service's query. A load-by-id with no
-   `org_id` predicate is the bug.
+3. **Confirm every `#[processor]` re-scopes.** Trace the tenant —
+   `current_tenant_id()`, or the id a tick puts in the payload — into the
+   service's query. A load-by-id with no `org_id` predicate is the bug.
 4. **Confirm every controller carries `#[use_guards(AuthnGuard,
    AuthzGuard)]`.** A missing binding fails closed to empty results, but
    a [negative-path test](/testing/negative-path/) pins it.
@@ -176,6 +197,11 @@ setting the tenant inside every transaction it opens — local to that
 transaction — on every path that reads, the pool's included. Until it does,
 the application-layer filter above is the only control, and the checklist is
 how you hold it.
+
+**A job pushed outside a request runs for no tenant.** A scheduled tick, a
+boot task or `main` has no verified principal, so what it pushes carries none:
+a tick fanning work out per tenant names each tenant in the job's payload, and
+the service filters on that.
 
 Isolation of rows and fields is the framework's job. Everything a
 production tenant boundary also depends on remains yours: key management,

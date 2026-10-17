@@ -173,8 +173,10 @@ Implementing `AmbientValue` is the line that lets it travel. By default the
 value crosses every place the unit continues — a streaming body, a DataLoader
 batch, a task handed to `TaskContext`, work held for the commit and the
 listeners of an event the unit emits, a socket's next messages — and never
-into a job's envelope: a job is system work, run later and elsewhere. A value
-that must not outlive the unit says where it stops:
+into a job's envelope: a job is system work, run later and elsewhere, and
+carries only the envelope's own keys — the trace, the actor, the tenant and
+W3C `baggage` — so a value whose `carry` lets it into an envelope still crosses
+nothing. A value that must not outlive the unit says where it stops:
 
 ```rust title="crates/yourpkg/src/budget.rs"
 use std::sync::Arc;

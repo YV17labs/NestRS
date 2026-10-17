@@ -123,7 +123,9 @@ matters at every edge, and the one that surprises people is the first:
 
 A queue crosses a *process*, so the context travels in the job envelope rather
 than in the ambient context a unit carries in process. A payload that carries none — a legacy producer, a foreign
-system — starts a trace instead of being refused.
+system — starts a trace instead of being refused. The envelope carries the
+actor beside the trace, and any W3C `baggage` the job came with, which every
+push the job makes carries on unread.
 
 ## Calling another service
 

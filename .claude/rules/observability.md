@@ -52,7 +52,9 @@ peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
   framework carries work) as well as on the span, and no sentinel is ever
   returned — `""` or `"anonymous"` would read as an actor of that name. What a
   caller may do is the ambient `Ability`; branching on `actor_id` in a service is
-  an authorization decision outside a guard.
+  an authorization decision outside a guard. **The tenant is the opposite**: an
+  authorization input, made ambient by the authn guard from a verified
+  principal alone (`current_tenant_id()`), and never a line field.
 - **The sampling flag is shared and updatable**: a sampler decides after the
   span exists, and an outbound `traceparent` must not carry a decision nobody
   made.
@@ -74,7 +76,8 @@ The edge owes propagation at every boundary it crosses.
 - **A process.** A queue job carries `traceparent` and `tracestate` in its
   envelope, and the consumer continues from them, so the job is a **child of the
   enqueue**. An envelope carrying none is a legacy or foreign payload and starts
-  a trace, never a refusal.
+  a trace, never a refusal. W3C `baggage` rides beside them, propagated into
+  every push the job makes and trusted by nothing.
 - **A response.** **A unit of work ends when its answer ends, not when its
   handler returns.** A streaming body — `#[sse]`, a download, anything over a
   `Stream` — is polled after the handler, with the edge's task-locals unwound,

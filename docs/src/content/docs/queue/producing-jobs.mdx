@@ -102,9 +102,12 @@ answers one receipt per job, in order. Both are `async` because the backend is.
 
 The port does the rest before the backend sees the job: it checks the options,
 mints the job's id — a UUID v7, the `job_id` every attempt at the job reports —
-and seals your payload in the wire envelope with your trace context, so the job
-runs under the trace that enqueued it. You never see either — see
-[Correlation](/fundamentals/correlation/).
+and seals your payload in the wire envelope with your trace context, your actor
+and your tenant, so the job runs under the trace that enqueued it and for the
+same tenant: `current_tenant_id()` answers in the processor what it answered
+where you pushed. You never see either — see
+[Correlation](/fundamentals/correlation/) and
+[Multi-tenant SaaS](/security/multi-tenant-saas/).
 
 <Aside type="caution">
 One escape hatch: `push_json(name, value, None)` takes a raw name and a JSON

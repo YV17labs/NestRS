@@ -1902,3 +1902,182 @@ async fn the_record_re_filed_after_a_retry_is_delivered_as_the_next_attempt() {
         );
     }
 }
+
+// --- what crosses with a job: the tenant it runs for, the baggage it carries on ---
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RelayCommand {
+    hop: u32,
+}
+
+#[queue(name = "relay", job = RelayCommand)]
+struct RelayQueue;
+
+#[queue(name = "relayed", job = RelayCommand)]
+struct RelayedQueue;
+
+/// The tenant each relay ran for. Process-wide, and nextest runs each test in
+/// a process of its own.
+static RELAYED_FOR: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
+
+/// Pushes the next hop of every job it runs, as a handler enqueueing follow-up
+/// work does.
+struct RelayProcessor {
+    producer: crate::memory::Memory,
+}
+
+// Hand-provided: no decorator built this type to state its residency.
+impl nest_rs_core::ProviderResidency for RelayProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl RelayProcessor {
+    #[process(queue = RelayQueue, retries = 0)]
+    async fn relay(&self, job: RelayCommand) -> anyhow::Result<()> {
+        RELAYED_FOR
+            .lock()
+            .expect("lock")
+            .push(nest_rs_core::current_tenant_id());
+        nest_rs_queue::JobProducerExt::push(
+            &self.producer,
+            RelayedQueue,
+            RelayCommand { hop: job.hop + 1 },
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+/// Run one attempt at the relay job `stored` is, and answer what it pushed.
+async fn relay(stored: serde_json::Value) -> (AttemptOutcome, Vec<serde_json::Value>) {
+    let producer = crate::memory::Memory::new(&crate::memory::PLAIN, Duration::from_secs(30));
+    let container = Container::builder()
+        .provide(RelayProcessor {
+            producer: producer.clone(),
+        })
+        .build();
+    let mut delivery = Delivery::new(
+        &BARE,
+        QueueName::new("relay").expect("a valid name"),
+        stored,
+    );
+    let outcome = consume::attempt(
+        method("RelayProcessor::relay"),
+        &mut delivery,
+        container,
+        None,
+    )
+    .await;
+    (outcome, producer.ready("relayed"))
+}
+
+#[tokio::test]
+async fn a_job_runs_for_its_tenant_and_carries_it_and_its_baggage_into_what_it_pushes() {
+    let (outcome, pushed) = relay(json!({
+        "v": WIRE_FORMAT_VERSION,
+        "id": JOB_ID,
+        "payload": { "hop": 1 },
+        "tenant_id": "acme",
+        "baggage": "region=eu;ttl=60",
+    }))
+    .await;
+
+    assert!(matches!(outcome, AttemptOutcome::Ok), "{outcome:?}");
+    assert_eq!(
+        RELAYED_FOR.lock().expect("lock").as_slice(),
+        [Some("acme".to_owned())],
+        "the handler runs for the tenant its push was served for",
+    );
+    assert_eq!(pushed.len(), 1, "{pushed:?}");
+    assert_eq!(pushed[0]["payload"], json!({ "hop": 2 }));
+    assert_eq!(pushed[0]["tenant_id"], json!("acme"));
+    assert_eq!(
+        pushed[0]["baggage"],
+        json!("region=eu;ttl=60"),
+        "propagated as it came, understood or not",
+    );
+}
+
+#[tokio::test]
+async fn a_job_pushed_for_no_tenant_runs_for_none_and_pushes_none() {
+    let (outcome, pushed) = relay(json!({
+        "v": WIRE_FORMAT_VERSION,
+        "payload": { "hop": 1 },
+    }))
+    .await;
+
+    assert!(matches!(outcome, AttemptOutcome::Ok), "{outcome:?}");
+    assert_eq!(RELAYED_FOR.lock().expect("lock").as_slice(), [None]);
+    assert!(pushed[0].get("tenant_id").is_none(), "{pushed:?}");
+    assert!(pushed[0].get("baggage").is_none(), "{pushed:?}");
+}
+
+#[tokio::test]
+async fn a_job_whose_tenant_names_no_tenant_dead_letters_without_running() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let (outcome, pushed) = relay(json!({
+        "v": WIRE_FORMAT_VERSION,
+        "payload": { "hop": 1 },
+        "tenant_id": "",
+    }))
+    .await;
+
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("a job runs for the tenant it was pushed for or not at all: {outcome:?}");
+    };
+    assert!(!error.retryable);
+    assert!(
+        RELAYED_FOR.lock().expect("lock").is_empty(),
+        "the handler never ran"
+    );
+    assert!(pushed.is_empty(), "{pushed:?}");
+    let event = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: non-retryable failure",
+    );
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|error| error.contains("`tenant_id`")),
+        "{event:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_baggage_past_the_limits_is_dropped_once_and_quoted_nowhere() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let oversized = vec!["leak=SECRET"; 65].join(",");
+    let (outcome, pushed) = relay(json!({
+        "v": WIRE_FORMAT_VERSION,
+        "id": JOB_ID,
+        "payload": { "hop": 1 },
+        "baggage": oversized,
+    }))
+    .await;
+
+    assert!(
+        matches!(outcome, AttemptOutcome::Ok),
+        "baggage is advisory: the job still runs: {outcome:?}"
+    );
+    assert!(pushed[0].get("baggage").is_none(), "{pushed:?}");
+    let event = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job envelope carries keys this consumer cannot use",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("job_id").as_deref(), Some(JOB_ID));
+    assert_eq!(event.field("unusable").as_deref(), Some("baggage"));
+    assert!(
+        event
+            .field("hint")
+            .is_some_and(|hint| hint.contains("64 list-members")),
+        "{event:#?}"
+    );
+    assert!(
+        !format!("{:?}", logs.events()).contains("SECRET"),
+        "no event quotes the baggage: {:#?}",
+        logs.events(),
+    );
+}

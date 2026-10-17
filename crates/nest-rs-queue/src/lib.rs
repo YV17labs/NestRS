@@ -75,6 +75,7 @@ pub const TARGET: &str = "nest_rs::queue";
 mod attempt;
 mod backend;
 mod backoff;
+mod baggage;
 mod capability;
 mod checkpoint;
 mod config;

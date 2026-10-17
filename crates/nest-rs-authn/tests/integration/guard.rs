@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, PrincipalIdentity, Strategy};
-use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, install_pending};
 use nest_rs_core::{AmbientValue, Handler, Posture, injectable, module};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::__private::{attached, check_request};
+use nest_rs_http::__private::{attached, attached_pending, check_request};
 use nest_rs_http::{HttpConfig, HttpModule, RejectedCredential, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
 use poem::Request;
@@ -280,6 +280,96 @@ async fn an_unauthenticated_caller_has_no_ambient_actor() {
     .await;
 
     assert_eq!(seen, None);
+}
+
+/// A principal acting within a tenant, as a SaaS product's claims are.
+#[derive(Clone, Debug)]
+struct Member(&'static str);
+
+impl AmbientValue for Member {}
+
+impl PrincipalIdentity for Member {
+    fn actor_id(&self) -> Option<String> {
+        Some("ada".to_owned())
+    }
+
+    fn tenant_id(&self) -> Option<String> {
+        Some(self.0.to_owned())
+    }
+}
+
+struct AuthenticateMember(&'static str);
+
+#[async_trait]
+impl Strategy for AuthenticateMember {
+    type Principal = Member;
+
+    async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
+        Ok(Member(self.0))
+    }
+}
+
+/// The tenant ambient for what runs after `guard` passed `req` on `site`.
+async fn tenant_after(
+    guard: &dyn Guard,
+    site: &'static Handler,
+    mut req: nest_rs_http::Request,
+) -> Option<String> {
+    check(guard, site, &mut req)
+        .await
+        .expect("the guard passes");
+    install_pending(attached_pending(&req), async {
+        nest_rs_core::current_tenant_id()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_principal_naming_a_tenant_makes_it_ambient_for_the_request() {
+    let guard = AuthnGuard::new(Arc::new(AuthenticateMember("acme")));
+    assert_eq!(
+        tenant_after(&guard, &GATED, bare()).await.as_deref(),
+        Some("acme"),
+    );
+    assert_eq!(
+        nest_rs_core::current_tenant_id(),
+        None,
+        "nothing is ambient before the guard's stage is installed",
+    );
+}
+
+#[tokio::test]
+async fn a_principal_naming_no_tenant_leaves_the_request_without_one() {
+    let unscoped = AuthnGuard::new(Arc::new(AuthenticateAs("alice")));
+    assert_eq!(tenant_after(&unscoped, &GATED, bare()).await, None);
+    let empty = AuthnGuard::new(Arc::new(AuthenticateMember("")));
+    assert_eq!(
+        tenant_after(&empty, &GATED, bare()).await,
+        None,
+        "an empty id names no tenant",
+    );
+}
+
+/// The tenant is an authorization input: what the caller sends beside its
+/// credential names none, authenticated or not.
+#[tokio::test]
+async fn a_header_named_like_the_tenant_sets_none() {
+    let claiming = || {
+        nest_rs_http::Request::builder()
+            .header(
+                nest_rs_http::HeaderName::from_static("x-tenant-id"),
+                nest_rs_http::HeaderValue::from_static("acme"),
+            )
+            .header(
+                nest_rs_http::HeaderName::from_static("tenant_id"),
+                nest_rs_http::HeaderValue::from_static("acme"),
+            )
+            .finish()
+    };
+    let authenticated = AuthnGuard::new(Arc::new(AuthenticateAs("alice")));
+    assert_eq!(tenant_after(&authenticated, &GATED, claiming()).await, None);
+    let anonymous = AuthnGuard::new(Arc::new(FailWith));
+    assert_eq!(tenant_after(&anonymous, &PUBLIC, claiming()).await, None);
 }
 
 // The bound: a strategy that never answers fails closed on every route,

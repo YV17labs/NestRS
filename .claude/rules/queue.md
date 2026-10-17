@@ -59,6 +59,17 @@ contract (`.claude/decisions/queue-redis-streams.md`).
   beyond that is replicas, added by a queue-depth autoscaler rather than CPU.
   Every backend owes it, so it is not a capability
   (`.claude/decisions/process-concurrency.md`).
+- **A value crosses into a job as an envelope key, or not at all.** The push
+  seals the envelope's own keys — the tenant and the baggage, each through its
+  `carry` for `Envelope` — and the attempt makes them ambient again; a value
+  with no key of its own crosses nothing, whatever its `carry` says. A value
+  the framework's posture depends on is a
+  first-class key — the actor (audit) and the tenant (authorization), a record
+  whose tenant names none refused rather than run for none; W3C `baggage` is
+  carried, never trusted: kept within W3C's limits and written into every push
+  the attempt makes, dropped at `warn` otherwise, and read by no decision of
+  the framework's (`.claude/decisions/ambient-carry.md`). Held by
+  `envelope.rs`'s tests.
 - **A newer wire version is handed back, for a bounded time.** An older worker
   cannot read or re-seal it, so the attempt defers without spending an attempt
   and warns per delivery naming both versions; past a patience it is

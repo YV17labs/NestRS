@@ -82,7 +82,7 @@ impl nest_rs::authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|sub| sub.to_string())
     }
-
+    // …
     fn scopes(&self) -> Option<&[String]> {
         Some(&self.scopes)
     }

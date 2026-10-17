@@ -1807,7 +1807,7 @@
           "orgs"
         ]
       },
-      "patch": {
+      "put": {
         "operationId": "orgs_update",
         "parameters": [
           {
@@ -2302,7 +2302,7 @@
           "posts"
         ]
       },
-      "patch": {
+      "put": {
         "operationId": "posts_update",
         "parameters": [
           {
@@ -2885,7 +2885,7 @@
           "users"
         ]
       },
-      "patch": {
+      "put": {
         "operationId": "users_update",
         "parameters": [
           {

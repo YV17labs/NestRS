@@ -120,7 +120,7 @@ pub use nest_rs_storage as storage;
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __requires_authz {
-    ($($sentence:tt)*) => {};
+    ($sentence:literal) => {};
 }
 
 #[cfg(not(feature = "authz"))]
@@ -136,7 +136,7 @@ macro_rules! __requires_authz {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __requires_seaorm {
-    ($($sentence:tt)*) => {};
+    ($sentence:literal) => {};
 }
 
 #[cfg(not(feature = "seaorm"))]

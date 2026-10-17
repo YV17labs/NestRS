@@ -25,6 +25,8 @@ use proc_macro_crate::{Error, FoundCrate, crate_name};
 use proc_macro2::{Delimiter, Group, Ident, Literal, Spacing, Span, TokenStream, TokenTree};
 use quote::quote;
 
+use crate::attrs::cfg_attr_conditions;
+
 /// How the call site reaches the umbrella, when it can reach it at all.
 enum Umbrella {
     /// The crate under compilation *is* `nest-rs` (its own doctests).
@@ -238,15 +240,12 @@ fn feature_checks(found: Vec<Root>, prefix: &[TokenTree]) -> TokenStream {
             (root.krate, key, root.cfgs)
         })
         .collect();
+    // Sorted, a crate's unconditional check (the empty key) comes first: a crate
+    // one path reaches unconditionally is checked once, unconditionally.
     checks.sort_by(|a, b| (a.0.lib, &a.1).cmp(&(b.0.lib, &b.1)));
-    checks.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-    // A crate one path reaches unconditionally is checked once, unconditionally.
-    let unconditional: Vec<&'static str> = checks
-        .iter()
-        .filter(|(_, key, _)| key.is_empty())
-        .map(|(krate, ..)| krate.lib)
-        .collect();
-    checks.retain(|(krate, key, _)| key.is_empty() || !unconditional.contains(&krate.lib));
+    checks.dedup_by(|later, kept| {
+        later.0.lib == kept.0.lib && (kept.1.is_empty() || later.1 == kept.1)
+    });
     checks
         .into_iter()
         .filter_map(|(krate, _, cfgs)| {
@@ -269,52 +268,38 @@ struct Root {
     cfgs: Vec<TokenStream>,
 }
 
+impl Root {
+    /// `krate` met under `scope`'s `cfg`s and those `pending` at its own level,
+    /// kept only for an attribute-gated crate: no check reads another's.
+    fn new(krate: &'static FrameworkCrate, scope: &[TokenStream], pending: &[TokenStream]) -> Self {
+        let cfgs = if krate.gated_by.is_some() {
+            enclosing(scope, pending)
+        } else {
+            Vec::new()
+        };
+        Self { krate, cfgs }
+    }
+}
+
 /// What of an outer attribute's content decides whether its item is compiled:
 /// `cfg(…)` whole, `cfg_attr(P, …)` kept to its `cfg(…)`s, nothing else.
 fn cfg_part(attribute: &Group) -> Option<TokenStream> {
-    let trees: Vec<TokenTree> = attribute.stream().into_iter().collect();
-    let [TokenTree::Ident(name), TokenTree::Group(args)] = trees.as_slice() else {
+    let mut trees = attribute.stream().into_iter();
+    let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(args)), None) =
+        (trees.next(), trees.next(), trees.next())
+    else {
         return None;
     };
     if args.delimiter() != Delimiter::Parenthesis {
         return None;
     }
     if name == "cfg" {
-        return Some(attribute.stream());
+        Some(attribute.stream())
+    } else if name == "cfg_attr" {
+        cfg_attr_conditions(args.stream())
+    } else {
+        None
     }
-    if name != "cfg_attr" {
-        return None;
-    }
-    let mut parts = split_on_commas(args.stream()).into_iter();
-    let predicate = parts.next()?;
-    let cfgs: Vec<TokenStream> = parts
-        .filter(|part| {
-            matches!(
-                part.clone().into_iter().collect::<Vec<_>>().as_slice(),
-                [TokenTree::Ident(cfg), TokenTree::Group(_)] if cfg == "cfg"
-            )
-        })
-        .collect();
-    if cfgs.is_empty() {
-        return None;
-    }
-    Some(quote!(#name(#predicate, #(#cfgs),*)))
-}
-
-/// `stream`'s top-level comma-separated parts, an empty one dropped.
-fn split_on_commas(stream: TokenStream) -> Vec<TokenStream> {
-    let mut parts = vec![TokenStream::new()];
-    for tree in stream {
-        match &tree {
-            TokenTree::Punct(p) if p.as_char() == ',' => parts.push(TokenStream::new()),
-            _ => parts
-                .last_mut()
-                .into_iter()
-                .for_each(|part| part.extend([tree.clone()])),
-        }
-    }
-    parts.retain(|part| !part.is_empty());
-    parts
 }
 
 /// What a build lacking `feature` says of an expansion `attribute` pulled into
@@ -374,10 +359,7 @@ fn walk(
         if let Some(ident) = segment_at(trees, i)
             && let Some(krate) = framework_crate(&ident.to_string())
         {
-            found.push(Root {
-                krate,
-                cfgs: enclosing(scope, &pending),
-            });
+            found.push(Root::new(krate, scope, &pending));
             if let Some(prefix) = prefix {
                 // Keeps the replaced root's span, or errors move to the attribute.
                 let span = trees[i].span();
@@ -442,10 +424,7 @@ fn walk(
             TokenTree::Literal(lit) if in_crate_attr => {
                 let root = split_path_literal(lit);
                 if let Some((krate, _)) = &root {
-                    found.push(Root {
-                        krate,
-                        cfgs: enclosing(scope, &pending),
-                    });
+                    found.push(Root::new(krate, scope, &pending));
                 }
                 match root.filter(|_| prefix.is_some()) {
                     Some((krate, tail)) => {
@@ -715,6 +694,21 @@ mod tests {
             struct Shown(::nest_rs_authz::X);
         });
         assert!(out.ends_with(&check("authz", quote!())), "{out}");
+    }
+
+    #[test]
+    fn a_nested_cfg_attr_travels_as_its_cfgs() {
+        let out = checked(quote! {
+            #[cfg_attr(all(), cfg_attr(any(), cfg(test)), inline)]
+            fn hidden() { ::nest_rs_authz::X }
+        });
+        assert!(
+            out.ends_with(&check(
+                "authz",
+                quote!(#[cfg_attr(all(), cfg_attr(any(), cfg(test)))])
+            )),
+            "{out}"
+        );
     }
 
     #[test]

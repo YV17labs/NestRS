@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use nest_rs_core::{App, AppLifecycle, Container, Transport};
-use tokio::task::{AbortHandle, Id, JoinHandle};
+use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -27,13 +27,12 @@ pub struct HeadlessApp {
 /// The transports still serving, in the order they were spawned.
 type Serving = Arc<Mutex<Vec<Spawned>>>;
 
-/// A transport still serving: its task, its name and stop bound, and the
-/// handle that aborts it once abandoned.
+/// A transport still serving: its name and stop bound, and its task, aborted
+/// once abandoned.
 struct Spawned {
-    task: Id,
     name: &'static str,
     stop_bound: Duration,
-    abort: AbortHandle,
+    task: AbortHandle,
 }
 
 impl HeadlessApp {
@@ -131,8 +130,8 @@ impl HeadlessApp {
         let mut still = locked(&self.serving);
         let join = self.transports.spawn(async move {
             let served = nest_rs_core::panic::contain(Box::new(transport).serve(token)).await;
-            let task = tokio::task::id();
-            locked(&serving).retain(|spawned| spawned.task != task);
+            let id = tokio::task::id();
+            locked(&serving).retain(|spawned| spawned.task.id() != id);
             // Its handle is often dropped unread: `close` awaits the tracker.
             match served {
                 Ok(Ok(())) => Ok(()),
@@ -157,10 +156,9 @@ impl HeadlessApp {
             }
         });
         still.push(Spawned {
-            task: join.id(),
             name,
             stop_bound,
-            abort: join.abort_handle(),
+            task: join.abort_handle(),
         });
         drop(still);
         TransportHandle { cancel, join }
@@ -210,7 +208,7 @@ async fn stop_within(transports: &TaskTracker, serving: &Serving) {
             stop_bound_ms = u64::try_from(spawned.stop_bound.as_millis()).unwrap_or(u64::MAX),
             "transport did not stop within its declared bound: abandoned",
         );
-        spawned.abort.abort();
+        spawned.task.abort();
     }
 }
 

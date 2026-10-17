@@ -134,7 +134,7 @@ impl<'a, T> From<&'a T> for Conditional<'a, T> {
 ///
 /// Read as tokens, never as `Meta`: `true` in `cfg_attr(true, ..)` is no path,
 /// and a `Meta` parse drops the whole attribute.
-fn cfg_attr_conditions(arguments: TokenStream) -> Option<TokenStream> {
+pub(crate) fn cfg_attr_conditions(arguments: TokenStream) -> Option<TokenStream> {
     let mut entries = split_at_commas(arguments).into_iter();
     let predicate = entries.next().filter(|predicate| !predicate.is_empty())?;
     let conditions: Vec<TokenStream> = entries

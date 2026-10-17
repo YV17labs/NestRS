@@ -164,3 +164,214 @@ async fn a_browser_request_from_another_origin_is_refused_while_cors_is_off() {
         .assert_status_is_ok();
     }
 }
+
+const CAPPED: &str = "/mcp/capped";
+
+#[nest_rs_mcp::mcp(path = "/mcp/capped")]
+#[derive(Clone, Default)]
+struct CappedTools;
+
+#[nest_rs_mcp::tools]
+impl CappedTools {
+    #[tool(description = "Answers at once.")]
+    #[public]
+    async fn ping(&self) -> Result<String, nest_rs_mcp::McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
+        max_concurrent_sessions: 2,
+        ..nest_rs_mcp::McpConfig::default()
+    })],
+    providers = [
+        CappedTools,
+        nest_rs_mcp::AllowAllMcpGuard as dyn nest_rs_mcp::McpOperationGuard,
+    ],
+)]
+struct TwoSessionsModule;
+
+/// A session outlives the connection that opened it, so the connection cap
+/// never counts it: the mount's own cap does.
+#[tokio::test]
+async fn an_initialize_past_the_session_cap_is_refused_until_a_session_closes() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<TwoSessionsModule>()
+        .await
+        .expect("boots");
+    let first = nest_rs_testing::mcp::open_session(app.http(), CAPPED, None).await;
+    nest_rs_testing::mcp::open_session(app.http(), CAPPED, None).await;
+
+    let refused = nest_rs_testing::mcp::post_message(
+        app.http(),
+        CAPPED,
+        None,
+        None,
+        &nest_rs_testing::mcp::initialize_request(),
+    )
+    .await;
+    refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    refused.assert_header(poem::http::header::RETRY_AFTER, "5");
+    refused.assert_content_type("application/problem+json");
+    let problem: serde_json::Value = refused.0.into_body().into_json().await.expect("a problem");
+    assert_eq!(problem["status"], 503, "{problem}");
+    assert_eq!(problem["code"], "UNAVAILABLE", "{problem}");
+    let event = logs.expect_one(
+        "nest_rs::mcp",
+        "mcp session refused: the mount holds its maximum",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("max_concurrent_sessions").as_deref(), Some("2"));
+
+    let answered = nest_rs_testing::mcp::call_method(
+        app.http(),
+        CAPPED,
+        &first,
+        None,
+        "tools/list",
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(
+        nest_rs_testing::mcp::result(&answered)
+            .get("result")
+            .is_some(),
+        "a session already open is served at the cap: {answered}"
+    );
+
+    app.http()
+        .delete(CAPPED)
+        .header("host", "localhost")
+        .header("mcp-session-id", first.as_str())
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    nest_rs_testing::mcp::open_session(app.http(), CAPPED, None).await;
+}
+
+/// The cap counts sessions, so what opens none is served at it: a
+/// `2026-07-28` request carries its lifecycle inline.
+#[tokio::test]
+async fn a_stateless_request_is_served_while_the_sessions_are_full() {
+    let app = TestApp::for_module::<TwoSessionsModule>()
+        .await
+        .expect("boots");
+    for _ in 0..2 {
+        nest_rs_testing::mcp::open_session(app.http(), CAPPED, None).await;
+    }
+    let version = nest_rs_mcp::ProtocolVersion::LATEST;
+
+    let discovered = app
+        .http()
+        .post(CAPPED)
+        .header("host", "localhost")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", version.as_str())
+        .header("mcp-method", "server/discover")
+        .body_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": { "_meta": {
+                "io.modelcontextprotocol/protocolVersion": version.as_str(),
+                "io.modelcontextprotocol/clientInfo": { "name": "nest-rs-mcp", "version": "0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            } },
+        }))
+        .send()
+        .await;
+    discovered.assert_status_is_ok();
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
+        max_concurrent_sessions: 1,
+        session_idle_timeout: std::time::Duration::from_secs(1),
+        // sse-stream re-arms its keep-alive on the std clock, which a paused
+        // tokio clock would flood past.
+        sse_keep_alive: None,
+        ..nest_rs_mcp::McpConfig::default()
+    })],
+    providers = [
+        CappedTools,
+        nest_rs_mcp::AllowAllMcpGuard as dyn nest_rs_mcp::McpOperationGuard,
+    ],
+)]
+struct IdleSessionModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_session_left_idle_past_its_timeout_is_closed_and_frees_its_place() {
+    let app = TestApp::for_module::<IdleSessionModule>()
+        .await
+        .expect("boots");
+    let idle = nest_rs_testing::mcp::open_session(app.http(), CAPPED, None).await;
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    nest_rs_testing::mcp::post_message(
+        app.http(),
+        CAPPED,
+        Some(&idle),
+        None,
+        &serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await
+    .assert_status(StatusCode::NOT_FOUND);
+    nest_rs_testing::mcp::open_session(app.http(), CAPPED, None).await;
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
+        sse_retry: None,
+        ..nest_rs_mcp::McpConfig::default()
+    })],
+    providers = [
+        CappedTools,
+        nest_rs_mcp::AllowAllMcpGuard as dyn nest_rs_mcp::McpOperationGuard,
+    ],
+)]
+struct NoRetryModule;
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
+        sse_retry: Some(std::time::Duration::from_secs(7)),
+        ..nest_rs_mcp::McpConfig::default()
+    })],
+    providers = [
+        CappedTools,
+        nest_rs_mcp::AllowAllMcpGuard as dyn nest_rs_mcp::McpOperationGuard,
+    ],
+)]
+struct SevenSecondRetryModule;
+
+/// The event stream answering one request on a session of `M`'s mount.
+async fn a_session_request_stream<M: nest_rs_core::Module + 'static>() -> String {
+    let app = TestApp::for_module::<M>().await.expect("boots");
+    let session = nest_rs_testing::mcp::open_session(app.http(), CAPPED, None).await;
+    nest_rs_testing::mcp::call_method(
+        app.http(),
+        CAPPED,
+        &session,
+        None,
+        "tools/list",
+        serde_json::json!({}),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn the_configured_sse_retry_reaches_a_session_stream() {
+    let silent = a_session_request_stream::<NoRetryModule>().await;
+    assert!(
+        !silent.contains("retry:"),
+        "no retry is advertised: {silent:?}"
+    );
+
+    let seven = a_session_request_stream::<SevenSecondRetryModule>().await;
+    assert!(
+        seven.contains("retry: 7000"),
+        "the configured retry: {seven:?}"
+    );
+}

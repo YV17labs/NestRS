@@ -28,6 +28,8 @@ nest-rs-guards.workspace = true
 # `Valid<T>` / `Piped<P, T>` on a tool argument: the `#[mcp]` expansion runs the
 # pipe over the wire value and renders a rejection as `invalid_params`.
 nest-rs-pipes.workspace = true
+# `Stream`, which the session manager wrapping rmcp's names in its signatures.
+futures-util.workspace = true
 poem.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
@@ -35,6 +37,8 @@ schemars.workspace = true
 # here and refused through `DecodeError` rather than in serde's quoting words.
 serde.workspace = true
 serde_json.workspace = true
+# The session manager's error, which rmcp writes into the body it answers.
+thiserror.workspace = true
 # `task_local!` installs the per-operation `RequestScope` around the inner rmcp
 # endpoint so tool methods reach it via `Scoped<T>`.
 tokio.workspace = true

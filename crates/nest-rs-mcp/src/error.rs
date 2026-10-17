@@ -54,6 +54,7 @@
 use nest_rs_core::ToProblem;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManagerError;
 
 use nest_rs_core::OPAQUE_CLIENT_MESSAGE as OPAQUE;
 
@@ -169,6 +170,19 @@ impl<T, E: From<McpError>> OperationAnswer for Result<T, E> {
 /// answer — see [`OperationAnswer`].
 pub fn refused<R: OperationAnswer>(error: McpError) -> R {
     R::refused(error)
+}
+
+/// Why a mount's session manager refused: its cap, or rmcp's own manager.
+///
+/// rmcp writes the `Display` into the `500` it answers a refused session with.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SessionsError {
+    /// The mount holds its `max_concurrent_sessions`.
+    #[error("the mount holds its maximum of live sessions")]
+    Full,
+    /// rmcp's local session manager refused.
+    #[error(transparent)]
+    Local(#[from] LocalSessionManagerError),
 }
 
 #[cfg(test)]

@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Container, Correlation, Handler, current_request_scope};
+use nest_rs_core::problem::code;
+use nest_rs_core::{Container, Correlation, Handler, Problem, current_request_scope};
 use nest_rs_http::__private::poem_bridge::{
     error_to_poem, request_from_poem, request_to_poem, response_to_poem,
 };
@@ -12,6 +13,8 @@ use nest_rs_http::{DetachedWork, Method, Request};
 use poem::endpoint::TowerCompatExt;
 use poem::{Endpoint, IntoEndpoint, Response, Result};
 use rmcp::ServerHandler;
+use rmcp::model::{ClientJsonRpcMessage, ClientRequest};
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::session::store::SessionStore;
@@ -22,8 +25,13 @@ use crate::guard::McpOperationGuard;
 use crate::guards::{GlobalPoolMcpGuard, deny_all};
 use crate::propagate::PropagatingHandler;
 use crate::registry::ENDPOINT;
+use crate::sessions::BoundedSessions;
 use nest_rs_database::UnitOfWork;
 use nest_rs_guards::__private::global_guards_active;
+
+/// The wait, in seconds, a client refused a session is told to take before
+/// trying again.
+const SESSION_RETRY_AFTER_SECS: u32 = 5;
 
 /// The operation guard an MCP mount runs: the global guard pool, with the
 /// app's registered `dyn McpOperationGuard` (the authz bridge) added to it; the
@@ -184,6 +192,11 @@ where
     let handler_guard = guard.clone();
     let operation_timeout = config.operation_timeout;
 
+    // `#[non_exhaustive]`: rmcp's default, its session config replaced.
+    let mut local = LocalSessionManager::default();
+    local.session_config = config.to_session_config();
+    let sessions = Arc::new(BoundedSessions::new(local, config.max_concurrent_sessions));
+
     // The stop, not the signal: rmcp ends every stream on this token, a POST's
     // answer included. A stateful session's operations miss it; the handler stops those.
     let mut server_config = config
@@ -202,7 +215,7 @@ where
                 operation_timeout,
             ))
         },
-        Arc::new(LocalSessionManager::default()),
+        sessions.clone(),
         server_config,
     );
     let inner = service.compat();
@@ -211,6 +224,11 @@ where
         guard,
         context,
         site: EndpointSite(site),
+        session_cap: SessionCap {
+            sessions,
+            legacy: config.legacy_session_mode,
+            max_request_body_bytes: config.max_request_body_bytes,
+        },
         inner,
     }
 }
@@ -220,7 +238,67 @@ struct GuardedEndpoint<E> {
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
     site: EndpointSite,
+    session_cap: SessionCap,
     inner: E,
+}
+
+/// What refuses an `initialize` before rmcp opens a session past the cap.
+struct SessionCap {
+    sessions: Arc<BoundedSessions>,
+    /// Off, rmcp opens no session at all.
+    legacy: bool,
+    /// What the body is read to, as rmcp would.
+    max_request_body_bytes: usize,
+}
+
+impl SessionCap {
+    /// The answer refusing `req`, when it would open a session past the cap —
+    /// the body read and handed back otherwise.
+    ///
+    /// Only a full mount reads the body, and only of a `POST` naming no session:
+    /// an `initialize` is the one message that opens a session, and a stateless
+    /// request is served at the cap. A creation racing past this check is
+    /// refused by [`BoundedSessions`] itself, which rmcp answers `500`.
+    async fn refusal(&self, req: &mut Request) -> Option<nest_rs_http::Response> {
+        if !self.legacy
+            || req.method() != Method::POST
+            || req.headers().contains_key(HEADER_SESSION_ID)
+            || !self.sessions.is_full().await
+        {
+            return None;
+        }
+        let body = match req
+            .take_body()
+            .into_bytes_limit(self.max_request_body_bytes)
+            .await
+        {
+            Ok(body) => body,
+            Err(unread) => return Some(unread.as_response()),
+        };
+        if !opens_a_session(&body) {
+            req.set_body(body);
+            return None;
+        }
+        tracing::warn!(
+            target: crate::TARGET,
+            max_concurrent_sessions = self.sessions.max(),
+            "mcp session refused: the mount holds its maximum",
+        );
+        Some(
+            Problem::new(503, code::UNAVAILABLE)
+                .with_retry_after(SESSION_RETRY_AFTER_SECS)
+                .as_response(),
+        )
+    }
+}
+
+/// Whether `body` is an `initialize` request, as rmcp decodes it.
+fn opens_a_session(body: &[u8]) -> bool {
+    matches!(
+        serde_json::from_slice::<ClientJsonRpcMessage>(body),
+        Ok(ClientJsonRpcMessage::Request(request))
+            if matches!(request.request, ClientRequest::InitializeRequest(_))
+    )
 }
 
 /// The site an endpoint's request runs as, on the request for the guards that
@@ -255,6 +333,9 @@ where
         }
         req.extensions_mut().insert(self.site);
         self.guard.before(&mut req).await.map_err(error_to_poem)?;
+        if let Some(refused) = self.session_cap.refusal(&mut req).await {
+            return Ok(response_to_poem(refused));
+        }
 
         // Post-guard, while the ambient executor and ability are reachable; rmcp
         // forwards the extensions into every operation's `RequestContext`.
@@ -295,5 +376,32 @@ where
                 .insert(nest_rs_http::OpenEndedBody);
         }
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_initialize_opens_a_session() {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "client", "version": "0" },
+            },
+        });
+        assert!(opens_a_session(initialize.to_string().as_bytes()));
+
+        let listed = serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+        assert!(!opens_a_session(listed.to_string().as_bytes()));
+        let initialized =
+            serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        assert!(!opens_a_session(initialized.to_string().as_bytes()));
+        assert!(!opens_a_session(b"{ not json"));
     }
 }

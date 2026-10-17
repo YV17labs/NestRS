@@ -71,6 +71,7 @@ mod parameters;
 mod propagate;
 mod registry;
 mod scope;
+mod sessions;
 pub mod unit;
 mod view;
 

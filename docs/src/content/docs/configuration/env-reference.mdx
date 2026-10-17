@@ -279,10 +279,12 @@ is refused too.)
 | `LEGACY_SESSION_MODE` | keep sessions alive for protocol revisions older than `2026-07-28` — default `true` |
 | `JSON_RESPONSE` | answer simple operations with `application/json` instead of an SSE stream — default `false` |
 | `SSE_KEEP_ALIVE_SECS` | SSE keep-alive ping interval, from `1` to `3600` (`0` ⇒ none) — default `15` |
-| `SSE_RETRY_SECS` | `retry:` interval advertised on SSE priming events, from `1` to `3600` (`0` ⇒ none) — default `3` |
+| `SSE_RETRY_SECS` | `retry:` interval advertised on SSE priming events, a session's streams included, from `1` to `3600` (`0` ⇒ none) — default `3` |
 | `MAX_REQUEST_BODY_BYTES` | cap on a single POST body, enforced while streaming — default 4 MiB |
 | `STATELESS_PROTOCOL_METADATA_REQUIRED` | require per-request protocol metadata on stateless POSTs (SEP-2243) — default `false` |
 | `OPERATION_TIMEOUT_SECS` | how long one operation may run, `subscriptions/listen` aside — default `20`, the request timeout's; whole seconds from `1` to `3600`, or `0` ⇒ none. An overrun answers a JSON-RPC internal error whose `data.reason` is `timeout`. A timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, files one `warn` at boot |
+| `MAX_CONCURRENT_SESSIONS` | live sessions one endpoint holds, at least `1` — default `1024`. Past it an `initialize` is answered `503` with `Retry-After: 5`; a stateless request is never refused for it |
+| `SESSION_IDLE_TIMEOUT_SECS` | how long a session may go without a message before it is closed, whole seconds from `1` to `3600`, never off — default `300` |
 
 ## `social` — `<PREFIX>_SOCIAL__<PROVIDER>__*`
 

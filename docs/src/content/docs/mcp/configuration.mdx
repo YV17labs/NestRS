@@ -41,10 +41,12 @@ McpModule::for_root(McpOptions {
 | `<PREFIX>_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
 | `<PREFIX>_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
 | `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS` | `15` | Keep-alive interval on an event stream; `0` ⇒ none |
-| `<PREFIX>_MCP__SSE_RETRY_SECS` | `3` | `retry:` advertised on an event stream's priming event; `0` ⇒ none |
+| `<PREFIX>_MCP__SSE_RETRY_SECS` | `3` | `retry:` advertised on an event stream's priming event, a session's streams included; `0` ⇒ none |
 | `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
 | `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
 | `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS` | `20` | How long one operation may run; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` | `1024` | Live sessions one endpoint holds; at least `1` |
+| `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` | `300` | How long a session may stay idle before it is closed; whole seconds from `1` to `3600`, never off |
 
 ## The operation timeout
 
@@ -66,6 +68,40 @@ default is the HTTP request timeout's, inside the 20-second shutdown window;
 a timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, is said once
 per endpoint at boot. A tool that legitimately runs longer raises the timeout
 and the window together.
+
+## Sessions
+
+A client older than `2026-07-28` opens a session with `initialize` and names
+it on every later request with `Mcp-Session-Id`. The session outlives the
+connection that opened it, holding a worker task and its channels, so the
+transport's connection cap never counts it. Each endpoint counts its own:
+past `max_concurrent_sessions`, an `initialize` is answered `503` with
+`Retry-After: 5` and a problem document whose `code` is `UNAVAILABLE`, and
+one `warn` on `nest_rs::mcp` — `mcp session refused: the mount holds its
+maximum` — names `max_concurrent_sessions`. The calls of a session already
+open are served as before.
+
+```http
+HTTP/1.1 503 Service Unavailable
+content-type: application/problem+json
+retry-after: 5
+
+{"type":"about:blank","title":"Service Unavailable","status":503,"code":"UNAVAILABLE"}
+```
+
+A place comes back when a session closes: its client sends `DELETE` with its
+id, or it goes `session_idle_timeout` without a message. An idle session's
+next request is answered `404`, and its client opens a new one. A
+`2026-07-28` request is served statelessly and opens no session, so the cap
+never refuses it; with `<PREFIX>_MCP__LEGACY_SESSION_MODE=false`, no session
+opens at all. A session restored from a `SessionStore` takes a place like
+one opened here.
+
+An idle session costs about 110 KiB, so the default cap holds about 110 MiB
+at most. Two `initialize`s racing for the last place are both admitted by the
+check that answers `503`; the session manager then refuses the second, which
+rmcp answers `500`. The wait for the `initialize` itself is 60 seconds, set
+in code so an rmcp release cannot move it.
 
 ## The host allowlist
 

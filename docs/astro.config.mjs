@@ -324,6 +324,7 @@ export default defineConfig({
             { autogenerate: { directory: 'queue' } },
             { label: 'Scheduling', slug: 'schedule' },
             { label: 'Events', slug: 'events' },
+            { label: 'Event dispatch', slug: 'events/dispatch' },
           ],
         },
         { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },

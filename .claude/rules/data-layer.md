@@ -79,8 +79,9 @@ how far the value travels (`.claude/decisions/ambient-carry.md`).
 **A continuation that can outlive the transaction never holds it.** Where a
 unit continues after the future that accepted it, the executor steps down to
 the pool — a `Pool` unit of the binding that opened it: a streaming body, a
-DataLoader batch, work held for the commit, an emitted event's listeners among
-it — and is dropped on a task handed to
+DataLoader batch, work held for the commit (an emitted event's dispatch, whose
+listeners each open a unit of their own through that binding) — and is dropped
+on a task handed to
 `TaskContext`, a connection's next message and a job's envelope, where a write
 opens a unit of its own. The ability crosses everywhere but a job's envelope.
 One exception is planned: a mutation operation's batches will run on the
@@ -88,14 +89,16 @@ operation's own transaction, joined before the field's savepoint settles.
 
 **The executor** is installed by each edge running its unit of work through
 the one port, `nest_rs_database::run_unit`, over the `dyn UnitOfWork` the
-driver's binding provides — resolved once at mount or boot, never per unit;
+driver's binding provides — resolved once at mount or boot, never per unit,
+or read by the bus off the unit its emitter ran under;
 with none bound a unit runs bare and `Repo` fails closed. A driver implements
 that one trait and serves every edge; an app lists no data context. Each edge
 commits on its own unit's outcome: an HTTP request on 2xx/3xx without a
 `MappedError` (a safe method runs on the pool, the unit opened by the
 `DbContext` interceptor in the innermost band); a WS message unless it answers
 an error frame, a connection hook unless it unwound; an MCP operation on `Ok`
-with no tool error in band (`isError`); a queue attempt and a tick on `Ok`. A
+with no tool error in band (`isError`); a queue attempt, a tick and a
+listener call on `Ok`. A
 unit of its own gets a **lazy** transaction — `BEGIN` deferred to the first
 data-layer touch, **a read included**. Guards run inside the unit, so a denied
 unit never touches the data layer and opens no transaction at all.
@@ -126,16 +129,24 @@ into a failed attempt a queue replays.
 An event announces a fact, and a fact its transaction rolled back never
 happened: a listener never pushes a job, notifies or calls out about a write
 that did not land, and a statement it fails never poisons its emitter's
-writes. With nothing to wait for it dispatches before `emit` returns.
+writes. With nothing to wait for it dispatches before `emit` returns. **Each
+listener is a unit of its own, settled on its `Result` within its own
+deadline**: opened through the binding its emitter ran under
+(`current_unit_of_work`), bare under none, one transaction unless
+`transactional = false`, its `Err` rolled back and filed at `error` while the
+chain goes on — so an event a listener emits waits for that listener's commit.
 
 - **Waits:** every unit of its own — a mutating HTTP request and the GraphQL
   mutation riding it, a WS message or connection hook, an MCP operation, a
-  queue attempt, a scheduled tick.
+  queue attempt, a scheduled tick, a listener call.
 - **Runs at once:** a pool — a safe request, a read-only GraphQL batch, a
   subscription, `transactional = false`.
 - **Not waited for:** a transaction the caller opened itself (`Executor::Txn`,
   or one held privately like `retry_on_conflict`'s) — its commit is the
-  caller's, so the caller emits after its own `commit`.
+  caller's, so the caller emits after its own `commit`. Inside a unit of
+  work, a listener reached sooner runs in a unit of its own beside it, never
+  inside it; outside every unit it runs bare, inside the caller's
+  (`.claude/decisions/listener-transaction-of-its-own.md`).
 - **Handed on:** an atomic block (`nest_rs_database::atomic`) hands its
   after-commit work to the enclosing unit on release and drops it on
   rollback; on the pool it is a transaction of its own and settles its work

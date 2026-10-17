@@ -1,0 +1,97 @@
+---
+title: Event dispatch
+description: How the bus runs each listener — its own unit of work and deadline, in what order, and what a failure or a transaction you opened yourself changes.
+---
+
+Every listener call runs as a unit of work of its own, through the same port
+as a request or a job: one lazy transaction, committed when the listener
+answers `Ok` and rolled back when it answers `Err`, so a listener writing two
+rows never leaves one. Two keys on `#[on_event]` shape that unit:
+
+```rust title="crates/features/src/notifications/events/listener.rs"
+#[on_event(timeout = "30s", transactional = false)]
+async fn on_post_published(&self, event: PostPublishedEvent) -> Result<(), QueueError> {
+    // …
+}
+```
+
+- **`timeout`** — counted from the call's own start, so a listener queued
+  behind a slow one is not charged for the wait; past it the body is cut, its
+  transaction rolls back and the call is reported at `error`. Ten minutes
+  unless declared, at most `"24h"`, never off: the bound a
+  [job](/queue/retries-and-failure/) has. A commit is never cut.
+- **`transactional = false`** — run on the pool instead, each statement
+  committing on its own, for a listener that brackets long work that is not
+  the database's.
+
+An event a listener emits waits for **its** commit. With no unit of work
+around the emitter — an app with no database, a task you spawned, a binary of
+your own — there is none to open: the listener runs bare, on whatever its
+emitter installed. [Transactions](/database/transactions/) has the unit's
+commit rules.
+
+## Each call files one line
+
+Dispatch is inline — each listener is awaited in turn, by `emit` or, after a
+commit, by the boundary that settled it. Each call is the unit of work
+`events.dispatch`: a **child** of whatever emitted the event, so its lines
+carry that request's `trace_id` and `actor_id` under a `span_id` of their own,
+and it files one
+[operation line](/opentelemetry/logs/#every-unit-of-work-files-one-line)
+naming the event and the listener. See
+[Correlation](/fundamentals/correlation/).
+
+## The shape of dispatch
+
+`bus.emit(event)` reads the listener list once (under an uncontended
+`RwLock` — read-only once the boot has wired it), then awaits each listener in
+turn with its own clone of the event. Only a task a factory or a constructor
+spawned can emit before that: its event reaches no listener, and one `warn`
+on `nest_rs::events` names the event type, `event emitted before the
+listeners were wired: dropped`. Three consequences worth naming:
+
+- **Order is deterministic** — registration order is preservation order;
+  listeners are registered in the order their providers appear in
+  `providers = [...]`, then in the order their methods appear in the
+  `#[listeners]` impl block.
+- **Failure is local** — a listener's `Err`, its timeout or a commit the
+  database could not honour rolls back that listener's unit alone, and is
+  logged at `error` on `nest_rs::events` with the event type, the listener and
+  the whole error chain. A **panicking** listener is contained the same way.
+  The chain continues with the next listener, and `emit` returns normally:
+  the emitter's work stands. There is no retry and no dead letter — side
+  effects that must eventually happen belong on the [Queue](/queue/). A
+  listener is dropped with its emitter — a request the shutdown window cut,
+  an operation its client cancelled — and its `events.dispatch` line says so,
+  `cancelled`.
+- **Dispatch follows the commit** — an event is a fact, and a fact the
+  transaction rolls back never happened. Emitted inside a transaction (a
+  mutating request, a WebSocket message, an MCP operation, a queue attempt,
+  a scheduled tick), the dispatch waits for the commit and is dropped when
+  the transaction rolls back or fails to commit, or the unit of work fails. A
+  listener runs *outside* that transaction — in one of its own, with the
+  scope and the ability its emitter had — so its writes stand on their own
+  and a statement it fails cannot take the emitter's down with it. A write
+  that must be atomic with the emitter's is not a reaction: call it from the
+  service.
+
+## A transaction you opened yourself
+
+A transaction you open yourself — `db.begin()` inside `retry_on_conflict`, an
+`Executor::Txn` you install — is committed by you, out of the framework's
+sight, so nothing waits for it: emit after your own `commit`. Inside a unit of
+work, a listener you reach sooner still runs in a transaction of its own,
+never in yours, and that has a price. It runs on another connection, so it
+does not see the rows you have not committed. It waits on any row you locked —
+you are awaiting `emit` — until its statement budget or its timeout cuts it.
+And its commit stands if you roll back afterwards. Outside every unit of work,
+it runs bare, inside your transaction, where its `Err` cannot undo what it
+wrote.
+
+## Going further
+
+- [Events](/events/) — declare, emit and wire a listener.
+- [Transactions](/database/transactions/) — what waits for the commit, at
+  every boundary.
+- [Queue](/queue/) — work that must survive a crash, retried on another
+  binary.

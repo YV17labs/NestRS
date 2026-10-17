@@ -114,7 +114,10 @@ non-transactional handle inside the capture under the scope you read:
 tagged — and for any other: `ExecutorScope` can grow within 7.x, so your `match`
 keeps a `_` arm, and `with_executor` is the one that fails closed. A job's held
 work installed untagged would fail closed like a request. Contain a panic in
-it: the commit already stood.
+it: the commit already stood. The capture also carries your binding, which
+each listener of an emitted event opens its own unit through
+(`nest_rs::database::current_unit_of_work()`): held work run outside it runs
+its listeners bare, without a transaction or a rollback.
 
 The other continuations — a streaming body, a DataLoader batch — run on a
 `TransactionPolicy::Pool` unit your binding opens on their first read: they

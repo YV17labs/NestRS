@@ -257,8 +257,8 @@ fn generate_events_adapter_puts_the_event_at_the_port() {
     let listener_rs = fs::read_to_string(feature.join("events/listener.rs")).unwrap();
     assert!(listener_rs.contains("#[listeners]"), "{listener_rs}");
     assert!(
-        listener_rs.contains("event: PostChangedEvent"),
-        "{listener_rs}"
+        listener_rs.contains("event: PostChangedEvent) -> Result<()>"),
+        "a listener answers a Result its unit settles on: {listener_rs}"
     );
     assert!(!listener_rs.contains("pub struct PostChangedEvent"));
 

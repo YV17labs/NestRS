@@ -263,7 +263,8 @@ impl {{tasks}} {
 }
 "#;
 
-pub(crate) const EVENTS_LISTENER: &str = r#"use nest_rs::core::injectable;
+pub(crate) const EVENTS_LISTENER: &str = r#"use anyhow::Result;
+use nest_rs::core::injectable;
 use nest_rs::events::listeners;
 
 use crate::{{snake}}::{{event}};
@@ -274,9 +275,13 @@ pub struct {{listener}};
 
 #[listeners]
 impl {{listener}} {
+    // Runs once the emitter's transaction has committed, as a unit of work of
+    // its own: an `Err` rolls back what it wrote and is logged at `error`.
+    // Cut after ten minutes unless `#[on_event(timeout = "…")]` says otherwise.
     #[on_event]
-    async fn on_changed(&self, event: {{event}}) {
+    async fn on_changed(&self, event: {{event}}) -> Result<()> {
         let _ = event;
+        Ok(())
     }
 }
 "#;

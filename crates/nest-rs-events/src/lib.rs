@@ -10,7 +10,9 @@
 //! Dispatch is in-process and awaited: every listener registered for the
 //! event type runs in registration order, each with its own clone — once the
 //! emitter's transaction has committed when it emits inside one, and never when
-//! that transaction rolls back (see [`EventBus::emit`]).
+//! that transaction rolls back. Each listener call is a unit of work of its
+//! own, its transaction settled on the `Result` it answers and its body cut at
+//! its timeout (see [`EventBus::emit`]).
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -18,7 +20,9 @@
 /// This crate's span target — the in-process event bus and its listeners.
 pub const TARGET: &str = "nest_rs::events";
 
+mod answer;
 mod bus;
+mod error;
 mod inventory;
 mod module;
 pub mod unit;
@@ -32,7 +36,10 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::answer::{ListenerAnswer, answered};
     pub use crate::bus::subscribe_named;
+
+    pub use nest_rs_database;
 }
 
 /// Orchestrator on a provider's `impl` block: each `#[on_event]` method in it
@@ -68,9 +75,11 @@ pub mod __private {
 ///         self.svc.credit(e.user_id, e.amount).await;
 ///     }
 ///
-///     #[on_event]
-///     async fn on_redeemed(&self, e: PointsRedeemed) {
+///     #[on_event(timeout = "30s")]
+///     async fn on_redeemed(&self, e: PointsRedeemed) -> anyhow::Result<()> {
+///         anyhow::ensure!(e.amount > 0, "a redemption takes points");
 ///         self.svc.debit(e.user_id, e.amount).await;
+///         Ok(())
 ///     }
 /// }
 /// # #[module(imports = [EventsModule], providers = [Ledger, PointsHandlers])]

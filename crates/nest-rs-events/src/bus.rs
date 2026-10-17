@@ -1,21 +1,34 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use nest_rs_core::tracing::Instrument;
+use nest_rs_database::{ExecutorScope, TransactionPolicy, Unhonoured, UnitSpec, run_unit};
 use parking_lot::RwLock;
 
+use crate::answer::ListenerAnswer;
+use crate::error::ListenerTimedOut;
+
 type BoxedEvent = Box<dyn Any + Send>;
-type ListenerFn = Arc<dyn Fn(BoxedEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+/// What one listener call came to: `Ok`, or why its unit failed.
+type Answered = Result<(), Box<dyn Error + Send + Sync>>;
+type ListenerFuture = Pin<Box<dyn Future<Output = Answered> + Send>>;
+type ListenerFn = Arc<dyn Fn(BoxedEvent) -> ListenerFuture + Send + Sync>;
 
 /// One registered listener, carrying the `Provider::method` its unit of work is
-/// filed under.
+/// filed under and what its decorator declared of that unit.
 #[derive(Clone)]
 struct Listener {
     name: &'static str,
+    /// How the unit settles the listener's data-layer work.
+    policy: TransactionPolicy,
+    /// How long one call runs before it is cut.
+    timeout: Duration,
     run: ListenerFn,
 }
 
@@ -58,15 +71,27 @@ impl EventBus {
     ///
     /// Inside a unit of work holding a transaction, the dispatch waits for it
     /// through [`nest_rs_database::after_commit`]: it runs on commit, outside
-    /// the transaction, under what the emitter carried into it — the pool, its
-    /// ability, a package's values — and is dropped unrun on rollback or
+    /// the transaction, under what the emitter carried into it — its scope,
+    /// its ability, a package's values — and is dropped unrun on rollback or
     /// failure. With no transaction to wait for it runs before `emit` returns,
-    /// inside the emitter, on its executor. Either way each listener is a unit
-    /// of its own, a child of the emitter's trace.
+    /// inside the emitter.
     ///
-    /// A slow listener delays the ones after it and the emitter: work that must
-    /// not block belongs on the queue. A panicking listener is caught, logged at
-    /// `error` on `nest_rs::events`, and the chain continues.
+    /// Each listener call is a unit of work of its own, a child of the
+    /// emitter's trace, opened by the unit-of-work binding the emitter ran
+    /// under: one transaction, committed when the listener answers `Ok` and
+    /// rolled back when it fails — on the pool for `transactional = false`. An
+    /// emitter outside every unit of work has no binding to open one, so its
+    /// listeners run bare on whatever executor it installed, a transaction it
+    /// opened itself included. A listener's body is cut at its timeout, ten
+    /// minutes unless its `#[on_event]` declares one; a commit never is. An
+    /// event the listener emits waits for its commit in turn.
+    ///
+    /// A failing listener — an `Err`, its timeout, a commit its driver could
+    /// not honour — is logged at `error` on `nest_rs::events` with its whole
+    /// chain, and a panicking one is caught and logged there too; the chain
+    /// continues with the next listener either way, and `emit` returns to an
+    /// emitter whose own work stands. A slow listener delays the ones after it
+    /// and the emitter: work that must not block belongs on the queue.
     pub async fn emit<E: Clone + Send + 'static>(&self, event: E) {
         if !self.wired.load(Ordering::Relaxed) {
             tracing::warn!(
@@ -85,8 +110,9 @@ impl EventBus {
         // No capture here: the executor that holds the dispatch carries it into
         // its commit, and one that hands it back runs it inside the emitter.
         nest_rs_database::after_commit(async move {
-            for Listener { name, run } in listeners {
-                dispatch_one(&cause, event_name, name, run(Box::new(event.clone()))).await;
+            for listener in listeners {
+                let body = (listener.run)(Box::new(event.clone()));
+                dispatch_one(&cause, event_name, &listener, body).await;
             }
         })
         .await;
@@ -98,8 +124,8 @@ impl EventBus {
 async fn dispatch_one(
     cause: &nest_rs_core::Correlation,
     event: &'static str,
-    listener: &'static str,
-    fut: Pin<Box<dyn Future<Output = ()> + Send>>,
+    listener: &Listener,
+    body: ListenerFuture,
 ) {
     // `Correlation::inherited()` is the ambient one unchanged: without `child()`
     // two listeners would share one `span_id`.
@@ -108,24 +134,39 @@ async fn dispatch_one(
         crate::unit::DISPATCH,
         &correlation,
         event = event,
-        listener = listener,
+        listener = listener.name,
     );
     let continuation = nest_rs_core::RequestContinuation::new(None, correlation.clone());
     let line = DispatchLine {
         event,
-        listener,
+        listener: listener.name,
         continuation: &continuation,
         span: span.clone(),
         started: std::time::Instant::now(),
         filed: false,
     };
     // Nested, never a fresh context, which would drop what the emitter carries.
-    let outcome =
-        nest_rs_core::with_request_scope(None, correlation, nest_rs_core::panic::contain(fut))
-            .instrument(span)
-            .await;
+    let outcome = nest_rs_core::with_request_scope(
+        None,
+        correlation,
+        nest_rs_core::panic::contain(run(listener.policy, listener.timeout, body)),
+    )
+    .instrument(span)
+    .await;
     match outcome {
-        Ok(()) => line.file(nest_rs_core::operation_log::OK),
+        Ok(Ok(())) => line.file(nest_rs_core::operation_log::OK),
+        Ok(Err(error)) => {
+            line.file(nest_rs_core::operation_log::ERROR);
+            continuation.enter(|| {
+                tracing::error!(
+                    target: crate::TARGET,
+                    event = event,
+                    listener = listener.name,
+                    error = %nest_rs_core::error_message(&*error),
+                    "event listener failed — dispatch continues with the next listener",
+                );
+            });
+        }
         Err(payload) => {
             line.file(nest_rs_core::operation_log::PANIC);
             continuation.enter(|| {
@@ -134,11 +175,38 @@ async fn dispatch_one(
                     payload.as_ref(),
                     "event listener panicked — dispatch continues with the next listener",
                     event = event,
-                    listener = listener,
+                    listener = listener.name,
                 );
             });
         }
     }
+}
+
+/// One listener call as a unit of work of its own, opened by the binding its
+/// emitter ran under — bare with none — its body cut `timeout` after it
+/// started, never after the listeners queued before it.
+async fn run(policy: TransactionPolicy, timeout: Duration, body: ListenerFuture) -> Answered {
+    let deadline = tokio::time::Instant::now() + timeout;
+    // The body alone is cut, so a commit never is.
+    let cut = async move {
+        tokio::time::timeout_at(deadline, body)
+            .await
+            .unwrap_or_else(|_| Err(Box::new(ListenerTimedOut::new(timeout))))
+    };
+    let Some(binding) = nest_rs_database::current_unit_of_work() else {
+        return cut.await;
+    };
+    let scope = nest_rs_database::current_executor_scope().unwrap_or(ExecutorScope::Request);
+    let spec = UnitSpec::new(crate::unit::DISPATCH, scope, policy).with_deadline(deadline);
+    let net = binding.settle_net();
+    let unit = run_unit(Some(&binding), spec, cut, Result::is_ok, |why| {
+        Err(Box::new(why))
+    });
+    // A unit not settled within its binding's net past the deadline holds a
+    // commit that never answered, and may have landed.
+    tokio::time::timeout_at(deadline + net, unit)
+        .await
+        .unwrap_or_else(|_| Err(Box::new(Unhonoured::IN_DOUBT)))
 }
 
 /// One listener's `events.dispatch` line, filed exactly once — by the end the
@@ -183,13 +251,20 @@ impl Drop for DispatchLine<'_> {
     }
 }
 
-/// Subscribe a listener on `bus` that files its unit of work under `name`; the
-/// seam `#[listeners]` emits.
-pub fn subscribe_named<E, H, Fut>(bus: &EventBus, name: &'static str, listener: H)
-where
+/// Subscribe a listener on `bus` that files its unit of work under `name`, runs
+/// it under `policy` and cuts it `timeout` after it starts; the seam
+/// `#[listeners]` emits.
+pub fn subscribe_named<E, H, Fut>(
+    bus: &EventBus,
+    name: &'static str,
+    policy: TransactionPolicy,
+    timeout: Duration,
+    listener: H,
+) where
     E: Any + Send + 'static,
     H: Fn(E) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ()> + Send + 'static,
+    Fut: Future + Send + 'static,
+    Fut::Output: ListenerAnswer,
 {
     let run: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
         #[expect(
@@ -199,13 +274,19 @@ where
         let event = *boxed
             .downcast::<E>()
             .expect("event downcasts to the type its listener subscribed for");
-        Box::pin(listener(event)) as Pin<Box<dyn Future<Output = ()> + Send>>
+        let answer = listener(event);
+        Box::pin(async move { answer.await.into_outcome() }) as ListenerFuture
     });
     bus.listeners
         .write()
         .entry(TypeId::of::<E>())
         .or_default()
-        .push(Listener { name, run });
+        .push(Listener {
+            name,
+            policy,
+            timeout,
+            run,
+        });
 }
 
 #[cfg(test)]
@@ -224,6 +305,24 @@ mod tests {
     {
         subscribe_named(bus, "<anonymous>", listener);
         bus.mark_wired();
+    }
+
+    /// A listener taking the defaults `#[on_event]` emits when it declares
+    /// no key.
+    pub(super) fn subscribe_named<E, H, Fut>(bus: &EventBus, name: &'static str, listener: H)
+    where
+        E: Any + Send + 'static,
+        H: Fn(E) -> Fut + Send + Sync + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: ListenerAnswer,
+    {
+        super::subscribe_named(
+            bus,
+            name,
+            TransactionPolicy::PerUnit,
+            nest_rs_core::JOB_TIMEOUT,
+            listener,
+        );
     }
 
     #[derive(Clone)]
@@ -387,7 +486,7 @@ mod panic_containment {
     use nest_rs_testing::LogCapture;
     use parking_lot::Mutex;
 
-    use super::tests::subscribe;
+    use super::tests::{subscribe, subscribe_named};
     use super::*;
 
     #[derive(Clone)]
@@ -546,6 +645,11 @@ mod panic_containment {
         );
     }
 
+    /// A listener body that unwinds, answering `()` as far as its type says.
+    fn explode() {
+        panic!("listener exploded");
+    }
+
     #[tokio::test]
     async fn a_panicking_listener_files_its_unit_as_a_panic() {
         let bus = EventBus::new();
@@ -553,9 +657,7 @@ mod panic_containment {
         subscribe_named(
             &bus,
             "Notifier::boom",
-            move |_: NotifyRequested| async move {
-                panic!("listener exploded");
-            },
+            move |_: NotifyRequested| async move { explode() },
         );
         let logs = LogCapture::install();
         let previous = std::panic::take_hook();

@@ -26,6 +26,7 @@ pub mod layers;
 mod mcp;
 mod meta;
 mod mount;
+mod on_event;
 pub mod pair;
 mod posture;
 mod queue_name;
@@ -79,6 +80,7 @@ pub use meta::{
     reject_meta_on_operations, take_meta,
 };
 pub use mount::{MountPath, reject_path};
+pub use on_event::{ON_EVENT_GRAMMAR, OnEventArgs, parse_on_event_args};
 pub use pair::{DecoratorPair, parse_provider_host, provider_residency};
 pub use posture::{
     ID_ARG_UNSUPPORTED_BECAUSE, Posture, PostureRules, at_most_one_authorize,

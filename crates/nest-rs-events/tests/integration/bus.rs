@@ -526,3 +526,643 @@ async fn a_listener_held_for_the_commit_runs_on_what_its_driver_installed() {
         "the driver's pool, under the scope the work was registered with",
     );
 }
+
+/// Who ran, in order.
+#[injectable]
+#[derive(Default)]
+struct Ran {
+    seen: std::sync::Mutex<Vec<&'static str>>,
+}
+
+impl Ran {
+    fn record(&self, who: &'static str) {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(who);
+    }
+
+    fn seen(&self) -> Vec<&'static str> {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// The sentence a failed listener is reported with.
+const LISTENER_FAILED: &str = "event listener failed — dispatch continues with the next listener";
+
+/// The outcome each listener's `events.dispatch` line filed, in order.
+fn dispatch_outcomes(logs: &nest_rs_testing::LogCapture) -> Vec<(String, String)> {
+    logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_events::unit::DISPATCH.name(),
+    )
+    .into_iter()
+    .map(|line| {
+        (
+            line.field("listener").unwrap_or_default(),
+            line.field("outcome").unwrap_or_default(),
+        )
+    })
+    .collect()
+}
+
+#[derive(Clone)]
+struct Refused;
+
+/// An answer spelled through an alias: read by its type, never its name.
+type Outcome = Result<(), std::io::Error>;
+
+#[injectable]
+struct FallibleListeners {
+    #[inject]
+    ran: Arc<Ran>,
+}
+
+#[listeners]
+impl FallibleListeners {
+    #[on_event]
+    async fn refuses(&self, _event: Refused) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+
+        self.ran.record("refuses");
+        Err(anyhow::anyhow!("the mailer refused the address"))
+            .context("could not notify the author")
+    }
+
+    #[on_event]
+    async fn carries_on(&self, _event: Refused) -> Outcome {
+        self.ran.record("carries_on");
+        Ok(())
+    }
+}
+
+#[module(imports = [EventsModule], providers = [Ran, FallibleListeners])]
+struct FallibleEventsModule;
+
+#[tokio::test]
+async fn a_listener_answering_an_error_is_filed_with_its_chain_and_the_next_one_runs() {
+    let app = App::new::<FallibleEventsModule>().expect("boots");
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    let ran = app.container().get::<Ran>().expect("the probe");
+    let logs = nest_rs_testing::LogCapture::install();
+
+    bus.emit(Refused).await;
+
+    assert_eq!(ran.seen(), ["refuses", "carries_on"], "the chain went on");
+    assert_eq!(
+        dispatch_outcomes(&logs),
+        [
+            ("FallibleListeners::refuses".to_owned(), "error".to_owned()),
+            ("FallibleListeners::carries_on".to_owned(), "ok".to_owned()),
+        ],
+    );
+    let failed = logs.expect_one(nest_rs_events::TARGET, LISTENER_FAILED);
+    assert_eq!(failed.level, "error");
+    assert_eq!(
+        failed.field("listener").as_deref(),
+        Some("FallibleListeners::refuses")
+    );
+    assert!(
+        failed
+            .field("event")
+            .is_some_and(|name| name.ends_with("Refused")),
+        "{:?}",
+        failed.fields,
+    );
+    assert_eq!(
+        failed.field("error").as_deref(),
+        Some("could not notify the author: the mailer refused the address"),
+        "the whole chain, never its head alone",
+    );
+}
+
+#[derive(Clone)]
+struct Stalled;
+
+#[injectable]
+struct StallingListeners {
+    #[inject]
+    ran: Arc<Ran>,
+}
+
+#[listeners]
+impl StallingListeners {
+    #[on_event(timeout = "1s")]
+    async fn stalls(&self, _event: Stalled) {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        self.ran.record("stalls ended");
+    }
+
+    #[on_event]
+    async fn after_it(&self, _event: Stalled) {
+        self.ran.record("after_it");
+    }
+}
+
+#[module(imports = [EventsModule], providers = [Ran, StallingListeners])]
+struct StallingEventsModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_listener_running_past_its_timeout_is_cut_there_and_the_next_one_runs() {
+    let app = App::new::<StallingEventsModule>().expect("boots");
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    let ran = app.container().get::<Ran>().expect("the probe");
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let emitted = tokio::time::Instant::now();
+    bus.emit(Stalled).await;
+    let took = emitted.elapsed();
+
+    assert!(
+        took >= std::time::Duration::from_secs(1) && took < std::time::Duration::from_secs(2),
+        "cut at its 1 s timeout, not after its 5 s sleep: {took:?}",
+    );
+    assert_eq!(ran.seen(), ["after_it"], "the cut body never ended");
+    assert_eq!(
+        dispatch_outcomes(&logs),
+        [
+            ("StallingListeners::stalls".to_owned(), "error".to_owned()),
+            ("StallingListeners::after_it".to_owned(), "ok".to_owned()),
+        ],
+    );
+    let cut = logs.expect_one(nest_rs_events::TARGET, LISTENER_FAILED);
+    assert_eq!(
+        cut.field("listener").as_deref(),
+        Some("StallingListeners::stalls")
+    );
+    assert_eq!(
+        cut.field("error").as_deref(),
+        Some(
+            "the listener did not end within its 1s timeout, and was cut — \
+             `#[on_event(timeout = …)]` sets it"
+        ),
+    );
+}
+
+/// How a unit the recording binding opened ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ended {
+    /// Settled, told whether the unit succeeded.
+    Settled { ok: bool },
+    /// Dropped before it settled.
+    Abandoned,
+}
+
+/// One unit the recording binding opened, as its spec declared it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Opened {
+    unit: &'static str,
+    policy: nest_rs_database::TransactionPolicy,
+    scope: nest_rs_database::ExecutorScope,
+    deadline: bool,
+    ended: Option<Ended>,
+}
+
+type OpenedUnits = Arc<std::sync::Mutex<Vec<Opened>>>;
+
+/// A unit-of-work binding recording every unit it opens and how each ended;
+/// its units hold the work an emit hands them until they commit, as a driver
+/// holding a transaction does.
+struct RecordingUnitOfWork {
+    opened: OpenedUnits,
+    /// Whether a listener's commit never answers.
+    commit_hangs: bool,
+}
+
+impl RecordingUnitOfWork {
+    /// The binding, and the units it will record.
+    fn bound(commit_hangs: bool) -> (Arc<dyn nest_rs_database::UnitOfWork>, OpenedUnits) {
+        let opened = OpenedUnits::default();
+        let binding = Self {
+            opened: Arc::clone(&opened),
+            commit_hangs,
+        };
+        (Arc::new(binding), opened)
+    }
+}
+
+/// The binding's settle net, past which a commit is in doubt.
+const SETTLE_NET: std::time::Duration = std::time::Duration::from_secs(16);
+
+impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
+    fn open(
+        &self,
+        spec: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        let mut opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        opened.push(Opened {
+            unit: spec.unit.name(),
+            policy: spec.policy,
+            scope: spec.scope,
+            deadline: spec.deadline.is_some(),
+            ended: None,
+        });
+        Ok(Box::new(RecordingUnit {
+            opened: Arc::clone(&self.opened),
+            at: opened.len() - 1,
+            executor: Arc::new(HoldingExecutor::default()),
+            commit_hangs: self.commit_hangs && spec.unit == nest_rs_events::unit::DISPATCH,
+            settled: false,
+        }))
+    }
+
+    fn settle_net(&self) -> std::time::Duration {
+        SETTLE_NET
+    }
+}
+
+/// An executor holding what an emit hands it, under what its unit carries into
+/// the commit, until its unit commits.
+#[derive(Default)]
+struct HoldingExecutor(std::sync::Mutex<Vec<nest_rs_database::Deferred>>);
+
+impl nest_rs_database::Executor for HoldingExecutor {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn after_commit(&self, work: nest_rs_database::Deferred) -> Option<nest_rs_database::Deferred> {
+        let work: nest_rs_database::Deferred =
+            match nest_rs_core::RequestContinuation::capture(nest_rs_core::Continuation::Commit) {
+                Some(carried) => Box::pin(carried.scope(work)),
+                None => work,
+            };
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(work);
+        None
+    }
+}
+
+struct RecordingUnit {
+    opened: OpenedUnits,
+    at: usize,
+    executor: Arc<HoldingExecutor>,
+    commit_hangs: bool,
+    settled: bool,
+}
+
+impl RecordingUnit {
+    fn end(&self, ended: Ended) {
+        self.opened
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)[self.at]
+            .ended = Some(ended);
+    }
+}
+
+impl nest_rs_database::OpenUnit for RecordingUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::clone(&self.executor) as Arc<dyn nest_rs_database::Executor>
+    }
+
+    fn settle(
+        mut self: Box<Self>,
+        ok: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = nest_rs_database::Settlement> + Send>>
+    {
+        self.settled = true;
+        self.end(Ended::Settled { ok });
+        let held = std::mem::take(
+            &mut *self
+                .executor
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        let hangs = ok && self.commit_hangs;
+        Box::pin(async move {
+            if hangs {
+                std::future::pending::<()>().await;
+            }
+            if ok {
+                for work in held {
+                    work.await;
+                }
+            }
+            nest_rs_database::Settlement::Settled
+        })
+    }
+}
+
+impl Drop for RecordingUnit {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.end(Ended::Abandoned);
+        }
+    }
+}
+
+/// A queue attempt's unit, the emitter's here.
+const EMITTER: nest_rs_core::operation_log::Unit = nest_rs_core::__private::declare_unit(
+    "nest-rs-queue",
+    "nest_rs::queue",
+    nest_rs_core::operation_log::Kind::Consumer,
+    "queue.job",
+);
+
+/// Emit `event` inside a unit of `binding`, as a queue attempt would: held
+/// until the attempt commits.
+async fn emitted_in_a_unit<E: Clone + Send + 'static>(
+    binding: &Arc<dyn nest_rs_database::UnitOfWork>,
+    bus: &EventBus,
+    event: E,
+) {
+    let spec = nest_rs_database::UnitSpec::new(
+        EMITTER,
+        nest_rs_database::ExecutorScope::Job,
+        nest_rs_database::TransactionPolicy::PerUnit,
+    );
+    nest_rs_database::run_unit(
+        Some(binding),
+        spec,
+        async {
+            bus.emit(event).await;
+            Ok::<(), ()>(())
+        },
+        Result::is_ok,
+        |_| Err(()),
+    )
+    .await
+    .expect("the emitter's unit settles");
+}
+
+/// The listener units `opened` holds, in the order they opened.
+fn listener_units(opened: &OpenedUnits) -> Vec<Opened> {
+    opened
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|unit| unit.unit == nest_rs_events::unit::DISPATCH.name())
+        .copied()
+        .collect()
+}
+
+#[derive(Clone)]
+struct Settling;
+
+#[injectable]
+struct SettlingListeners {
+    #[inject]
+    ran: Arc<Ran>,
+}
+
+#[listeners]
+impl SettlingListeners {
+    #[on_event]
+    async fn commits(&self, _event: Settling) -> anyhow::Result<()> {
+        self.ran.record("commits");
+        Ok(())
+    }
+
+    #[on_event]
+    async fn fails(&self, _event: Settling) -> anyhow::Result<()> {
+        self.ran.record("fails");
+        Err(anyhow::anyhow!("the reaction refused"))
+    }
+
+    #[on_event(transactional = false)]
+    async fn on_the_pool(&self, _event: Settling) -> anyhow::Result<()> {
+        self.ran.record("on_the_pool");
+        Err(anyhow::anyhow!("the reaction refused on the pool"))
+    }
+}
+
+#[module(imports = [EventsModule], providers = [Ran, SettlingListeners])]
+struct SettlingEventsModule;
+
+#[tokio::test]
+async fn each_listener_held_for_its_emitters_commit_settles_a_unit_of_its_own_on_its_answer() {
+    let app = App::new::<SettlingEventsModule>().expect("boots");
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    let ran = app.container().get::<Ran>().expect("the probe");
+    let (binding, opened) = RecordingUnitOfWork::bound(false);
+
+    emitted_in_a_unit(&binding, &bus, Settling).await;
+
+    assert_eq!(ran.seen(), ["commits", "fails", "on_the_pool"]);
+    let unit = |policy, ok| Opened {
+        unit: nest_rs_events::unit::DISPATCH.name(),
+        policy,
+        scope: nest_rs_database::ExecutorScope::Job,
+        deadline: true,
+        ended: Some(Ended::Settled { ok }),
+    };
+    assert_eq!(
+        listener_units(&opened),
+        [
+            unit(nest_rs_database::TransactionPolicy::PerUnit, true),
+            unit(nest_rs_database::TransactionPolicy::PerUnit, false),
+            unit(nest_rs_database::TransactionPolicy::Pool, false),
+        ],
+        "one unit per listener, opened by the emitter's binding under its scope, \
+         after its commit: {opened:#?}",
+    );
+}
+
+#[injectable]
+struct CutInAUnitListeners {
+    #[inject]
+    ran: Arc<Ran>,
+}
+
+#[derive(Clone)]
+struct StalledInAUnit;
+
+#[listeners]
+impl CutInAUnitListeners {
+    #[on_event(timeout = "1s")]
+    async fn stalls(&self, _event: StalledInAUnit) -> anyhow::Result<()> {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        self.ran.record("stalls ended");
+        Ok(())
+    }
+
+    #[on_event]
+    async fn after_it(&self, _event: StalledInAUnit) {
+        self.ran.record("after_it");
+    }
+}
+
+#[module(imports = [EventsModule], providers = [Ran, CutInAUnitListeners])]
+struct CutInAUnitEventsModule;
+
+/// The deadline cuts the listener's body inside its unit, never the unit
+/// around it, which would drop it unsettled.
+#[tokio::test(start_paused = true)]
+async fn a_listener_cut_at_its_timeout_settles_its_unit_as_a_failure() {
+    let app = App::new::<CutInAUnitEventsModule>().expect("boots");
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    let ran = app.container().get::<Ran>().expect("the probe");
+    let (binding, opened) = RecordingUnitOfWork::bound(false);
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let emitted = tokio::time::Instant::now();
+    emitted_in_a_unit(&binding, &bus, StalledInAUnit).await;
+    let took = emitted.elapsed();
+
+    assert!(
+        took >= std::time::Duration::from_secs(1) && took < std::time::Duration::from_secs(2),
+        "{took:?}"
+    );
+    assert_eq!(ran.seen(), ["after_it"]);
+    let ended: Vec<Option<Ended>> = listener_units(&opened)
+        .iter()
+        .map(|unit| unit.ended)
+        .collect();
+    assert_eq!(
+        ended,
+        [
+            Some(Ended::Settled { ok: false }),
+            Some(Ended::Settled { ok: true })
+        ],
+        "the cut listener's unit rolled back rather than dropping unsettled",
+    );
+    let cut = logs.expect_one(nest_rs_events::TARGET, LISTENER_FAILED);
+    assert!(
+        cut.field("error").is_some_and(
+            |error| error.starts_with("the listener did not end within its 1s timeout")
+        ),
+        "a cut whose rollback answered stays a timeout: {:?}",
+        cut.fields,
+    );
+}
+
+#[derive(Clone)]
+struct Queued;
+
+#[injectable]
+struct QueuedListeners {
+    #[inject]
+    ran: Arc<Ran>,
+}
+
+/// The second listener's 2 s would be spent before it starts, were it counted
+/// from the dispatch rather than from its own call.
+#[listeners]
+impl QueuedListeners {
+    #[on_event(timeout = "10s")]
+    async fn slow(&self, _event: Queued) -> anyhow::Result<()> {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        self.ran.record("slow");
+        Ok(())
+    }
+
+    #[on_event(timeout = "2s")]
+    async fn behind_it(&self, _event: Queued) -> anyhow::Result<()> {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        self.ran.record("behind_it");
+        Ok(())
+    }
+}
+
+#[module(imports = [EventsModule], providers = [Ran, QueuedListeners])]
+struct QueuedEventsModule;
+
+/// Both listeners ran to their end and filed `ok`.
+fn assert_both_ended(ran: &Ran, logs: &nest_rs_testing::LogCapture) {
+    assert_eq!(ran.seen(), ["slow", "behind_it"], "neither was cut");
+    assert_eq!(
+        dispatch_outcomes(logs),
+        [
+            ("QueuedListeners::slow".to_owned(), "ok".to_owned()),
+            ("QueuedListeners::behind_it".to_owned(), "ok".to_owned()),
+        ],
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_listener_queued_behind_a_slow_sibling_is_not_charged_for_it() {
+    let app = App::new::<QueuedEventsModule>().expect("boots");
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    let ran = app.container().get::<Ran>().expect("the probe");
+    let logs = nest_rs_testing::LogCapture::install();
+
+    bus.emit(Queued).await;
+
+    assert_both_ended(&ran, &logs);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_listener_unit_queued_behind_a_slow_sibling_is_not_charged_for_it() {
+    let app = App::new::<QueuedEventsModule>().expect("boots");
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    let ran = app.container().get::<Ran>().expect("the probe");
+    let (binding, opened) = RecordingUnitOfWork::bound(false);
+    let logs = nest_rs_testing::LogCapture::install();
+
+    emitted_in_a_unit(&binding, &bus, Queued).await;
+
+    assert_both_ended(&ran, &logs);
+    assert_eq!(
+        listener_units(&opened)
+            .iter()
+            .map(|unit| unit.ended)
+            .collect::<Vec<_>>(),
+        [
+            Some(Ended::Settled { ok: true }),
+            Some(Ended::Settled { ok: true })
+        ],
+        "each unit's deadline is its own call's: {opened:#?}",
+    );
+}
+
+#[derive(Clone)]
+struct CommitHangs;
+
+#[injectable]
+struct HangingCommitListeners {
+    #[inject]
+    ran: Arc<Ran>,
+}
+
+#[listeners]
+impl HangingCommitListeners {
+    #[on_event(timeout = "1s")]
+    async fn answers_at_once(&self, _event: CommitHangs) -> anyhow::Result<()> {
+        self.ran.record("answers_at_once");
+        Ok(())
+    }
+}
+
+#[module(imports = [EventsModule], providers = [Ran, HangingCommitListeners])]
+struct HangingCommitEventsModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_listener_whose_commit_never_answers_is_in_doubt_past_its_settle_net() {
+    let app = App::new::<HangingCommitEventsModule>().expect("boots");
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    let (binding, opened) = RecordingUnitOfWork::bound(true);
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let emitted = tokio::time::Instant::now();
+    emitted_in_a_unit(&binding, &bus, CommitHangs).await;
+    let took = emitted.elapsed();
+
+    let bound = std::time::Duration::from_secs(1) + SETTLE_NET;
+    assert!(
+        took >= bound && took < bound + std::time::Duration::from_secs(1),
+        "answered at its deadline plus the binding's settle net: {took:?}",
+    );
+    assert_eq!(
+        listener_units(&opened)
+            .iter()
+            .map(|unit| unit.ended)
+            .collect::<Vec<_>>(),
+        [Some(Ended::Settled { ok: true })],
+        "its body answered, so it was committed",
+    );
+    let doubt = logs.expect_one(nest_rs_events::TARGET, LISTENER_FAILED);
+    assert_eq!(
+        doubt.field("error").as_deref(),
+        Some(nest_rs_database::Unhonoured::IN_DOUBT.reason),
+        "a commit that never answered may have landed",
+    );
+}

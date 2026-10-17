@@ -1,5 +1,5 @@
 //! The queue half of the same refusal, worded once in `nest_rs::codegen::job`:
-//! an attempt allowed past a day is a process of its own.
+//! work allowed past a day is a process of its own.
 
 use nest_rs::core::injectable;
 use nest_rs::queue::{processor, queue};

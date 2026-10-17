@@ -92,9 +92,11 @@ the commit, and dropped when the transaction rolls back or fails to commit, or
 the request fails — an event announces a fact, and a write that did not land is
 not one. The same holds at every boundary that settles a transaction: a
 WebSocket message, an MCP operation, a queue attempt, a scheduled tick. The
-listeners run outside the transaction they waited for, on the pool, with the
-caller's scope, ability and every value the emitter carries; the response
-leaves once they have — or at the unit's deadline, whichever comes first.
+listeners run outside the transaction they waited for, each a unit of work of
+its own — a transaction committed on the `Result` it answers and bounded by
+its own `timeout` — with the caller's scope, ability and every value the
+emitter carries; the response leaves once they have — or at the unit's
+deadline, whichever comes first.
 Past the deadline a listener runs on, the unit answers the outcome it
 committed, and a slow listener never turns a committed write into a timeout
 (a `debug` line on `nest_rs::orm`: `after-commit work outlived the unit's

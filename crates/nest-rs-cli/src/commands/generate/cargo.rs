@@ -129,7 +129,7 @@ pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
         Transport::Queue => vec![&REDIS_QUEUE, &ANYHOW, &SERDE],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW],
         Transport::Mcp => vec![&MCP],
-        Transport::Events => vec![&EVENTS],
+        Transport::Events => vec![&EVENTS, &ANYHOW],
     }
 }
 

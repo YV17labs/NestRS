@@ -41,7 +41,9 @@ pub enum Executor {
     ///
     /// Its commit is the caller's, so work handed to
     /// [`after_commit`](nest_rs_database::after_commit) inside it runs at once:
-    /// the caller emits after its own `commit`.
+    /// the caller emits after its own `commit`. Inside a unit of work, a
+    /// listener reached before it still runs as a unit of its own, never in
+    /// this transaction; outside every unit, it runs bare in this one.
     Txn(Arc<DatabaseTransaction>),
     /// A transaction opened on **first data-layer touch**: what
     /// [`SeaOrmUnitOfWork`](crate::SeaOrmUnitOfWork) installs for a unit of

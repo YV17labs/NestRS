@@ -4,13 +4,14 @@
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
-use syn::ImplItem;
+use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
+use syn::spanned::Spanned;
+use syn::{ImplItem, ReturnType};
 
 use nest_rs_codegen::{
-    VersionedEdge, await_if_async, cfg_attrs, impl_self_ident, payload_arg_type, returns_unit,
-    snake_case,
+    VersionedEdge, await_if_async, cfg_attrs, impl_self_ident, parse_on_event_args,
+    payload_arg_type, snake_case,
 };
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -73,26 +74,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
 
-        if attr.meta.require_path_only().is_err() {
-            return syn::Error::new_spanned(
-                attr,
-                "#[on_event] takes no arguments; the event is read from the method's \
-                 second parameter (e.g. `fn on_x(&self, event: PointsAwarded)`)",
-            )
-            .to_compile_error()
-            .into();
-        }
-
-        if !returns_unit(&method.sig.output) {
-            return syn::Error::new_spanned(
-                &method.sig.output,
-                "#[on_event] methods are fire-and-forget — return `()`, written out or left \
-                 out (an alias of `()` is not read as one), and handle errors inside the \
-                 method (push a failed job to the queue, log, etc.)",
-            )
-            .to_compile_error()
-            .into();
-        }
+        let args = match parse_on_event_args(&attr) {
+            Ok(args) => args,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        let policy = args.transaction(&quote!(::nest_rs_events::__private));
+        let timeout = args.timeout();
 
         let event_ty = match payload_arg_type(method, "#[on_event]", "event", &provider_ident) {
             Ok(ty) => ty,
@@ -131,6 +118,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             &method.sig,
             quote!(<#self_ty>::#method_ident(&__provider, __event)),
         );
+        // What the method answers is read by its type, refused at its return type.
+        let answer_span = match &method.sig.output {
+            ReturnType::Type(_, ty) => ty.span(),
+            ReturnType::Default => method.sig.ident.span(),
+        };
+        let answered = quote_spanned! {answer_span=>
+            ::nest_rs_events::__private::answered(__nestrs_answer)
+        };
 
         emissions.push(quote! {
             #(#cfgs)*
@@ -147,12 +142,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         "` is not registered — add it to a reachable module's \
                          `providers = [...]`",
                     ));
-                ::nest_rs_events::__private::subscribe_named::<#event_ty, _, _>(__bus, #qualified_name, move |__event| {
-                    let __provider = ::std::sync::Arc::clone(&__provider);
-                    async move {
-                        #call
-                    }
-                });
+                ::nest_rs_events::__private::subscribe_named::<#event_ty, _, _>(
+                    __bus,
+                    #qualified_name,
+                    #policy,
+                    #timeout,
+                    move |__event| {
+                        let __provider = ::std::sync::Arc::clone(&__provider);
+                        async move {
+                            let __nestrs_answer = #call;
+                            #answered
+                        }
+                    },
+                );
             }
 
             #(#cfgs)*

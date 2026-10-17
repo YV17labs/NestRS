@@ -135,7 +135,7 @@ re-exports it, so import it from the one the file already uses
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[listeners]` | impl block | Orchestrates event listeners on a provider | [Events](/events/) |
-| `#[on_event]` | method | Subscribes the method to its second-parameter event type | [Events](/events/) |
+| `#[on_event]` | method | Subscribes the method to its second-parameter event type, each call a unit of work of its own, optional `timeout` and `transactional` | [Events](/events/) |
 
 ## MCP
 

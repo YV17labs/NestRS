@@ -395,12 +395,15 @@ length and while streaming (the JWK Set's `JWKS_MAX_BYTES`, OAuth's
 than its total, so no size is cut (storage's `read_timeout` beside its
 `operation_timeout`).
 
-A worker job — a queue attempt, a tick — is the one unit no edge deadline
-bounds, so its decorator's `timeout` key is its deadline, defaulting to
-`nest_rs_core::JOB_TIMEOUT` and never off: past it the attempt's body is cut,
-fails retryably and files `error` (held by `nest_rs_codegen::job`'s table and
-each edge's suite). Synchronous seams (`AbilityFactory`, the WS `Registry`,
-`ConfigSource`) and in-process listeners are outside the family.
+A worker job — a queue attempt, a tick — and an event listener are the units
+no edge deadline bounds, so their decorator's `timeout` key is their deadline,
+defaulting to `nest_rs_core::JOB_TIMEOUT` and never off: past it an attempt's
+body is cut and fails retryably, a listener's is cut and its unit rolls back,
+and each files `error` (held by `nest_rs_codegen::job`'s table, `#[on_event]`'s
+sibling grammar beside it, and each edge's suite). A listener's deadline starts
+with its own call, so one queued behind a slow sibling is not charged for it.
+Synchronous seams (`AbilityFactory`, the WS `Registry`, `ConfigSource`) are
+outside the family.
 
 ## Lifecycle hooks and the way down
 

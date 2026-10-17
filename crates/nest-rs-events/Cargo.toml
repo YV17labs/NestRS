@@ -22,9 +22,14 @@ parking_lot.workspace = true
 # transaction commits, and never when it rolls back. The seam is the data
 # layer's port, named for no ORM, so the bus waits for whichever one is bound.
 nest-rs-database.workspace = true
+# A listener's deadline is read on tokio's clock, the one a unit's deadline
+# (`UnitSpec::deadline`) is read on.
+tokio.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+# `test-util` pauses time, so a listener cut at its deadline is read off the
+# clock that cut it.
+tokio = { workspace = true, features = ["test-util"] }
 # A contained panic that logs nothing would be a silent failure — `LogCapture`
 # covers the event half of the containment contract.
 nest-rs-testing = { path = "../nest-rs-testing" }

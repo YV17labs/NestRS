@@ -35,9 +35,9 @@ method as a listener for the event type read from its parameter. Here the
 ```rust title="crates/features/src/notifications/events/listener.rs (from the demo)"
 use std::sync::Arc;
 
-use nest_rs::core::{error_message, injectable};
+use nest_rs::core::injectable;
 use nest_rs::events::listeners;
-use nest_rs::queue::{JobProducer, JobProducerExt};
+use nest_rs::queue::{JobProducer, JobProducerExt, QueueError};
 
 use crate::notifications::{NotifyCommand, NotifyQueue};
 use crate::posts::PostPublishedEvent;
@@ -51,27 +51,20 @@ pub struct NotificationsListener {
 #[listeners]
 impl NotificationsListener {
     #[on_event]
-    async fn on_post_published(&self, event: PostPublishedEvent) {
+    async fn on_post_published(&self, event: PostPublishedEvent) -> Result<(), QueueError> {
         let command = NotifyCommand {
             org_id: event.org_id,
             message: format!("Post \"{}\" was published", event.post.title),
         };
-        match self.queue.push(NotifyQueue, command, None).await {
-            Ok(receipt) => tracing::debug!(
-                target: crate::notifications::TARGET,
-                post_id = %event.post_id,
-                org_id = %event.org_id,
-                job_id = %receipt.id(),
-                "enqueued a publish notification for the worker",
-            ),
-            Err(error) => tracing::error!(
-                target: crate::notifications::TARGET,
-                error = %error_message(&error),
-                post_id = %event.post_id,
-                org_id = %event.org_id,
-                "failed to enqueue a publish notification",
-            ),
-        }
+        let receipt = self.queue.push(NotifyQueue, command, None).await?;
+        tracing::debug!(
+            target: crate::notifications::TARGET,
+            post_id = %event.post_id,
+            org_id = %event.org_id,
+            job_id = %receipt.id(),
+            "enqueued a publish notification for the worker",
+        );
+        Ok(())
     }
 }
 ```
@@ -81,14 +74,18 @@ impl NotificationsListener {
   entity's DB gateway.
 - **`#[listeners]`** on the impl block orchestrates the per-method
   `#[on_event]` attributes and submits one listener per decorated method.
-- **`#[on_event]`** takes no arguments — the event type is read from the
-  method's first parameter after `&self`. The bus enforces
-  `Clone + Send + 'static` on it through the call site.
+- **`#[on_event]`** reads the event type from the method's first parameter
+  after `&self`. The bus enforces `Clone + Send + 'static` on it through the
+  call site. The method returns `()` or a `Result<(), E>` whose error converts
+  into `Box<dyn Error + Send + Sync>` — `anyhow::Result<()>` or a crate's own
+  error type, as here. Its two keys, `timeout` and `transactional`, shape the
+  call's unit of work: [Event dispatch](/events/dispatch/).
 
 The reaction itself is a [queue](/queue/) push. Storing the notification is
 work that has to survive a crash and retry, which the bus does not buy, so the
-listener hands it to the worker as a `NotifyCommand` and logs a push that
-fails at `error` rather than dropping it.
+listener hands it to the worker as a `NotifyCommand`. A push that fails is the
+listener's `Err`: the bus reports it at `error` with its whole chain, rather
+than the listener logging it and answering as if it had worked.
 
 ## Several listeners on the same provider
 
@@ -240,13 +237,10 @@ As the boot ends, each wired listener logs one line at `debug`, target
 DEBUG nest_rs::events: wired event listener listener="NotificationsListener::on_post_published"
 ```
 
-Dispatch is inline — each listener is awaited in turn, by `emit` or, after a
-commit, by the boundary that settled it — and each listener call is a unit of
-work of its own, `events.dispatch`: a **child** of
-whatever emitted the event, so its lines carry that request's `trace_id` and
-`actor_id` under a `span_id` of their own, and it files one
-[operation line](/opentelemetry/logs/#every-unit-of-work-files-one-line) naming
-the event and the listener. See [Correlation](/fundamentals/correlation/).
+Each listener call then runs as a unit of work of its own, `events.dispatch`,
+and files one operation line naming the event and the listener.
+[Event dispatch](/events/dispatch/) covers that unit — its transaction, its
+deadline, the order the bus keeps and what a failure changes.
 
 <Aside type="caution">
 Without `EventsModule` anywhere in the tree, the `EventBus` is absent —
@@ -255,44 +249,6 @@ subscription is wired). This is the same "linked but unreachable"
 property the rest of the framework relies on: an app that does not want
 the bus omits the module.
 </Aside>
-
-## The shape of dispatch
-
-`bus.emit(event)` reads the listener list once (under an uncontended
-`RwLock` — read-only once the boot has wired it), then awaits each listener in
-turn with its own clone of the event. Only a task a factory or a constructor
-spawned can emit before that: its event reaches no listener, and one `warn`
-on `nest_rs::events` names the event type, `event emitted before the
-listeners were wired: dropped`. Three consequences worth naming:
-
-- **Order is deterministic** — registration order is preservation order;
-  listeners are registered in the order their providers appear in
-  `providers = [...]`, then in the order their methods appear in the
-  `#[listeners]` impl block.
-- **Failure is local** — a listener returns `()`; there is no `Result` to
-  propagate, no retry, no dead-letter queue, no global rollback. A
-  **panicking** listener is contained to itself: the panic is caught, logged
-  at `error` on `nest_rs::events` with the event type and the panic message,
-  and the chain continues with the next listener. `emit` returns normally, so
-  the emitter's own post-emit work still runs and an HTTP response is still
-  built. Side effects that can fail belong on the [Queue](/queue/), which
-  buys retries as well as isolation. A listener runs inside its emitter's
-  unit of work, so it is dropped with it — a request the shutdown window cut,
-  an operation its client cancelled — and its `events.dispatch` line says so,
-  `cancelled`.
-- **Dispatch follows the commit** — an event is a fact, and a fact the
-  transaction rolls back never happened. Emitted inside a transaction (a
-  mutating request, a WebSocket message, an MCP operation, a queue attempt,
-  a scheduled tick), the dispatch waits for the commit and is dropped when
-  the transaction rolls back or fails to commit, or the unit of work fails. A
-  listener runs *outside* that transaction — on the pool, with the scope and
-  the ability its emitter had — so its own writes stand on their own and a
-  statement it fails cannot take the emitter's down with it. A write that
-  must be atomic with the emitter's is not a reaction: call it from the
-  service. A transaction you open yourself — `db.begin()` inside
-  `retry_on_conflict`, an `Executor::Txn` you install — is committed by you,
-  out of the framework's sight, so nothing waits for it: emit after your own
-  `commit`.
 
 ## Module-gated, even when the crate is shared
 
@@ -315,6 +271,8 @@ app's own code. Same property as queue processors and scheduled jobs.
 
 ## Going further
 
+- [Event dispatch](/events/dispatch/) — each listener's unit of work, its
+  deadline, the order of dispatch and what a failure changes.
 - [Queue](/queue/) — durable, distributed, retried; the right tool when
   the work must outlive the request or run on another binary. A bus event
   shares the past-tense `…Event` naming; the difference is delivery

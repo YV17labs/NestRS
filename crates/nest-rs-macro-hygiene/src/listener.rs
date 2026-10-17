@@ -9,6 +9,18 @@ pub struct HygieneEvent {
     pub label: &'static str,
 }
 
+/// A listener's own error, converting into the boxed error the bus reports.
+#[derive(Debug)]
+pub struct HygieneRefusal;
+
+impl std::fmt::Display for HygieneRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the hygiene listener refused")
+    }
+}
+
+impl std::error::Error for HygieneRefusal {}
+
 #[injectable]
 pub struct HygieneListener;
 
@@ -27,6 +39,14 @@ impl HygieneListener {
     #[on_event]
     fn on_hygiene_sync(&self, event: HygieneEvent) {
         let _ = event.label;
+    }
+
+    #[on_event(transactional = false, timeout = "30s")]
+    async fn on_hygiene_fallible(&self, event: HygieneEvent) -> Result<(), HygieneRefusal> {
+        if event.label.is_empty() {
+            return Err(HygieneRefusal);
+        }
+        Ok(())
     }
 
     /// A listener compiled out takes its wiring with it.

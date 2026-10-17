@@ -319,6 +319,12 @@ const WHAT_THE_VALUES_DO: &str = "`true` (the default) settles the job's data-la
 ///
 /// The refusal states what each value *does*, not the type it wanted.
 pub fn transactional_value(member: JobDecorator, expr: &Expr) -> syn::Result<bool> {
+    transactional_value_at(member.name(), expr, WHAT_THE_VALUES_DO)
+}
+
+/// Read a `transactional = …` value written at `#[attr]`, refused stating
+/// `does`: what each value does there.
+pub(crate) fn transactional_value_at(attr: &str, expr: &Expr, does: &str) -> syn::Result<bool> {
     match ungrouped_expr(expr) {
         Expr::Lit(ExprLit {
             lit: Lit::Bool(b), ..
@@ -326,8 +332,8 @@ pub fn transactional_value(member: JobDecorator, expr: &Expr) -> syn::Result<boo
         other => Err(syn::Error::new_spanned(
             other,
             format!(
-                "{} — {WHAT_THE_VALUES_DO}",
-                takes_one_of(member.name(), TRANSACTIONAL, &["true", "false"])
+                "{} — {does}",
+                takes_one_of(attr, TRANSACTIONAL, &["true", "false"])
             ),
         )),
     }
@@ -336,14 +342,21 @@ pub fn transactional_value(member: JobDecorator, expr: &Expr) -> syn::Result<boo
 /// Read a `timeout = "…"` value written at `#[member]`, in milliseconds: a
 /// whole number of `ms`, `s`, `m` or `h`, above zero and at most a day.
 pub fn timeout_value(member: JobDecorator, expr: &Expr) -> syn::Result<u64> {
-    let millis = crate::duration_millis(member.name(), Some(TIMEOUT), expr)?;
+    timeout_value_at(member.name(), expr)
+}
+
+/// Read a `timeout = "…"` value written at `#[attr]` — a site the job
+/// family's bound reaches without being one of its members — in milliseconds:
+/// a whole number of `ms`, `s`, `m` or `h`, above zero and at most a day.
+pub(crate) fn timeout_value_at(attr: &str, expr: &Expr) -> syn::Result<u64> {
+    let millis = crate::duration_millis(attr, Some(TIMEOUT), expr)?;
     if millis > TIMEOUT_CEILING_MILLIS {
         return Err(syn::Error::new_spanned(
             ungrouped_expr(expr),
             format!(
-                "{} is at most `\"24h\"`: an attempt running past a day is a process of its own \
-                 — split it into jobs that each end within one",
-                site(member.name(), Some(TIMEOUT)),
+                "{} is at most `\"24h\"`: work running past a day is a process of its own — \
+                 split it into jobs that each end within one",
+                site(attr, Some(TIMEOUT)),
             ),
         ));
     }
@@ -359,12 +372,12 @@ pub fn job_timeout(millis: Option<u64>) -> TokenStream {
     }
 }
 
-/// The refusal for the key written **bare**, with no value.
-fn transactional_needs_a_value(member: JobDecorator) -> String {
+/// The refusal for the key written **bare** at `#[attr]`, with no value,
+/// stating `does`: what each value does there.
+pub(crate) fn transactional_needs_a_value(attr: &str, does: &str) -> String {
     format!(
-        "{} needs a value — write `{TRANSACTIONAL} = true` or `{TRANSACTIONAL} = false`. \
-         {WHAT_THE_VALUES_DO}",
-        site(member.name(), Some(TRANSACTIONAL)),
+        "{} needs a value — write `{TRANSACTIONAL} = true` or `{TRANSACTIONAL} = false`. {does}",
+        site(attr, Some(TRANSACTIONAL)),
     )
 }
 
@@ -373,7 +386,7 @@ fn transactional_needs_a_value(member: JobDecorator) -> String {
 /// as the member spells it, nested ones included (`throttle(limit)`).
 pub fn job_argument_needs_a_value(member: JobDecorator, name: &str) -> String {
     if name == TRANSACTIONAL {
-        transactional_needs_a_value(member)
+        transactional_needs_a_value(member.name(), WHAT_THE_VALUES_DO)
     } else {
         crate::args::needs_a_value(member.name(), name)
     }

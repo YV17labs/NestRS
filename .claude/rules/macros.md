@@ -130,7 +130,7 @@ decorator resolves no name, so a renamed `Result` or a type alias must behave
 as the literal does. Behaviour is decided through a type probe —
 `nest_rs_core::__private::Answer` at `#[routes]` and `#[operations]`,
 `nest_rs_mcp::__private::OperationAnswer` at `#[tools]`, `ReplyValue` at
-`#[messages]`. What a parameter resolves is read the same way: an extractor
+`#[messages]`, `nest_rs_events::__private::ListenerAnswer` at `#[listeners]`. What a parameter resolves is read the same way: an extractor
 that resolves a provider implements `nest_rs_core::ResolvesProvider`, and the
 impl half asks `nest_rs_core::__private::ParamProbe` per parameter type —
 called on `&&ParamProbe<T>`, the autoref depth its unit tests pin — and hands
@@ -174,6 +174,9 @@ by its exhaustive `match`): each cell is built, or refused with the fact that
 makes it meaningless (``#[every] takes no `retries`: a tick's retry is the next
 occurrence``), with a trybuild snapshot per refused cell and a hygiene use site
 per built one. `transactional` is the one key every member builds.
+`#[on_event]` is no member — a listener is no worker job — and reads two of the
+family's keys, `transactional` and `timeout`, through a sibling grammar
+(`nest_rs_codegen::ON_EVENT_GRAMMAR`) with the family's parsers, named by site.
 
 **A rule both a decorator and the runtime check is written twice and pinned
 once.** A surface crate cannot depend on its own macros, so a queue name or a

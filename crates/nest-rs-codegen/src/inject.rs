@@ -80,7 +80,9 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                     continue;
                 };
                 has_inject = true;
-                read_inject_args(&inject_attr)?;
+                if !matches!(inject_attr.meta, syn::Meta::Path(_)) {
+                    INJECT.parse_attr(&inject_attr, |_| Ok(()))?;
+                }
 
                 let field_ty = &field.ty;
 
@@ -171,14 +173,6 @@ fn removed_key(key: &str) -> Option<String> {
          (`Arc<RedisConnection<Cache>>`), or wrap your own value in a newtype"
             .to_owned()
     })
-}
-
-/// Refuse any argument written on an `#[inject]` attribute.
-fn read_inject_args(attr: &syn::Attribute) -> syn::Result<()> {
-    if matches!(attr.meta, syn::Meta::Path(_)) {
-        return Ok(());
-    }
-    INJECT.parse_attr(attr, |_| Ok(()))
 }
 
 /// The hidden `__nestrs_from_container` constructor emitted by every decorator

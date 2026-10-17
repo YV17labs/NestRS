@@ -360,8 +360,7 @@ clients of one library are two newtypes — `pub struct
 UpstreamClient(reqwest::Client);` — each naming what it reaches. Where the
 value must keep its own type, seed it under a marker,
 `App::builder().provide(Instanced::<Upstream, _>::from(client))`, and inject
-`Arc<Instanced<Upstream, reqwest::Client>>`. `#[inject]` takes no key: a
-dependency is found by its type alone.
+`Arc<Instanced<Upstream, reqwest::Client>>`. `#[inject]` takes no key.
 
 A module takes an instance only for a **resource an app opens more than
 once**, never a database:

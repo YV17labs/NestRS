@@ -428,8 +428,7 @@ pub struct ContainerBuilder {
     /// ([`install`](Self::install)): the registrations it makes are that
     /// factory's.
     installing: Option<Origin>,
-    /// Second registrations of one type
-    /// ([`duplicate_providers`](Self::duplicate_providers)).
+    /// Second registrations of one type ([`duplicate_providers`](Self::duplicate_providers)).
     duplicates: Vec<DuplicateProvider>,
     /// Dynamic imports (`Foo::for_root(opts)`) the collect phase constructed,
     /// keyed by import site so the register phase consumes the same value.
@@ -1300,8 +1299,8 @@ impl ContainerBuilder {
         &self.absent_optionals
     }
 
-    /// Provider keys registered so far — after the factory phase, the access
-    /// graph's **global** set.
+    /// Every singleton `TypeId` registered so far — after the factory phase,
+    /// the access graph's **global** set.
     pub(crate) fn provider_ids(&self) -> HashSet<TypeId> {
         self.providers.keys().copied().collect()
     }

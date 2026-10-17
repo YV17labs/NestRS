@@ -26,7 +26,7 @@
 
 use std::fmt;
 
-use nest_rs_http::{Bytes, HeaderValue, Response, StatusCode, header};
+use nest_rs_http::{Bytes, HeaderName, HeaderValue, Response, StatusCode, header};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -179,10 +179,7 @@ impl TestResponse {
 }
 
 /// `value` as the value the header `name` is expected to hold.
-fn expected_value<V: TryInto<HeaderValue>>(
-    name: &nest_rs_http::HeaderName,
-    value: V,
-) -> HeaderValue {
+fn expected_value<V: TryInto<HeaderValue>>(name: &HeaderName, value: V) -> HeaderValue {
     value.try_into().unwrap_or_else(|_| {
         panic!("the value expected of the `{name}` header is not a header value")
     })
@@ -242,11 +239,8 @@ impl<'a> TestJsonValue<'a> {
     #[track_caller]
     pub fn object(&self) -> TestJsonObject<'a> {
         match self.value {
-            Value::Object(fields) => TestJsonObject {
-                root: self.root,
-                fields,
-            },
-            other => self.mismatch("an object", other),
+            Value::Object(fields) => TestJsonObject { at: *self, fields },
+            _ => self.mismatch("an object"),
         }
     }
 
@@ -254,11 +248,8 @@ impl<'a> TestJsonValue<'a> {
     #[track_caller]
     pub fn array(&self) -> TestJsonArray<'a> {
         match self.value {
-            Value::Array(items) => TestJsonArray {
-                root: self.root,
-                items,
-            },
-            other => self.mismatch("an array", other),
+            Value::Array(items) => TestJsonArray { at: *self, items },
+            _ => self.mismatch("an array"),
         }
     }
 
@@ -267,7 +258,7 @@ impl<'a> TestJsonValue<'a> {
     pub fn string(&self) -> &'a str {
         match self.value {
             Value::String(text) => text,
-            other => self.mismatch("a string", other),
+            _ => self.mismatch("a string"),
         }
     }
 
@@ -276,7 +267,7 @@ impl<'a> TestJsonValue<'a> {
     pub fn i64(&self) -> i64 {
         self.value
             .as_i64()
-            .unwrap_or_else(|| self.mismatch("an i64", self.value))
+            .unwrap_or_else(|| self.mismatch("an i64"))
     }
 
     /// Asserts the value is the string `text`.
@@ -297,14 +288,26 @@ impl<'a> TestJsonValue<'a> {
         })
     }
 
-    /// Where this value sits in its document, from `$`.
+    /// `value`, a value of this one's document.
+    fn child(&self, value: &'a Value) -> Self {
+        Self {
+            root: self.root,
+            value,
+        }
+    }
+
+    /// Where this value sits in its document — `$`, `$.data`, `$.items[2]`,
+    /// `$["a key"]` — found by identity, so a walk pays for it only when an
+    /// assertion fails.
     fn path(&self) -> String {
-        path_to(self.root, self.value)
+        let mut path = String::from("$");
+        walk(self.root, self.value, &mut path);
+        path
     }
 
     #[track_caller]
-    fn mismatch(&self, expected: &str, actual: &Value) -> ! {
-        panic!("`{}` is {}, not {expected}", self.path(), kind(actual))
+    fn mismatch(&self, expected: &str) -> ! {
+        panic!("`{}` is {}, not {expected}", self.path(), kind(self.value))
     }
 }
 
@@ -317,7 +320,7 @@ impl fmt::Debug for TestJsonValue<'_> {
 /// An object of a [`TestJson`] document.
 #[derive(Clone, Copy)]
 pub struct TestJsonObject<'a> {
-    root: &'a Value,
+    at: TestJsonValue<'a>,
     fields: &'a Map<String, Value>,
 }
 
@@ -330,20 +333,15 @@ impl<'a> TestJsonObject<'a> {
     #[track_caller]
     pub fn get(&self, name: impl AsRef<str>) -> TestJsonValue<'a> {
         let name = name.as_ref();
-        self.get_opt(name).unwrap_or_else(|| {
-            panic!(
-                "`{}` has no key `{name}`",
-                path_to(self.root, self.as_value())
-            )
-        })
+        self.get_opt(name)
+            .unwrap_or_else(|| panic!("`{}` has no key `{name}`", self.at.path()))
     }
 
     /// The value under `name`, when the object has one.
     pub fn get_opt(&self, name: impl AsRef<str>) -> Option<TestJsonValue<'a>> {
-        self.fields.get(name.as_ref()).map(|value| TestJsonValue {
-            root: self.root,
-            value,
-        })
+        self.fields
+            .get(name.as_ref())
+            .map(|value| self.at.child(value))
     }
 
     /// How many keys the object has.
@@ -358,15 +356,10 @@ impl<'a> TestJsonObject<'a> {
 
     /// The object's keys and values.
     pub fn iter(&self) -> impl Iterator<Item = (&'a String, TestJsonValue<'a>)> {
-        let root = self.root;
+        let at = self.at;
         self.fields
             .iter()
-            .map(move |(name, value)| (name, TestJsonValue { root, value }))
-    }
-
-    /// The object, as the document holds it.
-    fn as_value(&self) -> &'a Value {
-        find_object(self.root, self.fields).unwrap_or(self.root)
+            .map(move |(name, value)| (name, at.child(value)))
     }
 }
 
@@ -379,7 +372,7 @@ impl fmt::Debug for TestJsonObject<'_> {
 /// An array of a [`TestJson`] document.
 #[derive(Clone, Copy)]
 pub struct TestJsonArray<'a> {
-    root: &'a Value,
+    at: TestJsonValue<'a>,
     items: &'a [Value],
 }
 
@@ -394,7 +387,7 @@ impl<'a> TestJsonArray<'a> {
         self.get_opt(index).unwrap_or_else(|| {
             panic!(
                 "`{}` has no index {index}: its length is {}",
-                path_to(self.root, self.as_value()),
+                self.at.path(),
                 self.items.len(),
             )
         })
@@ -402,10 +395,7 @@ impl<'a> TestJsonArray<'a> {
 
     /// The item at `index`, when the array has one.
     pub fn get_opt(&self, index: usize) -> Option<TestJsonValue<'a>> {
-        self.items.get(index).map(|value| TestJsonValue {
-            root: self.root,
-            value,
-        })
+        self.items.get(index).map(|value| self.at.child(value))
     }
 
     /// How many items the array has.
@@ -420,33 +410,14 @@ impl<'a> TestJsonArray<'a> {
 
     /// The array's items.
     pub fn iter(&self) -> impl Iterator<Item = TestJsonValue<'a>> {
-        let root = self.root;
-        self.items
-            .iter()
-            .map(move |value| TestJsonValue { root, value })
-    }
-
-    /// The array, as the document holds it.
-    fn as_value(&self) -> &'a Value {
-        find_array(self.root, self.items).unwrap_or(self.root)
+        let at = self.at;
+        self.items.iter().map(move |value| at.child(value))
     }
 }
 
 impl fmt::Debug for TestJsonArray<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self.items, f)
-    }
-}
-
-/// The JSON path of `target` in `root` — `$`, `$.data`, `$.items[2]`,
-/// `$["a key"]` — found by identity, so a walk pays for it only when an
-/// assertion fails.
-fn path_to(root: &Value, target: &Value) -> String {
-    let mut path = String::from("$");
-    if walk(root, target, &mut path) {
-        path
-    } else {
-        String::from("$")
     }
 }
 
@@ -462,6 +433,8 @@ fn kind(value: &Value) -> &'static str {
     }
 }
 
+/// Appends to `path` the steps from `node` to `target`, and says whether it
+/// found it; `path` is left as it was when it did not.
 fn walk(node: &Value, target: &Value, path: &mut String) -> bool {
     if std::ptr::eq(node, target) {
         return true;
@@ -509,44 +482,13 @@ fn push_key(path: &mut String, name: &str) {
     }
 }
 
-/// The value in `root` holding exactly `fields`.
-fn find_object<'a>(root: &'a Value, fields: &Map<String, Value>) -> Option<&'a Value> {
-    find(
-        root,
-        &|value| matches!(value, Value::Object(map) if std::ptr::eq(map, fields)),
-    )
-}
-
-/// The value in `root` holding exactly `items`.
-fn find_array<'a>(root: &'a Value, items: &[Value]) -> Option<&'a Value> {
-    find(
-        root,
-        &|value| matches!(value, Value::Array(list) if std::ptr::eq(list.as_slice(), items)),
-    )
-}
-
-fn find<'a>(node: &'a Value, hit: &dyn Fn(&Value) -> bool) -> Option<&'a Value> {
-    if hit(node) {
-        return Some(node);
-    }
-    match node {
-        Value::Object(fields) => fields.values().find_map(|value| find(value, hit)),
-        Value::Array(items) => items.iter().find_map(|value| find(value, hit)),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use nest_rs_http::{HeaderName, endpoint_fn};
+    use nest_rs_http::endpoint_fn;
     use serde_json::json;
 
     use super::*;
     use crate::TestClient;
-
-    fn document(value: Value) -> TestJson {
-        TestJson(value)
-    }
 
     async fn answered(response: fn() -> Response) -> TestResponse {
         TestClient::new(endpoint_fn(move |_req| async move { Ok(response()) }))
@@ -622,14 +564,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "`$.data` has no key `count`")]
     fn a_missing_key_names_its_object_path() {
-        let json = document(json!({ "data": { "items": [] } }));
+        let json = TestJson(json!({ "data": { "items": [] } }));
         let _ = json.value().object().get("data").object().get("count");
     }
 
     #[test]
     #[should_panic(expected = "`$.data.items` has no index 3: its length is 1")]
     fn a_missing_index_names_its_array_path_and_length() {
-        let json = document(json!({ "data": { "items": [1] } }));
+        let json = TestJson(json!({ "data": { "items": [1] } }));
         let _ = json
             .value()
             .object()
@@ -643,7 +585,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "`$.data.items[0].id` is a number, not a string")]
     fn a_kind_mismatch_names_the_value_path() {
-        let json = document(json!({ "data": { "items": [{ "id": 1 }] } }));
+        let json = TestJson(json!({ "data": { "items": [{ "id": 1 }] } }));
         let _ = json
             .value()
             .object()
@@ -660,19 +602,19 @@ mod tests {
     #[test]
     #[should_panic(expected = "`$[\"odd key\"]`")]
     fn a_key_that_is_no_identifier_is_quoted_in_the_path() {
-        let json = document(json!({ "odd key": "yes" }));
+        let json = TestJson(json!({ "odd key": "yes" }));
         json.value().object().get("odd key").assert_string("no");
     }
 
     #[test]
     fn the_document_serializes_as_it_was_read() {
         let read = json!({ "data": { "items": [1, 2] } });
-        assert_eq!(serde_json::to_value(document(read.clone())).unwrap(), read);
+        assert_eq!(serde_json::to_value(TestJson(read.clone())).unwrap(), read);
     }
 
     #[test]
     fn the_walk_reads_what_the_document_holds() {
-        let json = document(json!({ "items": [{ "id": 7, "title": "Hello" }], "total": 1 }));
+        let json = TestJson(json!({ "items": [{ "id": 7, "title": "Hello" }], "total": 1 }));
         let root = json.value().object();
         let items = root.get("items").array();
         assert_eq!(items.len(), 1);

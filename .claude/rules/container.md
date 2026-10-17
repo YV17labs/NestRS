@@ -62,9 +62,16 @@ framework half.
   its own type and each trait it is listed with, so a listing names a provider
   once. `#[module]` records each provider's injected types, and the boot fails
   (`AccessGraphError`) on a provider injecting what its module neither owns,
-  imports transitively, nor receives as global infrastructure. It governs
-  `#[inject]`, optional or not — an optional dependency no module the app
-  reaches provides is absent, never a leak — the `#[use_*]` layer lists, and
+  imports transitively, nor receives as global infrastructure: what a seed or
+  a factory makes is app-global, as NestJS's `TypeOrmModule.forRoot` and a
+  global `ConfigModule` are, and a provider a module lists is import-gated —
+  being global licenses no data access outside `Repo` (`data-layer.md`). What
+  a hand-written `register` installs is neither: the graph cannot see it, so
+  whatever registers after it reaches it with no import and one registered
+  before it is refused (`UnbuiltProviderError`) — app-wide infrastructure is a
+  factory's output, and a gated provider is listed in `providers`. It
+  governs `#[inject]`, optional or not — an optional dependency no module the
+  app reaches provides is absent, never a leak — the `#[use_*]` layer lists, and
   every provider a handler resolves through a parameter whose type implements
   `ResolvesProvider`, checked for reach but never for scope, since a request is
   its consumer; `Container::get` at runtime is an unchecked escape hatch. **A provider a module lists is built, or the boot

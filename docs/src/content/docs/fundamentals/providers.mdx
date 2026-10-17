@@ -184,7 +184,10 @@ The container is flat at runtime — every registered `TypeId` is
 globally resolvable — but `#[module]` makes wiring **declarative**. At
 boot the access graph checks: every `#[inject]` on a provider must be
 reachable from that provider's module through `imports`, or be global
-infrastructure (DB pool, config, …).
+infrastructure — what a seed or a factory makes, such as a config or the
+database connection ([what is global](/fundamentals/modules/#what-is-global)).
+What a hand-written module installs in its `register` is outside the check
+and reached only once that module has registered: import it.
 
 Typical mistake — controller registered without importing the port:
 

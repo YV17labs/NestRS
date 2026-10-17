@@ -237,7 +237,7 @@ does not do.
 | NestJS | Why NestRS has none |
 |---|---|
 | `configure(consumer)` middleware | The word covers two shapes. Gating is a [Guard](/fundamentals/guards/), wrapping is an [Interceptor](/fundamentals/interceptors/), body normalization is a [Pipe](/fundamentals/pipes/), CORS and security headers are `HttpConfig`. [Middleware](/fundamentals/middleware/) maps every role to its home |
-| `@Global()` | The import list is the declaration, and it is what the boot-time access-graph check reads. A module reachable everywhere without saying so is exactly the wire that check exists to catch |
+| `@Global()` | What a seed or a factory makes is [app-global](/fundamentals/modules/#what-is-global) — every config and connection, as `TypeOrmModule.forRoot` and `ConfigModule.forRoot({ isGlobal: true })` are in NestJS. A provider a module lists is import-gated, and no flag opens it everywhere: the import list is its declaration, the one the boot-time access-graph check reads |
 | `app.enableShutdownHooks()` | Never opt-in. `#[on_module_destroy]` and `#[on_application_shutdown]` always run, best-effort, so one failing cleanup doesn't skip the rest |
 | `@Injectable()` on everything | `#[injectable]` marks a provider the container builds; a controller, resolver or gateway is already one through its own decorator |
 

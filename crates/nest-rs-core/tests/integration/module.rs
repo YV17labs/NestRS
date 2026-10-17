@@ -403,6 +403,21 @@ async fn a_module_importing_the_hand_written_one_builds_its_provider() {
     assert!(app.container().get::<Bookkeeper>().is_some());
 }
 
+#[module(imports = [LedgerModule, BookkeepingModule])]
+struct LedgerFirstRoot;
+
+#[tokio::test]
+async fn what_a_hand_written_module_registers_is_outside_the_access_graph() {
+    let app = App::new::<LedgerFirstRoot>().expect("registered first, the ledger is reached");
+    assert!(app.container().get::<Bookkeeper>().is_some());
+    let app = App::builder()
+        .module::<LedgerFirstRoot>()
+        .build()
+        .await
+        .expect("registered first, the ledger is reached");
+    assert!(app.container().get::<Bookkeeper>().is_some());
+}
+
 #[injectable]
 #[derive(Default)]
 struct Archive;

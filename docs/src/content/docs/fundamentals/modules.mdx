@@ -267,6 +267,36 @@ reachable only through `PostsHttpModule` — that is the point.
 Sync-only apps skip collect/factories and call
 `App::new::<BlogModule>()` directly.
 
+## What is global
+
+What a seed or a factory makes is **app-global**: any provider may inject
+it, whichever module queued it. What a module lists in `providers` is
+**import-gated**: only that module and the modules importing it, at any
+depth, reach it. The framework's global outputs are the infrastructure an app
+opens once:
+
+- every `#[config]` a module reads;
+- the connections — `DatabaseConnection`, and `RedisConnection` once per
+  [instance](/fundamentals/providers/#instances--one-resource-opened-twice);
+- the backend a binding plugs into a port — `dyn UnitOfWork`,
+  `dyn JobProducer`, `dyn ThrottlerStore`, `dyn OccurrenceLock` — and the
+  `ThrottlerGuard` over its store;
+- `JwtService` and `OAuthClient`;
+- the kernel's own: `AppLifecycle`, `ReachableProviders`, `ProviderOrder`
+  and `Composition`.
+
+A value you seed with `App::builder().provide(value)` joins them. Global is
+no licence for data access: a connection is still reached through a service
+and `Repo`.
+
+What a hand-written module installs in its own `register` — `EventsModule`'s
+`EventBus`, `OpenTelemetryModule`'s `Metrics` — is neither global nor gated:
+the access graph does not see it. A provider registered after it reaches it with no import, and
+one registered before it fails the boot (`UnbuiltProviderError`), so import
+the module that installs it and it registers first. In a module of your own,
+open app-wide infrastructure in a factory, and list what you gate in
+`providers`.
+
 ## Safe to import twice
 
 The framework runs each phase of a module once, however many modules

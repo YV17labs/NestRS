@@ -55,17 +55,12 @@ that no longer resolves.
 "The use site owns that crate by definition" is not an admissible reason;
 owning a capability means enabling its feature.
 
-Two exceptions, neither a licence:
-
-- **Emitted derives** (`serde`, `validator`, `schemars`) target the call site's
-  prelude by construction. The fix is the derive's `crate = ` override through a
-  surface re-export; until a derive has one, its path is legal only where the
-  developer's own source writes that derive. sea-orm's own derives emit
-  relative `sea_orm::` paths, which an entity module satisfies with
-  `use nest_rs::seaorm::sea_orm;`.
-- **poem's `#[handler]`**, which `#[routes]` and `#[crud]` wrap, targets the call
-  site's `poem`. That is a known defect, stated on the `/http/` page, not a
-  design.
+One exception, not a licence: **emitted derives** (`serde`, `validator`,
+`schemars`) target the call site's prelude by construction. The fix is the
+derive's `crate = ` override through a surface re-export; until a derive has
+one, its path is legal only where the developer's own source writes that
+derive. sea-orm's own derives emit relative `sea_orm::` paths, which an entity
+module satisfies with `use nest_rs::seaorm::sea_orm;`.
 
 Held by the compile witness `nest-rs-macro-hygiene` (one dependency, one
 feature per capability — `manifests-ci.md`, *Shipping a capability*), which holds a

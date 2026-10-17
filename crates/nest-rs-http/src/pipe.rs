@@ -17,9 +17,7 @@ use std::pin::Pin;
 use nest_rs_pipes::{Pipe, PipeError, ValidationPipe};
 use validator::Validate;
 
-use crate::{
-    Form, FromRequest, Header, Json, Path, ProblemDetails, Query, RawBody, Request, RequestBody,
-};
+use crate::{Form, FromRequest, Header, Json, Path, ProblemDetails, Query, Request, RequestBody};
 
 /// Owned-unwrap for an extractor, so a pipe can take the value it carries
 /// without cloning.
@@ -44,16 +42,7 @@ macro_rules! into_inner {
     };
 }
 
-into_inner!(
-    Json<T>,
-    Path<T>,
-    Query<T>,
-    Form<T>,
-    Header<T>,
-    poem::web::Json<T>,
-    poem::web::Path<T>,
-    poem::web::Query<T>,
-);
+into_inner!(Json<T>, Path<T>, Query<T>, Form<T>, Header<T>,);
 
 /// A pipe's refusal, as the `400` problem every edge's rejection is.
 fn rejection(err: PipeError) -> ProblemDetails {
@@ -64,23 +53,9 @@ fn rejection(err: PipeError) -> ProblemDetails {
     problem
 }
 
-/// Extract `E` from poem's request and unwrap it to its inner value. The future
-/// is boxed: a generic `async fn` delegating to another's trips rustc#100013.
-async fn extract_poem_inner<'a, E>(
-    req: &'a poem::Request,
-    body: &mut poem::RequestBody,
-) -> poem::Result<E::Inner>
-where
-    E: poem::FromRequest<'a> + IntoInner,
-{
-    cap_poem_body(body).await?;
-    let extract: Pin<Box<dyn Future<Output = poem::Result<E>> + Send + '_>> =
-        Box::pin(E::from_request(req, body));
-    Ok(extract.await?.into_inner())
-}
-
 /// Extract `E` and unwrap it to its inner value; each extractor of the
-/// vocabulary that reads the body reads it under the cap itself.
+/// vocabulary that reads the body reads it under the cap itself. The future is
+/// boxed: a generic `async fn` delegating to another's trips rustc#100013.
 async fn extract_inner<'a, E>(req: &'a Request, body: &mut RequestBody) -> crate::Result<E::Inner>
 where
     E: FromRequest<'a> + IntoInner,
@@ -88,19 +63,6 @@ where
     let extract: Pin<Box<dyn Future<Output = crate::Result<E>> + Send + '_>> =
         Box::pin(E::from_request(req, body));
     Ok(extract.await?.into_inner())
-}
-
-/// Re-seat poem's request body bounded to the configured limit before the
-/// inner extractor reads it: poem's `Json` ignores the ambient cap. `413` past
-/// it.
-async fn cap_poem_body(body: &mut poem::RequestBody) -> poem::Result<()> {
-    if body.is_none() {
-        return Ok(());
-    }
-    let RawBody(bytes) =
-        RawBody::extract_poem_with_limit(body, crate::current_body_limit()).await?;
-    *body = poem::RequestBody::new(poem::Body::from_bytes(bytes));
-    Ok(())
 }
 
 /// Applies pipe `P` to the value extractor `E` produces, handing the handler
@@ -128,23 +90,6 @@ impl<P: Pipe, E> Deref for Piped<P, E> {
     type Target = P::Out;
     fn deref(&self) -> &P::Out {
         &self.value
-    }
-}
-
-impl<'a, P, E> poem::FromRequest<'a> for Piped<P, E>
-where
-    P: Pipe + Send + Sync,
-    P::Out: Send,
-    E: poem::FromRequest<'a> + IntoInner<Inner = P::In>,
-{
-    async fn from_request(
-        req: &'a poem::Request,
-        body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
-        let input = extract_poem_inner::<E>(req, body).await?;
-        P::transform(input)
-            .map(Self::of)
-            .map_err(|refused| rejection(refused).into())
     }
 }
 
@@ -181,22 +126,6 @@ impl<E: IntoInner> Deref for Valid<E> {
     type Target = E::Inner;
     fn deref(&self) -> &E::Inner {
         &self.0
-    }
-}
-
-impl<'a, E> poem::FromRequest<'a> for Valid<E>
-where
-    E: poem::FromRequest<'a> + IntoInner,
-    E::Inner: Validate,
-{
-    async fn from_request(
-        req: &'a poem::Request,
-        body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
-        let input = extract_poem_inner::<E>(req, body).await?;
-        ValidationPipe::<E::Inner>::transform(input)
-            .map(Valid)
-            .map_err(|refused| rejection(refused).into())
     }
 }
 
@@ -266,9 +195,6 @@ mod tests {
         assert_eq!(IntoInner::into_inner(Query(7)), 7);
         assert_eq!(IntoInner::into_inner(Form(8)), 8);
         assert_eq!(IntoInner::into_inner(Header("abc")), "abc");
-        assert_eq!(IntoInner::into_inner(poem::web::Json(1)), 1);
-        assert_eq!(IntoInner::into_inner(poem::web::Path(2)), 2);
-        assert_eq!(IntoInner::into_inner(poem::web::Query(3)), 3);
     }
 
     struct ToUpper;
@@ -416,45 +342,5 @@ mod tests {
             json.get("errors").and_then(|d| d.get("password")).is_some(),
             "errors should still name the failing field: {json}",
         );
-    }
-
-    /// The poem twin `#[routes]` still calls answers the same refusals, under
-    /// the same cap.
-    #[tokio::test]
-    async fn the_poem_reading_answers_as_the_vocabulary_does() {
-        let poem_json = |payload: &Greeting| {
-            poem::Request::builder()
-                .content_type("application/json")
-                .body(serde_json::to_vec(payload).expect("body serializes"))
-                .split()
-        };
-
-        let (req, mut body) = poem_json(&Greeting { msg: String::new() });
-        let Err(err) =
-            <Valid<poem::web::Json<Greeting>> as poem::FromRequest>::from_request(&req, &mut body)
-                .await
-        else {
-            panic!("validation should have rejected");
-        };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let json: serde_json::Value =
-            serde_json::from_slice(&resp.into_body().into_bytes().await.unwrap()).unwrap();
-        assert!(json["errors"]["msg"].is_array(), "{json}");
-
-        let (req, mut body) = poem_json(&Greeting {
-            msg: "well over four bytes".into(),
-        });
-        let Err(err) = crate::raw_body::with_body_limit(
-            4,
-            <Piped<ValidationPipe<Greeting>, poem::web::Json<Greeting>> as poem::FromRequest>::from_request(
-                &req, &mut body,
-            ),
-        )
-        .await
-        else {
-            panic!("body exceeds the cap");
-        };
-        assert_eq!(err.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

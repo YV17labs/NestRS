@@ -170,14 +170,9 @@ pub mod prelude {
 
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
-        ClientIp, Ctx, HttpConfig, HttpModule, RawBody, Scoped, Valid, controller, http_code,
-        interceptor, redirect, response_header, routes,
+        ClientIp, Ctx, HttpConfig, HttpModule, Json, Path, Query, RawBody, Scoped, Valid,
+        controller, http_code, interceptor, redirect, response_header, routes,
     };
-
-    // poem's extractors until the HTTP edge's API stops naming poem
-    // (`.claude/decisions/public-dependencies.md`).
-    #[cfg(feature = "http")]
-    pub use nest_rs_http::poem::web::{Json, Path, Query};
 
     #[cfg(feature = "config")]
     pub use nest_rs_config::{Config, Namespaced, config};

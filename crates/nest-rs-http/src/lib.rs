@@ -216,7 +216,7 @@ pub use link::set_next_link;
 pub use location::{caller_path, set_created_location};
 pub use mapped::MappedError;
 pub use module::{HttpModule, HttpSetup};
-pub use multipart::{Field, Multipart, PartExt, PartStream};
+pub use multipart::{Field, Multipart, PartStream};
 pub use nest_rs_core::input;
 pub use nest_rs_core::{current_request_scope, with_request_scope};
 pub use opaque::Opaque;
@@ -252,7 +252,7 @@ pub mod __private {
 
     pub use crate::controller::{SchemaFn, schema_of};
     pub use crate::deprecation::deprecated_route;
-    pub use crate::endpoint::{OriginCheck, carried_units, checks_origin, guarded_by, with_data};
+    pub use crate::endpoint::{OriginCheck, carried_units, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
     pub use crate::error::OriginRefused;
     pub use crate::guard_stage::{
@@ -276,9 +276,9 @@ pub mod __private {
     /// poem leaves the public surface.
     pub mod poem_bridge {
         pub use crate::poem_bridge::{
-            body_from_poem, body_to_poem, error_from_poem, error_to_poem, from_poem,
-            request_from_poem, request_from_poem_at, request_to_poem, response_from_poem,
-            response_to_poem, to_poem, wrap_poem,
+            body_from_poem, body_to_poem, downcast_from_poem, error_from_poem, error_to_poem,
+            from_poem, request_from_poem, request_from_poem_at, request_to_poem,
+            response_from_poem, response_to_poem, to_poem, wrap_poem,
         };
     }
 }
@@ -317,8 +317,7 @@ pub use nest_rs_http_macros::controller;
 ///
 /// ```
 /// # use nest_rs_core::{Discoverable, Discovery, module};
-/// # use nest_rs_http::poem::web::Json;
-/// # use nest_rs_http::{Controller, HttpControllerMeta, HttpVerb, controller, routes};
+/// # use nest_rs_http::{Controller, HttpControllerMeta, HttpVerb, Json, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// #[controller(path = "/users")]
 /// #[derive(Default)]

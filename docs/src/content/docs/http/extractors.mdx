@@ -8,9 +8,9 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 An extractor pulls a typed value out of the request before the handler
-runs. Most of the surface is [poem](https://docs.rs/poem)'s — `Path<T>`,
-`Query<T>`, `Json<T>`, `Form<T>` cover the request line, query string,
-JSON body, and form body. NestRS adds the framework-specific extractors:
+runs. `Path<T>`, `Query<T>`, `Json<T>` and `Form<T>` cover the request line,
+query string, JSON body and form body; beside them sit the framework-specific
+extractors:
 the validated `Valid<E>`, the typed header reader `Header<T>`, the
 raw-body reader `RawBody`, the spoofable but observation-grade
 `ClientIp`, the request-scoped DI resolver `Scoped<T>`, the
@@ -29,8 +29,7 @@ Works as a return type too — serializes `T`, sets
 the same schema:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::input;
+use nest_rs::http::{Json, input};
 
 #[input]
 struct CreatePost { title: String }
@@ -50,12 +49,11 @@ For validated bodies, wrap it in `Valid<Json<T>>` (covered next).
 
 `Valid<E>` runs [validator](https://docs.rs/validator) on whatever the
 inner extractor produced. The `E` is usually `Json<T>`, but `Path<T>`
-and `Query<T>` work the same way — every poem extractor that exposes
+and `Query<T>` work the same way — every extractor that exposes
 `IntoInner` is composable:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::{Valid, input};
-use nest_rs::http::poem::web::Json;
+use nest_rs::http::{Json, Valid, input};
 
 #[input]
 struct CreateUser {
@@ -88,9 +86,8 @@ the inner extractor produced. `Valid<Json<T>>` is exactly
 `Piped<ValidationPipe<T>, Json<T>>`:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::Piped;
+use nest_rs::http::{Path, Piped};
 use nest_rs::pipes::ParseUuid;
-use nest_rs::http::poem::web::Path;
 use uuid::Uuid;
 
 #[get("/posts/{id}")]
@@ -150,9 +147,7 @@ buffered unbounded. Like every extractor it reads after the guards, so a
 refused request never had its body read.
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::RawBody;
-use nest_rs::http::poem::Result;
-use nest_rs::http::poem::web::Path;
+use nest_rs::http::{Path, RawBody, Result};
 use uuid::Uuid;
 
 #[put("/{id}/source")]
@@ -169,8 +164,7 @@ For a tighter cap on a specific route, take the body and read it under
 your own:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::poem::web::Path;
-use nest_rs::http::poem::{Body, Result};
+use nest_rs::http::{Body, Path, Result};
 use uuid::Uuid;
 
 #[put("/{id}/summary")]

@@ -23,7 +23,6 @@ nest-rs-core.workspace = true
 # `NoBearerChallenge` so a token refusal is never dressed up as a
 # oauth-resource challenge.
 nest-rs-http.workspace = true
-poem.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # `AccessTokenRequest`/`AccessTokenResponse` are documented request and response

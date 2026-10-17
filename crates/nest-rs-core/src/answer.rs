@@ -1,7 +1,7 @@
 //! What a handler answered, known by its type — never by how the type is spelled.
 //!
-//! A macro reading tokens cannot see through an alias (`poem::Result as
-//! PoemResult`), so the expansions ask this probe: inherent methods, which
+//! A macro reading tokens cannot see through an alias (`http::Result as
+//! Answered`), so the expansions ask this probe: inherent methods, which
 //! method resolution prefers, exist only for a `Result`, and [`AnswerFallback`]
 //! answers for every other type. A return type naming a generic parameter
 //! resolves to the fallback.

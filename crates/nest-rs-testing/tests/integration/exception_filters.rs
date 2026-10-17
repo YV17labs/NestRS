@@ -34,7 +34,7 @@ pub(crate) struct InfraError(pub String);
 
 /// Without it, a `Result<_, DomainError>` return fails with an `E0277` on
 /// `IntoResult`. The status is the **default** a filter replaces.
-impl poem::error::ResponseError for DomainError {
+impl nest_rs_http::ResponseError for DomainError {
     fn status(&self) -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
     }
@@ -64,16 +64,16 @@ struct GlobalScope;
 #[routes]
 impl GlobalScope {
     #[get("/domain")]
-    async fn fail_domain_global(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_domain_global(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("bad input".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
     }
 
     #[get("/infra")]
-    async fn fail_infra_global(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_infra_global(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             InfraError("db down".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -87,8 +87,8 @@ struct ControllerScope;
 #[routes]
 impl ControllerScope {
     #[get("/domain")]
-    async fn fail_domain_ctrl(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_domain_ctrl(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("at controller scope".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -102,8 +102,8 @@ struct MethodScope;
 impl MethodScope {
     #[get("/domain")]
     #[use_exception_filters(DomainErrorFilter)]
-    async fn fail_domain_method(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_domain_method(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("at method scope".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -117,8 +117,8 @@ struct DupGlobalMethod;
 impl DupGlobalMethod {
     #[get("/domain")]
     #[use_exception_filters(DomainErrorFilter)]
-    async fn fail_domain_dup(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_domain_dup(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("dup".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -133,8 +133,8 @@ struct DupCtrlMethod;
 impl DupCtrlMethod {
     #[get("/domain")]
     #[use_exception_filters(DomainErrorFilter)]
-    async fn fail_domain_ctrl_method(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_domain_ctrl_method(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("dup".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -142,7 +142,7 @@ impl DupCtrlMethod {
 }
 
 /// `Result<T, DomainError>` straight out of the handler, no hand-built
-/// `poem::Error`.
+/// `HttpError`.
 #[controller(path = "/ordinary")]
 struct OrdinaryRaise;
 

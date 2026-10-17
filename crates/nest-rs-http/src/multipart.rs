@@ -144,110 +144,56 @@ impl Stream for PartStream {
     }
 }
 
-/// Read a poem multipart part without buffering it.
-pub trait PartExt {
-    /// The part's bytes as they arrive, for a sink that consumes a stream — an
-    /// object store's streamed upload — rather than a buffered part.
-    ///
-    /// ```
-    /// # use nest_rs_http::{Opaque, PartExt};
-    /// # use nest_rs_http::poem::test::{TestClient, TestForm};
-    /// # use nest_rs_http::poem::web::Multipart;
-    /// # use nest_rs_http::poem::{Result, handler};
-    /// use futures_util::TryStreamExt;
-    /// # #[handler]
-    /// # async fn upload(mut form: Multipart) -> Result<String> {
-    /// # let Some(part) = form.next_field().await? else { return Ok(String::new()) };
-    ///
-    /// let mut stream = part.into_byte_stream();
-    /// let mut received = 0;
-    /// while let Some(chunk) = stream.try_next().await.opaque()? {
-    ///     received += chunk.len();
-    /// }
-    /// # Ok(received.to_string())
-    /// # }
-    /// # #[nest_rs_core::main]
-    /// # async fn main() -> anyhow::Result<()> {
-    /// # let audio = vec![7u8; 512 * 1024];
-    /// # let form = TestForm::new().bytes("file", audio.clone());
-    /// # let reply = TestClient::new(upload).post("/").multipart(form).send().await;
-    /// # let received = reply.0.into_body().into_string().await?;
-    ///
-    /// assert_eq!(received, audio.len().to_string());
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn into_byte_stream(self) -> PartStream;
-}
-
-impl PartExt for poem::web::Field {
-    fn into_byte_stream(self) -> PartStream {
-        PartStream(ReaderStream::new(Box::pin(self.into_async_read())))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use futures_util::StreamExt;
     use http::{HeaderValue, StatusCode, header};
-    use poem::test::TestClient;
-    use poem::{Result, handler};
 
     use super::*;
 
-    #[handler]
-    async fn upload(mut form: poem::web::Multipart) -> Result<String> {
-        let mut chunks = 0usize;
-        let mut body = Vec::new();
-        while let Some(field) = form.next_field().await? {
-            if field.name() != Some("file") {
-                continue;
-            }
-            let mut stream = PartExt::into_byte_stream(field);
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(poem::error::InternalServerError)?;
-                chunks += 1;
-                body.extend_from_slice(&chunk);
-            }
+    /// One `file` part holding `payload`, as a client sends it.
+    fn upload(payload: &[u8]) -> (Request, RequestBody) {
+        let mut form =
+            b"--x\r\ncontent-disposition: form-data; name=\"file\"; filename=\"a\"\r\n\r\n"
+                .to_vec();
+        form.extend_from_slice(payload);
+        form.extend_from_slice(b"\r\n--x--\r\n");
+        Request::builder()
+            .header(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("multipart/form-data; boundary=x"),
+            )
+            .body(form)
+            .split()
+    }
+
+    /// The `file` part read as a stream: how many chunks, how many bytes.
+    async fn streamed(payload: &[u8]) -> (usize, usize) {
+        let (request, mut body) = upload(payload);
+        let mut form = Multipart::from_request(&request, &mut body)
+            .await
+            .expect("a form");
+        let field = form.next_field().await.expect("parts").expect("one part");
+        let mut stream = field.into_byte_stream();
+        let (mut chunks, mut bytes) = (0, 0);
+        while let Some(chunk) = stream.next().await {
+            chunks += 1;
+            bytes += chunk.expect("a chunk").len();
         }
-        Ok(format!("{chunks}:{}", body.len()))
+        (chunks, bytes)
     }
 
     #[tokio::test]
     async fn a_part_streams_its_bytes_without_being_buffered_whole() {
-        // Big enough that poem hands it over in several reads.
         let payload = vec![b'a'; 512 * 1024];
-        let form = poem::test::TestForm::new().bytes("file", payload.clone());
-        let resp = TestClient::new(upload)
-            .post("/")
-            .multipart(form)
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        let seen = resp.0.into_body().into_string().await.expect("body");
-        let (chunks, bytes) = seen.split_once(':').expect("chunks:bytes");
-        assert_eq!(
-            bytes.parse::<usize>().expect("byte count"),
-            payload.len(),
-            "every byte arrives",
-        );
-        assert!(
-            chunks.parse::<usize>().expect("chunk count") > 1,
-            "and they arrive in pieces, not one buffer: {seen}",
-        );
+        let (chunks, bytes) = streamed(&payload).await;
+        assert_eq!(bytes, payload.len(), "every byte arrives");
+        assert!(chunks > 1, "and they arrive in pieces, not one buffer");
     }
 
     #[tokio::test]
     async fn an_empty_part_yields_no_bytes_rather_than_failing() {
-        let form = poem::test::TestForm::new().bytes("file", Vec::new());
-        let resp = TestClient::new(upload)
-            .post("/")
-            .multipart(form)
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        let seen = resp.0.into_body().into_string().await.expect("body");
-        assert!(seen.ends_with(":0"), "no bytes: {seen}");
+        assert_eq!(streamed(&[]).await.1, 0);
     }
 
     const FORM: &str = "--x\r\n\

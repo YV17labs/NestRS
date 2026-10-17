@@ -25,8 +25,8 @@ body in `Valid<...>`:
 ```rust title="(expanded by #[crud] — you don't write this)"
 async fn create(
     &self,
-    __body: ::nest_rs::http::Valid<::poem::web::Json<CreatePost>>,
-) -> ::poem::Result<::poem::web::Json<Post>> {
+    __body: ::nest_rs::http::Valid<::nest_rs::http::Json<CreatePost>>,
+) -> ::nest_rs::http::Result<::nest_rs::http::Response> {
     // delegates to CrudService::create
 }
 ```
@@ -80,7 +80,7 @@ HTTP/1.1 400 Bad Request
 content-type: application/problem+json
 
 {
-  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.400",
+  "type": "about:blank",
   "title": "Bad Request",
   "status": 400,
   "detail": "validation failed",
@@ -124,7 +124,7 @@ malformed case.
 
 | Failure | Status | Trigger |
 |---------|--------|---------|
-| The body isn't valid JSON | `400` | poem rejects before any pipe runs |
+| The body isn't valid JSON | `400` | `Json` rejects before any pipe runs |
 | The body parses but a field is wrong | `400` with `errors` | `ValidationPipe` rejects after extraction |
 
 Both are `400`; the second carries the structured `errors` member a

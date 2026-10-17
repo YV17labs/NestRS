@@ -22,7 +22,7 @@ struct PostsController;
 impl PostsController {
     #[post("/")]
     #[api(multipart = UploadForm)]
-    async fn create(&self, body: poem::web::Json<CreatePost>) -> String {
+    async fn create(&self, body: nest_rs::http::Json<CreatePost>) -> String {
         body.0.title
     }
 }

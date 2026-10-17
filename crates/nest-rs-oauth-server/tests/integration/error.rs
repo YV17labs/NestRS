@@ -6,10 +6,9 @@
 
 use nest_rs_core::module;
 use nest_rs_http::challenge::NoBearerChallenge;
-use nest_rs_http::{HttpModule, controller, routes};
+use nest_rs_http::{HttpModule, StatusCode, controller, routes};
 use nest_rs_oauth_server::TokenError;
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 
 #[controller(path = "/")]
 struct TokenController;
@@ -18,19 +17,19 @@ struct TokenController;
 impl TokenController {
     #[post("/token")]
     #[public]
-    async fn token(&self) -> poem::Result<String> {
+    async fn token(&self) -> nest_rs_http::Result<String> {
         Err(TokenError::UnsupportedGrant.into())
     }
 
     #[post("/token/client")]
     #[public]
-    async fn client(&self) -> poem::Result<String> {
+    async fn client(&self) -> nest_rs_http::Result<String> {
         Err(TokenError::InvalidClient.into())
     }
 
     #[post("/token/outage")]
     #[public]
-    async fn outage(&self) -> poem::Result<String> {
+    async fn outage(&self) -> nest_rs_http::Result<String> {
         Err(TokenError::Server(anyhow::anyhow!("identity store unreachable")).into())
     }
 }
@@ -68,8 +67,8 @@ async fn a_refused_client_is_a_401_that_is_not_a_resource_challenge() {
         .assert_json(serde_json::json!({ "error": "invalid_client" }))
         .await;
 
-    // Through `poem::Error`, which `?` in the handler builds.
-    let rendered = poem::Error::from(TokenError::InvalidClient).into_response();
+    // Through the `HttpError` `?` in the handler builds.
+    let rendered = nest_rs_http::HttpError::from(TokenError::InvalidClient).into_response();
     assert!(
         rendered.extensions().get::<NoBearerChallenge>().is_some(),
         "the response opts out of the RFC 9728 pointer",

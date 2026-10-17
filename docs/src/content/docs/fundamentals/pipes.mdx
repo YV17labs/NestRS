@@ -105,8 +105,7 @@ can always tell which field was wrong, not merely that something was.
 `E`, then validate.
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::{Valid, input};
+use nest_rs::http::{Json, Result, Valid, input};
 
 #[input]
 pub struct CreateUser {
@@ -129,7 +128,7 @@ that fails validation is an RFC 9457 `problem+json` `400` with:
 
 ```json
 {
-  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.400",
+  "type": "about:blank",
   "title": "Bad Request",
   "status": 400,
   "detail": "validation failed",
@@ -151,9 +150,8 @@ When the input needs a transform other than `Validate`, name the pipe at
 the call site:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::Piped;
+use nest_rs::http::{Path, Piped};
 use nest_rs::pipes::ParseUuidV7;
-use nest_rs::http::poem::web::Path;
 
 #[get("/{id}")]
 async fn get(&self, id: Piped<ParseUuidV7, Path<String>>) -> Json<User> {

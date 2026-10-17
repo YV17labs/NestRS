@@ -1,16 +1,16 @@
 //! A destructured handler argument forwards under the identifier it binds, so
-//! `Path(name): Path<String>` works — poem's own idiom. A pattern binding
+//! `Path(name): Path<String>` works — the extractor's own idiom. A pattern binding
 //! **two** names has no single identifier to forward, and this pins the error
 //! that says so.
 //!
 //! It replaces the snapshot that used to pin a blanket "arguments must be simple
 //! identifiers": the general restriction is gone, and only this residue of it
 //! remains. Pinned because the message has to name the way out, not just the
-//! refusal — a developer hitting it copied the two-element form from poem, where
-//! it is legal.
+//! refusal — a developer hitting it copied the two-element form from a plain
+//! function, where it is legal.
 
 use nest_rs::http::{controller, routes};
-use poem::web::Path;
+use nest_rs::http::Path;
 
 #[controller(path = "/pairs")]
 struct PairController;

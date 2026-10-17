@@ -110,14 +110,12 @@ Two patterns to read here:
 The controller gains two attributes — the guard chain on the struct, the
 posture on the route — and an extractor for the by-id load.
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)" {3, 5, 9-11, 15, 26, 28-33, 38}
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)" {3, 5, 7-9, 13, 24, 26-31, 36}
 use std::sync::Arc;
 
 use nest_rs::authz::{Create, Read};
-use nest_rs::http::{Ctx, Valid, controller, crud};
+use nest_rs::http::{Ctx, Json, Result, Valid, controller, crud};
 use nest_rs::seaorm::Bind;
-use poem::Result;
-use poem::web::Json;
 
 use crate::Claims;
 use crate::authn::AuthnGuard;
@@ -161,7 +159,7 @@ Four things changed:
 | `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
 | `auth: Ctx<Claims>` | Read the principal that `AuthnGuard` attached to the request |
 | `#[authorize(Create, UserEntity)]` | Check the ability allows `Create` on `UserEntity` before the body runs |
-| `user: Bind<Read, UsersService>` | Parse the `:id`, load the row through the service, return `403` if the ability refuses it |
+| `user: Bind<Read, UsersService>` | Parse the `{id}`, load the row through the service, return `403` if the ability refuses it |
 
 The org id comes from the caller's claims, never from the body — there
 is no placeholder to fill in and no way to spoof the tenant.

@@ -7,8 +7,8 @@ sidebar:
 
 A handler picks a return type, and the framework turns it into the
 response. `String`, `&'static str`, `Json<T>`, a `(StatusCode, Body)`
-tuple — anything that implements [poem](https://docs.rs/poem)'s
-`IntoResponse` is a valid return. When the status, a header, or a
+pair, a built `Response` — anything that implements `nest_rs::http`'s
+`IntoResponse` is a valid return, and so is a `Result` of one. When the status, a header, or a
 redirect is the only thing changing, three attribute macros sit beside
 the verb attribute and shape the response without touching the handler
 body.
@@ -20,8 +20,7 @@ body.
 the same JSON schema:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::input;
+use nest_rs::http::{Json, input};
 
 #[input]
 struct GreetReply {
@@ -34,14 +33,13 @@ async fn me(&self) -> Json<GreetReply> {
 }
 ```
 
-## Status + body tuples
+## Status + body pairs
 
-Tuples up to `(StatusCode, Headers, Body)` are valid responses — useful
-when one route returns `202 Accepted` and another stays on the default
-`200`:
+A `(StatusCode, T)` pair answers `T` under that status — useful when one
+route returns `202 Accepted` and another stays on the default `200`:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::poem::http::StatusCode;
+use nest_rs::http::StatusCode;
 
 #[post("/queue")]
 async fn enqueue(&self) -> (StatusCode, &'static str) {
@@ -59,8 +57,7 @@ thing changing is the status, a header, or a redirect, three attribute
 macros sit beside the verb attribute:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::{http_code, response_header, redirect};
-use nest_rs::http::poem::web::Json;
+use nest_rs::http::{Json, http_code, redirect, response_header};
 
 #[post("/posts")]
 #[http_code(201)]
@@ -81,7 +78,7 @@ Overrides the response status on the **success path**. `N` must be in
 `Result` and yields `Err`, the shaper short-circuits: the error's own
 `ResponseError` status stands and `#[http_code]` never touches it — so a
 `201` handler that errors still returns the error's `4xx`/`5xx`, not
-`201`. A `Result` is known by its type, not its spelling: `poem::Result<T>`
+`201`. A `Result` is known by its type, not its spelling: `nest_rs::http::Result<T>`
 renamed on import, or a `type Outcome<T> = Result<T, MyError>`, short-circuits
 the same way. Mutually exclusive with `#[redirect]` — the two macros cannot both
 decorate the same handler.
@@ -146,8 +143,7 @@ whether an entity already existed, the headers depend on the resolved
 user — go back to a plain tuple return and let the handler decide:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::poem::http::StatusCode;
-use nest_rs::http::poem::IntoResponse;
+use nest_rs::http::{IntoResponse, Json, Result, StatusCode};
 
 #[post("/posts")]
 async fn upsert(&self, body: Valid<Json<CreatePost>>) -> Result<impl IntoResponse> {

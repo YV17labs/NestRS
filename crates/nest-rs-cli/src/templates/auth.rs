@@ -103,10 +103,7 @@ pub use module::AuthnHttpModule;
 pub(crate) const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::authn::JwtService;
-use nest_rs::http::poem::error::InternalServerError;
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::poem::Result;
-use nest_rs::http::{controller, input, routes};
+use nest_rs::http::{Json, Opaque, Result, controller, input, routes};
 use uuid::Uuid;
 
 use super::guard::DevOnlyGuard;
@@ -148,7 +145,7 @@ impl DevTokenController {
             roles: if roles.is_empty() { vec![Role::User] } else { roles },
             exp: self.jwt.expiry(),
         };
-        let access_token = self.jwt.sign(&claims).map_err(InternalServerError)?;
+        let access_token = self.jwt.sign(&claims).opaque()?;
         Ok(Json(DevTokenResponseDto {
             access_token,
             token_type: "Bearer".into(),

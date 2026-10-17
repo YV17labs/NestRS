@@ -5,11 +5,11 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Edge, Layer, UnitContext, injectable, module};
+use nest_rs_http::Json;
 use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError, pipe};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
-use poem::web::Json;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 

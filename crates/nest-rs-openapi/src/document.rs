@@ -1870,7 +1870,7 @@ mod tests {
         let mut create = route("create", "/");
         create.verb = HttpVerb::Post;
         let mut update = route("update", "/{id}");
-        update.verb = HttpVerb::Patch;
+        update.verb = HttpVerb::Put;
         let mut delete = route("delete", "/{id}");
         delete.verb = HttpVerb::Delete;
         list.tags = &["crud"];
@@ -1927,7 +1927,7 @@ mod tests {
         );
         assert_eq!(id_at(&doc, "/posts", "get"), Some("posts_list"));
         assert_eq!(id_at(&doc, "/users", "get"), Some("users_list"));
-        assert_eq!(id_at(&doc, "/posts/{id}", "patch"), Some("posts_update"));
+        assert_eq!(id_at(&doc, "/posts/{id}", "put"), Some("posts_update"));
         assert!(
             logs.find("nest_rs::openapi", "two operations share one operationId")
                 .is_empty(),

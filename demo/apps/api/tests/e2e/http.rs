@@ -127,3 +127,81 @@ async fn every_modelled_failure_returns_rfc9457_problem_json() {
     assert_eq!(conflict_problem.get("status").i64(), 409);
     assert_eq!(conflict_problem.get("title").string(), "Conflict");
 }
+
+const FOREIGN_MEDIA_TYPE: &str = "text/x-quoted-marker";
+
+#[tokio::test]
+async fn a_body_under_another_media_type_answers_415_naming_only_the_expected_type() {
+    let (_db, app) = boot().await;
+    let bearer = format!(
+        "Bearer {}",
+        token_with_sub(ORG_ID, "admin", Uuid::now_v7()).await
+    );
+    let any = Uuid::now_v7();
+    let json_bodies = [
+        ("POST", "/users".to_owned()),
+        ("PUT", format!("/users/{any}")),
+        ("POST", "/posts".to_owned()),
+        ("PUT", format!("/posts/{any}")),
+        ("POST", "/orgs".to_owned()),
+        ("PUT", format!("/orgs/{any}")),
+        ("POST", "/audio/uploads".to_owned()),
+        ("POST", "/audio/transcode".to_owned()),
+    ];
+    let multipart_bodies = [("POST", "/audio/uploads/direct".to_owned())];
+    for (expected, routes) in [
+        ("application/json", &json_bodies[..]),
+        ("multipart/form-data", &multipart_bodies[..]),
+    ] {
+        for (method, path) in routes {
+            let request = match *method {
+                "POST" => app.http().post(path),
+                _ => app.http().put(path),
+            };
+            let resp = request
+                .header(header::AUTHORIZATION, &bearer)
+                .header(header::CONTENT_TYPE, FOREIGN_MEDIA_TYPE)
+                .body("{}")
+                .send()
+                .await;
+            resp.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            let body = resp.0.into_body().into_string().await.expect("a body");
+            assert!(
+                !body.contains("x-quoted-marker"),
+                "{method} {path} quoted the client's media type: {body}"
+            );
+            assert!(
+                body.contains(expected),
+                "{method} {path} names the type it reads: {body}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_undecodable_value_is_refused_without_quoting_it() {
+    let (_db, app) = boot().await;
+    let bearer = format!("Bearer {}", login().await);
+    let secret = "sk_live_51UndecodableMarker";
+    let resp = app
+        .http()
+        .post("/orgs")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "name": [secret] }))
+        .send()
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    let body = resp.0.into_body().into_string().await.expect("a body");
+    assert!(!body.contains(secret), "{body}");
+    assert!(body.contains("expected a string"), "{body}");
+
+    let resp = app
+        .http()
+        .get(format!("/orgs/{secret}"))
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    let body = resp.0.into_body().into_string().await.expect("a body");
+    assert!(!body.contains("sk_live"), "{body}");
+}

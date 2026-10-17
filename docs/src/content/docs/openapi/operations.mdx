@@ -24,8 +24,8 @@ async fn archive(&self) -> Result<Response> { /* ... */ }
 `response = Type` is for a handler that builds its own `Response` and so states
 no payload in its return type — or that returns its `Json<T>` inside a `Result`
 spelled another way. The payload is read off the spelling `Json<T>` /
-`Result<Json<T>, E>`, since a macro resolves no name: `use poem::Result as
-PoemResult` hides it from the document, never from the route. The paginated
+`Result<Json<T>, E>`, since a macro resolves no name: `use nest_rs::http::Result
+as Answer` hides it from the document, never from the route. The paginated
 `#[crud]` list is the framework's own case: it returns a `Response` so it can
 carry its `Link` header, and declares `#[api(response = Vec<Post>)]`.
 
@@ -52,9 +52,10 @@ async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> 
 
 The form's parts are a type like any other payload — a `String` field carrying
 `#[schemars(extend("format" = "binary"))]` is the file part Swagger UI renders a
-file picker for. A handler that takes poem's `Multipart` directly and declares
-nothing still documents `multipart/form-data` with a free-form object: the media
-type it accepts is knowledge a client needs, even when no type states the parts.
+file picker for. A handler that takes `nest_rs::http::Multipart` directly and
+declares nothing still documents `multipart/form-data` with a free-form object:
+the media type it accepts is knowledge a client needs, even when no type states
+the parts.
 
 `response_content_type` replaces `application/json` on the success response and,
 with no `response = Type` beside it, types the body the way OpenAPI spells a

@@ -380,7 +380,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 use ::nest_rs_core::__private::AnswerFallback as _;
                 let __nestrs_answer = #call_expr;
                 ::nest_rs_core::__private::Answer(&__nestrs_answer)
-                    .map::<::nest_rs_http::poem::Error, _, _>()(
+                    .map::<::nest_rs_http::HttpError, _, _>()(
                     __nestrs_answer,
                     |__nestrs_stream| {
                         ::nest_rs_http::SseSettings::respond(&__nestrs_sse, __nestrs_stream)
@@ -400,13 +400,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 &wrapper_args,
             );
             (
-                quote! { ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> },
+                quote! { ::nest_rs_http::Result<::nest_rs_http::Response> },
                 body,
             )
         };
 
-        // Mirrors poem's `#[handler]` expansion, except the controller `Arc` is a
-        // captured field rather than a per-request `Data` extension.
+        // Each parameter read off the request in order, the body by at most one;
+        // the controller `Arc` is a captured field.
         let extractor_stmts: Vec<TokenStream2> = inputs
             .iter()
             .filter_map(|arg| match arg {
@@ -414,7 +414,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     let pat = &pt.pat;
                     let ty = &pt.ty;
                     Some(quote! {
-                        let #pat = <#ty as ::nest_rs_http::poem::FromRequest>::from_request(
+                        let #pat = <#ty as ::nest_rs_http::FromRequest>::from_request(
                             &#req_var, &mut #body_var,
                         )
                         .await?;
@@ -442,23 +442,21 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             #(#cfgs)*
-            impl ::nest_rs_http::poem::Endpoint for #wrapper_name {
-                type Output = ::nest_rs_http::poem::Response;
-
+            impl ::nest_rs_http::Endpoint for #wrapper_name {
                 #[allow(unused_mut)]
                 async fn call(
                     &self,
-                    mut #req_var: ::nest_rs_http::poem::Request,
-                ) -> ::nest_rs_http::poem::Result<Self::Output> {
+                    #req_var: ::nest_rs_http::Request,
+                ) -> ::nest_rs_http::Result<::nest_rs_http::Response> {
                     let (#req_var, mut #body_var) = #req_var.split();
                     #(#extractor_stmts)*
                     let #ctrl_var = &self.__ctrl;
                     #sse_binding
                     let #res_var: #wrapper_return_type = async move { #wrapper_body }.await;
-                    let #res_var = ::nest_rs_http::poem::error::IntoResult::into_result(#res_var);
+                    let #res_var = ::nest_rs_http::__private::IntoResult::into_result(#res_var);
                     ::std::result::Result::map(
                         #res_var,
-                        ::nest_rs_http::poem::IntoResponse::into_response,
+                        ::nest_rs_http::IntoResponse::into_response,
                     )
                 }
             }
@@ -510,7 +508,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             versions: method_versions.clone(),
             cfgs: cfgs.clone(),
         };
-        // poem silently keeps the last of two handlers for one (verb, path); refused
+        // Two handlers for one (verb, path) would leave one unreachable; refused
         // here without `#[cfg]`, and by rustc through the marker when both compile.
         let served: Vec<String> = method_versions.iter().map(LitStr::value).collect();
         let route = match served.as_slice() {
@@ -683,7 +681,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let error_responses = quote! { &[#(#error_responses),*] };
         let response_content_type = match &api.response_content_type {
             Some(lit) => quote! { ::core::option::Option::Some(#lit) },
-            None if is_sse || returns_sse(&method.sig.output) => {
+            None if is_sse => {
                 quote! { ::core::option::Option::Some("text/event-stream") }
             }
             None => quote! { ::core::option::Option::None },
@@ -847,7 +845,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     quote! {
                         #(#cfgs)*
                         let () = if #serves {
-                            __routes.route_poem(::nest_rs_http::Method::#method, &__path, #ep);
+                            __routes.route(::nest_rs_http::Method::#method, &__path, #ep);
                         };
                     }
                 })
@@ -1205,7 +1203,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         quote!(dyn ::nest_rs_interceptors::Interceptor),
     );
     // One call for the three pools: each generic wrapper level adds a
-    // `Request`-sized slot to the future poem boxes per request.
+    // `Request`-sized slot to the future the route table boxes per request.
     expr = quote! {
         ::nest_rs_interceptors::__private::wrap_route_response_layers(
             container,
@@ -1489,7 +1487,7 @@ fn first_extractor_payload(inputs: &[FnArg], name: &str) -> Option<Type> {
 }
 
 /// The path-parameter types a handler binds, in path order: `Path<(A, B)>`
-/// yields `[A, B]`, as poem binds tuple elements left to right.
+/// yields `[A, B]`, as `Path` binds tuple elements left to right.
 fn path_param_types(inputs: &[FnArg]) -> Vec<Type> {
     match first_extractor_payload(inputs, "Path") {
         Some(Type::Tuple(tuple)) => tuple.elems.into_iter().collect(),
@@ -1503,20 +1501,12 @@ fn last_segment_is(ty: &Type, name: &str) -> bool {
     matches!(ty, Type::Path(tp) if tp.path.segments.last().is_some_and(|s| s.ident == name))
 }
 
-/// Whether the handler pulls the parts itself through poem's `Multipart`.
+/// Whether the handler pulls the parts itself through a `Multipart` parameter.
 fn takes_multipart(inputs: &[FnArg]) -> bool {
     inputs.iter().any(|arg| match arg {
         FnArg::Typed(pt) => last_segment_is(&pt.ty, "Multipart"),
         FnArg::Receiver(_) => false,
     })
-}
-
-/// Whether the handler returns poem's `SSE`, possibly behind a `Result`.
-fn returns_sse(output: &ReturnType) -> bool {
-    let ReturnType::Type(_, ty) = output else {
-        return false;
-    };
-    last_segment_is(result_inner(ty).unwrap_or(ty), "SSE")
 }
 
 /// Refuse a malformed media type: it keys an OpenAPI `content` map no client
@@ -1711,23 +1701,6 @@ mod tests {
     }
 
     #[test]
-    fn sse_is_read_off_the_return_type_bare_or_behind_a_result() {
-        let bare: ReturnType = parse_quote!(-> SSE);
-        let qualified: ReturnType = parse_quote!(-> poem::web::sse::SSE);
-        let behind_result: ReturnType = parse_quote!(-> Result<SSE>);
-        assert!(returns_sse(&bare));
-        assert!(returns_sse(&qualified));
-        assert!(returns_sse(&behind_result));
-
-        let json: ReturnType = parse_quote!(-> Json<Post>);
-        let response: ReturnType = parse_quote!(-> Result<Response>);
-        let nothing = ReturnType::Default;
-        assert!(!returns_sse(&json));
-        assert!(!returns_sse(&response));
-        assert!(!returns_sse(&nothing));
-    }
-
-    #[test]
     fn a_payload_is_unwrapped_through_the_pipe_carriers() {
         for name in ["Header", "Json", "Form", "Query", "Path"] {
             let name_ident = format_ident!("{name}");
@@ -1748,7 +1721,7 @@ mod tests {
     fn a_bare_multipart_parameter_is_detected_however_it_is_spelled() {
         let inputs: Vec<FnArg> = vec![
             parse_quote!(query: Query<TranscodeDto>),
-            parse_quote!(form: poem::web::Multipart),
+            parse_quote!(form: nest_rs::http::Multipart),
         ];
         assert!(takes_multipart(&inputs));
         assert!(!takes_multipart(&[parse_quote!(body: Json<Post>)]));

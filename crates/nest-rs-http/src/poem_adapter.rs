@@ -13,7 +13,7 @@ use anyhow::Context;
 use bytes::Bytes;
 use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_RANGE, CONTENT_TYPE, Entry, VARY};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
-use poem::error::{NotFoundError, ParseFormError, ParseMultipartError};
+use poem::error::{NotFoundError, ParseFormError, ParseJsonError, ParseMultipartError};
 use poem::middleware::{Compression, Cors};
 use poem::web::{Compress, CompressionAlgo};
 use poem::{EndpointExt, FromRequest, IntoResponse, PathPattern};
@@ -25,7 +25,9 @@ use crate::allow::{Chosen, Methods, head_of};
 use crate::body::Body;
 use crate::cors::{FRAMEWORK_SENT, HttpCors, listed};
 use crate::endpoint::{BoxEndpoint, Endpoint};
-use crate::error::{FormError, HttpError, MultipartError, PathParameterError, Result, RouteError};
+use crate::error::{
+    FormError, HttpError, JsonError, MultipartError, PathParameterError, Result, RouteError,
+};
 use crate::matched::MatchedRoute;
 use crate::poem_bridge::{
     body_to_poem, error_from_poem, error_to_poem, from_poem, note_route, request_from_poem,
@@ -216,6 +218,29 @@ impl FieldReader {
     pub(crate) fn into_async_read(self) -> impl AsyncRead + Send + 'static {
         self.0.into_async_read()
     }
+}
+
+/// A media-type refusal of the library's own extractors, said in nestrs's words:
+/// the type the body had to be, never the one the client sent, which the
+/// library's sentence quotes. `None` for any other error.
+pub(crate) fn media_type_refusal(error: &poem::Error) -> Option<HttpError> {
+    if let Some(ParseJsonError::InvalidContentType(_) | ParseJsonError::ContentTypeRequired) =
+        error.downcast_ref::<ParseJsonError>()
+    {
+        return Some(JsonError::MediaType.into());
+    }
+    if let Some(ParseFormError::InvalidContentType(_) | ParseFormError::ContentTypeRequired) =
+        error.downcast_ref::<ParseFormError>()
+    {
+        return Some(FormError::MediaType.into());
+    }
+    if let Some(
+        ParseMultipartError::InvalidContentType(_) | ParseMultipartError::ContentTypeRequired,
+    ) = error.downcast_ref::<ParseMultipartError>()
+    {
+        return Some(MultipartError::MediaType.into());
+    }
+    None
 }
 
 /// What the library's multipart reader refused, said in nestrs's words: its

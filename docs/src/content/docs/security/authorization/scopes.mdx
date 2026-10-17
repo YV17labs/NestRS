@@ -151,9 +151,11 @@ A client that cannot tell "you may never do this" from "come back with a
 wider token" either gives up too early or retries the same token
 forever. So the two refusals are distinct on every transport.
 
-On HTTP, WS and MCP, a scope refusal is a `403` carrying the RFC 6750
-§3.1 challenge — provided the app is a
-[protected resource server](/security/authentication/split-deployment/):
+On HTTP, a scope refusal is a `403` whose RFC 6750 §3.1 challenge names
+the scopes the request needs. A
+[protected resource server](/security/authentication/split-deployment/)
+adds the document to request them from, and carries the same challenge on
+WS and MCP:
 
 ```http
 HTTP/1.1 403 Forbidden
@@ -178,6 +180,11 @@ frame the transport already speaks:
   }]
 }
 ```
+
+The list is what one grant lacks, every scope of it needed. When several
+grants would have allowed the operation, it is the narrowest one's — the
+action's own before `Action::Manage`'s, the first declared among them — never their
+union, which would send the client asking for more than it needs.
 
 The sentence is RFC 6750 §3.1's own description of `insufficient_scope`, and
 it is the same on every transport: one class gate,

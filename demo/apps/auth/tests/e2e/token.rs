@@ -119,3 +119,21 @@ async fn token_endpoint_rejects_a_scope_beyond_the_client_registration() {
     let json = resp.json().await;
     assert_eq!(json.value().object().get("error").string(), "invalid_scope");
 }
+
+#[tokio::test]
+async fn token_endpoint_refuses_another_media_type_naming_only_the_form_type() {
+    let (_db, app) = boot().await;
+
+    let resp = app
+        .http()
+        .post("/token")
+        .header("authorization", basic_auth(CLIENT_ID, CLIENT_SECRET))
+        .content_type(FOREIGN_MEDIA_TYPE)
+        .body("grant_type=client_credentials")
+        .send()
+        .await;
+    resp.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let body = resp.0.into_body().into_string().await.expect("a body");
+    assert!(!body.contains("x-quoted-marker"), "{body}");
+    assert!(body.contains("application/x-www-form-urlencoded"), "{body}");
+}

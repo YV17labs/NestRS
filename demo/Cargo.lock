@@ -3006,7 +3006,6 @@ dependencies = [
  "nest-rs-authn",
  "nest-rs-core",
  "nest-rs-http",
- "poem",
  "schemars",
  "serde",
  "serde_json",

@@ -59,16 +59,6 @@ impl ClientOrigin {
         )
     }
 
-    /// [`of`](Self::of) for a request the router hands over as poem's.
-    fn of_poem(req: &poem::Request) -> Self {
-        let config = configured();
-        Self::of_head(
-            req.headers(),
-            req.remote_addr().as_socket_addr().map(SocketAddr::ip),
-            trusted_proxies(config.as_deref()),
-        )
-    }
-
     /// [`of`](Self::of) against an explicit list, for the transport edge, which
     /// runs before the request scope `of` reads exists.
     pub(crate) fn of_with(req: &crate::Request, trusted_proxies: &[IpAddr]) -> Self {
@@ -324,15 +314,6 @@ fn parse_forwarded_entry(raw: &str) -> Option<IpAddr> {
         return Some(ip);
     }
     trimmed.parse::<SocketAddr>().ok().map(|sa| sa.ip())
-}
-
-impl<'a> poem::FromRequest<'a> for ClientIp {
-    async fn from_request(
-        req: &'a poem::Request,
-        _body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
-        Ok(ClientOrigin::of_poem(req).into())
-    }
 }
 
 impl<'a> crate::FromRequest<'a> for ClientIp {
@@ -725,42 +706,6 @@ mod tests {
             );
         }
         builder.finish()
-    }
-
-    /// The same request as poem's, for the twin `#[routes]` still calls.
-    fn poem_req_from(peer: &str, headers: &[(&str, &str)]) -> poem::Request {
-        use poem::Addr;
-        use poem::web::{LocalAddr, RemoteAddr};
-
-        let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
-        let (mut parts, _) = http::Request::new(()).into_parts();
-        for (name, value) in headers {
-            parts.headers.insert(
-                http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
-                http::HeaderValue::from_str(value).expect("header value"),
-            );
-        }
-        poem::Request::from_parts(
-            (
-                parts,
-                LocalAddr::default(),
-                RemoteAddr(Addr::socket(socket)),
-                http::uri::Scheme::HTTP,
-            )
-                .into(),
-            poem::Body::empty(),
-        )
-    }
-
-    #[tokio::test]
-    async fn the_poem_reading_resolves_the_same_peer() {
-        let (req, mut body) =
-            poem_req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]).split();
-        let extracted = <ClientIp as poem::FromRequest>::from_request(&req, &mut body)
-            .await
-            .expect("the extractor is infallible");
-        assert_eq!(extracted.ip, ip("10.0.0.1"));
-        assert!(!extracted.forwarded);
     }
 
     /// Extract under an ambient request scope over a container holding `config`.

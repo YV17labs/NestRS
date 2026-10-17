@@ -2,8 +2,9 @@
 
 use std::fmt::Display;
 
-use poem::Response;
-use poem::http::{HeaderValue, header::LINK};
+use http::{HeaderValue, header::LINK};
+
+use crate::response::Response;
 
 /// Stamp `Link: <collection_path?first=N&after=CURSOR>; rel="next"` onto a page
 /// another follows.

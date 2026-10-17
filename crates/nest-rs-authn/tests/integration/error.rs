@@ -1,8 +1,8 @@
 //! Covers `src/error.rs` — HTTP mapping for authentication failures.
 
 use nest_rs_authn::AuthError;
-use poem::IntoResponse;
-use poem::http::{StatusCode, header};
+use nest_rs_http::IntoResponse;
+use nest_rs_http::{StatusCode, header};
 
 #[test]
 fn maps_to_unauthorized_with_bearer_challenge() {

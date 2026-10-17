@@ -28,7 +28,7 @@ impl ProbeController {
     /// Records one sub-step the documented way, through [`Timings`].
     #[get("/")]
     #[public]
-    async fn index(&self, req: &nest_rs_http::poem::Request) -> String {
+    async fn index(&self, req: &nest_rs_http::Request) -> String {
         if let Some(timings) = req.extensions().get::<Timings>() {
             timings.record("db", Duration::from_millis(3));
         }

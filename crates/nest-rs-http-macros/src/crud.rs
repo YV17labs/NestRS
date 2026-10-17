@@ -51,9 +51,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     // helper enforce the same rule and must read the same sentence.
     let id_v7_check: TokenStream2 = quote! {
         if __id.0.get_version_num() != 7 {
-            return ::core::result::Result::Err(::nest_rs_http::poem::Error::from_string(
-                ::nest_rs_core::UUID_V7_REQUIRED,
-                ::nest_rs_http::poem::http::StatusCode::BAD_REQUEST,
+            return ::core::result::Result::Err(::nest_rs_http::HttpError::from(
+                ::nest_rs_http::ProblemDetails::bad_request()
+                    .with_detail(::nest_rs_core::UUID_V7_REQUIRED),
             ));
         }
     };
@@ -69,11 +69,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<::std::vec::Vec<#output>>> {
+                ) -> ::nest_rs_http::Result<::nest_rs_http::Json<::std::vec::Vec<#output>>> {
                     let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
                         .await
-                        .map_err(::nest_rs_seaorm::__private::crud_error)?;
-                    ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(
+                        .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
+                    ::core::result::Result::Ok(::nest_rs_http::Json(
                         __rows.iter().map(#output::from).collect(),
                     ))
                 }
@@ -87,10 +87,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                    // Read through `caller_path`: the router strips a global prefix off `uri()`.
-                    __req: &::nest_rs_http::poem::Request,
-                    __page: ::nest_rs_http::poem::web::Query<::nest_rs_seaorm::PageParams>,
-                ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
+                    // Read through `caller_path`: a version selector rewrites `uri()`.
+                    __req: &::nest_rs_http::Request,
+                    __page: ::nest_rs_http::Query<::nest_rs_seaorm::PageParams>,
+                ) -> ::nest_rs_http::Result<::nest_rs_http::Response> {
                     let __first = __page.0.limit();
                     let __p = ::nest_rs_seaorm::CrudService::page(
                         &*self.#service,
@@ -98,10 +98,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         __page.0.after_uuid(),
                     )
                     .await
-                    .map_err(::nest_rs_seaorm::__private::crud_error)?;
+                    .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                     let __items: ::std::vec::Vec<#output> =
                         __p.items.iter().map(#output::from).collect();
-                    let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(::nest_rs_http::poem::web::Json(__items));
+                    let mut __resp =
+                        ::nest_rs_http::IntoResponse::into_response(::nest_rs_http::Json(__items));
                     if let ::core::option::Option::Some(__cursor) = __p.next_cursor {
                         ::nest_rs_http::set_next_link(
                             &mut __resp,
@@ -125,8 +126,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Read, #entity)]
             async fn get(
                 &self,
-                __id: ::nest_rs_http::poem::web::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
-            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
+                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+            ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
@@ -134,16 +135,16 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::__private::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::http_crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__m)))
+                        ::core::result::Result::Ok(::nest_rs_http::Json(#output::from(&__m)))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
+                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::FORBIDDEN),
                     ),
                     ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
+                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::NOT_FOUND),
                     ),
                 }
             }
@@ -166,19 +167,18 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Create, #entity)]
             async fn create(
                 &self,
-                // Read through `caller_path`: the router strips a global prefix off
-                // `uri()`, and `original_uri()` is populated on the hyper path only.
-                __req: &::nest_rs_http::poem::Request,
-                __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#create>>,
-            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
+                // Read through `caller_path`: a version selector rewrites `uri()`.
+                __req: &::nest_rs_http::Request,
+                __body: ::nest_rs_http::Valid<::nest_rs_http::Json<#create>>,
+            ) -> ::nest_rs_http::Result<::nest_rs_http::Response> {
                 let __row = ::nest_rs_seaorm::Creatable::create(
                     &*self.#service,
                     __body.into_inner(),
                 )
                 .await
-                .map_err(::nest_rs_seaorm::__private::crud_error)?;
-                let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(
-                    ::nest_rs_http::poem::web::Json(#output::from(&__row)),
+                .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
+                let mut __resp = ::nest_rs_http::IntoResponse::into_response(
+                    ::nest_rs_http::Json(#output::from(&__row)),
                 );
                 // RFC 9110 §15.3.2: a `201` names what it created.
                 if let ::core::option::Option::Some(__id) =
@@ -200,15 +200,17 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     {
         let summary = format!("Update {noun} by id");
         generated.push(parse_quote! {
-            #[patch("/{id}")]
+            // RFC 9110 §9.3.4: `Update<E>` carries every writable field, which
+            // replace the row's — a replacement, not RFC 5789's partial patch.
+            #[put("/{id}")]
             #[api(summary = #summary)]
             #[crud_write]
             #[authorize(::nest_rs_authz::Update, #entity)]
             async fn update(
                 &self,
-                __id: ::nest_rs_http::poem::web::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
-                __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#update>>,
-            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
+                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+                __body: ::nest_rs_http::Valid<::nest_rs_http::Json<#update>>,
+            ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
@@ -216,7 +218,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::__private::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::http_crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         let __row = ::nest_rs_seaorm::Updatable::update(
@@ -225,14 +227,14 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                             __body.into_inner(),
                         )
                         .await
-                        .map_err(::nest_rs_seaorm::__private::crud_error)?;
-                        ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__row)))
+                        .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
+                        ::core::result::Result::Ok(::nest_rs_http::Json(#output::from(&__row)))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
+                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::FORBIDDEN),
                     ),
                     ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
+                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::NOT_FOUND),
                     ),
                 }
             }
@@ -250,8 +252,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Delete, #entity)]
             async fn delete(
                 &self,
-                __id: ::nest_rs_http::poem::web::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
-            ) -> ::nest_rs_http::poem::Result<()> {
+                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+            ) -> ::nest_rs_http::Result<()> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
@@ -259,19 +261,19 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::__private::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::http_crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
                             .await
-                            .map_err(::nest_rs_seaorm::__private::crud_error)?;
+                            .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                         ::core::result::Result::Ok(())
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
+                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::FORBIDDEN),
                     ),
                     ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
+                        ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::NOT_FOUND),
                     ),
                 }
             }
@@ -363,6 +365,17 @@ mod tests {
             );
         }
         assert!(!out.contains("Authorize <"), "no posture parameter: {out}");
+    }
+
+    // RFC 5789 makes `PATCH` a partial update; `Update<E>` carries every
+    // writable field, so the route replaces them (RFC 9110 §9.3.4).
+    #[test]
+    fn the_update_op_replaces_the_row_through_put() {
+        let out = generated_methods(quote! {
+            service = svc, entity = E, output = Thing, update = UpdateThing
+        });
+        assert!(out.contains("# [put (\"/{id}\")]"), "{out}");
+        assert!(!out.contains("patch"), "{out}");
     }
 
     #[test]

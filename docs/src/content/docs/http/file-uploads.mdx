@@ -1,12 +1,12 @@
 ---
 title: File uploads
-description: Accept a multipart/form-data upload with poem's Multipart extractor and stream the part into object storage.
+description: Accept a multipart/form-data upload with the Multipart extractor and stream the part into object storage.
 sidebar:
   order: 10
 ---
 
-Take a file part straight from a `multipart/form-data` request with
-poem's `Multipart` extractor and hand it to storage as it arrives. A direct
+Take a file part straight from a `multipart/form-data` request with the
+`Multipart` extractor and hand it to storage as it arrives. A direct
 upload is the single-round-trip alternative to the
 [presigned flow](/storage/): the client posts the bytes, the server stores
 them. The demo reads the form in an extractor of its own, so the handler is
@@ -37,20 +37,22 @@ pub struct UploadedAudio {
 impl<'a> FromRequest<'a> for UploadedAudio {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
         let mut form = Multipart::from_request(req, body).await?;
-        while let Some(part) = form
-            .next_field()
-            .await
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::BAD_REQUEST))?
-        {
+        while let Some(part) = form.next_field().await? {
             if part.name() != Some("file") {
                 continue;
             }
             let filename = part.file_name().map(str::to_owned).unwrap_or_default();
-            UploadRequestDto {
+            if (UploadRequestDto {
                 filename: filename.clone(),
-            }
+            })
             .validate()
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::UNPROCESSABLE_ENTITY))?;
+            .is_err()
+            {
+                return Err(HttpError::from(
+                    ProblemDetails::from_status(StatusCode::UNPROCESSABLE_ENTITY)
+                        .with_detail("the `file` part's filename is not an accepted audio name"),
+                ));
+            }
             return Ok(Self { filename, part });
         }
         // … no `file` part: 400
@@ -60,13 +62,14 @@ impl<'a> FromRequest<'a> for UploadedAudio {
 
 Two lines carry the weight: the filename is validated **before** it becomes
 an object key, and `into_byte_stream()` hands the part to storage as it
-arrives, so it never exists whole in memory.
+arrives, so it never exists whole in memory. The refusal says what the name had
+to be and never quotes the one sent: a client value has no place in a reply.
 
 ## Stream the part instead of buffering it
 
 `field.bytes()` is the buffered form: the whole part lands in memory before the
 handler sees any of it. That is right for a form value and wrong for a file.
-`PartExt::into_byte_stream()` is the other half — the part as it arrives, in the
+`Field::into_byte_stream()` is the other half — the part as it arrives, in the
 shape [`Storage::put_stream`](/storage/) consumes:
 
 ```rust title="crates/features/src/audio/service.rs (from the demo, abridged)"

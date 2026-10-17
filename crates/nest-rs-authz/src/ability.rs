@@ -160,12 +160,13 @@ pub(crate) struct Rule {
 #[derive(Default)]
 pub struct Ability {
     rules: HashMap<(Action, TypeId), Vec<Rule>>,
-    /// Scopes that would have unlocked a rule this actor's credential could not
-    /// reach — recorded when [`RuleSpec::requires_scope`] withholds one, so a
-    /// refusal can name what to ask for instead of being an opaque `403`.
+    /// What each grant this actor's credential could not reach lacks, in
+    /// declaration order — recorded when [`RuleSpec::requires_scope`] withholds
+    /// one, so a refusal can name what to ask for instead of being an opaque
+    /// `403`.
     ///
     /// [`RuleSpec::requires_scope`]: crate::RuleSpec::requires_scope
-    withheld: HashMap<(Action, TypeId), Vec<String>>,
+    withheld: HashMap<(Action, TypeId), Vec<Vec<String>>>,
     visitor: bool,
 }
 
@@ -177,30 +178,30 @@ impl Ability {
     /// Record that a rule was withheld for lack of `scopes`. The rule itself is
     /// never added — a withheld grant must not widen anything.
     pub(crate) fn withhold(&mut self, action: Action, subject: TypeId, scopes: Vec<String>) {
-        let entry = self.withheld.entry((action, subject)).or_default();
-        for scope in scopes {
-            if !entry.contains(&scope) {
-                entry.push(scope);
-            }
-        }
+        self.withheld
+            .entry((action, subject))
+            .or_default()
+            .push(scopes);
     }
 
-    /// The scopes that would have granted `action` on `subject`, had this
-    /// actor's credential carried them.
+    /// The scopes one grant of `action` on `subject` lacks: every one of them
+    /// is needed, and together with what the credential holds they suffice —
+    /// RFC 6750 §3's `scope`, what a client asks for next.
+    ///
+    /// When several grants would have allowed it, the set is the narrowest's:
+    /// the action's own grant before the [`Action::Manage`] wildcard's, the
+    /// first declared among them. Never a union, which would make a client ask
+    /// for more than it needs.
     ///
     /// Read it only after [`can_class`](Self::can_class) said no: a withheld rule
     /// and a granted one can coexist. Empty means the refusal was not about scope.
     pub fn missing_scopes(&self, action: Action, subject: TypeId) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for scope in keys_for(action, subject)
+        keys_for(action, subject)
             .filter_map(|key| self.withheld.get(&key))
             .flatten()
-        {
-            if !out.contains(scope) {
-                out.push(scope.clone());
-            }
-        }
-        out
+            .next()
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub(crate) fn mark_visitor(&mut self) {

@@ -8,8 +8,7 @@ sidebar:
 A handler returning `Err(MyError)` should produce a typed JSON body and
 the right status — never a stack trace, never a generic `500`. The HTTP
 surface gives two paths to get there. A feature with its own error enum
-implements [poem](https://docs.rs/poem)'s `ResponseError` once, and `?`
-carries the rest. A glue route without an enum picks up `ProblemDetails`
+implements `nest_rs::http::ResponseError` once, and `?` carries the rest. A glue route without an enum picks up `ProblemDetails`
 — a small builder that emits an RFC 9457 `application/problem+json`
 body.
 
@@ -19,12 +18,11 @@ unconditional mapping, the `ResponseError` default), see
 
 ## Map a feature error with `ResponseError`
 
-The pattern is `thiserror::Error` for the error type,
-[poem](https://docs.rs/poem)'s `ResponseError` for the status:
+The pattern is `thiserror::Error` for the error type, `ResponseError` for the
+status:
 
 ```rust title="crates/features/src/hello/error.rs"
-use nest_rs::http::poem::http::StatusCode;
-use nest_rs::http::poem::error::ResponseError;
+use nest_rs::http::{ResponseError, StatusCode};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -63,8 +61,8 @@ A feature owns one error type — usually the one it already returns from
 its service. The framework's plumbing errors carry their own HTTP mapping:
 `nest_rs::seaorm::ServiceError` and the OAuth `nest_rs::oauth::server::TokenError`
 ship `ResponseError` impls, so service-layer `?` works without a
-feature-level conversion. (`nest_rs::authn::AuthError` maps itself through
-`IntoResponse` instead — see [the table below](#framework-errors-carry-their-own-mapping).)
+feature-level conversion, and so does `nest_rs::authn::AuthError` — see
+[the table below](#framework-errors-carry-their-own-mapping).
 
 ## Structured bodies with `ProblemDetails`
 
@@ -73,9 +71,7 @@ structured error body conforming to
 [RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html):
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::ProblemDetails;
-use nest_rs::http::poem::Result;
-use nest_rs::http::poem::web::Json;
+use nest_rs::http::{Json, Path, ProblemDetails, Result};
 
 #[get("/posts/{id}")]
 async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Post>, ProblemDetails> {
@@ -91,9 +87,12 @@ async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Post>, ProblemDetails>
 ```
 
 Constructors cover the well-known statuses — `bad_request`, `unauthorized`,
-`forbidden`, `not_found`, `conflict`, `unprocessable`, `internal` — each
-preset with a stable `type` URI pointing at the matching RFC 9110
-section. Builders extend the body:
+`forbidden`, `not_found`, `conflict`, `unprocessable`, `internal` — and
+`from_status` any other. Each is `type: "about:blank"` with the status's phrase
+as its `title`: RFC 9457's spelling of a problem that says nothing beyond its
+status, the one every problem the framework renders carries. A client keys on
+the `status`, or on a `type` of your own set with `.with_type(…)`. Builders
+extend the body:
 
 | Builder | Field |
 |---------|-------|
@@ -109,7 +108,7 @@ automatically; an absent `detail` or `instance` is omitted from the body
 
 ```json
 {
-  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.404",
+  "type": "about:blank",
   "title": "Not Found",
   "status": 404,
   "detail": "post 9c3d… does not exist",
@@ -176,7 +175,7 @@ on a handler that calls a service without a single line of conversion code:
 |-------|--------|------------|
 | `nest_rs::seaorm::ServiceError` | Repo, CrudService, dataloader | `problem+json` — `422` validation/invalid, `409` conflict (a unique violation among them), `403` forbidden, `404` not found, `500` else (validation field errors ride as `errors`) |
 | `nest_rs::oauth::server::TokenError` | OAuth token endpoint | `ResponseError` — `application/json` per RFC 6749 §5.2 — `400` bad grant/scope, `401` `invalid_client`, `500` signing/backend |
-| `nest_rs::authn::AuthError` | Strategy authentication | `IntoResponse` — `401` challenge (`503`, with a `Retry-After` when known, when the identity store or provider is unavailable) |
+| `nest_rs::authn::AuthError` | Strategy authentication | `ResponseError` — `401` challenge (`503`, with a `Retry-After` when known, when the identity store or provider is unavailable) |
 
 Every error the HTTP transport renders — a handler's `ServiceError`, an
 inline `ProblemDetails`, a validation rejection, and even a raw router
@@ -185,8 +184,8 @@ as one `application/problem+json` body. The transport lifts any leftover
 plain-text error onto the RFC 9457 envelope at its edge; internal (`5xx`)
 detail is dropped so a driver or panic message never reaches the wire.
 
-An error nobody meant for the client — an `anyhow` chain, a
-`poem::error::InternalServerError(e)` — is never lost on the way: it answers an
+An error nobody meant for the client — an `anyhow` chain, an
+`HttpError::new(e, StatusCode::INTERNAL_SERVER_ERROR)` — is never lost on the way: it answers an
 opaque `500` problem, and its whole chain is filed once at `error` on
 `nest_rs::http`. A `nest_rs::core::Problem` the chain carries answers itself
 instead — its status, its `detail` on a `4xx`, its `code` as an extension
@@ -199,11 +198,9 @@ in it, and its connection serves the next request. The panic is filed once at
 `outcome="panic"` (see [Logs](/opentelemetry/logs/#every-unit-of-work-files-one-line)).
 A streaming body that panics mid-flow cannot be finished, so it ends there.
 
-The two `ResponseError` types convert into `poem::Error`, so `?`
-propagates them through a `poem::Result` handler. `AuthError` implements
-`IntoResponse` rather than `ResponseError`: it is returned as a handler's
-own error type (`Result<T, AuthError>`), not `?`-propagated into a
-`poem::Result`.
+Each of them converts into `HttpError`, so `?` propagates it through a
+`nest_rs::http::Result` handler, and a handler may also return it as its own
+error type (`Result<T, AuthError>`).
 
 There is **no `AbilityError`** — an ability denial is not an error. It is
 a guard denial, returned as an `Ok(403)` response by `AuthzGuard`, so it

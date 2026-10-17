@@ -3,9 +3,7 @@
 
 use std::fmt;
 
-use poem::http::{HeaderValue, header};
-use poem::web::Json;
-use poem::{IntoResponse, Response};
+use nest_rs_http::{HeaderValue, IntoResponse, Json, Response, header};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -28,9 +26,10 @@ pub struct AccessTokenRequest {
 /// RFC 6749 §5.1 — the successful access token response.
 ///
 /// A handler returns it bare: it renders as its JSON with §5.1's
-/// `Cache-Control: no-store` and `Pragma: no-cache`, which `Json<Self>` would
-/// drop. `#[api(response = …)]` names it for the OpenAPI document, which reads
-/// a body's type off a `Json<T>` return. `Debug` redacts the token.
+/// `Cache-Control: no-store` and `Pragma: no-cache`. It is no `Serialize`, so
+/// no other spelling of the response — a `Json<Self>`, a hand-built body — can
+/// drop the two. `#[api(response = …)]` names it for the OpenAPI document,
+/// which reads a body's type off a `Json<T>` return. `Debug` redacts the token.
 ///
 /// An issuer that grants another scope than the one requested — a narrower
 /// set, or its default when the request named none — states it with
@@ -50,12 +49,21 @@ pub struct AccessTokenRequest {
 ///     #[post("/login")]
 ///     #[public]
 ///     #[api(response = AccessTokenResponse)]
-///     async fn login(&self) -> poem::Result<AccessTokenResponse> {
+///     async fn login(&self) -> nest_rs_http::Result<AccessTokenResponse> {
 ///         Ok(sign_in())
 ///     }
 /// }
 /// ```
-#[derive(Serialize, JsonSchema)]
+///
+/// The token never leaves without them:
+///
+/// ```compile_fail,E0277
+/// use nest_rs_http::{IntoResponse, Json};
+/// use nest_rs_oauth_server::AccessTokenResponse;
+///
+/// let cacheable = Json(AccessTokenResponse::bearer("t", 60)).into_response();
+/// ```
+#[derive(JsonSchema)]
 #[schemars(description = "RFC 6749 §5.1 — the successful access token response.")]
 pub struct AccessTokenResponse {
     /// §5.1 REQUIRED — the token itself.
@@ -66,14 +74,24 @@ pub struct AccessTokenResponse {
     pub expires_in: u64,
     /// §5.1 — the scope granted, written space-delimited; empty, the member is
     /// absent, which says the grant is the scope requested.
-    #[serde(
-        skip_serializing_if = "Vec::is_empty",
-        serialize_with = "nest_rs_authn::scope::space_delimited::serialize"
-    )]
     // The wire is one string, and the member is optional: the OpenAPI document
     // reads schemas under the deserialize contract, where only a default says so.
     #[schemars(with = "String", default)]
     pub scope: Vec<String>,
+}
+
+/// What [`AccessTokenResponse`] puts on the wire, borrowed: the one serializer
+/// of the type, reached only through its own response.
+#[derive(Serialize)]
+struct Wire<'a> {
+    access_token: &'a str,
+    token_type: &'a str,
+    expires_in: u64,
+    #[serde(
+        skip_serializing_if = "<[String]>::is_empty",
+        serialize_with = "nest_rs_authn::scope::space_delimited::serialize"
+    )]
+    scope: &'a [String],
 }
 
 impl AccessTokenResponse {
@@ -116,16 +134,29 @@ impl fmt::Debug for AccessTokenResponse {
 
 impl IntoResponse for AccessTokenResponse {
     fn into_response(self) -> Response {
-        Json(self)
-            .with_header(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
-            .with_header(header::PRAGMA, HeaderValue::from_static("no-cache"))
-            .into_response()
+        let Self {
+            access_token,
+            token_type,
+            expires_in,
+            scope,
+        } = &self;
+        let mut response = Json(Wire {
+            access_token,
+            token_type,
+            expires_in: *expires_in,
+            scope,
+        })
+        .into_response();
+        let headers = response.headers_mut();
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+        response
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use poem::http::{StatusCode, header};
+    use nest_rs_http::StatusCode;
 
     use super::*;
 

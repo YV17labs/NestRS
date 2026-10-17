@@ -33,12 +33,12 @@ struct SixController;
 #[routes]
 impl SixController {
     #[get("/query")]
-    async fn query(&self, page: poem::web::Query<Page>) -> String {
+    async fn query(&self, page: nest_rs_http::Query<Page>) -> String {
         said(&page)
     }
 
     #[get("/form")]
-    async fn form(&self, page: poem::web::Form<Page>) -> String {
+    async fn form(&self, page: nest_rs_http::Form<Page>) -> String {
         said(&page)
     }
 }

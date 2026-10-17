@@ -9,10 +9,9 @@ A controller is a plain struct: inject what it needs, hang verb methods
 off its `impl` block, and `#[routes]` generates the route table. Verb
 attributes (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`) bind a
 method to a path, and [`#[sse]`](/http/streaming/) binds a `GET` that
-answers an event stream. Extractors, validation and response types all come from
-[poem](https://docs.rs/poem) — NestRS adds the DI shape, the self-composing
-route table, and a few framework-specific extractors covered on the
-[extractors](/http/extractors/) page.
+answers an event stream. Extractors, validation and response types all live in
+`nest_rs::http`, beside the DI shape and the self-composing route table; the
+whole extractor surface has its own [page](/http/extractors/).
 
 This page covers the minimum to ship an HTTP handler. Response shaping
 ([responses](/http/responses/)), error mapping ([errors](/http/errors/)),
@@ -48,8 +47,9 @@ impl HelloController {
   builds the controller.
 - **`#[routes]`** generates the route table; one entry per verb attribute.
 - **`async fn hello(&self) -> String`** — any type that implements
-  `IntoResponse` is a valid return. `String`, `&'static str`, `i32`,
-  `Json<T>`, `(StatusCode, Body)` … all work.
+  `IntoResponse` is a valid return. `String`, `&'static str`, `Json<T>`,
+  `StatusCode`, `(StatusCode, Body)`, a built `Response` … all work, and so does
+  a `Result` of any of them.
 - **A controller with no `#[inject]` field needs `#[derive(Default)]`.**
   Injected fields give the container everything it needs to build the struct;
   with none, it falls back to `Default`. rustc names the fix, but the case only
@@ -89,7 +89,7 @@ event rather than against the attribute.
 ## Adding a path parameter
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::http::poem::web::Path;
+use nest_rs::http::Path;
 
 #[get("/{name}")]
 async fn greet(&self, Path(name): Path<String>) -> String {
@@ -153,8 +153,7 @@ and at boot across two, naming both handlers.
 ## Reading query parameters
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::http::poem::web::Query;
-use nest_rs::http::input;
+use nest_rs::http::{Query, input};
 
 #[input]
 struct Greet {
@@ -178,9 +177,7 @@ Bonjour le monde
 ## Accepting a JSON body, validated
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::http::poem::Result;
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::{Valid, input};
+use nest_rs::http::{Json, Result, Valid, input};
 
 #[input]
 struct GreetInput {
@@ -214,12 +211,14 @@ async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<Gree
   custom `Deserialize` shape (e.g. untagged enums)? Skip `#[input]` and derive
   all four by hand.
 - **`Json<T>`** parses the request body into `T`. A body that does not decode
-  is `400`, and its `detail` says where and what kind — `parse error: invalid
-  type: a string, expected u64 at line 1 column 12` — never the value refused,
-  nor a key the client sent: serde's own sentence quotes both, and a body field
-  is where a password or a card number travels. `Form<T>`, `Query<T>`,
-  `Path<T>` and `Header<T>` refuse the same way, and so does a handler's own
-  decode returned as a `400` (`poem::error::BadRequest(e)`).
+  is `400`, and its `detail` says where and what kind — `the JSON body does not
+  decode: invalid type: a string, expected u64 at line 1 column 12` — never the
+  value refused, nor a key the client sent: serde's own sentence quotes both,
+  and a body field is where a password or a card number travels. A body sent
+  under another media type is `415`, naming the type it expected and never the
+  one sent. `Form<T>`, `Query<T>`, `Path<T>` and `Header<T>` refuse the same
+  way, and so does a handler's own decode returned as a `400`
+  (`HttpError::new(err, StatusCode::BAD_REQUEST)`).
 - **`Valid<E>`** runs [validator](https://docs.rs/validator) on the
   extracted value. A failure returns `400` with the structured error list
   — no manual checks in the handler. `Valid` is the ergonomic form of the
@@ -234,7 +233,7 @@ $ curl -sX POST http://localhost:3000/ \
 $ curl -sX POST http://localhost:3000/ \
     -H 'Content-Type: application/json' \
     -d '{"name":""}'
-{"type":"https://www.rfc-editor.org/rfc/rfc9110#status.400","title":"Bad Request",
+{"type":"about:blank","title":"Bad Request",
  "status":400,"detail":"validation failed",
  "errors":{"name":[{"code":"length","message":null}]}}
 ```

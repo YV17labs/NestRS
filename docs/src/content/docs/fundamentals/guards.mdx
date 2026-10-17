@@ -114,10 +114,8 @@ graph must reach.
 ```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
 use nest_rs::authz::Read;
-use nest_rs::http::{controller, routes};
+use nest_rs::http::{Json, Path, Result, controller, routes};
 use nest_rs::seaorm::Bind;
-use nest_rs::http::poem::web::{Json, Path};
-use nest_rs::http::poem::Result;
 use uuid::Uuid;
 
 use crate::authn::AuthnGuard;
@@ -475,7 +473,7 @@ method as well, so the guard is not also listed in `#[use_guards]` — the
 compiler refuses that second listing:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[patch("/{id}/publish")]
+#[post("/{id}/publish")]
 #[force_guards(FreshTokenGuard)]        // replay, even though the pool ran it
 #[authorize(Update, PostEntity)]
 async fn publish(&self, post: Bind<Update, PostsService>) -> Result<Json<Post>> { /* ... */ }

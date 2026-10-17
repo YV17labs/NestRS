@@ -12,10 +12,21 @@ impl Layer for ModerationGuard {}
 #[async_trait]
 impl Guard for ModerationGuard {
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let view = cx
-            .switch_to::<WsView>()
-            .ok_or_else(|| Denial::internal("ModerationGuard checks WebSocket messages only"))?;
+        let Some(view) = cx.switch_to::<WsView>() else {
+            tracing::error!(
+                target: crate::chat::TARGET,
+                reason = "not_a_message",
+                "message denied: the guard checks WebSocket messages only",
+            );
+            return Err(Denial::internal(
+                "ModerationGuard checks WebSocket messages only",
+            ));
+        };
         Self::decide(view.event(), view.data())
+    }
+
+    fn files_its_denials(&self) -> bool {
+        true
     }
 }
 
@@ -27,12 +38,12 @@ impl ModerationGuard {
             .and_then(|data| data.get("author"))
             .and_then(Value::as_str)
         {
-            Some(author @ "banned") => {
+            Some("banned") => {
                 tracing::warn!(
                     target: crate::chat::TARGET,
                     action = "post",
                     subject = event,
-                    author,
+                    reason = "banned_author",
                     "message denied: author is not allowed to post",
                 );
                 Err(Denial::forbidden("author `banned` is not allowed to post"))

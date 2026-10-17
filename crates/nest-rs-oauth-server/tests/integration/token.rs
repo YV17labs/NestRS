@@ -1,13 +1,24 @@
 //! RFC 6749 §4.4.2 and §5.1 on the wire.
 
 use nest_rs_core::{Discovery, module};
-use nest_rs_http::{HttpControllerMeta, HttpModule, controller, routes};
+use nest_rs_http::{HttpControllerMeta, HttpModule, IntoResponse, controller, routes};
 use nest_rs_oauth_server::{AccessTokenRequest, AccessTokenResponse};
 use nest_rs_testing::TestApp;
 
-#[test]
-fn the_response_carries_exactly_the_members_5_1_marks_required() {
-    let body = serde_json::to_value(AccessTokenResponse::bearer("t", 3600)).expect("serializes");
+/// The JSON `response` answers: its one serialization.
+async fn wire(response: AccessTokenResponse) -> serde_json::Value {
+    let body = response
+        .into_response()
+        .into_body()
+        .into_bytes()
+        .await
+        .expect("a body");
+    serde_json::from_slice(&body).expect("JSON")
+}
+
+#[tokio::test]
+async fn the_response_carries_exactly_the_members_5_1_marks_required() {
+    let body = wire(AccessTokenResponse::bearer("t", 3600)).await;
 
     assert_eq!(
         body,
@@ -16,21 +27,18 @@ fn the_response_carries_exactly_the_members_5_1_marks_required() {
 }
 
 /// §5.1 and §3.3: an issuer that narrows or defaults the grant says so.
-#[test]
-fn a_granted_scope_is_written_as_the_scope_member() {
-    let body =
-        serde_json::to_value(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read"]))
-            .expect("serializes");
+#[tokio::test]
+async fn a_granted_scope_is_written_as_the_scope_member() {
+    let body = wire(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read"])).await;
 
     assert_eq!(body["scope"], "posts:read");
 }
 
-#[test]
-fn several_granted_scopes_are_written_space_delimited() {
-    let body = serde_json::to_value(
-        AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read", "posts:write"]),
-    )
-    .expect("serializes");
+#[tokio::test]
+async fn several_granted_scopes_are_written_space_delimited() {
+    let body =
+        wire(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read", "posts:write"]))
+            .await;
 
     assert_eq!(body["scope"], "posts:read posts:write");
 }
@@ -65,7 +73,7 @@ impl IssuerController {
     #[post("/token")]
     #[public]
     #[api(response = AccessTokenResponse)]
-    async fn token(&self) -> poem::Result<AccessTokenResponse> {
+    async fn token(&self) -> nest_rs_http::Result<AccessTokenResponse> {
         Ok(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read"]))
     }
 }

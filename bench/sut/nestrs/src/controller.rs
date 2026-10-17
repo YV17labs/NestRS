@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::{controller, routes};
+use nest_rs::http::{Json, controller, routes};
 
 use crate::dto::HelloDto;
 use crate::service::HelloService;

@@ -6,7 +6,7 @@ use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::module;
 use nest_rs_guards::guard;
-use nest_rs_http::poem::web::Json;
+use nest_rs_http::Json;
 use nest_rs_http::{controller, routes};
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
 use nest_rs_testing::TestApp;
@@ -126,7 +126,7 @@ macro_rules! visitor_app {
                 async fn list(
                     &self,
                     _authz: Authorize<Read, post::Entity>,
-                ) -> poem::Result<Json<Vec<PostDto>>> {
+                ) -> nest_rs_http::Result<Json<Vec<PostDto>>> {
                     let rows = PostsService.list().await.map_err(ServiceError::from)?;
                     Ok(Json(rows.into_iter().map(PostDto::from).collect()))
                 }
@@ -135,7 +135,7 @@ macro_rules! visitor_app {
                 // installs it as the ambient one `Repo` reads.
                 #[get("/unshaped")]
                 #[public]
-                async fn unshaped(&self) -> poem::Result<Json<Vec<PostDto>>> {
+                async fn unshaped(&self) -> nest_rs_http::Result<Json<Vec<PostDto>>> {
                     let rows = PostsService.list().await.map_err(ServiceError::from)?;
                     Ok(Json(rows.into_iter().map(PostDto::from).collect()))
                 }

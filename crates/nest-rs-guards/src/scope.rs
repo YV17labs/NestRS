@@ -42,7 +42,7 @@ impl GrantedScopes {
 impl AmbientValue for GrantedScopes {}
 
 /// The scopes an operation required but the caller's credential did not carry,
-/// attached to the refused response.
+/// every one of them needed, attached to the refused response.
 ///
 /// Read at the transport edge to build RFC 6750 §3.1's `insufficient_scope`
 /// challenge.
@@ -50,7 +50,7 @@ impl AmbientValue for GrantedScopes {}
 pub struct RequiredScopes(Vec<String>);
 
 impl RequiredScopes {
-    /// Record the scopes that would have granted the refused operation.
+    /// Record the scopes the refused operation needs.
     pub fn new(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self(scopes.into_iter().map(Into::into).collect())
     }

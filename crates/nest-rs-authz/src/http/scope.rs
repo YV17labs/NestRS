@@ -5,8 +5,7 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-use poem::http::StatusCode;
-use poem::{Error, FromRequest, Request, RequestBody, Result};
+use nest_rs_http::{FromRequest, HttpError, Request, RequestBody, Result, StatusCode};
 use sea_orm::EntityTrait;
 use sea_orm::sea_query::Condition;
 
@@ -35,12 +34,15 @@ where
     A: ActionMarker,
 {
     async fn from_request(_req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        let ability = nest_rs_core::ambient::<Ability>().ok_or_else(|| {
-            Error::from_string(
+        let Some(ability) = nest_rs_core::ambient::<Ability>() else {
+            // A wiring mistake, said to the operator: the caller learns nothing of it.
+            tracing::error!(
+                target: crate::TARGET,
+                subject = std::any::type_name::<E>(),
                 "missing request `Ability` — is the ability guard applied to this route?",
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
+            );
+            return Err(HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR));
+        };
         Ok(Scope(ability.condition_for::<E>(A::ACTION), PhantomData))
     }
 }

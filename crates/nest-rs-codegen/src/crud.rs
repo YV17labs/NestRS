@@ -29,7 +29,7 @@ pub enum CrudOp {
     Get,
     /// `POST /` — needs `create = <InputType>` and `Creatable`.
     Create,
-    /// `PATCH /{id}` — needs `update = <InputType>` and `Updatable`.
+    /// `PUT /{id}` — needs `update = <InputType>` and `Updatable`.
     Update,
     /// `DELETE /{id}` — needs `Deletable`.
     Delete,

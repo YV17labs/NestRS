@@ -49,10 +49,6 @@ use crate::response::Response;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OpenEndedBody;
 
-/// The exact type poem converts its body to and from in its public `From`
-/// impls.
-type PoemBody = BoxBody<Bytes, IoError>;
-
 /// What a streaming body continues its request under: what the handler ran
 /// under, captured where it returned the body, each value through its own
 /// `carry` — the executor as the pool, never the transaction the route settles.
@@ -61,10 +57,10 @@ struct BodyContinuation(RequestContinuation);
 
 /// Capture, for a body that streams, what the handler's unit carries into it;
 /// a body of known length is written at once and needs none.
-pub(crate) fn continue_body(mut resp: poem::Response) -> poem::Response {
-    let body: PoemBody = resp.take_body().into();
+pub(crate) fn continue_body(mut resp: Response) -> Response {
+    let body = resp.take_body();
     let streams = !body.is_end_stream() && body.size_hint().exact().is_none();
-    resp.set_body(poem::Body::from(body));
+    resp.set_body(body);
     if streams && let Some(carried) = RequestContinuation::capture(Continuation::Body) {
         resp.extensions_mut().insert(BodyContinuation(carried));
     }
@@ -346,7 +342,12 @@ mod tests {
         let carried = carry(
             RequestContinuation::new(None, Correlation::minted(None)),
             tracing::Span::none(),
-            Some(AccessLog::open(&request, None, std::time::Instant::now())),
+            Some(AccessLog::open(
+                &request,
+                &crate::matched::MatchedRoute::default(),
+                None,
+                std::time::Instant::now(),
+            )),
             None,
             panics_after_one_event(),
             &Arc::new(Drain::default()),

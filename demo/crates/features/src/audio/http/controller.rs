@@ -4,11 +4,11 @@ use std::future::ready;
 
 use futures_util::StreamExt;
 use nest_rs::core::error_message;
-use nest_rs::http::{Header, PartExt, SseEvent, SseStream, Valid, controller, routes};
+use nest_rs::http::{
+    Body, Header, HeaderValue, HttpError, Json, Query, Response, Result, SseEvent, SseStream,
+    StatusCode, Valid, controller, routes,
+};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
-use poem::http::StatusCode;
-use poem::web::{Json, Query};
-use poem::{Body, Error, Response, Result};
 
 use super::uploaded_audio::UploadedAudio;
 use crate::audio::TranscodeGuard;
@@ -60,7 +60,7 @@ impl AudioController {
         let file = query.into_inner().file;
         match self.svc.presign_result(&file).await? {
             Some(ticket) => Ok(Json(ticket)),
-            None => Err(Error::from_status(StatusCode::NOT_FOUND)),
+            None => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
         }
     }
 
@@ -100,9 +100,9 @@ impl AudioController {
         let file = query.into_inner().file;
         match self.svc.open_result(&file).await? {
             Some(stream) => Ok(Response::builder()
-                .content_type("audio/mpeg")
-                .body(Body::from_bytes_stream(stream))),
-            None => Err(Error::from_status(StatusCode::NOT_FOUND)),
+                .content_type(HeaderValue::from_static("audio/mpeg"))
+                .body(Body::from_stream(stream))),
+            None => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
         }
     }
 

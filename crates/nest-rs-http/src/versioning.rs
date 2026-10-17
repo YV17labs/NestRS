@@ -363,7 +363,6 @@ impl<E> VersionedEndpoint<E> {
         if self.selector.is_versioned(path) {
             tracing::debug!(
                 target: crate::target::HTTP,
-                path = path,
                 strategy = self.selector.strategy.as_str(),
                 "refused a URI-versioned path under a non-URI versioning strategy",
             );
@@ -414,7 +413,7 @@ impl<E> VersionedEndpoint<E> {
             // Falling through would answer with another version's body.
             tracing::debug!(
                 target: crate::target::HTTP,
-                path = path,
+                strategy = self.selector.strategy.as_str(),
                 "no route serves the requested API version",
             );
             return Err(HttpError::from_status(StatusCode::NOT_FOUND));

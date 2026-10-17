@@ -68,3 +68,26 @@ async fn login_rejects_unknown_email() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn login_refuses_another_media_type_naming_only_json() {
+    let (_db, app) = boot().await;
+
+    let resp = app
+        .http()
+        .post("/login")
+        .content_type(FOREIGN_MEDIA_TYPE)
+        .body(
+            json!({
+                "email": LOGIN_EMAIL,
+                "password": LOGIN_PASSWORD,
+            })
+            .to_string(),
+        )
+        .send()
+        .await;
+    resp.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let body = resp.0.into_body().into_string().await.expect("a body");
+    assert!(!body.contains("x-quoted-marker"), "{body}");
+    assert!(body.contains("application/json"), "{body}");
+}

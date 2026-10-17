@@ -17,6 +17,7 @@ pub(crate) const CLIENT_ID: &str = "demo-service";
 pub(crate) const CLIENT_SECRET: &str = "demo-service-secret";
 pub(crate) const READER_ID: &str = "reader-service";
 pub(crate) const READER_SECRET: &str = "reader-secret";
+pub(crate) const FOREIGN_MEDIA_TYPE: &str = "text/x-quoted-marker";
 
 pub(crate) fn basic_auth(client_id: &str, client_secret: &str) -> String {
     let raw = format!("{client_id}:{client_secret}");

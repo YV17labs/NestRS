@@ -138,7 +138,7 @@ lifecycle hook:
 
 | Unit | Canonical name | Names |
 |---|---|---|
-| HTTP request | `http.request` | method, path, status, bytes, client |
+| HTTP request | `http.request` | method, route template, status, bytes, client |
 | WS message | `ws.message` | event, `conn_id` |
 | WS socket open | `ws.connect` | `conn_id` |
 | WS socket close | `ws.disconnect` | `conn_id` |
@@ -240,7 +240,7 @@ dropped before it answered is still named `{method} {route}` for the route the
 router had matched, so a backend groups it with the answered ones.
 
 ```text frame="terminal"
-INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=127 duration_ms=0.103 user_agent="curl/8.14.1" trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b
+INFO nest_rs::operation: http.request method=GET route="/users" status=401 bytes=127 duration_ms=0.103 user_agent="curl/8.14.1" trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b
 INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
 ```
 
@@ -354,15 +354,19 @@ the queue, so it can appear before log lines filed earlier.
 
 ## Access log
 
-**The access log belongs to `nest-rs-http`, not to this crate.** Method, path,
+**The access log belongs to `nest-rs-http`, not to this crate.** Method, route,
 status, duration, client, `trace_id`, `span_id` and `actor_id` are what the transport
 knows about a request it served — no collector, no exporter and no propagator is
 involved, so none is required. It emits one event per request on
 `nest_rs::operation`, at end-of-body, with byte-accurate `bytes`:
 
 ```text frame="terminal"
-INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16
+INFO nest_rs::operation: http.request method=GET route="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16
 ```
+
+`route` is the template the router matched — `/posts/{id}`, never
+`/posts/42` — so the line groups the way a dashboard does and never repeats a
+value the client chose. A request no route matched carries no `route` at all.
 
 `actor_id` joins the line once an authn guard resolved a principal, and is
 absent above because nobody was authenticated — which is why that request is a

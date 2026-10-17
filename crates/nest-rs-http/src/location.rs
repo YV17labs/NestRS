@@ -5,13 +5,13 @@
 
 use std::fmt::Display;
 
-use poem::http::{HeaderValue, Uri, header::LOCATION};
-use poem::{Request, Response};
+use http::{HeaderValue, Uri, header::LOCATION};
 
-/// The URI the caller addressed, captured at the transport edge.
-///
-/// poem's `original_uri()` is populated only on the hyper path: a request built
-/// through `Request::builder()`, as every `TestApp` sends, reads `/`.
+use crate::request::Request;
+use crate::response::Response;
+
+/// The URI the caller addressed, captured at the transport edge before any
+/// rewrite in front of the router.
 #[derive(Clone)]
 pub(crate) struct CallerUri(pub(crate) Uri);
 
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn caller_path_reads_the_edges_capture() {
-        let mut req = Request::builder().uri_str("/posts").finish();
+        let mut req = Request::builder().uri(Uri::from_static("/posts")).finish();
         req.extensions_mut()
             .insert(CallerUri(Uri::from_static("/api/posts")));
 
@@ -75,9 +75,8 @@ mod tests {
 
     #[test]
     fn caller_path_falls_back_to_the_request_uri() {
-        let req = Request::builder().uri_str("/posts").finish();
+        let req = Request::builder().uri(Uri::from_static("/posts")).finish();
 
         assert_eq!(caller_path(&req), "/posts");
-        assert_eq!(req.original_uri().path(), "/");
     }
 }

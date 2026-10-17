@@ -138,28 +138,6 @@ where
     }
 }
 
-/// `endpoint`, with `value` in every request's extensions: the per-route data
-/// `#[meta]` and `#[public]` attach.
-pub fn with_data<E, T>(endpoint: E, value: T) -> impl Endpoint
-where
-    E: Endpoint,
-    T: Clone + Send + Sync + 'static,
-{
-    WithData { endpoint, value }
-}
-
-struct WithData<E, T> {
-    endpoint: E,
-    value: T,
-}
-
-impl<E: Endpoint, T: Clone + Send + Sync + 'static> Endpoint for WithData<E, T> {
-    fn call(&self, mut req: Request) -> impl Future<Output = Result<Response>> + Send {
-        req.extensions_mut().insert(self.value.clone());
-        self.endpoint.call(req)
-    }
-}
-
 type MountFn = dyn Fn(&Container, &mut HttpRoutes) + Send + Sync;
 
 /// Discovery metadata for a self-mounting HTTP endpoint owned by another
@@ -440,22 +418,6 @@ mod tests {
     use nest_rs_core::Posture;
 
     use super::*;
-
-    #[derive(Clone)]
-    struct Public;
-
-    #[tokio::test]
-    async fn with_data_hands_the_value_to_every_request() {
-        let seen = endpoint_fn(|req: Request| async move {
-            let marked = req.extensions().get::<Public>().is_some();
-            Ok(Response::builder().body(if marked { "public" } else { "unmarked" }))
-        });
-        let endpoint = with_data(seen, Public);
-        for _ in 0..2 {
-            let response = endpoint.call(Request::builder().finish()).await.unwrap();
-            assert_eq!(response.into_body().into_string().await.unwrap(), "public");
-        }
-    }
 
     #[test]
     fn a_boxed_endpoint_is_kept_as_it_is() {

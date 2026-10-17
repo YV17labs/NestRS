@@ -77,10 +77,11 @@ types with their HTTP mapping already wired:
 | `TokenError::*` | `nest_rs::authn` | RFC 6749 wire codes (`400` / `401` / `500`) |
 
 A service returns the framework type directly; `?` flows it to the
-boundary; the impl decides status and body. Every row above implements poem's
-`ResponseError`, which is what makes the `?` legal — a handler returning
-`Result<Json<T>>` propagates any of them with no `map_err`. No per-feature
-`error.rs` for these — the framework owns them once, every feature reuses them.
+boundary; the impl decides status and body. Every row above implements
+`nest_rs::http::ResponseError`, which is what makes the `?` legal — a
+handler returning `Result<Json<T>>` propagates any of them with no
+`map_err`. No per-feature `error.rs` for these — the framework owns them
+once, every feature reuses them.
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::seaorm::ServiceError;
@@ -112,9 +113,9 @@ with `queue,seaorm` and no `http` links no HTTP stack.
 Write a per-feature error **only** when the failure is genuinely
 domain-specific — a wire contract a consumer reads, a security-critical
 opaque variant. In that case the type lives in `<feature>/error.rs`
-and its `ResponseError` impl sits next to it (the features crate
-already links poem because it ships HTTP controllers). Most features
-never need this — they compose the framework's types.
+and its `nest_rs::http::ResponseError` impl sits next to it, with nothing
+beyond the `http` feature its controllers already need. Most features never
+need this — they compose the framework's types.
 
 `ResponseError` is HTTP's seam. An error that also crosses GraphQL,
 WebSockets or MCP implements `nest_rs::core::ToProblem` once: the `Problem`
@@ -172,8 +173,8 @@ pub struct WidgetController;
 impl WidgetController {
     #[get("/boom")]
     #[use_filters(TeapotFilter)]               // route scope
-    async fn boom(&self) -> poem::Result<&'static str> {
-        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn boom(&self) -> nest_rs::http::Result<&'static str> {
+        Err(nest_rs::http::HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
 }
 
@@ -201,15 +202,15 @@ outer `Filter`, then to the transport's default renderer.
 ```rust title="apps/api/src/exception_filter.rs"
 use nest_rs::core::{Layer, injectable};
 use nest_rs::exception_filters::{ExceptionFilter, async_trait};
-use nest_rs::http::poem::error::ResponseError;
+use nest_rs::http::ResponseError;
 use nest_rs::http::poem::{http::StatusCode, Response};
 
 #[derive(Debug, thiserror::Error)]
 #[error("domain failure: {0}")]
 pub struct DomainError(pub String);
 
-// The filter claims by downcast, so the error has to reach the chain as a
-// `poem::Error` first — that is what this impl is for.
+// The filter claims by downcast, so a handler's `?` has to turn the error
+// into an `HttpError` first — that is what this impl is for.
 impl ResponseError for DomainError {
     fn status(&self) -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
@@ -294,7 +295,7 @@ A route-site exception-filter sits closest to the handler (typed catch); global 
 | Layer | Where it lives | When to reach for it |
 |-------|----------------|-----------------|
 | `ResponseError` on an error type | Framework crate that owns the error (`nest-rs-seaorm`, `nest-rs-authn`), or `<feature>/error.rs` for a domain-specific variant | Default. Every handler returning that error gets the same mapping |
-| `ExceptionFilter` | A provider | The mapping depends on the **error type** — `DomainError → 422` even when the surrounding handler returns `poem::Error` for everything else |
+| `ExceptionFilter` | A provider | The mapping depends on the **error type** — `DomainError → 422` even when the surrounding handler returns `HttpError` for everything else |
 | `#[use_filters(F)]` | A provider | The mapping depends on the **route** — a debug endpoint, a special status, a custom body envelope |
 
 Reach for `ResponseError` first. An `ExceptionFilter` earns its keep

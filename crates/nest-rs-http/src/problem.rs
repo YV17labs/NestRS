@@ -34,13 +34,18 @@ pub(crate) fn problem_response(problem: &Problem) -> crate::Response {
     response
 }
 
-/// Body of an `application/problem+json` response. `type` is the only field a
-/// client may key on, so the constructors' URIs are stable across releases.
+/// Body of an `application/problem+json` response.
+///
+/// Every problem the framework builds from a status alone has one `type`,
+/// `about:blank`, and the status's reason phrase as its `title`: RFC 9457
+/// §4.2.1's spelling of a problem that means nothing beyond its status. A
+/// problem type of an app's own, which a client may key on, is set with
+/// [`with_type`](Self::with_type).
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct ProblemDetails {
-    /// Stable URI identifying the problem type. `about:blank` means the client
-    /// should ignore the type and key on `status` + `title` instead.
+    /// URI identifying the problem type. `about:blank` means the problem says
+    /// nothing beyond its `status`, which a client keys on instead.
     #[serde(rename = "type")]
     pub type_uri: String,
     /// Short, human-readable summary of the problem type (stable per `type`).
@@ -130,10 +135,12 @@ impl ProblemDetails {
         }
     }
 
-    fn new(type_uri: &'static str, title: &'static str, status: StatusCode) -> Self {
+    /// The problem a bare [`StatusCode`] answers: `about:blank` and the
+    /// status's reason phrase (RFC 9457 §4.2.1).
+    pub fn from_status(status: StatusCode) -> Self {
         Self {
-            type_uri: type_uri.into(),
-            title: title.into(),
+            type_uri: "about:blank".into(),
+            title: reason_phrase(status).into(),
             status,
             detail: None,
             instance: None,
@@ -141,89 +148,39 @@ impl ProblemDetails {
         }
     }
 
-    /// Build a problem from a bare [`StatusCode`]: a well-known code through its
-    /// canonical constructor, anything else as `about:blank` and its reason phrase.
-    pub fn from_status(status: StatusCode) -> Self {
-        match status {
-            StatusCode::BAD_REQUEST => Self::bad_request(),
-            StatusCode::UNAUTHORIZED => Self::unauthorized(),
-            StatusCode::FORBIDDEN => Self::forbidden(),
-            StatusCode::NOT_FOUND => Self::not_found(),
-            StatusCode::CONFLICT => Self::conflict(),
-            StatusCode::UNPROCESSABLE_ENTITY => Self::unprocessable(),
-            StatusCode::INTERNAL_SERVER_ERROR => Self::internal(),
-            other => Self {
-                type_uri: "about:blank".into(),
-                title: other.canonical_reason().unwrap_or("Error").into(),
-                status: other,
-                detail: None,
-                instance: None,
-                extensions: serde_json::Map::new(),
-            },
-        }
-    }
-
     /// A `400 Bad Request` problem.
     pub fn bad_request() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.400",
-            "Bad Request",
-            StatusCode::BAD_REQUEST,
-        )
+        Self::from_status(StatusCode::BAD_REQUEST)
     }
 
     /// A `401 Unauthorized` problem.
     pub fn unauthorized() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.401",
-            "Unauthorized",
-            StatusCode::UNAUTHORIZED,
-        )
+        Self::from_status(StatusCode::UNAUTHORIZED)
     }
 
     /// A `403 Forbidden` problem.
     pub fn forbidden() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.403",
-            "Forbidden",
-            StatusCode::FORBIDDEN,
-        )
+        Self::from_status(StatusCode::FORBIDDEN)
     }
 
     /// A `404 Not Found` problem.
     pub fn not_found() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.404",
-            "Not Found",
-            StatusCode::NOT_FOUND,
-        )
+        Self::from_status(StatusCode::NOT_FOUND)
     }
 
     /// A `409 Conflict` problem.
     pub fn conflict() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.409",
-            "Conflict",
-            StatusCode::CONFLICT,
-        )
+        Self::from_status(StatusCode::CONFLICT)
     }
 
     /// A `422 Unprocessable Content` problem — well-formed but semantically invalid.
     pub fn unprocessable() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.422",
-            "Unprocessable Content",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        )
+        Self::from_status(StatusCode::UNPROCESSABLE_ENTITY)
     }
 
     /// A `500 Internal Server Error` problem.
     pub fn internal() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.500",
-            "Internal Server Error",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )
+        Self::from_status(StatusCode::INTERNAL_SERVER_ERROR)
     }
 
     /// Set the occurrence-specific `detail` message.
@@ -259,6 +216,16 @@ impl ProblemDetails {
     ) -> Self {
         self.extensions.insert(key.into(), value.into());
         self
+    }
+}
+
+/// The reason phrase RFC 9110 gives `status`, where the `http` crate still
+/// says the RFC 7231 one.
+fn reason_phrase(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::PAYLOAD_TOO_LARGE => "Content Too Large",
+        StatusCode::UNPROCESSABLE_ENTITY => "Unprocessable Content",
+        other => other.canonical_reason().unwrap_or("Error"),
     }
 }
 
@@ -332,7 +299,9 @@ fn is_raw_text(headers: &http::HeaderMap) -> bool {
 
 /// An `Err` as the response it renders, by one rule: an error that renders
 /// itself — a [`ResponseError`], a ready response, an
-/// [`HttpError`] — answers as it renders. Any other poem
+/// [`HttpError`] — answers as it renders, but a media-type refusal of poem's
+/// own extractors, which quotes the client's `Content-Type`, answers nestrs's
+/// sentence naming only the type expected. Any other poem
 /// renders as its own sentence, so it is read instead: a [`Problem`] its chain
 /// carries answers its document, and a `5xx` answers opaquely; what either
 /// answer withholds of the chain is filed once at `error`. A raw text body left
@@ -345,6 +314,9 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
         Ok(carried) => return crate::poem_bridge::response_to_poem(carried.answer()),
         Err(err) => err,
     };
+    if let Some(refused) = crate::poem_adapter::media_type_refusal(&err) {
+        return crate::poem_bridge::response_to_poem(refused.answer());
+    }
     let source = std::error::Error::source(&err);
     let problem = source
         .and_then(nest_rs_core::__private::find_in_chain::<Problem>)
@@ -468,6 +440,39 @@ mod tests {
         crate::poem_bridge::response_from_poem(response)
     }
 
+    /// poem's own body extractors quote the client's `Content-Type` in their
+    /// `415`; rendered by the edge, the refusal names only the type expected.
+    #[tokio::test]
+    async fn a_foreign_media_type_refusal_never_quotes_the_clients_content_type() {
+        let marker = "text/x-quoted-marker".to_owned();
+        for (refused, expected) in [
+            (
+                poem::Error::from(poem::error::ParseJsonError::InvalidContentType(
+                    marker.clone(),
+                )),
+                "application/json",
+            ),
+            (
+                poem::Error::from(poem::error::ParseFormError::InvalidContentType(
+                    marker.clone(),
+                )),
+                "application/x-www-form-urlencoded",
+            ),
+            (
+                poem::Error::from(poem::error::ParseMultipartError::InvalidContentType(
+                    marker.clone(),
+                )),
+                "multipart/form-data",
+            ),
+        ] {
+            let resp = crossed(render_error(refused));
+            assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            let body = resp.into_body().into_string().await.expect("a body");
+            assert!(!body.contains("x-quoted-marker"), "{body}");
+            assert!(body.contains(expected), "{body}");
+        }
+    }
+
     #[test]
     fn constructors_set_status_and_title() {
         assert_eq!(
@@ -490,16 +495,6 @@ mod tests {
             ProblemDetails::internal().status,
             StatusCode::INTERNAL_SERVER_ERROR,
         );
-    }
-
-    #[test]
-    fn constructors_preset_type_uri() {
-        assert!(
-            ProblemDetails::not_found()
-                .type_uri
-                .starts_with("https://www.rfc-editor.org/rfc/rfc9110"),
-        );
-        assert!(ProblemDetails::unprocessable().type_uri.contains("rfc9110"),);
     }
 
     #[test]
@@ -597,19 +592,51 @@ mod tests {
         assert_eq!(v["errors"]["email"][0], "not an email");
     }
 
+    /// RFC 9457 §4.2.1: a problem that says nothing beyond its status is
+    /// `about:blank`, titled with the status's phrase — one rule for every
+    /// status the framework answers, the named constructors included.
     #[test]
-    fn from_status_routes_well_known_codes_to_their_constructor() {
-        assert_eq!(
-            ProblemDetails::from_status(StatusCode::NOT_FOUND).type_uri,
-            ProblemDetails::not_found().type_uri,
-        );
-        assert_eq!(
-            ProblemDetails::from_status(StatusCode::CONFLICT).status,
-            StatusCode::CONFLICT,
-        );
-        let teapot = ProblemDetails::from_status(StatusCode::IM_A_TEAPOT);
-        assert_eq!(teapot.type_uri, "about:blank");
-        assert_eq!(teapot.title, "I'm a teapot");
+    fn every_status_the_framework_answers_is_about_blank_with_its_phrase() {
+        for (status, title) in [
+            (StatusCode::BAD_REQUEST, "Bad Request"),
+            (StatusCode::UNAUTHORIZED, "Unauthorized"),
+            (StatusCode::FORBIDDEN, "Forbidden"),
+            (StatusCode::NOT_FOUND, "Not Found"),
+            (StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed"),
+            (StatusCode::REQUEST_TIMEOUT, "Request Timeout"),
+            (StatusCode::CONFLICT, "Conflict"),
+            (StatusCode::PAYLOAD_TOO_LARGE, "Content Too Large"),
+            (StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type"),
+            (StatusCode::UNPROCESSABLE_ENTITY, "Unprocessable Content"),
+            (StatusCode::TOO_MANY_REQUESTS, "Too Many Requests"),
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+            (StatusCode::SERVICE_UNAVAILABLE, "Service Unavailable"),
+            (StatusCode::IM_A_TEAPOT, "I'm a teapot"),
+        ] {
+            let problem = ProblemDetails::from_status(status);
+            assert_eq!(
+                (problem.type_uri.as_str(), problem.title.as_str()),
+                ("about:blank", title),
+                "{status}",
+            );
+        }
+        for named in [
+            ProblemDetails::bad_request(),
+            ProblemDetails::unauthorized(),
+            ProblemDetails::forbidden(),
+            ProblemDetails::not_found(),
+            ProblemDetails::conflict(),
+            ProblemDetails::unprocessable(),
+            ProblemDetails::internal(),
+        ] {
+            let bare = ProblemDetails::from_status(named.status);
+            assert_eq!(
+                (named.type_uri, named.title),
+                (bare.type_uri, bare.title),
+                "{}",
+                named.status,
+            );
+        }
     }
 
     #[tokio::test]

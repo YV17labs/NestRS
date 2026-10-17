@@ -8,9 +8,9 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
+use nest_rs_http::Result;
 use nest_rs_http::{HttpConfig, HttpTls, HttpTransport, controller, routes};
 use nest_rs_testing::{TestAuthority, TestCertificate};
-use poem::Result;
 use rustls::pki_types::ServerName;
 use rustls::pki_types::pem::PemObject;
 use tokio::io::AsyncWriteExt;

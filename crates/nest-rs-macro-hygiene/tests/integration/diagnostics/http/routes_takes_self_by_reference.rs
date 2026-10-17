@@ -11,7 +11,7 @@ struct DemoController;
 impl DemoController {
     #[get("/{id}")]
     #[public]
-    async fn show(id: nest_rs::http::poem::web::Path<String>) -> String {
+    async fn show(id: nest_rs::http::Path<String>) -> String {
         id.0
     }
 }

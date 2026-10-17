@@ -220,6 +220,25 @@ pub fn error_to_poem(error: HttpError) -> poem::Error {
     }
 }
 
+/// The `T` a poem error holds, whichever side built it: poem's own cause, or the
+/// cause of an [`HttpError`] that crossed into poem carried; the error back,
+/// unchanged, when it holds none.
+pub fn downcast_from_poem<T>(error: poem::Error) -> std::result::Result<T, poem::Error>
+where
+    T: std::error::Error + Send + Sync + 'static,
+{
+    let error = match error.downcast::<T>() {
+        Ok(cause) => return Ok(cause),
+        Err(error) => error,
+    };
+    if !error.is::<Carried>() {
+        return Err(error);
+    }
+    error_from_poem(error)
+        .downcast::<T>()
+        .map_err(error_to_poem)
+}
+
 /// The [`HttpError`] a poem error carries, taken out to be rendered as nestrs
 /// renders it: poem's own rendering would replace the response's extensions with
 /// its error's.

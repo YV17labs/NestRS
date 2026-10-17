@@ -1,5 +1,5 @@
-//! Two handlers for the same (verb, path) would collapse silently into
-//! `poem::get(h1).get(h2)` — the macro must reject the duplicate (HTTP-R2).
+//! Two handlers for the same (verb, path) would leave one of them unreachable —
+//! the macro must reject the duplicate (HTTP-R2).
 
 use nest_rs::http::{controller, routes};
 

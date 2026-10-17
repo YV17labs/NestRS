@@ -320,11 +320,11 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         // `actor_id` field the authn guard records into.
         let span = trace_context::request_span(&req, &correlation, origin, user_agent);
         let method = req.method().clone();
-        let log = self
-            .access_log
-            .then(|| AccessLog::open(&req, user_agent, arrival.into_std()));
         // Filled by the table's entry the router matched.
         let matched = MatchedRoute::default();
+        let log = self
+            .access_log
+            .then(|| AccessLog::open(&req, &matched, user_agent, arrival.into_std()));
         req.extensions_mut().insert(matched.clone());
 
         // Built here, not in `handle`: a streaming body outlives that future.

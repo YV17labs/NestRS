@@ -69,9 +69,10 @@ async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse
 The token goes back bare, not in a `Json`: `AccessTokenResponse` renders its
 own JSON with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749
 §5.1 requires on anything carrying a token, so no shared or back-forward
-cache keeps it. `Json<AccessTokenResponse>` would still compile and drop both
-headers. The OpenAPI document reads a body's type off a `Json<T>` return, which
-is why `#[api(response = AccessTokenResponse)]` names it here.
+cache keeps it. `Json<AccessTokenResponse>` does not compile: the response
+has no `Serialize`, so the token never leaves without both headers. The
+OpenAPI document reads a body's type off a `Json<T>` return, which is why
+`#[api(response = AccessTokenResponse)]` names it here.
 
 `grant_password` authenticates the email/password pair and signs the
 claims — invalid credentials come back as one opaque error (no

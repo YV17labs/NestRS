@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use nest_rs_core::module;
+use nest_rs_http::Body;
 use nest_rs_http::{HttpConfig, controller, routes};
 use nest_rs_testing::{LogCapture, wait_until};
-use poem::Body;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
@@ -96,8 +96,8 @@ impl ServerController {
     #[get("/tail-stream")]
     #[public]
     async fn tail_stream(&self) -> Body {
-        Body::from_bytes_stream(futures_util::stream::iter([Ok::<_, std::io::Error>(
-            vec![b'x'; TAIL],
+        Body::from_stream(futures_util::stream::iter([Ok::<_, std::io::Error>(
+            Bytes::from(vec![b'x'; TAIL]),
         )]))
     }
 
@@ -105,8 +105,8 @@ impl ServerController {
     #[get("/endless")]
     #[public]
     async fn endless(&self) -> Body {
-        Body::from_bytes_stream(futures_util::stream::repeat_with(|| {
-            Ok::<_, std::io::Error>(vec![b'x'; 16 * 1024])
+        Body::from_stream(futures_util::stream::repeat_with(|| {
+            Ok::<_, std::io::Error>(Bytes::from(vec![b'x'; 16 * 1024]))
         }))
     }
 }

@@ -6,7 +6,7 @@ use nest_rs::queue::{QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::HeadlessApp;
-use poem::http::header;
+use poem::http::{StatusCode, header};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -322,4 +322,39 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         .shutdown()
         .await
         .expect("the worker's QueueWorker stops cleanly");
+}
+
+#[tokio::test]
+async fn a_post_author_denial_files_one_line_on_every_edge() {
+    let (_db, app) = boot().await;
+    let subjectless = format!("Bearer {}", login().await);
+
+    let logs = nest_rs::testing::LogCapture::install();
+    let refused = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, &subjectless)
+        .body_json(&json!({ "title": "Launch", "body": "Big news" }))
+        .send()
+        .await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let mutation = json!({
+        "query": format!(
+            "mutation {{ publishPost(id: \"{}\") {{ id }} }}",
+            Uuid::now_v7()
+        )
+    });
+    app.http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &subjectless)
+        .body_json(&mutation)
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    let denied = logs.find(features::posts::TARGET, "post write denied");
+    assert_eq!(denied.len(), 2, "one line per denial: {denied:#?}");
+    for structural in ["guard denied the request", "guard denied the operation"] {
+        logs.expect_none("nest_rs::layers", structural);
+    }
 }

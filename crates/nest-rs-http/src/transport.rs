@@ -404,6 +404,11 @@ impl Transport for HttpTransport {
             })?;
         }
         let mut routes = HttpRoutes::new(prefix.as_deref());
+        // What an operator reads of a path is the one a client calls.
+        let served = |path: &str| match &prefix {
+            Some(prefix) => join_path(prefix, path),
+            None => path.to_owned(),
+        };
 
         let global_guards = nest_rs_guards::__private::global_guards_active(container);
         let mut unguarded: Vec<String> = Vec::new();
@@ -475,13 +480,18 @@ impl Transport for HttpTransport {
                         target: crate::target::ROUTES,
                         controller = d.meta.controller,
                         method = r.verb.as_str(),
-                        path = logged.as_str(),
+                        path = served(&logged).as_str(),
                         version = version,
                         handler = r.handler,
                         "mounted route",
                     );
                     if r.access_is_implicit(global_guards) {
-                        unguarded.push(format!("{} {} ({})", r.verb.as_str(), path, r.handler));
+                        unguarded.push(format!(
+                            "{} {} ({})",
+                            r.verb.as_str(),
+                            served(&path),
+                            r.handler
+                        ));
                     }
                 }
             }
@@ -575,7 +585,7 @@ impl Transport for HttpTransport {
             tracing::info!(
                 target: crate::target::ROUTES,
                 kind = d.meta.label(),
-                path = d.meta.path(),
+                path = served(d.meta.path()).as_str(),
                 "mounted endpoint",
             );
             if let Some(work) = d.meta.detached() {

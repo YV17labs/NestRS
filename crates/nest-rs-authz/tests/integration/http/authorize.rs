@@ -3,8 +3,8 @@
 //! cause exists.
 
 use nest_rs_authz::{Read, http::Authorize};
+use nest_rs_http::{Body, FromRequest, Request, RequestBody, StatusCode, Uri};
 use nest_rs_testing::LogCapture;
-use poem::{Body, FromRequest, Request, RequestBody};
 
 mod widget {
     use sea_orm::entity::prelude::*;
@@ -28,7 +28,7 @@ async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy(
     // No ambient `Ability`: the shape a route gets when `#[authorize]` is
     // written but no ability guard runs on it.
     let req = Request::builder()
-        .uri("/widgets/1".parse().unwrap())
+        .uri(Uri::from_static("/widgets/1"))
         .finish();
     let mut body = RequestBody::new(Body::empty());
 
@@ -36,7 +36,7 @@ async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy(
         .await
         .err()
         .expect("a missing ambient ability is a wiring bug, not a pass");
-    assert_eq!(err.status(), poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     let event = logs.expect_one("nest_rs::authz", "authorization denied");
     assert_eq!(event.level, "error");
@@ -68,8 +68,7 @@ mod gate_order {
     use nest_rs_core::{Layer, injectable, module};
     use nest_rs_filters::{Filter, RequestSnapshot};
     use nest_rs_guards::{Denial, Guard, GuardFor};
-    use nest_rs_http::poem::web::Json;
-    use nest_rs_http::{async_trait, controller, crud, routes};
+    use nest_rs_http::{Json, async_trait, controller, crud, routes};
     use nest_rs_interceptors::{Interceptor, Next};
     use nest_rs_seaorm::CrudService;
     use nest_rs_testing::TestApp;

@@ -4,10 +4,7 @@
 //! ```
 //! # use std::sync::Arc;
 //! # use nest_rs_core::{injectable, module};
-//! # use nest_rs_http::poem::Result;
-//! # use nest_rs_http::poem::http::StatusCode;
-//! # use nest_rs_http::poem::web::{Json, Path};
-//! # use nest_rs_http::{Opaque, controller, input, routes};
+//! # use nest_rs_http::{Json, Opaque, Path, Result, StatusCode, controller, input, routes};
 //! # use nest_rs_testing::TestApp;
 //! # #[input]
 //! # struct Report {
@@ -52,8 +49,8 @@
 //! returned directly, as a `ProblemDetails`.
 
 use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
-use poem::Error;
 
+use crate::error::HttpError;
 use crate::problem::ProblemDetails;
 
 /// Turn a failure the client must not read into one it may.
@@ -63,14 +60,14 @@ use crate::problem::ProblemDetails;
 /// [`nest_rs_core::boxed_error`].
 pub trait Opaque<T> {
     /// Log the real error for the operator, hand the client an opaque one.
-    fn opaque(self) -> Result<T, Error>;
+    fn opaque(self) -> Result<T, HttpError>;
 }
 
 impl<T, E> Opaque<T> for Result<T, E>
 where
     E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
 {
-    fn opaque(self) -> Result<T, Error> {
+    fn opaque(self) -> Result<T, HttpError> {
         self.map_err(|err| {
             let err = nest_rs_core::boxed_error(err);
             tracing::error!(
@@ -79,19 +76,19 @@ where
                 "request failed",
             );
             // The same envelope as a legible failure, so the shape gives nothing away.
-            Error::from(ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE))
+            HttpError::from(ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE))
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use poem::error::ResponseError;
-    use poem::http::StatusCode;
-
     use std::fmt::Display;
 
+    use http::StatusCode;
+
     use super::*;
+    use crate::ResponseError;
 
     /// An error whose `Display` carries exactly what must not ship.
     #[derive(Debug)]
@@ -107,7 +104,7 @@ mod tests {
 
     #[test]
     fn the_body_carries_the_shared_constant_not_the_error() {
-        let out: Result<(), Error> = Err(Leaky).opaque();
+        let out: Result<(), HttpError> = Err(Leaky).opaque();
         let err = out.expect_err("the failure stays a failure");
         let rendered = err.to_string();
         assert!(
@@ -123,7 +120,7 @@ mod tests {
     )]
     fn and_the_operator_gets_the_error_the_client_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
-        let _: Result<(), Error> = Err(Leaky).opaque();
+        let _: Result<(), HttpError> = Err(Leaky).opaque();
 
         let event = logs.expect_one("nest_rs::http", "request failed");
         assert_eq!(event.level, "error");
@@ -138,7 +135,7 @@ mod tests {
 
     #[test]
     fn it_is_a_500_and_a_problem_document() {
-        let out: Result<(), Error> = Err(Leaky).opaque();
+        let out: Result<(), HttpError> = Err(Leaky).opaque();
         let err = out.expect_err("a failure");
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let problem = ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE);
@@ -151,7 +148,7 @@ mod tests {
 
     #[test]
     fn a_success_passes_through_untouched() {
-        let out: Result<i32, Error> = Ok::<_, Leaky>(7).opaque();
+        let out: Result<i32, HttpError> = Ok::<_, Leaky>(7).opaque();
         assert_eq!(out.ok(), Some(7));
     }
 }

@@ -4,10 +4,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_http::{controller, routes};
-use poem::http::StatusCode;
-use poem::web::Path;
-use poem::{IntoResponse, Response};
+use nest_rs_http::{HeaderValue, IntoResponse, Path, Response, StatusCode, controller, routes};
 
 use crate::metadata::ProtectedResourceMetadata;
 
@@ -45,7 +42,7 @@ impl OAuthResourceController {
         match serde_json::to_vec(&*self.metadata) {
             Ok(body) => Response::builder()
                 .status(StatusCode::OK)
-                .content_type("application/json")
+                .content_type(HeaderValue::from_static("application/json"))
                 .body(body),
             Err(error) => {
                 tracing::error!(

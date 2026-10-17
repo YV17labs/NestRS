@@ -10,9 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use poem::error::ResponseError;
-use poem::http::{StatusCode, header};
-use poem::{IntoResponse, Response};
+use nest_rs_http::{HeaderValue, IntoResponse, Response, ResponseError, StatusCode, header};
 
 use nest_rs_http::challenge::NoBearerChallenge;
 
@@ -221,17 +219,23 @@ impl AuthError {
             tracing::error!(target: crate::TARGET, detail = %detail, "authentication unavailable");
             let mut response = Response::builder().status(StatusCode::SERVICE_UNAVAILABLE);
             if let Some(secs) = self.retry_after_secs() {
-                response = response.header(header::RETRY_AFTER, secs);
+                response = response.header(header::RETRY_AFTER, HeaderValue::from(secs));
             }
             return response.body(body);
         }
         if let Self::Failed(detail) = self {
             tracing::warn!(target: crate::TARGET, detail = %detail, "authentication failed");
         }
-        Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .header(header::WWW_AUTHENTICATE, self.challenge())
-            .body(body)
+        let response = Response::builder().status(StatusCode::UNAUTHORIZED);
+        // The challenge is composed from constants, so it always encodes.
+        match HeaderValue::try_from(self.challenge()) {
+            Ok(challenge) => response.header(header::WWW_AUTHENTICATE, challenge),
+            Err(_) => response.header(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_static(nest_rs_http::challenge::BEARER),
+            ),
+        }
+        .body(body)
     }
 
     /// The `WWW-Authenticate` value this failure answers with.
@@ -278,11 +282,10 @@ impl ResponseError for CredentialError {
     }
 
     fn as_response(&self) -> Response {
-        let mut response = Response::builder()
+        Response::builder()
             .status(StatusCode::UNAUTHORIZED)
-            .body(self.to_string());
-        response.extensions_mut().insert(NoBearerChallenge);
-        response
+            .extension(NoBearerChallenge)
+            .body(self.to_string())
     }
 }
 

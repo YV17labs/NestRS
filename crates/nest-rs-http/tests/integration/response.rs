@@ -1,13 +1,14 @@
-//! Route-level HTTP decorators — `#[http_code]`, `#[response_header]`, `#[redirect]`,
-//! and `Result<T, E>` error paths. Boots a real controller through `HttpTransport`.
+//! What a route answers: the response decorators — `#[http_code]`,
+//! `#[response_header]`, `#[redirect]` (`nest-rs-http-macros/src/response.rs`)
+//! — over `src/response.rs`'s `IntoResponse`, and `Result<T, E>` error paths.
+//! Boots a real controller through `HttpTransport`.
 
 use nest_rs_core::module;
-use nest_rs_http::{controller, routes};
-use poem::Result as PoemResult;
-use poem::error::ResponseError;
-use poem::http::{StatusCode, header};
+use nest_rs_http::Result as NestResult;
+use nest_rs_http::{
+    HeaderValue, IntoResponse, Response, ResponseError, StatusCode, controller, header, routes,
+};
 use poem::test::TestClient;
-use poem::{IntoResponse, Response};
 
 #[controller(path = "/")]
 struct DecoratorProbeController;
@@ -42,7 +43,7 @@ impl DecoratorProbeController {
     #[post("/forbidden-by-import")]
     #[http_code(201)]
     #[response_header("x-created", "yes")]
-    async fn forbidden_by_import(&self) -> PoemResult<&'static str> {
+    async fn forbidden_by_import(&self) -> NestResult<&'static str> {
         Err(ForbiddenError.into())
     }
 
@@ -77,10 +78,8 @@ impl DecoratorProbeController {
     #[response_header("content-type", "application/json")]
     async fn xml_as_json(&self) -> Response {
         let mut resp = "<root/>".into_response();
-        resp.headers_mut().insert(
-            header::CONTENT_TYPE,
-            poem::http::HeaderValue::from_static("text/xml"),
-        );
+        resp.headers_mut()
+            .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/xml"));
         resp
     }
 }

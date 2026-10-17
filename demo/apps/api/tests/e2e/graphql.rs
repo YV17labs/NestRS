@@ -411,7 +411,11 @@ async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
     );
 }
 
-async fn graphql(app: &nest_rs::testing::TestApp, bearer: &str, query: &str) -> serde_json::Value {
+pub(crate) async fn graphql(
+    app: &nest_rs::testing::TestApp,
+    bearer: &str,
+    query: &str,
+) -> serde_json::Value {
     let resp = app
         .http()
         .post("/graphql")

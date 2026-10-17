@@ -33,8 +33,8 @@ impl OrgsController {
 
     /// What `#[crud]`'s generated create does, by hand.
     #[post("/")]
-    async fn create_org(&self, req: &poem::Request) -> poem::Response {
-        let mut resp = poem::Response::builder()
+    async fn create_org(&self, req: &nest_rs_http::Request) -> nest_rs_http::Response {
+        let mut resp = nest_rs_http::Response::builder()
             .status(StatusCode::CREATED)
             .finish();
         set_created_location(&mut resp, caller_path(req), NEW_ORG_ID);
@@ -198,4 +198,32 @@ async fn a_global_prefix_is_one_literal_address() {
         msg.contains("the global prefix") && msg.contains("one literal address"),
         "names the prefix and why: {msg}",
     );
+}
+
+/// The boot says where each route and each self-mount is served: under the
+/// prefix, the path a client calls — the unprefixed one answers `404`.
+#[tokio::test]
+async fn the_boot_lines_name_the_paths_served_under_the_prefix() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let _client = boot_with_prefix(Some("/api")).await;
+    let routes: Vec<_> = logs
+        .find(nest_rs_http::target::ROUTES, "mounted route")
+        .into_iter()
+        .filter_map(|line| line.field("path"))
+        .collect();
+    assert!(routes.contains(&"/api/users".to_owned()), "{routes:?}");
+    assert!(routes.contains(&"/api/orgs".to_owned()), "{routes:?}");
+
+    let logs = nest_rs_testing::LogCapture::install();
+    crate::routes::table_under(Some("/api"), |routes| {
+        routes.route(
+            nest_rs_http::Method::GET,
+            "/probe",
+            crate::answering("probe"),
+        );
+    })
+    .await
+    .expect("the table mounts");
+    let endpoint = logs.expect_one(nest_rs_http::target::ROUTES, "mounted endpoint");
+    assert_eq!(endpoint.field("path").as_deref(), Some("/api"));
 }

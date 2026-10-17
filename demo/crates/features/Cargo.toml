@@ -14,7 +14,7 @@ nest-rs.workspace = true
 async-graphql.workspace = true
 async-trait.workspace = true
 # The audio streaming download proxies object storage's chunk stream
-# (`futures_util::Stream` of `bytes::Bytes`) into a streamed poem body.
+# (`futures_util::Stream` of `bytes::Bytes`) into `nest_rs::http::Body::from_stream`.
 bytes.workspace = true
 futures-util.workspace = true
 parking_lot.workspace = true

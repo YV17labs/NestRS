@@ -7,6 +7,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
+use nest_rs_http::__private::poem_bridge::error_to_poem;
 use nest_rs_http::Opaque;
 use poem::error::{MethodNotAllowedError, NotFoundError, ResponseError};
 use poem::http::header::{
@@ -104,7 +105,12 @@ impl Endpoint for StaticFilesEndpoint {
         // Whether a miss here may be a page — what `Accept` then decides.
         let may_fall_back = read && served.spa_fallback && !path.names_a_file();
         let fallback = may_fall_back && is_navigation(req.headers());
-        let found = served.files.find(&path, fallback).await.opaque()?;
+        let found = served
+            .files
+            .find(&path, fallback)
+            .await
+            .opaque()
+            .map_err(error_to_poem)?;
         let varies = may_fall_back && matches!(found, Found::Fallback(_) | Found::Missing);
         let mut resp = match found {
             Found::Asset(asset) if read => {
@@ -171,7 +177,7 @@ fn answer(asset: Asset, req: &Request, cache_control: HeaderValue) -> poem::Resu
     if head {
         return Ok(builder.body(Body::empty()));
     }
-    Ok(builder.body(body(asset.body, part).opaque()?))
+    Ok(builder.body(body(asset.body, part).opaque().map_err(error_to_poem)?))
 }
 
 /// Whether the `Range` applies: a file without validators cannot be checked

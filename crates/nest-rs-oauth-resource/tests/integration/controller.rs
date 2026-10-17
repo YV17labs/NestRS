@@ -49,8 +49,8 @@ struct StubAuthorizationServer;
 impl StubAuthorizationServer {
     #[get("/.well-known/openid-configuration")]
     #[public]
-    async fn metadata(&self) -> poem::web::Json<Value> {
-        poem::web::Json(serde_json::json!({
+    async fn metadata(&self) -> nest_rs_http::Json<Value> {
+        nest_rs_http::Json(serde_json::json!({
             "issuer": ISSUER,
             "authorization_endpoint": format!("{ISSUER}/oauth/authorize"),
             "token_endpoint": format!("{ISSUER}/oauth/token"),

@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use nest_rs_core::{Container, Discovery};
 use nest_rs_http::{
-    HttpConfig, HttpControllerMeta, controller, join_path, normalize_mount_path, routes,
+    HeaderValue, HttpConfig, HttpControllerMeta, Response, StatusCode, controller, join_path,
+    normalize_mount_path, routes,
 };
-use poem::{Response, http::StatusCode};
 
 use crate::indicator::{IndicatorStatus, ProbeKind, ProbeReport};
 use crate::service::HealthService;
@@ -53,7 +53,7 @@ fn respond(report: ProbeReport) -> Response {
     match serde_json::to_vec(&report) {
         Ok(body) => Response::builder()
             .status(status)
-            .content_type("application/json")
+            .content_type(HeaderValue::from_static("application/json"))
             .body(body),
         Err(error) => {
             tracing::error!(

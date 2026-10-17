@@ -33,8 +33,8 @@ impl PostsController {
     }
 
     #[get("/{id}")]
-    async fn one(&self) -> poem::Result<&'static str> {
-        Err(poem::error::NotFoundError.into())
+    async fn one(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(StatusCode::NOT_FOUND))
     }
 }
 

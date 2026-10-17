@@ -129,7 +129,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
 
     let patched = app
         .http()
-        .patch(format!("/users/{user_a}"))
+        .put(format!("/users/{user_a}"))
         .header(header::AUTHORIZATION, &token_a)
         .body_json(&json!({ "name": "Ada L.", "email": "ada-writes@acme.test" }))
         .send()
@@ -141,7 +141,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
     );
 
     app.http()
-        .patch(format!("/users/{user_a}"))
+        .put(format!("/users/{user_a}"))
         .header(header::AUTHORIZATION, &token_b)
         .body_json(&json!({ "name": "Hijacked", "email": "ada-writes@acme.test" }))
         .send()
@@ -381,9 +381,23 @@ async fn crud_generated_update_and_delete_round_trip() {
 
     let id = create_org(&app, &admin, "Before").await;
 
-    let patched = app
+    let partial = app
         .http()
         .patch(format!("/orgs/{id}"))
+        .header(header::AUTHORIZATION, &admin)
+        .body_json(&json!({ "name": "After" }))
+        .send()
+        .await;
+    partial.assert_status(StatusCode::METHOD_NOT_ALLOWED);
+    let allowed = partial.0.headers()[header::ALLOW]
+        .to_str()
+        .expect("ASCII")
+        .to_owned();
+    assert!(allowed.contains("PUT"), "{allowed}");
+
+    let patched = app
+        .http()
+        .put(format!("/orgs/{id}"))
         .header(header::AUTHORIZATION, &admin)
         .body_json(&json!({ "name": "After" }))
         .send()

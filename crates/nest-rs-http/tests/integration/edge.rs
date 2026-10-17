@@ -21,17 +21,17 @@ impl KitchenController {
     }
 
     #[get("/items/{id}")]
-    async fn item(&self, id: poem::web::Path<String>) -> String {
+    async fn item(&self, id: nest_rs_http::Path<String>) -> String {
         format!("item {}", id.0)
     }
 
     #[get("/search")]
-    async fn search(&self, req: &poem::Request) -> String {
+    async fn search(&self, req: &nest_rs_http::Request) -> String {
         req.uri().query().unwrap_or("none").to_owned()
     }
 
     #[get("/shelves/{n}")]
-    async fn shelf(&self, n: poem::web::Path<u32>) -> String {
+    async fn shelf(&self, n: nest_rs_http::Path<u32>) -> String {
         format!("shelf {}", n.0)
     }
 }

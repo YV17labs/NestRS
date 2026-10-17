@@ -4,12 +4,12 @@
 
 use nest_rs_core::{App, Layer, Transport, injectable, module};
 use nest_rs_http::{
-    HttpConfig, Opaque, ProblemDetails, Valid, async_trait, controller, input, routes,
+    Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
+    Result, Valid, async_trait, controller, input, routes,
 };
 use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
 use poem::http::StatusCode;
 use poem::test::TestClient;
-use poem::web::{Form, Json, Query};
 use serde::{Deserialize, Serialize};
 
 const SECRET: &str = "sk_live_51HsecretTOKEN";
@@ -55,26 +55,25 @@ impl DecodeController {
         format!("{:?}", filter.0.card)
     }
 
-    /// A body the handler decodes itself, failing as a `400` through anyhow.
+    /// A body the handler decodes itself, failing as a `400` it names.
     #[post("/own")]
-    async fn own(&self, body: String) -> poem::Result<String> {
-        let amount: u64 = serde_json::from_str(&body).map_err(|err| {
-            poem::Error::from((StatusCode::BAD_REQUEST, anyhow::Error::from(err)))
-        })?;
+    async fn own(&self, body: RawBody) -> Result<String> {
+        let amount: u64 = serde_json::from_slice(&body)
+            .map_err(|err| HttpError::new(err, StatusCode::BAD_REQUEST))?;
         Ok(amount.to_string())
     }
 
-    /// The same decode, mapped the way poem's docs map one.
+    /// The same decode, through an error of the handler's own that knows its status.
     #[post("/bad-request")]
-    async fn bad_request(&self, body: String) -> poem::Result<String> {
-        let amount: u64 = serde_json::from_str(&body).map_err(poem::error::BadRequest)?;
+    async fn bad_request(&self, body: RawBody) -> std::result::Result<String, BadAmount> {
+        let amount: u64 = serde_json::from_slice(&body)?;
         Ok(amount.to_string())
     }
 
     /// A problem built from the error by the framework's own constructor.
     #[post("/problem")]
-    async fn problem(&self, body: String) -> Result<String, ProblemDetails> {
-        let amount: u64 = serde_json::from_str(&body).map_err(|err| {
+    async fn problem(&self, body: RawBody) -> std::result::Result<String, ProblemDetails> {
+        let amount: u64 = serde_json::from_slice(&body).map_err(|err| {
             ProblemDetails::from_error(StatusCode::BAD_REQUEST, "Bad Request", &err)
         })?;
         Ok(amount.to_string())
@@ -82,23 +81,35 @@ impl DecodeController {
 
     /// A developer's own sentence in serde's vocabulary reaches the client as written.
     #[get("/own-words")]
-    async fn own_words(&self) -> poem::Result<String> {
-        Err(poem::Error::from_string(
-            "invalid value: must be positive",
-            StatusCode::BAD_REQUEST,
-        ))
+    async fn own_words(&self) -> Result<String> {
+        Err(HttpError::new(MustBePositive, StatusCode::BAD_REQUEST))
     }
 
     /// A failure the client must not read, carrying a decode failure in an
     /// anyhow chain: the operator's line says it without the value.
     #[post("/opaque")]
-    async fn opaque(&self, body: String) -> poem::Result<String> {
-        let amount: u64 = serde_json::from_str(&body)
+    async fn opaque(&self, body: RawBody) -> Result<String> {
+        let amount: u64 = serde_json::from_slice(&body)
             .map_err(anyhow::Error::from)
             .opaque()?;
         Ok(amount.to_string())
     }
 }
+
+/// A handler's own decode failure, which knows its status.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+struct BadAmount(#[from] serde_json::Error);
+
+impl ResponseError for BadAmount {
+    fn status(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid value: must be positive")]
+struct MustBePositive;
 
 #[module(providers = [DecodeController, Forwarding])]
 struct DecodeModule;
@@ -114,12 +125,13 @@ impl FailureController {
         Err(anyhow::anyhow!("secret 42"))
     }
 
-    /// The same, wrapped by poem's own helper.
+    /// The same, wrapped with its status.
     #[get("/wrapped")]
-    async fn wrapped(&self) -> poem::Result<String> {
-        Err(poem::error::InternalServerError(std::io::Error::other(
-            "secret 42",
-        )))
+    async fn wrapped(&self) -> Result<String> {
+        Err(HttpError::new(
+            std::io::Error::other("secret 42"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 
     /// A `Problem` an anyhow chain carries answers itself.
@@ -132,23 +144,21 @@ impl FailureController {
         .context("loading the post"))
     }
 
-    /// A `Problem` returned through the edge's own error, crossed into poem.
+    /// A `Problem` returned through the edge's own error.
     #[get("/taken")]
-    async fn taken(&self) -> poem::Result<String> {
+    async fn taken(&self) -> Result<String> {
         let taken = nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT)
             .with_detail("the handle is taken")
             .with_retry_after(30);
-        Err(nest_rs_http::__private::poem_bridge::error_to_poem(
-            nest_rs_http::HttpError::from(taken),
-        ))
+        Err(HttpError::from(taken))
     }
 
-    /// An `anyhow` chain crossed into poem as an `HttpError`.
+    /// An `anyhow` chain returned as an `HttpError`.
     #[get("/ledger")]
-    async fn ledger(&self) -> poem::Result<String> {
-        Err(nest_rs_http::__private::poem_bridge::error_to_poem(
-            nest_rs_http::HttpError::from(anyhow::anyhow!("the ledger at 10.0.0.1 refused")),
-        ))
+    async fn ledger(&self) -> Result<String> {
+        Err(HttpError::from(anyhow::anyhow!(
+            "the ledger at 10.0.0.1 refused"
+        )))
     }
 
     /// A server `Problem` an anyhow chain carries, behind what the chain says
@@ -158,29 +168,24 @@ impl FailureController {
         Err(anyhow::Error::from(server_problem()).context("the search index at 10.0.0.1 refused"))
     }
 
-    /// The same chain, crossed into poem as an `HttpError`.
+    /// The same chain, returned as an `HttpError`.
     #[get("/outage-carried")]
-    async fn outage_carried(&self) -> poem::Result<String> {
-        Err(nest_rs_http::__private::poem_bridge::error_to_poem(
-            nest_rs_http::HttpError::from(
-                anyhow::Error::from(server_problem())
-                    .context("the search index at 10.0.0.1 refused"),
-            ),
+    async fn outage_carried(&self) -> Result<String> {
+        Err(HttpError::from(
+            anyhow::Error::from(server_problem()).context("the search index at 10.0.0.1 refused"),
         ))
     }
 
     /// A server `Problem` returned through the edge's own error.
     #[get("/unavailable")]
-    async fn unavailable(&self) -> poem::Result<String> {
-        Err(nest_rs_http::__private::poem_bridge::error_to_poem(
-            nest_rs_http::HttpError::from(server_problem()),
-        ))
+    async fn unavailable(&self) -> Result<String> {
+        Err(HttpError::from(server_problem()))
     }
 
     /// A deliberate `500` with no cause: nothing withheld, nothing filed.
     #[get("/status")]
-    async fn status(&self) -> poem::Result<String> {
-        Err(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn status(&self) -> Result<String> {
+        Err(HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
 }
 
@@ -274,7 +279,7 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
                 .await;
             assert_eq!(
                 detail(resp).await,
-                "parse error: invalid type: a string, expected u64 at line 1 column 34",
+                "the JSON body does not decode: invalid type: a string, expected u64 at line 1 column 34",
                 "{path}",
             );
         }
@@ -287,7 +292,7 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
                 .await;
             assert_eq!(
                 detail(resp).await,
-                "parse error: invalid type: a sequence, expected u64 at line 1 column 10",
+                "the JSON body does not decode: invalid type: a sequence, expected u64 at line 1 column 10",
                 "{path}",
             );
         }
@@ -299,7 +304,7 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
             .await;
         assert_eq!(
             detail(resp).await,
-            "parse error: unknown field, expected `amount` at line 1 column 36",
+            "the JSON body does not decode: unknown field, expected `amount` at line 1 column 36",
         );
     }
     assert!(

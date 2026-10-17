@@ -369,7 +369,7 @@ fn redirect_status(written: &Expr) -> syn::Result<LitInt> {
 }
 
 /// Expand a handler's response transformation into a
-/// `poem::Result<Response>`. `call_expr` evaluates the user method;
+/// `nest_rs_http::Result<Response>`. `call_expr` evaluates the user method;
 /// `wrapper_args` lists every wrapper-fn parameter, silenced when `#[redirect]`
 /// skips the call.
 ///
@@ -395,16 +395,18 @@ pub(crate) fn apply_response_shapers(
         return quote! {
             {
                 let _ = (#(&#wrapper_args,)*);
-                let mut #response: ::nest_rs_http::poem::Response =
-                    ::nest_rs_http::poem::Response::builder()
-                        .status(
-                            ::nest_rs_http::poem::http::StatusCode::from_u16(#status_lit)
-                                .expect("redirect status validated at compile time"),
-                        )
-                        .header(::nest_rs_http::poem::http::header::LOCATION, #url)
-                        .finish();
+                let mut #response: ::nest_rs_http::Response = ::nest_rs_http::Response::builder()
+                    .status(
+                        ::nest_rs_http::StatusCode::from_u16(#status_lit)
+                            .expect("redirect status validated at compile time"),
+                    )
+                    .header(
+                        ::nest_rs_http::header::LOCATION,
+                        ::nest_rs_http::HeaderValue::from_static(#url),
+                    )
+                    .finish();
                 #header_writes
-                ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(#response)
+                ::nest_rs_http::Result::<::nest_rs_http::Response>::Ok(#response)
             }
         };
     }
@@ -412,7 +414,7 @@ pub(crate) fn apply_response_shapers(
     let status_apply = match &shapers.http_code {
         Some(lit) => quote! {
             #response.set_status(
-                ::nest_rs_http::poem::http::StatusCode::from_u16(#lit)
+                ::nest_rs_http::StatusCode::from_u16(#lit)
                     .expect("status validated at compile time"),
             );
         },
@@ -423,16 +425,16 @@ pub(crate) fn apply_response_shapers(
     quote! {
         {
             let #out = #call_expr;
-            let mut #response: ::nest_rs_http::poem::Response = {
+            let mut #response: ::nest_rs_http::Response = {
                 use ::nest_rs_core::__private::AnswerFallback as _;
-                ::nest_rs_core::__private::Answer(&#out).map::<::nest_rs_http::poem::Error, _, _>()(
+                ::nest_rs_core::__private::Answer(&#out).map::<::nest_rs_http::HttpError, _, _>()(
                     #out,
-                    ::nest_rs_http::poem::IntoResponse::into_response,
+                    ::nest_rs_http::IntoResponse::into_response,
                 )?
             };
             #status_apply
             #header_writes
-            ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(#response)
+            ::nest_rs_http::Result::<::nest_rs_http::Response>::Ok(#response)
         }
     }
 }
@@ -451,8 +453,8 @@ fn headers_tokens(headers: &[(LitStr, LitStr)], response: &syn::Ident) -> TokenS
         };
         quote! {
             #response.headers_mut().#method(
-                ::nest_rs_http::poem::http::HeaderName::from_static(#name),
-                ::nest_rs_http::poem::http::HeaderValue::from_static(#value),
+                ::nest_rs_http::HeaderName::from_static(#name),
+                ::nest_rs_http::HeaderValue::from_static(#value),
             );
         }
     });

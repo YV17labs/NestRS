@@ -2,9 +2,8 @@
 //! reuse the wrapper's local names, so compiling them is half the assertion.
 
 use nest_rs_core::module;
-use nest_rs_http::{ClientIp, controller, routes};
+use nest_rs_http::{ClientIp, Json, Path, Query, controller, routes};
 use poem::test::TestClient;
-use poem::web::{Json, Path, Query};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -257,6 +256,35 @@ async fn a_parameter_in_the_controller_path_binds_before_the_route_s_own() {
         resp.assert_status_is_ok();
         resp.assert_text("acme/7").await;
     }
+}
+
+#[derive(Deserialize)]
+struct Member {
+    org: String,
+    id: u64,
+}
+
+#[controller(path = "/teams/{org}")]
+struct RosterController;
+
+#[routes]
+impl RosterController {
+    #[get("/members/{id}")]
+    async fn member(&self, ids: Path<(String, u64)>, Path(member): Path<Member>) -> String {
+        let Path((org, id)) = ids;
+        format!("{org}#{id} {}#{}", member.org, member.id)
+    }
+}
+
+#[module(providers = [RosterController])]
+struct RosterModule;
+
+#[tokio::test]
+async fn path_binds_by_position_and_name() {
+    let client = crate::boot::<RosterModule>().await;
+    let resp = client.get("/teams/a%2Fb+c/members/7").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_text("a/b+c#7 a/b+c#7").await;
 }
 
 // A router that reads a path differently from `RoutePath::identity` fails here:

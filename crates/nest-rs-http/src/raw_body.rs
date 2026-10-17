@@ -11,8 +11,6 @@
 use std::ops::Deref;
 
 use bytes::Bytes;
-use http::StatusCode;
-use poem::error::ReadBodyError;
 
 use crate::request::{FromRequest, Request, RequestBody};
 
@@ -76,37 +74,12 @@ impl RawBody {
     pub async fn extract_with_limit(body: &mut RequestBody, limit: usize) -> crate::Result<Self> {
         Ok(Self(body.take()?.into_bytes_limit(limit).await?))
     }
-
-    /// [`extract_with_limit`](Self::extract_with_limit) over poem's body, which
-    /// `#[routes]` still hands its extractors.
-    pub(crate) async fn extract_poem_with_limit(
-        body: &mut poem::RequestBody,
-        limit: usize,
-    ) -> poem::Result<Self> {
-        let raw = body.take()?;
-        match raw.into_bytes_limit(limit).await {
-            Ok(bytes) => Ok(Self(bytes)),
-            Err(ReadBodyError::PayloadTooLarge) => {
-                Err(poem::Error::from_status(StatusCode::PAYLOAD_TOO_LARGE))
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
 }
 
 impl Deref for RawBody {
     type Target = Bytes;
     fn deref(&self) -> &Bytes {
         &self.0
-    }
-}
-
-impl<'a> poem::FromRequest<'a> for RawBody {
-    async fn from_request(
-        _req: &'a poem::Request,
-        body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
-        Self::extract_poem_with_limit(body, crate::current_body_limit()).await
     }
 }
 
@@ -119,23 +92,10 @@ impl<'a> FromRequest<'a> for RawBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Body;
+    use crate::{Body, StatusCode};
 
     fn request_with_body(payload: impl Into<Body>) -> (Request, RequestBody) {
         Request::builder().body(payload).split()
-    }
-
-    /// The poem twin `#[routes]` still calls reads under the same cap.
-    #[tokio::test]
-    async fn the_poem_reading_answers_the_same_413() {
-        let (req, mut body) = poem::Request::builder().body(vec![b'x'; 64]).split();
-        let err = with_body_limit(
-            32,
-            <RawBody as poem::FromRequest>::from_request(&req, &mut body),
-        )
-        .await
-        .expect_err("over the ambient cap");
-        assert_eq!(err.into_response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]

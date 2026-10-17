@@ -139,6 +139,10 @@ async fn a_machine_token_delegated_reading_is_refused_a_write_by_an_insufficient
         challenge.contains(r#"error="insufficient_scope""#),
         "{challenge}"
     );
+    assert!(
+        challenge.contains(&format!(r#"scope="{}""#, constants::POSTS_WRITE)),
+        "{challenge}"
+    );
 
     app.http()
         .get(format!("/posts/{post}"))
@@ -146,4 +150,37 @@ async fn a_machine_token_delegated_reading_is_refused_a_write_by_an_insufficient
         .send()
         .await
         .assert_status_is_ok();
+}
+
+#[tokio::test]
+async fn a_refused_read_names_the_one_scope_it_needs_on_every_edge() {
+    let (_db, app) = boot().await;
+    let (org, author) = org_with_author(&app, "ScopeVandelay").await;
+    let unrelated = narrow_bearer(&org, author, &[constants::AUDIO_TRANSCODE]);
+
+    let refused = app
+        .http()
+        .get(format!("/posts/{}", Uuid::now_v7()))
+        .header(header::AUTHORIZATION, &unrelated)
+        .send()
+        .await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let challenge = refused
+        .0
+        .headers()
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        challenge.contains(&format!(r#"scope="{}""#, constants::POSTS_READ)),
+        "{challenge}"
+    );
+
+    let refused = crate::graphql::graphql(&app, &unrelated, "{ posts { id } }").await;
+    assert_eq!(
+        refused["errors"][0]["extensions"]["requiredScopes"],
+        json!([constants::POSTS_READ]),
+        "{refused}"
+    );
 }

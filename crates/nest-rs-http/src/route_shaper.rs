@@ -16,13 +16,14 @@ use nest_rs_core::{Container, Handler};
 use nest_rs_guards::__private::{resolve_global_guards, validate_guard_chain};
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec, PipeSpecs};
-use poem::error::ReadBodyError;
-use poem::{Body, Endpoint, Request, Response, Result};
 use serde_json::Value;
 
-use crate::error::BodyError;
+use crate::body::Body;
+use crate::endpoint::Endpoint;
+use crate::error::{BodyError, HttpError, Result};
 use crate::guard_stage::denial_to_http_response;
-use crate::poem_bridge::{request_from_poem, request_to_poem};
+use crate::request::Request;
+use crate::response::Response;
 use crate::shaper::GateFn;
 use crate::view::with_view;
 
@@ -43,12 +44,7 @@ pub struct RouteShaper<E> {
     inner: E,
 }
 
-impl<E> Endpoint for RouteShaper<E>
-where
-    E: Endpoint<Output = Response>,
-{
-    type Output = Response;
-
+impl<E: Endpoint> Endpoint for RouteShaper<E> {
     async fn call(&self, req: Request) -> Result<Response> {
         // What the guards attach is withheld from the reads a mask would scope
         // when no response shaper masks the route's reply.
@@ -68,15 +64,12 @@ where
     }
 }
 
-impl<E> RouteShaper<E>
-where
-    E: Endpoint<Output = Response>,
-{
+impl<E: Endpoint> RouteShaper<E> {
     /// Everything after the guard stage, under what it attached.
     async fn after_the_guards(&self, mut req: Request) -> Result<Response> {
         if !self.pipes.is_empty() {
             // Boxed on purpose: inlining `apply_body_pipes`' large state machine
-            // would bloat every route's future, which poem boxes per request.
+            // would bloat every route's future, which the table boxes per request.
             Box::pin(apply_body_pipes(self.handler, &mut req, &self.pipes)).await?;
         }
 
@@ -100,12 +93,7 @@ pub enum ShapedRoute<E> {
     Refused,
 }
 
-impl<E> Endpoint for ShapedRoute<E>
-where
-    E: Endpoint<Output = Response> + 'static,
-{
-    type Output = Response;
-
+impl<E: Endpoint> Endpoint for ShapedRoute<E> {
     async fn call(&self, req: Request) -> Result<Response> {
         match self {
             Self::Bare(ep) => ep.call(req).await,
@@ -150,7 +138,7 @@ pub fn wrap_route_shaper<E>(
     handler: &'static Handler,
 ) -> ShapedRoute<E>
 where
-    E: Endpoint<Output = Response> + 'static,
+    E: Endpoint,
 {
     let composed = resolve_guards(
         container,
@@ -238,8 +226,8 @@ fn resolve_pipes(
 /// Whether the transport's body wrapper ended this read — past the cap, or no
 /// frame within its gap. The client did, and the edge answers it, `413` or
 /// `408`, whatever this read returns.
-fn stopped_by_the_edge(err: &ReadBodyError) -> bool {
-    let ReadBodyError::Io(err) = err else {
+fn stopped_by_the_edge(err: &BodyError) -> bool {
+    let BodyError::Io(err) = err else {
         return false;
     };
     matches!(
@@ -257,24 +245,13 @@ async fn apply_body_pipes(
     req: &mut Request,
     pipes: &[ResolvedLayer<dyn GlobalPipe>],
 ) -> Result<()> {
-    let content_type = req
-        .headers()
-        .get(poem::http::header::CONTENT_TYPE)
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
-    if !content_type.contains("json") {
+    if !req.content_type().is_some_and(|ct| ct.contains("json")) {
         return Ok(());
     }
     let limit = crate::current_body_limit();
-    let body = req.take_body();
-    let bytes = match body.into_bytes_limit(limit).await {
-        Ok(b) => b,
-        Err(ReadBodyError::PayloadTooLarge) => {
-            return Err(poem::Error::from_status(
-                poem::http::StatusCode::PAYLOAD_TOO_LARGE,
-            ));
-        }
+    let bytes = match req.take_body().into_bytes_limit(limit).await {
+        Ok(bytes) => bytes,
+        Err(err @ BodyError::TooLarge { .. }) => return Err(err.into()),
         Err(err) => {
             // The body is consumed and cannot be restored: fail rather than run
             // the handler with every global pipe skipped.
@@ -297,13 +274,11 @@ async fn apply_body_pipes(
     };
     // The body is out of the request while the pipes read it, so the view holds
     // the head alone.
-    let mut request = request_from_poem(std::mem::take(req));
-    let folded = with_view(handler, &mut request, |cx| {
+    let folded = with_view(handler, req, |cx| {
         pipes
             .iter()
             .try_for_each(|entry| entry.layer.transform(cx, ArgumentKind::Body, &mut value))
     });
-    *req = request_to_poem(request);
     if let Err(err) = folded {
         // A `400` RFC 9457 problem: the pipe message as `detail`, field-level
         // errors as an `errors` extension member.
@@ -312,7 +287,7 @@ async fn apply_body_pipes(
         if let Some(details) = err.into_details() {
             problem = problem.with_extension("errors", details);
         }
-        return Err(poem::Error::from(problem));
+        return Err(HttpError::from(problem));
     }
     // A re-serialization failure must not hand the handler an empty body
     // silently — fail the request instead.
@@ -322,7 +297,7 @@ async fn apply_body_pipes(
             error = %nest_rs_core::error_message(&err),
             "global pipe: failed to re-serialize the transformed body",
         );
-        poem::Error::from_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+        HttpError::from_status(http::StatusCode::INTERNAL_SERVER_ERROR)
     })?;
     req.set_body(Body::from_bytes(rewritten.into()));
     Ok(())
@@ -332,13 +307,18 @@ async fn apply_body_pipes(
 mod tests {
     use std::sync::Arc;
 
+    use http::StatusCode;
     use nest_rs_core::__private::take_site_refusal;
     use nest_rs_core::{Layer, LayerSite, LayerSpec};
     use nest_rs_testing::LogCapture;
-    use poem::Body;
-    use poem::http::StatusCode;
 
     use super::*;
+    use crate::endpoint::endpoint_fn;
+    use crate::{HeaderName, HeaderValue, Method, Uri, header};
+
+    fn ran() -> impl Endpoint {
+        endpoint_fn(|_| async { Ok(Response::builder().body("the handler ran")) })
+    }
 
     /// A layer no imported module provides: its spec resolves to nothing.
     struct Unprovided;
@@ -392,7 +372,7 @@ mod tests {
 
             let route = wrap_route_shaper(
                 &container,
-                poem::endpoint::make_sync(|_| Response::builder().body("the handler ran")),
+                ran(),
                 "get /x",
                 controller_guards,
                 method_guards,
@@ -409,7 +389,7 @@ mod tests {
                 "{slot:?}: the route would run without the layer it declares",
             );
             let response = route
-                .call(Request::default())
+                .call(Request::builder().finish())
                 .await
                 .expect("a refused route answers");
             assert_eq!(
@@ -455,15 +435,22 @@ mod tests {
 
     /// A JSON request whose body stream dies mid-read — a client that hung up,
     /// or a proxy that closed the connection after the headers.
+    fn json_post(body: impl Into<Body>) -> Request {
+        Request::builder()
+            .method(Method::POST)
+            .uri(Uri::from_static("/things"))
+            .header(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            )
+            .body(body)
+    }
+
     fn request_with_a_failing_body() -> Request {
         let stream = futures_util::stream::once(async {
-            Err::<Vec<u8>, _>(std::io::Error::other("the client hung up mid-body"))
+            Err::<bytes::Bytes, _>(std::io::Error::other("the client hung up mid-body"))
         });
-        Request::builder()
-            .method(poem::http::Method::POST)
-            .uri("/things".parse().expect("a uri"))
-            .content_type("application/json")
-            .body(Body::from_bytes_stream(stream))
+        json_post(Body::from_stream(stream))
     }
 
     #[tokio::test]
@@ -492,11 +479,7 @@ mod tests {
         // `PayloadTooLarge` is the body limit doing its job: `413`, and no
         // read-failure line.
         let logs = LogCapture::install();
-        let mut req = Request::builder()
-            .method(poem::http::Method::POST)
-            .uri("/things".parse().expect("a uri"))
-            .content_type("application/json")
-            .body(Body::from_bytes(vec![b'x'; 64 * 1024 * 1024].into()));
+        let mut req = json_post(vec![b'x'; 64 * 1024 * 1024]);
 
         let err = apply_body_pipes(&ROUTE, &mut req, &pipe())
             .await
@@ -521,7 +504,7 @@ mod tests {
         let container = Container::default();
         let route = wrap_route_shaper(
             &container,
-            poem::endpoint::make_sync(|_| Response::builder().body("the handler ran")),
+            ran(),
             "get /gated",
             Vec::new(),
             Vec::new(),
@@ -538,11 +521,21 @@ mod tests {
             "a gate alone shapes the route"
         );
 
-        let refused = route.call(Request::default()).await.expect("answers");
+        let refused = route
+            .call(Request::builder().finish())
+            .await
+            .expect("answers");
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
 
         let admitted = route
-            .call(Request::builder().header("x-admitted", "").finish())
+            .call(
+                Request::builder()
+                    .header(
+                        HeaderName::from_static("x-admitted"),
+                        HeaderValue::from_static(""),
+                    )
+                    .finish(),
+            )
             .await
             .expect("answers");
         assert_eq!(admitted.status(), StatusCode::OK);

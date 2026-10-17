@@ -9,6 +9,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use http::{HeaderValue, StatusCode, header};
 use nest_rs_core::__private::{
     Pending, ResolvedLayer, UnmaskedReply, carries_ambient, install_pending, new_unit_context,
     take_pending,
@@ -16,12 +17,12 @@ use nest_rs_core::__private::{
 use nest_rs_core::{AmbientValue, Handler};
 use nest_rs_guards::__private::{Refused, denial_of, failure_chain};
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
-use poem::http::{HeaderValue, StatusCode, header};
-use poem::{Error, IntoResponse, Request, Response};
 
 use crate::endpoint::{BoxEndpoint, Endpoint};
-use crate::poem_bridge::{request_from_poem, request_to_poem};
+use crate::error::HttpError;
 use crate::problem::ProblemDetails;
+use crate::request::Request;
+use crate::response::{IntoResponse, Response};
 use crate::shaper::GateFn;
 use crate::view::HttpView;
 
@@ -42,8 +43,8 @@ async fn run_stage<'g>(
     handler: &'static Handler,
     guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
     gates: &[GateFn],
-    request: crate::Request,
-) -> (crate::Request, Result<Pending, Refused>) {
+    request: Request,
+) -> (Request, Result<Pending, Refused>) {
     let earlier = pending_in(request.extensions());
     let mut view = HttpView::new(request);
     let checked = install_pending(earlier, async {
@@ -61,17 +62,6 @@ async fn run_stage<'g>(
     })
     .await;
     (view.into_request(), checked)
-}
-
-/// [`run_stage`] on a request poem hands over, given back as poem's.
-async fn run_poem_stage<'g>(
-    handler: &'static Handler,
-    guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
-    gates: &[GateFn],
-    request: Request,
-) -> (Request, Result<Pending, Refused>) {
-    let (request, checked) = run_stage(handler, guards, gates, request_from_poem(request)).await;
-    (request_to_poem(request), checked)
 }
 
 /// A refusal's answer, filing first a guard's denial nobody filed.
@@ -94,9 +84,9 @@ fn erased(chain: &[ResolvedLayer<dyn Guard>]) -> impl Iterator<Item = (&'static 
 pub async fn check_request<'g>(
     handler: &'static Handler,
     guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
-    req: &mut crate::Request,
+    req: &mut Request,
 ) -> Result<(), Denial> {
-    let taken = std::mem::replace(req, crate::Request::builder().finish());
+    let taken = std::mem::replace(req, Request::builder().finish());
     let (request, checked) = run_stage(handler, guards, &[], taken).await;
     *req = request;
     let pending = checked.map_err(|refused| refused.into_denial(file_denial))?;
@@ -113,7 +103,7 @@ pub async fn check_request<'g>(
 /// What `req`'s guard stages attached so far, to install around what runs
 /// after them — later stages, the endpoint, work that leaves the request's task
 /// (an MCP operation).
-pub fn attached_pending(req: &crate::Request) -> Pending {
+pub fn attached_pending(req: &Request) -> Pending {
     pending_in(req.extensions())
 }
 
@@ -126,7 +116,7 @@ fn pending_in(extensions: &http::Extensions) -> Pending {
 }
 
 /// The `T` one of `req`'s guard stages attached.
-pub fn attached<T: AmbientValue>(req: &crate::Request) -> Option<Arc<T>> {
+pub fn attached<T: AmbientValue>(req: &Request) -> Option<Arc<T>> {
     req.extensions().get::<Attached>()?.0.get::<T>()
 }
 
@@ -143,16 +133,16 @@ pub(crate) async fn guard_then<F, Fut>(
     req: Request,
     rest: F,
     unmasked: bool,
-) -> poem::Result<Response>
+) -> crate::Result<Response>
 where
     F: FnOnce(Request) -> Fut,
-    Fut: Future<Output = poem::Result<Response>>,
+    Fut: Future<Output = crate::Result<Response>>,
 {
-    // Nothing to run: the request stays poem's, and nothing is attached.
+    // Nothing to run: nothing is attached.
     let (req, pending) = if chain.is_empty() && gates.is_empty() {
         (req, Pending::default())
     } else {
-        match run_poem_stage(handler, erased(chain), gates, req).await {
+        match run_stage(handler, erased(chain), gates, req).await {
             (req, Ok(pending)) => (req, pending),
             (_, Err(refused)) => return Ok(answer(refused)),
         }
@@ -196,11 +186,11 @@ impl GuardedEndpoint {
 }
 
 impl Endpoint for GuardedEndpoint {
-    async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
+    async fn call(&self, req: Request) -> crate::Result<Response> {
         let (mut req, checked) = run_stage(self.handler, erased(&self.chain), &[], req).await;
         let pending = match checked {
             Ok(pending) => pending,
-            Err(refused) => return Ok(crate::poem_bridge::response_from_poem(answer(refused))),
+            Err(refused) => return Ok(answer(refused)),
         };
         req.extensions_mut().insert(Attached(pending.clone()));
         install_pending(marked(pending, false), self.inner.call(req)).await
@@ -221,17 +211,15 @@ impl DeniedEndpoint {
 }
 
 impl Endpoint for DeniedEndpoint {
-    async fn call(&self, _req: crate::Request) -> crate::Result<crate::Response> {
+    async fn call(&self, _req: Request) -> crate::Result<Response> {
         tracing::warn!(
             target: nest_rs_core::target::LAYERS,
             path = self.path.as_str(),
             "request denied: the endpoint runs no guard at its request",
         );
-        Ok(crate::poem_bridge::response_from_poem(
-            denial_to_http_response(Denial::unauthorized(
-                "no guard admits requests to this endpoint",
-            )),
-        ))
+        Ok(denial_to_http_response(Denial::unauthorized(
+            "no guard admits requests to this endpoint",
+        )))
     }
 }
 
@@ -262,8 +250,8 @@ pub fn denial_to_http_response(denial: Denial) -> Response {
 }
 
 /// The problem+json envelope alone — everything [`denial_to_http_response`]
-/// builds except the scope evidence, which the `Err` path must attach to the
-/// [`Error`] instead of to this response.
+/// builds except the scope evidence, which the `Err` path attaches to the
+/// [`HttpError`] instead of to this response.
 fn problem_response(denial: &Denial) -> Response {
     let status =
         StatusCode::from_u16(denial.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -275,8 +263,12 @@ fn problem_response(denial: &Denial) -> Response {
     // RFC 6750 §3/§3.1: a rejected credential names its code. Not gated on the
     // status: `insufficient_scope` lives at `403`, and `bearer_error` is already
     // `None` wherever no challenge is due.
-    if let Some(code) = denial.bearer_error() {
-        crate::challenge::stamp_bearer_error(&mut response, code);
+    match (denial.bearer_error(), denial.required_scopes()) {
+        (Some(crate::challenge::INSUFFICIENT_SCOPE), required) if !required.is_empty() => {
+            crate::challenge::stamp_insufficient_scope(&mut response, required);
+        }
+        (Some(code), _) => crate::challenge::stamp_bearer_error(&mut response, code),
+        (None, _) => {}
     }
     // RFC 6585 §4 for a rate limit, RFC 9110 §15.6.4 for an unavailable
     // dependency: the wait, in delay-seconds, whenever it is known.
@@ -296,17 +288,14 @@ fn required_scopes(denial: &Denial) -> Option<RequiredScopes> {
     (!required.is_empty()).then(|| RequiredScopes::new(required.to_vec()))
 }
 
-/// A [`Denial`] as a poem [`Error`] — the `Err` path's counterpart to
+/// A [`Denial`] as an [`HttpError`] — the `Err` path's counterpart to
 /// [`denial_to_http_response`], for the sites that must reject rather than
-/// return (an extractor, the MCP endpoint).
-///
-/// Not `Error::from_response(denial_to_http_response(d))`: poem's
-/// `Error::into_response` overwrites the response's extensions with the error's
-/// own, dropping the scope evidence; `set_data` is the channel that survives.
-pub fn denial_to_http_error(denial: Denial) -> Error {
-    let mut error = Error::from_response(problem_response(&denial));
+/// return (an extractor). The scope evidence rides the error's extensions,
+/// which its rendering copies onto the response.
+pub fn denial_to_http_error(denial: Denial) -> HttpError {
+    let mut error = HttpError::from_response(problem_response(&denial));
     if let Some(required) = required_scopes(&denial) {
-        error.set_data(required);
+        error.extensions_mut().insert(required);
     }
     error
 }
@@ -376,12 +365,15 @@ mod tests {
             Some(crate::challenge::INSUFFICIENT_SCOPE),
             "the denial names the code the challenge writes",
         );
+        assert_eq!(
+            resp.headers()[header::WWW_AUTHENTICATE],
+            r#"Bearer error="insufficient_scope", scope="posts:write""#,
+            "RFC 6750 §3: the challenge names the scope the request needs",
+        );
     }
 
     #[tokio::test]
-    async fn the_err_path_carries_the_scopes_through_poems_extension_overwrite() {
-        // `Error::from_response` alone loses them: `into_response` replaces the
-        // response's extensions wholesale.
+    async fn the_err_path_carries_the_scopes_to_the_response_it_renders() {
         let error = denial_to_http_error(Denial::insufficient_scope(
             ["posts:write"],
             "this token may not write posts",
@@ -531,12 +523,21 @@ mod tests {
     }
 
     fn tenant_request() -> Request {
-        Request::builder().header("x-tenant", "acme").finish()
+        tenant("acme")
+    }
+
+    fn tenant(name: &'static str) -> Request {
+        Request::builder()
+            .header(
+                http::HeaderName::from_static("x-tenant"),
+                HeaderValue::from_static(name),
+            )
+            .finish()
     }
 
     #[tokio::test]
     async fn a_later_stage_reads_what_an_earlier_one_attached_and_never_a_shadow() {
-        let mut req = request_from_poem(tenant_request());
+        let mut req = tenant_request();
         check_request(&ROUTE, erased(&chain(TenantGuard)), &mut req)
             .await
             .expect("the tenant is known");
@@ -559,7 +560,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_stage_attaches_nothing() {
         let logs = nest_rs_testing::LogCapture::install();
-        let mut req = request_from_poem(Request::builder().header("x-tenant", "globex").finish());
+        let mut req = tenant("globex");
         let denial = check_request(&ROUTE, erased(&chain(TenantGuard)), &mut req)
             .await
             .expect_err("an unknown tenant is refused");
@@ -582,21 +583,15 @@ mod tests {
 
     #[tokio::test]
     async fn a_guarded_endpoint_runs_its_inner_endpoint_under_what_the_stage_attached() {
-        let inner = poem::endpoint::make(|_req: Request| async {
-            nest_rs_core::ambient::<Tenant>()
+        let inner = crate::endpoint_fn(|_req: Request| async {
+            let tenant = nest_rs_core::ambient::<Tenant>()
                 .map(|tenant| tenant.0)
-                .unwrap_or("none")
+                .unwrap_or("none");
+            Ok(Response::builder().body(tenant))
         });
-        let guarded = GuardedEndpoint::new(
-            &ROUTE,
-            chain(TenantGuard),
-            BoxEndpoint::new(crate::poem_bridge::from_poem(inner)),
-        );
+        let guarded = GuardedEndpoint::new(&ROUTE, chain(TenantGuard), BoxEndpoint::new(inner));
 
-        let admitted = guarded
-            .call(request_from_poem(tenant_request()))
-            .await
-            .expect("answers");
+        let admitted = guarded.call(tenant_request()).await.expect("answers");
         assert_eq!(
             admitted.into_body().into_string().await.expect("a body"),
             "acme"
@@ -604,7 +599,7 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let refused = guarded
-            .call(crate::Request::builder().finish())
+            .call(Request::builder().finish())
             .await
             .expect("answers");
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
@@ -647,15 +642,12 @@ mod tests {
     #[tokio::test]
     async fn a_route_denial_keeping_its_cause_files_the_chain_and_answers_without_it() {
         let logs = nest_rs_testing::LogCapture::install();
-        let inner = poem::endpoint::make(|_req: Request| async { "reached" });
-        let guarded = GuardedEndpoint::new(
-            &ROUTE,
-            chain(StoreDown),
-            BoxEndpoint::new(crate::poem_bridge::from_poem(inner)),
-        );
+        let inner =
+            crate::endpoint_fn(|_req: Request| async { Ok(Response::builder().body("reached")) });
+        let guarded = GuardedEndpoint::new(&ROUTE, chain(StoreDown), BoxEndpoint::new(inner));
 
         let refused = guarded
-            .call(crate::Request::builder().finish())
+            .call(Request::builder().finish())
             .await
             .expect("answers");
         assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -675,7 +667,7 @@ mod tests {
         let denial = check_request(
             &ROUTE,
             erased(&chain(StoreDown)),
-            &mut crate::Request::builder().finish(),
+            &mut Request::builder().finish(),
         )
         .await
         .expect_err("the store is down");
@@ -710,9 +702,12 @@ mod tests {
 
     #[tokio::test]
     async fn an_unmasked_route_marks_only_a_unit_carrying_something_to_withhold() {
-        assert!(!withheld(&[], Request::default()).await, "no guard ran");
         assert!(
-            !withheld(&chain(Admitting), Request::default()).await,
+            !withheld(&[], Request::builder().finish()).await,
+            "no guard ran"
+        );
+        assert!(
+            !withheld(&chain(Admitting), Request::builder().finish()).await,
             "its guard attached nothing",
         );
         assert!(
@@ -721,7 +716,7 @@ mod tests {
         );
         let carried = nest_rs_core::with_ambient(
             Arc::new(Tenant("acme")),
-            withheld(&chain(Admitting), Request::default()),
+            withheld(&chain(Admitting), Request::builder().finish()),
         )
         .await;
         assert!(carried, "what the unit carried in is withheld too");

@@ -743,7 +743,7 @@ mod tests {
                 ::core::option::Option::Some(__v) => { ["2"].contains(&__v) }
                 ::core::option::Option::None => true,
             } {
-                __routes.route_poem(Method::GET, &__path, ::nest_rs_authz::http::Authorize::new(ep));
+                __routes.route(Method::GET, &__path, ::nest_rs_authz::http::Authorize::new(ep));
             };
         });
         assert!(

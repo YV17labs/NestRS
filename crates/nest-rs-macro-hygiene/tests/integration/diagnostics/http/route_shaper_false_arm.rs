@@ -5,8 +5,8 @@
 //! the parameter itself, naming the trait.
 
 use nest_rs::http::{controller, routes};
-use poem::web::Json;
-use poem::Result;
+use nest_rs::http::Json;
+use nest_rs::http::Result;
 
 struct Authorize<T>(T);
 

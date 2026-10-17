@@ -94,8 +94,9 @@ impl Denial {
     }
 
     /// A `403 Forbidden` denial for a token too narrow to authorize the
-    /// operation — `required` names the scopes that would have granted it, and
-    /// reaches the client as the RFC 6750 `insufficient_scope` challenge.
+    /// operation — `required` names the scopes the request needs, every one of
+    /// them (RFC 6750 §3's `scope`), and reaches the client as the
+    /// `insufficient_scope` challenge.
     pub fn insufficient_scope(
         required: impl IntoIterator<Item = impl Into<String>>,
         reason: impl Into<Cow<'static, str>>,
@@ -194,7 +195,7 @@ impl Denial {
         }
     }
 
-    /// The scopes that would have granted the refused operation — empty for
+    /// The scopes the refused operation needs, every one of them — empty for
     /// every denial that is not about scope, and for an
     /// [`InsufficientScope`](Self::InsufficientScope) that names none.
     pub fn required_scopes(&self) -> &[String] {

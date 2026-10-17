@@ -79,15 +79,6 @@ fn opaque() -> ProblemDetails {
     ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE)
 }
 
-impl<'a, T: Send + Sync + 'static> poem::FromRequest<'a> for Scoped<T> {
-    async fn from_request(
-        _req: &'a poem::Request,
-        _body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
-        Self::resolve().ok_or_else(|| opaque().into())
-    }
-}
-
 impl<'a, T: Send + Sync + 'static> crate::FromRequest<'a> for Scoped<T> {
     async fn from_request(
         _req: &'a crate::Request,
@@ -211,23 +202,5 @@ mod tests {
             .level,
             "error"
         );
-    }
-
-    /// The poem twin `#[routes]` still calls answers the same.
-    #[tokio::test]
-    async fn the_poem_reading_answers_the_miss_as_opaquely() {
-        let (req, mut body) = poem::Request::default().split();
-        let Err(refused) = in_scope(
-            Container::builder().build(),
-            <Scoped<Marker> as poem::FromRequest>::from_request(&req, &mut body),
-        )
-        .await
-        else {
-            panic!("no provider for Marker");
-        };
-        let response = refused.into_response();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let text = response.into_body().into_string().await.unwrap();
-        assert!(!text.contains("Marker"), "{text}");
     }
 }

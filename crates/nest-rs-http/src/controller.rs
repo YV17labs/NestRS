@@ -58,7 +58,7 @@ pub enum RequestBodyMeta {
     /// A `Json<T>` extractor — `application/json`, carrying `T`'s schema.
     Json(SchemaFn),
     /// A `multipart/form-data` body: `Some` when `#[api(multipart = T)]` names
-    /// the form's type, `None` for a bare [`poem::web::Multipart`] parameter.
+    /// the form's type, `None` for a bare [`Multipart`](crate::Multipart) parameter.
     Multipart(Option<SchemaFn>),
     /// A `Form<T>` extractor — `application/x-www-form-urlencoded`, carrying
     /// `T`'s schema.
@@ -115,7 +115,7 @@ pub struct HttpRouteMeta {
     pub request_body: Option<RequestBodyMeta>,
     /// Schema builder for the response payload — inferred from a `Json<T>`
     /// return, or declared with `#[api(response = T)]` when the handler builds
-    /// its own [`Response`](poem::Response).
+    /// its own [`Response`](crate::Response).
     pub response: Option<SchemaFn>,
     /// The media type of the success response body, when it is **not**
     /// `application/json` — `#[api(response_content_type = "audio/mpeg")]`, or

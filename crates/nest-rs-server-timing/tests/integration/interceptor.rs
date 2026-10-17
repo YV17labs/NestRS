@@ -36,17 +36,16 @@ struct StatusController;
 impl StatusController {
     #[get("/err/{code}")]
     #[public]
-    async fn err(
-        &self,
-        code: nest_rs_http::poem::web::Path<u16>,
-    ) -> nest_rs_http::poem::Result<String> {
-        Err(nest_rs_http::poem::Error::from_status(status(code.0)))
+    async fn err(&self, code: nest_rs_http::Path<u16>) -> nest_rs_http::Result<String> {
+        Err(nest_rs_http::HttpError::from_status(status(code.0)))
     }
 
     #[get("/ok/{code}")]
     #[public]
-    async fn ok(&self, code: nest_rs_http::poem::web::Path<u16>) -> Response {
-        Response::builder().status(status(code.0)).finish()
+    async fn ok(&self, code: nest_rs_http::Path<u16>) -> nest_rs_http::Response {
+        nest_rs_http::Response::builder()
+            .status(status(code.0))
+            .finish()
     }
 }
 

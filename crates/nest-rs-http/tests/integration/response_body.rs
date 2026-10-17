@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::futures_util::{StreamExt, stream};
+use nest_rs_http::{Body, Response};
 use nest_rs_http::{HttpConfig, HttpModule, SseEvent, SseStream, controller, routes};
 use nest_rs_testing::LogCapture;
-use poem::{Body, IntoResponse, Response};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
@@ -45,11 +45,10 @@ impl StreamController {
     #[get("/chunks")]
     #[public]
     async fn chunks(&self) -> Response {
-        Body::from_bytes_stream(stream::iter(["a", "b"]).map(|chunk| {
+        Response::builder().body(Body::from_stream(stream::iter(["a", "b"]).map(|chunk| {
             report("chunks");
             Ok::<_, std::io::Error>(bytes::Bytes::from_static(chunk.as_bytes()))
-        }))
-        .into_response()
+        })))
     }
 
     /// A body whose length is known before it is written.

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use crate::oauth::{
     AuthenticatedClient, Caller, ClientAuthnGuard, LoginDto, OAuthGuard, OAuthService,
 };
-use nest_rs::http::{Ctx, Piped, Valid, controller, routes};
+use nest_rs::http::{
+    Ctx, Form, HeaderValue, HttpError, Json, Opaque, Path, Piped, Response, Result, StatusCode,
+    Valid, controller, header, routes,
+};
 use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse};
 use nest_rs::pipes::Lowercase;
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
-use poem::http::{StatusCode, header};
-use poem::web::{Form, Json, Path};
-use poem::{Response, Result};
 
 #[controller(path = "/")]
 pub struct OAuthController {
@@ -50,12 +50,14 @@ impl OAuthController {
         let authorization = self
             .svc
             .authorize(&provider.into_inner())
-            .ok_or_else(|| poem::Error::from_status(StatusCode::NOT_FOUND))?
-            .map_err(poem::error::InternalServerError)?;
+            .ok_or_else(|| HttpError::from_status(StatusCode::NOT_FOUND))?
+            .opaque()?;
+        let set_cookie = HeaderValue::try_from(authorization.set_cookie()).opaque()?;
+        let location = HeaderValue::try_from(authorization.url).opaque()?;
         Ok(Response::builder()
             .status(StatusCode::FOUND)
-            .header(header::SET_COOKIE, authorization.set_cookie())
-            .header(header::LOCATION, authorization.url)
+            .header(header::SET_COOKIE, set_cookie)
+            .header(header::LOCATION, location)
             .finish())
     }
 

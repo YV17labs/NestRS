@@ -2,8 +2,7 @@
 //! authentication (§2.3.1) an issuer performs before it mints anything.
 
 use nest_rs_http::challenge::NoBearerChallenge;
-use poem::http::{StatusCode, header};
-use poem::{IntoResponse, Response};
+use nest_rs_http::{HeaderValue, Response, ResponseError, StatusCode, header};
 
 /// Token-endpoint failure — RFC 6749 §5.2's closed set, all six of it.
 ///
@@ -59,30 +58,24 @@ impl TokenError {
             _ => StatusCode::BAD_REQUEST,
         }
     }
-
-    /// RFC 6749 §5.2's JSON body, with §5.1's `no-store` and `no-cache`, which
-    /// bind the whole token endpoint.
-    fn render(&self) -> Response {
-        let body = serde_json::json!({ "error": self.to_string() });
-        let mut response = body
-            .to_string()
-            .with_content_type("application/json")
-            .with_status(self.status())
-            .with_header(header::CACHE_CONTROL, "no-store")
-            .with_header(header::PRAGMA, "no-cache")
-            .into_response();
-        // A token-endpoint refusal is not a resource refusal: no RFC 9728 pointer.
-        response.extensions_mut().insert(NoBearerChallenge);
-        response
-    }
 }
 
-/// Not a `ResponseError`: poem overwrites a response's extensions with the
-/// error's own, so the `NoBearerChallenge` marker survives only on the `poem::Error`.
-impl From<TokenError> for poem::Error {
-    fn from(error: TokenError) -> Self {
-        let mut err = poem::Error::from_response(error.render());
-        err.set_data(NoBearerChallenge);
-        err
+/// RFC 6749 §5.2's JSON body, with §5.1's `no-store` and `no-cache`, which
+/// bind the whole token endpoint; `?` on one in a handler answers it.
+impl ResponseError for TokenError {
+    fn status(&self) -> StatusCode {
+        TokenError::status(self)
+    }
+
+    fn as_response(&self) -> Response {
+        let body = serde_json::json!({ "error": self.to_string() });
+        Response::builder()
+            .status(TokenError::status(self))
+            .content_type(HeaderValue::from_static("application/json"))
+            .header(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
+            .header(header::PRAGMA, HeaderValue::from_static("no-cache"))
+            // A token-endpoint refusal is not a resource refusal: no RFC 9728 pointer.
+            .extension(NoBearerChallenge)
+            .body(body.to_string())
     }
 }

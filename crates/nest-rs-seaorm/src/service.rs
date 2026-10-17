@@ -155,7 +155,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 ///         (HttpVerb::Get, "/", "list"),
 ///         (HttpVerb::Get, "/{id}", "get"),
 ///         (HttpVerb::Post, "/", "create"),
-///         (HttpVerb::Patch, "/{id}", "update"),
+///         (HttpVerb::Put, "/{id}", "update"),
 ///         (HttpVerb::Delete, "/{id}", "delete"),
 ///     ],
 /// );

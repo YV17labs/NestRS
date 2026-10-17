@@ -384,6 +384,32 @@ mod tests {
         );
     }
 
+    /// Two grants, either sufficient: the refusal names one set — every scope
+    /// of it needed, and enough — the action's own grant before the wildcard's,
+    /// so a client asking for it never asks for more than it needs.
+    #[test]
+    fn of_two_sufficient_grants_the_refusal_names_the_narrowest_alone() {
+        let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
+        ab.can(Action::Manage, widget::Entity)
+            .requires_scope("widgets:write");
+        ab.can(Action::Read, widget::Entity)
+            .requires_scope("widgets:read");
+        ab.can(Action::Read, widget::Entity)
+            .requires_scope("widgets:audit");
+        let ability = ab.build().expect("a valid rule set");
+
+        assert!(!ability.can_class(Action::Read, subject()));
+        assert_eq!(
+            ability.missing_scopes(Action::Read, subject()),
+            ["widgets:read"],
+            "one grant's scopes, never the union of every grant's",
+        );
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, subject()),
+            ["widgets:write"],
+        );
+    }
+
     #[test]
     fn a_withheld_denial_is_dropped_without_being_advertised() {
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));

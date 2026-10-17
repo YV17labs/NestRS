@@ -50,7 +50,6 @@ trybuild.workspace = true
 anyhow.workspace = true
 async-graphql.workspace = true
 futures-util.workspace = true
-poem.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 tracing.workspace = true

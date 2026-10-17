@@ -9,7 +9,7 @@ use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefau
 use nest_rs_core::module;
 use nest_rs_guards::guard;
 use nest_rs_http::futures_util::stream;
-use nest_rs_http::poem::{Body, Response};
+use nest_rs_http::{Body, HeaderValue, Response};
 use nest_rs_http::{controller, routes};
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::TestApp;
@@ -89,11 +89,11 @@ impl ItemsController {
                 }
                 Err(_) => String::from("failed"),
             };
-            Ok::<_, std::io::Error>(line)
+            Ok::<_, std::io::Error>(nest_rs_http::Bytes::from(line))
         });
         Response::builder()
-            .content_type("text/plain")
-            .body(Body::from_bytes_stream(listed))
+            .content_type(HeaderValue::from_static("text/plain"))
+            .body(Body::from_stream(listed))
     }
 }
 

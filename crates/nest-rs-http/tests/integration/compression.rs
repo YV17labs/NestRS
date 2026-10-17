@@ -29,10 +29,13 @@ impl EchoController {
     /// The first part of a 4000-byte representation, as a range request is
     /// answered.
     #[get("/part")]
-    async fn part(&self) -> poem::Response {
-        poem::Response::builder()
+    async fn part(&self) -> nest_rs_http::Response {
+        nest_rs_http::Response::builder()
             .status(StatusCode::PARTIAL_CONTENT)
-            .header(header::CONTENT_RANGE, "bytes 0-1727/4000")
+            .header(
+                header::CONTENT_RANGE,
+                nest_rs_http::HeaderValue::from_static("bytes 0-1727/4000"),
+            )
             .body("x".repeat(1728))
     }
 

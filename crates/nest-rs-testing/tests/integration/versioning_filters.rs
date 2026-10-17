@@ -38,13 +38,17 @@ impl WidgetController {
 
     #[get("/boom")]
     #[use_filters(TeapotFilter)]
-    async fn boom(&self) -> poem::Result<&'static str> {
-        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 
     #[get("/raw-boom")]
-    async fn raw_boom(&self) -> poem::Result<&'static str> {
-        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn raw_boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 }
 
@@ -55,8 +59,10 @@ struct GadgetController;
 #[routes]
 impl GadgetController {
     #[get("/boom")]
-    async fn gadget_boom(&self) -> poem::Result<&'static str> {
-        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn gadget_boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 }
 
@@ -135,8 +141,10 @@ struct DupGlobalCtrl;
 #[routes]
 impl DupGlobalCtrl {
     #[get("/boom")]
-    async fn dup_global_ctrl_boom(&self) -> poem::Result<&'static str> {
-        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn dup_global_ctrl_boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 }
 
@@ -147,8 +155,10 @@ struct DupGlobalMethod;
 impl DupGlobalMethod {
     #[get("/boom")]
     #[use_filters(CountingFilter)]
-    async fn dup_global_method_boom(&self) -> poem::Result<&'static str> {
-        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn dup_global_method_boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 }
 
@@ -160,8 +170,10 @@ struct DupCtrlMethod;
 impl DupCtrlMethod {
     #[get("/boom")]
     #[use_filters(CountingFilter)]
-    async fn dup_ctrl_method_boom(&self) -> poem::Result<&'static str> {
-        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn dup_ctrl_method_boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 }
 

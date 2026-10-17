@@ -1,6 +1,7 @@
-use poem::http::StatusCode;
-use poem::web::{Field, Multipart};
-use poem::{Error, FromRequest, Request, RequestBody, Result};
+use nest_rs::http::{
+    Field, FromRequest, HttpError, Multipart, ProblemDetails, Request, RequestBody, Result,
+    StatusCode,
+};
 use validator::Validate;
 
 use crate::audio::UploadRequestDto;
@@ -13,25 +14,26 @@ pub struct UploadedAudio {
 impl<'a> FromRequest<'a> for UploadedAudio {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
         let mut form = Multipart::from_request(req, body).await?;
-        while let Some(part) = form
-            .next_field()
-            .await
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::BAD_REQUEST))?
-        {
+        while let Some(part) = form.next_field().await? {
             if part.name() != Some("file") {
                 continue;
             }
             let filename = part.file_name().map(str::to_owned).unwrap_or_default();
-            UploadRequestDto {
+            if (UploadRequestDto {
                 filename: filename.clone(),
-            }
+            })
             .validate()
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::UNPROCESSABLE_ENTITY))?;
+            .is_err()
+            {
+                return Err(HttpError::from(
+                    ProblemDetails::from_status(StatusCode::UNPROCESSABLE_ENTITY)
+                        .with_detail("the `file` part's filename is not an accepted audio name"),
+                ));
+            }
             return Ok(Self { filename, part });
         }
-        Err(Error::from_string(
-            "multipart body has no `file` part",
-            StatusCode::BAD_REQUEST,
+        Err(HttpError::from(
+            ProblemDetails::bad_request().with_detail("multipart body has no `file` part"),
         ))
     }
 }

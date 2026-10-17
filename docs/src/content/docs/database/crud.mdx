@@ -62,7 +62,7 @@ mounts:
 | `GET`    | `/orgs`     | `Read` on `Org`    | —                     | `200` `Vec<Org>` + cursor |
 | `GET`    | `/orgs/{id}` | `Read` on `Org`    | —                     | `200` `Org` (404/403)  |
 | `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrg`         | `201` `Org` + `Location` |
-| `PATCH`  | `/orgs/{id}` | `Update` on `Org`  | `UpdateOrg`         | `200` `Org` (404/403)  |
+| `PUT`    | `/orgs/{id}` | `Update` on `Org`  | `UpdateOrg`         | `200` `Org` (404/403)  |
 | `DELETE` | `/orgs/{id}` | `Delete` on `Org`  | —                     | `204` (404/403)        |
 
 Every handler delegates to the same `OrgsService` instance, which goes through
@@ -77,15 +77,17 @@ document declares the header, so a generated client reads it rather than
 discarding it. An entity keyed on something other than a `Uuid` gets the `201`
 and the body without the header.
 
-### `PATCH` takes a whole `Update<Name>`
+### `PUT` takes a whole `Update<Name>`
 
-The verb is `PATCH`, but the body is not a partial one. `Update<Name>` mirrors
-the column types the entity exposed with `input(update)`, so a non-`Option`
-column is **required**:
+The update replaces the row's writable fields, so its verb is `PUT` (RFC 9110
+§9.3.4), never `PATCH`, which RFC 5789 keeps for a partial change; a `PATCH`
+there answers `405`, its `Allow` naming `PUT`. `Update<Name>` mirrors the column
+types the entity exposed with `input(update)`, so a non-`Option` column is
+**required**:
 
 ```bash frame="terminal"
-$ curl -X PATCH …/posts/$ID -d '{"title":"Updated"}'
-{"…":"…status.400","status":400,"detail":"parse error: missing field `body`"}
+$ curl -X PUT …/posts/$ID -H 'content-type: application/json' -d '{"title":"Updated"}'
+{"type":"about:blank","status":400,"detail":"the JSON body does not decode: missing field `body` at line 1 column 19"}
 ```
 
 Make a column `Option<T>` on the entity when callers must be able to omit it —

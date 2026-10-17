@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+use nest_rs_http::__private::poem_bridge::downcast_from_poem;
 use poem::{Error, Response};
 
 use crate::ExceptionFilter;
@@ -46,7 +47,9 @@ where
     }
 
     async fn try_catch(&self, err: Error) -> Result<Response, Error> {
-        match err.downcast::<T::Exception>() {
+        // A route's handler answers on the HTTP vocabulary, so its error reaches
+        // this poem-typed chain carried: the downcast reaches inside the carrier.
+        match downcast_from_poem::<T::Exception>(err) {
             Ok(exception) => Ok(self.catch(exception).await),
             Err(unchanged) => Err(unchanged),
         }
@@ -127,6 +130,29 @@ mod tests {
             err.downcast_ref::<OtherError>().is_some(),
             "the original error must survive for the next filter",
         );
+    }
+
+    #[tokio::test]
+    async fn a_handler_error_carried_across_the_bridge_is_caught_by_its_type() {
+        let filter: &dyn ExceptionFilterErased = &DomainErrorFilter;
+        let carried = nest_rs_http::__private::poem_bridge::error_to_poem(
+            nest_rs_http::HttpError::new(DomainError, StatusCode::INTERNAL_SERVER_ERROR),
+        );
+        let resp = filter
+            .try_catch(carried)
+            .await
+            .expect("the carried exception matches");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let other = nest_rs_http::__private::poem_bridge::error_to_poem(
+            nest_rs_http::HttpError::new(OtherError, StatusCode::INTERNAL_SERVER_ERROR),
+        );
+        let err = filter
+            .try_catch(other)
+            .await
+            .expect_err("a foreign carried exception is handed back");
+        let back = nest_rs_http::__private::poem_bridge::error_from_poem(err);
+        assert!(back.is::<OtherError>(), "the next filter still finds it");
     }
 
     #[test]

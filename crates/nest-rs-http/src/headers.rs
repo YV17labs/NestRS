@@ -31,8 +31,7 @@ use crate::error::HeaderError;
 ///
 /// ```
 /// # use nest_rs_core::module;
-/// # use nest_rs_http::poem::web::Json;
-/// # use nest_rs_http::{Header, controller, input, routes};
+/// # use nest_rs_http::{Header, Json, controller, input, routes};
 /// # use nest_rs_testing::TestApp;
 /// #[input]
 /// struct Tracing {
@@ -91,15 +90,6 @@ impl<T: DeserializeOwned> Header<T> {
 /// A header refusal, as the `400` problem every edge's rejection is.
 fn rejection(refused: &HeaderError) -> ProblemDetails {
     ProblemDetails::bad_request().with_detail(refused.to_string())
-}
-
-impl<'a, T: DeserializeOwned> poem::FromRequest<'a> for Header<T> {
-    async fn from_request(
-        req: &'a poem::Request,
-        _body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
-        Self::bind(req.headers()).map_err(|refused| rejection(&refused).into())
-    }
 }
 
 impl<'a, T: DeserializeOwned> crate::FromRequest<'a> for Header<T> {

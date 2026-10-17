@@ -1,7 +1,8 @@
 //! The `WWW-Authenticate: Bearer` challenge grammar — RFC 6750 §3.
 
-use poem::Response;
-use poem::http::{HeaderValue, header};
+use http::{HeaderValue, header};
+
+use crate::response::Response;
 
 pub use crate::problem::BEARER;
 
@@ -59,9 +60,76 @@ pub fn stamp_bearer_error(res: &mut Response, code: &str) {
     stamp_bearer_error_on(res.headers_mut(), code);
 }
 
+/// Write `WWW-Authenticate: Bearer error="insufficient_scope", scope="<…>"`
+/// onto a refusal: RFC 6750 §3's `scope`, the scopes the request needs, every
+/// one of them, space-delimited. A scope outside RFC 6749 §3.3's grammar, which
+/// a quoted string could not carry, leaves the challenge without the attribute.
+pub(crate) fn stamp_insufficient_scope(res: &mut Response, scopes: &[String]) {
+    let well_formed = !scopes.is_empty() && scopes.iter().all(|scope| is_scope_token(scope));
+    if !well_formed {
+        stamp_bearer_error(res, INSUFFICIENT_SCOPE);
+        return;
+    }
+    let challenge = format!(
+        r#"{BEARER} error="{INSUFFICIENT_SCOPE}", scope="{}""#,
+        scopes.join(" ")
+    );
+    match HeaderValue::try_from(challenge) {
+        Ok(value) => {
+            res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
+        }
+        // Unreachable: every scope was checked against the grammar above.
+        Err(_) => stamp_bearer_error(res, INSUFFICIENT_SCOPE),
+    }
+}
+
+/// RFC 6749 §3.3's `scope-token`: one or more `NQCHAR`.
+fn is_scope_token(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope
+            .bytes()
+            .all(|b| b == 0x21 || (0x23..=0x5b).contains(&b) || (0x5d..=0x7e).contains(&b))
+}
+
 /// [`stamp_bearer_error`] on a head's headers, whichever response holds them.
 pub(crate) fn stamp_bearer_error_on(headers: &mut http::HeaderMap, code: &str) {
     if let Some(value) = bearer_error_value(code) {
         headers.insert(header::WWW_AUTHENTICATE, value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn challenge(scopes: &[&str]) -> String {
+        let mut res = Response::builder().finish();
+        let scopes: Vec<String> = scopes.iter().map(|&scope| scope.to_owned()).collect();
+        stamp_insufficient_scope(&mut res, &scopes);
+        res.headers()[header::WWW_AUTHENTICATE]
+            .to_str()
+            .expect("ASCII")
+            .to_owned()
+    }
+
+    #[test]
+    fn the_scope_attribute_lists_every_scope_needed() {
+        assert_eq!(
+            challenge(&["posts:read", "audit"]),
+            r#"Bearer error="insufficient_scope", scope="posts:read audit""#,
+        );
+    }
+
+    /// A quote would end the attribute early; a space would split one scope in
+    /// two: such a set is not said at all.
+    #[test]
+    fn a_scope_outside_the_grammar_leaves_the_attribute_out() {
+        for refused in [&["posts\"read"][..], &["posts read"], &[""], &[]] {
+            assert_eq!(
+                challenge(refused),
+                r#"Bearer error="insufficient_scope""#,
+                "{refused:?}"
+            );
+        }
     }
 }

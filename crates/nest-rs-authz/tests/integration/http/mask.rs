@@ -5,7 +5,7 @@ use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::poem::web::Json;
+use nest_rs_http::Json;
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use serde::Serialize;
@@ -174,47 +174,47 @@ impl WidgetController {
 
     /// RFC 6839: `+json` is a structured syntax suffix, so this **is** JSON.
     #[get("/vendor")]
-    async fn vendor(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+    async fn vendor(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
         raw_widget_response(Some("application/vnd.api+json"))
     }
 
     /// RFC 9110 §8.3.1: type and subtype are case-insensitive, so this is the
     /// *same* media type as `application/json`.
     #[get("/upper")]
-    async fn upper(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+    async fn upper(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
         raw_widget_response(Some("Application/JSON"))
     }
 
     /// Parameters are not part of the media type.
     #[get("/charset")]
-    async fn charset(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+    async fn charset(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
         raw_widget_response(Some("application/json; charset=utf-8"))
     }
 
     /// Nothing declared at all — the shaper cannot classify it, so it must not
     /// guess in the direction that ships the body.
     #[get("/untyped")]
-    async fn untyped(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+    async fn untyped(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
         raw_widget_response(None)
     }
 
     /// A declared non-JSON type still passes through untouched: the handler said
     /// what it was returning, and there is no entity in it to mask.
     #[get("/csv")]
-    async fn csv(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
-        poem::Response::builder()
-            .content_type("text/csv")
+    async fn csv(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
+        nest_rs_http::Response::builder()
+            .content_type(nest_rs_http::HeaderValue::from_static("text/csv"))
             .body("id,name\n1,ada\n")
     }
 }
 
 /// A hand-built response carrying the unexposed `secret`, under whichever
 /// `Content-Type` spelling the caller asks for — or none at all.
-fn raw_widget_response(content_type: Option<&str>) -> poem::Response {
+fn raw_widget_response(content_type: Option<&'static str>) -> nest_rs_http::Response {
     let body = r#"{"id":1,"name":"ada","secret":"s1"}"#;
-    let mut builder = poem::Response::builder();
+    let mut builder = nest_rs_http::Response::builder();
     if let Some(content_type) = content_type {
-        builder = builder.content_type(content_type);
+        builder = builder.content_type(nest_rs_http::HeaderValue::from_static(content_type));
     }
     builder.body(body)
 }

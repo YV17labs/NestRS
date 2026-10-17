@@ -49,7 +49,10 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Applied to an `impl` block belonging to a `#[controller]`-marked struct.
 /// Each method tagged with `#[get("/path")]`, `#[post]`, `#[put]`,
-/// `#[delete]`, or `#[patch]` is wired as a poem handler.
+/// `#[delete]`, or `#[patch]` is wired as a route of the HTTP vocabulary:
+/// every parameter a `nest_rs_http::FromRequest`, the return an
+/// `IntoResponse` or a `Result` of one whose error converts into an
+/// `HttpError`.
 ///
 /// Per-method attributes (all consumed; no imports needed):
 ///
@@ -81,11 +84,11 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Expands to
 ///
-/// The impl block (verb/layer/response attrs stripped), one `#[poem::handler]`
-/// wrapper per route, `impl nest_rs_http::Controller` (registers each route on
-/// the transport's `HttpRoutes` with its guard/pipe/filter/interceptor pools), and
-/// `impl nest_rs_core::Discoverable` attaching the `HttpControllerMeta` route
-/// table the transport mounts.
+/// The impl block (verb/layer/response attrs stripped), one
+/// `nest_rs_http::Endpoint` wrapper per route, `impl nest_rs_http::Controller`
+/// (registers each route on the transport's `HttpRoutes` with its
+/// guard/pipe/filter/interceptor pools), and `impl nest_rs_core::Discoverable`
+/// attaching the `HttpControllerMeta` route table the transport mounts.
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(routes::routes(args, input).into()).into()

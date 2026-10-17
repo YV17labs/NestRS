@@ -331,6 +331,43 @@ async fn a_stated_version_a_path_does_not_serve_never_falls_through() {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
+/// A version refusal is the client's own `404`, which the access line records
+/// under no route: its `debug` line names the strategy, never the path sent.
+#[tokio::test]
+async fn a_version_refusal_files_no_path_the_client_sent() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let client = boot_with(versioned(ApiVersioning::Header, None), None).await;
+
+    client
+        .get("/v1/fund/ping")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .get("/fund/ping")
+        .header(DEFAULT_VERSION_HEADER, "9")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    for message in [
+        "refused a URI-versioned path under a non-URI versioning strategy",
+        "no route serves the requested API version",
+    ] {
+        let event = logs.expect_one("nest_rs::http", message);
+        assert_eq!(
+            event.field("strategy").as_deref(),
+            Some("header"),
+            "{message}"
+        );
+        assert!(
+            !event.fields.values().any(|value| value.contains("fund")),
+            "{message} quoted the path the client sent: {:?}",
+            event.fields,
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_path_with_no_versions_is_served_whatever_version_is_stated() {
     // A client sets the version header globally; `/unversioned/ping` has one

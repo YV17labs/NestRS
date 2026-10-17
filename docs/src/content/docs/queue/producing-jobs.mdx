@@ -292,10 +292,11 @@ pub struct TranscodeDto {
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
 use std::sync::Arc;
 
-use nest_rs::http::{Header, PartExt, SseEvent, SseStream, Valid, controller, routes};
+use nest_rs::http::{
+    Body, Header, HeaderValue, HttpError, Json, Query, Response, Result, SseEvent, SseStream,
+    StatusCode, Valid, controller, routes,
+};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
-use poem::web::{Json, Query};
-use poem::{Body, Error, Response, Result};
 
 use crate::audio::TranscodeGuard;
 use crate::audio::{

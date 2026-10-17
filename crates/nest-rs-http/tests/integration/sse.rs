@@ -40,9 +40,9 @@ impl FeedController {
     /// A fallible open whose `Result` is spelled through an alias.
     #[sse("/closed")]
     #[public]
-    async fn closed(&self) -> poem::Result<SseStream> {
-        Err(poem::Error::from_status(
-            poem::http::StatusCode::SERVICE_UNAVAILABLE,
+    async fn closed(&self) -> nest_rs_http::Result<SseStream> {
+        Err(nest_rs_http::HttpError::from_status(
+            nest_rs_http::StatusCode::SERVICE_UNAVAILABLE,
         ))
     }
 
@@ -62,7 +62,7 @@ impl FeedController {
 }
 
 /// A fallible open under another name.
-type Opened = Result<SseStream, poem::Error>;
+type Opened = Result<SseStream, nest_rs_http::HttpError>;
 
 /// A one-second ceiling, pinned on the module as a deployment would.
 #[module(imports = [HttpModule::for_root(
@@ -292,7 +292,7 @@ async fn a_stream_that_panics_ends_its_body_and_files_panic() {
             nest_rs_http::unit::REQUEST.name(),
         )
         .into_iter()
-        .filter(|line| line.field("path").as_deref() == Some("/flaky/events"))
+        .filter(|line| line.field("route").as_deref() == Some("/flaky/events"))
         .collect();
     assert_eq!(lines.len(), 1, "{lines:#?}");
     assert_eq!(

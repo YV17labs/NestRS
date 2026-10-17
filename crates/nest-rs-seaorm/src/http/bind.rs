@@ -4,7 +4,6 @@ use std::ops::Deref;
 
 use nest_rs_authz::{Ability, ActionMarker, with_ability};
 use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, ResolvesProvider};
-use nest_rs_http::__private::poem_bridge::error_from_poem;
 use nest_rs_http::{HttpError, ProblemDetails, StatusCode};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
@@ -108,46 +107,16 @@ fn opaque() -> ProblemDetails {
 }
 
 impl Unbound {
-    fn into_poem(self) -> poem::Error {
-        match self {
-            Self::NotV7 => {
-                poem::Error::from_string(nest_rs_core::UUID_V7_REQUIRED, StatusCode::BAD_REQUEST)
-            }
-            Self::Unwired => poem::Error::from(opaque()),
-            Self::Failed(err) => poem::Error::from(err),
-            Self::Denied => poem::Error::from_status(StatusCode::FORBIDDEN),
-            Self::Missing => poem::Error::from_status(StatusCode::NOT_FOUND),
-        }
-    }
-
     fn into_http(self) -> HttpError {
         match self {
             Self::NotV7 => ProblemDetails::bad_request()
                 .with_detail(nest_rs_core::UUID_V7_REQUIRED)
                 .into(),
             Self::Unwired => opaque().into(),
-            // `ServiceError` answers through poem's `ResponseError` until the
-            // HTTP edge retypes it.
-            Self::Failed(err) => error_from_poem(poem::Error::from(err)),
+            Self::Failed(err) => HttpError::from(err),
             Self::Denied => HttpError::from_status(StatusCode::FORBIDDEN),
             Self::Missing => HttpError::from_status(StatusCode::NOT_FOUND),
         }
-    }
-}
-
-impl<'a, A, S> poem::FromRequest<'a> for Bind<A, S>
-where
-    S: CrudService + 'static,
-    <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
-    A: ActionMarker,
-{
-    async fn from_request(
-        req: &'a poem::Request,
-        body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
-        nest_rs_http::__private::MaskProbe::mark();
-        let poem::web::Path(id) = poem::web::Path::<Uuid>::from_request(req, body).await?;
-        Self::load(id).await.map_err(Unbound::into_poem)
     }
 }
 
@@ -252,26 +221,16 @@ mod tests {
 
     #[tokio::test]
     async fn db_errors_map_to_an_opaque_500_with_no_driver_text() {
-        for answered in [
-            nest_rs_http::__private::poem_bridge::response_from_poem(
-                Unbound::Failed(ServiceError::Db(DbErr::Custom(
-                    "connection to db.internal:5432 refused".into(),
-                )))
-                .into_poem()
-                .into_response(),
-            ),
-            Unbound::Failed(ServiceError::Db(DbErr::Custom(
-                "connection to db.internal:5432 refused".into(),
-            )))
-            .into_http()
-            .into_response(),
-        ] {
-            assert_eq!(answered.status(), StatusCode::INTERNAL_SERVER_ERROR);
-            let body = answered.into_body().into_string().await.expect("body");
-            assert!(
-                !body.contains("db.internal"),
-                "driver text must not reach the client: {body}"
-            );
-        }
+        let answered = Unbound::Failed(ServiceError::Db(DbErr::Custom(
+            "connection to db.internal:5432 refused".into(),
+        )))
+        .into_http()
+        .into_response();
+        assert_eq!(answered.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = answered.into_body().into_string().await.expect("body");
+        assert!(
+            !body.contains("db.internal"),
+            "driver text must not reach the client: {body}"
+        );
     }
 }

@@ -3,7 +3,7 @@
 use nest_rs_config::Config;
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::poem::web::Multipart;
+use nest_rs_http::Multipart;
 use nest_rs_http::{
     ApiVersioning, Header, HttpConfig, HttpModule, HttpSecurityHeaders, async_trait, controller,
     input, routes,
@@ -47,7 +47,7 @@ impl WidgetsController {
     }
 
     #[post("/token")]
-    async fn token(&self, body: nest_rs_http::poem::web::Form<TokenForm>) -> String {
+    async fn token(&self, body: nest_rs_http::Form<TokenForm>) -> String {
         body.0.grant_type
     }
 

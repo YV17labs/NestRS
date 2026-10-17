@@ -209,8 +209,10 @@ impl EdgeController {
 
     #[get("/boom")]
     #[use_filters(MapToOk)]
-    async fn boom(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 }
 

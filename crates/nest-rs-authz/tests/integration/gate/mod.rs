@@ -1,7 +1,7 @@
 //! Covers `src/gate.rs` — one class gate on every edge, through each edge's
-//! real decorator: the refusal a wider token would fix reads the same sentence
-//! and code on HTTP, GraphQL, WS and MCP, each edge carrying the code where it
-//! carries a client's.
+//! real decorator: the refusal a wider token would fix reads the same sentence,
+//! code and scope list on HTTP, GraphQL, WS and MCP, each edge carrying them
+//! where it carries a client's.
 
 mod graphql;
 mod mcp;
@@ -26,15 +26,22 @@ use crate::widget;
 /// RFC 6750 §3.1's description of `insufficient_scope`, the one sentence.
 const TOO_NARROW: &str = "the request requires higher privileges than provided by the access token";
 
-/// A credential that delegated no scope, beside a rule that asks one: the
-/// refusal a wider token would have fixed.
+/// A credential that delegated no scope, beside two grants that would each
+/// allow a read: the refusal a wider token would have fixed. The read's own
+/// grant is the narrowest, so its scope is the one every edge names.
 fn too_narrow() -> Ability {
     let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
     builder
         .can(Action::Read, widget::Entity)
         .requires_scope("widgets:read");
+    builder
+        .can(Action::Manage, widget::Entity)
+        .requires_scope("widgets:admin");
     builder.build().expect("valid test ability")
 }
+
+/// The one list every edge names: what the narrowest grant lacks.
+const NEEDED: [&str; 1] = ["widgets:read"];
 
 /// Attaches [`too_narrow`] to every request it checks.
 #[injectable]
@@ -117,7 +124,7 @@ impl WidgetsGateway {
 struct EveryEdgeModule;
 
 #[tokio::test]
-async fn a_token_too_narrow_reads_one_sentence_and_one_code_on_every_edge() {
+async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_every_edge() {
     let app = TestApp::builder()
         .module::<EveryEdgeModule>()
         .use_guards_global([guard::<NarrowToken>()])
@@ -138,9 +145,9 @@ async fn a_token_too_narrow_reads_one_sentence_and_one_code_on_every_edge() {
         serde_json::from_str(&http.0.into_body().into_string().await.expect("a body"))
             .expect("a problem document");
     assert_eq!(problem["detail"], TOO_NARROW, "HTTP: {problem}");
-    assert!(
-        challenge.contains("error=\"insufficient_scope\""),
-        "HTTP carries the code on its challenge: {challenge:?}",
+    assert_eq!(
+        challenge, r#"Bearer error="insufficient_scope", scope="widgets:read""#,
+        "HTTP carries the code and RFC 6750's `scope` on its challenge",
     );
 
     let graphql: serde_json::Value = serde_json::to_value(
@@ -156,6 +163,11 @@ async fn a_token_too_narrow_reads_one_sentence_and_one_code_on_every_edge() {
     let refused = &graphql["errors"][0];
     assert_eq!(refused["message"], TOO_NARROW, "GraphQL: {graphql}");
     assert_eq!(refused["extensions"]["code"], "INSUFFICIENT_SCOPE");
+    assert_eq!(
+        refused["extensions"]["requiredScopes"],
+        serde_json::json!(NEEDED),
+        "GraphQL: {graphql}",
+    );
 
     let mcp = call_tool_as(
         app.http(),
@@ -171,6 +183,10 @@ async fn a_token_too_narrow_reads_one_sentence_and_one_code_on_every_edge() {
         mcp.contains("\"code\":\"INSUFFICIENT_SCOPE\""),
         "MCP: {mcp}"
     );
+    assert!(
+        mcp.contains(r#""requiredScopes":["widgets:read"]"#),
+        "MCP: {mcp}"
+    );
 
     let ws = crate::ws::dispatch_with(&WidgetsGateway, Arc::new(too_narrow()), "read").await;
     let WsReply::Error(refused) = ws else {
@@ -180,6 +196,14 @@ async fn a_token_too_narrow_reads_one_sentence_and_one_code_on_every_edge() {
     assert_eq!(
         refused.errors.as_ref().map(|errors| &errors["code"]),
         Some(&serde_json::json!("INSUFFICIENT_SCOPE")),
+        "WS: {refused:?}",
+    );
+    assert_eq!(
+        refused
+            .errors
+            .as_ref()
+            .map(|errors| &errors["requiredScopes"]),
+        Some(&serde_json::json!(NEEDED)),
         "WS: {refused:?}",
     );
 }

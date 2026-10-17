@@ -11,10 +11,11 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use nest_rs_core::{Layer, UnitContext, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{HttpConfig, HttpView, RawBody, async_trait, controller, routes};
+use nest_rs_http::{
+    Body, HttpConfig, HttpError, HttpView, Json, RawBody, async_trait, controller, routes,
+};
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
-use poem::web::Json;
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -40,8 +41,9 @@ impl BodyController {
     }
 
     #[post("/string")]
-    async fn take_string(&self, body: String) -> String {
-        format!("{} bytes", body.len())
+    async fn take_string(&self, body: Body) -> nest_rs_http::Result<String> {
+        let text = body.into_string().await?;
+        Ok(format!("{} bytes", text.len()))
     }
 
     #[post("/raw")]
@@ -51,11 +53,13 @@ impl BodyController {
 
     // A streamed body has no extractor limit: its only bound is the edge's.
     #[post("/stream")]
-    async fn take_stream(&self, body: poem::Body) -> poem::Result<String> {
-        let mut stream = body.into_bytes_stream();
+    async fn take_stream(&self, body: Body) -> nest_rs_http::Result<String> {
+        let mut stream = std::pin::pin!(body.into_stream());
         let mut seen = 0usize;
         while let Some(chunk) = stream.next().await {
-            seen += chunk.map_err(poem::error::InternalServerError)?.len();
+            seen += chunk
+                .map_err(|failed| HttpError::new(failed, StatusCode::INTERNAL_SERVER_ERROR))?
+                .len();
         }
         Ok(format!("{seen} bytes"))
     }
@@ -206,14 +210,16 @@ impl ReadController {
     /// Reads its body frame by frame, failing on the first error a read meets.
     #[post("/counted")]
     #[public]
-    async fn counted(&self, body: poem::Body) -> poem::Result<String> {
-        let mut stream = body.into_bytes_stream();
+    async fn counted(&self, body: Body) -> nest_rs_http::Result<String> {
+        let mut stream = std::pin::pin!(body.into_stream());
         let mut seen = 0usize;
         while let Some(chunk) = stream.next().await {
             if seen == 0 {
                 FIRST_FRAME.notify_one();
             }
-            seen += chunk.map_err(poem::error::BadRequest)?.len();
+            seen += chunk
+                .map_err(|failed| HttpError::new(failed, StatusCode::BAD_REQUEST))?
+                .len();
         }
         COMPLETED.store(true, Ordering::SeqCst);
         Ok(format!("{seen} bytes"))

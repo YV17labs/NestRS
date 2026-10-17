@@ -17,7 +17,11 @@ impl OrgsController {
     /// Parameterised, so the raw path and the template differ.
     #[get("/{org}/members/{id}")]
     #[public]
-    async fn member(&self, org: poem::web::Path<String>, id: poem::web::Path<String>) -> String {
+    async fn member(
+        &self,
+        org: nest_rs_http::Path<String>,
+        id: nest_rs_http::Path<String>,
+    ) -> String {
         format!("{}/{}", org.0, id.0)
     }
 }
@@ -34,7 +38,7 @@ impl JobsController {
     /// Waits on something that never comes: only dropping the request ends it.
     #[get("/{id}/wait")]
     #[public]
-    async fn wait(&self, _id: poem::web::Path<String>) -> &'static str {
+    async fn wait(&self, _id: nest_rs_http::Path<String>) -> &'static str {
         WAITING.notify_one();
         std::future::pending::<()>().await;
         "never"
@@ -42,20 +46,22 @@ impl JobsController {
 
     #[get("/{id}/done")]
     #[public]
-    async fn done(&self, _id: poem::web::Path<String>) -> &'static str {
+    async fn done(&self, _id: nest_rs_http::Path<String>) -> &'static str {
         "done"
     }
 
     #[get("/{id}/broken")]
     #[public]
-    async fn broken(&self, _id: poem::web::Path<String>) -> poem::Result<&'static str> {
-        Err(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    async fn broken(&self, _id: nest_rs_http::Path<String>) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 
     #[get("/{id}/missing")]
     #[public]
-    async fn missing(&self, _id: poem::web::Path<String>) -> poem::Result<&'static str> {
-        Err(poem::Error::from_status(StatusCode::NOT_FOUND))
+    async fn missing(&self, _id: nest_rs_http::Path<String>) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(StatusCode::NOT_FOUND))
     }
 }
 

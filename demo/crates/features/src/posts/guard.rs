@@ -20,9 +20,16 @@ impl Layer for PostAuthorGuard {}
 #[async_trait]
 impl Guard for PostAuthorGuard {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let claims = cx
-            .ambient::<Claims>()
-            .ok_or_else(|| Denial::internal("PostAuthorGuard requires AuthnGuard to run first"))?;
+        let Some(claims) = cx.ambient::<Claims>() else {
+            tracing::error!(
+                target: crate::posts::TARGET,
+                reason = "no_claims",
+                "post write denied: AuthnGuard did not run first",
+            );
+            return Err(Denial::internal(
+                "PostAuthorGuard requires AuthnGuard to run first",
+            ));
+        };
         let author = Self::author(&claims)?;
         cx.attach(PostAuthor(author));
         Ok(())
@@ -38,6 +45,10 @@ impl Guard for PostAuthorGuard {
             return Err(Self::subject_required());
         };
         Self::author(&claims).map(|_| ())
+    }
+
+    fn files_its_denials(&self) -> bool {
+        true
     }
 }
 

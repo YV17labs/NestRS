@@ -104,10 +104,10 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::config::DEFAULT_STATEMENT_TIMEOUT;
-    #[cfg(feature = "http")]
-    pub use crate::error::crud_error;
     #[cfg(feature = "graphql")]
     pub use crate::error::graphql_crud_error;
+    #[cfg(feature = "http")]
+    pub use crate::error::http_crud_error;
     pub use crate::error::masking;
 
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};

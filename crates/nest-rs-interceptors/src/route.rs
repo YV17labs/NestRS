@@ -22,7 +22,9 @@
 //!
 //! The three families compose in **one** call ([`wrap_route_response_layers`]):
 //! every nested enum level adds a `Request`-sized slot (~500 B) to the route's
-//! future, which poem boxes per request for every route, bare included.
+//! future, which the route table boxes per request for every route, bare
+//! included. The families are still written on poem: a layered route crosses
+//! into poem once around them and back, a bare one never does.
 
 use nest_rs_core::__private::{
     ResolvedLayer, compose_chain, dedup_bucket, refuse_unresolved, resolve_global_layers,
@@ -32,10 +34,10 @@ use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, LayerSpec, UnresolvedLayerError};
 use nest_rs_exception_filters::{ExceptionFilterErased, ExceptionFilterSpecs};
 use nest_rs_filters::{Filter, FilterChain, FilterSpecs};
+use nest_rs_http::__private::poem_bridge::{from_poem, to_poem};
 use nest_rs_http::__private::refused_route;
-use nest_rs_http::MappedError;
-use poem::endpoint::BoxEndpoint;
-use poem::{Endpoint, EndpointExt, Request, Response};
+use nest_rs_http::{BoxEndpoint, Endpoint, MappedError, Request, Response, endpoint_fn};
+use poem::{EndpointExt, Response as PoemResponse};
 
 use crate::interceptor::{Interceptor, InterceptorChain};
 use crate::registry::InterceptorSpecs;
@@ -52,21 +54,16 @@ pub type InterceptorDeclaration = LayerSpec<dyn Interceptor>;
 /// response-side layer stack composes over.
 pub enum RouteEndpoint<E> {
     /// No response-side layer reached this route — the endpoint passes
-    /// through untouched; poem's `RouteMethod` boxes it once at mount.
+    /// through untouched; the route table boxes it once at mount.
     Plain(E),
     /// At least one interceptor / filter / exception-filter — the composed
     /// stack (interceptors outside filters outside the typed catches)
     /// executes behind a single boxed endpoint.
-    Layered(BoxEndpoint<'static, Response>),
+    Layered(BoxEndpoint),
 }
 
-impl<E> Endpoint for RouteEndpoint<E>
-where
-    E: Endpoint<Output = Response> + 'static,
-{
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> poem::Result<Response> {
+impl<E: Endpoint> Endpoint for RouteEndpoint<E> {
+    async fn call(&self, req: Request) -> nest_rs_http::Result<Response> {
         match self {
             Self::Plain(ep) => ep.call(req).await,
             Self::Layered(ep) => ep.call(req).await,
@@ -100,7 +97,7 @@ pub fn wrap_route_response_layers<E>(
     route_label: &str,
 ) -> RouteEndpoint<E>
 where
-    E: Endpoint<Output = Response> + 'static,
+    E: Endpoint,
 {
     let composed = compose_exception_filters(
         container,
@@ -123,7 +120,9 @@ where
         Ok(chains) => chains,
         Err(unresolved) => {
             refuse_unresolved(container, unresolved);
-            return RouteEndpoint::Layered(poem::endpoint::make_sync(|_| refused_route()).boxed());
+            return RouteEndpoint::Layered(BoxEndpoint::new(endpoint_fn(|_| async {
+                Ok(refused_route())
+            })));
         }
     };
     if exception_filters.is_empty() && filters.is_empty() && interceptors.is_empty() {
@@ -132,11 +131,11 @@ where
     // An empty stage inside a non-empty stack is a cheap pass-through branch
     // in its runner — boxing once here beats naming all eight stage
     // combinations.
-    RouteEndpoint::Layered(
+    RouteEndpoint::Layered(BoxEndpoint::new(from_poem(
         InterceptorChain::new(
             FilterChain::new(
                 ExceptionFiltersEndpoint {
-                    inner: endpoint,
+                    inner: to_poem(endpoint),
                     chain: exception_filters,
                 },
                 filters,
@@ -144,7 +143,7 @@ where
             interceptors,
         )
         .boxed(),
-    )
+    )))
 }
 
 /// Compose the full exception-filter pool (global + controller + method,
@@ -218,13 +217,13 @@ struct ExceptionFiltersEndpoint<E> {
     chain: Vec<ResolvedLayer<dyn ExceptionFilterErased>>,
 }
 
-impl<E> Endpoint for ExceptionFiltersEndpoint<E>
+impl<E> poem::Endpoint for ExceptionFiltersEndpoint<E>
 where
-    E: Endpoint<Output = Response>,
+    E: poem::Endpoint<Output = PoemResponse>,
 {
-    type Output = Response;
+    type Output = PoemResponse;
 
-    async fn call(&self, req: Request) -> poem::Result<Response> {
+    async fn call(&self, req: poem::Request) -> poem::Result<PoemResponse> {
         match self.inner.call(req).await {
             Ok(resp) => Ok(resp),
             Err(err) => {
@@ -253,8 +252,8 @@ mod tests {
 
     use nest_rs_core::__private::take_site_refusal;
     use nest_rs_core::LayerSpec;
+    use nest_rs_http::StatusCode;
     use nest_rs_testing::LogCapture;
-    use poem::http::StatusCode;
 
     use super::*;
 
@@ -305,7 +304,7 @@ mod tests {
 
             let route = wrap_route_response_layers(
                 &container,
-                poem::endpoint::make_sync(|_| Response::builder().body("the handler ran")),
+                endpoint_fn(|_| async { Ok(Response::builder().body("the handler ran")) }),
                 &controller_exception_filters,
                 &method_exception_filters,
                 &controller_filters,
@@ -315,7 +314,7 @@ mod tests {
                 "get /x",
             );
             let response = route
-                .call(Request::default())
+                .call(Request::builder().finish())
                 .await
                 .expect("a refused route answers");
             assert_eq!(

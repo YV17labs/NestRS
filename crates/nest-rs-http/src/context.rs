@@ -104,20 +104,6 @@ impl<T: AmbientValue + Clone> Ctx<T> {
     }
 }
 
-impl<'a, T: AmbientValue + Clone> poem::FromRequest<'a> for Ctx<T> {
-    async fn from_request(
-        req: &'a poem::Request,
-        _body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
-        Self::read(req.extensions()).map_err(|absent| match absent {
-            Absent::Deferred(rejected) => poem::Error::from_response(
-                crate::poem_bridge::response_to_poem(rejected.deferred()),
-            ),
-            Absent::Unwired => poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR),
-        })
-    }
-}
-
 impl<'a, T: AmbientValue + Clone> crate::FromRequest<'a> for Ctx<T> {
     async fn from_request(
         req: &'a crate::Request,
@@ -143,38 +129,6 @@ mod tests {
     async fn extract(req: Request) -> Result<Ctx<Principal>> {
         let (req, mut body) = req.split();
         Ctx::<Principal>::from_request(&req, &mut body).await
-    }
-
-    async fn extract_poem(req: poem::Request) -> poem::Result<Ctx<Principal>> {
-        let (req, mut body) = req.split();
-        <Ctx<Principal> as poem::FromRequest>::from_request(&req, &mut body).await
-    }
-
-    /// The poem twin `#[routes]` still calls answers each absence alike.
-    #[tokio::test]
-    async fn the_poem_reading_answers_as_the_vocabulary_does() {
-        let unwired = extract_poem(poem::Request::default())
-            .await
-            .err()
-            .expect("no guard ran");
-        assert_eq!(unwired.status(), StatusCode::INTERNAL_SERVER_ERROR);
-
-        let mut req = poem::Request::default();
-        req.extensions_mut().insert(RejectedCredential {
-            principal: TypeId::of::<Principal>(),
-            client_message: "authentication failed".into(),
-            bearer_error: Some(crate::challenge::INVALID_TOKEN),
-        });
-        let deferred = extract_poem(req)
-            .await
-            .err()
-            .expect("credential was rejected");
-        let response = deferred.into_response();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            response.headers()[http::header::WWW_AUTHENTICATE],
-            r#"Bearer error="invalid_token""#
-        );
     }
 
     #[tokio::test]

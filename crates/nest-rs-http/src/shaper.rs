@@ -15,8 +15,12 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 
-use poem::http::StatusCode;
-use poem::{Endpoint, Error, IntoResponse, Request, Response, Result};
+use http::StatusCode;
+
+use crate::endpoint::Endpoint;
+use crate::error::{HttpError, Result};
+use crate::request::Request;
+use crate::response::Response;
 
 /// The handler's future, as a [`ResponseShaping`] receives it; boxed on armed
 /// routes only.
@@ -183,15 +187,11 @@ pub struct ShapedEndpoint<E> {
     probe: Option<&'static str>,
 }
 
-impl<E> ShapedEndpoint<E>
-where
-    E: Endpoint + Send + Sync,
-    E::Output: IntoResponse,
-{
+impl<E: Endpoint> ShapedEndpoint<E> {
     /// The handler, its streaming body continuing under what the handler ran
     /// under.
     async fn plain(&self, req: Request) -> Result<Response> {
-        let resp = self.inner.call(req).await?.into_response();
+        let resp = self.inner.call(req).await?;
         Ok(crate::response_body::continue_body(resp))
     }
 
@@ -211,19 +211,13 @@ where
                  declare it as a handler parameter (a nested or hand-rolled extractor \
                  is invisible to the type-directed arm); failing closed",
             );
-            return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
+            return Err(HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR));
         }
         Ok(resp)
     }
 }
 
-impl<E> Endpoint for ShapedEndpoint<E>
-where
-    E: Endpoint + Send + Sync,
-    E::Output: IntoResponse,
-{
-    type Output = Response;
-
+impl<E: Endpoint> Endpoint for ShapedEndpoint<E> {
     async fn call(&self, req: Request) -> Result<Response> {
         match self.shaper.and_then(|capture| capture(&req)) {
             Some(shaping) => {
@@ -266,28 +260,49 @@ impl MaskProbe {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use poem::handler;
-    use poem::test::TestClient;
+    use crate::endpoint::endpoint_fn;
+    use crate::{HeaderName, HeaderValue};
 
     use super::*;
 
-    #[handler]
-    fn marks_and_succeeds() -> &'static str {
-        MaskProbe::mark();
-        "unmasked body"
+    fn marks_and_succeeds() -> impl Endpoint {
+        endpoint_fn(|_req| async {
+            MaskProbe::mark();
+            Ok(Response::builder().body("unmasked body"))
+        })
     }
 
-    #[handler]
-    fn plain() -> &'static str {
-        "ok"
+    fn plain() -> impl Endpoint {
+        endpoint_fn(|_req| async { Ok(Response::builder().body("ok")) })
+    }
+
+    /// `ep`'s answer to a request, `x-tag` set when `tag` is.
+    async fn answer(ep: &impl Endpoint, tag: Option<&'static str>) -> Result<Response> {
+        let mut req = Request::builder();
+        if let Some(tag) = tag {
+            req = req.header(
+                HeaderName::from_static("x-tag"),
+                HeaderValue::from_static(tag),
+            );
+        }
+        ep.call(req.finish()).await
+    }
+
+    async fn text(resp: Result<Response>) -> (StatusCode, String) {
+        let resp = resp.expect("answers");
+        let status = resp.status();
+        (
+            status,
+            resp.into_body().into_string().await.expect("a body"),
+        )
     }
 
     #[tokio::test]
     async fn a_marked_probe_on_success_fails_closed() {
         let logs = nest_rs_testing::LogCapture::install();
-        let ep = shaped(marks_and_succeeds, None, Some("GET /users"));
-        let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        let ep = shaped(marks_and_succeeds(), None, Some("GET /users"));
+        let refused = answer(&ep, None).await.expect_err("fails closed");
+        assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let event = logs.expect_one(
             "nest_rs::http",
@@ -301,10 +316,11 @@ mod tests {
 
     #[tokio::test]
     async fn an_unmarked_probe_passes_the_response_through() {
-        let ep = shaped(plain, None, Some("GET /health"));
-        let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_text("ok").await;
+        let ep = shaped(plain(), None, Some("GET /health"));
+        assert_eq!(
+            text(answer(&ep, None).await).await,
+            (StatusCode::OK, "ok".into())
+        );
     }
 
     struct Shout;
@@ -316,7 +332,7 @@ mod tests {
             Box::pin(async move {
                 let resp = inner.await?;
                 let body = resp.into_body().into_string().await.unwrap_or_default();
-                Ok(format!("{}:{}", self.0, body.to_uppercase()).into_response())
+                Ok(Response::builder().body(format!("{}:{}", self.0, body.to_uppercase())))
             })
         }
     }
@@ -347,22 +363,20 @@ mod tests {
 
     #[tokio::test]
     async fn an_armed_shaper_wraps_the_handler_and_rewrites_the_body() {
-        let ep = shaped(plain, __shaper_of!(Shout), None);
-        let resp = TestClient::new(ep)
-            .get("/")
-            .header("x-tag", "seen")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("seen:OK").await;
+        let ep = shaped(plain(), __shaper_of!(Shout), None);
+        assert_eq!(
+            text(answer(&ep, Some("seen")).await).await,
+            (StatusCode::OK, "seen:OK".into())
+        );
     }
 
     #[tokio::test]
     async fn a_capture_that_declines_leaves_the_response_untouched() {
-        let ep = shaped(plain, __shaper_of!(Shout), None);
-        let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_text("ok").await;
+        let ep = shaped(plain(), __shaper_of!(Shout), None);
+        assert_eq!(
+            text(answer(&ep, None).await).await,
+            (StatusCode::OK, "ok".into())
+        );
     }
 
     #[tokio::test]
@@ -370,21 +384,16 @@ mod tests {
         // A `mark` inside an armed route must not fail it closed.
         static RAN: AtomicBool = AtomicBool::new(false);
 
-        #[handler]
-        fn marks() -> &'static str {
+        let marks = endpoint_fn(|_req| async {
             MaskProbe::mark();
             RAN.store(true, Ordering::SeqCst);
-            "ok"
-        }
-
+            Ok(Response::builder().body("ok"))
+        });
         let ep = shaped(marks, __shaper_of!(Shout), Some("GET /armed"));
-        let resp = TestClient::new(ep)
-            .get("/")
-            .header("x-tag", "seen")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("seen:OK").await;
+        assert_eq!(
+            text(answer(&ep, Some("seen")).await).await,
+            (StatusCode::OK, "seen:OK".into())
+        );
         assert!(RAN.load(Ordering::SeqCst), "the handler ran");
     }
 

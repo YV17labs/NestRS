@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use nest_rs_core::{Edge, Posture};
 use nest_rs_guards::Denial;
 use nest_rs_http::__private::denial_to_http_error;
-use poem::{FromRequest, Request, RequestBody, Result};
+use nest_rs_http::{FromRequest, Request, RequestBody, Result};
 
 use crate::gate::{Refusal, decide, warn_denied};
 use crate::{Ability, ActionMarker, Subject};
@@ -28,10 +28,7 @@ use crate::{Ability, ActionMarker, Subject};
 /// # use nest_rs_authz::{AbilityBuilder, Action, Create};
 /// # use nest_rs_core::{Layer, injectable, input, module};
 /// # use nest_rs_guards::{Denial, Guard, GuardFor};
-/// # use nest_rs_http::poem::http::StatusCode;
-/// # use nest_rs_http::poem::web::Json;
-/// # use nest_rs_http::poem::Result;
-/// # use nest_rs_http::{Valid, async_trait, controller, routes};
+/// # use nest_rs_http::{Json, Result, StatusCode, Valid, async_trait, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// # mod users {
 /// #     use sea_orm::entity::prelude::*;

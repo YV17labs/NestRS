@@ -20,9 +20,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use nest_rs_core::Edge;
-use nest_rs_http::{ResponseShaping, RouteFuture, RouteResponseShaper};
-use poem::http::StatusCode;
-use poem::{Request, Response};
+use nest_rs_http::{
+    Request, Response, ResponseShaping, RouteFuture, RouteResponseShaper, StatusCode, header,
+};
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -99,7 +99,11 @@ enum BodyKind {
 /// (a `+json` suffix), parameters ignored. Undeclared is its own answer: passing
 /// such a body through would be the shaper guessing, toward the leak.
 fn body_kind(resp: &Response) -> BodyKind {
-    let Some(raw) = resp.content_type() else {
+    let Some(raw) = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    else {
         return BodyKind::Undeclared;
     };
     let essence = raw.split(';').next().unwrap_or_default().trim();

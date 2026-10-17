@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{App, ContainerBuilder, Layer, Transport, injectable, module};
+use nest_rs_http::Body;
 use nest_rs_http::{
     DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, Method, SseStream, async_trait,
     controller, routes,
@@ -15,7 +16,7 @@ use nest_rs_http::{
 use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
 use nest_rs_testing::LogCapture;
 use poem::web::websocket::{Message as Frame, WebSocket};
-use poem::{Body, IntoResponse, handler};
+use poem::{IntoResponse, handler};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Notify;
@@ -67,9 +68,11 @@ impl ShutdownController {
     #[get("/download")]
     #[public]
     async fn download(&self) -> Body {
-        Body::from_bytes_stream(
-            futures_util::stream::once(async { Ok::<_, std::io::Error>(&b"part"[..]) })
-                .chain(futures_util::stream::pending()),
+        Body::from_stream(
+            futures_util::stream::once(async {
+                Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"part"))
+            })
+            .chain(futures_util::stream::pending()),
         )
     }
 
@@ -192,17 +195,17 @@ impl Serving {
     }
 }
 
-/// The one `http.request` line filed for `path`.
-fn operation_line(logs: &LogCapture, path: &str) -> nest_rs_testing::CapturedEvent {
+/// The one `http.request` line filed for the route `route`.
+fn operation_line(logs: &LogCapture, route: &str) -> nest_rs_testing::CapturedEvent {
     let mut lines: Vec<_> = logs
         .find(
             nest_rs_core::operation_log::TARGET,
             nest_rs_http::unit::REQUEST.name(),
         )
         .into_iter()
-        .filter(|line| line.field("path").as_deref() == Some(path))
+        .filter(|line| line.field("route").as_deref() == Some(route))
         .collect();
-    assert_eq!(lines.len(), 1, "one line for {path}, got {lines:?}");
+    assert_eq!(lines.len(), 1, "one line for {route}, got {lines:?}");
     lines.remove(0)
 }
 

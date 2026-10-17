@@ -465,7 +465,7 @@ fn crud_problem(err: &DbErr) -> nest_rs_core::Problem {
 }
 
 #[cfg(feature = "http")]
-pub use http::crud_error;
+pub use http::crud_error as http_crud_error;
 
 #[cfg(feature = "graphql")]
 pub use graphql::crud_error as graphql_crud_error;
@@ -584,10 +584,9 @@ mod http {
     use std::borrow::Cow;
 
     use nest_rs_core::ToProblem;
-    use nest_rs_http::ProblemDetails;
-    use poem::error::ResponseError;
-    use poem::http::StatusCode;
-    use poem::{IntoResponse, Response};
+    use nest_rs_http::{
+        HttpError, IntoResponse, ProblemDetails, Response, ResponseError, StatusCode,
+    };
 
     use super::ServiceError;
 
@@ -654,14 +653,14 @@ mod http {
         }
     }
 
-    /// A `#[crud]` operation's failure as its status, with an empty body: `409`
-    /// for a unique violation, `403` for a create its scope re-check rolled
-    /// back, `404` for a row gone before the write, `503` for a statement
-    /// Postgres cancelled, else a `500` whose error is filed at `error`. Called
-    /// by the `#[crud]` expansion.
-    pub fn crud_error(err: sea_orm::DbErr) -> poem::Error {
-        let problem = super::crud_problem(&err);
-        poem::Error::from_status(nest_rs_http::ResponseError::status(&problem))
+    /// A `#[crud]` operation's failure as the problem document of its class:
+    /// `409` for a unique violation, `403` for a create its scope re-check
+    /// rolled back, `404` for a row gone before the write, `503` for a
+    /// statement Postgres cancelled, else a `500` whose error is filed at
+    /// `error` — each with the `code` member the other edges answer. Called by
+    /// the `#[crud]` expansion.
+    pub fn crud_error(err: sea_orm::DbErr) -> HttpError {
+        HttpError::from(super::crud_problem(&err))
     }
 
     #[cfg(test)]
@@ -733,6 +732,27 @@ mod http {
             );
         }
 
+        /// A cancelled statement answers the class every edge names it by, as
+        /// the MCP and WebSocket edges do.
+        #[tokio::test]
+        async fn a_crud_503_answers_its_problem_document_with_the_code() {
+            let unavailable = crud_error(crate::error::tests::cancelled_statement());
+            assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let resp = unavailable.into_response();
+            assert_eq!(
+                resp.headers()[nest_rs_http::header::CONTENT_TYPE],
+                "application/problem+json"
+            );
+            let body: serde_json::Value =
+                serde_json::from_slice(&resp.into_body().into_bytes().await.expect("a body"))
+                    .expect("problem json");
+            assert_eq!(body["status"], 503);
+            assert_eq!(
+                body["code"],
+                nest_rs_core::problem::code::UNAVAILABLE.as_str()
+            );
+        }
+
         #[test]
         fn a_crud_500_files_the_database_error_without_the_value_it_quoted() {
             let logs = nest_rs_testing::LogCapture::install();
@@ -795,7 +815,7 @@ mod http {
             let status = resp.status();
             let ct = resp
                 .headers()
-                .get(poem::http::header::CONTENT_TYPE)
+                .get(nest_rs_http::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_owned);
             let bytes = resp.into_body().into_bytes().await.expect("body");

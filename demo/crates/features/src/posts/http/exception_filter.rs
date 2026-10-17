@@ -1,9 +1,7 @@
 use nest_rs::core::{Layer, error_message, injectable};
 use nest_rs::exception_filters::ExceptionFilter;
-use nest_rs::http::async_trait;
+use nest_rs::http::{ResponseError, StatusCode, async_trait};
 use poem::Response;
-use poem::error::ResponseError;
-use poem::http::StatusCode;
 
 use crate::posts::PostError;
 
@@ -24,7 +22,7 @@ impl ExceptionFilter for PostProblemFilter {
                 "Post already published",
                 "https://nestrs.dev/problems/post-already-published",
             ),
-            PostError::Service(svc) => return svc.as_response(),
+            PostError::Service(svc) => return svc.as_response().into(),
         };
         let body = serde_json::json!({
             "type": kind,

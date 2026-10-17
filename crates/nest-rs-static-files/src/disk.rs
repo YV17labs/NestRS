@@ -2,10 +2,11 @@
 //! confinement every file is held to: resolved through every link, and under
 //! the root it was at boot.
 
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use bytes::Bytes;
 use poem::http::HeaderValue;
@@ -63,7 +64,14 @@ impl DiskRoot {
 
 /// A candidate path, opened and held to the root.
 enum Opened {
-    File(PathBuf, File, Metadata),
+    File {
+        path: PathBuf,
+        file: File,
+        len: u64,
+        modified: Option<SystemTime>,
+    },
+    Directory(PathBuf),
+    /// Not there, or neither a regular file nor a directory.
     Missing,
     Escaped,
 }
@@ -71,18 +79,18 @@ enum Opened {
 /// What `candidate` resolves to under `root`: a regular file, a directory's
 /// index, or nothing — never a listing.
 fn resolve(root: &Path, candidate: &Path) -> io::Result<Found> {
-    match open(root, candidate)? {
-        Opened::File(path, _, metadata) if metadata.is_dir() => {
-            match open(root, &path.join(INDEX))? {
-                Opened::File(index, file, metadata) if metadata.is_file() => {
-                    asset(&index, file, &metadata)
-                }
-                Opened::Escaped => Ok(Found::Escaped),
-                Opened::File(..) | Opened::Missing => Ok(Found::Missing),
-            }
-        }
-        Opened::File(path, file, metadata) if metadata.is_file() => asset(&path, file, &metadata),
-        Opened::File(..) | Opened::Missing => Ok(Found::Missing),
+    let opened = match open(root, candidate)? {
+        Opened::Directory(path) => open(root, &path.join(INDEX))?,
+        opened => opened,
+    };
+    match opened {
+        Opened::File {
+            path,
+            file,
+            len,
+            modified,
+        } => asset(&path, file, len, modified),
+        Opened::Directory(_) | Opened::Missing => Ok(Found::Missing),
         Opened::Escaped => Ok(Found::Escaped),
     }
 }
@@ -101,7 +109,18 @@ fn open(root: &Path, candidate: &Path) -> io::Result<Opened> {
         return Ok(Opened::Missing);
     };
     let metadata = file.metadata()?;
-    Ok(Opened::File(canonical, file, metadata))
+    Ok(if metadata.is_file() {
+        Opened::File {
+            path: canonical,
+            file,
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        }
+    } else if metadata.is_dir() {
+        Opened::Directory(canonical)
+    } else {
+        Opened::Missing
+    })
 }
 
 #[cfg(unix)]
@@ -124,27 +143,27 @@ fn read_only() -> std::fs::OpenOptions {
 
 /// The regular file at `path`, read whole when small, its length and time
 /// read off the open handle.
-fn asset(path: &Path, mut file: File, metadata: &Metadata) -> io::Result<Found> {
+fn asset(path: &Path, mut file: File, len: u64, modified: Option<SystemTime>) -> io::Result<Found> {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy())
         .unwrap_or_default();
     let media_type = media_type(&name);
-    let (body, len) = match usize::try_from(metadata.len()) {
-        Ok(len) if len <= CHUNK => {
-            let mut bytes = Vec::with_capacity(len);
+    let (body, len) = match usize::try_from(len) {
+        Ok(small) if small <= CHUNK => {
+            let mut bytes = Vec::with_capacity(small);
             file.read_to_end(&mut bytes)?;
             let len = bytes.len() as u64;
             (AssetBody::Bytes(Bytes::from(bytes)), len)
         }
-        _ => (AssetBody::File(file), metadata.len()),
+        _ => (AssetBody::File(file), len),
     };
     Ok(Found::Asset(Asset {
         body,
         len,
         content_type: HeaderValue::from_static(media_type),
         html: is_html(media_type),
-        validators: Validators::of_file(len, metadata.modified().ok()),
+        validators: Validators::of_file(len, modified),
     }))
 }
 

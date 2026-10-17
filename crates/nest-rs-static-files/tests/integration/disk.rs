@@ -7,6 +7,8 @@ use nest_rs_testing::LogCapture;
 
 use crate::{SCRIPT, is_problem_404, serve, site, text, write};
 
+const ESCAPED: &str = "a link under the static files' root resolves outside what it serves";
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_link_leaving_the_root_is_refused_and_reported() {
@@ -27,10 +29,7 @@ async fn a_link_leaving_the_root_is_refused_and_reported() {
             "{link} resolves outside what the root serves"
         );
     }
-    let escapes = logs.find(
-        nest_rs_static_files::TARGET,
-        "a link under the static files' root resolves outside what it serves",
-    );
+    let escapes = logs.find(nest_rs_static_files::TARGET, ESCAPED);
     assert_eq!(escapes.len(), 3, "{:#?}", logs.events());
     assert!(escapes.iter().all(|event| event.level == "warn"));
 }
@@ -51,6 +50,34 @@ async fn a_link_staying_under_the_root_is_served() {
     let resp = app.http().get("/latest.js").send().await;
     resp.assert_status_is_ok();
     assert_eq!(text(resp).await, SCRIPT);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_directory_whose_index_leaves_the_root_is_refused_and_reported() {
+    use std::os::unix::fs::symlink;
+
+    let dir = site();
+    let outside = tempfile::tempdir().unwrap();
+    write(outside.path(), "secret.html", "<p>secret</p>\n");
+    std::fs::create_dir_all(dir.path().join("leak")).unwrap();
+    symlink(
+        outside.path().join("secret.html"),
+        dir.path().join("leak/index.html"),
+    )
+    .unwrap();
+    let app = serve(dir.path(), StaticFilesConfig::default()).await;
+    let logs = LogCapture::install();
+
+    for path in ["/leak", "/leak/"] {
+        assert!(
+            is_problem_404(app.http().get(path).send().await).await,
+            "{path}'s index resolves outside what the root serves"
+        );
+    }
+    let escapes = logs.find(nest_rs_static_files::TARGET, ESCAPED);
+    assert_eq!(escapes.len(), 2, "{:#?}", logs.events());
+    assert!(escapes.iter().all(|event| event.level == "warn"));
 }
 
 #[tokio::test]
@@ -131,4 +158,37 @@ async fn a_fifo_under_the_root_is_no_file_and_never_blocks() {
     .await
     .expect("opening a FIFO must not wait for a writer");
     assert!(is_problem_404(answered).await);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_index_that_is_no_file_is_no_index_and_never_blocks() {
+    let dir = site();
+    std::fs::create_dir_all(dir.path().join("nested/index.html")).unwrap();
+    std::fs::create_dir_all(dir.path().join("piped")).unwrap();
+    let fifo = std::ffi::CString::new(
+        dir.path()
+            .join("piped/index.html")
+            .into_os_string()
+            .into_encoded_bytes(),
+    )
+    .unwrap();
+    // SAFETY: a NUL-terminated path the call only reads.
+    #[expect(unsafe_code, reason = "std has no mkfifo")]
+    let made = unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) };
+    assert_eq!(made, 0, "mkfifo");
+    let app = serve(dir.path(), StaticFilesConfig::default()).await;
+    let logs = LogCapture::install();
+
+    for path in ["/nested", "/piped"] {
+        let answered = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            app.http().get(path).send(),
+        )
+        .await
+        .expect("opening a FIFO must not wait for a writer");
+        assert!(is_problem_404(answered).await, "{path}");
+    }
+    let escapes = logs.find(nest_rs_static_files::TARGET, ESCAPED);
+    assert!(escapes.is_empty(), "{:#?}", logs.events());
 }

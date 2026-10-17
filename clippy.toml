@@ -24,6 +24,8 @@ disallowed-methods = [
     { path = "rustls::ClientConfig::dangerous", reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
     { path = "sqlx::postgres::PgConnectOptions::ssl_mode", reason = "verification is never optional (CLAUDE.md, hard no): set through SeaOrmConfig::connect_options, the one constructor, which refuses a mode that encrypts without verifying" },
     { path = "object_store::aws::AmazonS3Builder::from_env", reason = "it reads every AWS_* variable, AWS_ALLOW_INVALID_CERTIFICATES among them: build the client from StorageConfig, whose ClientTls verifies always" },
+    { path = "object_store::parse_url", reason = "it builds a store from the URL alone, past StorageConfig's refusals and its ClientTls: open the store through StorageConfig" },
+    { path = "object_store::parse_url_opts", reason = "it builds a store from the URL and string options, allow_invalid_certificates among them, past StorageConfig's refusals and its ClientTls: open the store through StorageConfig" },
 ]
 
 disallowed-macros = [

@@ -27,11 +27,14 @@ handshake refuses at once, the rest is retried within the operation budget.
 - **`file://`, `gs://`, `az://` without a user.** No consumer asks; presigning
   does not exist on the filesystem; the transfer's `ETag`-fenced resume is
   unverified on a local filesystem. Each is a scheme learned in a minor.
-- **`AmazonS3Builder::from_env` and `parse_url_opts` on an `s3://` URL.** Both
-  read every `AWS_*` variable, `AWS_ALLOW_INVALID_CERTIFICATES` among them,
-  beside the namespace; the URL is parsed here and the client built with
-  explicit setters (held by `clippy.toml`). Ambient AWS credentials, which
-  object_store reads only that way, wait with them.
+- **`AmazonS3Builder::from_env`, `parse_url` and `parse_url_opts` on an
+  `s3://` URL.** `from_env` reads every `AWS_*` variable,
+  `AWS_ALLOW_INVALID_CERTIFICATES` among them, beside the namespace; the two
+  parsers build the client from the URL and string options, past the explicit
+  setters, `ClientTls` and the namespace's refusals. The URL is parsed here and
+  the client built with explicit setters; `clippy.toml` disallows all three.
+  Ambient AWS credentials, which object_store reads only through `from_env`,
+  wait with them.
 - **Classifying the probe by object_store's error variant.** A listing's 404
   arrives as `Error::Generic`, never `NotFound`; reading the status off the
   error's sentence would parse a dependency's wording.

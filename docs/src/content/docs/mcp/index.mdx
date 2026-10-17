@@ -119,7 +119,9 @@ pub struct AssistantModule;
 A public `/mcp` runs no guard at its request, the global pool's included, so the
 opening belongs where the app is composed, never in a feature crate another app
 might import — and a module declaring guards for the endpoint beside it fails
-the boot rather than seeing them dropped. `#[mcp]` mounts the tool on the existing HTTP transport —
+the boot rather than seeing them dropped. The opening is made at one import: a
+second `McpModule::for_root` opening the endpoint fails the boot naming both,
+even when the two agree. `#[mcp]` mounts the tool on the existing HTTP transport —
 same port, same CORS, no second server. An MCP client pointed at
 `http://localhost:3003/mcp` sees one tool called `hello` and can invoke it. (To
 authenticate instead of opening it, see [Authorization](/mcp/authorization/).)

@@ -98,8 +98,9 @@ pub struct McpOptions {
     /// the global guard pool and the `EndpointGuards<McpView, _>` the app's
     /// modules declare run at each request, and with neither the endpoint
     /// denies every request. [`Posture::Public`] opens them with no guard at the
-    /// request, the one visible line that does, in code alone; a module then
-    /// declaring `EndpointGuards` for them fails the boot. Any other posture
+    /// request, the one visible line that does, in code alone, at one import: a
+    /// second import opening them fails the boot naming both, and a module
+    /// declaring `EndpointGuards` for them fails it too. Any other posture
     /// fails the boot.
     pub posture: Posture,
 }
@@ -130,11 +131,25 @@ impl From<Option<McpConfig>> for McpOptions {
 }
 
 /// [`DynamicModule`] returned by [`McpModule::for_root`]: resolves
-/// [`McpConfig`] (env over the pinned base) and provides the app's declared
+/// [`McpConfig`] (env over the pinned base) and declares the app's
 /// [`McpIdentity`].
 pub struct McpSetup {
     options: McpOptions,
 }
+
+/// The remedy a second declared identity is refused with.
+const ONE_IDENTITY: &str = "An app reports one serverInfo — declare its identity once, on one \
+                            `McpModule::for_root`, and let every other import of the module \
+                            leave `server` unset.";
+
+/// The remedy a second opening is refused with.
+const ONE_OPENING: &str = "An app opens its MCP endpoints once — set `posture: Posture::Public` \
+                           on one `McpModule::for_root`, and let every other import of the \
+                           module leave `posture` at its default.";
+
+/// The app's opening of its MCP endpoints, declared by the one import setting
+/// [`Posture::Public`].
+struct McpPosture;
 
 impl DynamicModule for McpSetup {
     fn module() -> TypeId {
@@ -142,13 +157,32 @@ impl DynamicModule for McpSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.options.config.clone(), builder.import::<McpModule>())
+        let builder = ConfigModule::provide_feature(
+            self.options.config.clone(),
+            builder.import::<McpModule>(),
+        );
+        // Declarations, so a second import declaring one fails the boot naming
+        // both, before any factory runs.
+        let builder = if self.options.posture == Posture::Public {
+            builder.provide_declared_factory::<McpPosture, _, _>(ONE_OPENING, |_| async {
+                Ok(McpPosture)
+            })
+        } else {
+            builder
+        };
+        match self.options.server.clone() {
+            Some(server) => builder
+                .provide_declared_factory::<McpIdentity, _, _>(ONE_IDENTITY, move |_| async move {
+                    Ok(server)
+                }),
+            None => builder,
+        }
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         // Gated is every endpoint's own posture: only the opening is declared, so
         // a second import of the module, a library's, cannot close what the app
-        // opened.
+        // opened, and `collect` lets one import open it.
         let builder = match self.options.posture {
             Posture::Gated => builder,
             Posture::Public => {
@@ -159,12 +193,9 @@ impl DynamicModule for McpSetup {
                  (the default) or Posture::Public — set one of the two",
             )),
         };
-        // Provider-less metadata: importing this module is itself the gate.
+        // The one import declaring the identity checks that it reaches a host.
         let builder = match self.options.server {
-            Some(server) => builder
-                .provide_meta(server)
-                .provide_meta(registry::server_reaches_a_host())
-                .provide_meta(registry::server_is_declared_once()),
+            Some(_) => builder.provide_meta(registry::server_reaches_a_host()),
             None => builder,
         };
         builder.import::<McpModule>()

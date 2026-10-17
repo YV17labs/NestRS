@@ -99,7 +99,10 @@ pub trait Module: 'static {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 ///
-/// Dynamic modules are **not** deduplicated — each carries its own config.
+/// Dynamic modules are **not** deduplicated — each carries its own config —
+/// but their per-app wiring is, through the module they import by type: a
+/// transport, a mount or a close lives in that module's phases, so a setup
+/// imported twice wires once.
 ///
 /// # Importing it imports the module it declares
 ///

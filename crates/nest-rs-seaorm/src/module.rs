@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use nest_rs_config::{ClientTls, ConfigModule, DurationBounds, Namespaced};
 use nest_rs_core::{
-    Attempt, Backoff, Budget, Collecting, ContainerBuilder, DynamicModule, Proving, Unproved,
-    process_seed, prove,
+    Attempt, Backoff, Budget, Collecting, ContainerBuilder, DynamicModule, Module, Proving,
+    Registering, Unproved, process_seed, prove,
 };
 use sea_orm::sqlx::Connection as _;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgConnection};
@@ -52,13 +52,23 @@ impl DynamicModule for SeaOrmSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(
-            self.pinned.clone(),
-            budgets(BudgetReach::Injected)
-                .into_iter()
-                .fold(builder, ContainerBuilder::provide_meta),
-        );
-        builder
+        ConfigModule::provide_feature(self.pinned.clone(), builder.import::<SeaOrmOpening>())
+    }
+
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<SeaOrmOpening>()
+    }
+}
+
+/// What [`SeaOrmModule::for_root`] opens: the pool, its budgets and its close,
+/// imported by type so that two `for_root`s open and close one pool.
+struct SeaOrmOpening;
+
+impl Module for SeaOrmOpening {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        budgets(BudgetReach::Injected)
+            .into_iter()
+            .fold(builder, ContainerBuilder::provide_meta)
             .provide_factory_after::<DatabaseConnection, (SeaOrmConfig,), _, _>(
                 |container| async move {
                     let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
@@ -70,6 +80,10 @@ impl DynamicModule for SeaOrmSetup {
             .provide_close::<DatabaseConnection, _, _>(
                 |db| async move { Ok(db.close_by_ref().await?) },
             )
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
     }
 }
 

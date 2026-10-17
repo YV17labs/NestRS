@@ -123,7 +123,7 @@ fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
 /// Fail the boot when two import sites each declared a value for one type —
 /// neither may silently win on queue position.
 fn check_contested_declarations(builder: &ContainerBuilder) -> Result<()> {
-    if let Some(contested) = builder.contested_factories().first() {
+    if let Some(contested) = builder.contested().first() {
         return Err(ContestedDeclarationError {
             type_name: contested.type_name,
             first: contested.first.clone(),

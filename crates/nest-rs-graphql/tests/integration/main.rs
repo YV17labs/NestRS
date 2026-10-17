@@ -15,6 +15,7 @@ mod guard;
 mod layer_pool;
 mod limits;
 mod loader;
+mod module;
 mod operation;
 mod pipe;
 mod read_only;

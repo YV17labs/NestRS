@@ -242,13 +242,9 @@ fn resolve_identity(
 }
 
 /// The app's own [`McpIdentity`], if it declared one through
-/// [`McpOptions::server`](crate::McpOptions::server); two that disagree fail the boot.
+/// [`McpOptions::server`](crate::McpOptions::server) — once: a second fails the boot.
 fn declared_server(container: &Container) -> Option<Arc<McpIdentity>> {
-    Discovery::new(container)
-        .meta::<McpIdentity>()
-        .into_iter()
-        .map(|discovered| discovered.meta)
-        .next()
+    container.get::<McpIdentity>()
 }
 
 /// Every host contributing to `path`, in registration order.
@@ -461,29 +457,6 @@ pub(crate) fn server_reaches_a_host() -> HttpBootCheck {
              `server` from McpOptions"
                 .to_owned(),
         )
-    })
-}
-
-/// Fail boot when two imports declare a different server for one app.
-pub(crate) fn server_is_declared_once() -> HttpBootCheck {
-    HttpBootCheck::new(|container| {
-        let declared = Discovery::new(container).meta::<McpIdentity>();
-        let mut seen: Option<&Arc<McpIdentity>> = None;
-        for identity in declared.iter().map(|discovered| &discovered.meta) {
-            match seen {
-                // Dynamic module registration is not deduplicated: one `for_root` twice is fine.
-                Some(first) if first.as_ref() == identity.as_ref() => {}
-                Some(first) => {
-                    return Err(format!(
-                        "two different MCP server identities are declared: {first:?} and \
-                         {identity:?} — an app reports one serverInfo, so declare it once \
-                         through a single McpModule::for_root",
-                    ));
-                }
-                None => seen = Some(identity),
-            }
-        }
-        Ok(())
     })
 }
 

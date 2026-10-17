@@ -296,6 +296,20 @@ impl DynamicModule for ConfigRootSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<ConfigRoot>()
+    }
+
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<ConfigRoot>()
+    }
+}
+
+/// What [`ConfigModule::for_root`] registers, imported by type so that a
+/// second import registers nothing twice.
+struct ConfigRoot;
+
+impl Module for ConfigRoot {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let environment = Environment::from_env();
         if Environment::declared().is_none() {
             tracing::info!(
@@ -307,6 +321,10 @@ impl DynamicModule for ConfigRootSetup {
         }
         // No `set_var` on the boot path: a spawned worker's `getenv` could race it.
         builder.provide(environment)
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
     }
 }
 

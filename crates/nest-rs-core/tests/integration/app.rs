@@ -1339,6 +1339,106 @@ async fn a_transport_that_fails_to_configure_fails_the_boot_naming_the_step() {
     );
 }
 
+/// The first of two modules serving through one transport type.
+struct FirstServesFailing;
+
+impl Module for FirstServesFailing {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|_| Ok(Failing))
+    }
+}
+
+/// The second, attaching the type [`FirstServesFailing`] attached.
+struct SecondServesFailing;
+
+impl Module for SecondServesFailing {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|_| Ok(Failing))
+    }
+}
+
+#[module(imports = [FirstServesFailing, SecondServesFailing])]
+struct OneTransportTwiceRoot;
+
+/// An app runs one transport of each type: a second module attaching the
+/// same type fails the boot naming both imports.
+#[tokio::test]
+async fn two_modules_attaching_one_transport_type_fail_the_boot_naming_both() {
+    for refused in crate::refused_on_both_paths::<OneTransportTwiceRoot>().await {
+        let contested = refused
+            .downcast_ref::<nest_rs_core::ContestedDeclarationError>()
+            .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
+        assert_eq!(contested.type_name, std::any::type_name::<Failing>());
+        assert_eq!(
+            contested.first,
+            "`FirstServesFailing` at `imports[0]` of `OneTransportTwiceRoot`"
+        );
+        assert_eq!(
+            contested.second,
+            "`SecondServesFailing` at `imports[1]` of `OneTransportTwiceRoot`"
+        );
+        assert!(
+            contested.remedy.contains("one transport of each type"),
+            "{refused}"
+        );
+    }
+}
+
+/// Serves the queue `Q` names until it is stopped: one type per queue.
+struct Consumes<Q>(std::marker::PhantomData<fn() -> Q>);
+
+#[async_trait::async_trait]
+impl<Q: 'static> Transport for Consumes<Q> {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct Orders;
+struct Invoices;
+
+struct ConsumesOrders;
+
+impl Module for ConsumesOrders {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|_| Ok(Consumes::<Orders>(std::marker::PhantomData)))
+    }
+}
+
+struct ConsumesInvoices;
+
+impl Module for ConsumesInvoices {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|_| Ok(Consumes::<Invoices>(std::marker::PhantomData)))
+    }
+}
+
+#[module(imports = [ConsumesOrders, ConsumesInvoices])]
+struct TwoQueuesRoot;
+
+/// A transport generic over a marker is one type per marker, so two markers
+/// are two transports, each named with its marker.
+#[test]
+fn a_transport_generic_over_a_marker_is_one_type_per_marker() {
+    let app = App::new::<TwoQueuesRoot>().expect("two markers boot");
+    let attached =
+        nest_rs_core::Discovery::new(app.container()).meta::<nest_rs_core::TransportContribution>();
+    let names: Vec<&str> = attached
+        .iter()
+        .map(|contribution| contribution.meta.name())
+        .collect();
+    assert_eq!(names, ["Consumes<Orders>", "Consumes<Invoices>"]);
+}
+
 /// Serves until the app's stop token fires.
 struct ServesUntilStopped;
 

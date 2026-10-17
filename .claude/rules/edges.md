@@ -246,8 +246,9 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   `InBand` posture lets `AuthnGuard` admit anonymous operations to resolver
   gates; `/mcp` is `Gated`, and with neither pool nor endpoint guards it is
   deny-all, said once at boot and per refusal. The one opening is
-  `McpOptions::posture = Posture::Public`, written in code, and a module
-  declaring guards beside it fails the boot
+  `McpOptions::posture = Posture::Public`, written in code at one import (a
+  second is a contested declaration), and a module declaring guards beside it
+  fails the boot
   (`.claude/decisions/bridge-joins-the-pool.md`).
 - **A mapped error never commits**: a route-site filter mapping a handler `Err`
   tags it `MappedError`, and `DbContext` rolls back whatever status it maps to.
@@ -335,7 +336,9 @@ router parses. The rewrite is skipped when nothing is versioned.
 
 ## Surface decisions
 
-- **HTTP** is activated only by `HttpModule::for_root`; no public `.transport(...)`.
+- **HTTP** is activated only by importing `HttpModule` — configured by the
+  app's one `for_root`, bare in a feature declaring the dependency; no public
+  `.transport(...)`.
 - **`#[sse]` is a verb, not an edge.** It collapses to `GET` before the route
   table is built and carries the route's guards, pipes, posture and document; it
   owns only the response. It refuses `#[authorize]`, a shaper parameter

@@ -108,6 +108,11 @@ Keep them general: what a caller must know to use the surface at all. What each
 tool *does* is already carried by its own `#[tool(description = "…")]`, which is
 what the model reads when it chooses between them.
 
+The identity is a declaration, made at one import. A second
+`McpModule::for_root` naming a `server` fails the boot before anything is built,
+naming both imports — even when the two are equal, since two sites would have to
+change together. Every other import of the module leaves `server` unset.
+
 **A host says which endpoint stands apart**, on the file that serves it:
 
 ```rust title="crates/features/src/weather/mcp/tool.rs"

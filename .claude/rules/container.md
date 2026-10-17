@@ -54,7 +54,8 @@ framework half.
   configured value is the module its required `DynamicModule::module` names, as
   NestJS's `DynamicModule { module }` is — declared, never read off what
   `register` wires. Registration is idempotent, so a diamond builds once;
-  dynamic imports are not deduplicated.
+  dynamic imports are not deduplicated — what they wire per app is, through
+  the module they import by type (*`for_root`*).
 - **The container is flat and the access graph is the contract.** Visibility is
   Rust's: hide an implementation module-private and bind a `pub trait` with
   `Foo as dyn Trait`; there is no `exports` list. The binding takes a singleton
@@ -128,6 +129,14 @@ A setup that only pins its config is `ConfigSetup<M, C>` (`ConfigSetup<M, C,
 I>` per instance) behind a named alias, built by `ConfigModule::setup`; a
 hand-written setup is for one whose `collect` queues more than the config or
 whose `register` does more than recurse.
+
+**A setup imported twice wires once**: what it wires per app — a transport,
+a mount, a close, a registry — runs in the module it imports by type from both
+of its phases, never in its own, so a feature importing the module bare beside
+the app's `for_root` wires nothing twice; what an import site chose is a
+declaration, so two refuse naming both. An app runs one transport of each
+type (`ContainerBuilder::provide_transport`). Held by `nest-rs-testing`'s
+setups table, which imports every first-party `for_root` twice.
 
 - **A bare import is a dependency declaration**, not a second seam. A module
   that must not be imported bare hides its `#[module]` behind a private host

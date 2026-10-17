@@ -486,8 +486,8 @@ async fn an_identity_no_host_serves_fails_boot() {
     );
 }
 
-/// A second, disagreeing `for_root`: the app identity carries no path, so no
-/// per-path check sees it.
+/// A second `for_root` naming another identity: an app reports one
+/// `serverInfo`, so the boot refuses before any transport configures.
 #[module(imports = [
     AlphaMcpModule,
     app_identity(),
@@ -499,28 +499,57 @@ async fn an_identity_no_host_serves_fails_boot() {
 struct ContestedServerApp;
 
 #[tokio::test]
-async fn two_disagreeing_server_identities_fail_boot() {
-    let err = match TestApp::for_module::<ContestedServerApp>().await {
-        Ok(_) => panic!("two different server identities must not boot"),
-        Err(err) => err.to_string(),
+async fn two_server_identities_fail_the_boot_naming_both_imports() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<ContestedServerApp>()
+        .build()
+        .await
+    else {
+        panic!("two server identities must not boot");
     };
-
+    let contested = refused
+        .downcast_ref::<nest_rs_core::ContestedDeclarationError>()
+        .unwrap_or_else(|| panic!("refused as a contest, before any transport: {refused:#}"));
+    assert_eq!(contested.type_name, std::any::type_name::<McpIdentity>());
+    assert_eq!(
+        contested.first,
+        "`app_identity(..)` at `imports[1]` of `ContestedServerApp`"
+    );
+    assert_eq!(
+        contested.second,
+        "`McpModule::for_root(..)` at `imports[2]` of `ContestedServerApp`"
+    );
+    let said = format!("{refused:#}");
     assert!(
-        err.contains("composition-witness") && err.contains("second-witness"),
-        "the failure names both claimants: {err}",
+        !said.contains("composition-witness") && !said.contains("second-witness"),
+        "the refusal names the imports, never the values: {said}",
     );
 }
 
-/// `DynamicModule` registration is not deduplicated: one `for_root` imported
-/// twice arrives twice.
+/// One pin, one site: the same identity imported twice is still declared
+/// twice.
 #[module(imports = [AlphaMcpModule, app_identity(), app_identity()])]
 struct RepeatedServerApp;
 
 #[tokio::test]
-async fn the_same_identity_declared_twice_is_not_a_conflict() {
-    TestApp::for_module::<RepeatedServerApp>()
+async fn the_same_identity_declared_twice_fails_the_boot_naming_both_imports() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<RepeatedServerApp>()
+        .build()
         .await
-        .expect("one declaration imported twice boots");
+    else {
+        panic!("one identity declared at two sites must not boot");
+    };
+    let contested = refused
+        .downcast_ref::<nest_rs_core::ContestedDeclarationError>()
+        .unwrap_or_else(|| panic!("refused as a contest: {refused:#}"));
+    assert_eq!(
+        (contested.first.as_str(), contested.second.as_str()),
+        (
+            "`app_identity(..)` at `imports[1]` of `RepeatedServerApp`",
+            "`app_identity(..)` at `imports[2]` of `RepeatedServerApp`",
+        )
+    );
 }
 
 /// `/mcp/` and `/mcp` are one endpoint; poem's `Route::nest` panics on the

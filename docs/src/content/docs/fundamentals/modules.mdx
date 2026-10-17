@@ -156,8 +156,9 @@ PostsHttpModule
 
 Static modules dedupe automatically: if two branches of the import tree
 both reach `SeaOrmDatabaseModule` (the bare binding beside `SeaOrmModule`), its
-providers are built once. Dynamic
-modules do **not** dedupe — each call carries its own config.
+providers are built once. A dynamic import carries its own config, so each
+call is read — but what it wires once per app lives in the module it
+imports by type, so it is wired once (see [Safe to import twice](#safe-to-import-twice)).
 
 A dynamic import is the module it configures, as a NestJS `DynamicModule`
 names its `module`: importing `StorageModule::for_root(cfg)` reaches what
@@ -325,6 +326,26 @@ flowchart TB
 ```
 
 `Common`'s providers are registered once, not twice.
+
+The same holds for a framework module you configure. A feature that serves
+over HTTP declares the dependency with a bare `HttpModule` beside the app's
+`HttpModule::for_root(...)`, and the app still runs one server; two
+`GraphqlModule::for_root(None)` mount `/graphql` once. What a setup wires per
+app — its transport, its mount, the close of what it opened — sits in the
+module it imports by type, and an app runs one transport of each type.
+
+What two imports cannot both have is a value each one chose. Two pinned
+configs for one module, or two MCP server identities, fail the boot naming
+both imports before anything is built — here `BlogModule` pins a port and so
+does the `PostsHttpModule` it imports:
+
+```text title="two pins of one config"
+contested declaration: `nest_rs_http::config::HttpConfig` is declared twice — by
+`HttpModule::for_root(..)` at `imports[0]` of `BlogModule`, and by
+`HttpModule::for_root(..)` at `imports[0]` of `PostsHttpModule`. A config has one
+seam — pin it once, on the `for_root` of the module that owns it, and let every
+other import of that module stay bare.
+```
 
 ## Going further
 

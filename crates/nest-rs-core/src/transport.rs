@@ -75,6 +75,10 @@ impl Listening {
     }
 }
 
+/// What a second transport of one type is refused with.
+pub(crate) const ONE_TRANSPORT_PER_TYPE: &str = "An app runs one transport of each type: import \
+     the module that attaches it by type, bare beside the one `for_root` that configures it.";
+
 /// What builds the transport from the assembled container, its type erased.
 type Build = Box<dyn Fn(&Container) -> Result<Box<dyn Transport>> + Send + Sync>;
 

@@ -410,9 +410,12 @@ pub struct ContainerBuilder {
     /// declared it: a declaration supersedes a queued default, and a second
     /// declaration names the first.
     declared_factories: HashMap<TypeId, Declaration>,
-    /// Two declarations for one type
-    /// ([`ContestedDeclarationError`](crate::ContestedDeclarationError)).
-    contested_factories: Vec<crate::ContestedDeclarationError>,
+    /// Two declarations for one type, a transport type attached twice among
+    /// them ([`ContestedDeclarationError`](crate::ContestedDeclarationError)).
+    contested: Vec<crate::ContestedDeclarationError>,
+    /// Each transport type attached, with the import that attached it: an app
+    /// runs one transport of each type.
+    transports: HashMap<TypeId, String>,
     /// The first error a `register` refused the boot with — see
     /// [`refuse`](Self::refuse).
     refusal: Option<anyhow::Error>,
@@ -779,6 +782,13 @@ impl ContainerBuilder {
     /// it listen, and serves it until the app stops. Its boot lines name it by
     /// its short type name, read off `T`.
     ///
+    /// An app runs one transport of each type: a second `T`, attached by any
+    /// module, fails the boot naming both imports
+    /// ([`ContestedDeclarationError`](crate::ContestedDeclarationError)) — the
+    /// module that attaches it is imported by type, so a second import of it
+    /// attaches nothing. A transport generic over a marker (`Consumer<Orders>`)
+    /// is one type per marker.
+    ///
     /// `build` is a function, never a closure holding a value: what the
     /// transport needs is read from the container, where the module's
     /// `for_root` value has landed — as HTTP reads its `HttpConfig`.
@@ -838,10 +848,25 @@ impl ContainerBuilder {
     /// let _ = Container::builder().provide_transport(move |_| Ok(captured.clone()));
     /// ```
     pub fn provide_transport<T: crate::Transport>(
-        self,
+        mut self,
         build: fn(&Container) -> anyhow::Result<T>,
     ) -> Self {
-        self.provide_meta(crate::TransportContribution::new(build))
+        let site = self.declaring_site();
+        match self.transports.entry(TypeId::of::<T>()) {
+            Entry::Occupied(first) => {
+                self.contested.push(crate::ContestedDeclarationError {
+                    type_name: std::any::type_name::<T>(),
+                    first: first.get().clone(),
+                    second: site,
+                    remedy: crate::transport::ONE_TRANSPORT_PER_TYPE,
+                });
+                self
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(site);
+                self.provide_meta(crate::TransportContribution::new(build))
+            }
+        }
     }
 
     /// Fill the registry `name` from the assembled container once, through
@@ -1168,13 +1193,12 @@ impl ContainerBuilder {
                 Some(first) if remedy.is_none() && first.binder == id => {}
                 Some(first) => {
                     let remedy = remedy.or(first.remedy).unwrap_or(DYN_BINDING_REMEDY);
-                    self.contested_factories
-                        .push(crate::ContestedDeclarationError {
-                            type_name: key_name,
-                            first: first.site.clone(),
-                            second: site,
-                            remedy,
-                        });
+                    self.contested.push(crate::ContestedDeclarationError {
+                        type_name: key_name,
+                        first: first.site.clone(),
+                        second: site,
+                        remedy,
+                    });
                     return self;
                 }
                 None => {
@@ -1250,10 +1274,12 @@ impl ContainerBuilder {
         self
     }
 
-    /// Types declared by more than one import site, each naming both sites.
-    /// Checked by `AppBuilder::build` before any factory runs.
-    pub(crate) fn contested_factories(&self) -> &[crate::ContestedDeclarationError] {
-        &self.contested_factories
+    /// Types declared, or transport types attached, by more than one import
+    /// site, each naming both sites. Checked after the collect phase, before
+    /// any factory runs, and again after the register phase, on either boot
+    /// path.
+    pub(crate) fn contested(&self) -> &[crate::ContestedDeclarationError] {
+        &self.contested
     }
 
     /// The innermost import whose phase is running, as a declaration names its

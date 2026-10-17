@@ -171,6 +171,18 @@ schemars.workspace = true
 # passed the whole suite. Path-only, so publishing drags none of them.
 nest-rs-opentelemetry = { path = "../nest-rs-opentelemetry" }
 nest-rs-schedule = { path = "../nest-rs-schedule" }
+# `setups.rs` imports every first-party `for_root` twice, so it reaches every
+# crate shipping one. Path-only, so publishing drags none of them.
+nest-rs-authn = { path = "../nest-rs-authn" }
+nest-rs-health = { path = "../nest-rs-health" }
+nest-rs-oauth-client = { path = "../nest-rs-oauth-client" }
+nest-rs-oauth-resource = { path = "../nest-rs-oauth-resource" }
+nest-rs-openapi = { path = "../nest-rs-openapi" }
+nest-rs-redis = { path = "../nest-rs-redis", features = ["queue"] }
+nest-rs-server-timing = { path = "../nest-rs-server-timing" }
+nest-rs-static-files = { path = "../nest-rs-static-files" }
+nest-rs-storage = { path = "../nest-rs-storage" }
+nest-rs-throttler = { path = "../nest-rs-throttler" }
 
 [lints]
 workspace = true

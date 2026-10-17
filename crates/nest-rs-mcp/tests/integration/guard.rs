@@ -214,6 +214,37 @@ async fn mcp_options_public_opens_the_endpoint() {
         .assert_status(StatusCode::OK);
 }
 
+#[module(imports = [OpenedModule, crate::open_mcp()])]
+struct OpenedTwiceApp;
+
+/// One opening, one site: a second import opening `/mcp` is refused naming
+/// both, even though the two agree, before any factory runs.
+#[tokio::test]
+async fn two_imports_opening_the_endpoint_fail_the_boot_naming_both() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<OpenedTwiceApp>()
+        .build()
+        .await
+    else {
+        panic!("an opening declared at two sites must not boot");
+    };
+    let contested = refused
+        .downcast_ref::<nest_rs_core::ContestedDeclarationError>()
+        .unwrap_or_else(|| panic!("refused as a contest: {refused:#}"));
+    assert_eq!(
+        (contested.first.as_str(), contested.second.as_str()),
+        (
+            "`McpModule::for_root(..)` at `imports[0]` of `OpenedModule`",
+            "`crate::open_mcp(..)` at `imports[1]` of `OpenedTwiceApp`",
+        )
+    );
+    assert!(
+        contested.remedy.contains("`posture: Posture::Public`"),
+        "the remedy says which field to set once: {}",
+        contested.remedy,
+    );
+}
+
 #[module(
     imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })],
     providers = [Trail, Declared, PoolTool, EndpointGuards<McpView, (Declared,)>],

@@ -47,13 +47,14 @@
 //! What serves the app — the HTTP server, the queue worker, the scheduler — is
 //! a [`Transport`] a module attaches with
 //! [`ContainerBuilder::provide_transport`], and [`App::run`] builds,
-//! configures, listens and serves each one. A third-party transport is
-//! supported, and it adds no edge: the edges are the framework's. So it serves
-//! infrastructure no caller identifies (a metrics port), carries system work
-//! into an edge that exists (an event published, a job pushed) under the actor
-//! [`Correlation::continued`] carries, or, when it is request-shaped and must
-//! authenticate, rides HTTP as a self-mount, whose guards decide. Transport
-//! code makes no authentication or authorization decision of its own.
+//! configures, listens and serves each one; an app runs one transport of each
+//! type. A third-party transport is supported, and it adds no edge: the edges
+//! are the framework's. So it serves infrastructure no caller identifies (a
+//! metrics port), carries system work into an edge that exists (an event
+//! published, a job pushed) under the actor [`Correlation::continued`]
+//! carries, or, when it is request-shaped and must authenticate, rides HTTP as
+//! a self-mount, whose guards decide. Transport code makes no authentication
+//! or authorization decision of its own.
 //!
 //! # One pipeline
 //!

@@ -141,14 +141,19 @@ fn scopes_clause(scopes: Option<(ProviderScope, ProviderScope)>) -> String {
     }
 }
 
-/// Two import sites each *declared* a value for the same type, and one of them
-/// would have to lose. Raised by `AppBuilder::build` before any factory runs.
+/// Two import sites each *declared* a value for the same type, or attached the
+/// same transport type, and one of them would have to lose.
 ///
-/// Only a **declaration** contests (`ContainerBuilder::provide_declared_factory`,
-/// or the trait object a `provide_factory_dyn` binds); the same default or
-/// binding queued twice never does, so a diamond import stays legal. Both
-/// declarations are named by their import site; `remedy` comes from the
-/// declaring seam.
+/// What contests: a **declaration** (`ContainerBuilder::provide_declared_factory`,
+/// or the trait object a `provide_factory_dyn` binds), and a **transport type**
+/// attached twice (`ContainerBuilder::provide_transport`: an app runs one of
+/// each). The same default or binding queued twice never does, so a diamond
+/// import stays legal. Both are named by their import site; `remedy` comes from
+/// the declaring seam.
+///
+/// Raised on either boot path, `App::new` included: before any factory runs
+/// for what the imports' `collect` declared, and once the register phase ends
+/// for what a `register` declared or attached.
 #[derive(Debug, Error)]
 #[error(
     "contested declaration: `{type_name}` is declared twice — by {first}, and by {second}. {remedy}"

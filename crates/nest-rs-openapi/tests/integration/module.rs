@@ -122,6 +122,49 @@ async fn the_test_profile_serves_the_documentation_unpinned_or_pinned_over_its_d
     assert_eq!(document["info"]["title"], "Profile API");
 }
 
+/// A feature configuring the module as the app does.
+#[module(imports = [OpenApiModule::for_root(None)], providers = [WidgetsController])]
+struct ConfiguringWidgetsModule;
+
+/// A feature declaring the dependency bare.
+#[module(imports = [OpenApiModule], providers = [WidgetsController])]
+struct BareWidgetsModule;
+
+#[module(imports = [OpenApiModule::for_root(None), ConfiguringWidgetsModule])]
+struct TwiceConfiguredApp;
+
+#[module(imports = [BareWidgetsModule, OpenApiModule::for_root(None)])]
+struct BareBesideTheConfiguredApp;
+
+/// The document mounts once and answers, imported by `M`.
+async fn mounts_once<M: nest_rs_core::Module>() {
+    let app = TestApp::for_module::<M>()
+        .await
+        .unwrap_or_else(|refused| panic!("one document for both imports: {refused:#}"));
+
+    assert_eq!(
+        nest_rs_core::Discovery::new(app.container())
+            .meta::<nest_rs_http::HttpEndpointMeta>()
+            .len(),
+        1
+    );
+    app.http()
+        .get("/api-json")
+        .send()
+        .await
+        .assert_status_is_ok();
+}
+
+#[tokio::test]
+async fn two_imports_mount_the_documentation_once() {
+    mounts_once::<TwiceConfiguredApp>().await;
+}
+
+#[tokio::test]
+async fn a_bare_import_beside_the_configured_one_mounts_the_documentation_once() {
+    mounts_once::<BareBesideTheConfiguredApp>().await;
+}
+
 #[tokio::test]
 async fn the_documented_import_serves_a_document_describing_the_app() {
     let app = TestApp::for_module::<DocumentedApp>()

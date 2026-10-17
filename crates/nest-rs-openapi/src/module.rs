@@ -3,10 +3,10 @@
 
 use std::any::TypeId;
 
-use nest_rs_config::ConfigModule;
+use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{
-    Collecting, Container, ContainerBuilder, DynamicModule, Handler, Posture, Registering,
+    Collecting, Container, ContainerBuilder, Handler, Module, Posture, Registering,
 };
 use nest_rs_http::{HttpEndpointMeta, Method, join_path, version_path};
 
@@ -30,34 +30,30 @@ const VERSIONED_SPEC_PATTERN: &str = "/api-json/{*version}";
 /// Both endpoints are public, so they are served in a development or test
 /// profile alone until `<PREFIX>_OPENAPI__ENABLED=true` (or a pinned
 /// `OpenApiConfig { enabled: true, .. }`) opens them — see [`OpenApiConfig`].
+/// A bare `OpenApiModule` import beside the app's `for_root` mounts nothing
+/// twice.
 pub struct OpenApiModule;
 
 impl OpenApiModule {
     /// Pass `None` to load [`OpenApiConfig`] from `<PREFIX>_OPENAPI__*`, or an
     /// `OpenApiConfig` to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<OpenApiConfig>>) -> OpenApiSetup {
-        OpenApiSetup {
-            pinned: config.into(),
-        }
+        ConfigModule::setup(config.into())
     }
 }
 
-/// The configured import produced by [`OpenApiModule::for_root`]. Registers the
-/// [`OpenApiConfig`] and self-mounts the `/api-json` + `/api` endpoints.
-pub struct OpenApiSetup {
-    pinned: Option<OpenApiConfig>,
-}
+/// The configured import [`OpenApiModule::for_root`] returns.
+pub type OpenApiSetup = ConfigSetup<OpenApiModule, OpenApiConfig>;
 
-impl DynamicModule for OpenApiSetup {
-    fn module() -> TypeId {
-        TypeId::of::<OpenApiModule>()
+impl Module for OpenApiModule {
+    // A bare import still reads `<PREFIX>_OPENAPI__*`; a `for_root(Some(cfg))`'s
+    // declared value supersedes this env-only one.
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature(None::<OpenApiConfig>, builder)
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder)
-    }
-
-    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+    // Registered once however many modules import it, so the document mounts once.
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         match ConfigModule::resolved::<OpenApiConfig>(&builder.snapshot()) {
             Ok(config) => register(builder, (*config).clone()),
             Err(refusal) => builder.refuse(refusal),
@@ -158,7 +154,7 @@ fn document_path(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_core::{App, Discovery, LateFactoryError, Module, module};
+    use nest_rs_core::{App, Discovery, LateFactoryError, module};
     use nest_rs_http::HttpConfig;
 
     fn mount_count(enabled: bool) -> usize {

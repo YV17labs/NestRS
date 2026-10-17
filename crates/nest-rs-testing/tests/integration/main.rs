@@ -30,6 +30,7 @@ mod mcp;
 mod pipes;
 mod reflector;
 mod request_scope;
+mod setups;
 mod shutdown;
 mod transient_scope;
 mod transport_parity;

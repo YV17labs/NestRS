@@ -1,11 +1,9 @@
 //! `GraphqlModule` — import it to serve the auto-discovered schema over HTTP.
 
-use std::any::TypeId;
-
 use std::sync::Arc;
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering};
+use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering};
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
 use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta};
 
@@ -19,6 +17,9 @@ use crate::view::GraphqlView;
 /// Mounts `POST <path>` (queries + mutations) and `GET <path>` — the graphql-ws
 /// socket for subscriptions, or the playground for a plain browser request when
 /// it is enabled. The schema composes itself from the resolver registry.
+///
+/// The app imports [`GraphqlModule::for_root`]; a feature serving resolvers
+/// may import `GraphqlModule` bare beside it, and the endpoint mounts once.
 ///
 /// [`GraphqlConfig::default`] keeps the playground + boot-time SDL emit
 /// **off**; a dev run opts them in via `<PREFIX>_GRAPHQL__PLAYGROUND=true` /
@@ -46,28 +47,22 @@ impl GraphqlModule {
     /// Pass `None` to load [`GraphqlConfig`] from `<PREFIX>_GRAPHQL__*`, or a
     /// `GraphqlConfig` to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<GraphqlConfig>>) -> GraphqlSetup {
-        GraphqlSetup {
-            pinned: config.into(),
-        }
+        ConfigModule::setup(config.into())
     }
 }
 
-/// The configured import produced by [`GraphqlModule::for_root`]. Registers the
-/// [`GraphqlConfig`] and self-mounts the `/graphql` endpoint on the HTTP transport.
-pub struct GraphqlSetup {
-    pinned: Option<GraphqlConfig>,
-}
+/// The configured import [`GraphqlModule::for_root`] returns.
+pub type GraphqlSetup = ConfigSetup<GraphqlModule, GraphqlConfig>;
 
-impl DynamicModule for GraphqlSetup {
-    fn module() -> TypeId {
-        TypeId::of::<GraphqlModule>()
+impl Module for GraphqlModule {
+    // A bare import still reads `<PREFIX>_GRAPHQL__*`; a `for_root(Some(cfg))`'s
+    // declared value supersedes this env-only one.
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature(None::<GraphqlConfig>, builder)
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder)
-    }
-
-    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+    // Registered once however many modules import it, so `/graphql` mounts once.
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         match ConfigModule::resolved::<GraphqlConfig>(&builder.snapshot()) {
             Ok(config) => register(builder, (*config).clone()),
             Err(refusal) => builder.refuse(refusal),
@@ -205,7 +200,7 @@ fn refused_origin(refused: &OriginRefused) {
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::{App, LateFactoryError, Module, module};
+    use nest_rs_core::{App, LateFactoryError, module};
 
     use super::*;
 

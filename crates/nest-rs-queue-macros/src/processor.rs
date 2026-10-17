@@ -279,12 +279,15 @@ fn emit_method(
         let state = &checkpoint.state;
         quote! {
             let __checkpoint = ::nest_rs_queue::__private::open_checkpoint::<#state>(
-                __context.checkpoints.as_ref(),
+                __checkpoints.as_ref(),
                 #queue_str,
             )
             .await?;
         }
     });
+    let checkpoints_take = checkpoint
+        .as_ref()
+        .map(|_| quote!(let __checkpoints = __context.checkpoints.clone();));
     // The method's arguments in the order it declares them.
     let call_args: Vec<TokenStream2> = method
         .sig
@@ -349,16 +352,18 @@ fn emit_method(
                         );
                     }
                 };
-                #checkpoint_open
+                #checkpoints_take
                 #attempt_take
                 // The user `#[process]` method's `Err` is a transient fault —
                 // retryable within the budget. Mapped *inside* the unit so its
                 // settling reads one error type and can report a commit it could
-                // not honour in it.
+                // not honour in it. The checkpoint is read inside the body the
+                // deadline cuts: past it, the queue's timer calls a commit in doubt.
                 ::nest_rs_queue::__private::run_attempt(
                     __context,
                     #transaction_tokens,
                     async move {
+                        #checkpoint_open
                         #call.map_err(::nest_rs_queue::JobError::retry)
                     },
                 )

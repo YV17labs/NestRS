@@ -63,19 +63,28 @@ pub fn stamp_bearer_error(res: &mut Response, code: &str) {
 /// Write `WWW-Authenticate: Bearer error="insufficient_scope", scope="<…>"`
 /// onto a refusal: RFC 6750 §3's `scope`, the scopes the request needs, every
 /// one of them, space-delimited. A scope outside RFC 6749 §3.3's grammar, which
-/// a quoted string could not carry, leaves the challenge without the attribute.
+/// a quoted string could not carry, leaves the challenge without the attribute
+/// and files a `warn` naming the set: the scopes are the rule's own literals.
 pub(crate) fn stamp_insufficient_scope(res: &mut Response, scopes: &[String]) {
-    let well_formed = !scopes.is_empty() && scopes.iter().all(|scope| is_scope_token(scope));
-    if well_formed
+    if scopes.is_empty() {
+        stamp_bearer_error(res, INSUFFICIENT_SCOPE);
+        return;
+    }
+    if scopes.iter().all(|scope| is_scope_token(scope))
         && let Ok(value) = HeaderValue::try_from(format!(
             r#"{BEARER} error="{INSUFFICIENT_SCOPE}", scope="{}""#,
             scopes.join(" ")
         ))
     {
         res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
-    } else {
-        stamp_bearer_error(res, INSUFFICIENT_SCOPE);
+        return;
     }
+    tracing::warn!(
+        target: crate::target::HTTP,
+        ?scopes,
+        "a required scope is not a scope-token; the challenge is sent without its scope attribute",
+    );
+    stamp_bearer_error(res, INSUFFICIENT_SCOPE);
 }
 
 /// RFC 6749 §3.3's `scope-token`: one or more `NQCHAR`.
@@ -95,7 +104,12 @@ pub(crate) fn stamp_bearer_error_on(headers: &mut http::HeaderMap, code: &str) {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_testing::LogCapture;
+
     use super::*;
+
+    const LEFT_OUT: &str =
+        "a required scope is not a scope-token; the challenge is sent without its scope attribute";
 
     fn challenge(scopes: &[&str]) -> String {
         let mut res = Response::builder().finish();
@@ -109,22 +123,36 @@ mod tests {
 
     #[test]
     fn the_scope_attribute_lists_every_scope_needed() {
+        let logs = LogCapture::install();
         assert_eq!(
             challenge(&["posts:read", "audit"]),
             r#"Bearer error="insufficient_scope", scope="posts:read audit""#,
         );
+        logs.expect_none(crate::target::HTTP, LEFT_OUT);
     }
 
     /// A quote would end the attribute early; a space would split one scope in
-    /// two: such a set is not said at all.
+    /// two: such a set is not said at all, and the operator is told why.
     #[test]
     fn a_scope_outside_the_grammar_leaves_the_attribute_out() {
-        for refused in [&["posts\"read"][..], &["posts read"], &[""], &[]] {
+        for refused in [&["posts\"read"][..], &["posts read"], &[""]] {
+            let logs = LogCapture::install();
             assert_eq!(
                 challenge(refused),
                 r#"Bearer error="insufficient_scope""#,
                 "{refused:?}"
             );
+            let filed = logs.expect_one(crate::target::HTTP, LEFT_OUT);
+            assert_eq!(filed.level, "warn");
+            assert_eq!(filed.field("scopes"), Some(format!("{refused:?}")));
         }
+    }
+
+    /// No scope to name is no malformed one: the bare challenge, filed nowhere.
+    #[test]
+    fn an_empty_set_answers_the_bare_challenge_and_files_nothing() {
+        let logs = LogCapture::install();
+        assert_eq!(challenge(&[]), r#"Bearer error="insufficient_scope""#);
+        logs.expect_none(crate::target::HTTP, LEFT_OUT);
     }
 }

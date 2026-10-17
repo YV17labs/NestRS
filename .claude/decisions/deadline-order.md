@@ -104,13 +104,19 @@ so a request whose commit hangs can outlive the shutdown window; the transport
 then drops its future, and the commit, on the driver's task, is drained by the
 driver's close within the hooks' budget.
 
+An atomic block of its own on a pool unit — a non-transactional job or tick, a
+safe route — commits inside the body, so the cut could land on its `COMMIT`.
+It too commits on the driver's task, and a failed unit whose body never saw
+that commit answered is in doubt: the one driver answer that replaces a
+failure.
+
 **Refused:**
 
 - **The net in `run_unit`.** The port sees one future per settle and cannot
   tell a commit still waiting from after-commit work still running, so a net
   there would call a slow listener in doubt. The driver, which sees both, owns
   the net; the port bounds only a failed unit's settle, by its deadline, since
-  a failure stands whatever the driver answers.
+  a failure stands unless the driver answers it in doubt.
 - **A boot `Net` for the settle.** It would be a budget plus a second by
   construction, and a `Net` is declared before the config that sizes it is
   read.

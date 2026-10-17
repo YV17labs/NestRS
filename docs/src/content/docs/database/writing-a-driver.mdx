@@ -197,14 +197,17 @@ impl OpenUnit for InTransaction {
 
 `OnPool`'s `settle` answers `Settlement::Settled` at once: there is nothing to
 commit, and a pool unit may be dropped unsettled — it is what a streaming body
-or a DataLoader batch runs on.
+or a DataLoader batch runs on. The one exception is an atomic block's own
+commit its body was cut while waiting for (Step 6).
 
 What your binding owes:
 
 - **Settle on the outcome you are handed.** `ok` is the edge's own verdict —
   a 2xx, a reply that is not an error frame, a tool answer without `isError`,
-  a job's `Ok`. A failure stands whatever you answer; `Settlement::Unhonoured`
-  turns a *success* you could not keep into the edge's failure.
+  a job's `Ok`. `Settlement::Unhonoured` turns a *success* you could not
+  keep into the edge's failure; a failure stands whatever you answer, but
+  `Unhonoured::IN_DOUBT`, which says a commit the body set off before it was
+  cut may have landed.
 - **Never let a commit be cut.** An edge cuts a unit's *body* at its deadline
   (`UnitSpec::deadline`) and drops the settle future when its client goes or
   its operation is stopped: run the commit on a task of your own, tracked and
@@ -215,7 +218,7 @@ What your binding owes:
   landed, so the unit is never retried. Wait for the work `after_commit` held
   until the unit's deadline, then answer and let it run on: a slow listener
   never fails a committed unit. A failed unit's rollback is waited for until
-  the deadline at most, whatever you answer.
+  the deadline at most.
 - **Fail closed on an escaped handle.** `settle` is called once the body and
   the executor `run_unit` installed are dropped, so a handle still alive was
   carried off by a spawned task: answer `Unhonoured` on a success.
@@ -468,6 +471,11 @@ What a block owes, in order of how badly it goes wrong without it:
   writes next.
 - **Nothing is sent before the first statement**, so a block that never
   queries costs no round trip.
+- **A block of its own on a pool unit commits on your settle task.** The
+  body's cut — a deadline, a stopped operation — must not drop its `COMMIT`
+  either: run it on the task your module drains, and when the body failed
+  before seeing that commit's answer, the pool unit's `settle` answers
+  `Unhonoured::IN_DOUBT`.
 
 `crates/nest-rs-seaorm/src/savepoint.rs` and `crates/nest-rs-seaorm/src/turn.rs`
 are the reference shape.

@@ -56,7 +56,10 @@ use crate::executor::{Executor, current_executor, with_executor};
 ///
 /// A block dropped before it settles — cancelled by a timeout or a `select!` —
 /// rolls back; inside a unit of work it leaves that unit unable to commit, so
-/// nothing the unit wrote stands.
+/// nothing the unit wrote stands. A block of its own on a pool unit dropped
+/// while it commits leaves the `COMMIT` to finish on its driver's task, and a
+/// unit whose body failed without seeing its answer is in doubt
+/// ([`Unhonoured::IN_DOUBT`](crate::Unhonoured::IN_DOUBT)).
 pub fn atomic<'a, T, E, F>(work: F) -> impl Future<Output = Result<T, E>> + Send + 'a
 where
     F: Future<Output = Result<T, E>> + Send + 'a,

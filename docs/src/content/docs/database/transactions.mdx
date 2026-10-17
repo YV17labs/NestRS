@@ -154,7 +154,9 @@ match linked {
   `AtomicError::Poisoned`, since nothing it wrote stands.
 - **On a safe route**, where the request runs on the pool, the block is a
   transaction of its own, committed when it returns `Ok`. A block in a block
-  is a savepoint of its own and rolls back alone.
+  is a savepoint of its own and rolls back alone. Its `COMMIT` runs on the
+  driver's task too: a deadline that cuts the body while it commits leaves
+  it to finish, and the unit fails *in doubt*, its writes possibly landed.
 - **Nothing is sent until the block's first statement**: a block that never
   queries costs no round trip.
 

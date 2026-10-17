@@ -510,3 +510,95 @@ async fn a_job_whose_listener_outlives_its_timeout_is_not_retried() {
         "the listener ran once, on the driver's task"
     );
 }
+
+#[nest_rs_queue::queue(name = "worker-atomic-in-doubt", job = DeadlineProbe)]
+struct AtomicInDoubtQueue;
+
+struct AtomicInDoubtProcessor;
+
+impl nest_rs_core::ProviderResidency for AtomicInDoubtProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[nest_rs_queue::processor]
+impl AtomicInDoubtProcessor {
+    /// On the pool, its one write in an atomic block of its own, whose
+    /// `COMMIT` outlives the timeout.
+    #[process(queue = AtomicInDoubtQueue, retries = 1, timeout = "1s", transactional = false)]
+    async fn write(&self, _job: DeadlineProbe) -> anyhow::Result<()> {
+        nest_rs_database::atomic(async {
+            current_executor()
+                .expect("the block runs with an ambient executor")
+                .execute_unprepared("INSERT INTO worker_atomic_in_doubt DEFAULT VALUES")
+                .await?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+    }
+}
+
+/// A deadline cutting the body while its atomic block commits never cuts that
+/// `COMMIT`: it lands on the driver's task, and the attempt is in doubt —
+/// dead-lettered, never retried into a second write.
+#[tokio::test]
+async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_lands() {
+    use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
+
+    let conn = crate::harness::connect_arc().await;
+    scratch_table(&conn, "worker_atomic_in_doubt").await;
+    // A deferred trigger runs at `COMMIT`, which then outlives the timeout.
+    for sql in [
+        "CREATE OR REPLACE FUNCTION worker_atomic_in_doubt_slow() RETURNS trigger \
+         LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(2); RETURN NULL; END $$",
+        "CREATE CONSTRAINT TRIGGER worker_atomic_in_doubt_slow AFTER INSERT ON \
+         worker_atomic_in_doubt DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION \
+         worker_atomic_in_doubt_slow()",
+    ] {
+        conn.execute_unprepared(sql)
+            .await
+            .expect("the slow commit is set up");
+    }
+    let unit: Arc<dyn UnitOfWork> = Arc::new(SeaOrmUnitOfWork::new(
+        conn.clone(),
+        &SeaOrmConfig::default(),
+    ));
+    let method = nest_rs_core::inventory::iter::<nest_rs_queue::ProcessMethod>()
+        .find(|method| method.name() == "AtomicInDoubtProcessor::write")
+        .expect("the processor's method is submitted");
+    let mut delivery = Delivery::new(
+        &BARE,
+        nest_rs_queue::QueueName::new("worker-atomic-in-doubt").expect("a valid name"),
+        serde_json::json!({
+            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
+            "payload": { "id": 1 },
+        }),
+    );
+
+    let started = std::time::Instant::now();
+    let outcome = consume::attempt(
+        method,
+        &mut delivery,
+        nest_rs_core::Container::builder()
+            .provide(AtomicInDoubtProcessor)
+            .build(),
+        Some(unit),
+    )
+    .await;
+    let took = started.elapsed();
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("a commit the cut left running may have landed: {outcome:?}");
+    };
+    assert!(
+        error.to_string().ends_with("its writes may have landed"),
+        "{error}"
+    );
+    assert!(
+        took < std::time::Duration::from_millis(1900),
+        "answered at the deadline, not after the commit, took {took:?}",
+    );
+    nest_rs_testing::wait_for(std::time::Duration::from_secs(5), || {
+        let conn = Arc::clone(&conn);
+        async move { row_count(&conn, "worker_atomic_in_doubt").await == 1 }
+    })
+    .await;
+}

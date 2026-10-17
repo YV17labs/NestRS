@@ -701,6 +701,17 @@ impl ConnectionTrait for Executor {
     }
 }
 
+impl Executor {
+    /// The transaction of its own an atomic block on this pool runs on; `None`
+    /// on a handle that is no pool.
+    pub(crate) fn own_block(&self) -> Option<Arc<LazyTransaction>> {
+        match self {
+            Executor::Pool(pool) => Some(Arc::new(LazyTransaction::new(pool.clone(), ATOMIC))),
+            _ => None,
+        }
+    }
+}
+
 impl nest_rs_database::Executor for Executor {
     fn as_any(&self) -> &dyn Any {
         self

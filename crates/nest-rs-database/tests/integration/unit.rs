@@ -218,19 +218,34 @@ async fn a_success_the_binding_could_not_honour_becomes_the_edges_failure() {
 }
 
 #[tokio::test]
-async fn a_failure_stands_whatever_the_binding_answers() {
-    let (binding, _) = Stub::answering(Settlement::Unhonoured(Unhonoured::deterministic(
-        "rolled back",
-    )));
-    let answered = run_unit(
-        Some(&binding),
-        spec(ExecutorScope::Request),
-        async { Err::<(), _>("the handler's own failure") },
-        Result::is_ok,
-        |_| Err("unhonoured"),
-    )
-    .await;
-    assert_eq!(answered, Err("the handler's own failure"));
+async fn a_failure_stands_unless_the_binding_says_its_writes_may_have_landed() {
+    let fail = |answer| async move {
+        let (binding, _) = Stub::answering(answer);
+        run_unit(
+            Some(&binding),
+            spec(ExecutorScope::Request),
+            async { Err::<(), _>("the handler's own failure") },
+            Result::is_ok,
+            |why| Err(why.reason),
+        )
+        .await
+    };
+    for answer in [
+        Settlement::Settled,
+        Settlement::Unhonoured(Unhonoured::deterministic("rolled back")),
+        Settlement::Unhonoured(Unhonoured::retryable("the rollback was lost")),
+    ] {
+        assert_eq!(
+            fail(answer).await,
+            Err("the handler's own failure"),
+            "{answer:?}"
+        );
+    }
+    assert_eq!(
+        fail(Settlement::Unhonoured(Unhonoured::IN_DOUBT)).await,
+        Err(Unhonoured::IN_DOUBT.reason),
+        "a failed unit whose commit went on past it is in doubt, never retried as a failure",
+    );
 }
 
 /// A binding refusing what the spec asks — a policy it does not support.

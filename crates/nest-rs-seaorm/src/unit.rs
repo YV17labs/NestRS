@@ -1,22 +1,27 @@
 //! A unit's events name its edge (`http`, `ws`, `queue`, …) in `transport`, as
 //! every other framework event does; a unit no edge dispatches is named in full.
 
+use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use nest_rs_core::{Continuation, TaskContext, Unanswered, within};
 use nest_rs_database::{
-    ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
+    AtomicBlock, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork,
+    UnitSpec,
 };
 use sea_orm::DatabaseConnection;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::task::TaskTracker;
 
 use crate::SeaOrmConfig;
+use crate::atomic::{AtomicExecutor, PoolCommit};
 use crate::error::CommitError;
 use crate::executor::{Executor, FinalizeOutcome, LazyTransaction};
 
@@ -44,8 +49,8 @@ const UNSUPPORTED_POLICY: &str = "this driver does not support the unit's transa
 /// its units through it.
 pub struct SeaOrmUnitOfWork {
     db: DatabaseConnection,
-    /// Every pool unit installs this one handle: nothing to allocate per unit.
-    pool: Arc<dyn nest_rs_database::Executor>,
+    /// The handle every pool unit installs, shared.
+    pool: Arc<Executor>,
     observe_conflicts: bool,
     settle_net: Duration,
     settles: Settles,
@@ -87,22 +92,26 @@ fn settle_net(config: &SeaOrmConfig) -> Duration {
 
 impl UnitOfWork for SeaOrmUnitOfWork {
     fn open(&self, spec: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
+        let transport = spec
+            .unit
+            .edge()
+            .map_or(spec.unit.name(), nest_rs_core::Edge::as_str);
         match spec.policy {
-            TransactionPolicy::Pool => Ok(Box::new(OnPool(Arc::clone(&self.pool)))),
-            TransactionPolicy::PerUnit => {
-                let transport = spec
-                    .unit
-                    .edge()
-                    .map_or(spec.unit.name(), nest_rs_core::Edge::as_str);
-                Ok(Box::new(InTransaction {
-                    lazy: Arc::new(LazyTransaction::new(self.db.clone(), transport)),
-                    observe_conflicts: self.observe_conflicts
-                        && spec.scope == ExecutorScope::Request,
-                    net: self.settle_net,
-                    deadline: spec.deadline,
+            TransactionPolicy::Pool => Ok(Box::new(OnPool {
+                unit: Arc::new(PoolUnit {
+                    pool: Arc::clone(&self.pool),
                     settles: self.settles.clone(),
-                }))
-            }
+                    unseen: OnceLock::new(),
+                }),
+                transport,
+            })),
+            TransactionPolicy::PerUnit => Ok(Box::new(InTransaction {
+                lazy: Arc::new(LazyTransaction::new(self.db.clone(), transport)),
+                observe_conflicts: self.observe_conflicts && spec.scope == ExecutorScope::Request,
+                net: self.settle_net,
+                deadline: spec.deadline,
+                settles: self.settles.clone(),
+            })),
             // A policy this driver does not know is refused before the body runs.
             _ => Err(Unhonoured::deterministic(UNSUPPORTED_POLICY)),
         }
@@ -118,6 +127,15 @@ impl UnitOfWork for SeaOrmUnitOfWork {
 pub(crate) struct Settles(TaskTracker);
 
 impl Settles {
+    /// Run `task` as a settle the drain waits for.
+    pub(crate) fn spawn<F>(&self, task: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.0.spawn(task)
+    }
+
     /// Wait for every settle still running; one started after is run as well.
     pub(crate) async fn drain(&self) {
         self.0.close();
@@ -126,16 +144,65 @@ impl Settles {
     }
 }
 
-/// A unit on the pool: each statement commits on its own, and nothing settles.
-struct OnPool(Arc<dyn nest_rs_database::Executor>);
+/// A unit on the pool: each statement commits on its own, and nothing settles
+/// but a failure cut while an atomic block's own commit ran.
+struct OnPool {
+    unit: Arc<PoolUnit>,
+    transport: &'static str,
+}
 
 impl OpenUnit for OnPool {
     fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
-        Arc::clone(&self.0)
+        Arc::clone(&self.unit) as Arc<dyn nest_rs_database::Executor>
     }
 
-    fn settle(self: Box<Self>, _ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
+    fn settle(self: Box<Self>, ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
+        if !ok && self.unit.cut_mid_commit() {
+            tracing::error!(
+                target: crate::target::ORM,
+                transport = self.transport,
+                outcome = "in_doubt",
+                "the unit was cut while an atomic block's commit ran; its writes may have landed",
+            );
+            return Box::pin(std::future::ready(Settlement::Unhonoured(
+                Unhonoured::IN_DOUBT,
+            )));
+        }
         Box::pin(Settled)
+    }
+}
+
+/// The handle a pool unit installs: the pool, on which an atomic block is a
+/// transaction of its own committed on the binding's settle task.
+pub(crate) struct PoolUnit {
+    pool: Arc<Executor>,
+    settles: Settles,
+    /// The commits of the blocks the body opened whose answer it has not seen;
+    /// allocated by the first block.
+    unseen: OnceLock<Arc<AtomicUsize>>,
+}
+
+impl PoolUnit {
+    /// Whether the body ended before seeing a block's commit answer.
+    fn cut_mid_commit(&self) -> bool {
+        self.unseen
+            .get()
+            .is_some_and(|unseen| unseen.load(Ordering::Relaxed) > 0)
+    }
+}
+
+impl nest_rs_database::Executor for PoolUnit {
+    fn as_any(&self) -> &dyn Any {
+        &*self.pool
+    }
+
+    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
+        let own = self.pool.own_block()?;
+        let unseen = Arc::clone(self.unseen.get_or_init(Arc::default));
+        Some(Arc::new(AtomicExecutor::own_on_pool(
+            own,
+            PoolCommit::new(self.settles.clone(), unseen),
+        )))
     }
 }
 
@@ -201,7 +268,7 @@ impl OpenUnit for InTransaction {
                 );
             }
         });
-        let finished = settles.0.spawn(task);
+        let finished = settles.spawn(task);
         Box::pin(told(ok, transport, net, deadline, answered, async move {
             drop(finished.await);
         }))
@@ -383,6 +450,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A pool unit settles nothing, but a failure its body met before a block
+    /// of its own saw its commit answered: that commit may have landed.
+    #[tokio::test]
+    async fn a_pool_unit_failed_before_a_block_saw_its_commit_answered_is_in_doubt() {
+        let logs = nest_rs_testing::LogCapture::install();
+        for (blocks_unseen, ok, settled) in [
+            (None, false, Settlement::Settled),
+            (Some(0), false, Settlement::Settled),
+            (Some(1), true, Settlement::Settled),
+            (Some(1), false, Settlement::Unhonoured(Unhonoured::IN_DOUBT)),
+        ] {
+            let unit = Arc::new(PoolUnit {
+                pool: Arc::new(Executor::Pool(DatabaseConnection::default())),
+                settles: Settles::default(),
+                unseen: OnceLock::new(),
+            });
+            if let Some(unseen) = blocks_unseen {
+                let block = nest_rs_database::Executor::atomic(&*unit)
+                    .expect("a pool unit offers a block of its own");
+                assert!(matches!(seaorm(&(block as _)), Executor::Lazy(_)));
+                let count = unit.unseen.get().expect("the block counts its commit");
+                count.fetch_add(unseen, Ordering::Relaxed);
+            }
+            let open = Box::new(OnPool {
+                unit,
+                transport: "queue",
+            });
+            assert_eq!(
+                open.settle(ok).await,
+                settled,
+                "{blocks_unseen:?} unseen, ok = {ok}"
+            );
+        }
+        let line = logs.expect_one(
+            crate::target::ORM,
+            "the unit was cut while an atomic block's commit ran; its writes may have landed",
+        );
+        assert_eq!(line.field("outcome").as_deref(), Some("in_doubt"));
     }
 
     #[test]

@@ -344,7 +344,8 @@ that outruns its net is not retried**: each edge cuts the body it hands
 hands the unit layer — and a cut unit is answered at its deadline whatever its
 rollback still waits on; the driver settles on a task it drains at its close,
 answers `Unhonoured::IN_DOUBT` past its settle net (`UnitOfWork::settle_net`,
-above every statement bound), and waits for held work until the deadline; an
+above every statement bound) — and for a failed unit whose body was cut before
+an atomic block's own commit answered — and waits for held work until the deadline; an
 edge timer wrapping a unit is armed that net past the deadline, and answers in
 doubt, never a retryable timeout. **A command whose
 answer is the only record of what it claimed is never cut** — a timeout does

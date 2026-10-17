@@ -174,7 +174,10 @@ pub trait OpenUnit: Send {
     ///   slow listener never turns a committed unit into a failure.
     ///
     /// [`run_unit`] waits for a failed unit's rollback until the deadline at
-    /// most, since a failure stands whatever the driver answers.
+    /// most, and the failure stands unless the driver answers
+    /// [`Unhonoured::IN_DOUBT`]: a commit the body set off before it was cut
+    /// (an [`atomic`](fn@crate::atomic) block's own) still running on the
+    /// driver's task.
     fn settle(self: Box<Self>, ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>>;
 }
 
@@ -199,7 +202,9 @@ pub enum Settlement {
     /// The unit's outcome stands: committed, rolled back, or nothing to settle.
     Settled,
     /// The unit succeeded and the driver could **not** honour it — nothing it
-    /// wrote stands: it becomes the failure the [`Unhonoured`] describes.
+    /// wrote stands: it becomes the failure the [`Unhonoured`] describes. A
+    /// failed unit answered [`Unhonoured::IN_DOUBT`] becomes it too, since a
+    /// commit it set off may have landed.
     Unhonoured(Unhonoured),
 }
 
@@ -233,7 +238,7 @@ impl Bound {
 /// the spec's scope, the binding ambient for [`current_unit_of_work`]. Once the
 /// body ended and was dropped, the unit settles on `ok(&outcome)`: a unit the
 /// driver could not honour turns a success into `unhonoured(why)`, and a
-/// failure stands whatever the driver answers.
+/// failure stands unless the driver answers it [`Unhonoured::IN_DOUBT`].
 ///
 /// The edge cuts `body` at the spec's deadline itself, answering its timeout
 /// in its own terms; `run_unit` never cuts a commit. A failure is answered by
@@ -306,11 +311,14 @@ async fn settle<T>(
     if !succeeded {
         // A rollback may wait on a statement the cut body left running: the
         // edge answers by its deadline, and the driver's task finishes it.
-        match deadline {
-            Some(deadline) => drop(tokio::time::timeout_at(deadline, settling).await),
-            None => drop(settling.await),
-        }
-        return outcome;
+        let settled = match deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, settling).await.ok(),
+            None => Some(settling.await),
+        };
+        return match settled {
+            Some(Settlement::Unhonoured(why)) if why == Unhonoured::IN_DOUBT => unhonoured(why),
+            _ => outcome,
+        };
     }
     match settling.await {
         Settlement::Settled => outcome,

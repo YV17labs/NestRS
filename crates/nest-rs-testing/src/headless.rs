@@ -3,9 +3,9 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use nest_rs_core::{App, AppLifecycle, Container, Transport};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, Id, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -22,8 +22,17 @@ pub struct HeadlessApp {
     serving: Serving,
 }
 
-/// The transports still serving, by name, each with its stop bound.
-type Serving = Arc<Mutex<Vec<(&'static str, Duration)>>>;
+/// The transports still serving, in the order they were spawned.
+type Serving = Arc<Mutex<Vec<Spawned>>>;
+
+/// A transport still serving: its task, its name and stop bound, and the
+/// handle that aborts it once abandoned.
+struct Spawned {
+    task: Id,
+    name: &'static str,
+    stop_bound: Duration,
+    abort: AbortHandle,
+}
 
 impl HeadlessApp {
     pub(crate) fn new(app: App) -> Self {
@@ -61,7 +70,8 @@ impl HeadlessApp {
     /// [`TransportHandle`] to observe then shut it down: once this returns,
     /// what it listens on accepts. It serves under the app's stop token, so
     /// [`close`](Self::close) stops it; a `serve` that fails is filed at
-    /// `error` with its chain.
+    /// `error` with its chain, and one that panics is contained and filed at
+    /// `error` once, as [`App::run`] files it.
     pub async fn spawn_transport<T: Transport>(&self, mut transport: T) -> Result<TransportHandle> {
         self.configure_transport(&mut transport).await?;
         transport.listen().await?;
@@ -85,28 +95,46 @@ impl HeadlessApp {
     /// Serve a configured, listening `transport` on the tracked background task.
     pub(crate) fn serve_transport<T: Transport>(&self, transport: T) -> TransportHandle {
         let name = std::any::type_name::<T>();
-        locked(&self.serving).push((name, transport.stop_bound()));
+        let stop_bound = transport.stop_bound();
         let serving = Arc::clone(&self.serving);
         let cancel = self.lifecycle().stopping();
         let token = cancel.clone();
+        // Held across the spawn, so the task cannot leave the list before it joins it.
+        let mut still = locked(&self.serving);
         let join = self.transports.spawn(async move {
-            let served = Box::new(transport).serve(token).await;
-            let mut still = locked(&serving);
-            if let Some(at) = still.iter().position(|(serves, _)| *serves == name) {
-                still.remove(at);
-            }
-            drop(still);
+            let served = nest_rs_core::panic::contain(Box::new(transport).serve(token)).await;
+            let task = tokio::task::id();
+            locked(&serving).retain(|spawned| spawned.task != task);
             // Its handle is often dropped unread: `close` awaits the tracker.
-            if let Err(error) = &served {
-                nest_rs_core::tracing::error!(
-                    target: nest_rs_core::target::APP,
-                    transport = name,
-                    error = %nest_rs_core::error_message(&**error),
-                    "a transport the harness spawned failed",
-                );
+            match served {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => {
+                    nest_rs_core::tracing::error!(
+                        target: nest_rs_core::target::APP,
+                        transport = name,
+                        error = %nest_rs_core::error_message(&*error),
+                        "a transport the harness spawned failed",
+                    );
+                    Err(error)
+                }
+                Err(payload) => {
+                    nest_rs_core::contained_panic!(
+                        target: nest_rs_core::target::APP,
+                        payload.as_ref(),
+                        "a transport the harness spawned panicked",
+                        transport = name,
+                    );
+                    Err(anyhow!("transport `{name}` panicked"))
+                }
             }
-            served
         });
+        still.push(Spawned {
+            task: join.id(),
+            name,
+            stop_bound,
+            abort: join.abort_handle(),
+        });
+        drop(still);
         TransportHandle { cancel, join }
     }
 
@@ -114,9 +142,9 @@ impl HeadlessApp {
     /// [`Draining`](nest_rs_core::AppState::Draining), the transports it spawned
     /// stop within the longest of their stop bounds plus
     /// [`SHUTDOWN_SETTLE_TIMEOUT`](nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT) — one
-    /// still serving then is abandoned at `error`, as [`App::run`] abandons it
-    /// — then the shutdown phases run in reverse, the resources close, and the
-    /// container drops.
+    /// still serving then is abandoned at `error` and aborted, as [`App::run`]
+    /// abandons it — then the shutdown phases run in reverse, the resources
+    /// close, and the container drops.
     pub async fn close(self) {
         let HeadlessApp {
             app,
@@ -133,25 +161,28 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Wait for every tracked transport to return once the app's stop token fired,
 /// within the longest stop bound plus the settle, as [`App::run`] does; one
-/// still serving then is abandoned at `error`.
+/// still serving then is abandoned at `error` and aborted.
 async fn stop_within(transports: &TaskTracker, serving: &Serving) {
     transports.close();
     let longest = locked(serving)
         .iter()
-        .map(|(_, bound)| *bound)
+        .map(|spawned| spawned.stop_bound)
         .max()
         .unwrap_or_default();
     let held = longest + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
     if tokio::time::timeout(held, transports.wait()).await.is_ok() {
         return;
     }
-    for (transport, bound) in locked(serving).iter() {
+    // Aborted, never awaited: a task blocking its thread would hold the way
+    // down past every bound.
+    for spawned in locked(serving).drain(..) {
         nest_rs_core::tracing::error!(
             target: nest_rs_core::target::APP,
-            transport,
-            stop_bound_ms = u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
+            transport = spawned.name,
+            stop_bound_ms = u64::try_from(spawned.stop_bound.as_millis()).unwrap_or(u64::MAX),
             "transport did not stop within its declared bound: abandoned",
         );
+        spawned.abort.abort();
     }
 }
 

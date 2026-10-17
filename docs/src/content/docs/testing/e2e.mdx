@@ -418,9 +418,10 @@ assert_eq!(lifecycle.cause(), Some(StopCause::Closed));
 
 A `HeadlessApp` stops the transports it spawned first — they serve under the
 app's stop token — and waits for them within the longest of their stop bounds,
-so a worker's last job finishes before the hooks it may depend on run; its
-`init()` does the same before tearing down an init that fails, and a spawned
-transport whose `serve` fails is logged at `error` with its cause. A boot
+so a worker's last job finishes before the hooks it may depend on run, and one
+still serving past them is named at `error` and aborted; its `init()` does the
+same before tearing down an init that fails. A spawned transport whose `serve`
+fails or panics is logged at `error` with its cause, as `App::run` logs it. A boot
 that fails inside `build()` — a transport's configuration, an init hook — is
 torn down before the error returns, as `App::run` tears it down.
 

@@ -2,8 +2,8 @@
 //! first at init and in reverse at shutdown, bare and `Result`-returning
 //! alike; a failing init hook aborts the boot and tears every host down; the
 //! harness runs them once, hands out the app's lifecycle, and closes the app,
-//! stopping what it spawned before any teardown and filing a spawned
-//! transport that fails.
+//! stopping what it spawned before any teardown, aborting what it abandons,
+//! and filing a spawned transport that fails or panics.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -715,6 +715,182 @@ async fn a_spawned_transport_that_ignores_its_stop_is_abandoned_at_its_bound_the
     );
     assert_eq!(line.level, "error");
     assert_eq!(line.field("stop_bound_ms").as_deref(), Some("2000"));
+}
+
+/// Never returns from `serve`, its stop token ignored; what it holds drops
+/// with its task.
+struct HeldUntilAborted(tokio::sync::oneshot::Sender<()>);
+
+#[async_trait::async_trait]
+impl nest_rs_core::Transport for HeldUntilAborted {
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(
+        self: Box<Self>,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<()> {
+        let _held = self.0;
+        std::future::pending().await
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(2)
+    }
+}
+
+/// What the harness abandons it aborts, as the kernel does, rather than
+/// leaving it to run on into the shutdown phases.
+#[tokio::test(start_paused = true)]
+async fn a_spawned_transport_abandoned_at_its_bound_is_aborted() {
+    let app = TestApp::builder()
+        .module::<ServesNothingModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+    let (held, dropped) = tokio::sync::oneshot::channel();
+    let _serving = app
+        .spawn_transport(HeldUntilAborted(held))
+        .await
+        .expect("the transport listens");
+
+    app.close().await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), dropped)
+        .await
+        .expect("the abandoned transport's task is aborted")
+        .expect_err("the transport never sends: its task was dropped");
+}
+
+/// Returns at once, or `lingers` once its stop token fires.
+struct Paced {
+    stop_bound: std::time::Duration,
+    lingers: Option<std::time::Duration>,
+}
+
+#[async_trait::async_trait]
+impl nest_rs_core::Transport for Paced {
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(
+        self: Box<Self>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<()> {
+        if let Some(lingers) = self.lingers {
+            cancel.cancelled().await;
+            tokio::time::sleep(lingers).await;
+        }
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        self.stop_bound
+    }
+}
+
+/// Two transports of one type keep an entry each: the one that returns first
+/// leaves the other held to its own bound, never abandoned at the first's.
+#[tokio::test(start_paused = true)]
+async fn two_spawned_transports_of_one_type_are_each_held_to_their_own_bound() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ServesNothingModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+    let _slow = app
+        .spawn_transport(Paced {
+            stop_bound: std::time::Duration::from_secs(10),
+            lingers: Some(std::time::Duration::from_secs(3)),
+        })
+        .await
+        .expect("the slow transport listens");
+    let _quick = app
+        .spawn_transport(Paced {
+            stop_bound: std::time::Duration::from_secs(1),
+            lingers: None,
+        })
+        .await
+        .expect("the quick transport listens");
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    let started = tokio::time::Instant::now();
+
+    app.close().await;
+
+    let took = started.elapsed();
+    let lingered = std::time::Duration::from_secs(3);
+    assert!(
+        took >= lingered && took < lingered + std::time::Duration::from_millis(100),
+        "the close waited for the slow transport under its own bound: took {took:?}",
+    );
+    logs.expect_none(
+        target::APP,
+        "transport did not stop within its declared bound: abandoned",
+    );
+}
+
+/// Panics as soon as it serves.
+struct PanicsAsItServes;
+
+#[async_trait::async_trait]
+impl nest_rs_core::Transport for PanicsAsItServes {
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(
+        self: Box<Self>,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<()> {
+        panic!("the listener lost its socket")
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
+/// The harness contains a spawned transport's panic as `App::run` contains
+/// one: filed once at `error`, and the transport's error naming it.
+#[tokio::test]
+async fn a_spawned_transport_that_panics_is_contained_and_filed_at_error() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ServesNothingModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+    let serving = app
+        .spawn_transport(PanicsAsItServes)
+        .await
+        .expect("the transport listens");
+
+    let error = serving
+        .shutdown()
+        .await
+        .expect_err("a transport that panicked fails its handle");
+    app.close().await;
+
+    assert!(
+        error.to_string().ends_with("PanicsAsItServes` panicked"),
+        "{error:#}"
+    );
+    let filed = logs.expect_one(target::APP, "a transport the harness spawned panicked");
+    assert_eq!(filed.level, "error");
+    assert_eq!(
+        filed.field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the listener lost its socket"),
+    );
+    assert!(
+        filed
+            .field("transport")
+            .is_some_and(|transport| transport.ends_with("PanicsAsItServes")),
+        "{:?}",
+        filed.fields,
+    );
 }
 
 static WS_RELEASED: AtomicUsize = AtomicUsize::new(0);

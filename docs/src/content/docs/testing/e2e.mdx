@@ -53,7 +53,7 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
 Each test module reaches for that `boot()` and the token helpers beside it:
 
 ```rust title="apps/api/tests/e2e/users.rs (from the demo, abridged)"
-use poem::http::{StatusCode, header};
+use nest_rs::http::{StatusCode, header};
 // …
 use serde_json::json;
 // …
@@ -171,11 +171,27 @@ let app = TestApp::builder()
 
 ## Driving the HTTP surface
 
-`app.http()` returns
-[`poem::test::TestClient`](https://docs.rs/poem/latest/poem/test/struct.TestClient.html)
-— typed requests, typed responses, no socket. GraphQL
+`app.http()` returns a `TestClient` — typed requests, typed responses, no
+socket. A request runs through everything a socket's would, the edge
+included, and its failed assertion names what differed: the status, the
+header, or the JSON path it stood at (`$.data.items[2]`). GraphQL
 (`POST /graphql`), the OpenAPI document (`GET /api-json`), and MCP all
 ride the same client because they self-mount as HTTP endpoints.
+
+In process a request has no peer address, so `ClientIp` reads `0.0.0.0`
+until the request names one — `.peer_addr(addr)` — which is how a suite
+proves what a proxy listed in `<PREFIX>_HTTP__TRUSTED_PROXIES` may forward:
+
+```rust title="tests/integration/client.rs"
+app.http()
+    .get("/who")
+    .peer_addr("10.0.0.9:5000".parse().unwrap())
+    .header("x-forwarded-for", "203.0.113.7")
+    .send()
+    .await
+    .assert_text("203.0.113.7 forwarded=true")
+    .await;
+```
 
 It drives **the transport your app's `HttpModule::for_root(cfg)` describes**, not
 a bare one — so a global prefix, a versioning strategy, a body cap or a request

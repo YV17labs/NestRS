@@ -8,10 +8,10 @@ sidebar:
 
 `nest-rs-testing` boots the **real** `AppBuilder` (the four-phase collect →
 factories → register → access-graph check) in-process, configures an
-`HttpTransport` without a socket, and exposes a typed client over
-[`poem::test::TestClient`](https://docs.rs/poem/latest/poem/test/struct.TestClient.html).
-GraphQL, OpenAPI, and MCP ride the same client because they self-mount as
-HTTP endpoints.
+`HttpTransport` without a socket, and hands you `TestClient`, its own
+in-process client over the stack the server runs — the edge, the router, the
+guards and your handlers. GraphQL, OpenAPI, and MCP ride the same client
+because they self-mount as HTTP endpoints.
 
 The principle: **a test is the truth of what production does.** No mocked
 DI graph, no separate test wiring.

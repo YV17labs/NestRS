@@ -50,15 +50,15 @@ nextest prints each test's time: compare before and after.
 ## `nest-rs-testing`
 
 - **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives HTTP,
-  GraphQL, OpenAPI and MCP through poem's `TestClient`, no socket; `TestApp`
-  and the builder's HTTP half (`build`, `build_ws`, `use_*_global`) are the
-  `http` feature, the builder itself is not. The default entry point, and the
-  composition witness `manifests-ci.md` asks of every `for_root` seam. It
-  boots the transport the app's own `HttpModule::for_root(cfg)` describes,
-  through the call the module itself makes: pin an `HttpConfig` on the module
-  to test a prefix, a versioning strategy, a body cap or a timeout, or seed
-  the whole config (`provide`) for a value the module does not pin — the
-  transport has no builder.
+  GraphQL, OpenAPI and MCP through nestrs's `TestClient`, the stack the server
+  runs, no socket; `TestApp` and the builder's HTTP half (`build`, `build_ws`,
+  `use_*_global`) are the `http` feature, the builder itself is not. The
+  default entry point, and the composition witness `manifests-ci.md` asks of
+  every `for_root` seam. It boots the transport the app's own
+  `HttpModule::for_root(cfg)` describes, through the call the module itself
+  makes: pin an `HttpConfig` on the module to test a prefix, a versioning
+  strategy, a body cap or a timeout, or seed the whole config (`provide`) for
+  a value the module does not pin — the transport has no builder.
 - **`provide` / `provide_arc`** seed a value, which short-circuits its
   resolving factory and still passes its config's checks;
   **`override_dyn` / `override_value` / `override_arc`** replace a provider

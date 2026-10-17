@@ -161,3 +161,16 @@ decoding, the template each entry records, the version rewrite, the global
 prefix (applied at registration) and the fallback are nestrs's own, pinned by
 `tests/integration/routes.rs` and its siblings, so the next adapter brings a
 path matcher and nothing more.
+
+## 2026-10-18 — the test kit drives the endpoint itself
+
+`nest-rs-testing` no longer re-exports poem's `TestClient`: its own client
+takes any `nest_rs_http::Endpoint` and sends nestrs's `Request` to it, as the
+accept loop does, so a suite names no server type and the next adapter
+rewrites none. The names and assertions are poem's, ported with its MIT
+notice, and a failure now names the header or the JSON path it read. A request
+has no peer unless the test gives it one, as poem's had none. Refused: a
+client over a loopback socket, which would test the socket on every request
+where `tests/integration/server.rs` already does once; and keeping poem's
+client behind the bridge, which kept poem's `test` feature, and the MPL-2.0
+`sse-codec` it pulls, in every suite's graph.

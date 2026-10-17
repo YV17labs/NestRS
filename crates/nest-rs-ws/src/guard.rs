@@ -124,7 +124,7 @@ impl EventLayerTable {
                     );
                     denial_to_ws_error(denial)
                 }
-                Refused::Gate(denial) => denial_to_ws_error(denial),
+                Refused::Filed(denial) => denial_to_ws_error(denial),
             })?;
         Ok((attached, view.take_data()))
     }

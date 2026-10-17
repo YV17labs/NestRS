@@ -247,6 +247,12 @@ impl Guard for ThrottlerGuard {
         }
         Err(rate_limited(decision.retry_after))
     }
+
+    /// Every refusal is filed here, on `nest_rs::throttler`: the limit, or the
+    /// store that could not count the hit.
+    fn files_its_denials(&self) -> bool {
+        true
+    }
 }
 
 /// `ThrottlerGuard` checks every unit: an HTTP request through

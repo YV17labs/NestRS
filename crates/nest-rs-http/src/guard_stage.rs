@@ -14,8 +14,8 @@ use nest_rs_core::__private::{
     Pending, ResolvedLayer, UnmaskedReply, carries_ambient, install_pending, new_unit_context,
     take_pending,
 };
-use nest_rs_core::{AmbientValue, Failure, Handler};
-use nest_rs_guards::__private::{denial_of, failure_chain};
+use nest_rs_core::{AmbientValue, Handler};
+use nest_rs_guards::__private::{Refused, denial_of, failure_chain};
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
 use poem::http::{HeaderValue, StatusCode, header};
 use poem::{Error, IntoResponse, Request, Response};
@@ -30,14 +30,6 @@ use crate::view::HttpView;
 /// stage and the endpoint that runs the rest of it.
 #[derive(Clone, Default)]
 struct Attached(Pending);
-
-/// Why a guard stage refused its unit.
-enum Refused {
-    /// A guard's denial, beside the guard's name, as raised: the edge files it.
-    Guard(&'static str, Denial),
-    /// The posture's class gate: it filed its own refusal.
-    Gate(Failure),
-}
 
 /// Run each of `guards`' [`check_http`](Guard::check_http), in order, on
 /// `request` as the unit `handler` declares, then each of the route's class
@@ -61,10 +53,10 @@ async fn run_stage<'g>(
             guard
                 .check_http(&mut cx)
                 .await
-                .map_err(|denial| Refused::Guard(name, denial))?;
+                .map_err(|denial| Refused::by(name, guard, denial))?;
         }
         for gate in gates {
-            gate(&mut cx).map_err(Refused::Gate)?;
+            gate(&mut cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;
         }
         Ok(take_pending(&mut cx))
     })
@@ -83,25 +75,23 @@ async fn run_poem_stage<'g>(
     (request_to_poem(request), checked)
 }
 
-impl Refused {
-    /// The refusal's answer, a guard's denial filed first.
-    fn answer(self) -> Response {
-        match self {
-            Self::Guard(guard, denial) => deny_http(guard, denial),
-            Self::Gate(refused) => denial_to_http_response(denial_of(&refused)),
-        }
+/// A refusal's answer, filing first a guard's denial nobody filed.
+fn answer(refused: Refused) -> Response {
+    match refused {
+        Refused::Guard(guard, denial) => deny_http(guard, denial),
+        Refused::Filed(denial) => denial_to_http_response(denial),
     }
+}
 
-    /// The denial a guard raised, its name filed with it — the in-band stage
-    /// renders it as its edge does — or a gate's, already filed.
-    fn into_denial(self) -> Denial {
-        match self {
-            Self::Guard(guard, denial) => {
-                file_denial(guard, &denial);
-                denial
-            }
-            Self::Gate(refused) => denial_of(&refused),
+/// The denial a refusal carries, filing first a guard's nobody filed — the
+/// in-band stage renders it as its edge does.
+fn into_denial(refused: Refused) -> Denial {
+    match refused {
+        Refused::Guard(guard, denial) => {
+            file_denial(guard, &denial);
+            denial
         }
+        Refused::Filed(denial) => denial,
     }
 }
 
@@ -126,7 +116,7 @@ pub async fn check_request<'g>(
     let taken = std::mem::replace(req, crate::Request::builder().finish());
     let (request, checked) = run_stage(handler, guards, &[], taken).await;
     *req = request;
-    let pending = checked.map_err(Refused::into_denial)?;
+    let pending = checked.map_err(into_denial)?;
     let attached = req.extensions_mut();
     match attached.get_mut::<Attached>() {
         Some(Attached(earlier)) => earlier.merge(pending),
@@ -201,7 +191,7 @@ where
     } else {
         match run_poem_stage(handler, erased(chain), gates, req).await {
             (req, Ok(pending)) => (req, pending),
-            (_, Err(refused)) => return Ok(refused.answer()),
+            (_, Err(refused)) => return Ok(answer(refused)),
         }
     };
     install_pending(marked(pending, unmasked), rest(req)).await
@@ -246,7 +236,7 @@ impl Endpoint for GuardedEndpoint {
         let (req, pending) = match run_stage(self.handler, erased(&self.chain), &[], req).await {
             (req, Ok(pending)) => (req, pending),
             (_, Err(refused)) => {
-                return Ok(crate::poem_bridge::response_from_poem(refused.answer()));
+                return Ok(crate::poem_bridge::response_from_poem(answer(refused)));
             }
         };
         install_pending(marked(pending, false), self.inner.call(req)).await

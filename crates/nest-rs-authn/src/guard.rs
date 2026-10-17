@@ -251,6 +251,12 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
     fn produced_principal(&self) -> Option<PrincipalClaim> {
         Some(PrincipalClaim::of::<S::Principal>())
     }
+
+    /// Every refusal is filed here, on `nest_rs::authn`, with the strategy and
+    /// its reason.
+    fn files_its_denials(&self) -> bool {
+        true
+    }
 }
 
 /// HTTP is the only edge this guard checks, and enough for all: the GraphQL

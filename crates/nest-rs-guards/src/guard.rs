@@ -129,6 +129,14 @@ pub trait Guard: Layer {
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         None
     }
+
+    /// Whether this guard files one line of its own, on its crate's target, for
+    /// every denial it returns. The edge then files none, so one denial is one
+    /// line, the decider's; by default the edge files `guard denied …` on
+    /// `nest_rs::layers`, so a guard that says nothing is still seen.
+    fn files_its_denials(&self) -> bool {
+        false
+    }
 }
 
 /// Declares that a guard checks the units whose view is `V` — the bound every
@@ -182,6 +190,10 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
 
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         (**self).expected_principal()
+    }
+
+    fn files_its_denials(&self) -> bool {
+        (**self).files_its_denials()
     }
 }
 

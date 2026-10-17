@@ -280,20 +280,20 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3005/posts
 
 ```text frame="terminal"
 WARN nest_rs::authn: authentication failed strategy="…JwtStrategy<…Claims>" reason="missing_credentials" trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
-WARN nest_rs::layers: guard denied the request guard="…AuthnGuard<…>" status=401 trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
 ```
 
-Both lines carry the request's `trace_id`, and no `actor_id` — nobody was
-authenticated, which is the whole story of a `401`.
+One denial, one line, on the target of the guard that decided it. It carries
+the request's `trace_id`, and no `actor_id` — nobody was authenticated, which
+is the whole story of a `401`.
 
 Drop `#[use_guards(...)]` from the controller and the answer becomes a **500**
 instead, because `#[crud]` still emits the class gate and nothing installed an
 ability for it to read:
 
 ```text frame="terminal"
-ERROR nest_rs::authz: missing request Ability — route is authorized but no ability guard ran
-                      action=Read subject="features::posts::entity::Entity"
-                      hint="bind the ability guard (#[use_guards(AuthnGuard, AuthzGuard)]) …"
+ERROR nest_rs::authz: authorization denied transport="http" host="PostsController" method="list"
+                      action=Read subject="features::posts::entity::Entity" reason="no_ambient_ability"
+                      remedy="bind the ability guard on this site's request — #[use_guards(AuthnGuard, AuthzGuard)], …"
 ```
 
 That log line is the difference between a five-minute fix and an afternoon:

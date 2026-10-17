@@ -76,6 +76,11 @@ Review a new edge, or a change to one, against it:
    the guard there and re-runs it, composed once per site and
    deduplicated by `TypeId`; a denial renders through one
    `denial_to_<edge>_error`, so a guard's refusal and a gate's look the same.
+   **One denial files one line**, its decider's: a guard that files its own
+   says so (`Guard::files_its_denials`), as the framework's authentication,
+   ability and throttler guards do, and the edge files the structural
+   `guard denied …` on `nest_rs::layers` only for one that does not; a class
+   gate files its own. Held by a test per edge.
 6. **A view, `<Edge>View` in the edge crate's `view.rs`, and the bound the
    decorators emit for it** (`guard_capability_bounds`: `GuardFor<<Edge>View>`).
    A guard has two entries, `check_http` for an HTTP request and `check` for

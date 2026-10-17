@@ -107,7 +107,7 @@ pub async fn run_layered_mcp_chain(
                 );
                 denial_to_mcp_error(denial)
             }
-            Refused::Gate(denial) => denial_to_mcp_error(denial),
+            Refused::Filed(denial) => denial_to_mcp_error(denial),
         })
 }
 

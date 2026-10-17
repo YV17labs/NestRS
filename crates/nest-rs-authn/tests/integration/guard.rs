@@ -789,7 +789,7 @@ mod ws {
     /// refuses the upgrade itself and no socket opens. An in-process client
     /// cannot finish a handshake that *passed* either — it answers `500 no
     /// upgrade` at once — so what shows the guard refused it is the wait and
-    /// the two lines: the guard's, and the chain's naming the guard.
+    /// the guard's line, the one the denial files.
     #[tokio::test(start_paused = true)]
     async fn the_websocket_upgrade_is_refused_at_the_bound() {
         let logs = LogCapture::install();
@@ -812,15 +812,8 @@ mod ws {
         refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         assert_the_strategy_was_waited_out(&logs);
 
-        let denied = logs.expect_one(nest_rs_core::target::LAYERS, "guard denied the request");
-        assert_eq!(denied.field("status").as_deref(), Some("503"));
-        assert!(
-            denied
-                .field("guard")
-                .is_some_and(|guard| guard.contains("StalledStrategy")),
-            "the chain names the guard that refused the upgrade, got {:?}",
-            denied.fields,
-        );
+        // The guard filed the refusal, so the chain files none: one denial, one line.
+        logs.expect_none(nest_rs_core::target::LAYERS, "guard denied the request");
     }
 }
 

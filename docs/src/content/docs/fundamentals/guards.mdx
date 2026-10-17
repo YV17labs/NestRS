@@ -29,8 +29,12 @@ lets it through (`Ok(())`) or short-circuits with a typed `Denial` the
 framework maps to 401 / 403 / 429 — or 503, `Denial::unavailable`, when
 something the guard depends on did not answer and the caller did nothing
 wrong. `Denial::unavailable_because` keeps what failed as well: every edge
-files the denial at `warn`, and that line carries the whole chain as its
-`error` field, while the caller reads the condition alone. One trait, four
+files the denial at `warn`, `guard denied …` on `nest_rs::layers`, and that
+line carries the whole chain as its `error` field, while the caller reads the
+condition alone. A guard that files a line of its own for every denial — the
+framework's authentication, ability and throttler guards do, on their crates'
+targets — says so with `files_its_denials()`, and the edge then files none:
+one denial is one line, the decider's. One trait, four
 transports — the same
 `#[injectable]` impl is reachable from HTTP, GraphQL, WS and MCP through the
 [the request lifecycle](/fundamentals/request-lifecycle/).

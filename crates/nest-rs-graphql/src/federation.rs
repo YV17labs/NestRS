@@ -176,7 +176,7 @@ impl Extension for FederationExtension {
                     );
                     denial
                 }
-                Refused::Gate(denial) => denial,
+                Refused::Filed(denial) => denial,
             };
             denial_to_graphql_error(denial).into_server_error(info.field.name.pos)
         })?;

@@ -116,6 +116,11 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         Some(PrincipalClaim::of::<F::Actor>())
     }
+
+    /// Every refusal is filed here, on `nest_rs::authz`.
+    fn files_its_denials(&self) -> bool {
+        true
+    }
 }
 
 /// `AbilityGuard` checks HTTP: [`check_http`](Guard::check_http) attaches the

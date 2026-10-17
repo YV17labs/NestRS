@@ -109,7 +109,7 @@ pub async fn run_layered_graphql_chain(
                 );
                 denial_to_graphql_error(denial)
             }
-            Refused::Gate(denial) => denial_to_graphql_error(denial),
+            Refused::Filed(denial) => denial_to_graphql_error(denial),
         })
 }
 

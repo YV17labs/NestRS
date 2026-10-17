@@ -336,6 +336,9 @@ async fn a_message_that_wrote_then_outlived_its_deadline_leaves_no_row() {
 
     let answer = socket.next_envelope().await;
     assert_eq!(answer["data"]["errors"]["reason"], "timeout", "{answer}");
+    // The close drains the binding's settles: the count follows the cut unit's.
+    drop(socket);
+    app.close().await;
     assert_eq!(
         crate::harness::committed_rows(&conn, "ws_unit_deadline").await,
         0,
@@ -357,7 +360,6 @@ async fn a_message_that_wrote_then_outlived_its_deadline_leaves_no_row() {
         abandoned.is_empty(),
         "the unit settled its transaction as a rollback: {abandoned:#?}",
     );
-    app.shutdown().await.expect("the transport stops cleanly");
 }
 
 static BLOCKED_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
@@ -427,6 +429,9 @@ async fn a_message_whose_statement_is_blocked_is_answered_at_its_deadline() {
     );
 
     locker.rollback().await.expect("the lock goes");
+    // The close drains the binding's settles: the count follows the cut unit's.
+    drop(socket);
+    app.close().await;
     assert_eq!(
         crate::harness::committed_rows(&conn, "ws_unit_blocked").await,
         0,
@@ -444,5 +449,4 @@ async fn a_message_whose_statement_is_blocked_is_answered_at_its_deadline() {
         abandoned.is_empty(),
         "settled, never abandoned: {abandoned:#?}"
     );
-    app.shutdown().await.expect("the transport stops cleanly");
 }

@@ -234,6 +234,8 @@ async fn an_operation_whose_statement_is_blocked_is_answered_at_its_deadline() {
     );
 
     locker.rollback().await.expect("the lock goes");
+    // The close drains the binding's settles: the count follows the cut unit's.
+    app.close().await;
     assert_eq!(
         crate::harness::committed_rows(&conn, "mcp_unit_blocked").await,
         0,

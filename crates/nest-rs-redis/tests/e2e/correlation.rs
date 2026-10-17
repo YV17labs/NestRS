@@ -7,7 +7,7 @@ use std::time::Duration;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobProducerExt, QueueModule, QueueWorker, processor, queue};
 use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer};
-use nest_rs_testing::TestApp;
+use nest_rs_testing::HeadlessApp;
 use serde::{Deserialize, Serialize};
 
 /// What the handler saw as its ambient identity: the trace it is running in,
@@ -63,7 +63,7 @@ struct CorrelationModule;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<CorrelationModule>()
         .build_headless()
         .await

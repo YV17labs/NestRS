@@ -52,7 +52,7 @@ use nest_rs_redis::{
     RedisQueueProducer, RedisTopology,
 };
 use nest_rs_testing::{
-    CapturedEvent, TestApp, TransportHandle, url_as, url_at, url_on, wait_for, wait_until,
+    CapturedEvent, HeadlessApp, TransportHandle, url_as, url_at, url_on, wait_for, wait_until,
 };
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -930,7 +930,7 @@ struct Replica {
 /// [`LEASE`] and draining within [`WINDOW`]. The app is leaked: the transport
 /// borrows the container it owns, the way a process would hold it.
 async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
-    replica_of::<M>(TestApp::builder()).await
+    replica_of::<M>(HeadlessApp::builder()).await
 }
 
 /// [`replica`], reaching Redis as `redis` says whatever the environment says:
@@ -938,7 +938,7 @@ async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
 /// the hermetic-test hatch, for a suite that needs a database or a user of its
 /// own while `<PREFIX>_REDIS__URL` points every other one at the shared Redis.
 async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
-    replica_of::<M>(TestApp::builder().provide(redis)).await
+    replica_of::<M>(HeadlessApp::builder().provide(redis)).await
 }
 
 async fn replica_of<M: nest_rs_core::Module + 'static>(
@@ -957,7 +957,7 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
 /// binds.
 async fn booted<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
-) -> (nest_rs_testing::HeadlessApp, RedisQueueProducer) {
+) -> (HeadlessApp, RedisQueueProducer) {
     let app = brisk(builder)
         .module::<M>()
         .build_headless()
@@ -991,7 +991,7 @@ impl Mortal {
 /// Boot the worker app `M` like [`replica`], and run its worker on a task a
 /// test can abort.
 async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
-    let (app, producer) = booted::<M>(TestApp::builder()).await;
+    let (app, producer) = booted::<M>(HeadlessApp::builder()).await;
     let mut worker = QueueWorker::new();
     worker
         .configure(app.container())
@@ -1188,7 +1188,7 @@ async fn producer() -> RedisQueueProducer {
 
 /// A producer-only app reaching Redis as `redis` says.
 async fn producer_on(redis: RedisConfig) -> RedisQueueProducer {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .provide(redis)
         .module::<ProducerOnlyModule>()
         .build_headless()

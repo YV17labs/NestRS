@@ -18,7 +18,7 @@ use nest_rs::database::{
 use nest_rs::queue::{QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-use nest_rs::testing::{EphemeralDatabase, TestApp};
+use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use uuid::Uuid;
 
@@ -159,7 +159,7 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
     let rolled_back = draft(&conn, org_id, author_id, "Rolled back").await;
     let committed = draft(&conn, org_id, author_id, "Committed").await;
 
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<PublishingHarness>()
         .provide_arc(conn.clone())
         .provide(RedisDatabase::PostsRollback.config())
@@ -187,7 +187,7 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
     assert_eq!(status(&conn, rolled_back).await, PostStatus::Draft);
     assert_eq!(status(&conn, committed).await, PostStatus::Published);
 
-    let worker = TestApp::builder()
+    let worker = HeadlessApp::builder()
         .module::<NotifyingWorkerHarness>()
         .provide_arc(conn.clone())
         .provide(RedisDatabase::PostsRollback.config())

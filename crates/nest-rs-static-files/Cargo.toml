@@ -36,7 +36,7 @@ tracing.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 # A global deny-all guard, to prove the files are public by import.
 nest-rs-guards = { path = "../nest-rs-guards" }
 # The suite's `#[routes]` wrap each route's response layers.

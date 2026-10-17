@@ -49,21 +49,24 @@ nextest prints each test's time: compare before and after.
 
 ## `nest-rs-testing`
 
-- **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives
-  HTTP, GraphQL, OpenAPI and MCP through poem's `TestClient`, no socket. The
-  default entry point, and the composition witness `manifests-ci.md` asks
-  of every `for_root` seam. It boots the transport the app's own
-  `HttpModule::for_root(cfg)` describes, through the call the module itself
-  makes: pin an `HttpConfig` on the module to test a prefix, a versioning
-  strategy, a body cap or a timeout, or seed the whole config (`provide`) for
-  a value the module does not pin — the transport has no builder.
+- **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives HTTP,
+  GraphQL, OpenAPI and MCP through poem's `TestClient`, no socket; `TestApp`
+  and the builder's HTTP half (`build`, `build_ws`, `use_*_global`) are the
+  `http` feature, the builder itself is not. The default entry point, and the
+  composition witness `manifests-ci.md` asks of every `for_root` seam. It
+  boots the transport the app's own `HttpModule::for_root(cfg)` describes,
+  through the call the module itself makes: pin an `HttpConfig` on the module
+  to test a prefix, a versioning strategy, a body cap or a timeout, or seed
+  the whole config (`provide`) for a value the module does not pin — the
+  transport has no builder.
 - **`provide` / `provide_arc`** seed a value, which short-circuits its
   resolving factory and still passes its config's checks;
   **`override_dyn` / `override_value` / `override_arc`** replace a provider
   before anything is built from it, so every consumer injects the double.
   Never the database (`CLAUDE.md`, hard "no").
 - **`HeadlessApp` / `TransportHandle`** — boot with no transport, for
-  lifecycle, DI and discovery assertions.
+  lifecycle, DI and discovery assertions. A suite serving no HTTP starts from
+  `HeadlessApp::builder()` and leaves `http` off, so it links no HTTP stack.
 - **`WsApp` / `WsSocket`, `GraphqlSocket`** — a real upgrade, for the edges
   whose protocol is the socket.
 - **`LogCapture`** — the events a unit emits are half its contract: a denial

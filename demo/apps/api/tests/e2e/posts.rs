@@ -5,7 +5,7 @@ use nest_rs::core::module;
 use nest_rs::queue::{QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-use nest_rs::testing::TestApp;
+use nest_rs::testing::HeadlessApp;
 use poem::http::header;
 use serde_json::json;
 use uuid::Uuid;
@@ -192,7 +192,7 @@ struct NotificationsWorkerHarness;
 async fn publishing_a_post_notifies_the_org_through_the_worker() {
     let (db, app) = boot_on(RedisDatabase::PostsNotify).await;
 
-    let worker = TestApp::builder()
+    let worker = HeadlessApp::builder()
         .module::<NotificationsWorkerHarness>()
         .provide_arc(db.connection())
         .provide(RedisDatabase::PostsNotify.config())

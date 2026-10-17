@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use nest_rs_core::injectable;
 use nest_rs_storage::{Storage, StorageConfig, StorageModule};
-use nest_rs_testing::{HeadlessApp, TestApp};
+use nest_rs_testing::HeadlessApp;
 
 /// A feature service injecting the client, as an app's would.
 #[injectable]
@@ -34,7 +34,7 @@ struct UploadsModule;
 
 /// The app's client, booted over the in-process store.
 async fn booted() -> (HeadlessApp, Arc<Storage>) {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<UploadsModule>()
         .build_headless()
         .await

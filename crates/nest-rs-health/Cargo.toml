@@ -42,7 +42,7 @@ tokio = { workspace = true, features = ["test-util"] }
 # A probe's contract has two halves: the body an operator can read off an open
 # port, and the log line carrying what the body deliberately withholds. Path-only
 # (intra-workspace dev-edge), per the manifest rule.
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-//! Booted app with no HTTP client, for queue workers and schedulers.
+//! Booted app with no transport of its own, for queue workers and schedulers.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -8,6 +8,8 @@ use nest_rs_core::{App, AppLifecycle, Container, Transport};
 use tokio::task::{AbortHandle, Id, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+
+use crate::TestAppBuilder;
 
 /// Runs non-HTTP [`Transport`]s on a cancellable background task so a test
 /// can enqueue, observe, then shut the transport down.
@@ -35,6 +37,32 @@ struct Spawned {
 }
 
 impl HeadlessApp {
+    /// Start a [`TestAppBuilder`] to register modules and override providers,
+    /// then [`build_headless`](TestAppBuilder::build_headless): the entry of a
+    /// suite that serves no HTTP, which compiles without the `http` feature.
+    ///
+    /// ```
+    /// # use nest_rs_core::{injectable, module};
+    /// use nest_rs_testing::HeadlessApp;
+    ///
+    /// #[injectable]
+    /// struct Transcoder;
+    ///
+    /// #[module(providers = [Transcoder])]
+    /// struct WorkerModule;
+    ///
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// let app = HeadlessApp::builder().module::<WorkerModule>().build_headless().await?;
+    /// assert!(app.container().get::<Transcoder>().is_some());
+    /// app.close().await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn builder() -> TestAppBuilder {
+        TestAppBuilder::new()
+    }
+
     pub(crate) fn new(app: App) -> Self {
         Self {
             app,

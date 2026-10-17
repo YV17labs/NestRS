@@ -8,7 +8,7 @@ use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{Ctx, HttpView, async_trait, controller, routes};
-use nest_rs_testing::TestApp;
+use nest_rs_testing::{HeadlessApp, TestApp};
 use poem::http::StatusCode;
 use tokio::sync::Mutex;
 
@@ -596,7 +596,7 @@ struct PhasedGuardsModule;
 
 #[tokio::test]
 async fn a_global_pool_listing_authorization_first_fails_the_boot_of_an_app_serving_no_http() {
-    let result = TestApp::builder()
+    let result = HeadlessApp::builder()
         .module::<PhasedGuardsModule>()
         .use_guards_global([guard::<PolicyGuard>(), guard::<SessionGuard>()])
         .build_headless()

@@ -9,7 +9,7 @@ use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_pipes::{GlobalPipe, pipe};
-use nest_rs_testing::TestApp;
+use nest_rs_testing::{HeadlessApp, TestApp};
 use poem::{IntoResponse, Request, Response};
 
 use crate::refused_wiring;
@@ -152,7 +152,7 @@ async fn an_unresolvable_global_interceptor_fails_boot() {
 
 #[tokio::test]
 async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_interceptor() {
-    let result = TestApp::builder()
+    let result = HeadlessApp::builder()
         .module::<GuardOnlyModule>()
         .use_interceptors_global([interceptor::<GhostInterceptor>()])
         .build_headless()
@@ -168,7 +168,7 @@ async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_intercepto
 
 #[tokio::test]
 async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_guard() {
-    let result = TestApp::builder()
+    let result = HeadlessApp::builder()
         .module::<GuardOnlyModule>()
         .use_guards_global([guard::<GhostGuard>()])
         .build_headless()
@@ -186,7 +186,7 @@ async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_guard() {
 
 #[tokio::test]
 async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_pipe() {
-    let result = TestApp::builder()
+    let result = HeadlessApp::builder()
         .module::<GuardOnlyModule>()
         .use_pipes_global([pipe::<GhostPipe>()])
         .build_headless()
@@ -204,7 +204,7 @@ async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_pipe() {
 
 #[tokio::test]
 async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_filter() {
-    let result = TestApp::builder()
+    let result = HeadlessApp::builder()
         .module::<GuardOnlyModule>()
         .use_filters_global([filter::<GhostFilter>()])
         .build_headless()
@@ -221,7 +221,7 @@ async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_filter() {
 
 #[tokio::test]
 async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_exception_filter() {
-    let result = TestApp::builder()
+    let result = HeadlessApp::builder()
         .module::<GuardOnlyModule>()
         .use_exception_filters_global([exception_filter::<GhostExceptionFilter>()])
         .build_headless()

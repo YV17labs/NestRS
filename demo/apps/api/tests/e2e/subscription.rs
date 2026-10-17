@@ -4,7 +4,7 @@ use futures_util::{SinkExt, StreamExt};
 use nest_rs::authn::AuthnConfig;
 use nest_rs::http::poem::http::header;
 use nest_rs::http::{HttpConfig, HttpTransport};
-use nest_rs::testing::{EphemeralDatabase, TestApp};
+use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -130,7 +130,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
-    let served = TestApp::builder()
+    let served = HeadlessApp::builder()
         .module::<ApiModule>()
         .provide_arc(db.connection())
         .provide(AuthnConfig {

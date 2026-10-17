@@ -62,7 +62,7 @@ tokio.workspace = true
 # binds a real port: the graphql-ws socket's way down — `complete`, then the
 # Close frame — exists only over a real upgrade, and so does the shutdown window
 # a DataLoader batch is stopped at.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "ws"] }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "http", "ws"] }
 # The layer-pool test asserts the transport-edge interceptor pool covers the
 # `/graphql` self-mount. An allowed dev-dependency cycle: the interceptors
 # depend on `nest-rs-http`, which this crate does.

@@ -11,7 +11,7 @@ use std::time::Duration;
 use nest_rs_config::{Config, ConfigError, ConfigModule, ConfigService, MapSource, config};
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, injectable, module};
 use nest_rs_http::HttpConfig;
-use nest_rs_testing::TestApp;
+use nest_rs_testing::HeadlessApp;
 
 #[config(namespace = "demoapp")]
 #[derive(Clone, Debug)]
@@ -78,7 +78,7 @@ fn from_env_maps_each_namespaced_var_from_its_source() {
 
 #[tokio::test]
 async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<DemoModule>()
         .build_headless()
         .await
@@ -94,7 +94,7 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
         "the loaded config is a factory output, present in the container"
     );
 
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<DemoModule>()
         .provide(DemoConfig {
             url: "postgres://seeded/app".into(),
@@ -153,7 +153,7 @@ fn a_pinned_config_still_lets_the_environment_override_each_field() {
                 .build()
                 .expect("runtime")
                 .block_on(async {
-                    let app = TestApp::builder()
+                    let app = HeadlessApp::builder()
                         .module::<DemoPinnedModule>()
                         .build_headless()
                         .await
@@ -178,7 +178,7 @@ fn a_pinned_config_still_lets_the_environment_override_each_field() {
 
 #[tokio::test]
 async fn a_pinned_field_survives_an_environment_that_says_nothing() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<DemoPinnedModule>()
         .build_headless()
         .await
@@ -190,7 +190,7 @@ async fn a_pinned_field_survives_an_environment_that_says_nothing() {
 
 #[tokio::test]
 async fn a_seed_outside_the_validation_its_read_passes_fails_the_boot_naming_the_namespace() {
-    let Err(refused) = TestApp::builder()
+    let Err(refused) = HeadlessApp::builder()
         .module::<DemoModule>()
         .provide(DemoConfig {
             url: String::new(),
@@ -240,7 +240,7 @@ struct ProbeModule;
 
 #[tokio::test]
 async fn a_seed_past_a_bound_fails_the_boot_before_any_factory_reads_it() {
-    let Err(refused) = TestApp::builder()
+    let Err(refused) = HeadlessApp::builder()
         .module::<ProbeModule>()
         .provide(HttpConfig {
             shutdown_timeout: Duration::MAX,
@@ -276,7 +276,7 @@ fn a_valid_seed_is_kept_as_seeded_whatever_the_environment_says() {
                 .build()
                 .expect("runtime")
                 .block_on(async {
-                    let app = TestApp::builder()
+                    let app = HeadlessApp::builder()
                         .module::<DemoModule>()
                         .provide(DemoConfig {
                             url: "postgres://seeded/app".into(),

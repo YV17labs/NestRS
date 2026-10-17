@@ -36,7 +36,7 @@ tracing.workspace = true
 [dev-dependencies]
 # The integration suite boots a real app and reads `/api-json` back, which is
 # what separates it from the mount-table unit tests in `src/module.rs`.
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 # A global deny-all guard, to prove the documentation edges are public — the
 # exposure that makes `enabled = false` the production posture.

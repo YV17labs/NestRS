@@ -1,9 +1,11 @@
 //! In-process testing harness for nestrs.
 //!
-//! [`TestApp`] boots an app's real DI graph (same four-phase
-//! [`AppBuilder`](nest_rs_core::AppBuilder) build, access-graph enforced) and
-//! exposes HTTP through `poem`'s `TestClient` without binding a socket. GraphQL,
-//! OpenAPI and MCP self-mount over HTTP, so one client drives every surface.
+//! [`HeadlessApp::builder`] boots an app's real DI graph (same four-phase
+//! [`AppBuilder`](nest_rs_core::AppBuilder) build, access-graph enforced) with
+//! no transport, for a worker or a scheduler; it links no HTTP stack. With the
+//! `http` feature, [`TestApp`] boots the same graph and exposes HTTP through
+//! `poem`'s `TestClient` without binding a socket. GraphQL, OpenAPI and MCP
+//! self-mount over HTTP, so one client drives every surface.
 //!
 //! Override providers with [`override_dyn`](TestAppBuilder::override_dyn) /
 //! [`override_value`](TestAppBuilder::override_value).
@@ -32,6 +34,8 @@ mod app;
 mod env;
 mod headless;
 mod logs;
+/// Driving the MCP endpoint over the HTTP test client (feature `http`).
+#[cfg(feature = "http")]
 pub mod mcp;
 mod url;
 mod wait;
@@ -59,13 +63,16 @@ pub mod ws;
 #[cfg(feature = "queue")]
 pub mod queue;
 
-pub use app::{TestApp, TestAppBuilder};
+#[cfg(feature = "http")]
+pub use app::TestApp;
+pub use app::TestAppBuilder;
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
 pub use logs::{CapturedEvent, CapturedSpan, LogCapture};
 pub use url::{url_as, url_at, url_on};
 pub use wait::{wait_for, wait_until};
 
+#[cfg(feature = "http")]
 pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};
 
 #[doc(hidden)]

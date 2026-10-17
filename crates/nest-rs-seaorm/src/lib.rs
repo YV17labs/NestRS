@@ -102,6 +102,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::config::DEFAULT_STATEMENT_TIMEOUT;
     #[cfg(feature = "http")]
     pub use crate::error::crud_error;
     #[cfg(feature = "graphql")]

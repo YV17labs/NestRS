@@ -52,7 +52,7 @@ use nest_rs_redis::{
 use nest_rs_schedule::{
     Occurrence, OccurrenceClaim, OccurrenceLock, ScheduleModule, Scheduler, scheduled,
 };
-use nest_rs_testing::{CapturedEvent, LogCapture, TestApp, TransportHandle};
+use nest_rs_testing::{CapturedEvent, HeadlessApp, LogCapture, TransportHandle};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -100,7 +100,7 @@ async fn schedule_connection() -> RedisConnection {
 async fn schedule_replica<M: nest_rs_core::Module + 'static>(
     config: RedisConfig,
 ) -> TransportHandle {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<M>()
         .provide(config)
         .build_headless()

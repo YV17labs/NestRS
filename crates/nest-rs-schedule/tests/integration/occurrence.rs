@@ -12,7 +12,7 @@ use nest_rs_schedule::{
     BACKEND_REMEDY, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError, Replicas,
     ScheduleModule, ScheduledMethod, Scheduler, scheduled,
 };
-use nest_rs_testing::TestApp;
+use nest_rs_testing::HeadlessApp;
 
 static RUNS: AtomicU64 = AtomicU64::new(0);
 static PINNED_RUNS: AtomicU64 = AtomicU64::new(0);
@@ -129,7 +129,7 @@ async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
     assert_eq!(declared.replicas, Replicas::One);
     assert_eq!(declared.key, None);
 
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<BoundRoot>()
         .build_headless()
         .await
@@ -174,7 +174,7 @@ async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
 
 #[tokio::test(start_paused = true)]
 async fn a_pinned_job_claims_under_the_key_it_declares() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<PinnedRoot>()
         .build_headless()
         .await
@@ -202,7 +202,7 @@ async fn a_pinned_job_claims_under_the_key_it_declares() {
 
 #[tokio::test]
 async fn two_lock_bindings_fail_the_boot_naming_the_remedy() {
-    let refusal = TestApp::builder()
+    let refusal = HeadlessApp::builder()
         .module::<ContestedRoot>()
         .build_headless()
         .await
@@ -216,7 +216,7 @@ async fn two_lock_bindings_fail_the_boot_naming_the_remedy() {
 #[tokio::test]
 async fn a_job_firing_once_with_no_lock_bound_fails_the_boot_naming_it() {
     let declared = declared();
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<UnboundRoot>()
         .build_headless()
         .await

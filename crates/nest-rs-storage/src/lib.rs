@@ -25,7 +25,7 @@
 //! ```
 //! # use std::sync::Arc;
 //! # use nest_rs_core::{injectable, module};
-//! # use nest_rs_testing::TestApp;
+//! # use nest_rs_testing::HeadlessApp;
 //! use futures_util::TryStreamExt;
 //! use nest_rs_storage::{Storage, StorageConfig, StorageModule};
 //!
@@ -46,7 +46,7 @@
 //! struct UploadsModule;
 //! # #[nest_rs_core::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let app = TestApp::builder().module::<UploadsModule>().build_headless().await?;
+//! # let app = HeadlessApp::builder().module::<UploadsModule>().build_headless().await?;
 //! # let UploadsService { storage } = &*app.container().get::<UploadsService>().expect("provided");
 //!
 //! storage.put_bytes("abc.txt", "hello", "text/plain").await?;

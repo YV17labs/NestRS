@@ -7,7 +7,7 @@ use nest_rs::queue::JobProducerExt;
 use nest_rs::queue::QueueWorker;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
 use nest_rs::schedule::Scheduler;
-use nest_rs::testing::{EphemeralDatabase, HeadlessApp, TestApp};
+use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 use uuid::Uuid;
 use worker::WorkerModule;
@@ -44,7 +44,7 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
-    let worker = TestApp::builder()
+    let worker = HeadlessApp::builder()
         .module::<WorkerModule>()
         .provide_arc(db.connection())
         .provide(RedisDatabase::WorkerRuns.config())
@@ -56,7 +56,7 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
         .await
         .expect("WorkerModule's QueueWorker configures against Redis");
 
-    let suites = TestApp::builder()
+    let suites = HeadlessApp::builder()
         .module::<SuitesProducer>()
         .build_headless()
         .await
@@ -95,7 +95,7 @@ async fn worker_app_binds_the_lock_its_one_replica_purge_claims_through() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
-    let worker = TestApp::builder()
+    let worker = HeadlessApp::builder()
         .module::<WorkerModule>()
         .provide_arc(db.connection())
         .build_headless()

@@ -29,6 +29,8 @@ pub mod entity;
 pub mod entry;
 #[cfg(feature = "ws")]
 pub mod gateway;
+#[cfg(feature = "testing")]
+pub mod harness;
 #[cfg(feature = "health")]
 pub mod indicators;
 pub mod instance;

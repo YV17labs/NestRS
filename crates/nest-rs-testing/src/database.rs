@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use nest_rs_seaorm::SeaOrmConfig;
@@ -14,8 +14,8 @@ use sea_orm_migration::MigratorTrait;
 use crate::env::load_project_env;
 
 /// Fresh Postgres database created for one e2e run, migrated, then **dropped
-/// when this guard drops**. Seed `db.connection()` into a `TestApp` and the
-/// real connection short-circuits `SeaOrmDatabaseModule`'s `for_root` factory.
+/// when this guard drops**. Seed `db.connection()` into a test app and the
+/// real connection short-circuits the pool `SeaOrmModule::for_root` opens.
 ///
 /// Every connection it opens is the app's pool's
 /// ([`SeaOrmConfig::connect_options`]): TLS verified or off, as the URL says,
@@ -63,7 +63,7 @@ impl EphemeralDatabase {
 
         let url = crate::url_on(admin_url, &name);
         let mut options = options(&url)?;
-        options.statement_timeout(STATEMENT_BOUND);
+        options.statement_timeout(nest_rs_seaorm::__private::DEFAULT_STATEMENT_TIMEOUT);
         let connection = Database::connect(options).await?;
         M::up(&connection, None).await?;
 
@@ -75,8 +75,8 @@ impl EphemeralDatabase {
         })
     }
 
-    /// The live connection to the ephemeral database, to seed into a
-    /// [`TestApp`](crate::TestApp).
+    /// The live connection to the ephemeral database, to seed into a test app
+    /// ([`TestAppBuilder::provide_arc`](crate::TestAppBuilder::provide_arc)).
     pub fn connection(&self) -> Arc<DatabaseConnection> {
         self.connection.clone()
     }
@@ -121,10 +121,6 @@ impl Drop for EphemeralDatabase {
 }
 
 static CREATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// How long a statement on the fixture's pool runs before Postgres cancels it:
-/// the app pool's default.
-const STATEMENT_BOUND: Duration = Duration::from_secs(15);
 
 /// Past this a [`PREFIX`]`*` database is an orphan, not a concurrent sibling's.
 const STALE_AFTER_NANOS: u128 = 5 * 60 * 1_000_000_000;

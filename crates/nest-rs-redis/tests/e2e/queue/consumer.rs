@@ -11,7 +11,7 @@ use std::time::Duration;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Checkpoint, JobProducerExt, QueueName, processor, queue};
 use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule};
-use nest_rs_testing::TestApp;
+use nest_rs_testing::HeadlessApp;
 use nest_rs_testing::queue::KitBackend;
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +69,7 @@ impl RedisKit {
 
 impl KitBackend for RedisKit {
     fn app(&self) -> nest_rs_testing::TestAppBuilder {
-        TestApp::builder()
+        HeadlessApp::builder()
             .provide(RedisQueueConfig {
                 lease: crate::LEASE,
             })
@@ -1303,7 +1303,7 @@ async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
             .expect("its lease lapsed");
     }
 
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .provide(RedisQueueConfig {
             lease: Duration::from_secs(30),
         })

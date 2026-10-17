@@ -61,6 +61,9 @@ full = [
 # `#[controller]` / `#[routes]` expand to the per-route Layer System chain —
 # guard specs, pipe folds, interceptor/filter/exception-filter sites — all
 # unconditional, none of them a crate the developer names.
+# `nest-rs-testing?/http` is the harness's HTTP half (`TestApp`): a suite
+# beside `testing` reaches it, and a headless one without `http` boots through
+# `HeadlessApp::builder()` and links no HTTP stack.
 http = [
     "dep:nest-rs-http",
     "guards",
@@ -70,6 +73,7 @@ http = [
     "exception-filters",
     "nest-rs-seaorm?/http",
     "nest-rs-authz?/http",
+    "nest-rs-testing?/http",
 ]
 config = ["dep:nest-rs-config"]
 database = ["dep:nest-rs-database"]

@@ -51,7 +51,7 @@ nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # route's own `#[meta(Throttle)]`; `ws` drives a gateway over a real socket, the
 # one way to see a refused message's frame. Path-only (intra-workspace
 # dev-edge), per the manifest rule.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["ws"] }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "ws"] }
 # The per-edge suites declare the real thing rather than calling a check by
 # hand: a `#[resolver]`, an `#[mcp]` host and a `#[gateway]`, each binding the
 # guard where a developer would and answering through each real transport. That

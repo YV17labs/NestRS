@@ -39,7 +39,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 # The discovery-flow proof boots a real app and walks 401 → metadata → AS.
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 # The challenge is attached once at the transport edge; the MCP endpoint and a
 # test gateway prove it reaches an MCP client and a WS client, not only an HTTP
 # one.

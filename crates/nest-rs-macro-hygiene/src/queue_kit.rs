@@ -1,19 +1,20 @@
-//! `queue_kit!` and `TestAuthority`, reached through the umbrella's `queue`
-//! and `testing` features alone, as a queue driver's suite reaches them.
+//! `queue_kit!`, reached through the umbrella's `queue` and `testing` features
+//! alone, as a queue driver's suite reaches it: `just lint` compiles it without
+//! `http` too.
 
 use std::time::Duration;
 
 use nest_rs::core::anyhow;
 use nest_rs::queue::QueueName;
 use nest_rs::testing::queue::KitBackend;
-use nest_rs::testing::{TestApp, TestAppBuilder, TestAuthority};
+use nest_rs::testing::{HeadlessApp, TestAppBuilder};
 
 /// A backend the kit is written against, as a driver declares its own.
 pub struct HygieneQueueKit;
 
 impl KitBackend for HygieneQueueKit {
     fn app(&self) -> TestAppBuilder {
-        TestApp::builder()
+        HeadlessApp::builder()
     }
 
     fn lease(&self) -> Duration {
@@ -37,8 +38,3 @@ impl KitBackend for HygieneQueueKit {
 // would run against a backend that holds nothing, so the invocation stays out.
 #[cfg(not(test))]
 nest_rs::testing::queue_kit!(HygieneQueueKit);
-
-/// The authority a TLS test double presents, reached through `testing`.
-pub fn hygiene_authority() -> TestAuthority {
-    TestAuthority::new()
-}

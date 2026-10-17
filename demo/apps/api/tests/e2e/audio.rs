@@ -4,7 +4,7 @@ use features::audio::AudioQueueModule;
 use nest_rs::core::module;
 use nest_rs::queue::{QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::testing::TestApp;
+use nest_rs::testing::HeadlessApp;
 use poem::http::{StatusCode, header};
 use poem::test::{TestForm, TestFormField};
 use serde_json::json;
@@ -77,7 +77,7 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
     let (_db, app) = boot_on(RedisDatabase::AudioUpload).await;
     let http = reqwest::Client::new();
 
-    let worker = TestApp::builder()
+    let worker = HeadlessApp::builder()
         .module::<AudioWorkerHarness>()
         .provide(RedisDatabase::AudioUpload.config())
         .build_headless()
@@ -182,7 +182,7 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
 async fn audio_multipart_upload_and_streamed_download_round_trip() {
     let (_db, app) = boot_on(RedisDatabase::AudioMultipart).await;
 
-    let worker = TestApp::builder()
+    let worker = HeadlessApp::builder()
         .module::<AudioWorkerHarness>()
         .provide(RedisDatabase::AudioMultipart.config())
         .build_headless()

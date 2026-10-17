@@ -43,7 +43,14 @@ cargo add --dev nest-rs --features testing
 ```
 
 A dev-dependency — the harness only compiles under `cargo test`, never into
-your release binary.
+your release binary. `TestApp`, the HTTP half, rides the `http` feature your
+app already enables. A crate built without `http` — a worker, a queue driver —
+keeps its suite headless too: it boots through `HeadlessApp::builder()`, and
+its dev-dependency leaves the default features off:
+
+```bash frame="terminal"
+cargo add --dev nest-rs --no-default-features --features queue,testing
+```
 
 ## Picking the right tool
 

@@ -15,8 +15,8 @@ driver only moves records and keeps leases. At the end of this page your
 backend runs every `#[process]` method an app declares, and the port's
 behaviour kit proves it keeps the contract. You need a crate of your own,
 `nestrs-<storage>`, depending on `nest-rs` with `default-features = false` and
-the `queue` feature, and on `nest-rs` with `queue` and `testing` as a
-dev-dependency. The [naming rule](/semver/#naming-a-package) roots every name
+the `queue` feature, and on `nest-rs` with `default-features = false`, `queue`
+and `testing` as a dev-dependency, so neither links an HTTP stack. The [naming rule](/semver/#naming-a-package) roots every name
 your driver owns at that crate.
 
 Every excerpt below is lifted from `nest-rs-queue`'s in-memory test backend or
@@ -176,7 +176,7 @@ from the Redis binding, so each compiles and runs in the framework's suite.
    impl KitBackend for MemoryKit {
        fn app(&self) -> nest_rs_testing::TestAppBuilder {
            let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
-           TestApp::builder()
+           HeadlessApp::builder()
                .provide(BoundConsumer::new(self.memory.consumer()))
                .provide_dyn(producer)
        }
@@ -206,7 +206,9 @@ from the Redis binding, so each compiles and runs in the framework's suite.
    ```
 
    Your crate reaches the kit through the umbrella, as
-   `nest_rs::testing::queue_kit!` and `nest_rs::testing::queue::KitBackend`.
+   `nest_rs::testing::queue_kit!` and `nest_rs::testing::queue::KitBackend`;
+   `app` starts from `nest_rs::testing::HeadlessApp::builder()`, since a
+   driver's suite serves no HTTP.
    `purge` empties a queue, `lapse` makes every lease on it lapse with its
    holder and count unchanged, and `take` hands every delivery to another holder
    that lapses at once — what a frozen worker meets. Checkpoint: twelve tests

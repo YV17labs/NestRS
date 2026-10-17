@@ -45,7 +45,7 @@ pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
 
 /// The statement bound when none is set: under the authentication guard's
 /// 18 s net and the HTTP edge's default 20 s deadline.
-const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(15);
+pub const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The acquire budget when none is set: under the authentication guard's 18 s
 /// net and the HTTP edge's default 20 s deadline, so a dry pool answers with its

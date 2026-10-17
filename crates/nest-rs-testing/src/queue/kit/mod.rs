@@ -44,7 +44,7 @@ where
 /// # use std::time::Duration;
 /// # use nest_rs_queue::QueueName;
 /// # use nest_rs_testing::queue::KitBackend;
-/// # use nest_rs_testing::{TestApp, TestAppBuilder};
+/// # use nest_rs_testing::{HeadlessApp, TestAppBuilder};
 /// # struct MyBackend;
 /// # impl MyBackend {
 /// #     fn new() -> Self {
@@ -53,7 +53,7 @@ where
 /// # }
 /// # impl KitBackend for MyBackend {
 /// #     fn app(&self) -> TestAppBuilder {
-/// #         TestApp::builder()
+/// #         HeadlessApp::builder()
 /// #     }
 /// #     fn lease(&self) -> Duration {
 /// #         Duration::from_secs(1)

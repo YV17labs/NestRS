@@ -57,7 +57,7 @@ tokio.workspace = true
 [dev-dependencies]
 # Booting the `AuthnModule::for_root` seam and reading the resolved service back;
 # `tls` issues the certificate the in-process JWK Set double presents.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
 # The signing keys a JWK Set test publishes — RSA, P-256 and Ed25519 —
 # generated in process rather than committed.
 rcgen = { workspace = true }

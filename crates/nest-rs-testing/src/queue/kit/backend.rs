@@ -17,8 +17,10 @@ pub trait KitBackend: Send + Sync + 'static {
 
     /// A test app reaching this backend — its connection, and the binding of
     /// its producer and consumer — over a store no other test of the run
-    /// reaches, leasing deliveries for [`lease`](Self::lease). Every call builds
-    /// a consumer of its own, as each replica has.
+    /// reaches, leasing deliveries for [`lease`](Self::lease), from
+    /// [`HeadlessApp::builder`](crate::HeadlessApp::builder): a driver's suite
+    /// serves no HTTP. Every call builds a consumer of its own, as each replica
+    /// has.
     fn app(&self) -> TestAppBuilder;
 
     /// How long a delivery's lease lasts in [`app`](Self::app): short, since a

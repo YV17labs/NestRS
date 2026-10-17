@@ -9,7 +9,7 @@ use nest_rs::core::{injectable, module};
 use nest_rs::queue::{QueueModule, QueueWorker, processor};
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::{ScheduleModule, Scheduler};
-use nest_rs::testing::TestApp;
+use nest_rs::testing::HeadlessApp;
 
 static SCHEDULED_FIRES: AtomicUsize = AtomicUsize::new(0);
 
@@ -65,7 +65,7 @@ struct CountingWorkerHarness;
 async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
     let _ = started_ms();
 
-    let worker = TestApp::builder()
+    let worker = HeadlessApp::builder()
         .module::<CountingWorkerHarness>()
         .provide(RedisDatabase::AudioSchedule.config())
         .build_headless()
@@ -76,7 +76,7 @@ async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
         .await
         .expect("the QueueWorker drains the audio queue");
 
-    let schedule = TestApp::builder()
+    let schedule = HeadlessApp::builder()
         .module::<ScheduleHarness>()
         .provide(RedisDatabase::AudioSchedule.config())
         .build_headless()

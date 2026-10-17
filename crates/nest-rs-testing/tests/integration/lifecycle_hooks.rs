@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
 use nest_rs_core::{App, AppLifecycle, AppState, StopCause, hooks, injectable, module, target};
-use nest_rs_testing::{LogCapture, TestApp};
+use nest_rs_testing::{HeadlessApp, LogCapture, TestApp};
 
 static LOG: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
@@ -127,7 +127,7 @@ async fn the_harness_runs_init_once_and_hands_out_the_lifecycle_its_providers_in
     assert!(Arc::ptr_eq(app.lifecycle(), &watcher.lifecycle));
     assert_eq!(app.lifecycle().state(), AppState::Starting);
 
-    let headless = TestApp::builder()
+    let headless = HeadlessApp::builder()
         .module::<WatchedModule>()
         .build_headless()
         .await
@@ -453,7 +453,7 @@ struct DrainedModule;
 async fn a_headless_close_stops_its_transports_within_their_bound_then_runs_the_hooks() {
     use nest_rs_core::Transport as _;
 
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<DrainedModule>()
         .build_headless()
         .await
@@ -508,7 +508,7 @@ struct RefusesToWarmModule;
 
 #[tokio::test(start_paused = true)]
 async fn a_headless_init_that_fails_stops_its_transports_before_the_shutdown_hooks_run() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<RefusesToWarmModule>()
         .build_headless()
         .await
@@ -560,7 +560,7 @@ struct ServesNothingModule;
 #[tokio::test]
 async fn a_spawned_transport_that_fails_is_filed_at_error_with_its_chain() {
     let logs = LogCapture::install();
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<ServesNothingModule>()
         .build_headless()
         .await
@@ -627,7 +627,7 @@ impl nest_rs_core::Transport for Refused {
 /// held, and it listens before it serves.
 #[tokio::test]
 async fn a_spawned_transport_is_refused_an_unbounded_stop_and_listens_before_it_serves() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<ServesNothingModule>()
         .build_headless()
         .await
@@ -690,7 +690,7 @@ impl nest_rs_core::Transport for IgnoresItsStop {
 #[tokio::test(start_paused = true)]
 async fn a_spawned_transport_that_ignores_its_stop_is_abandoned_at_its_bound_then_the_settle() {
     let logs = LogCapture::install();
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<ServesNothingModule>()
         .build_headless()
         .await
@@ -744,7 +744,7 @@ impl nest_rs_core::Transport for HeldUntilAborted {
 /// leaving it to run on into the shutdown phases.
 #[tokio::test(start_paused = true)]
 async fn a_spawned_transport_abandoned_at_its_bound_is_aborted() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<ServesNothingModule>()
         .build_headless()
         .await
@@ -796,7 +796,7 @@ impl nest_rs_core::Transport for Paced {
 #[tokio::test(start_paused = true)]
 async fn two_spawned_transports_of_one_type_are_each_held_to_their_own_bound() {
     let logs = LogCapture::install();
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<ServesNothingModule>()
         .build_headless()
         .await
@@ -858,7 +858,7 @@ impl nest_rs_core::Transport for PanicsAsItServes {
 #[tokio::test]
 async fn a_spawned_transport_that_panics_is_contained_and_filed_at_error() {
     let logs = LogCapture::install();
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<ServesNothingModule>()
         .build_headless()
         .await

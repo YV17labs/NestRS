@@ -340,17 +340,20 @@ asserting on a fiction; use `EphemeralDatabase` instead.
 
 ## Headless apps
 
-`build_headless()` skips the HTTP transport for queue workers,
+`HeadlessApp::builder()` boots without the HTTP transport, for queue workers,
 schedulers, or any binary without an HTTP surface. The four-phase build
 still runs, so the access-graph check still fires.
 
 ```rust title="apps/worker/tests/e2e/module.rs"
-let app = TestApp::builder()
+let app = HeadlessApp::builder()
     .module::<WorkerModule>()
     .provide_arc(db.connection())
     .build_headless()
     .await?;
 ```
+
+It needs no `http` feature, so the suite of a crate that serves none links no
+HTTP stack; `TestApp` lives behind `http`.
 
 Drive non-HTTP transports through `HeadlessApp::spawn_transport` — the queue's
 is `nest_rs::queue::QueueWorker`. It runs a transport the way `App::run` does:
@@ -381,7 +384,7 @@ can own is the database. Two settings keep a suite apart:
   land on it whatever the suite's URL says:
 
   ```rust title="apps/worker/tests/e2e/module.rs (from the demo, abridged)"
-  let worker = TestApp::builder()
+  let worker = HeadlessApp::builder()
       .module::<WorkerModule>()
       .provide_arc(db.connection())
       .provide(RedisDatabase::WorkerRuns.config())
@@ -460,7 +463,7 @@ it, and forwarded into the connection's context by the app's seeds, where the
 response mask reads it. `data(..)` adds a value to that context alone. What this
 does *not* exercise is the upgrade itself: the guards that authenticate it,
 the socket-lifetime ceiling that bounds it, and `max_connection`. Those need a real connection, so
-a suite that must cover them binds a transport (`build_headless` +
+a suite that must cover them binds a transport (`HeadlessApp::builder()` +
 `spawn_transport`) and
 connects a WebSocket client to it.
 

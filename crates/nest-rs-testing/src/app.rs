@@ -1,92 +1,20 @@
-//! Boot an app's real DI graph in-process and drive its HTTP surface through
-//! `poem`'s `TestClient`.
+//! Boot an app's real DI graph in-process: headless, or with its HTTP surface
+//! driven through `poem`'s `TestClient` (feature `http`).
 
 use std::any::Any;
 use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_core::{App, AppBuilder, AppLifecycle, Container, Module, Transport};
-use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, ExceptionFilterSpec};
-use nest_rs_filters::{AppBuilderFiltersExt, FilterSpec};
-use nest_rs_guards::{AppBuilderGuardsExt, GuardSpec};
-use nest_rs_http::{HttpConfig, HttpTransport};
-use nest_rs_interceptors::{AppBuilderInterceptorsExt, InterceptorSpec};
-use nest_rs_pipes::{AppBuilderPipesExt, PipeSpec};
-use poem::endpoint::BoxEndpoint;
-use poem::test::TestClient;
-use poem::{EndpointExt, Response};
+use nest_rs_core::{App, AppBuilder, Container, Module};
 
 use crate::headless::HeadlessApp;
 
-/// The config the app's own `HttpModule::for_root(cfg)` resolved, or the one a
-/// suite seeded; the defaults when there is neither.
-fn http_config(container: &Container) -> Arc<HttpConfig> {
-    container.get::<HttpConfig>().unwrap_or_default()
-}
+#[cfg(feature = "http")]
+pub use http::TestApp;
 
-/// The app's endpoint as poem's client drives it, until the harness has a
-/// client of its own.
-type TestEndpoint = BoxEndpoint<'static, Response>;
-
-/// A booted app plus a `poem` [`TestClient`] over its mounted endpoint, driving
-/// REST, GraphQL, OpenAPI and MCP through [`http`](Self::http) without a socket.
-///
-/// [`close`](Self::close) ends it as [`App::close`] does; dropping it instead
-/// runs no shutdown hook and closes nothing.
-pub struct TestApp {
-    app: App,
-    client: TestClient<TestEndpoint>,
-}
-
-impl TestApp {
-    /// Start a [`TestAppBuilder`] to register modules and override providers.
-    pub fn builder() -> TestAppBuilder {
-        TestAppBuilder::new()
-    }
-
-    /// Boot a single root module with defaults.
-    pub async fn for_module<M: Module + 'static>() -> Result<TestApp> {
-        TestAppBuilder::new().module::<M>().build().await
-    }
-
-    /// The HTTP test client for issuing requests against the mounted routes.
-    pub fn http(&self) -> &TestClient<TestEndpoint> {
-        &self.client
-    }
-
-    /// Open a graphql-ws connection against the app's composed schema, for the
-    /// subscriptions the HTTP client cannot speak; see [`crate::graphql`].
-    #[cfg(feature = "graphql")]
-    pub fn graphql_socket(&self) -> crate::graphql::GraphqlSocketBuilder {
-        crate::graphql::GraphqlSocketBuilder::new(self.container().clone())
-    }
-
-    /// The DI [`Container`], for resolving providers directly in assertions.
-    pub fn container(&self) -> &Container {
-        self.app.container()
-    }
-
-    /// The app's [`AppLifecycle`]: in-process, it stays
-    /// [`Starting`](nest_rs_core::AppState::Starting), since no transport
-    /// serves it, until [`close`](Self::close) turns it
-    /// [`Draining`](nest_rs_core::AppState::Draining).
-    pub fn lifecycle(&self) -> &Arc<AppLifecycle> {
-        self.app.lifecycle()
-    }
-
-    /// Stop the app as [`App::close`] does: the shutdown phases in reverse, the
-    /// resources its modules opened closed, its container dropped — within the
-    /// shutdown hooks' budget.
-    pub async fn close(self) {
-        let TestApp { app, client } = self;
-        // The mounted endpoint holds the container too.
-        drop(client);
-        app.close().await;
-    }
-}
-
-/// Builder for a [`TestApp`]: [`AppBuilder`]'s registration surface plus
+/// Builder for a test app, from [`HeadlessApp::builder`] or, with the `http`
+/// feature, `TestApp::builder`: [`AppBuilder`]'s registration surface plus
 /// test-only overrides. Defaults `<PREFIX>_ENV=test` and loads the project `.env`
 /// cascade.
 pub struct TestAppBuilder {
@@ -94,7 +22,7 @@ pub struct TestAppBuilder {
 }
 
 impl TestAppBuilder {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         crate::env::load_project_env();
         Self {
             inner: App::builder(),
@@ -164,102 +92,12 @@ impl TestAppBuilder {
         self
     }
 
-    /// Forwards to [`AppBuilderGuardsExt::use_guards_global`].
-    pub fn use_guards_global<I>(mut self, specs: I) -> Self
-    where
-        I: IntoIterator<Item = GuardSpec>,
-    {
-        self.inner = self.inner.use_guards_global(specs);
-        self
-    }
-
-    /// Forwards to [`AppBuilderPipesExt::use_pipes_global`].
-    pub fn use_pipes_global<I>(mut self, specs: I) -> Self
-    where
-        I: IntoIterator<Item = PipeSpec>,
-    {
-        self.inner = self.inner.use_pipes_global(specs);
-        self
-    }
-
-    /// Forwards to [`AppBuilderInterceptorsExt::use_interceptors_global`].
-    pub fn use_interceptors_global<I>(mut self, specs: I) -> Self
-    where
-        I: IntoIterator<Item = InterceptorSpec>,
-    {
-        self.inner = self.inner.use_interceptors_global(specs);
-        self
-    }
-
-    /// Forwards to [`AppBuilderFiltersExt::use_filters_global`].
-    pub fn use_filters_global<I>(mut self, specs: I) -> Self
-    where
-        I: IntoIterator<Item = FilterSpec>,
-    {
-        self.inner = self.inner.use_filters_global(specs);
-        self
-    }
-
-    /// Forwards to
-    /// [`AppBuilderExceptionFiltersExt::use_exception_filters_global`].
-    pub fn use_exception_filters_global<I>(mut self, specs: I) -> Self
-    where
-        I: IntoIterator<Item = ExceptionFilterSpec>,
-    {
-        self.inner = self.inner.use_exception_filters_global(specs);
-        self
-    }
-
-    /// Build the app, configure the HTTP transport and run the init phases —
-    /// once: they do not run again for this app. A boot that fails past the
-    /// build is closed as [`App::run`] closes it before the error returns.
-    pub async fn build(self) -> Result<TestApp> {
-        let app = self.inner.build().await?;
-        match mount(&app).await {
-            Ok(client) => Ok(TestApp { app, client }),
-            Err(error) => {
-                app.close().await;
-                Err(error)
-            }
-        }
-    }
-
-    /// Boot the app on a **real** local port and hand back a socket driver,
-    /// for the WS upgrade `TestClient` cannot reach.
-    #[cfg(feature = "ws")]
-    pub async fn build_ws(self) -> Result<crate::ws::WsApp> {
-        let app = self.inner.build().await?;
-        let config = http_config(app.container());
-        crate::ws::serve(HeadlessApp::new(app), &config).await
-    }
-
     /// Boot without an HTTP surface, for queue workers and schedulers; drive
     /// their transports through [`HeadlessApp::spawn_transport`].
     pub async fn build_headless(self) -> Result<HeadlessApp> {
         let app = self.inner.build().await?;
         Ok(HeadlessApp::new(app))
     }
-}
-
-/// Configure the app's HTTP transport, run its init phases, and hand back a
-/// client over the endpoint it mounted.
-async fn mount(app: &App) -> Result<TestClient<TestEndpoint>> {
-    // A default transport would ignore every field the module configured,
-    // so the harness boots the one `App::run` resolves.
-    let mut transport = HttpTransport::from_config(&http_config(app.container()))?;
-    transport.configure(app.container()).await?;
-    // What `App::run` refuses after configuring, a route or gateway whose
-    // chain did not compose, the harness refuses too.
-    if let Some(refusal) = nest_rs_core::__private::take_site_refusal(app.container()) {
-        return Err(refusal);
-    }
-    app.init().await?;
-    let endpoint = transport
-        .take_endpoint()
-        .expect("HttpTransport::configure populates the endpoint");
-    Ok(TestClient::new(
-        nest_rs_http::__private::poem_bridge::to_poem(endpoint).boxed(),
-    ))
 }
 
 #[cfg(feature = "opentelemetry")]
@@ -269,5 +107,186 @@ impl TestAppBuilder {
     pub fn with_test_telemetry(self) -> Self {
         nest_rs_opentelemetry::__private::init_for_tests();
         self
+    }
+}
+
+/// The HTTP half (feature `http`): the app booted with its HTTP transport
+/// mounted, and the builder's seams that only an HTTP app reads.
+#[cfg(feature = "http")]
+mod http {
+    use std::sync::Arc;
+
+    use anyhow::Result;
+    use nest_rs_core::{App, AppLifecycle, Container, Module, Transport};
+    use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, ExceptionFilterSpec};
+    use nest_rs_filters::{AppBuilderFiltersExt, FilterSpec};
+    use nest_rs_guards::{AppBuilderGuardsExt, GuardSpec};
+    use nest_rs_http::{HttpConfig, HttpTransport};
+    use nest_rs_interceptors::{AppBuilderInterceptorsExt, InterceptorSpec};
+    use nest_rs_pipes::{AppBuilderPipesExt, PipeSpec};
+    use poem::endpoint::BoxEndpoint;
+    use poem::test::TestClient;
+    use poem::{EndpointExt, Response};
+
+    use super::TestAppBuilder;
+
+    /// The config the app's own `HttpModule::for_root(cfg)` resolved, or the one a
+    /// suite seeded; the defaults when there is neither.
+    fn http_config(container: &Container) -> Arc<HttpConfig> {
+        container.get::<HttpConfig>().unwrap_or_default()
+    }
+
+    /// The app's endpoint as poem's client drives it, until the harness has a
+    /// client of its own.
+    type TestEndpoint = BoxEndpoint<'static, Response>;
+
+    /// A booted app plus a `poem` [`TestClient`] over its mounted endpoint,
+    /// driving REST, GraphQL, OpenAPI and MCP through [`http`](Self::http)
+    /// without a socket.
+    ///
+    /// [`close`](Self::close) ends it as [`App::close`] does; dropping it instead
+    /// runs no shutdown hook and closes nothing.
+    pub struct TestApp {
+        app: App,
+        client: TestClient<TestEndpoint>,
+    }
+
+    impl TestApp {
+        /// Start a [`TestAppBuilder`] to register modules and override providers.
+        pub fn builder() -> TestAppBuilder {
+            TestAppBuilder::new()
+        }
+
+        /// Boot a single root module with defaults.
+        pub async fn for_module<M: Module + 'static>() -> Result<TestApp> {
+            TestAppBuilder::new().module::<M>().build().await
+        }
+
+        /// The HTTP test client for issuing requests against the mounted routes.
+        pub fn http(&self) -> &TestClient<TestEndpoint> {
+            &self.client
+        }
+
+        /// Open a graphql-ws connection against the app's composed schema, for the
+        /// subscriptions the HTTP client cannot speak; see [`crate::graphql`].
+        #[cfg(feature = "graphql")]
+        pub fn graphql_socket(&self) -> crate::graphql::GraphqlSocketBuilder {
+            crate::graphql::GraphqlSocketBuilder::new(self.container().clone())
+        }
+
+        /// The DI [`Container`], for resolving providers directly in assertions.
+        pub fn container(&self) -> &Container {
+            self.app.container()
+        }
+
+        /// The app's [`AppLifecycle`]: in-process, it stays
+        /// [`Starting`](nest_rs_core::AppState::Starting), since no transport
+        /// serves it, until [`close`](Self::close) turns it
+        /// [`Draining`](nest_rs_core::AppState::Draining).
+        pub fn lifecycle(&self) -> &Arc<AppLifecycle> {
+            self.app.lifecycle()
+        }
+
+        /// Stop the app as [`App::close`] does: the shutdown phases in reverse, the
+        /// resources its modules opened closed, its container dropped — within the
+        /// shutdown hooks' budget.
+        pub async fn close(self) {
+            let TestApp { app, client } = self;
+            // The mounted endpoint holds the container too.
+            drop(client);
+            app.close().await;
+        }
+    }
+
+    impl TestAppBuilder {
+        /// Forwards to [`AppBuilderGuardsExt::use_guards_global`].
+        pub fn use_guards_global<I>(mut self, specs: I) -> Self
+        where
+            I: IntoIterator<Item = GuardSpec>,
+        {
+            self.inner = self.inner.use_guards_global(specs);
+            self
+        }
+
+        /// Forwards to [`AppBuilderPipesExt::use_pipes_global`].
+        pub fn use_pipes_global<I>(mut self, specs: I) -> Self
+        where
+            I: IntoIterator<Item = PipeSpec>,
+        {
+            self.inner = self.inner.use_pipes_global(specs);
+            self
+        }
+
+        /// Forwards to [`AppBuilderInterceptorsExt::use_interceptors_global`].
+        pub fn use_interceptors_global<I>(mut self, specs: I) -> Self
+        where
+            I: IntoIterator<Item = InterceptorSpec>,
+        {
+            self.inner = self.inner.use_interceptors_global(specs);
+            self
+        }
+
+        /// Forwards to [`AppBuilderFiltersExt::use_filters_global`].
+        pub fn use_filters_global<I>(mut self, specs: I) -> Self
+        where
+            I: IntoIterator<Item = FilterSpec>,
+        {
+            self.inner = self.inner.use_filters_global(specs);
+            self
+        }
+
+        /// Forwards to
+        /// [`AppBuilderExceptionFiltersExt::use_exception_filters_global`].
+        pub fn use_exception_filters_global<I>(mut self, specs: I) -> Self
+        where
+            I: IntoIterator<Item = ExceptionFilterSpec>,
+        {
+            self.inner = self.inner.use_exception_filters_global(specs);
+            self
+        }
+
+        /// Build the app, configure the HTTP transport and run the init phases —
+        /// once: they do not run again for this app. A boot that fails past the
+        /// build is closed as [`App::run`] closes it before the error returns.
+        pub async fn build(self) -> Result<TestApp> {
+            let app = self.inner.build().await?;
+            match mount(&app).await {
+                Ok(client) => Ok(TestApp { app, client }),
+                Err(error) => {
+                    app.close().await;
+                    Err(error)
+                }
+            }
+        }
+
+        /// Boot the app on a **real** local port and hand back a socket driver,
+        /// for the WS upgrade `TestClient` cannot reach.
+        #[cfg(feature = "ws")]
+        pub async fn build_ws(self) -> Result<crate::ws::WsApp> {
+            let app = self.inner.build().await?;
+            let config = http_config(app.container());
+            crate::ws::serve(crate::HeadlessApp::new(app), &config).await
+        }
+    }
+
+    /// Configure the app's HTTP transport, run its init phases, and hand back a
+    /// client over the endpoint it mounted.
+    async fn mount(app: &App) -> Result<TestClient<TestEndpoint>> {
+        // A default transport would ignore every field the module configured,
+        // so the harness boots the one `App::run` resolves.
+        let mut transport = HttpTransport::from_config(&http_config(app.container()))?;
+        transport.configure(app.container()).await?;
+        // What `App::run` refuses after configuring, a route or gateway whose
+        // chain did not compose, the harness refuses too.
+        if let Some(refusal) = nest_rs_core::__private::take_site_refusal(app.container()) {
+            return Err(refusal);
+        }
+        app.init().await?;
+        let endpoint = transport
+            .take_endpoint()
+            .expect("HttpTransport::configure populates the endpoint");
+        Ok(TestClient::new(
+            nest_rs_http::__private::poem_bridge::to_poem(endpoint).boxed(),
+        ))
     }
 }

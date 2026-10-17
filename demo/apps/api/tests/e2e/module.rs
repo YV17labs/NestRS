@@ -1,7 +1,7 @@
 use api::ApiModule;
 use nest_rs::authn::AuthnConfig;
 use nest_rs::schedule::Scheduler;
-use nest_rs::testing::{EphemeralDatabase, TestApp};
+use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
 
 use crate::{AUDIENCE, DEV_PUBLIC_KEY};
 
@@ -10,7 +10,7 @@ async fn api_app_binds_the_lock_its_one_replica_transcode_seed_claims_through() 
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
-    let api = TestApp::builder()
+    let api = HeadlessApp::builder()
         .module::<ApiModule>()
         .provide_arc(db.connection())
         .provide(AuthnConfig {

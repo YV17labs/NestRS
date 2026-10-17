@@ -1,6 +1,6 @@
 # nest-rs-testing
 
-In-process testing harness for NestRS: boot an app's real DI graph and drive its HTTP/GraphQL/MCP surfaces with poem's TestClient, with provider overrides and no socket bound.
+In-process testing harness for NestRS: boot an app's real DI graph, headless or serving HTTP/GraphQL/MCP through poem's TestClient (the `http` feature), with provider overrides and no socket bound.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

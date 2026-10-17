@@ -32,7 +32,7 @@ tracing.workspace = true
 # edges, per the manifest rule.
 [dev-dependencies]
 nest-rs-guards = { path = "../nest-rs-guards" }
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 tokio.workspace = true
 # `figment::Jail` declares `<PREFIX>_ENV`, which the default reads off the
 # process environment rather than a `ConfigService`.

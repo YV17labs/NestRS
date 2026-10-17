@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use nest_rs_core::{Transport, injectable, module};
 use nest_rs_queue::{BoundConsumer, JobProducer, QueueName, QueueWorker, processor, queue};
-use nest_rs_testing::TestApp;
+use nest_rs_testing::HeadlessApp;
 use nest_rs_testing::queue::KitBackend;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -42,7 +42,7 @@ impl KitBackend for MemoryKit {
 
     fn app(&self) -> nest_rs_testing::TestAppBuilder {
         let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
-        TestApp::builder()
+        HeadlessApp::builder()
             .provide(BoundConsumer::new(self.memory.consumer()))
             .provide_dyn(producer)
     }
@@ -110,7 +110,7 @@ struct EmptyModule;
 
 #[tokio::test]
 async fn a_method_with_no_backend_bound_fails_the_boot_naming_the_remedy() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<BootModule>()
         .build_headless()
         .await
@@ -133,7 +133,7 @@ async fn a_method_with_no_backend_bound_fails_the_boot_naming_the_remedy() {
 async fn a_producer_and_a_consumer_of_two_backends_fail_the_boot_naming_both() {
     let producer: Arc<dyn JobProducer> = Arc::new(Memory::new(&PLAIN, LEASE));
     let consumer = Memory::new(&DELAYING, LEASE).consumer();
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<BootModule>()
         .provide(BoundConsumer::new(consumer))
         .provide_dyn(producer)
@@ -152,7 +152,7 @@ async fn a_producer_and_a_consumer_of_two_backends_fail_the_boot_naming_both() {
 
 #[tokio::test(start_paused = true)]
 async fn a_worker_with_nothing_to_run_idles_and_stops_at_once() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<EmptyModule>()
         .build_headless()
         .await
@@ -192,7 +192,7 @@ async fn boot_worker_of<M: nest_rs_core::Module>(
     tokio::task::JoinHandle<anyhow::Result<()>>,
 ) {
     let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<M>()
         .provide(BoundConsumer::new(memory.consumer()))
         .provide_dyn(producer)
@@ -313,7 +313,7 @@ const SETTLE_LEASE: Duration = Duration::from_secs(2);
 async fn settle_failing(failures: u32, within: Duration) -> Memory {
     let memory = Memory::new(&DELAYING, SETTLE_LEASE);
     let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<BootModule>()
         .provide(BoundConsumer::new(Flaky {
             inner: memory.consumer(),
@@ -472,7 +472,7 @@ async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
     let lease = Duration::from_millis(500);
     let memory = Memory::new(&DELAYING, lease);
     let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<CheckpointedModule>()
         .provide(BoundConsumer::new(PanicsOnce {
             inner: memory.consumer(),
@@ -607,7 +607,7 @@ async fn a_settle_that_panics_is_retried_and_said_once() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let memory = Memory::new(&DELAYING, SETTLE_LEASE);
     let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<BootModule>()
         .provide(BoundConsumer::new(Misbehaving {
             unwind_settle: std::sync::atomic::AtomicBool::new(true),
@@ -729,7 +729,7 @@ async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let memory = Memory::new(&DELAYING, LEASE);
     let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<LongModule>()
         .provide(BoundConsumer::new(Silent {
             inner: memory.consumer(),
@@ -823,7 +823,7 @@ async fn an_attempt_past_its_timeout_is_cut_retried_and_dead_lettered_naming_it(
 async fn a_backend_answering_at_or_past_the_net_fails_the_boot_naming_it() {
     let memory = Memory::new(&DELAYING, LEASE);
     for bound in [nest_rs_queue::BACKEND_TIMEOUT, Duration::MAX] {
-        let app = TestApp::builder()
+        let app = HeadlessApp::builder()
             .module::<BootModule>()
             .provide(BoundConsumer::new(Misbehaving {
                 answer_bound: bound,
@@ -860,7 +860,7 @@ async fn a_receive_that_panics_is_retried_and_said_once() {
     consumer
         .unwind_receive
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<BootModule>()
         .provide(BoundConsumer::new(consumer))
         .provide_dyn(Arc::clone(&producer))

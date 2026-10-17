@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use nest_rs_core::injectable;
 use nest_rs_storage::{Storage, StorageConfig, StorageModule};
-use nest_rs_testing::TestApp;
+use nest_rs_testing::HeadlessApp;
 
 use crate::booted;
 
@@ -40,7 +40,7 @@ struct ReportsModule;
 
 #[tokio::test]
 async fn an_overridden_client_boots_without_opening_the_store_it_replaces() {
-    let builder = TestApp::builder();
+    let builder = HeadlessApp::builder();
     let double = Storage::connect(&StorageConfig {
         url: "memory:///double".into(),
         ..StorageConfig::default()

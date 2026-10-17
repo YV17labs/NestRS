@@ -724,8 +724,8 @@ struct Opened {
 type OpenedUnits = Arc<std::sync::Mutex<Vec<Opened>>>;
 
 /// A unit-of-work binding recording every unit it opens and how each ended;
-/// its units hold the work an emit hands them until they commit, as a driver
-/// holding a transaction does.
+/// each unit's executor is an [`OpenTransaction`], holding the work an emit
+/// hands it until the unit commits.
 struct RecordingUnitOfWork {
     opened: OpenedUnits,
     /// Whether a listener's commit never answers.
@@ -766,7 +766,7 @@ impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
         Ok(Box::new(RecordingUnit {
             opened: Arc::clone(&self.opened),
             at: opened.len() - 1,
-            executor: Arc::new(HoldingExecutor::default()),
+            executor: Arc::new(OpenTransaction::default()),
             commit_hangs: self.commit_hangs && spec.unit == nest_rs_events::unit::DISPATCH,
             settled: false,
         }))
@@ -777,34 +777,10 @@ impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
     }
 }
 
-/// An executor holding what an emit hands it, under what its unit carries into
-/// the commit, until its unit commits.
-#[derive(Default)]
-struct HoldingExecutor(std::sync::Mutex<Vec<nest_rs_database::Deferred>>);
-
-impl nest_rs_database::Executor for HoldingExecutor {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn after_commit(&self, work: nest_rs_database::Deferred) -> Option<nest_rs_database::Deferred> {
-        let work: nest_rs_database::Deferred =
-            match nest_rs_core::RequestContinuation::capture(nest_rs_core::Continuation::Commit) {
-                Some(carried) => Box::pin(carried.scope(work)),
-                None => work,
-            };
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(work);
-        None
-    }
-}
-
 struct RecordingUnit {
     opened: OpenedUnits,
     at: usize,
-    executor: Arc<HoldingExecutor>,
+    executor: Arc<OpenTransaction>,
     commit_hangs: bool,
     settled: bool,
 }
@@ -830,22 +806,16 @@ impl nest_rs_database::OpenUnit for RecordingUnit {
     {
         self.settled = true;
         self.end(Ended::Settled { ok });
-        let held = std::mem::take(
-            &mut *self
-                .executor
-                .0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        let executor = Arc::clone(&self.executor);
         let hangs = ok && self.commit_hangs;
         Box::pin(async move {
             if hangs {
                 std::future::pending::<()>().await;
             }
             if ok {
-                for work in held {
-                    work.await;
-                }
+                executor.commit().await;
+            } else {
+                executor.roll_back();
             }
             nest_rs_database::Settlement::Settled
         })

@@ -42,7 +42,11 @@ pub(crate) struct BareModule;
 
 /// The `server-timing` header a response carries, if any.
 pub(crate) fn server_timing(resp: &TestResponse) -> Option<String> {
-    resp.0.header("server-timing").map(str::to_owned)
+    resp.0
+        .headers()
+        .get("server-timing")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
 }
 
 /// Boots `M` and returns the `server-timing` header its probe answers with.

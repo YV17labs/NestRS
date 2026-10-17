@@ -186,8 +186,7 @@ async fn two_shapes_of_one_address_fail_the_boot_naming_both() {
             .route(Method::DELETE, "/parcels/{key}", echoing("release", &[]));
     })
     .await
-    .err()
-    .expect("one address, two shapes");
+    .expect_err("one address, two shapes");
     for named in ["Conformance", "\"/parcels/{id}\"", "\"/parcels/{key}\""] {
         assert!(refused.contains(named), "names {named}: {refused}");
     }

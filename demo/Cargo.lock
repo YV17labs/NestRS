@@ -3257,7 +3257,6 @@ dependencies = [
  "nest-rs-queue",
  "nest-rs-seaorm",
  "nest-rs-ws",
- "poem",
  "rcgen",
  "rustls",
  "sea-orm",
@@ -3270,6 +3269,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

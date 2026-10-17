@@ -9,6 +9,7 @@
 )]
 
 mod access_contract;
+mod client;
 mod config;
 mod cors;
 mod database;

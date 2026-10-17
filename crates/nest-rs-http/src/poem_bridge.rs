@@ -389,6 +389,18 @@ mod tests {
     #[error("the kettle is busy")]
     struct Busy;
 
+    /// `GET uri`, as poem's own builder makes it.
+    fn poem_get(uri: &'static str) -> poem::Request {
+        poem::Request::builder()
+            .uri(http::Uri::from_static(uri))
+            .finish()
+    }
+
+    /// The body of `response`, read as text.
+    async fn poem_text(response: poem::Response) -> String {
+        response.into_body().into_string().await.unwrap()
+    }
+
     /// The request poem's own server builds from hyper's, as today's transport
     /// hands every request to the router.
     fn as_poem_builds_it(request: http::Request<hyper::body::Incoming>) -> poem::Request {
@@ -573,13 +585,10 @@ mod tests {
         });
         let app = poem::Route::new().at("/rooms/:room", crossing);
 
-        let answer = poem::test::TestClient::new(app)
-            .get("/rooms/lobby")
-            .send()
-            .await;
+        let answer = poem::Endpoint::get_response(&app, poem_get("/rooms/lobby")).await;
 
-        answer.assert_status_is_ok();
-        answer.assert_text("lobby").await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert_eq!(poem_text(answer).await, "lobby");
     }
 
     #[tokio::test]
@@ -599,12 +608,9 @@ mod tests {
         });
         let app = poem::Route::new().at("/rooms/:room", leaf);
 
-        let answer = poem::test::TestClient::new(app)
-            .get("/rooms/lobby")
-            .send()
-            .await;
+        let answer = poem::Endpoint::get_response(&app, poem_get("/rooms/lobby")).await;
 
-        answer.assert_text("/rooms/{room} lobby").await;
+        assert_eq!(poem_text(answer).await, "/rooms/{room} lobby");
     }
 
     #[tokio::test]
@@ -645,11 +651,8 @@ mod tests {
         let nestrs = crate::endpoint_fn(|req: Request| async move {
             Ok(Response::builder().body(format!("nestrs saw {}", req.uri().path())))
         });
-        let answer = poem::test::TestClient::new(to_poem(nestrs))
-            .get("/here")
-            .send()
-            .await;
-        answer.assert_text("nestrs saw /here").await;
+        let answer = poem::Endpoint::get_response(&to_poem(nestrs), poem_get("/here")).await;
+        assert_eq!(poem_text(answer).await, "nestrs saw /here");
 
         let failing = poem::endpoint::make(|_req: poem::Request| async {
             Err::<String, _>(poem::Error::new(Busy, StatusCode::SERVICE_UNAVAILABLE))

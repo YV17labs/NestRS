@@ -384,14 +384,14 @@ mod tests {
     use futures_util::StreamExt;
     use nest_rs_core::current_request_scope;
     use poem::handler;
-    use poem::test::TestClient;
 
     use http::StatusCode;
 
     use super::*;
     use crate::endpoint::BoxEndpoint;
     use crate::error::HttpError;
-    use crate::poem_bridge::{from_poem, to_poem};
+    use crate::poem_bridge::from_poem;
+    use crate::testing::{answer, get, text};
 
     /// The gap bound the edges below hold a body to.
     const GAP: Duration = Duration::from_secs(30);
@@ -479,21 +479,19 @@ mod tests {
     async fn a_handler_panic_answers_500_and_files_its_line_panic() {
         let logs = nest_rs_testing::LogCapture::install();
         let ep = edge(from_poem(panics_after_waiting), None, None, nosniff());
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-        resp.assert_content_type("application/problem+json");
-        resp.assert_header("x-content-type-options", "nosniff");
-        assert!(
-            resp.0.headers().contains_key("traceresponse"),
-            "the caller can still name the trace: {:?}",
-            resp.0.headers(),
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            resp.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
         );
-        let body = resp
-            .0
-            .into_body()
-            .into_string()
-            .await
-            .expect("the document is text");
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
+        assert!(
+            resp.headers().contains_key("traceresponse"),
+            "the caller can still name the trace: {:?}",
+            resp.headers(),
+        );
+        let body = text(resp).await;
         assert!(!body.contains("the handler panicked"), "{body}");
 
         let line = logs.expect_one(
@@ -506,11 +504,7 @@ mod tests {
             "{line:#?}"
         );
         assert_eq!(line.field("status").as_deref(), Some("500"), "{line:#?}");
-        let errors: Vec<_> = logs
-            .events()
-            .into_iter()
-            .filter(|event| event.level == "error")
-            .collect();
+        let errors = logs.events_at(tracing::Level::ERROR);
         assert_eq!(errors.len(), 1, "one event says the panic: {errors:#?}");
         assert_eq!(errors[0].target, crate::target::HTTP);
         assert_eq!(
@@ -539,13 +533,9 @@ mod tests {
             false,
             Arc::default(),
         );
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-        resp.0
-            .into_body()
-            .into_string()
-            .await
-            .expect("the document is read to its end");
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        text(resp).await;
 
         logs.expect_none(
             nest_rs_core::operation_log::TARGET,
@@ -574,13 +564,12 @@ mod tests {
             None,
             Vec::new(),
         );
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let said = logs
-            .events()
-            .into_iter()
-            .find(|event| event.level == "error")
+            .events_at(tracing::Level::ERROR)
+            .first()
             .and_then(|event| event.field(nest_rs_core::panic::FIELD))
             .expect("the panic is said");
         assert!(!said.contains("sk_live"), "{said}");
@@ -593,9 +582,9 @@ mod tests {
     #[tokio::test]
     async fn installs_a_request_scope_and_forwards_the_response() {
         let ep = edge(from_poem(observe_scope), None, None, Vec::new());
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_text("ok").await;
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(text(resp).await, "ok");
     }
 
     #[test]
@@ -621,49 +610,33 @@ mod tests {
 
     #[tokio::test]
     async fn declared_length_over_the_cap_is_rejected_with_headers() {
-        // TestClient bypasses the wire, so the Content-Length hyper would derive
-        // is set by hand.
         let ep = edge(from_poem(echo_len), None, Some(8), nosniff());
-        let resp = TestClient::new(to_poem(ep))
-            .post("/")
-            .header("content-length", "64")
-            .body(vec![0u8; 64])
-            .send()
-            .await;
-        resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
-        resp.assert_header("x-content-type-options", "nosniff");
+        let resp = answer(&ep, declaring_64_bytes()).await;
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
     }
 
     #[tokio::test]
     async fn declared_length_within_the_cap_passes_the_body_through() {
         let ep = edge(from_poem(echo_len), None, Some(1024), Vec::new());
-        let resp = TestClient::new(to_poem(ep))
-            .post("/")
-            .header("content-length", "64")
-            .body(vec![0u8; 64])
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("64").await;
+        let resp = answer(&ep, declaring_64_bytes()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(text(resp).await, "64");
     }
 
     #[tokio::test]
     async fn an_undeclared_length_body_is_capped_as_its_reader_takes_it() {
         // No Content-Length: the wrapper counts what arrives.
         let ep = edge(from_poem(echo_len), None, Some(8), Vec::new());
-        let resp = TestClient::new(to_poem(ep))
-            .post("/")
-            .body(vec![0u8; 64])
-            .send()
-            .await;
-        resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+        let resp = answer(&ep, post(Version::HTTP_11, Body::from(vec![0u8; 64]))).await;
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
     async fn a_bodyless_request_passes_under_the_cap() {
         let ep = edge(from_poem(observe_scope), None, Some(8), Vec::new());
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status_is_ok();
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -674,10 +647,10 @@ mod tests {
             None,
             nosniff(),
         );
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-        resp.assert_header(header::RETRY_AFTER, "1");
-        resp.assert_header("x-content-type-options", "nosniff");
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers()[header::RETRY_AFTER], "1");
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
     }
 
     #[tokio::test]
@@ -689,9 +662,9 @@ mod tests {
             None,
             Vec::new(),
         );
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_text("ok").await;
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(text(resp).await, "ok");
     }
 
     #[handler]
@@ -709,9 +682,9 @@ mod tests {
             None,
             Vec::new(),
         );
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_text("made it").await;
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(text(resp).await, "made it");
     }
 
     /// The budget runs from the instant the accept loop handed the request
@@ -828,24 +801,29 @@ mod tests {
             HeaderValue::from_static("DENY"),
         ));
         let ep = edge(from_poem(sets_header), None, None, headers);
-        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_header_all("x-content-type-options", ["handler-value"]);
-        resp.assert_header("x-frame-options", "DENY");
+        let resp = answer(&ep, get()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get_all("x-content-type-options")
+                .iter()
+                .collect::<Vec<_>>(),
+            ["handler-value"],
+            "the handler's value is kept, never doubled",
+        );
+        assert_eq!(resp.headers()["x-frame-options"], "DENY");
     }
 
     #[tokio::test]
     async fn fused_normalize_lifts_a_413_onto_problem_json_with_headers() {
         let ep = fused_edge(from_poem(echo_len), Some(8), nosniff());
-        let resp = TestClient::new(to_poem(ep))
-            .post("/")
-            .header("content-length", "64")
-            .body(vec![0u8; 64])
-            .send()
-            .await;
-        resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
-        resp.assert_header("x-content-type-options", "nosniff");
-        resp.assert_content_type("application/problem+json");
+        let resp = answer(&ep, declaring_64_bytes()).await;
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(
+            resp.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
+        );
     }
 
     /// Reads its body to the end and answers `200` whatever the read made of
@@ -863,6 +841,15 @@ mod tests {
             futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"part"))])
                 .chain(futures_util::stream::pending()),
         )
+    }
+
+    /// A `POST` whose `Content-Length` says 64 bytes, as hyper derives it on
+    /// the wire, and carries them.
+    fn declaring_64_bytes() -> Request {
+        Request::builder()
+            .method(http::Method::POST)
+            .header(header::CONTENT_LENGTH, HeaderValue::from_static("64"))
+            .body(vec![0u8; 64])
     }
 
     fn post(version: Version, body: Body) -> Request {
@@ -924,10 +911,13 @@ mod tests {
             BoxEndpoint::new(fused_edge(failing(), None, nosniff())),
             BoxEndpoint::new(edge(failing(), None, None, nosniff())),
         ] {
-            let resp = TestClient::new(to_poem(ep)).get("/").send().await;
-            resp.assert_status(StatusCode::BAD_REQUEST);
-            resp.assert_content_type("application/problem+json");
-            resp.assert_header("x-content-type-options", "nosniff");
+            let resp = answer(&ep, get()).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                resp.headers()[header::CONTENT_TYPE],
+                "application/problem+json"
+            );
+            assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
         }
     }
 }

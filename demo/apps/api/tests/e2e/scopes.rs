@@ -34,7 +34,7 @@ async fn org_with_author(app: &TestApp, label: &str) -> (String, Uuid) {
     (org, author)
 }
 
-async fn create_post_with(app: &TestApp, bearer: &str) -> poem::Response {
+async fn create_post_with(app: &TestApp, bearer: &str) -> nest_rs::http::Response {
     app.http()
         .post("/posts")
         .header(header::AUTHORIZATION, bearer)

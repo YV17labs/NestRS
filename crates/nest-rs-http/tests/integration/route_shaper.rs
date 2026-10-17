@@ -11,11 +11,10 @@ use futures_util::StreamExt;
 use nest_rs_core::{AmbientValue, Layer, UnitContext, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{
-    Ctx, HttpConfig, HttpModule, HttpView, RawBody, async_trait, controller, routes,
+    Body, Bytes, Ctx, HttpConfig, HttpModule, HttpView, RawBody, async_trait, controller, routes,
 };
 use nest_rs_pipes::GlobalPipe;
 use nest_rs_testing::{LogCapture, TestApp};
-use poem::Body;
 use poem::http::StatusCode;
 
 const CAP: usize = 64;
@@ -74,13 +73,14 @@ async fn a_body_past_the_cap_is_the_edges_413_and_no_pipe_failure() {
 #[tokio::test(start_paused = true)]
 async fn a_body_that_stops_arriving_is_the_edges_408_and_no_pipe_failure() {
     let logs = LogCapture::install();
-    let opened = futures_util::stream::once(async { Ok::<_, std::io::Error>(b"{".to_vec()) });
+    let opened =
+        futures_util::stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"{")) });
     let resp = app()
         .await
         .http()
         .post("/piped")
         .content_type("application/json")
-        .body(Body::from_bytes_stream(
+        .body(Body::from_stream(
             opened.chain(futures_util::stream::pending()),
         ))
         .send()

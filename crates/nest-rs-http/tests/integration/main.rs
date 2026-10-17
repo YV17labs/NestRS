@@ -186,11 +186,9 @@ pub(crate) async fn answered(resp: poem::test::TestResponse) -> (u16, String, St
     (status, content_type, body)
 }
 
-/// poem's client over the transport's endpoint.
+/// The kit's client over the transport's endpoint.
 pub(crate) fn client(
     endpoint: nest_rs_http::BoxEndpoint,
 ) -> TestClient<BoxEndpoint<'static, poem::Response>> {
-    TestClient::new(poem::EndpointExt::boxed(
-        nest_rs_http::__private::poem_bridge::to_poem(endpoint),
-    ))
+    TestClient::new(endpoint)
 }

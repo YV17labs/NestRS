@@ -150,6 +150,28 @@ impl LogCapture {
             .clone()
     }
 
+    /// Every event filed at `level`, in emission order, whatever its target:
+    /// the `error`s a test asserts were said once, or not at all.
+    ///
+    /// ```
+    /// # use nest_rs_testing::LogCapture;
+    /// use tracing::Level;
+    ///
+    /// let logs = LogCapture::install();
+    /// tracing::warn!(target: "features::orders", order = 7, "order refused");
+    /// tracing::error!(target: "features::orders", order = 8, "order lost");
+    /// let errors = logs.events_at(Level::ERROR);
+    /// assert_eq!(errors.len(), 1);
+    /// assert_eq!(errors[0].message, "order lost");
+    /// ```
+    pub fn events_at(&self, level: tracing::Level) -> Vec<CapturedEvent> {
+        let level = level.as_str().to_lowercase();
+        self.events()
+            .into_iter()
+            .filter(|event| event.level == level)
+            .collect()
+    }
+
     /// Every event on `target` whose message is exactly `message`.
     pub fn find(&self, target: &str, message: &str) -> Vec<CapturedEvent> {
         self.events()
@@ -330,6 +352,10 @@ mod tests {
         assert!(!event.message.contains("post"));
         assert_eq!(logs.find("nest_rs::orm", "listing rows").len(), 1);
         assert!(logs.find("nest_rs::http", "denying all rows").is_empty());
+        let debug = logs.events_at(tracing::Level::DEBUG);
+        assert_eq!(debug.len(), 1, "{debug:#?}");
+        assert_eq!(debug[0].message, "listing rows");
+        assert!(logs.events_at(tracing::Level::ERROR).is_empty());
     }
 
     #[tokio::test]

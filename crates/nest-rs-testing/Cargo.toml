@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "In-process testing harness for NestRS: boot an app's real DI graph, headless or serving HTTP/GraphQL/MCP through poem's TestClient (the `http` feature), with provider overrides and no socket bound."
+description = "In-process testing harness for NestRS: boot an app's real DI graph, headless or serving HTTP/GraphQL/MCP through its in-process TestClient (the `http` feature), with provider overrides and no socket bound."
 keywords = ["framework", "nestrs", "testing", "test", "harness"]
 categories = ["development-tools::testing"]
 
@@ -19,7 +19,7 @@ all-features = true
 
 [features]
 # The HTTP half: `TestApp`, which mounts the app's HTTP transport and drives it
-# through poem's `TestClient`, the `use_*_global` layer seams and the MCP
+# through the kit's `TestClient`, the `use_*_global` layer seams and the MCP
 # helpers. A headless suite — a worker, a queue driver's kit — leaves it off
 # and links no HTTP stack; it boots through `HeadlessApp::builder()`.
 http = [
@@ -29,7 +29,8 @@ http = [
     "dep:nest-rs-filters",
     "dep:nest-rs-exception-filters",
     "dep:nest-rs-pipes",
-    "dep:poem",
+    "dep:serde",
+    "dep:url",
 ]
 # Satisfy the OpenTelemetryModule boot guard in tests (`with_test_telemetry`).
 opentelemetry = ["dep:nest-rs-opentelemetry"]
@@ -41,9 +42,8 @@ orm = ["dep:nest-rs-seaorm", "dep:sea-orm", "dep:sea-orm-migration"]
 graphql = ["http", "dep:nest-rs-graphql", "dep:async-graphql"]
 # The WebSocket driver (`TestAppBuilder::build_ws`). Gated for `graphql`'s
 # reason and one more: this is the only driver that binds a real port, so a
-# suite that never opens a socket should not link a client or turn poem's
-# non-default `websocket` feature on for the whole build.
-ws = ["http", "dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws", "poem/websocket"]
+# suite that never opens a socket should not link a client.
+ws = ["http", "dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws"]
 # The queue backend kit (`queue_kit!`): the behaviour a queue backend owes the
 # port's worker, as tests a driver runs against its own implementation. tokio's
 # `test-util` (not part of `full`) is what pauses time under a backend running
@@ -66,9 +66,10 @@ nest-rs-interceptors = { workspace = true, optional = true }
 nest-rs-filters = { workspace = true, optional = true }
 nest-rs-exception-filters = { workspace = true, optional = true }
 nest-rs-pipes = { workspace = true, optional = true }
-# Behind `http`: `test` adds poem's in-process TestClient; `tower-compat` comes
-# from the workspace default and is harmless here.
-poem = { workspace = true, optional = true, features = ["test"] }
+# Behind `http`: the client's query and form bodies are form-encoded through
+# rust-url's `form_urlencoded`, the WHATWG encoder `nest-rs-config` already
+# links, so it adds no crate to the graph.
+url = { workspace = true, optional = true }
 # A headless app drives non-HTTP transports on a cancellable background task.
 tokio.workspace = true
 tokio-util.workspace = true
@@ -94,7 +95,8 @@ tracing-subscriber.workspace = true
 # Behind `ws`: a real WebSocket client. The upgrade, the lifetime ceiling and
 # the writer task only exist above a socket, so unlike `GraphqlSocket` — which
 # runs the protocol engine in process — this driver has to bind one. Already in
-# the graph as poem's own websocket backend, so the feature adds no new crate.
+# the graph as the WebSocket edge's own backend, so the feature adds no new
+# crate.
 tokio-tungstenite = { workspace = true, optional = true }
 # `SinkExt`/`StreamExt` to drive that client.
 futures-util = { workspace = true, optional = true }
@@ -103,8 +105,9 @@ futures-util = { workspace = true, optional = true }
 # read from it rather than re-spelled here — a copy of a wire grammar drifts
 # silently, because nothing joins the two spellings.
 nest-rs-ws = { workspace = true, optional = true }
-# Behind `queue`: the port the kit runs its cases through, and the serde its
-# job derives.
+# Behind `queue`: the port the kit runs its cases through. `serde` is the
+# kit's job's derives, and the HTTP client's `body_json`, `form` and
+# `assert_json`.
 nest-rs-queue = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
@@ -137,6 +140,10 @@ nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 # `#[derive(SimpleObject)]` on the payload those two share.
 async-graphql.workspace = true
+# The suites' handlers, interceptors, filters and exception filters still
+# answer poem's types until the HTTP edge's contracts leave it; the client
+# names none of them.
+poem.workspace = true
 # `test-util` (not part of tokio's `full`) pauses time, so the close of a
 # transport that unwinds for seconds is asserted on a virtual clock.
 tokio = { workspace = true, features = ["test-util"] }

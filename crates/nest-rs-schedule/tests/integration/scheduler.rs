@@ -2714,13 +2714,9 @@ fn a_schedule_whose_loop_panicked_is_said_once_by_the_scheduler() {
     // Rust's own hook back, so an assertion failing below prints.
     drop(std::panic::take_hook());
 
-    let events = logs.events();
-    let errors: Vec<_> = events
-        .iter()
-        .filter(|event| event.level == "error")
-        .collect();
+    let errors = logs.events_at(tracing::Level::ERROR);
     assert_eq!(errors.len(), 1, "the panic is said once: {errors:#?}");
-    let line = errors[0];
+    let line = &errors[0];
     assert_eq!(
         (line.target.as_str(), line.message.as_str()),
         (nest_rs_schedule::TARGET, STOPPED)

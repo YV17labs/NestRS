@@ -1,9 +1,10 @@
 //! Driving an MCP endpoint over streamable HTTP, through a
-//! [`TestApp`](crate::TestApp)'s [`TestClient`] or a bare `endpoint(..)` mount.
+//! [`TestApp`](crate::TestApp)'s [`TestClient`] or one over a bare
+//! `endpoint(..)` mount.
 
-use poem::Endpoint;
-use poem::test::{TestClient, TestResponse};
 use serde_json::{Value, json};
+
+use crate::{TestClient, TestResponse};
 
 /// The protocol version every suite negotiates — rmcp's own
 /// `LATEST_WITH_INITIALIZE`, pinned by `mcp::the_driver_negotiates_the_sdk_latest_handshake`.
@@ -36,8 +37,8 @@ pub fn initialize_request_with(capabilities: Value) -> Value {
 /// POST one JSON-RPC message with the headers streamable HTTP requires.
 /// `session` is the id [`open_session`] returned; `bearer` is the raw
 /// `authorization` value (`"Bearer …"`), omitted for an anonymous call.
-pub async fn post_message<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn post_message(
+    client: &TestClient,
     path: &str,
     session: Option<&str>,
     bearer: Option<&str>,
@@ -50,8 +51,8 @@ pub async fn post_message<E: Endpoint>(
 ///
 /// Prefer it to a hand-rolled POST, which drops the `host` header rmcp's
 /// DNS-rebinding defence requires and answers `400`.
-pub async fn post_message_with<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn post_message_with(
+    client: &TestClient,
     path: &str,
     session: Option<&str>,
     bearer: Option<&str>,
@@ -79,18 +80,14 @@ pub async fn post_message_with<E: Endpoint>(
 /// Run `initialize` + `notifications/initialized` and return the session id.
 /// Panics if the endpoint refuses the handshake; assert a refusal on
 /// [`post_message`].
-pub async fn open_session<E: Endpoint>(
-    client: &TestClient<E>,
-    path: &str,
-    bearer: Option<&str>,
-) -> String {
+pub async fn open_session(client: &TestClient, path: &str, bearer: Option<&str>) -> String {
     open_session_with(client, path, bearer, &[], json!({})).await
 }
 
 /// [`open_session`] declaring client `capabilities` on the handshake, under
 /// caller-supplied `headers`.
-pub async fn open_session_with<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn open_session_with(
+    client: &TestClient,
     path: &str,
     bearer: Option<&str>,
     headers: &[(&str, &str)],
@@ -129,11 +126,7 @@ pub async fn open_session_with<E: Endpoint>(
 
 /// Run `initialize` and return the raw response body, to assert what the
 /// handshake advertises.
-pub async fn initialize<E: Endpoint>(
-    client: &TestClient<E>,
-    path: &str,
-    bearer: Option<&str>,
-) -> String {
+pub async fn initialize(client: &TestClient, path: &str, bearer: Option<&str>) -> String {
     post_message(client, path, None, bearer, &initialize_request())
         .await
         .0
@@ -162,8 +155,8 @@ pub fn result(body: &str) -> Value {
 /// Send one JSON-RPC **request** on an open session and return the raw
 /// response body. `params` is the method's params object (`json!({})` when it
 /// takes none).
-pub async fn call_method<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn call_method(
+    client: &TestClient,
     path: &str,
     session: &str,
     bearer: Option<&str>,
@@ -174,8 +167,8 @@ pub async fn call_method<E: Endpoint>(
 }
 
 /// [`call_method`] carrying extra request headers.
-pub async fn call_method_with<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn call_method_with(
+    client: &TestClient,
     path: &str,
     session: &str,
     bearer: Option<&str>,
@@ -202,8 +195,8 @@ pub async fn call_method_with<E: Endpoint>(
 
 /// Send one JSON-RPC **notification** (no `id`, no response) on an open
 /// session.
-pub async fn notify<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn notify(
+    client: &TestClient,
     path: &str,
     session: &str,
     bearer: Option<&str>,
@@ -222,8 +215,8 @@ pub async fn notify<E: Endpoint>(
 
 /// Drive the full handshake and call `tool` with no arguments, returning the
 /// response body.
-pub async fn call_tool<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn call_tool(
+    client: &TestClient,
     path: &str,
     tool: &str,
     bearer: Option<&str>,
@@ -232,8 +225,8 @@ pub async fn call_tool<E: Endpoint>(
 }
 
 /// [`call_tool`] with an `arguments` object.
-pub async fn call_tool_with<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn call_tool_with(
+    client: &TestClient,
     path: &str,
     tool: &str,
     bearer: Option<&str>,
@@ -244,8 +237,8 @@ pub async fn call_tool_with<E: Endpoint>(
 
 /// [`call_tool_with`] under caller-supplied headers, applied to the handshake
 /// and the call alike.
-pub async fn call_tool_as<E: Endpoint>(
-    client: &TestClient<E>,
+pub async fn call_tool_as(
+    client: &TestClient,
     path: &str,
     tool: &str,
     bearer: Option<&str>,

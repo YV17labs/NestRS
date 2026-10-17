@@ -1,6 +1,8 @@
 //! Test doubles: a real upgrade request, served by hyper over an in-memory pipe,
-//! so its `OnUpgrade` yields a socket once answered; and an allocator counting
-//! the bytes a thread holds on the heap.
+//! so its `OnUpgrade` yields a socket once answered; an allocator counting the
+//! bytes a thread holds on the heap; and the in-process call this crate's units
+//! drive an endpoint with, since `nest_rs_testing::TestClient` names the
+//! crate's other copy.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -182,4 +184,29 @@ impl Drop for Held {
     fn drop(&mut self) {
         HELD.set(None);
     }
+}
+
+/// What `endpoint` answers `request`, an error rendered as the server renders it.
+pub(crate) async fn answer(
+    endpoint: &impl crate::Endpoint,
+    request: crate::Request,
+) -> crate::Response {
+    endpoint
+        .call(request)
+        .await
+        .unwrap_or_else(crate::HttpError::into_response)
+}
+
+/// `GET /`, as a client in process sends it: no peer, no body.
+pub(crate) fn get() -> crate::Request {
+    crate::Request::builder().finish()
+}
+
+/// The body of `response`, read as text.
+pub(crate) async fn text(response: crate::Response) -> String {
+    response
+        .into_body()
+        .into_string()
+        .await
+        .expect("a text body")
 }

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nest_rs_core::module;
+use nest_rs_http::__private::poem_bridge::from_poem;
 
 use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::model::{
@@ -34,6 +35,7 @@ use nest_rs_mcp::service::{NotificationContext, RequestContext, RoleServer};
 use nest_rs_mcp::{McpError, PropagatingHandler, ServerHandler, mcp, tools};
 use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with};
 use nest_rs_testing::{LogCapture, TestApp};
+use poem::IntoEndpoint as _;
 use poem::test::TestClient;
 use tokio::sync::Notify;
 
@@ -360,7 +362,9 @@ async fn await_seen(seen: &Seen, expected: &[&str]) {
 async fn every_server_handler_method_reaches_the_wrapped_host() {
     let seen: Seen = Arc::default();
     let host = ProbeHandler { seen: seen.clone() };
-    let client = TestClient::new(endpoint(McpMount::new(), move || host.clone()));
+    let client = TestClient::new(from_poem(
+        endpoint(McpMount::new(), move || host.clone()).into_endpoint(),
+    ));
 
     // A legacy session: the capabilities reachable through `initialize`.
     let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;

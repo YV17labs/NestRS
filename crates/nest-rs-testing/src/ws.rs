@@ -231,7 +231,7 @@ impl WsSocketBuilder {
             .with_context(|| format!("`{}` is not a websocket url", self.url))?;
         for (name, value) in &self.headers {
             request.headers_mut().insert(
-                poem::http::HeaderName::from_bytes(name.as_bytes())
+                nest_rs_http::HeaderName::from_bytes(name.as_bytes())
                     .with_context(|| format!("`{name}` is not a header name"))?,
                 // A test header is often a credential: named, never quoted.
                 value.parse().with_context(|| {

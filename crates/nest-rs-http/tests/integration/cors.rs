@@ -44,7 +44,7 @@ fn listed() -> HttpCors {
 }
 
 /// Every value of `name`, split on commas, lowercased.
-fn values(response: &poem::Response, name: header::HeaderName) -> Vec<String> {
+fn values(response: &nest_rs_http::Response, name: header::HeaderName) -> Vec<String> {
     response
         .headers()
         .get_all(name)

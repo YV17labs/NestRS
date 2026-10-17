@@ -170,12 +170,9 @@ fn a_transport_that_panics_is_one_line_without_its_value_and_the_app_s_error_nam
             "the payload's value reached a line: {event:#?}"
         );
     }
-    let errors: Vec<_> = events
-        .iter()
-        .filter(|event| event.level == "error")
-        .collect();
+    let errors = logs.events_at(tracing::Level::ERROR);
     assert_eq!(errors.len(), 1, "the panic is said once: {errors:#?}");
-    let line = errors[0];
+    let line = &errors[0];
     assert_eq!(
         (line.target.as_str(), line.message.as_str()),
         (target::APP, "transport task panicked; shutting down")

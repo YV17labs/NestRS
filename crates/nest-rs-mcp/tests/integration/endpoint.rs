@@ -307,7 +307,7 @@ async fn an_initialize_past_the_session_cap_is_refused_until_a_session_closes() 
     refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
     refused.assert_header(poem::http::header::RETRY_AFTER, "5");
     refused.assert_content_type("application/problem+json");
-    let problem: serde_json::Value = refused.0.into_body().into_json().await.expect("a problem");
+    let problem: serde_json::Value = refused.json().await.value().deserialize();
     assert_eq!(problem["status"], 503, "{problem}");
     assert_eq!(problem["code"], "UNAVAILABLE", "{problem}");
     let event = logs.expect_one(

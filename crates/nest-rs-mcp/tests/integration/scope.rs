@@ -4,6 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{Container, RequestScope};
+use nest_rs_http::__private::poem_bridge::from_poem;
 use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, McpError, Scoped, ServerHandler, tool, tool_handler, tool_router,
@@ -51,7 +52,7 @@ fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
 #[tokio::test]
 async fn ambient_request_scope_reaches_a_tool_body() {
     let app = with_scope_extension(endpoint(McpMount::new(), || ScopeProbeTool));
-    let client = TestClient::new(app);
+    let client = TestClient::new(from_poem(app));
 
     let body = call_tool(&client, "/", "probe_scope", None).await;
 
@@ -109,7 +110,7 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         tracing::info_span!("http.request"),
     );
 
-    call_tool(&TestClient::new(app), "/", "probe_span", None).await;
+    call_tool(&TestClient::new(from_poem(app)), "/", "probe_span", None).await;
 
     let (span_name, trace_id) = seen
         .lock()

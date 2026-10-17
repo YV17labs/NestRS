@@ -119,7 +119,7 @@ async fn a_large_file_is_streamed_whole_and_in_part() {
     let whole = app.http().get("/assets/blob.bin").send().await;
     whole.assert_status_is_ok();
     whole.assert_header("content-length", bytes.len().to_string());
-    assert_eq!(whole.0.into_body().into_vec().await.unwrap(), bytes);
+    assert_eq!(whole.0.into_body().into_bytes().await.unwrap(), bytes);
 
     let part = app
         .http()
@@ -129,7 +129,7 @@ async fn a_large_file_is_streamed_whole_and_in_part() {
         .await;
     part.assert_status(poem::http::StatusCode::PARTIAL_CONTENT);
     assert_eq!(
-        part.0.into_body().into_vec().await.unwrap(),
+        part.0.into_body().into_bytes().await.unwrap(),
         &bytes[150_000..150_010]
     );
 }

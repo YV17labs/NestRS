@@ -69,7 +69,7 @@ struct StreamModule;
 struct SilentStreamModule;
 
 /// The id the client was told this request was filed under.
-fn echoed_id(resp: &poem::Response) -> String {
+fn echoed_id(resp: &nest_rs_http::Response) -> String {
     let reported = resp
         .headers()
         .get("traceresponse")

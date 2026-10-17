@@ -381,11 +381,7 @@ mod tests {
             Some("11"),
             "what was written"
         );
-        let errors: Vec<_> = logs
-            .events()
-            .into_iter()
-            .filter(|event| event.level == "error")
-            .collect();
+        let errors = logs.events_at(tracing::Level::ERROR);
         assert_eq!(errors.len(), 1, "one event says the panic: {errors:#?}");
         assert_eq!(
             errors[0].field(nest_rs_core::panic::FIELD).as_deref(),

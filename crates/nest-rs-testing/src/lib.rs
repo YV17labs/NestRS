@@ -3,9 +3,10 @@
 //! [`HeadlessApp::builder`] boots an app's real DI graph (same four-phase
 //! [`AppBuilder`](nest_rs_core::AppBuilder) build, access-graph enforced) with
 //! no transport, for a worker or a scheduler; it links no HTTP stack. With the
-//! `http` feature, [`TestApp`] boots the same graph and exposes HTTP through
-//! `poem`'s `TestClient` without binding a socket. GraphQL, OpenAPI and MCP
-//! self-mount over HTTP, so one client drives every surface.
+//! `http` feature, [`TestApp`] boots the same graph and drives its HTTP stack,
+//! the edge included, through a [`TestClient`] without binding a socket.
+//! GraphQL, OpenAPI and MCP self-mount over HTTP, so one client drives every
+//! surface.
 //!
 //! Override providers with [`override_dyn`](TestAppBuilder::override_dyn) /
 //! [`override_value`](TestAppBuilder::override_value).
@@ -31,13 +32,21 @@
 // Re-exporting both ways gave each type two paths, and this crate was already
 // spelling one of them two ways 200 lines apart.
 mod app;
+#[cfg(feature = "http")]
+mod client;
 mod env;
+#[cfg(feature = "http")]
+mod form;
 mod headless;
 mod logs;
 /// Driving the MCP endpoint over the HTTP test client (feature `http`).
 #[cfg(feature = "http")]
 pub mod mcp;
+#[cfg(feature = "http")]
+mod response;
 mod url;
+#[cfg(feature = "http")]
+mod urlencoded;
 mod wait;
 
 #[cfg(feature = "tls")]
@@ -73,7 +82,11 @@ pub use url::{url_as, url_at, url_on};
 pub use wait::{wait_for, wait_until};
 
 #[cfg(feature = "http")]
-pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};
+pub use client::{TestClient, TestRequestBuilder};
+#[cfg(feature = "http")]
+pub use form::{TestForm, TestFormField};
+#[cfg(feature = "http")]
+pub use response::{TestJson, TestJsonArray, TestJsonObject, TestJsonValue, TestResponse};
 
 #[doc(hidden)]
 pub mod __private {

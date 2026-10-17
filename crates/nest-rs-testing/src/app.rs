@@ -1,5 +1,5 @@
 //! Boot an app's real DI graph in-process: headless, or with its HTTP surface
-//! driven through `poem`'s `TestClient` (feature `http`).
+//! driven through a [`TestClient`](crate::TestClient) (feature `http`).
 
 use std::any::Any;
 use std::future::Future;
@@ -124,11 +124,9 @@ mod http {
     use nest_rs_http::{HttpConfig, HttpTransport};
     use nest_rs_interceptors::{AppBuilderInterceptorsExt, InterceptorSpec};
     use nest_rs_pipes::{AppBuilderPipesExt, PipeSpec};
-    use poem::endpoint::BoxEndpoint;
-    use poem::test::TestClient;
-    use poem::{EndpointExt, Response};
 
     use super::TestAppBuilder;
+    use crate::TestClient;
 
     /// The config the app's own `HttpModule::for_root(cfg)` resolved, or the one a
     /// suite seeded; the defaults when there is neither.
@@ -136,19 +134,15 @@ mod http {
         container.get::<HttpConfig>().unwrap_or_default()
     }
 
-    /// The app's endpoint as poem's client drives it, until the harness has a
-    /// client of its own.
-    type TestEndpoint = BoxEndpoint<'static, Response>;
-
-    /// A booted app plus a `poem` [`TestClient`] over its mounted endpoint,
-    /// driving REST, GraphQL, OpenAPI and MCP through [`http`](Self::http)
-    /// without a socket.
+    /// A booted app plus a [`TestClient`] over its mounted endpoint, driving
+    /// REST, GraphQL, OpenAPI and MCP through [`http`](Self::http) without a
+    /// socket.
     ///
     /// [`close`](Self::close) ends it as [`App::close`] does; dropping it instead
     /// runs no shutdown hook and closes nothing.
     pub struct TestApp {
         app: App,
-        client: TestClient<TestEndpoint>,
+        client: TestClient,
     }
 
     impl TestApp {
@@ -162,8 +156,10 @@ mod http {
             TestAppBuilder::new().module::<M>().build().await
         }
 
-        /// The HTTP test client for issuing requests against the mounted routes.
-        pub fn http(&self) -> &TestClient<TestEndpoint> {
+        /// The HTTP test client for issuing requests against the mounted
+        /// routes, through the stack the server runs: the edge, the router,
+        /// the guards and the handlers.
+        pub fn http(&self) -> &TestClient {
             &self.client
         }
 
@@ -271,7 +267,7 @@ mod http {
 
     /// Configure the app's HTTP transport, run its init phases, and hand back a
     /// client over the endpoint it mounted.
-    async fn mount(app: &App) -> Result<TestClient<TestEndpoint>> {
+    async fn mount(app: &App) -> Result<TestClient> {
         // A default transport would ignore every field the module configured,
         // so the harness boots the one `App::run` resolves.
         let mut transport = HttpTransport::from_config(&http_config(app.container()))?;
@@ -285,8 +281,6 @@ mod http {
         let endpoint = transport
             .take_endpoint()
             .expect("HttpTransport::configure populates the endpoint");
-        Ok(TestClient::new(
-            nest_rs_http::__private::poem_bridge::to_poem(endpoint).boxed(),
-        ))
+        Ok(TestClient::new(endpoint))
     }
 }

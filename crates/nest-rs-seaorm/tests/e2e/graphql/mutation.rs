@@ -207,9 +207,8 @@ async fn remove(conn: &DatabaseConnection, ids: &[Uuid]) {
 }
 
 fn errors_filed(logs: &LogCapture) -> Vec<String> {
-    logs.events()
+    logs.events_at(tracing::Level::ERROR)
         .into_iter()
-        .filter(|event| event.level == "error")
         .map(|event| format!("{} {}", event.target, event.message))
         .collect()
 }

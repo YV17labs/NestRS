@@ -34,7 +34,7 @@ impl Guard for AlwaysUnauthorized {
 impl GuardFor<nest_rs_http::HttpView> for AlwaysUnauthorized {}
 
 /// Read the `WWW-Authenticate` challenge off a response, panicking with its status when absent.
-pub fn challenge(resp: &poem::Response) -> String {
+pub fn challenge(resp: &nest_rs_http::Response) -> String {
     resp.headers()
         .get(header::WWW_AUTHENTICATE)
         .unwrap_or_else(|| panic!("a {} must carry a challenge", resp.status()))

@@ -4,7 +4,7 @@
 
 /// Composition root: transports attached, boot phases, shutdown.
 pub const APP: &str = "nest_rs::app";
-/// Provider registration and resolution, including shadowed bindings.
+/// Provider registration and resolution, and the registries wired from them.
 pub const CONTAINER: &str = "nest_rs::container";
 /// Guard, pipe, filter and interceptor chains as they compose.
 pub const LAYERS: &str = "nest_rs::layers";

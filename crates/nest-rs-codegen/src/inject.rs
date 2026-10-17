@@ -28,12 +28,6 @@ pub struct InjectableBody {
     pub opt_keys: Vec<TokenStream2>,
     /// Human-readable label for each entry in `opt_keys`, in the same order.
     pub opt_names: Vec<TokenStream2>,
-    /// One `::nest_rs_core::KeyedDependency { … }` expression per
-    /// `#[inject(key = "…")]` field, for the access-graph keyed check. Kept
-    /// apart from `dep_keys`: a keyed dependency resolves via `get_keyed`, is
-    /// excluded from the register-phase fixpoint, and is validated against the
-    /// global keyed set rather than the module import closure.
-    pub keyed_dep_keys: Vec<TokenStream2>,
 }
 
 /// Strip `#[inject]` attributes from `item`'s fields and build its
@@ -50,7 +44,6 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             dep_names: Vec::new(),
             opt_keys: Vec::new(),
             opt_names: Vec::new(),
-            keyed_dep_keys: Vec::new(),
         }),
         Fields::Named(fields) => {
             let mut has_inject = false;
@@ -59,7 +52,6 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             let mut dep_names = Vec::new();
             let mut opt_keys = Vec::new();
             let mut opt_names = Vec::new();
-            let mut keyed_dep_keys = Vec::new();
 
             for field in fields.named.iter_mut() {
                 #[expect(
@@ -88,49 +80,9 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                     continue;
                 };
                 has_inject = true;
+                read_inject_args(&inject_attr)?;
 
                 let field_ty = &field.ty;
-
-                // No keyed optional/dyn resolution exists: concrete `Arc<T>` only.
-                if let Some(key) = parse_inject_key(&inject_attr)? {
-                    if nth_generic_type(field_ty, "Option", 0).is_some() {
-                        return Err(syn::Error::new_spanned(
-                            field_ty,
-                            "#[inject(key = \"…\")] does not support `Option<…>` — a keyed \
-                             dependency is a required singleton",
-                        ));
-                    }
-                    let Some(inner_ty) = arc_inner(field_ty) else {
-                        return Err(syn::Error::new_spanned(
-                            field_ty,
-                            "#[inject(key = \"…\")] requires an `Arc<T>` field",
-                        ));
-                    };
-                    if matches!(inner_ty, syn::Type::TraitObject(_)) {
-                        return Err(syn::Error::new_spanned(
-                            field_ty,
-                            "#[inject(key = \"…\")] does not support `Arc<dyn Trait>` — keyed \
-                             providers are concrete singletons",
-                        ));
-                    }
-                    let msg = format!(
-                        "{}.{}: no keyed provider registered for key `{}`",
-                        item.ident,
-                        field_name,
-                        key.value()
-                    );
-                    field_inits.push(quote! {
-                        #field_name: container.get_keyed(#key).expect(#msg)
-                    });
-                    let label = type_label(inner_ty);
-                    keyed_dep_keys.push(quote! {
-                        ::nest_rs_core::KeyedDependency {
-                            key: ::nest_rs_core::ProviderKey::named::<#inner_ty>(#key),
-                            type_name: #label,
-                        }
-                    });
-                    continue;
-                }
 
                 // Optional `#[inject] Option<Arc<…>>`: lenient resolution,
                 // out of `dependencies`/`injected` so a provider no reached
@@ -199,7 +151,6 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 dep_names,
                 opt_keys,
                 opt_names,
-                keyed_dep_keys,
             })
         }
         Fields::Unnamed(_) => Err(syn::Error::new_spanned(
@@ -209,32 +160,25 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
     }
 }
 
-/// `#[inject]`'s one key.
-const INJECT: crate::Grammar = crate::Grammar::new("inject", &["key"]);
+/// `#[inject]` takes no argument: a dependency is found by its type alone.
+const INJECT: crate::Grammar = crate::Grammar::new("inject", &[]).elsewhere(removed_key);
 
-/// Parse the optional `key = "…"` argument of an `#[inject]` attribute.
-/// `#[inject]` (bare) yields `None`; `#[inject(key = "github")]` yields the
-/// literal. Any other argument is a spanned compile error.
-fn parse_inject_key(attr: &syn::Attribute) -> syn::Result<Option<syn::LitStr>> {
-    if matches!(attr.meta, syn::Meta::Path(_)) {
-        return Ok(None);
-    }
-    let mut key: Option<syn::LitStr> = None;
-    INJECT.parse_attr(attr, |arg| {
-        key = Some(arg.str_lit("github")?);
-        Ok(())
-    })?;
-    Ok(key)
+/// 6.x's `key`, answered with what replaced it rather than as unknown.
+fn removed_key(key: &str) -> Option<String> {
+    (key == "key").then(|| {
+        "#[inject] takes no `key`: string-keyed injection was removed in 7.0, since two \
+         instances of one type are two types — inject the instance's type \
+         (`Arc<RedisConnection<Cache>>`), or wrap your own value in a newtype"
+            .to_owned()
+    })
 }
 
-/// `Discoverable::injected_keyed` — one `KeyedDependency` per
-/// `#[inject(key = "…")]` field, for the access-graph keyed check.
-pub fn injected_keyed_method(keyed_dep_keys: &[TokenStream2]) -> TokenStream2 {
-    quote! {
-        fn injected_keyed() -> ::std::vec::Vec<::nest_rs_core::KeyedDependency> {
-            ::std::vec![ #(#keyed_dep_keys),* ]
-        }
+/// Refuse any argument written on an `#[inject]` attribute.
+fn read_inject_args(attr: &syn::Attribute) -> syn::Result<()> {
+    if matches!(attr.meta, syn::Meta::Path(_)) {
+        return Ok(());
     }
+    INJECT.parse_attr(attr, |_| Ok(()))
 }
 
 /// The hidden `__nestrs_from_container` constructor emitted by every decorator
@@ -611,5 +555,64 @@ pub fn injected_method(dep_keys: &[TokenStream2]) -> TokenStream2 {
         fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
             #body
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    fn refusal(mut item: ItemStruct) -> String {
+        match build_injectable_body(&mut item) {
+            Ok(_) => panic!("the field was read"),
+            Err(refused) => refused.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_key_is_refused_naming_what_replaced_it() {
+        for value in [quote!("cache"), quote!(42)] {
+            let refused = refusal(parse_quote! {
+                struct Repo {
+                    #[inject(key = #value)]
+                    cache: Arc<RedisConnection>,
+                }
+            });
+            assert!(refused.starts_with("#[inject] takes no `key`"), "{refused}");
+            assert!(refused.contains("removed in 7.0"), "{refused}");
+            assert!(
+                refused.contains("`Arc<RedisConnection<Cache>>`") && refused.contains("newtype"),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn inject_takes_no_argument() {
+        let refused = refusal(parse_quote! {
+            struct Repo {
+                #[inject(name = "primary")]
+                pool: Arc<Pool>,
+            }
+        });
+        assert_eq!(
+            refused,
+            "unknown #[inject] argument `name`; expected no arguments"
+        );
+    }
+
+    #[test]
+    fn a_bare_inject_resolves_its_field_by_type() {
+        let mut item: ItemStruct = parse_quote! {
+            struct Repo {
+                #[inject]
+                pool: Arc<Pool>,
+            }
+        };
+        let body = build_injectable_body(&mut item).expect("a bare #[inject] is read");
+        assert_eq!(body.dep_keys.len(), 1);
+        assert!(item.fields.iter().all(|field| field.attrs.is_empty()));
     }
 }

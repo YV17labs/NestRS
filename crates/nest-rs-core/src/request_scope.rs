@@ -395,12 +395,6 @@ impl RequestScope {
     pub fn get_dyn<T: ?Sized + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.root.get_dyn::<T>()
     }
-
-    /// Resolve a **keyed** singleton (`#[inject(key = "…")]`), forwarded to
-    /// the root.
-    pub fn get_keyed<T: Any + Send + Sync>(&self, name: &'static str) -> Option<Arc<T>> {
-        self.root.get_keyed::<T>(name)
-    }
 }
 
 #[cfg(test)]

@@ -205,3 +205,25 @@ vendor that opens no instance.
 **Status (2026-10-17):** Redis — the connection, its three bindings and every
 refusal and line — is instance-capable; storage keeps one disk (above), and
 the removal of string keys follows.
+
+## 2026-10-17 — string keys removed; where it departs
+
+**`#[inject]` takes no argument, and `key` is answered, not unknown.** A 6.x
+`#[inject(key = "…")]` is refused at the key with what replaced it — the
+instance's type, or a newtype — through the grammar's slot for a key the
+framework knows elsewhere; any other argument reads the shared sentence,
+expecting none. The key is refused before its value is read, so a key that
+was not a string earns the same sentence and no refusal of its own.
+
+**The container keys on `TypeId` alone.** `ProviderKey` existed to carry a
+key's name beside the type; with no name left, the singleton map, the access
+graph's global set and the duplicate check all read one `TypeId`.
+
+**An edge reads every field of the injectable body.** The keyed record went
+unread because the edge decorators destructured the body with a rest pattern;
+they now name each field, so a field the body grows cannot be dropped by one
+edge in silence.
+
+**Status (2026-10-17):** string keys are gone — `#[inject(key)]`,
+`provide_keyed`, `get_keyed`, `ProviderKey`, `KeyedDependency` and its error;
+storage keeps one disk (above).

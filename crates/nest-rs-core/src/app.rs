@@ -15,11 +15,11 @@ use tokio::time::Instant;
 use crate::access::{
     Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, dependency_order,
     provider_order, reachable_descriptors, reachable_provider_ids, scoped_cycle, singleton_cycle,
-    unbuilt_cause, validate_access_graph, validate_keyed_access_graph,
+    unbuilt_cause, validate_access_graph,
 };
 use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::close::InstallRecord;
-use crate::container::{AbsentOptional, ProviderKey, ProviderScope, Stall};
+use crate::container::{AbsentOptional, ProviderScope, Stall};
 use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
@@ -111,7 +111,7 @@ impl std::fmt::Display for BootStep {
     }
 }
 
-/// Fail the boot if any unkeyed type was registered twice, in any two scopes,
+/// Fail the boot if any type was registered twice, in any two scopes,
 /// rather than let one registration silently replace the other.
 fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
     match builder.duplicate_providers().first() {
@@ -344,7 +344,6 @@ impl App {
             &descriptors,
             &[(TypeId::of::<M>(), root)],
             &global,
-            &HashSet::new(),
         )?;
         let installed = builder.install_record();
         let container = sealed.provide(builder).build();
@@ -870,24 +869,6 @@ impl AppBuilder {
         self
     }
 
-    /// Seed a **keyed** singleton, resolvable with an `#[inject(key = "…")]`
-    /// field or [`Container::get_keyed`](crate::Container::get_keyed); one
-    /// instance per `name`, injectable by any provider reachable from the root.
-    pub fn provide_keyed<T: Any + Send + Sync>(mut self, name: &'static str, value: T) -> Self {
-        self.builder = self.builder.provide_keyed(name, value);
-        self
-    }
-
-    /// [`provide_keyed`](Self::provide_keyed) for an already-shared `Arc<T>`.
-    pub fn provide_keyed_arc<T: Any + Send + Sync>(
-        mut self,
-        name: &'static str,
-        value: Arc<T>,
-    ) -> Self {
-        self.builder = self.builder.provide_keyed_arc(name, value);
-        self
-    }
-
     /// Seed module-less metadata of type `M` ([`ContainerBuilder::provide_meta`]
     /// at the app root), for global builder extensions such as `use_guards_global`.
     pub fn provide_meta<M: Any + Send + Sync>(mut self, meta: M) -> Self {
@@ -1162,7 +1143,6 @@ async fn assemble(
     global.insert(TypeId::of::<ReachableProviders>());
     global.insert(TypeId::of::<ProviderOrder>());
     global.insert(TypeId::of::<Composition>());
-    let global_keyed: HashSet<ProviderKey> = slot.keyed_provider_keys();
     let mut builder = std::mem::take(slot).enter_phase(Phase::Register);
     for hooks in modules {
         builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
@@ -1171,7 +1151,7 @@ async fn assemble(
     check_register_phase(slot)?;
     check_unclaimed_overrides(slot)?;
 
-    let sealed = seal(slot, &descriptors, &roots, &global, &global_keyed)?;
+    let sealed = seal(slot, &descriptors, &roots, &global)?;
     let installed = slot.install_record();
     Ok((sealed.provide(std::mem::take(slot)).build(), installed))
 }
@@ -1214,7 +1194,6 @@ fn seal(
     descriptors: &[&ModuleDescriptor],
     roots: &[(TypeId, &'static str)],
     global: &HashSet<TypeId>,
-    global_keyed: &HashSet<ProviderKey>,
 ) -> Result<Sealed> {
     let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
     // A provider a test's double stands in for is never built: what it
@@ -1233,7 +1212,6 @@ fn seal(
         &overridden,
     )
     .map_err(AccessError::into_anyhow)?;
-    validate_keyed_access_graph(descriptors, &ids, global_keyed)?;
     let scopes = builder.dynamic_scopes();
     if let Some(cycle) = scoped_cycle(descriptors, &ids, &scopes, &overridden) {
         return Err(cycle.into());

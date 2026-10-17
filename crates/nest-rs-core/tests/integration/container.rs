@@ -1,43 +1,14 @@
 //! Covers `src/container.rs` — one type has one provider whatever its scope, so
 //! a second registration fails the boot naming both; `Foo as dyn Trait` holds
-//! one `Foo` under its own type and each trait; a replaced keyed binding warns
-//! and continues.
+//! one `Foo` under its own type and each trait.
 
-use nest_rs_core::target;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    App, Collecting, Container, ContainerBuilder, DuplicateProviderError, Module, ProviderScope,
-    Registering, injectable, module,
+    App, Collecting, ContainerBuilder, DuplicateProviderError, Module, ProviderScope, Registering,
+    injectable, module,
 };
-use nest_rs_testing::LogCapture;
-
-#[derive(Debug, PartialEq)]
-struct Pool(&'static str);
-
-#[test]
-fn a_second_registration_under_one_key_names_the_provider_and_the_key() {
-    let logs = LogCapture::install();
-    let container = Container::builder()
-        .provide_keyed("primary", Pool("first"))
-        .provide_keyed("primary", Pool("second"))
-        .build();
-
-    let pool: Arc<Pool> = container
-        .get_keyed("primary")
-        .expect("the keyed provider resolves");
-    assert_eq!(pool.0, "second");
-
-    let event = logs.expect_one(target::CONTAINER, "keyed provider override");
-    assert_eq!(event.level, "warn");
-    assert_eq!(event.field("key").as_deref(), Some("primary"));
-    assert!(
-        event.field("provider").is_some_and(|p| p.contains("Pool")),
-        "the event names the provider whose binding was replaced, got {:?}",
-        event.fields,
-    );
-}
 
 fn duplicate(boot: anyhow::Result<App>) -> DuplicateProviderError {
     let Err(refused) = boot else {

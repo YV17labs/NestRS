@@ -5,7 +5,7 @@ use std::any::TypeId;
 use std::borrow::Cow;
 
 use crate::access::{Composition, ModuleDescriptor};
-use crate::container::{Container, ContainerBuilder, KeyedDependency};
+use crate::container::{Container, ContainerBuilder};
 
 /// Anything a `#[module]` can pull in via `providers = [...]`.
 ///
@@ -53,13 +53,6 @@ pub trait Discoverable {
     /// [`injected`](Discoverable::injected), never for scope — its consumer is
     /// a request.
     fn injected_per_request() -> Vec<(TypeId, &'static str)> {
-        Vec::new()
-    }
-
-    /// [`ProviderKey`](crate::ProviderKey) of each **keyed** `#[inject(key = "…")]`
-    /// dependency, validated against the global keyed set (seeds + factory
-    /// outputs).
-    fn injected_keyed() -> Vec<KeyedDependency> {
         Vec::new()
     }
 
@@ -413,7 +406,6 @@ mod tests {
         use super::super::{InertHost, classify};
         use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
         use crate::access::Composition;
-        use crate::container::KeyedDependency;
 
         struct AppModule;
         struct WorkerTasksModule;
@@ -427,9 +419,6 @@ mod tests {
             Vec::new()
         }
         fn no_names() -> Vec<&'static str> {
-            Vec::new()
-        }
-        fn no_keyed() -> Vec<KeyedDependency> {
             Vec::new()
         }
         fn no_per_request() -> Vec<(TypeId, &'static str)> {
@@ -464,7 +453,6 @@ mod tests {
                         inject_names: no_names,
                         injects_optional: nothing,
                         inject_optional_names: no_names,
-                        injects_keyed: no_keyed,
                         injects_per_request: no_per_request,
                     }],
                 },
@@ -481,7 +469,6 @@ mod tests {
                         inject_names: no_names,
                         injects_optional: nothing,
                         inject_optional_names: no_names,
-                        injects_keyed: no_keyed,
                         injects_per_request: no_per_request,
                     }],
                 },

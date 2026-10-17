@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    AccessGraphError, App, Collecting, ContainerBuilder, DynamicModule, LateFactoryError,
-    LateOptionalDependencyError, Module, ProviderCycleError, Registering, UnbuiltCause,
-    UnbuiltProviderError, injectable, module,
+    AccessGraphError, App, Collecting, ContainerBuilder, DynamicModule, Instance, Instanced,
+    LateFactoryError, LateOptionalDependencyError, Module, ProviderCycleError, Registering,
+    UnbuiltCause, UnbuiltProviderError, injectable, instance, module,
 };
 
 use crate::refused_on_both_paths;
@@ -107,7 +107,27 @@ fn a_dynamic_import_is_evaluated_once_on_the_sync_path() {
 
 struct Tagged(&'static str);
 
-struct TaggingSetup(&'static str);
+#[instance]
+struct First;
+
+#[instance]
+struct Second;
+
+/// One setup type imported twice, each value holding its tag under its own
+/// instance.
+struct TaggingSetup {
+    tag: &'static str,
+    install: fn(ContainerBuilder, Tagged) -> ContainerBuilder,
+}
+
+impl TaggingSetup {
+    fn of<I: Instance>(tag: &'static str) -> Self {
+        Self {
+            tag,
+            install: |builder, tagged| builder.provide(Instanced::<I, _>::from(tagged)),
+        }
+    }
+}
 
 impl DynamicModule for TaggingSetup {
     fn module() -> TypeId {
@@ -115,11 +135,11 @@ impl DynamicModule for TaggingSetup {
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_keyed(self.0, Tagged(self.0))
+        (self.install)(builder, Tagged(self.tag))
     }
 }
 
-#[module(imports = [TaggingSetup("first"), TaggingSetup("second")])]
+#[module(imports = [TaggingSetup::of::<First>("first"), TaggingSetup::of::<Second>("second")])]
 struct TwoDynamicImportsModule;
 
 #[tokio::test]
@@ -130,14 +150,10 @@ async fn two_dynamic_imports_in_one_module_keep_their_own_values() {
         .await
         .expect("the module boots");
 
-    assert_eq!(
-        app.container().get_keyed::<Tagged>("first").unwrap().0,
-        "first"
-    );
-    assert_eq!(
-        app.container().get_keyed::<Tagged>("second").unwrap().0,
-        "second"
-    );
+    let first = app.container().get::<Instanced<First, Tagged>>();
+    let second = app.container().get::<Instanced<Second, Tagged>>();
+    assert_eq!(first.expect("the first import registered").0, "first");
+    assert_eq!(second.expect("the second import registered").0, "second");
 }
 
 struct Mixed(usize);

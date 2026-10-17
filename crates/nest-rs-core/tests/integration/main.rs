@@ -18,6 +18,7 @@ mod container;
 mod discoverable;
 mod error_message;
 mod exception_filter;
+mod instance;
 mod interceptor;
 mod lifecycle;
 #[cfg(feature = "logging")]

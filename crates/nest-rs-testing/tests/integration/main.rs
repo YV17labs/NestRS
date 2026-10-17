@@ -21,7 +21,6 @@ mod guards;
 mod harness_parity;
 mod http;
 mod interceptors;
-mod keyed_providers;
 mod layer_pool;
 mod lifecycle_hooks;
 mod mcp;

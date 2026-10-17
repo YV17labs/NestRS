@@ -72,8 +72,8 @@ pub struct ScopeViolationError {
     pub dependency: &'static str,
 }
 
-/// The failure modes of the bare (non-keyed) access-graph pass: a cross-module
-/// reach that no import covers, or a dependency no module provides.
+/// The failure modes of the access-graph pass: a cross-module reach that no
+/// import covers, or a dependency no module provides.
 ///
 /// `pub(crate)`: [`into_anyhow`](Self::into_anyhow) discards it before a boot
 /// failure leaves the crate.
@@ -474,26 +474,6 @@ pub struct BudgetPastNetError {
     pub net: std::time::Duration,
     /// What lowers the budget: the variable, and the field that pins it in code.
     pub setting: String,
-}
-
-/// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider
-/// registered as global infrastructure (a seed or a factory output).
-#[derive(Debug, Error)]
-#[error(
-    "keyed dependency unreachable: `{consumer}` (in module `{module}`) injects `{type_name}` \
-     keyed `{key}`, but no keyed provider for that (type, key) is registered. Register it as \
-     global infrastructure — `App::builder().provide_keyed::<{type_name}>(\"{key}\", …)` or a \
-     `ContainerBuilder::provide_keyed`/factory in a module reachable from the root."
-)]
-pub struct KeyedDependencyError {
-    /// Module that owns the consumer with the unreachable keyed dependency.
-    pub module: &'static str,
-    /// Provider whose `#[inject(key = "…")]` has no keyed provider registered.
-    pub consumer: &'static str,
-    /// The injected type of the keyed dependency.
-    pub type_name: &'static str,
-    /// The requested key — named alongside the type so both appear in the error.
-    pub key: &'static str,
 }
 
 /// A wiring a module attaches at the kernel's wiring step failed: the boot ends

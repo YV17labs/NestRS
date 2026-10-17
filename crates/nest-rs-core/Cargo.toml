@@ -53,10 +53,9 @@ parking_lot.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-# `LogCapture`: the container's two survivable conflicts (a keyed override, a
-# scope that changes under a type) warn and continue, so the event is the only
-# trace a shadowed provider leaves. Dev-only, so the cycle back to this crate
-# never reaches a consumer build.
+# `LogCapture`: what the kernel says only in a line — an inert host, a hook or
+# a close that failed, the way down's bound — is asserted on that event.
+# Dev-only, so the cycle back to this crate never reaches a consumer build.
 nest-rs-testing = { path = "../nest-rs-testing" }
 # `test-util` (not part of tokio's `full`) pauses time, so a shutdown hook that
 # never returns is abandoned at its bound without the suite waiting it out.

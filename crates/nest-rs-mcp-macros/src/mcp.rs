@@ -60,7 +60,6 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         dep_names,
         opt_keys,
         opt_names,
-        ..
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return refused_beside(err, item),

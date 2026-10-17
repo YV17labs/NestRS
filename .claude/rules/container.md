@@ -311,8 +311,8 @@ is not a DI provider — reached only through `SocialRegistry`, in no `providers
 list — yet it has a module, `<Vendor>SocialModule`, which an app imports to open
 it; a third-party provider crate is `config.rs`, `module.rs` and `provider.rs`.
 A duplicate key, or a registry key disagreeing with the provider's `key()`,
-fails the boot. Keyed injection (`#[inject(key)]`) stays the tool for static roles
-such as primary and replica pools.
+fails the boot. A static role a resource plays twice is an instance marker
+(`Instance`, above), never a string key.
 
 ## Every wait the framework owns is bounded
 

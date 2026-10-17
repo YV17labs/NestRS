@@ -49,7 +49,6 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         dep_names,
         opt_keys,
         opt_names,
-        ..
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),

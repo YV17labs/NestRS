@@ -62,11 +62,10 @@ pub use identity::{KEY, invalid_job_key, is_valid_job_key, key_value, key_withou
 pub use inject::{
     InjectableBody, LayerDeps, build_injectable_body, dependencies_method, dependency_names_method,
     forwarded_arg_idents, forwarded_idents, from_container_method, from_scope_method,
-    injected_keyed_method, injected_keys_with_layers, injected_method,
-    injected_methods_with_layers, injected_names_method, injected_names_with_layers,
-    injected_optional_fns, injected_optional_method, injected_optional_names_method, layer_deps,
-    mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
-    optional_dependency_names_method,
+    injected_keys_with_layers, injected_method, injected_methods_with_layers,
+    injected_names_method, injected_names_with_layers, injected_optional_fns,
+    injected_optional_method, injected_optional_names_method, layer_deps, mixed_site_ident,
+    normalize_forwarded_args, optional_dependencies_method, optional_dependency_names_method,
 };
 pub use instance::{DEFAULT_INSTANCE, INSTANCE, RESERVED_VOCABULARY, instance_name};
 pub use job::{

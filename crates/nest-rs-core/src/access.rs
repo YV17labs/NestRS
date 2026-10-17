@@ -12,10 +12,10 @@ use std::any::TypeId;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use crate::container::{ProviderKey, ProviderScope};
+use crate::container::ProviderScope;
 use crate::error::{
-    AccessError, AccessGraphError, KeyedDependencyError, MissingDependencyError,
-    ProviderCycleError, ScopeViolationError, UnbuiltCause,
+    AccessError, AccessGraphError, MissingDependencyError, ProviderCycleError, ScopeViolationError,
+    UnbuiltCause,
 };
 
 pub(crate) use self::__private::{ModuleDescriptor, ProviderDescriptor};
@@ -27,8 +27,6 @@ pub(crate) const UNNAMED_DEPENDENCY: &str = "<unnamed dependency>";
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
-
-    use crate::container::KeyedDependency;
 
     /// One provider declared in a module's `providers = [...]`, recorded by the
     /// `#[module]` macro for the access-graph check.
@@ -59,9 +57,6 @@ pub(crate) mod __private {
         /// Label for each [`injects_optional`](Self::injects_optional) entry, in
         /// the same order; may be shorter, never longer.
         pub inject_optional_names: fn() -> Vec<&'static str>,
-        /// Each **keyed** `#[inject(key = "…")]` field, validated against the
-        /// global keyed set.
-        pub injects_keyed: fn() -> Vec<KeyedDependency>,
         /// Each provider a handler resolves through a parameter, with its label
         /// ([`Discoverable::injected_per_request`](crate::Discoverable::injected_per_request)):
         /// checked like [`injects`](Self::injects), never for scope.
@@ -318,38 +313,6 @@ pub(crate) fn labelled<'a>(
         let name = names.get(i).copied().unwrap_or(UNNAMED_DEPENDENCY);
         (*id, name)
     })
-}
-
-/// Validate the **keyed** access graph: every reachable provider's
-/// `#[inject(key = "…")]` dependency must be in the global keyed set (seeds +
-/// factory outputs), since keyed providers have no per-module declaration.
-pub(crate) fn validate_keyed_access_graph(
-    descriptors: &[&ModuleDescriptor],
-    roots: &[TypeId],
-    global_keyed: &HashSet<ProviderKey>,
-) -> Result<(), KeyedDependencyError> {
-    let by_id: HashMap<TypeId, &ModuleDescriptor> =
-        descriptors.iter().map(|d| ((d.module)(), *d)).collect();
-
-    for module_id in reachable(roots, &by_id) {
-        let Some(desc) = by_id.get(&module_id) else {
-            continue;
-        };
-        for p in desc.providers {
-            for dep in (p.injects_keyed)() {
-                if global_keyed.contains(&dep.key) {
-                    continue;
-                }
-                return Err(KeyedDependencyError {
-                    module: desc.name,
-                    consumer: p.name,
-                    type_name: dep.type_name,
-                    key: dep.key.name.unwrap_or("<unnamed>"),
-                });
-            }
-        }
-    }
-    Ok(())
 }
 
 /// The first cycle among the request-scoped and transient providers the roots
@@ -802,7 +765,6 @@ pub(crate) fn reachable_descriptors<'a>(
 mod tests {
     use super::__private::ProviderDescriptor;
     use super::*;
-    use crate::container::KeyedDependency;
 
     // Descriptors are hand-built so the global `inventory` registry is untouched.
     struct AppMod;
@@ -825,10 +787,6 @@ mod tests {
 
     fn billing_names() -> Vec<&'static str> {
         vec!["UsersService"]
-    }
-
-    fn no_keyed_deps() -> Vec<KeyedDependency> {
-        Vec::new()
     }
 
     fn no_per_request() -> Vec<(TypeId, &'static str)> {
@@ -860,7 +818,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -907,7 +864,6 @@ mod tests {
                     inject_names: no_names,
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
-                    injects_keyed: no_keyed_deps,
                     injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
@@ -919,7 +875,6 @@ mod tests {
                     inject_names: no_names,
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
-                    injects_keyed: no_keyed_deps,
                     injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
@@ -951,7 +906,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -988,7 +942,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1035,7 +988,6 @@ mod tests {
                 inject_names: billing_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1076,7 +1028,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1125,7 +1076,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1152,7 +1102,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1179,7 +1128,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1212,71 +1160,6 @@ mod tests {
         assert!(keys.contains(&TypeId::of::<Db>()));
     }
 
-    // One concrete type injected twice, disambiguated by key.
-    struct OAuthClient;
-
-    fn github_dep() -> Vec<KeyedDependency> {
-        vec![KeyedDependency {
-            key: ProviderKey::named::<OAuthClient>("github"),
-            type_name: "OAuthClient",
-        }]
-    }
-
-    fn keyed_consumer_module() -> ModuleDescriptor {
-        ModuleDescriptor {
-            module: || TypeId::of::<UsersMod>(),
-            name: "UsersModule",
-            imports: &[],
-            providers: &[ProviderDescriptor {
-                name: "SocialLoginService",
-                provides: || TypeId::of::<UsersService>(),
-                provider: || TypeId::of::<UsersService>(),
-                injects: no_deps,
-                inject_names: no_names,
-                injects_optional: no_deps,
-                inject_optional_names: no_names,
-                injects_keyed: github_dep,
-                injects_per_request: no_per_request,
-                also_provides: provides_only_itself,
-            }],
-        }
-    }
-
-    #[test]
-    fn keyed_dependency_supplied_globally_passes() {
-        let users = keyed_consumer_module();
-        let global_keyed = HashSet::from([ProviderKey::named::<OAuthClient>("github")]);
-        validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
-            .expect("a globally-seeded keyed provider satisfies the keyed dependency");
-    }
-
-    #[test]
-    fn unmet_keyed_dependency_is_rejected_naming_type_and_key() {
-        let users = keyed_consumer_module();
-        let err =
-            validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &HashSet::new())
-                .expect_err("a keyed dependency with no keyed provider must fail");
-        assert_eq!(err.consumer, "SocialLoginService");
-        assert_eq!(err.module, "UsersModule");
-        assert_eq!(err.type_name, "OAuthClient");
-        assert_eq!(err.key, "github");
-        let msg = err.to_string();
-        assert!(msg.contains("OAuthClient"), "names the type: {msg}");
-        assert!(msg.contains("github"), "names the key: {msg}");
-    }
-
-    #[test]
-    fn wrong_key_does_not_satisfy_a_keyed_dependency() {
-        // Only the exact `(type, key)` counts — a different key of the same
-        // type leaves the dependency unmet.
-        let users = keyed_consumer_module();
-        let global_keyed = HashSet::from([ProviderKey::named::<OAuthClient>("google")]);
-        let err =
-            validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
-                .expect_err("the `google` key must not satisfy a `github` dependency");
-        assert_eq!(err.key, "github");
-    }
-
     #[test]
     fn the_injection_closure_follows_every_declared_injection_and_stops_at_what_none_declares() {
         let users = users_module();
@@ -1292,7 +1175,6 @@ mod tests {
                 inject_names: billing_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1340,7 +1222,6 @@ mod tests {
                     inject_names: no_names,
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
-                    injects_keyed: no_keyed_deps,
                     injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
@@ -1352,7 +1233,6 @@ mod tests {
                     inject_names: no_names,
                     injects_optional: injects_zdb,
                     inject_optional_names: no_names,
-                    injects_keyed: no_keyed_deps,
                     injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
@@ -1364,7 +1244,6 @@ mod tests {
                     inject_names: no_names,
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
-                    injects_keyed: no_keyed_deps,
                     injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
@@ -1405,7 +1284,6 @@ mod tests {
                     inject_names: no_names,
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
-                    injects_keyed: no_keyed_deps,
                     injects_per_request: no_per_request,
                     also_provides: provides_only_itself,
                 },
@@ -1417,7 +1295,6 @@ mod tests {
                     inject_names: no_names,
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
-                    injects_keyed: no_keyed_deps,
                     injects_per_request: no_per_request,
                     also_provides: also_its_own_type,
                 },
@@ -1445,7 +1322,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1462,7 +1338,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],
@@ -1479,7 +1354,6 @@ mod tests {
                 inject_names: no_names,
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
-                injects_keyed: no_keyed_deps,
                 injects_per_request: no_per_request,
                 also_provides: provides_only_itself,
             }],

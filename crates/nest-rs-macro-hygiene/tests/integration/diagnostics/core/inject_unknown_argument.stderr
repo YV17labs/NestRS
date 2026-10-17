@@ -1,4 +1,4 @@
-error: unknown #[inject] argument `name`; expected `key`
+error: unknown #[inject] argument `name`; expected no arguments
   --> tests/integration/diagnostics/core/inject_unknown_argument.rs:15:14
    |
 15 |     #[inject(name = "primary")]

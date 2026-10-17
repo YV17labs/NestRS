@@ -12,8 +12,8 @@ struct Pool;
 
 #[injectable]
 struct Repo {
-    #[inject(key = "primary")]
-    #[inject(key = "replica")]
+    #[inject]
+    #[inject]
     pool: Arc<Pool>,
 }
 

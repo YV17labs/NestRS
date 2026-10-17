@@ -138,9 +138,7 @@ pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
 pub use backoff::{Backoff, Retries, process_seed};
 pub use budget::Budget;
 pub use close::CloseContribution;
-pub use container::{
-    Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey, ProviderScope,
-};
+pub use container::{Container, ContainerBuilder, ContainerId, ProviderScope};
 pub use discoverable::{
     Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, unresolved_host,
 };
@@ -150,7 +148,7 @@ pub use env_prefix::EnvPrefix;
 pub use error::{
     AccessGraphError, BootInterruptedError, BudgetPastNetError, ContestedDeclarationError,
     DecodeError, DuplicateProviderError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    KeyedDependencyError, LateFactoryError, LateOptionalDependencyError, MissingDependencyError,
+    LateFactoryError, LateOptionalDependencyError, MissingDependencyError,
     OverriddenDependencyError, ProviderCycleError, ScopeViolationError, UnboundedTransportError,
     UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError,
     UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,

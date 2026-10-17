@@ -39,3 +39,11 @@ handshake refuses at once, the rest is retried within the operation budget.
   arrives as `Error::Generic`, never `NotFound`; reading the status off the
   error's sentence would parse a dependency's wording.
 - **Named stores (`Storage<I>`) in 7.0** — `named-instances.md`.
+
+## 2026-10-17 — the registry joins the disallowed parsers
+
+`object_store::registry::DefaultObjectStoreRegistry` resolves a URL it holds
+no store for through `parse_url_opts` and every process variable,
+`AWS_ALLOW_INVALID_CERTIFICATES` among them — a store opened past
+`StorageConfig`'s refusals and `ClientTls`, as the two parsers above open one.
+`clippy.toml` disallows the type beside them.

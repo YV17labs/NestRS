@@ -31,6 +31,10 @@ disallowed-methods = [
     { path = "syn::MetaList::parse_nested_meta", reason = "parse a decorator's keys through nest_rs_codegen::Grammar" },
 ]
 
+disallowed-types = [
+    { path = "object_store::registry::DefaultObjectStoreRegistry", reason = "its resolve opens a store for an unregistered URL through parse_url_opts and every process variable, AWS_ALLOW_INVALID_CERTIFICATES among them, past StorageConfig's refusals and its ClientTls: open the store through StorageConfig" },
+]
+
 disallowed-macros = [
     { path = "tokio::main", reason = "use #[nest_rs::main]: its runtime teardown is bounded by the shutdown budget" },
 ]

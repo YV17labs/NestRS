@@ -30,6 +30,7 @@ mod detached;
 mod drain;
 mod edge;
 mod endpoint;
+mod endpoint_guards;
 mod error;
 mod fallback;
 mod form;
@@ -205,6 +206,7 @@ pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
 pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, endpoint_fn};
+pub use endpoint_guards::{EndpointGuards, GuardList};
 pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError};
 pub use fallback::HttpFallbackMeta;
 pub use form::Form;
@@ -250,11 +252,12 @@ pub mod __private {
 
     pub use crate::controller::{SchemaFn, schema_of};
     pub use crate::deprecation::deprecated_route;
-    pub use crate::endpoint::{guards_in_band, with_data};
+    pub use crate::endpoint::{OriginCheck, checks_origin, with_data};
+    pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
     pub use crate::error::OriginRefused;
     pub use crate::guard_stage::{
-        GuardedEndpoint, attached, attached_pending, check_request, check_request_chain,
-        denial_to_http_error, denial_to_http_response, deny_http, install_attached,
+        GuardedEndpoint, attached, attached_pending, check_request, denial_to_http_error,
+        denial_to_http_response, deny_http, install_attached,
     };
     pub use crate::interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
     pub use crate::origin::{OriginFacts, OriginPolicy};

@@ -10,11 +10,24 @@ help: the trait `ProviderResidency` is not implemented for `Stamped`
 15 | struct Stamped;
    | ^^^^^^^^^^^^^^
    = note: a provider-hosted decorator resolves its host with `Container::get::<Self>()`, outside any request, and `as dyn Trait` holds one instance under its own type beside the trait object, so the type must be a singleton provider. Add `#[injectable]` — or, on a provider registered by hand with `ContainerBuilder::provide`, write `impl ProviderResidency` for it with `const SINGLETON: bool = true`
-   = help: the following other types implement trait `ProviderResidency`:
-             AbilityGuard<F>
-             AllowAllMcpGuard
-             GraphqlAbilityBridge<A, G>
-             HealthService
-             McpAbilityBridge<A, G>
-             SeaOrmHealthIndicator
-             WsServer<N>
+help: the following other types implement trait `ProviderResidency`
+  --> $WORKSPACE/crates/nest-rs-ws/src/server.rs
+   |
+   | #[injectable]
+   | ^^^^^^^^^^^^^ `WsServer<N>`
+   |
+  ::: $WORKSPACE/crates/nest-rs-health/src/service.rs
+   |
+   | #[injectable]
+   | ^^^^^^^^^^^^^ `HealthService`
+   |
+  ::: $WORKSPACE/crates/nest-rs-seaorm/src/health/indicator.rs
+   |
+   | #[injectable]
+   | ^^^^^^^^^^^^^ `SeaOrmHealthIndicator`
+   |
+  ::: $WORKSPACE/crates/nest-rs-authz/src/guard.rs
+   |
+   | #[injectable]
+   | ^^^^^^^^^^^^^ `AbilityGuard<F>`
+   = note: this error originates in the attribute macro `injectable` (in Nightly builds, run with -Z macro-backtrace for more info)

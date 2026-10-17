@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering};
+use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
 use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta};
 
 use crate::config::GraphqlConfig;
@@ -13,6 +14,7 @@ use crate::context::{ENDPOINT, OperationBridge};
 use crate::endpoint::GetEndpoint;
 use crate::resolver::{build_schema, check_operations};
 use crate::subscription::SubscriptionEndpoint;
+use crate::view::GraphqlView;
 
 /// Mounts `POST <path>` (queries + mutations) and `GET <path>` — the graphql-ws
 /// socket for subscriptions, or the playground for a plain browser request when
@@ -134,7 +136,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
     // DataLoader batch (on its own task), so the transport stops them at shutdown.
     let carried = DetachedWork::new();
     let mounted = carried.clone();
-    builder.provide_meta(
+    builder.provide_meta(checks_origin(
         HttpEndpointMeta::new(&ENDPOINT, log_path, "graphql", move |container, routes| {
             let schema = build_schema(container.clone(), &options, &mounted);
             if options.emit_sdl {
@@ -168,7 +170,6 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                     bridge,
                     &options,
                     mounted.clone(),
-                    nest_rs_http::__private::OriginPolicy::from_container(container),
                     container.get_dyn::<dyn nest_rs_database::UnitOfWork>(),
                 ),
                 options.playground.then(|| {
@@ -178,13 +179,28 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                     )
                 }),
             ));
-            // Guards run in band, never at the HTTP edge: the endpoint's
-            // `InBand` posture lets `AuthnGuard` admit an anonymous request to the
-            // operations' own gates while a presented bearer is still verified.
+            // The transport runs the request's guards in front of both methods:
+            // the endpoint's `InBand` posture lets `AuthnGuard` admit an anonymous
+            // request to the operations' own gates while a presented bearer is
+            // still verified.
             routes.route_any_poem(options.path.as_str(), method);
         })
+        .in_band::<GraphqlView>()
         .runs_detached(carried),
-    )
+        OriginCheck::Upgrades,
+        refused_origin,
+    ))
+}
+
+/// A graphql-ws upgrade from a browser origin the transport's policy refuses,
+/// filed on this edge's target.
+fn refused_origin(refused: &OriginRefused) {
+    tracing::warn!(
+        target: crate::TARGET,
+        origin = refused.origin(),
+        expected = refused.expected(),
+        "browser origin refused",
+    );
 }
 
 #[cfg(test)]

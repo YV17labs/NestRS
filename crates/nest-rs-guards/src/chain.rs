@@ -186,12 +186,12 @@ fn compose(
 /// Guards in the order they run.
 type Guards = Vec<ResolvedLayer<dyn Guard>>;
 
-/// Split the global pool at the first guard a bridge covers, the bridge running
-/// every guard `covers` names itself: the guards listed before that one, then
-/// the rest, every covered guard left to the bridge. Run head, bridge, tail,
-/// and the bridge sits where the pool placed the authentication it carries,
-/// ahead of a pooled guard reading the principal; with nothing covered it runs
-/// after the whole pool.
+/// Split the global pool at the first guard `covers` names, an endpoint's own
+/// guards running every one of them: the guards listed before that one, then
+/// the rest, every covered guard left to the endpoint's. Run head, the
+/// endpoint's guards, tail, and they sit where the pool placed the
+/// authentication they carry, ahead of a pooled guard reading the principal;
+/// with nothing covered they run after the whole pool.
 pub fn split_at_covered(pool: Guards, covers: &[TypeId]) -> (Guards, Guards) {
     let covered = |entry: &ResolvedLayer<dyn Guard>| covers.contains(&entry.type_id);
     let mut head = pool;
@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn the_bridge_sits_at_the_first_guard_it_covers_and_runs_every_covered_one() {
+    fn endpoint_guards_sit_at_the_first_guard_they_name_and_run_every_named_one() {
         let covers = [TypeId::of::<Covered>(), TypeId::of::<AlsoCovered>()];
         let (head, tail) = split_at_covered(pool(), &covers);
         assert_eq!(ids(&head), [TypeId::of::<First>()]);
@@ -254,14 +254,14 @@ mod tests {
     }
 
     #[test]
-    fn a_bridge_covering_nothing_in_the_pool_runs_after_it() {
+    fn endpoint_guards_naming_nothing_in_the_pool_run_after_it() {
         let (head, tail) = split_at_covered(pool(), &[TypeId::of::<u8>()]);
         assert_eq!(ids(&head).len(), 5);
         assert!(ids(&tail).is_empty());
     }
 
     #[test]
-    fn a_bridge_covering_the_whole_pool_runs_alone() {
+    fn endpoint_guards_naming_the_whole_pool_run_alone() {
         let covers = [
             TypeId::of::<First>(),
             TypeId::of::<Covered>(),

@@ -75,7 +75,7 @@ where
         .is_none()
     {
         return Err(Error::new(
-            "missing request `Ability` — is the GraphQL auth bridge installed on /graphql?",
+            "missing request `Ability` — does a guard attach one at the /graphql request?",
         ));
     }
     let id = parse_v7(id)?;

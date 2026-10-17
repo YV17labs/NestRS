@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::header::{HeaderName, HeaderValue, SERVER};
-use nest_rs_core::{Container, Discovery, Listening, Transport};
+use nest_rs_core::{Container, Discovery, Listening, Posture, Transport};
 use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::HttpBootCheck;
@@ -15,10 +15,12 @@ use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::edge::EdgeEndpoint;
 use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta};
+use crate::endpoint_guards::{RequestStage, request_stage};
 use crate::error::RouteError;
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
-use crate::guard_stage::GuardedEndpoint;
+use crate::guard_stage::{DeniedEndpoint, GuardedEndpoint};
 use crate::interceptor::HttpEndpointWrap;
+use crate::origin::{OriginChecked, OriginPolicy};
 use crate::poem_adapter::{CorsPolicy, PoemAdapter};
 use crate::problem::{Normalized, ResolvedErrors};
 use crate::route_template::RouteTemplate;
@@ -520,13 +522,10 @@ impl Transport for HttpTransport {
                 "unguarded routes detected",
             );
         }
-        // Empty without a global guard pool. A self-mount guarded at the edge
-        // has no route shaper, so the transport runs the pool there.
-        let edge_pool =
-            nest_rs_guards::__private::resolve_global_chain(container, "self-mount edge");
-        // A warning, not a fail-secure stop: a gateway may bind its own
-        // `#[use_guards]` inside its opaque mount closure.
+        // A warning, not a fail-secure stop: a gateway whose messages are all
+        // `#[public]` is a legitimate shape.
         let mut unguarded_edges: Vec<String> = Vec::new();
+        let origins = OriginPolicy::from_container(container);
         let mut endpoint_owner: HashMap<String, String> = HashMap::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
             let owner = format!("{} endpoint {}", d.meta.label(), d.meta.owner());
@@ -577,18 +576,51 @@ impl Transport for HttpTransport {
             if let Some(work) = d.meta.detached() {
                 self.detached.push((d.meta.path().to_owned(), work.clone()));
             }
-            if d.meta.edge_access_is_implicit(global_guards) {
-                unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
-            }
-            // Each entry runs the pool once routed, so a guard reads the template it
-            // matched; gated in band (GraphQL, MCP), public by design (OpenAPI), or
-            // with no pool to run, an entry is registered as it is.
-            let wrap = (d.meta.guarded_at_the_edge() && !edge_pool.is_empty()).then(|| {
-                let (handler, pool) = (d.meta.handler(), edge_pool.clone());
-                Arc::new(move |inner| {
-                    BoxEndpoint::new(GuardedEndpoint::new(handler, pool.clone(), inner))
-                }) as Wrap
-            });
+            // Each entry runs the stage once routed, so a guard reads the template
+            // it matched; a public surface (OpenAPI), or one with no guard to run,
+            // registers its entries as they are.
+            let site = format!("the {} request at {}", d.meta.label(), d.meta.path());
+            let handler = d.meta.handler();
+            let guarded: Option<Wrap> = match request_stage(container, &d.meta, &site)? {
+                RequestStage::Open => {
+                    if handler.posture() == Posture::Gated && d.meta.carries().is_none() {
+                        unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
+                    }
+                    None
+                }
+                RequestStage::Guarded(chain) => Some(Arc::new(move |inner| {
+                    BoxEndpoint::new(GuardedEndpoint::new(handler, chain.clone(), inner))
+                })),
+                RequestStage::Denied => {
+                    tracing::warn!(
+                        target: nest_rs_core::target::LAYERS,
+                        path = d.meta.path(),
+                        kind = d.meta.label(),
+                        units = d.meta.carries().map(|units| units.name),
+                        hint = "list a global guard pool, declare EndpointGuards for these \
+                                units, or open the endpoint in code",
+                        "a gated endpoint runs no guard at its request; it denies every request",
+                    );
+                    let path = d.meta.path().to_owned();
+                    Some(Arc::new(move |_inner| {
+                        BoxEndpoint::new(DeniedEndpoint::new(path.clone()))
+                    }))
+                }
+            };
+            // Ahead of the guards: a refused origin never pays for authentication.
+            let wrap = match d.meta.origin() {
+                Some(gate) => {
+                    let policy = origins.clone();
+                    Some(Arc::new(move |inner| {
+                        let inner = match &guarded {
+                            Some(guard) => guard(inner),
+                            None => inner,
+                        };
+                        BoxEndpoint::new(OriginChecked::new(policy.clone(), gate, inner))
+                    }) as Wrap)
+                }
+                None => guarded,
+            };
             routes.for_self_mount(format!("the {owner}"), templates, wrap);
             d.meta.mount(container, &mut routes);
             routes.settle()?;

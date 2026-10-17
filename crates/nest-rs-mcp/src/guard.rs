@@ -1,55 +1,15 @@
-//! Per-operation guard the MCP endpoint runs before each streamable-HTTP request.
+//! A guard's refusal as the JSON-RPC error one MCP operation answers with.
 
-use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_guards::Denial;
-use nest_rs_http::{Request, Result};
 
 use crate::McpError;
-use crate::context::{Captured, OperationOutcome};
 
-/// A boxed, `Send` future — the return type of an async guard method in a
-/// dyn-compatible trait.
+/// A boxed, `Send` future — the return type of an async method in a
+/// dyn-compatible trait ([`McpToolContext`](crate::McpToolContext)).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// Authenticates an MCP HTTP request before the streamable handler runs. Bind
-/// with `providers = [MyBridge as dyn McpOperationGuard]`.
-///
-/// A registered guard adds to the global guard pool, which always runs at the
-/// request. It gates the HTTP request, and never stands in for an operation's
-/// own `Guard::check` chain.
-pub trait McpOperationGuard: Send + Sync + 'static {
-    /// Gate the operation: check `req` — keeping what the checks attach on it,
-    /// as `nest_rs_http`'s request guard stage does — and return `Err` to
-    /// reject it before the handler runs.
-    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>>;
-
-    /// Snapshot what [`around`](Self::around) will need, from the post-`before`
-    /// request. `None` (the default) means this guard installs nothing and
-    /// `around` is never called for it.
-    fn capture(&self, _req: &Request) -> Option<Captured> {
-        None
-    }
-
-    /// Wrap one operation's dispatch to install ambient state for its duration
-    /// (the caller's `Ability`), inside rmcp's spawned dispatch, on whatever
-    /// [`capture`](Self::capture) returned. Default = pass-through.
-    fn around<'a>(
-        &'a self,
-        _captured: &'a Captured,
-        inner: BoxFuture<'a, OperationOutcome>,
-    ) -> BoxFuture<'a, OperationOutcome> {
-        inner
-    }
-
-    /// The guards [`before`](Self::before) runs itself, by type. The global pool
-    /// leaves each of them to this guard, so a guard listed in both runs once.
-    fn covers(&self) -> &[TypeId] {
-        &[]
-    }
-}
 
 /// Render a guard's [`Denial`] as the JSON-RPC error one MCP operation answers
 /// with.

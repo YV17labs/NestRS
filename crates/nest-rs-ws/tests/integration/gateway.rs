@@ -2450,7 +2450,7 @@ impl RefusingGateway {
 struct RefusingModule;
 
 /// A guard's internal denial answers the opaque message, never its text, and is
-/// filed once, by the bridge that still holds the `Denial`, as the other three
+/// filed once, by the stage that still holds the `Denial`, as the other three
 /// edges file theirs.
 #[tokio::test]
 async fn a_per_message_internal_denial_answers_opaquely_and_is_filed_once_on_the_layers_target() {

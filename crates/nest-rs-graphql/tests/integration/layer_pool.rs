@@ -1,15 +1,14 @@
 //! The layer-pool contract on the `/graphql` self-mount: a global guard runs
-//! **exactly once** per request, and a registered operation guard **adds to**
-//! the global pool, which leaves it only the guards it covers.
+//! **exactly once** per request, and the guards a module declares for the
+//! endpoint **add to** the global pool, a guard in both running once.
 
-use std::any::TypeId;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
-use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, operations, resolver};
+use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::async_trait;
+use nest_rs_http::{EndpointGuards, async_trait};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
 use poem::{Request, Response};
@@ -59,56 +58,6 @@ impl Interceptor for CountingInterceptor {
     }
 }
 
-/// A registered operation guard that runs nothing and covers nothing.
-#[injectable]
-#[derive(Default)]
-struct NoopOpGuard;
-
-impl GraphqlOperationGuard for NoopOpGuard {
-    fn before<'a>(
-        &'a self,
-        _req: &'a mut nest_rs_http::Request,
-    ) -> BoxFuture<'a, Result<(), nest_rs_http::Response>> {
-        Box::pin(async move { Ok(()) })
-    }
-
-    fn around<'a>(
-        &'a self,
-        _req: &'a nest_rs_http::Request,
-        inner: BoxFuture<'a, ()>,
-    ) -> BoxFuture<'a, ()> {
-        inner
-    }
-}
-
-/// A registered operation guard claiming [`CountingPassGuard`] as its own, as
-/// a bridge does the guards it runs.
-#[injectable]
-#[derive(Default)]
-struct CoveringOpGuard;
-
-impl GraphqlOperationGuard for CoveringOpGuard {
-    fn before<'a>(
-        &'a self,
-        _req: &'a mut nest_rs_http::Request,
-    ) -> BoxFuture<'a, Result<(), nest_rs_http::Response>> {
-        Box::pin(async move { Ok(()) })
-    }
-
-    fn around<'a>(
-        &'a self,
-        _req: &'a nest_rs_http::Request,
-        inner: BoxFuture<'a, ()>,
-    ) -> BoxFuture<'a, ()> {
-        inner
-    }
-
-    fn covers(&self) -> &[TypeId] {
-        const COVERS: [TypeId; 1] = [TypeId::of::<CountingPassGuard>()];
-        &COVERS
-    }
-}
-
 #[resolver]
 struct PingResolver;
 
@@ -129,15 +78,13 @@ struct FallbackModule;
 
 #[module(
     imports = [GraphqlModule::for_root(None)],
-    providers = [CountingPassGuard, NoopOpGuard as dyn GraphqlOperationGuard, PingResolver],
+    providers = [
+        CountingPassGuard,
+        PingResolver,
+        EndpointGuards<GraphqlView, (CountingPassGuard,)>,
+    ],
 )]
-struct BridgedModule;
-
-#[module(
-    imports = [GraphqlModule::for_root(None)],
-    providers = [CountingPassGuard, CoveringOpGuard as dyn GraphqlOperationGuard, PingResolver],
-)]
-struct CoveringModule;
+struct DeclaredModule;
 
 async fn post_ping(app: &TestApp) {
     let resp = app
@@ -175,18 +122,18 @@ async fn global_guard_runs_exactly_once_per_graphql_request() {
     assert_eq!(
         GUARD_RUNS.load(Ordering::SeqCst),
         1,
-        "the global guard pool runs in-band (fallback operation guard) and nowhere else — \
-         the edge double-run must never come back",
+        "the global guard pool runs at the request and nowhere else — the double-run \
+         must never come back",
     );
 }
 
 #[tokio::test]
-async fn a_registered_operation_guard_adds_to_the_pool() {
+async fn a_guard_both_pooled_and_declared_for_the_endpoint_runs_once() {
     let _gate = GATE.lock().await;
     reset_counters();
 
     let app = TestApp::builder()
-        .module::<BridgedModule>()
+        .module::<DeclaredModule>()
         .use_guards_global([guard::<CountingPassGuard>()])
         .build()
         .await
@@ -196,29 +143,21 @@ async fn a_registered_operation_guard_adds_to_the_pool() {
     assert_eq!(
         GUARD_RUNS.load(Ordering::SeqCst),
         1,
-        "a registered GraphqlOperationGuard joins the global pool — a pooled guard it does \
-         not cover still runs, once",
+        "the endpoint's guards join the global pool — a guard in both runs once",
     );
 }
 
 #[tokio::test]
-async fn the_pool_leaves_a_covered_guard_to_the_operation_guard() {
+async fn a_guard_declared_for_the_endpoint_runs_without_a_pool() {
     let _gate = GATE.lock().await;
     reset_counters();
 
-    let app = TestApp::builder()
-        .module::<CoveringModule>()
-        .use_guards_global([guard::<CountingPassGuard>()])
-        .build()
+    let app = TestApp::for_module::<DeclaredModule>()
         .await
         .expect("boots");
 
     post_ping(&app).await;
-    assert_eq!(
-        GUARD_RUNS.load(Ordering::SeqCst),
-        0,
-        "the guard the operation guard covers is its to run — the pool does not run it again",
-    );
+    assert_eq!(GUARD_RUNS.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

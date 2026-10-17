@@ -3,7 +3,6 @@
 //! A gateway is `Gated`, so these suites install the ambient ability with
 //! [`with_ability`] and drive `Gateway::dispatch` directly, as the connection loop does.
 
-mod authorize;
 mod mask;
 
 use std::sync::Arc;

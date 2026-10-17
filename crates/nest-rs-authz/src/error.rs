@@ -31,9 +31,9 @@ pub struct MalformedRuleError {
 /// either case as fail-closed: send an error frame, never the unmasked body.
 #[derive(Debug, thiserror::Error)]
 pub enum MaskReplyError {
-    /// No ambient [`Ability`](crate::Ability) is installed — the auth bridge for this
-    /// transport is missing, so masking cannot run.
-    #[error("no ambient ability — is the transport's authz bridge installed?")]
+    /// No ambient [`Ability`](crate::Ability) — no ability guard ran at the
+    /// request, so masking cannot run.
+    #[error("no ambient ability — does an ability guard run at the request?")]
     NoAmbientAbility,
     /// The wire value could not be reconciled with the entity model — said by
     /// where and what kind, never by the value.

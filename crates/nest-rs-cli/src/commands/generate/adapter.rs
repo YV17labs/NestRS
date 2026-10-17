@@ -6,7 +6,7 @@
 //! A `g resource` port exposes a `CrudService` rather than `g feature`'s
 //! `count()` stand-in, and its rows are reachable only behind the app's guards:
 //! GraphQL and HTTP over one take the `#[crud]` template, and each transport
-//! gets its `authz/` bridge ([`auth::bridge_for`]) whenever the workspace has a
+//! gets its `authz/` adapter ([`auth::authz_for`]) whenever the workspace has a
 //! policy to enforce.
 
 use std::path::PathBuf;
@@ -68,12 +68,12 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let mut s = Scaffold::new();
     s.create(dir.join(transport.handler_file()), r.render(handler_tmpl));
 
-    // A guarded `#[crud]` handler imports its transport's authz bridge, or the
+    // A guarded `#[crud]` handler imports its transport's authz adapter, or the
     // access graph fails the boot on the guards it names.
     let mut module_rs = r.render(module_tmpl);
     let guarded_handler = crud_port && matches!(transport, Transport::Graphql | Transport::Http);
     if guarded_handler
-        && let Some(b) = auth::bridge_for(transport)
+        && let Some(b) = auth::authz_for(transport)
         && let Some(wired) = ensure_module_imports(&[(b.feature_path, b.module)])(&module_rs)
     {
         module_rs = wired;
@@ -81,22 +81,22 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     s.create(dir.join("module.rs"), module_rs);
     s.create(dir.join("mod.rs"), r.render(adapter::MOD));
 
-    // The transport's authz bridge, whenever the workspace has a policy to enforce:
+    // The transport's authz adapter, whenever the workspace has a policy to enforce:
     // without it `/graphql` installs no ability and `/mcp` is deny-all.
     let scaffolded_auth = is_graphql && crud_port && !auth::exists(&ws);
-    let bridge = auth::bridge_for(transport).filter(|b| {
+    let authz = auth::authz_for(transport).filter(|b| {
         !b.written_by_g_auth && (scaffolded_auth || auth::exists(&ws)) && !b.exists(&ws)
     });
-    let decls = bridge.map(auth::AuthzBridge::decls).unwrap_or_default();
-    if let Some(bridge) = bridge {
-        bridge.queue(&mut s, &ws);
+    let decls = authz.map(auth::AuthzAdapter::decls).unwrap_or_default();
+    if let Some(authz) = authz {
+        authz.queue(&mut s, &ws);
     }
     let mut bootstrapped = None;
     if scaffolded_auth {
         // This run creates `authz/mod.rs`, so its index lines ride in its contents:
         // there is nothing on disk for an `edit` to resolve against.
         bootstrapped = Some(auth::queue(&mut s, &ws, decls)?);
-    } else if bridge.is_some() {
+    } else if authz.is_some() {
         s.edit(ws.features_root().join("authz/mod.rs"), ensure_lines(decls));
     }
 
@@ -128,8 +128,8 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     }
 
     let mut deps = adapter_deps(transport);
-    if let Some(bridge) = bridge {
-        deps.extend(bridge.deps);
+    if let Some(authz) = authz {
+        deps.extend(authz.deps);
     }
     // `#[expose(graphql)]` makes the port's entity a GraphQL object; a port
     // without the generated `entity.rs` is left alone, since an `edit` on a missing
@@ -162,7 +162,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
     let use_path = format!("features::{}::{}", names.snake, tmodule);
     let mut imports = vec![(use_path.as_str(), tmodule.as_str())];
-    if let Some(b) = bridge {
+    if let Some(b) = authz {
         imports.push((b.app_path, b.module));
     }
     if scaffolded_auth {
@@ -192,7 +192,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &names,
         &tmodule,
         wired_app.is_some(),
-        bridge,
+        authz,
     );
     if let Some(secrets) = &bootstrapped {
         auth::print_bootstrapped(secrets);
@@ -248,7 +248,7 @@ fn print_next_steps(
     names: &Names,
     tmodule: &str,
     wired: bool,
-    bridge: Option<&'static auth::AuthzBridge>,
+    authz: Option<&'static auth::AuthzAdapter>,
 ) {
     println!();
     println!("Next steps:");
@@ -281,22 +281,22 @@ fn print_next_steps(
             names.queue()
         );
     }
-    if matches!(transport, Transport::Mcp) && bridge.is_none() {
+    if matches!(transport, Transport::Mcp) && authz.is_none() {
         println!(
-            "  Security: the MCP endpoint denies all requests until you bind an \
-             McpOperationGuard. Run `nestrs g auth`, then `nestrs g mcp` again — it \
-             writes the AuthzMcpModule that authenticates callers and installs the \
-             ambient Ability."
+            "  Security: the MCP endpoint denies all requests until a guard runs at \
+             its request. Run `nestrs g auth`, then `nestrs g mcp` again — it \
+             writes the AuthzMcpModule that declares the guards authenticating \
+             callers and attaching the ambient Ability."
         );
     }
-    if let Some(bridge) = bridge {
+    if let Some(authz) = authz {
         println!();
         println!(
             "Also created the {} authz adapter (crates/features/src/authz/{}/):",
             transport.folder(),
-            bridge.dir,
+            authz.dir,
         );
-        for line in bridge.rationale {
+        for line in authz.rationale {
             println!("  {line}");
         }
     }

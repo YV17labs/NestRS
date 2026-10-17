@@ -107,9 +107,6 @@ pub(crate) struct McpAmbient {
     pub(crate) scope: Option<Arc<RequestScope>>,
     /// Whatever the registered [`McpToolContext`] snapshotted.
     pub(crate) captured: Option<Captured>,
-    /// Whatever the endpoint's [`McpOperationGuard`](crate::McpOperationGuard)
-    /// snapshotted — the caller's ability, for the canonical bridge.
-    pub(crate) guard_captured: Option<Captured>,
     /// What the request's guards attached, ambient for each operation.
     pub(crate) attached: Pending,
     /// The span the request arrived under: in session mode rmcp's serve loop runs
@@ -126,7 +123,6 @@ impl Default for McpAmbient {
         Self {
             scope: None,
             captured: None,
-            guard_captured: None,
             attached: Pending::default(),
             span: tracing::Span::none(),
             correlation: nest_rs_core::Correlation::minted(None),

@@ -1,6 +1,11 @@
-//! Covers `src/gate.rs` — one class gate on every edge: the refusal a wider
-//! token would fix reads the same sentence and code on HTTP, GraphQL, WS and
-//! MCP, each edge carrying the code where it carries a client's.
+//! Covers `src/gate.rs` — one class gate on every edge, through each edge's
+//! real decorator: the refusal a wider token would fix reads the same sentence
+//! and code on HTTP, GraphQL, WS and MCP, each edge carrying the code where it
+//! carries a client's.
+
+mod graphql;
+mod mcp;
+mod ws;
 
 use std::sync::Arc;
 

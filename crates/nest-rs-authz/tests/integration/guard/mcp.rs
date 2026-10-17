@@ -6,12 +6,11 @@
 //! only the pair tells a working check from a deny-all and from a no-op.
 
 use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, Posture, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::async_trait;
-use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, mcp, tools};
+use nest_rs_http::{EndpointGuards, async_trait};
+use nest_rs_mcp::{McpError, McpModule, McpOptions, McpView, mcp, tools};
 use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
 
 use crate::widget;
@@ -75,25 +74,22 @@ impl GuardedTool {
     }
 }
 
-/// The endpoint admits every request and installs nothing — as when
-/// `AuthzMcpModule` never made it into the module tree.
-#[module(providers = [
-    Rules,
-    AuthzGuard,
-    AllowAllMcpGuard as dyn McpOperationGuard,
-    GuardedTool,
-])]
+/// The endpoint is opened and nothing runs at its request — as when the app's
+/// authz module declaring the endpoint's guards never made it into the module
+/// tree.
+#[module(
+    imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })],
+    providers = [Rules, AuthzGuard, GuardedTool],
+)]
 struct UnscopedModule;
 
-type Bridge = McpAbilityBridge<ActorGuard, AuthzGuard>;
-
-/// The wired app: the bridge authenticates the request and installs the
-/// caller's ability for the operation's duration.
+/// The wired app: the endpoint's guards authenticate the request and attach the
+/// caller's ability, ambient for the operation's duration.
 #[module(providers = [
     Rules,
     ActorGuard,
     AuthzGuard,
-    Bridge as dyn McpOperationGuard,
+    EndpointGuards<McpView, (ActorGuard, AuthzGuard)>,
     GuardedTool,
 ])]
 struct ScopedModule;
@@ -118,7 +114,7 @@ async fn an_operation_with_no_ambient_ability_is_refused() {
         "…and it refuses loudly, never as a silent passthrough: {body}",
     );
 
-    // The refusal is an opaque JSON-RPC error; only the log says the bridge is missing.
+    // The refusal is an opaque JSON-RPC error; only the log says the ability is missing.
     let event = logs.expect_one("nest_rs::authz", "authorization denied");
     assert_eq!(
         event.level, "warn",
@@ -141,7 +137,7 @@ async fn an_operation_with_no_ambient_ability_is_refused() {
 }
 
 #[tokio::test]
-async fn an_operation_the_bridge_scoped_reaches_the_body() {
+async fn an_operation_the_endpoint_guards_scoped_reaches_the_body() {
     let logs = LogCapture::install();
     let app = TestApp::for_module::<ScopedModule>()
         .await
@@ -150,7 +146,7 @@ async fn an_operation_the_bridge_scoped_reaches_the_body() {
     let body = call_tool(app.http(), PATH, "ping", None).await;
     assert!(
         body.contains("pong"),
-        "the bridge installed the caller's ability, so the guard has nothing to \
+        "the endpoint's guards attached the caller's ability, so the guard has nothing to \
          refuse — without this half the check above would also pass a deny-all: \
          {body}",
     );

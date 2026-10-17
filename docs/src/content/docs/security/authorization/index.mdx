@@ -264,8 +264,8 @@ controller with the transport's authz module, and write a
   narrows a rule to the scope a *token* carries, and refuses with an
   `insufficient_scope` challenge naming what to request. Read it when
   you hand tokens to third-party clients (MCP, in particular).
-- [Per-transport bridges](/security/authorization/per-transport-bridges/)
-  — how GraphQL, WS, and MCP re-establish the ambient ability
+- [Endpoint guards](/security/authorization/endpoint-guards/)
+  — how GraphQL, WS, and MCP build the ambient ability at their request
   (explanation — useful once you add a second transport, not before).
 
 ## In this section
@@ -283,8 +283,8 @@ controller with the transport's authz module, and write a
 
 ### All options
 
-- [Authorization on GraphQL, WS & MCP](/security/authorization/per-transport-bridges/)
-  — the bridges that re-establish the ambient ability per transport.
+- [Endpoint guards](/security/authorization/endpoint-guards/)
+  — the guards that build the ambient ability at each transport's request.
 - [Public reads](/security/authorization/public-reads/) — the anonymous
   branch of the same policy, granting nothing until you write it.
 - [OAuth scopes](/security/authorization/scopes/) — gate a rule on the

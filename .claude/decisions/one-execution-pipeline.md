@@ -136,3 +136,12 @@ yet; the app's two lists are reached through `__private` until
 - **`force` is the guard stage's.** Guards are the one family with a
   `#[force_*]`, so the site's guard-stage factory carries it; no other list of
   the declaration takes one.
+
+**2026-10-17 — `feat/endpoint-guards-and-class-gate`.** The posture's class
+gate is `nest_rs_authz::class_gate::<A, S>`, which coerces to `ClassGate`;
+every decorator emits it, so a package's decorator emits the same for its own
+posture. One departure: a self-mount's request stage is composed by one
+function in `nest-rs-http` (`request_stage`) rather than handed to a site as a
+`GuardStageFactory`, since no self-mount declares a site before
+`feat/http-on-pipeline`; that branch builds the factory over the same
+function rather than composing the stage again.

@@ -1,18 +1,17 @@
-//! The resolver gate end-to-end through the in-band path: `GraphqlAbilityBridge`
-//! builds the ability per operation and `#[authorize(Read, …)]` admits or rejects
-//! by role. `/graphql` is an `InBand` mount, so the bridge is the only
-//! execution site.
+//! The class gate on a resolver, end to end: the guards at the `/graphql`
+//! request build the ability and `#[authorize(Read, …)]` admits or rejects by
+//! role. `/graphql` is an `InBand` mount, so an anonymous request reaches the
+//! gate, which refuses it.
 
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
-use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
+use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::async_trait;
+use nest_rs_http::{EndpointGuards, async_trait};
 use nest_rs_testing::TestApp;
 
-use super::query;
+use crate::graphql::query;
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`.
 mod widget {
@@ -33,8 +32,8 @@ mod widget {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// No-op stand-in for the bridge's authentication slot (`A` in
-/// `GraphqlAbilityBridge<A, G>`) — this test only exercises the ability path.
+/// No-op stand-in for the authentication guard ahead of the ability guard at
+/// the request — this test only exercises the ability path.
 #[injectable]
 #[derive(Default)]
 struct PassGuard;
@@ -107,15 +106,15 @@ impl WidgetResolver {
 }
 
 /// The same shape `crates/features` wires for the real app:
-/// `GraphqlAbilityBridge<AuthnGuard, AuthzGuard> as dyn GraphqlOperationGuard`.
-type TestOpGuard = GraphqlAbilityBridge<PassGuard, AbilityInjector>;
+/// `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>`.
+type TestOpGuard = EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>;
 
 #[module(
     imports = [GraphqlModule::for_root(None)],
     providers = [
         PassGuard,
         AbilityInjector,
-        TestOpGuard as dyn GraphqlOperationGuard,
+        TestOpGuard,
         WidgetResolver,
     ],
 )]

@@ -2,9 +2,7 @@
 
 use nest_rs_core::anyhow::{self, Context};
 use nest_rs_core::module;
-use nest_rs_mcp::{
-    AllowAllMcpGuard, McpError, McpOperationGuard, Opaque, Parameters, Piped, input, mcp, tools,
-};
+use nest_rs_mcp::{McpError, Opaque, Parameters, Piped, input, mcp, tools};
 use nest_rs_pipes::{ParseArray, Pipe, PipeError};
 use nest_rs_testing::mcp::call_tool_with;
 use nest_rs_testing::{LogCapture, TestApp};
@@ -89,7 +87,7 @@ impl IdListTool {
     }
 }
 
-#[module(providers = [IdListTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [IdListTool])]
 struct IdListModule;
 
 /// `pipe_error` hands a pipe's refusal to the model as it is.

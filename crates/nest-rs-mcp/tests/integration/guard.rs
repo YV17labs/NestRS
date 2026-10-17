@@ -1,175 +1,20 @@
-//! `src/guard.rs` + the guard half of `src/endpoint.rs`: the global pool with a
-//! registered bridge in it → the bridge alone → deny-all, and `around` crossing
-//! rmcp's spawned dispatch.
+//! The guards at the `/mcp` request — the global pool and the
+//! `EndpointGuards<McpView, _>` the app's modules declare, run by the transport
+//! in front of the endpoint — and what they refuse, as `src/guard.rs` renders
+//! it.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use nest_rs_core::module;
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::async_trait;
-use nest_rs_http::{HttpError, Request, Response, StatusCode};
+use nest_rs_core::{AmbientValue, Layer, Posture, UnitContext, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, guard};
+use nest_rs_http::{EndpointGuards, HttpView, StatusCode, async_trait};
 use nest_rs_mcp::{
-    AllowAllMcpGuard, BoxFuture, CallToolResult, Captured, ContentBlock, McpError, McpMount,
-    McpOperationGuard, OperationOutcome, ServerHandler, endpoint, mcp, tool, tool_handler,
-    tool_router,
+    CallToolResult, ContentBlock, McpError, McpModule, McpOptions, McpView, ServerHandler, mcp,
+    tool, tool_handler, tool_router,
 };
-use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
+use nest_rs_testing::mcp::{call_tool, initialize_request, post_message};
+use nest_rs_testing::{LogCapture, TestApp};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
-use poem::test::TestClient;
-
-struct RejectGuard;
-
-impl McpOperationGuard for RejectGuard {
-    fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, nest_rs_http::Result<()>> {
-        Box::pin(async move {
-            Err(HttpError::from_response(
-                Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .body("nope"),
-            ))
-        })
-    }
-}
-
-#[derive(Clone)]
-struct DummyHandler;
-
-#[tool_router(allow_empty)]
-impl DummyHandler {}
-
-#[tool_handler]
-impl ServerHandler for DummyHandler {}
-
-#[tokio::test]
-async fn a_mounted_guard_rejects_before_the_handler_runs() {
-    let guarded = endpoint(
-        McpMount::deny_all().with_guard(Arc::new(RejectGuard) as Arc<dyn McpOperationGuard>),
-        || DummyHandler,
-    );
-    let resp = TestClient::new(guarded).post("/").send().await;
-    assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
-    resp.assert_text("nope").await;
-}
-
-#[tokio::test]
-async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let open = endpoint(McpMount::deny_all(), || DummyHandler);
-    let resp = TestClient::new(open).post("/").send().await;
-    assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
-
-    // A missing wiring answers like a refused caller; only this line tells them
-    // apart. Single-thread runtime — `LogCapture` is thread-local.
-    let announced = logs
-        .find(
-            "nest_rs::mcp",
-            "no operation guard registered — mcp endpoint is deny-all",
-        )
-        .into_iter()
-        .next()
-        .expect("an endpoint that fell back to deny-all says so at boot");
-    assert_eq!(announced.level, "warn");
-    assert_eq!(announced.field("mode").as_deref(), Some("deny_all"));
-
-    let denial = logs
-        .find("nest_rs::mcp", "mcp operation denied")
-        .into_iter()
-        .next()
-        .expect("and each refusal it then serves is reported too");
-    assert_eq!(denial.level, "warn");
-    assert_eq!(
-        denial.field("reason").as_deref(),
-        Some("no McpOperationGuard registered"),
-        "naming the cause, so an operator can tell a missing wiring from a \
-         refused caller: {denial:?}",
-    );
-}
-
-#[tokio::test]
-async fn allow_all_guard_admits_the_request() {
-    let guard = nest_rs_mcp::AllowAllMcpGuard;
-    let mut req = Request::builder().finish();
-    assert!(guard.before(&mut req).await.is_ok());
-}
-
-tokio::task_local! {
-    /// Stand-in for the authz bridge's ambient `Ability`.
-    static AMBIENT: String;
-}
-
-#[derive(Clone)]
-struct Attached(String);
-
-/// The shape `McpAbilityBridge` has: `before` attaches per-request state,
-/// `around` installs it as a task-local for the operation's duration.
-struct AmbientGuard;
-
-impl McpOperationGuard for AmbientGuard {
-    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, nest_rs_http::Result<()>> {
-        Box::pin(async move {
-            req.extensions_mut()
-                .insert(Attached("installed".to_owned()));
-            Ok(())
-        })
-    }
-
-    fn capture(&self, req: &Request) -> Option<Captured> {
-        req.extensions()
-            .get::<Attached>()
-            .cloned()
-            .map(|attached| Arc::new(attached) as Captured)
-    }
-
-    fn around<'a>(
-        &'a self,
-        captured: &'a Captured,
-        inner: BoxFuture<'a, OperationOutcome>,
-    ) -> BoxFuture<'a, OperationOutcome> {
-        Box::pin(async move {
-            match captured.downcast_ref::<Attached>() {
-                Some(attached) => AMBIENT.scope(attached.0.clone(), inner).await,
-                None => inner.await,
-            }
-        })
-    }
-}
-
-#[derive(Clone)]
-struct AmbientProbeTool;
-
-#[tool_router]
-impl AmbientProbeTool {
-    /// Answers over the wire, so no process-global flag is shared between tests.
-    #[tool(description = "Report whether the guard's ambient state reached this tool body.")]
-    async fn probe_ambient(&self) -> Result<CallToolResult, McpError> {
-        let seen = AMBIENT.try_with(|value| value.clone()).is_ok();
-        Ok(CallToolResult::success(vec![ContentBlock::text(if seen {
-            "ambient"
-        } else {
-            "bare"
-        })]))
-    }
-}
-
-#[tool_handler]
-impl ServerHandler for AmbientProbeTool {}
-
-// No `McpToolContext` registered: the guard alone installs the ambient state.
-#[tokio::test]
-async fn an_operation_guards_around_installs_ambient_state_with_no_tool_context() {
-    let guard = Arc::new(AmbientGuard) as Arc<dyn McpOperationGuard>;
-    let client = TestClient::new(endpoint(McpMount::deny_all().with_guard(guard), || {
-        AmbientProbeTool
-    }));
-
-    let body = call_tool(&client, "/", "probe_ambient", None).await;
-
-    assert!(
-        body.contains("ambient") && !body.contains("bare"),
-        "the guard's `around` must install its state across rmcp's spawn — \
-         without it no ambient ability reaches the tool. Body: {body}",
-    );
-}
 
 #[mcp]
 #[derive(Clone)]
@@ -193,27 +38,6 @@ fn one_per_minute() -> ThrottlerConfig {
     }
 }
 
-#[nest_rs_core::injectable]
-#[derive(Default)]
-struct DenyEverythingGuard;
-
-impl nest_rs_core::Layer for DenyEverythingGuard {}
-
-#[async_trait]
-impl Guard for DenyEverythingGuard {
-    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        Err(Denial::forbidden("global pool refused"))
-    }
-}
-
-impl GuardFor<nest_rs_http::HttpView> for DenyEverythingGuard {}
-
-#[module(providers = [PoolTool, DenyEverythingGuard, AllowAllMcpGuard as dyn McpOperationGuard])]
-struct BridgedModule;
-
-#[module(providers = [PoolTool])]
-struct NoPoolModule;
-
 #[tokio::test]
 async fn a_global_throttler_guard_rate_limits_mcp() {
     let app = TestApp::builder()
@@ -221,7 +45,7 @@ async fn a_global_throttler_guard_rate_limits_mcp() {
         .use_guards_global([guard::<ThrottlerGuard>()])
         .build()
         .await
-        .expect("boots with a global throttler and no MCP bridge");
+        .expect("boots with a global throttler and no endpoint guards");
 
     let first = app.http().post("/mcp").send().await;
     assert_ne!(
@@ -243,58 +67,32 @@ async fn a_global_throttler_guard_rate_limits_mcp() {
     );
 }
 
+#[module(providers = [PoolTool])]
+struct NoPoolModule;
+
+/// With neither a pool nor endpoint guards, a gated `/mcp` refuses every
+/// request: said once at boot, and filed per refusal so a missing wiring tells
+/// itself apart from a refused caller.
 #[tokio::test]
-async fn a_registered_guard_adds_to_the_global_pool() {
+async fn an_empty_pool_and_no_endpoint_guards_deny_initialize() {
     let logs = LogCapture::install();
-    let app = TestApp::builder()
-        .module::<BridgedModule>()
-        .use_guards_global([guard::<DenyEverythingGuard>()])
-        .build()
-        .await
-        .expect("boots");
-
-    app.http()
-        .post("/mcp")
-        .send()
-        .await
-        .assert_status(StatusCode::FORBIDDEN);
-
-    let gated = logs.expect_one("nest_rs::mcp", "mcp operations gated");
-    assert_eq!(gated.field("mode").as_deref(), Some("global_guard_pool"));
-    assert_eq!(gated.field("bridge").as_deref(), Some("true"));
-}
-
-#[tokio::test]
-async fn a_registered_guard_runs_alone_without_a_pool() {
-    let logs = LogCapture::install();
-    let app = TestApp::for_module::<BridgedModule>().await.expect("boots");
-
-    let resp = app.http().post("/mcp").send().await;
-    assert_ne!(
-        resp.0.status(),
-        StatusCode::FORBIDDEN,
-        "with no global pool the registered guard decides alone",
-    );
-    assert_ne!(resp.0.status(), StatusCode::UNAUTHORIZED);
-
-    // The line the MCP docs print for an app with the bridge alone.
-    let gated = logs.expect_one("nest_rs::mcp", "mcp operations gated");
-    assert_eq!(gated.field("mode").as_deref(), Some("operation_guard"));
-    assert_eq!(
-        gated.field("bridge"),
-        None,
-        "the mode already says the bridge runs alone: {gated:?}",
-    );
-}
-
-#[tokio::test]
-async fn no_global_pool_leaves_mcp_deny_all() {
     let app = TestApp::for_module::<NoPoolModule>().await.expect("boots");
-    app.http()
-        .post("/mcp")
-        .send()
+
+    post_message(app.http(), "/mcp", None, None, &initialize_request())
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+
+    let announced = logs.expect_one(
+        "nest_rs::layers",
+        "a gated endpoint runs no guard at its request; it denies every request",
+    );
+    assert_eq!(announced.level, "warn");
+    assert_eq!(announced.field("path").as_deref(), Some("/mcp"));
+    let denied = logs.expect_one(
+        "nest_rs::layers",
+        "request denied: the endpoint runs no guard at its request",
+    );
+    assert_eq!(denied.field("path").as_deref(), Some("/mcp"));
 }
 
 #[tokio::test]
@@ -310,6 +108,242 @@ async fn an_empty_global_pool_leaves_mcp_deny_all() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+/// The `check_http` calls of the recording guards below, in the order they ran.
+#[injectable]
+#[derive(Default)]
+struct Trail {
+    seen: Mutex<Vec<&'static str>>,
+}
+
+impl Trail {
+    fn take(&self) -> Vec<&'static str> {
+        std::mem::take(&mut *self.seen.lock().expect("trail lock"))
+    }
+}
+
+/// A guard admitting every request after writing its name on the [`Trail`].
+macro_rules! recording_guard {
+    ($name:ident, $label:literal) => {
+        #[injectable]
+        struct $name {
+            #[inject]
+            trail: Arc<Trail>,
+        }
+
+        impl Layer for $name {}
+
+        #[async_trait]
+        impl Guard for $name {
+            async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+                self.trail.seen.lock().expect("trail lock").push($label);
+                Ok(())
+            }
+        }
+
+        impl GuardFor<HttpView> for $name {}
+    };
+}
+
+recording_guard!(Pooled, "pooled");
+recording_guard!(Declared, "declared");
+
+#[module(providers = [
+    Trail,
+    Pooled,
+    Declared,
+    PoolTool,
+    EndpointGuards<McpView, (Pooled, Declared)>,
+])]
+struct DeclaredModule;
+
+/// The pool and the endpoint guards both run at the request, each once: a guard
+/// in both runs where the pool lists it.
+#[tokio::test]
+async fn endpoint_guards_compose_with_the_pool() {
+    let app = TestApp::builder()
+        .module::<DeclaredModule>()
+        .use_guards_global([guard::<Pooled>()])
+        .build()
+        .await
+        .expect("boots");
+    let trail = app.container().get::<Trail>().expect("the trail");
+
+    post_message(app.http(), "/mcp", None, None, &initialize_request())
+        .await
+        .assert_status(StatusCode::OK);
+    assert_eq!(trail.take(), ["pooled", "declared"]);
+}
+
+#[module(
+    imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })],
+    providers = [PoolTool, DenyEverything],
+)]
+struct OpenedModule;
+
+/// Refuses every request.
+#[injectable]
+#[derive(Default)]
+struct DenyEverything;
+
+impl Layer for DenyEverything {}
+
+#[async_trait]
+impl Guard for DenyEverything {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::forbidden("the pool refused"))
+    }
+}
+
+impl GuardFor<HttpView> for DenyEverything {}
+
+/// The app opens `/mcp` in code: no guard runs at its request, the global
+/// pool's included.
+#[tokio::test]
+async fn mcp_options_public_opens_the_endpoint() {
+    let app = TestApp::builder()
+        .module::<OpenedModule>()
+        .use_guards_global([guard::<DenyEverything>()])
+        .build()
+        .await
+        .expect("boots");
+
+    post_message(app.http(), "/mcp", None, None, &initialize_request())
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[module(
+    imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })],
+    providers = [Trail, Declared, PoolTool, EndpointGuards<McpView, (Declared,)>],
+)]
+struct OpenedAndDeclaredModule;
+
+/// An opening would drop the guards a module declares for the endpoint: the
+/// boot refuses the contradiction, naming the declaration.
+#[tokio::test]
+async fn an_opened_endpoint_a_module_declares_guards_for_fails_the_boot() {
+    let Err(refused) = TestApp::for_module::<OpenedAndDeclaredModule>().await else {
+        panic!("an opening must not drop declared guards silently");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("declared public") && said.contains("EndpointGuards"),
+        "{said}",
+    );
+}
+
+/// Authorizes after an authentication guard, declaring it.
+#[injectable]
+#[derive(Default)]
+struct Authorizing;
+
+impl Layer for Authorizing {}
+
+impl Guard for Authorizing {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authorization
+    }
+}
+
+impl GuardFor<HttpView> for Authorizing {}
+
+/// Authenticates, declaring it.
+#[injectable]
+#[derive(Default)]
+struct Authenticating;
+
+impl Layer for Authenticating {}
+
+impl Guard for Authenticating {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+}
+
+impl GuardFor<HttpView> for Authenticating {}
+
+#[module(providers = [
+    Authorizing,
+    Authenticating,
+    PoolTool,
+    EndpointGuards<McpView, (Authorizing, Authenticating)>,
+])]
+struct MisorderedModule;
+
+/// Endpoint guards authorizing before they authenticate fail the boot, as a
+/// route's would, rather than refusing every request.
+#[tokio::test]
+async fn endpoint_guards_out_of_phase_order_fail_the_boot() {
+    let Err(refused) = TestApp::for_module::<MisorderedModule>().await else {
+        panic!("a misordered request stage would deny every caller");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("Authorizing") && said.contains("Authenticating"),
+        "{said}",
+    );
+}
+
+/// What [`Attaching`] hands the operations of the request it checked.
+struct Caller(&'static str);
+
+impl AmbientValue for Caller {}
+
+/// Attaches a [`Caller`] to every request.
+#[injectable]
+#[derive(Default)]
+struct Attaching;
+
+impl Layer for Attaching {}
+
+#[async_trait]
+impl Guard for Attaching {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(Caller("ada"));
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for Attaching {}
+
+#[mcp(path = "/mcp/ambient")]
+#[derive(Clone)]
+struct AmbientProbeTool;
+
+#[tool_router]
+impl AmbientProbeTool {
+    /// Answers over the wire, so no process-global flag is shared between tests.
+    #[tool(description = "Report who the request's guards said the caller is.")]
+    async fn probe_ambient(&self) -> Result<CallToolResult, McpError> {
+        let caller = nest_rs_core::ambient::<Caller>().map_or("nobody", |caller| caller.0);
+        Ok(CallToolResult::success(vec![ContentBlock::text(caller)]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for AmbientProbeTool {}
+
+#[module(providers = [
+    Attaching,
+    AmbientProbeTool,
+    EndpointGuards<McpView, (Attaching,)>,
+])]
+struct AmbientModule;
+
+/// What the request's guards attach is ambient in each operation, across
+/// rmcp's own task.
+#[tokio::test]
+async fn what_the_endpoint_guards_attach_reaches_each_operation() {
+    let app = TestApp::for_module::<AmbientModule>().await.expect("boots");
+
+    let body = call_tool(app.http(), "/mcp/ambient", "probe_ambient", None).await;
+
+    assert!(
+        body.contains("ada") && !body.contains("nobody"),
+        "the attachment must cross rmcp's spawn. Body: {body}",
+    );
 }
 
 #[module(providers = [PoolTool, crate::StoreDown])]

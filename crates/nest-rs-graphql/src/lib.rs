@@ -35,7 +35,7 @@ pub mod unit;
 mod view;
 
 pub use config::GraphqlConfig;
-pub use context::{BoxFuture, GraphqlOperationGuard};
+pub use context::BoxFuture;
 pub use context::{GraphqlContextSeed, SeedLifetime};
 pub use error::{
     CODE_EXTENSION, FIELD_ERRORS_EXTENSION, denial_to_graphql_error, pipe_error, problem_error,

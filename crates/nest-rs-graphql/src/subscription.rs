@@ -25,15 +25,13 @@ use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketConfig, WebSo
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
-use nest_rs_http::__private::OriginPolicy;
-use nest_rs_http::__private::poem_bridge::{request_from_poem, request_to_poem, response_to_poem};
+use nest_rs_http::__private::poem_bridge::request_from_poem;
 use nest_rs_http::DetachedWork;
-use nest_rs_http::ResponseError as _;
 use tracing::Instrument;
 
 use crate::config::GraphqlConfig;
 use crate::context::{ENDPOINT, OperationBridge, fold_variables, variable_pipe_error};
-use nest_rs_http::__private::{install_attached, with_view};
+use nest_rs_http::__private::with_view;
 use nest_rs_pipes::{GlobalPipe, PipeError};
 
 /// The composed schema as a bare [`Executor`], as the mount serves it: a
@@ -298,8 +296,6 @@ pub(crate) struct SubscriptionEndpoint<E> {
     /// Every socket this mount serves: an upgraded socket outlives the HTTP
     /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
-    /// The browser origins that may open a socket, which CORS never asks about.
-    origins: OriginPolicy,
     /// The unit-of-work binding, resolved once at mount.
     unit_of_work: Option<Arc<dyn nest_rs_database::UnitOfWork>>,
 }
@@ -310,7 +306,6 @@ impl<E> SubscriptionEndpoint<E> {
         bridge: Arc<OperationBridge>,
         config: &GraphqlConfig,
         sockets: DetachedWork,
-        origins: OriginPolicy,
         unit_of_work: Option<Arc<dyn nest_rs_database::UnitOfWork>>,
     ) -> Self {
         Self {
@@ -318,7 +313,6 @@ impl<E> SubscriptionEndpoint<E> {
             bridge,
             bounds: SocketBounds::of(config),
             sockets,
-            origins,
             unit_of_work,
         }
     }
@@ -328,43 +322,22 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
-        if let Err(refused) = self.origins.allows(&req) {
-            tracing::warn!(
-                target: crate::TARGET,
-                origin = refused.origin(),
-                expected = refused.expected(),
-                "browser origin refused",
-            );
-            return Ok(response_to_poem(refused.as_response()));
-        }
+        // The transport checked the origin and ran the upgrade's guards in front:
+        // a refusal there is an ordinary HTTP response, and no socket opens.
         let (req, mut body) = req.split();
-        let mut req = request_from_poem(req);
-        // A denial at the upgrade is an ordinary HTTP response: no socket opens.
-        if let Err(resp) = self.bridge.before(&mut req).await {
-            return Ok(response_to_poem(resp));
-        }
-        // poem's extractors take the upgrade from poem's own request.
-        let upgrade = request_to_poem(req);
-        let websocket = WebSocket::from_request(&upgrade, &mut body).await?;
-        let protocol = GraphQLProtocol::from_request(&upgrade, &mut body).await?;
-        let req = request_from_poem(upgrade);
+        let websocket = WebSocket::from_request(&req, &mut body).await?;
+        let protocol = GraphQLProtocol::from_request(&req, &mut body).await?;
+        let req = request_from_poem(req);
         let pipes = SocketPipes::of(&self.bridge, &req);
         // What the upgrade's guards attached reaches the socket the way it
         // reaches a POST: forwarded by the seeds, carried by the connection.
         // Never the upgrade's scope nor its transaction: the socket's own
         // executor is installed below.
-        let (data, carried) = install_attached(&req, async {
-            (
-                self.bridge.connection_data(&req),
-                RequestContinuation::capture(Continuation::Connection),
-            )
-        })
-        .await;
+        let data = self.bridge.connection_data(&req);
+        let carried = RequestContinuation::capture(Continuation::Connection);
         let executor = self.executor.clone();
         let bounds = self.bounds;
         let socket_data = SocketData::of_upgrade(self.unit_of_work.as_ref());
-        // `around` wraps the **whole socket**: one upgrade, one principal.
-        let bridge = Arc::clone(&self.bridge);
         // Read on the request task, before poem answers the `101`.
         let correlation = socket_correlation();
         let sockets = self.sockets.clone();
@@ -382,7 +355,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 let span = nest_rs_core::operation_span!(crate::unit::SUBSCRIPTION, &correlation,);
                 let line = SubscriptionLine::new(correlation.clone(), span.clone());
                 let end = ends_at(sockets.going_away(), bounds.max_connection);
-                // A local slot, since the guard scopes a `()` future.
+                // A local slot, since the executor scope wraps a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
                     let served =
@@ -410,11 +383,9 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                         None => served.await,
                     });
                 });
-                let guarded: crate::BoxFuture<'_, ()> = bridge.around(&req, serving);
-                // Executor outermost, ability inside, as on the POST path.
                 let served = match socket_data {
-                    Some(socket_data) => socket_data.serve(guarded),
-                    None => guarded,
+                    Some(socket_data) => socket_data.serve(serving),
+                    None => serving,
                 };
                 // Dropped at the window's close, which `line`'s `Drop` files `cancelled`.
                 let served = match carried {

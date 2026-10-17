@@ -112,13 +112,13 @@ nest-rs-seaorm = { path = ".", features = ["full"] }
 # The `public_visitor` e2e boots a real app: a `#[public]` controller behind
 # `AbilityGuard`, driven through the in-process harness. `#[routes]` expands to
 # `::nest_rs_guards::` paths, so a crate defining a controller owns that dep
-# directly (same reason `nest-rs-authz`'s bridge tests do).
+# directly (same reason `nest-rs-authz`'s own edge tests do).
 # `graphql` because the `federation` e2e writes a `#[resolver]`: `#[operations]`
 # expands to the per-site guard chain, which this crate only exposes with the
 # GraphQL edge compiled in.
 nest-rs-guards = { path = "../nest-rs-guards" }
-# Same reason one layer up: the subgraph's operation guard is
-# `GraphqlAbilityBridge`, and the bridge lives behind authz's own `graphql`
+# Same reason one layer up: an `#[authorize]` operation's mask is
+# `nest_rs_authz::graphql::masked_value_for`, behind authz's own `graphql`
 # feature. A dev-dep, so no consumer of this crate gains it.
 nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 # `features = ["orm"]` so the framework workspace actually compiles

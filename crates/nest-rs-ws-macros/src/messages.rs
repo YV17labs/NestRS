@@ -567,6 +567,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 let __sockets = ::nest_rs_ws::nest_rs_http::DetachedWork::new();
                 let __carried = __sockets.clone();
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
+                    ::nest_rs_ws::nest_rs_http::__private::checks_origin(
                     ::nest_rs_ws::nest_rs_http::HttpEndpointMeta::new(
                         <#self_ty>::__NESTRS_UPGRADE,
                         <#self_ty>::__nestrs_mount_path(),
@@ -587,18 +588,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                 __container,
                                 ::core::clone::Clone::clone(&__carried),
                             );
-                            let __ep = <#self_ty>::__nestrs_gateway_layers(
-                                __container,
-                                __ep,
-                                <#self_ty>::__NESTRS_UPGRADE,
-                            );
                             __routes.route_any_poem(&__path, __ep);
                         },
                     )
                     .owned_by(#gateway_name)
-                    .self_guarded_if(<#self_ty>::HAS_EDGE_GUARDS)
+                    .guarded_by(<#self_ty>::__nestrs_edge_guard_specs())
                     .runs_detached(__sockets),
-                )
+                    ::nest_rs_ws::nest_rs_http::__private::OriginCheck::Upgrades,
+                    ::nest_rs_ws::__private::refused_origin,
+                ))
                 // Only the upgrade chain is phase-validated: the principal check
                 // describes `check_http`, and per-message chains have no notion of a
                 // producer yet. Every declared guard must resolve, upgrade and events.

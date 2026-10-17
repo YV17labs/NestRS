@@ -3,13 +3,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use nest_rs_core::{AmbientValue, ambient, injectable, module, with_ambient};
+use nest_rs_core::{AmbientValue, Layer, UnitContext, ambient, injectable, module};
 use nest_rs_graphql::async_graphql::dataloader::{DataLoader, Loader};
 use nest_rs_graphql::async_graphql::{self, Context};
-use nest_rs_graphql::{
-    BoxFuture, GraphqlModule, GraphqlOperationGuard, dataloader, operations, resolver,
-};
-use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_graphql::{GraphqlModule, GraphqlView, dataloader, operations, resolver};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::{EndpointGuards, HttpConfig, HttpModule, HttpView, async_trait};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// A trait whose method shares the batch's name, implemented for the `Arc` the
@@ -50,34 +49,29 @@ async fn a_loader_runs_its_owners_method_and_not_a_trait_method_of_the_same_name
     assert_eq!(loaded.get(&7).map(String::as_str), Some("shelf 7"));
 }
 
-/// Who the request is for, as an ability bridge says what the caller may do.
+/// Who the request is for, as an ability guard says what the caller may do.
 #[derive(Debug)]
 struct Caller(&'static str);
 
 impl AmbientValue for Caller {}
 
-/// Adds the caller around the request's execution, as the authorization
-/// bridge installs the caller's ability.
+/// Attaches the caller at the request, as the authorization guard attaches the
+/// caller's ability.
 #[injectable]
 #[derive(Default)]
-struct CallerBridge;
+struct CallerGuard;
 
-impl GraphqlOperationGuard for CallerBridge {
-    fn before<'a>(
-        &'a self,
-        _req: &'a mut nest_rs_http::Request,
-    ) -> BoxFuture<'a, Result<(), nest_rs_http::Response>> {
-        Box::pin(async { Ok(()) })
-    }
+impl Layer for CallerGuard {}
 
-    fn around<'a>(
-        &'a self,
-        _req: &'a nest_rs_http::Request,
-        inner: BoxFuture<'a, ()>,
-    ) -> BoxFuture<'a, ()> {
-        Box::pin(with_ambient(Arc::new(Caller("alice")), inner))
+#[async_trait]
+impl Guard for CallerGuard {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(Caller("alice"));
+        Ok(())
     }
 }
+
+impl GuardFor<HttpView> for CallerGuard {}
 
 /// Answers each key with what its batch ran under.
 #[injectable]
@@ -141,7 +135,8 @@ impl TraceShelfResolver {
     providers = [
         TraceShelf,
         TraceShelfResolver,
-        CallerBridge as dyn GraphqlOperationGuard,
+        CallerGuard,
+        EndpointGuards<GraphqlView, (CallerGuard,)>,
     ],
 )]
 struct TraceShelfApp;

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_mcp::rmcp::serde_json::json;
-use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, McpOperationKind, mcp, tools};
+use nest_rs_mcp::{McpError, McpOperationKind, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_method, call_tool, open_session};
 
@@ -115,13 +115,11 @@ impl LayeredTool {
     }
 }
 
-#[module(providers = [
+#[module(imports = [crate::open_mcp()], providers = [
     LayeredTool,
     Recorder,
     Closed,
-    crate::StoreDown,
-    AllowAllMcpGuard as dyn McpOperationGuard,
-])]
+    crate::StoreDown])]
 struct LayeredModule;
 
 async fn boot() -> TestApp {
@@ -310,8 +308,8 @@ async fn a_pooled_guard_checks_the_request_once_and_the_operation_once() {
     assert_eq!(
         POOLED_HTTP_CALLS.load(Ordering::SeqCst) - http_before,
         1,
-        "the endpoint's `McpOperationGuard` folds the pool over the HTTP request \
-         once — `exactly once per request` is what the whole Layer System promises",
+        "the transport folds the pool over the HTTP request once — `exactly \
+         once per request` is what the whole Layer System promises",
     );
     assert_eq!(
         POOLED_MCP_CALLS.load(Ordering::SeqCst) - mcp_before,
@@ -343,12 +341,12 @@ impl Guard for PoolOnlyMcp {
 
 impl GuardFor<nest_rs_mcp::McpView> for PoolOnlyMcp {}
 
-#[mcp(path = "/mcp/unbridged")]
+#[mcp(path = "/mcp/pool-only")]
 #[derive(Clone, Default)]
-struct UnbridgedTool;
+struct PoolOnlyTool;
 
 #[tools]
-impl UnbridgedTool {
+impl PoolOnlyTool {
     /// Answer with a constant — reaching it at all is the failure.
     #[tool]
     #[public]
@@ -357,19 +355,19 @@ impl UnbridgedTool {
     }
 }
 
-#[module(providers = [UnbridgedTool, PoolOnlyMcp])]
-struct UnbridgedModule;
+#[module(providers = [PoolOnlyTool, PoolOnlyMcp])]
+struct PoolOnlyModule;
 
 #[tokio::test]
 async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
     let app = TestApp::builder()
         .use_guards_global([nest_rs_guards::guard::<PoolOnlyMcp>()])
-        .module::<UnbridgedModule>()
+        .module::<PoolOnlyModule>()
         .build()
         .await
-        .expect("a global MCP-only guard and no bridge boots");
+        .expect("a global MCP-only guard and no endpoint guards boots");
 
-    let body = call_tool(app.http(), "/mcp/unbridged", "ping", None).await;
+    let body = call_tool(app.http(), "/mcp/pool-only", "ping", None).await;
 
     assert_eq!(
         POOL_ONLY_MCP_CALLS.load(Ordering::SeqCst),
@@ -388,8 +386,9 @@ async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
     );
 }
 
-/// Global and declared on a `#[tool]`, under a bridge that runs nothing from the
-/// pool: deduping onto the pool entry would leave the declaration never run.
+/// Global and declared on a `#[tool]`, under endpoint guards that run nothing
+/// from the pool: deduping onto the pool entry would leave the declaration never
+/// run.
 static DECLARED_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
@@ -408,26 +407,23 @@ impl Guard for DeclaredEverywhere {
 
 impl GuardFor<nest_rs_mcp::McpView> for DeclaredEverywhere {}
 
-/// Stands in for `McpAbilityBridge`, which runs nothing from the pool.
+/// Admits every request: the endpoint's own guard, beside the pool.
 #[injectable]
 #[derive(Default)]
-struct BridgeStub;
+struct AdmitRequest;
 
-impl McpOperationGuard for BridgeStub {
-    fn before<'a>(
-        &'a self,
-        _req: &'a mut nest_rs_http::Request,
-    ) -> nest_rs_mcp::BoxFuture<'a, nest_rs_http::Result<()>> {
-        Box::pin(async { Ok(()) })
-    }
-}
+impl Layer for AdmitRequest {}
 
-#[mcp(path = "/mcp/bridged")]
+impl Guard for AdmitRequest {}
+
+impl GuardFor<nest_rs_http::HttpView> for AdmitRequest {}
+
+#[mcp(path = "/mcp/declared")]
 #[derive(Clone, Default)]
-struct BridgedTool;
+struct DeclaredTool;
 
 #[tools]
-impl BridgedTool {
+impl DeclaredTool {
     /// Answer with a constant.
     #[tool]
     #[public]
@@ -438,30 +434,31 @@ impl BridgedTool {
 }
 
 #[module(providers = [
-    BridgedTool,
+    DeclaredTool,
     DeclaredEverywhere,
-    BridgeStub as dyn McpOperationGuard,
+    AdmitRequest,
+    nest_rs_http::EndpointGuards<nest_rs_mcp::McpView, (AdmitRequest,)>,
 ])]
-struct BridgedModule;
+struct DeclaredModule;
 
 #[tokio::test]
 async fn a_guard_the_edge_did_not_run_still_runs_per_operation() {
     let app = TestApp::builder()
         .use_guards_global([nest_rs_guards::guard::<DeclaredEverywhere>()])
-        .module::<BridgedModule>()
+        .module::<DeclaredModule>()
         .build()
         .await
-        .expect("a bridge plus a guard declared both globally and on the tool boots");
+        .expect("endpoint guards plus a guard declared both globally and on the tool boot");
 
-    let body = call_tool(app.http(), "/mcp/bridged", "ping", None).await;
+    let body = call_tool(app.http(), "/mcp/declared", "ping", None).await;
     assert!(body.contains("pong"), "the operation ran: {body}");
     assert_eq!(
         DECLARED_CALLS.load(Ordering::SeqCst),
         1,
-        "the registered bridge runs its own guards and nothing from the pool, so \
-         the guard declared beside this tool must still execute — dropping it \
-         because its `TypeId` also appears in the pool is a fail-open on a \
-         declaration the developer wrote",
+        "the request's guards run `check_http` alone, so the guard declared \
+         beside this tool must still execute its `check` — dropping it because \
+         its `TypeId` also appears in the pool is a fail-open on a declaration \
+         the developer wrote",
     );
 }
 
@@ -505,13 +502,10 @@ async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_say
     // Built by hand, so the access graph does not refuse first; the request
     // scope stands in for the edge that installs it.
     let container = nest_rs_core::Container::builder().build();
-    let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
     let inner = Arc::new(
-        nest_rs_mcp::endpoint(nest_rs_mcp::McpMount::deny_all().with_guard(guard), || {
-            OrphanTool
-        })
-        .into_endpoint()
-        .map_to_response(),
+        nest_rs_mcp::__private::endpoint(nest_rs_mcp::__private::McpMount::new(), || OrphanTool)
+            .into_endpoint()
+            .map_to_response(),
     );
     let scoped = poem::endpoint::make(move |req| {
         let inner = Arc::clone(&inner);
@@ -585,11 +579,9 @@ impl CountedTool {
     }
 }
 
-#[module(providers = [
+#[module(imports = [crate::open_mcp()], providers = [
     CountedTool,
-    CountsItsDrop,
-    AllowAllMcpGuard as dyn McpOperationGuard,
-])]
+    CountsItsDrop])]
 struct CountedModule;
 
 #[tokio::test]

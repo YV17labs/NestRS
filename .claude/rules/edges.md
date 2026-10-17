@@ -146,9 +146,9 @@ Review a new edge, or a change to one, against it:
     `demo/`; a use site in `nest-rs-macro-hygiene`; its `nestrs generate`
     adapter generator (`cli.md`).
 
-Argued, not gaps: a WS gateway owns its mount, and on WS the connection, not
-an operation guard, carries the ability (`data-layer.md`, *Extractors and
-bridges*).
+Argued, not gaps: a WS gateway owns its mount, and on WS the connection
+carries the ability its upgrade's guards attached (`data-layer.md`,
+*Extractors and the carried ability*).
 
 ## The way down at an edge (`container.md` states the invariant)
 
@@ -187,7 +187,7 @@ executions; it chooses the **site**, by the family's nature:
 
 | Family | Global scope runs at | Controller / handler scope runs at |
 |---|---|---|
-| Guard | the route shaper; a `Gated` self-mount's edge; the in-band operation guard; the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
+| Guard | the route shaper; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`); the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
 | Pipe | the route shaper; `/graphql` variables (a POST or a graphql-ws operation) and WS `data` at their endpoint | the route shaper; per argument on the other edges |
 | Exception filter | the route, closest to the handler | the route |
 | Interceptor | the transport edge — sees 404s, denials and self-mounts, before authentication | around the handler, inside the guards |
@@ -218,11 +218,15 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   unit opaquely and files one `error` naming both. **A surface beyond the
   route table is a self-mount**, the transport's one other mount (it is built
   from `HttpConfig` alone, with no builder), and declares a `static` `Handler`
-  with its posture: `Gated` (a WS upgrade, `/mcp`) gets the global chain at its
-  edge; `InBand` (`/graphql`) runs it at its request, its operations gating
-  themselves; `Public` (OpenAPI, health, static files) is deliberately open. An
-  in-band mount runs the pool itself, inside its endpoint
-  (`nest_rs_http::__private::guards_in_band`).
+  with its posture: `Gated` (a WS upgrade, `/mcp`) and `InBand` (`/graphql`,
+  its operations gating themselves) get the request stage the transport
+  composes in front of the endpoint; `Public` (OpenAPI, health, static files)
+  is deliberately open. **The transport composes every self-mount's request
+  stage, one function for all** (`request_stage`): the global pool, the
+  mount's own guards (a gateway's) and the `EndpointGuards<V, G>` the app's
+  modules declare for the in-band units it carries, each guard once and in
+  phase order, behind the browser-origin check where the mount owes one — a
+  refused origin pays for no guard. An endpoint never runs a guard of its own.
 - **The in-band edges also run a per-operation chain**, composed once per site in
   a shared `SiteChainCell` from the app-wide pool, the provider's `#[use_guards]`
   and the operation's own — one `compose`, no per-transport switch over where the
@@ -230,12 +234,17 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   the operation**: `check_http` once per request, `check` once per operation,
   and neither stands in for the other. What a request's guards attach
   (`cx.attach`) is ambient for every unit the request carries.
-- **`/graphql` and `/mcp` stay fail-secure in band**: the global pool
-  always runs at the request, in band, and a bridge adds its guards to it, never
-  replaces it — each guard once, the bridge where the pool lists the first guard
-  it covers. GraphQL's `InBand` posture lets `AuthnGuard` admit anonymous
-  operations to resolver gates; `/mcp` has none, and with neither pool nor
-  bridge it is deny-all (`.claude/decisions/bridge-joins-the-pool.md`).
+- **`/graphql` and `/mcp` stay fail-secure**: the global pool always runs at
+  the request, and the `EndpointGuards` a module declares add to it, never
+  replace it — each guard once, the declared guards where the pool lists the
+  first one they name, else after it; declared by several modules, in import
+  order. They are providers, so module-gated by construction. GraphQL's
+  `InBand` posture lets `AuthnGuard` admit anonymous operations to resolver
+  gates; `/mcp` is `Gated`, and with neither pool nor endpoint guards it is
+  deny-all, said once at boot and per refusal. The one opening is
+  `McpOptions::posture = Posture::Public`, written in code, and a module
+  declaring guards beside it fails the boot
+  (`.claude/decisions/bridge-joins-the-pool.md`).
 - **A mapped error never commits**: a route-site filter mapping a handler `Err`
   tags it `MappedError`, and `DbContext` rolls back whatever status it maps to.
 - **The global site takes no capability bound**, by decision: a global guard
@@ -248,7 +257,7 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   units run is a visible line, not a gap to close
   (`.claude/decisions/check-http-stays-on-guard.md`).
 - **Only route mounts (global, controller and method scope composed), the global
-  bucket and a WS upgrade are phase-validated**
+  bucket and a self-mount's request stage are phase-validated**
   (`.claude/decisions/in-band-phase-validation.md`); **MCP discovery is gated at
   the transport**, where the specification places it
   (`.claude/decisions/mcp-discovery-at-transport.md`).

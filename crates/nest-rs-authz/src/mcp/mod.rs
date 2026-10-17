@@ -1,9 +1,10 @@
 //! MCP bindings (feature `mcp`) — the tool-host analog of [`crate::graphql`].
 //!
-//! [`McpAbilityBridge`] is the endpoint's per-operation guard: it authenticates
-//! each `/mcp` request with the same chain controllers use and installs the
-//! caller's ambient [`Ability`](crate::Ability) for the operation's duration.
-//! [`masked_value_for`] masks an operation's return value.
+//! The guards at the `/mcp` request — the app's global pool, or
+//! `EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>` a module declares —
+//! authenticate it with the same chain controllers use, and the caller's
+//! [`Ability`](crate::Ability) they attach is ambient for each operation the
+//! request carries. [`masked_value_for`] masks an operation's return value.
 //!
 //! A host does not call it directly: `#[authorize(Action, Entity)]` beside a
 //! `#[tool]` / `#[prompt]` makes `#[tools]` emit the class gate
@@ -11,12 +12,11 @@
 //! `#[operations]` does on GraphQL and `#[routes]` on HTTP.
 //!
 //! ```
-//! # use nest_rs_authz::mcp::McpAbilityBridge;
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};
 //! # use nest_rs_core::{Layer, injectable, input, module};
 //! # use nest_rs_guards::{Denial, Guard, GuardFor};
-//! # use nest_rs_http::async_trait;
-//! # use nest_rs_mcp::{Json, McpError, McpOperationGuard, mcp, tools};
+//! # use nest_rs_http::{EndpointGuards, async_trait};
+//! # use nest_rs_mcp::{Json, McpError, McpView, mcp, tools};
 //! # use nest_rs_testing::TestApp;
 //! # use nest_rs_testing::mcp::call_tool_as;
 //! # mod users {
@@ -44,6 +44,7 @@
 //! # impl Layer for PassGuard {}
 //! # #[async_trait]
 //! # impl Guard for PassGuard {}
+//! # impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 //! # #[injectable]
 //! # #[derive(Default)]
 //! # struct Grants;
@@ -74,8 +75,12 @@
 //! #       Ok(Json(vec![User { id: 1, name: Some("ada".into()) }]))
 //!     }
 //! }
-//! # type Bridge = McpAbilityBridge<PassGuard, Grants>;
-//! # #[module(providers = [PassGuard, Grants, Bridge as dyn McpOperationGuard, UsersTool])]
+//! # #[module(providers = [
+//! #     PassGuard,
+//! #     Grants,
+//! #     EndpointGuards<McpView, (PassGuard, Grants)>,
+//! #     UsersTool,
+//! # ])]
 //! # struct UsersModule;
 //! # #[nest_rs_core::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -92,10 +97,9 @@
 //! ```
 //!
 //! These read the *ambient* ability: rmcp dispatches an operation on its own
-//! task with no context value, so the operation guard installs it in its `around`.
+//! task with no context value, so the endpoint re-installs what the request's
+//! guards attached around each operation.
 
-mod bridge;
 mod mask;
 
-pub use bridge::McpAbilityBridge;
 pub use mask::masked_value_for;

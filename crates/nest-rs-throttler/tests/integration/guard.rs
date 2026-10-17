@@ -653,7 +653,7 @@ mod graphql {
 
 mod mcp {
     use nest_rs_core::module;
-    use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, mcp, tools};
+    use nest_rs_mcp::{McpError, mcp, tools};
     use nest_rs_testing::TestApp;
     use nest_rs_testing::mcp::call_tool;
     use nest_rs_throttler::{Throttle, ThrottlerGuard, ThrottlerModule};
@@ -687,11 +687,17 @@ mod mcp {
         }
     }
 
-    // Without an operation guard `/mcp` is deny-all, and a `401` would hide
-    // whether the per-operation chain ran at all.
+    // With no guard at its request `/mcp` is deny-all, and a `401` would hide
+    // whether the per-operation chain ran at all: the endpoint is opened.
     #[module(
-        imports = [ThrottlerModule::for_root(generous())],
-        providers = [RatedTool, AllowAllMcpGuard as dyn McpOperationGuard],
+        imports = [
+            nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpOptions {
+                posture: nest_rs_core::Posture::Public,
+                ..Default::default()
+            }),
+            ThrottlerModule::for_root(generous()),
+        ],
+        providers = [RatedTool],
     )]
     struct RatedMcpModule;
 
@@ -700,14 +706,18 @@ mod mcp {
     #[module(
         imports = [
             nest_rs_http::HttpModule::for_root(edge()),
-            nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
-                sse_keep_alive: None,
+            nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpOptions {
+                config: Some(nest_rs_mcp::McpConfig {
+                    sse_keep_alive: None,
+                    ..Default::default()
+                }),
+                posture: nest_rs_core::Posture::Public,
                 ..Default::default()
             }),
             ThrottlerModule::for_root(generous()),
             StalledStoreModule,
         ],
-        providers = [RatedTool, AllowAllMcpGuard as dyn McpOperationGuard],
+        providers = [RatedTool],
     )]
     struct StalledMcpModule;
 

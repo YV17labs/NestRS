@@ -127,18 +127,6 @@ pub async fn check_request<'g>(
     Ok(())
 }
 
-/// [`check_request`] over a composed chain; an empty one leaves `req` as it is.
-pub async fn check_request_chain(
-    handler: &'static Handler,
-    chain: &[ResolvedLayer<dyn Guard>],
-    req: &mut crate::Request,
-) -> Result<(), Denial> {
-    if chain.is_empty() {
-        return Ok(());
-    }
-    check_request(handler, erased(chain), req).await
-}
-
 /// Run `fut` under what `req`'s guard stages attached.
 pub fn install_attached<F: Future>(
     req: &crate::Request,
@@ -209,7 +197,8 @@ fn marked(mut pending: Pending, unmasked: bool) -> Pending {
 
 /// An endpoint behind a guard stage — a self-mount's request, a gateway's
 /// upgrade: the chain runs as the unit `handler` declares, then the endpoint
-/// under what it attached.
+/// under what it attached, kept on the request too for work the endpoint runs
+/// off its task ([`attached_pending`]).
 pub struct GuardedEndpoint {
     handler: &'static Handler,
     chain: Vec<ResolvedLayer<dyn Guard>>,
@@ -239,7 +228,37 @@ impl Endpoint for GuardedEndpoint {
                 return Ok(crate::poem_bridge::response_from_poem(answer(refused)));
             }
         };
+        let mut req = req;
+        req.extensions_mut().insert(Attached(pending.clone()));
         install_pending(marked(pending, false), self.inner.call(req)).await
+    }
+}
+
+/// A gated self-mount carrying in-band units with no guard at its request:
+/// every request is refused, and filed.
+pub(crate) struct DeniedEndpoint {
+    path: String,
+}
+
+impl DeniedEndpoint {
+    /// Refuse every request to the self-mount at `path`.
+    pub(crate) fn new(path: String) -> Self {
+        Self { path }
+    }
+}
+
+impl Endpoint for DeniedEndpoint {
+    async fn call(&self, _req: crate::Request) -> crate::Result<crate::Response> {
+        tracing::warn!(
+            target: nest_rs_core::target::LAYERS,
+            path = self.path.as_str(),
+            "request denied: the endpoint runs no guard at its request",
+        );
+        Ok(crate::poem_bridge::response_from_poem(
+            denial_to_http_response(Denial::unauthorized(
+                "no guard admits requests to this endpoint",
+            )),
+        ))
     }
 }
 
@@ -551,10 +570,10 @@ mod tests {
     #[tokio::test]
     async fn a_later_stage_reads_what_an_earlier_one_attached_and_never_a_shadow() {
         let mut req = request_from_poem(tenant_request());
-        check_request_chain(&ROUTE, &chain(TenantGuard), &mut req)
+        check_request(&ROUTE, erased(&chain(TenantGuard)), &mut req)
             .await
             .expect("the tenant is known");
-        check_request_chain(&ROUTE, &chain(Witness), &mut req)
+        check_request(&ROUTE, erased(&chain(Witness)), &mut req)
             .await
             .expect("the second stage reads the first one's tenant and the declared throttle");
 
@@ -571,7 +590,7 @@ mod tests {
     async fn a_refused_stage_attaches_nothing() {
         let logs = nest_rs_testing::LogCapture::install();
         let mut req = request_from_poem(Request::builder().header("x-tenant", "globex").finish());
-        let denial = check_request_chain(&ROUTE, &chain(TenantGuard), &mut req)
+        let denial = check_request(&ROUTE, erased(&chain(TenantGuard)), &mut req)
             .await
             .expect_err("an unknown tenant is refused");
         assert_eq!(denial.http_status(), 403);
@@ -683,9 +702,9 @@ mod tests {
     #[tokio::test]
     async fn an_in_band_request_stage_files_a_denials_chain() {
         let logs = nest_rs_testing::LogCapture::install();
-        let denial = check_request_chain(
+        let denial = check_request(
             &ROUTE,
-            &chain(StoreDown),
+            erased(&chain(StoreDown)),
             &mut crate::Request::builder().finish(),
         )
         .await

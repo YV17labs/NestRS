@@ -309,10 +309,11 @@ resolver only translates between the wire shape and the service —
 gating the call against the ambient ability and masking the returned
 value automatically. The `#[use_guards(AuthzGuard)]` binding on the
 struct scopes each operation to the caller's ability. Authentication runs
-in band, per operation, through the bridge `AuthzGraphqlModule` registers:
-`/graphql` has no guard at the HTTP edge, and `AuthnGuard` checks HTTP
-requests only, so binding it on a resolver is a compile error rather than
-a check that passes every operation. The feature's `UsersGraphqlModule`
+at the `/graphql` request, through the
+[endpoint guards](/security/authorization/endpoint-guards/)
+`AuthzGraphqlModule` declares, and `AuthnGuard` checks HTTP requests only,
+so binding it on a resolver is a compile error rather than a check that
+passes every operation. The feature's `UsersGraphqlModule`
 imports `AuthzGraphqlModule`, which provides `AuthzGuard` (omit it and
 boot fails naming the missing guard). See [Database / CRUD](/database/crud/)
 for the service contract and [Security](/security/) for the guard wiring.

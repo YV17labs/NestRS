@@ -48,7 +48,7 @@ where
         return Err(mask_failure::<E>(
             action,
             mask_reason::NO_AMBIENT_ABILITY,
-            "no ambient ability — is the MCP authz bridge registered?",
+            "no ambient ability — does an ability guard run at the /mcp request?",
             None,
         ));
     };

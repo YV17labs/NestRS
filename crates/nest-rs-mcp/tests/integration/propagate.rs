@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use nest_rs_core::module;
 
+use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams,
     CancelledNotificationParam, CompleteRequestParams, CompleteResult, ContentBlock,
@@ -30,10 +31,7 @@ use nest_rs_mcp::model::{
 };
 use nest_rs_mcp::rmcp::serde_json::{self, json};
 use nest_rs_mcp::service::{NotificationContext, RequestContext, RoleServer};
-use nest_rs_mcp::{
-    AllowAllMcpGuard, McpError, McpMount, McpOperationGuard, PropagatingHandler, ServerHandler,
-    endpoint, mcp, tools,
-};
+use nest_rs_mcp::{McpError, PropagatingHandler, ServerHandler, mcp, tools};
 use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with};
 use nest_rs_testing::{LogCapture, TestApp};
 use poem::test::TestClient;
@@ -362,12 +360,7 @@ async fn await_seen(seen: &Seen, expected: &[&str]) {
 async fn every_server_handler_method_reaches_the_wrapped_host() {
     let seen: Seen = Arc::default();
     let host = ProbeHandler { seen: seen.clone() };
-
-    let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
-    let client = TestClient::new(endpoint(
-        McpMount::deny_all().with_guard(guard),
-        move || host.clone(),
-    ));
+    let client = TestClient::new(endpoint(McpMount::new(), move || host.clone()));
 
     // A legacy session: the capabilities reachable through `initialize`.
     let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
@@ -539,7 +532,7 @@ impl StoppingTools {
     }
 }
 
-#[module(providers = [StoppingTools, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [StoppingTools])]
 struct StoppingModule;
 
 /// The one `mcp.operation` line filed for `operation`, once it is filed.
@@ -675,7 +668,7 @@ impl ExplodingTools {
     }
 }
 
-#[module(providers = [ExplodingTools, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [ExplodingTools])]
 struct ExplodingModule;
 
 /// rmcp runs a tool on a task of its own: a panic there answers nothing unless
@@ -775,7 +768,7 @@ impl ServerHandler for SubscribedHost {
     }
 }
 
-#[module(providers = [SubscribedHost, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [SubscribedHost])]
 struct SubscribedModule;
 
 /// The 2026-07-28 schema's graceful teardown is the final
@@ -873,9 +866,18 @@ fn without_keep_alive() -> nest_rs_mcp::McpConfig {
     }
 }
 
+/// `config`, the endpoint opened in code, so the tests reach their tools.
+fn opened(config: nest_rs_mcp::McpConfig) -> nest_rs_mcp::McpOptions {
+    nest_rs_mcp::McpOptions {
+        config: Some(config),
+        posture: nest_rs_core::Posture::Public,
+        ..Default::default()
+    }
+}
+
 #[module(
-    imports = [nest_rs_mcp::McpModule::for_root(without_keep_alive())],
-    providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard],
+    imports = [nest_rs_mcp::McpModule::for_root(opened(without_keep_alive()))],
+    providers = [StalledTools],
 )]
 struct StalledModule;
 
@@ -1000,11 +1002,11 @@ async fn a_session_tool_call_past_the_request_timeout_is_cut_at_the_operation_de
 }
 
 #[module(
-    imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
+    imports = [nest_rs_mcp::McpModule::for_root(opened(nest_rs_mcp::McpConfig {
         legacy_session_mode: false,
         ..without_keep_alive()
-    })],
-    providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard],
+    }))],
+    providers = [StalledTools],
 )]
 struct StatelessStalledModule;
 
@@ -1157,12 +1159,10 @@ impl Drop for RecordingUnit {
 }
 
 #[module(
-    imports = [nest_rs_mcp::McpModule::for_root(without_keep_alive())],
+    imports = [nest_rs_mcp::McpModule::for_root(opened(without_keep_alive()))],
     providers = [
         StalledTools,
-        AllowAllMcpGuard as dyn McpOperationGuard,
-        RecordingUnitOfWork as dyn nest_rs_database::UnitOfWork,
-    ],
+        RecordingUnitOfWork as dyn nest_rs_database::UnitOfWork],
 )]
 struct StalledInUnitModule;
 
@@ -1276,11 +1276,8 @@ impl nest_rs_database::OpenUnit for HeldCommitUnit {
 }
 
 #[module(
-    providers = [
-        SettlingTools,
-        AllowAllMcpGuard as dyn McpOperationGuard,
-        HeldCommit as dyn nest_rs_database::UnitOfWork,
-    ],
+    imports = [crate::open_mcp()],
+    providers = [SettlingTools, HeldCommit as dyn nest_rs_database::UnitOfWork],
 )]
 struct SettlingModule;
 

@@ -2,12 +2,13 @@
 //! and answers a bare `internal error`, GraphQL having no rendering choke point.
 
 use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, injectable, module};
+use nest_rs_graphql::GraphqlView;
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
@@ -93,7 +94,7 @@ impl Guard for AlwaysAuthenticated {
 
 impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
-type Bridge = GraphqlAbilityBridge<AlwaysAuthenticated, GhostAbilityGuard>;
+type Bridge = EndpointGuards<GraphqlView, (AlwaysAuthenticated, GhostAbilityGuard)>;
 
 #[resolver]
 struct GhostsResolver;
@@ -127,7 +128,7 @@ impl GhostsResolver {
         ReadEverything,
         GhostAbilityGuard,
         AlwaysAuthenticated,
-        Bridge as dyn GraphqlOperationGuard,
+        Bridge,
         GhostsResolver,
     ],
 )]

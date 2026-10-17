@@ -45,9 +45,9 @@ pub struct UsersController {
 }
 ```
 
-That's the whole opt-in surface for HTTP. GraphQL and WebSockets get
-matching bridges that re-establish the ambient ability at the dispatch
-point — see [Per-transport bridges](/security/authorization/per-transport-bridges/).
+That's the whole opt-in surface for HTTP. GraphQL, WebSockets and MCP run the
+same two guards at their own request, and every operation it carries reads the
+ability they attached — see [Endpoint guards](/security/authorization/endpoint-guards/).
 
 ## What you get once both are mounted
 
@@ -112,7 +112,7 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
     - [row-level-filtering.mdx](/security/authorization/row-level-filtering/) — `condition_for`, `Repo::scoped`
     - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `Bind<A, S>`, the `Access` outcome
     - [response-masking.mdx](/security/authorization/response-masking/) — `Authorize`, `mask`, `WireModelDefaults`
-    - [per-transport-bridges.mdx](/security/authorization/per-transport-bridges/) — HTTP / GraphQL / WS / MCP
+    - [endpoint-guards.mdx](/security/authorization/endpoint-guards/) — HTTP / GraphQL / WS / MCP
   - [threat-model.mdx](/security/threat-model/) — the boundary each layer enforces (read before production, not needed for your first feature)
 </FileTree>
 

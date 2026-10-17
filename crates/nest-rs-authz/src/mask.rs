@@ -28,7 +28,7 @@ where
                 std::any::type_name::<E>(),
                 A::ACTION,
                 mask_reason::NO_AMBIENT_ABILITY,
-                "no ambient ability — is the transport's authz bridge installed?",
+                "no ambient ability — does an ability guard run at the request?",
                 None,
                 None,
                 None,

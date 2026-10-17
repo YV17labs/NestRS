@@ -157,14 +157,14 @@ omission needs no controller code and no manual `if` in the resolver.
 
 A batch runs on its **own task** — that is what a DataLoader is — and carries
 what its request carries: the executor `SeaOrmDatabaseModule` installs around
-`/graphql`, as the pool, and the ability the authorization bridge installs.
+`/graphql`, as the pool, and the ability the endpoint's guards attach.
 There is nothing to bind for it.
 
 Without an executor — `SeaOrmDatabaseModule` not imported — `Repo` finds none
 and **every relation field fails before a single statement reaches the
 database**: the operation answers `internal error` under the `INTERNAL` code
 on each relation path, scalars resolve normally, and the query log stays
-empty. Without the bridge there is no ability, and `Repo` denies every row,
+empty. Without those guards there is no ability, and `Repo` denies every row,
 saying so at `warn` on `nest_rs::orm`.
 
 The missing executor is logged — `error` on `nest_rs::orm`, naming the entity

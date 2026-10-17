@@ -58,7 +58,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 # Boot the schema in-process and fire GraphQL requests at it (the ContextSeed
-# bridge test). nest-rs-http/nest-rs-core are already runtime deps above. `ws`
+# tests). nest-rs-http/nest-rs-core are already runtime deps above. `ws`
 # binds a real port: the graphql-ws socket's way down — `complete`, then the
 # Close frame — exists only over a real upgrade, and so does the shutdown window
 # a DataLoader batch is stopped at.

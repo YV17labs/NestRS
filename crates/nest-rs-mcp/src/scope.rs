@@ -7,9 +7,9 @@
 //!
 //! ```
 //! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_core::Posture;
 //! # use nest_rs_mcp::{
-//! #     AllowAllMcpGuard, CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpOperationGuard,
-//! #     mcp, tools,
+//! #     CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpModule, McpOptions, mcp, tools,
 //! # };
 //! # use nest_rs_testing::mcp::{call_tool, result};
 //! #
@@ -37,7 +37,7 @@
 //! }
 //! # }
 //! #
-//! # #[module(providers = [RequestCache, CacheHost, AllowAllMcpGuard as dyn McpOperationGuard])]
+//! # #[module(imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })], providers = [RequestCache, CacheHost])]
 //! # struct AppModule;
 //! #
 //! # #[nest_rs_core::main]

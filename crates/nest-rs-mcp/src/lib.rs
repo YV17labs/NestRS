@@ -14,8 +14,8 @@
 //! `#[public]`), and a pipe on its arguments (`Parameters<Valid<T>>` /
 //! `Parameters<Piped<P, T>>`), run in that order. The host's `#[use_guards]` and
 //! the app-wide pool join one chain per site, deduplicated by `TypeId`, which
-//! runs `check_mcp`; the endpoint's [`McpOperationGuard`] runs `check_http`
-//! apart from it.
+//! runs each guard's `check`; the guards at the endpoint's request run
+//! `check_http` apart from it.
 //!
 //! Response masking fails *closed* on a stripped **required** field — declare
 //! `unmasked` when a tool deliberately answers with a narrower projection — and
@@ -36,8 +36,7 @@
 //!
 //! * [`Scoped<T>::from_context`](Scoped) for an `#[injectable(scope = request)]`
 //!   provider;
-//! * the caller's ability, installed by the operation guard's
-//!   [`around`](McpOperationGuard::around);
+//! * what the request's guards attached — the caller's ability — ambient;
 //! * a `Repo`-backed body reading through the ambient executor of the
 //!   operation's own unit of work, opened through the bound
 //!   `nest_rs_database::UnitOfWork`, row-filtered by the caller's ability.
@@ -45,11 +44,12 @@
 //! Notifications and `subscriptions/listen` are the exceptions, documented on
 //! [`McpToolContext::around`].
 //!
-//! The endpoint guard is what [`resolve_operation_guard`] mounts: the global
-//! guard pool with the app's registered [`McpOperationGuard`] in it, the
-//! registered guard alone when the pool is empty, else **deny-all**. Without a
-//! bound unit of work a `Repo`-backed body fails closed (`Repo::conn` errors),
-//! and without an ability `scope_for` denies every row.
+//! The HTTP transport runs the endpoint's request guards in front of it: the
+//! app's global guard pool and the `EndpointGuards<McpView, _>` its modules
+//! declare, each once — and with neither, **deny-all**, unless the app opens
+//! the endpoint in code ([`McpOptions::posture`]). Without a bound unit of work
+//! a `Repo`-backed body fails closed (`Repo::conn` errors), and without an
+//! ability `scope_for` denies every row.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -62,7 +62,6 @@ mod context;
 mod endpoint;
 mod error;
 mod guard;
-mod guards;
 mod host;
 mod identity;
 mod module;
@@ -78,10 +77,8 @@ mod view;
 pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
-pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
 pub use error::{Opaque, pipe_error, problem_error, unresolvable_chain};
-pub use guard::{BoxFuture, McpOperationGuard, denial_to_mcp_error};
-pub use guards::AllowAllMcpGuard;
+pub use guard::{BoxFuture, denial_to_mcp_error};
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpOptions, McpSetup};
@@ -98,7 +95,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::endpoint::endpoint_site;
+    pub use crate::endpoint::{McpMount, endpoint};
     pub use crate::error::{OperationAnswer, refused};
     pub use crate::identity::declared_identity;
     pub use crate::operation::{description_is_blank, run_layered_mcp_chain};
@@ -174,9 +171,8 @@ pub use nest_rs_pipes::{Piped, Valid};
 /// use nest_rs_core::Discoverable;
 /// use nest_rs_mcp::{DEFAULT_PATH, hosts_on, mcp};
 /// # use nest_rs_core::{injectable, module};
-/// # use nest_rs_mcp::{
-/// #     AllowAllMcpGuard, McpError, McpIdentity, McpModule, McpOperationGuard, McpOptions, tools,
-/// # };
+/// # use nest_rs_core::Posture;
+/// # use nest_rs_mcp::{McpError, McpIdentity, McpModule, McpOptions, tools};
 /// # use nest_rs_testing::mcp::{initialize, result};
 /// #
 /// # #[injectable]
@@ -220,6 +216,7 @@ pub use nest_rs_pipes::{Piped, Valid};
 /// # #[module(imports = [
 /// #     McpModule::for_root(McpOptions {
 /// #         server: Some(McpIdentity::new("assistant", "1.0.0")),
+/// #         posture: Posture::Public,
 /// #         ..Default::default()
 /// #     }),
 /// # ], providers = [
@@ -227,7 +224,6 @@ pub use nest_rs_pipes::{Piped, Valid};
 /// #     PostsService,
 /// #     MyHandler,
 /// #     PostsHandler,
-/// #     AllowAllMcpGuard as dyn McpOperationGuard,
 /// # ])]
 /// # struct AppModule;
 ///
@@ -255,7 +251,8 @@ pub use nest_rs_mcp_macros::mcp;
 /// use std::sync::Arc;
 /// use nest_rs_mcp::{McpError, Parameters, ServerHandler, Valid, input, mcp, tools};
 /// # use nest_rs_core::{injectable, module};
-/// # use nest_rs_mcp::{AllowAllMcpGuard, DEFAULT_PATH, McpOperationGuard, hosts_on};
+/// # use nest_rs_core::Posture;
+/// # use nest_rs_mcp::{DEFAULT_PATH, McpModule, McpOptions, hosts_on};
 /// # use nest_rs_testing::mcp::{call_tool_with, result};
 /// #
 /// # #[injectable]
@@ -284,7 +281,7 @@ pub use nest_rs_mcp_macros::mcp;
 /// }
 ///
 /// fn implements<T: ServerHandler>() {}
-/// # #[module(providers = [MyService, MyHandler, AllowAllMcpGuard as dyn McpOperationGuard])]
+/// # #[module(imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })], providers = [MyService, MyHandler])]
 /// # struct AppModule;
 /// #
 /// # #[nest_rs_core::main]

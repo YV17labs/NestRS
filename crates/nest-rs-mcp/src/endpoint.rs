@@ -3,11 +3,9 @@
 use std::sync::Arc;
 
 use nest_rs_core::problem::code;
-use nest_rs_core::{Container, Correlation, Handler, Problem, current_request_scope};
-use nest_rs_http::__private::poem_bridge::{
-    error_to_poem, request_from_poem, request_to_poem, response_to_poem,
-};
-use nest_rs_http::__private::{OriginPolicy, attached_pending};
+use nest_rs_core::{Container, Correlation, Problem, current_request_scope};
+use nest_rs_http::__private::attached_pending;
+use nest_rs_http::__private::poem_bridge::{request_from_poem, request_to_poem, response_to_poem};
 use nest_rs_http::ResponseError as _;
 use nest_rs_http::{DetachedWork, Method, Request};
 use poem::endpoint::TowerCompatExt;
@@ -20,52 +18,20 @@ use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
 use crate::config::McpConfig;
 use crate::context::{McpAmbient, McpToolContext};
-use crate::guard::McpOperationGuard;
-use crate::guards::{GlobalPoolMcpGuard, deny_all};
 use crate::propagate::PropagatingHandler;
-use crate::registry::ENDPOINT;
 use crate::sessions::BoundedSessions;
 use nest_rs_database::UnitOfWork;
-use nest_rs_guards::__private::global_guards_active;
 
 /// The wait, in seconds, a client refused a session is told to take before
 /// trying again.
 const SESSION_RETRY_AFTER_SECS: u32 = 5;
 
-/// The operation guard an MCP mount runs: the global guard pool, with the
-/// app's registered `dyn McpOperationGuard` (the authz bridge) added to it; the
-/// registered guard alone when the app lists no pool; else deny-all.
-pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGuard> {
-    let bridge = container.get_dyn::<dyn McpOperationGuard>();
-    match (global_guards_active(container), bridge) {
-        (true, bridge) => {
-            tracing::debug!(
-                target: crate::TARGET,
-                mode = "global_guard_pool",
-                bridge = bridge.is_some(),
-                "mcp operations gated",
-            );
-            Arc::new(GlobalPoolMcpGuard::new(container, bridge))
-        }
-        (false, Some(bridge)) => {
-            tracing::debug!(
-                target: crate::TARGET,
-                mode = "operation_guard",
-                "mcp operations gated",
-            );
-            bridge
-        }
-        // `deny_all` says the fail-closed posture itself, at `warn`.
-        (false, None) => deny_all(),
-    }
-}
-
-/// Everything one `#[mcp]` mount needs beyond the handler itself: which
-/// browser origins may reach it, who gates an operation, what ambient state is
-/// re-installed around it, and how the streamable-HTTP server is configured.
+/// Everything one `#[mcp]` mount needs beyond the handler itself: what ambient
+/// state is re-installed around an operation, and how the streamable-HTTP
+/// server is configured. The transport checks the request's origin and runs its
+/// guards in front of it, so an endpoint built from one serves whoever reaches
+/// it.
 pub struct McpMount {
-    origins: OriginPolicy,
-    guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
     config: McpConfig,
@@ -73,32 +39,23 @@ pub struct McpMount {
     /// Told and stopped by the HTTP transport; a hand-built [`endpoint`]'s is never
     /// told, so its operations end only with their clients' cancellations.
     detached: DetachedWork,
-    /// The site the endpoint's requests run as.
-    site: &'static Handler,
 }
 
 impl McpMount {
-    /// Fail closed: an MCP endpoint mounted without an explicit
-    /// [`McpOperationGuard`] denies every request rather than serving the tool
-    /// surface unauthenticated.
-    pub fn deny_all() -> Self {
+    /// A mount on [`McpConfig::default`], with no context and no unit of work:
+    /// a hand-built endpoint's, in a test.
+    pub fn new() -> Self {
         Self {
-            origins: OriginPolicy::default(),
-            guard: deny_all(),
             context: None,
             unit_of_work: None,
             config: McpConfig::default(),
             session_store: None,
             detached: DetachedWork::new(),
-            site: &ENDPOINT,
         }
     }
 
     /// Resolve the whole mount from the app's container:
     ///
-    /// * the browser origins the HTTP transport admits — its own while no CORS
-    ///   policy is set, what that policy lists once one is;
-    /// * the operation guard, per [`resolve_operation_guard`];
     /// * the registered `dyn McpToolContext`, if any;
     /// * the bound `dyn UnitOfWork` each request operation runs its unit of work
     ///   through — without one a `Repo`-backed handler fails **closed**;
@@ -134,14 +91,11 @@ impl McpMount {
         }
 
         Self {
-            origins: OriginPolicy::from_container(container),
-            guard: resolve_operation_guard(container),
             context: container.get_dyn::<dyn McpToolContext>(),
             unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
             config,
             session_store: container.get_dyn::<dyn SessionStore>(),
             detached: DetachedWork::new(),
-            site: &ENDPOINT,
         }
     }
 
@@ -152,23 +106,16 @@ impl McpMount {
         self.detached = work;
         self
     }
+}
 
-    /// Run the endpoint's requests as `site`, the one `#[mcp]` declared for its
-    /// path.
-    pub(crate) fn running_as(mut self, site: &'static Handler) -> Self {
-        self.site = site;
-        self
-    }
-
-    /// Replace the operation guard — `AllowAllMcpGuard` for a deliberately
-    /// public endpoint, or a test double.
-    pub fn with_guard(mut self, guard: Arc<dyn McpOperationGuard>) -> Self {
-        self.guard = guard;
-        self
+impl Default for McpMount {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-/// Mount `factory`'s handler as a poem endpoint, gated and wrapped per `mount`.
+/// Mount `factory`'s handler as a poem endpoint, wrapped per `mount`; the
+/// transport runs the request's origin check and guards in front of it.
 ///
 /// `factory` runs on every new MCP session, so per-session state stays fresh.
 pub fn endpoint<F, H>(mount: McpMount, factory: F) -> impl IntoEndpoint
@@ -177,18 +124,14 @@ where
     H: ServerHandler + Send + 'static,
 {
     let McpMount {
-        origins,
-        guard,
         context,
         unit_of_work,
         config,
         session_store,
         detached,
-        site,
     } = mount;
 
     let handler_context = context.clone();
-    let handler_guard = guard.clone();
     let operation_timeout = config.operation_timeout;
 
     let sessions = Arc::new(BoundedSessions::new(
@@ -207,7 +150,6 @@ where
         move || {
             Ok(PropagatingHandler::new(
                 factory(),
-                handler_guard.clone(),
                 handler_context.clone(),
                 unit_of_work.clone(),
                 detached.clone(),
@@ -218,11 +160,8 @@ where
         server_config,
     );
     let inner = service.compat();
-    GuardedEndpoint {
-        origins,
-        guard,
+    SessionEndpoint {
         context,
-        site: EndpointSite(site),
         session_cap: SessionCap {
             sessions,
             legacy: config.legacy_session_mode,
@@ -232,11 +171,10 @@ where
     }
 }
 
-struct GuardedEndpoint<E> {
-    origins: OriginPolicy,
-    guard: Arc<dyn McpOperationGuard>,
+/// The streamable-HTTP service behind the session cap, each request carrying
+/// what its operations re-install on rmcp's own tasks.
+struct SessionEndpoint<E> {
     context: Option<Arc<dyn McpToolContext>>,
-    site: EndpointSite,
     session_cap: SessionCap,
     inner: E,
 }
@@ -300,20 +238,7 @@ fn opens_a_session(body: &[u8]) -> bool {
     )
 }
 
-/// The site an endpoint's request runs as, on the request for the guards that
-/// run it ([`endpoint_site`]).
-#[derive(Clone, Copy)]
-struct EndpointSite(&'static Handler);
-
-/// The site the MCP endpoint `req` reached runs its requests as: the one its
-/// path declares, [`ENDPOINT`] for a request no endpoint marked.
-pub fn endpoint_site(req: &Request) -> &'static Handler {
-    req.extensions()
-        .get::<EndpointSite>()
-        .map_or(&ENDPOINT, |site| site.0)
-}
-
-impl<E> Endpoint for GuardedEndpoint<E>
+impl<E> Endpoint for SessionEndpoint<E>
 where
     E: Endpoint<Output = Response>,
 {
@@ -321,17 +246,6 @@ where
 
     async fn call(&self, req: poem::Request) -> Result<Self::Output> {
         let mut req = request_from_poem(req);
-        if let Err(refused) = self.origins.allows(&req) {
-            tracing::warn!(
-                target: crate::TARGET,
-                origin = refused.origin(),
-                expected = refused.expected(),
-                "browser origin refused",
-            );
-            return Ok(response_to_poem(refused.as_response()));
-        }
-        req.extensions_mut().insert(self.site);
-        self.guard.before(&mut req).await.map_err(error_to_poem)?;
         if let Some(refused) = self.session_cap.refusal(&mut req).await {
             return Ok(response_to_poem(refused));
         }
@@ -343,15 +257,12 @@ where
         let correlation = nest_rs_core::__private::current_correlation()
             .unwrap_or_else(|| Correlation::minted(None));
         let captured = self.context.as_ref().map(|context| context.capture(&req));
-        // Post-`before`, so the guard sees the ability its chain attached.
-        let guard_captured = self.guard.capture(&req);
         // What the request's guards attached, re-installed around each
         // operation on rmcp's own task, which no ambient context reaches.
         let attached = attached_pending(&req);
         req.extensions_mut().insert(McpAmbient {
             scope: scope.clone(),
             captured,
-            guard_captured,
             attached,
             // The request's own span: the interceptor band is the outermost wrap.
             span: tracing::Span::current(),

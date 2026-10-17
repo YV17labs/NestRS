@@ -2,17 +2,20 @@
 //! server ([`McpConfig`]) and who the app is ([`McpIdentity`]).
 //!
 //! It activates nothing: listing an `#[mcp]` provider mounts the endpoint.
-//! Without it every mount runs on [`McpConfig::default`] and reports what its
-//! hosts declare. Identity has no `<PREFIX>_MCP__*` twin, so it travels in [`McpOptions`].
+//! Without it every mount runs on [`McpConfig::default`], gated, and reports
+//! what its hosts declare. Identity and posture have no `<PREFIX>_MCP__*` twin,
+//! so they travel in [`McpOptions`].
 
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering, module};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Posture, Registering, module};
+use nest_rs_http::__private::EndpointPosture;
 
 use crate::config::McpConfig;
 use crate::identity::McpIdentity;
 use crate::registry;
+use crate::view::McpView;
 
 /// DI module that resolves [`McpConfig`] and carries the app's own
 /// [`McpIdentity`].
@@ -31,13 +34,15 @@ impl McpModule {
     }
 }
 
-/// What an app declares about MCP: the server options every mount runs on, and
-/// the identity every endpoint reports unless one of its hosts says otherwise.
+/// What an app declares about MCP: the server options every mount runs on, the
+/// identity every endpoint reports unless one of its hosts says otherwise, and
+/// who may call its endpoints.
 ///
 /// ```
 /// use nest_rs_core::module;
 /// use nest_rs_mcp::{McpIdentity, McpModule, McpOptions};
-/// # use nest_rs_mcp::{AllowAllMcpGuard, DEFAULT_PATH, McpError, McpOperationGuard, mcp, tools};
+/// # use nest_rs_core::Posture;
+/// # use nest_rs_mcp::{DEFAULT_PATH, McpError, mcp, tools};
 /// # use nest_rs_testing::mcp::{initialize, result};
 ///
 /// #[module(imports = [
@@ -46,6 +51,7 @@ impl McpModule {
 ///             McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))
 ///                 .instructions("Every result is scoped to the caller's token."),
 ///         ),
+/// #       posture: Posture::Public,
 ///         ..Default::default()
 ///     }),
 /// ])]
@@ -64,7 +70,7 @@ impl McpModule {
 /// #     }
 /// # }
 /// #
-/// # #[module(imports = [AppModule], providers = [PingHost, AllowAllMcpGuard as dyn McpOperationGuard])]
+/// # #[module(imports = [AppModule], providers = [PingHost])]
 /// # struct ServedModule;
 /// #
 /// # #[nest_rs_core::main]
@@ -80,7 +86,7 @@ impl McpModule {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct McpOptions {
     /// The base `<PREFIX>_MCP__*` overlays, per field. `None` ⇒ the environment
     /// over [`McpConfig::default`]; a bare `McpConfig` would demote the `.env` cascade.
@@ -88,6 +94,24 @@ pub struct McpOptions {
     /// Who this app is: the `serverInfo` every endpoint reports unless an `#[mcp]`
     /// host overrides it per field. Declared where no `#[mcp]` host serves, it fails boot.
     pub server: Option<McpIdentity>,
+    /// Who may call the app's MCP endpoints. [`Posture::Gated`], the default:
+    /// the global guard pool and the `EndpointGuards<McpView, _>` the app's
+    /// modules declare run at each request, and with neither the endpoint
+    /// denies every request. [`Posture::Public`] opens them with no guard at the
+    /// request, the one visible line that does, in code alone; a module then
+    /// declaring `EndpointGuards` for them fails the boot. Any other posture
+    /// fails the boot.
+    pub posture: Posture,
+}
+
+impl Default for McpOptions {
+    fn default() -> Self {
+        Self {
+            config: None,
+            server: None,
+            posture: Posture::Gated,
+        }
+    }
 }
 
 impl From<McpConfig> for McpOptions {
@@ -100,7 +124,7 @@ impl From<Option<McpConfig>> for McpOptions {
     fn from(config: Option<McpConfig>) -> Self {
         Self {
             config,
-            server: None,
+            ..Self::default()
         }
     }
 }
@@ -122,6 +146,19 @@ impl DynamicModule for McpSetup {
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        // Gated is every endpoint's own posture: only the opening is declared, so
+        // a second import of the module, a library's, cannot close what the app
+        // opened.
+        let builder = match self.options.posture {
+            Posture::Gated => builder,
+            Posture::Public => {
+                builder.provide_meta(EndpointPosture::of::<McpView>(Posture::Public))
+            }
+            refused => builder.refuse(nest_rs_core::anyhow::anyhow!(
+                "McpOptions::posture is {refused:?}, and an MCP endpoint is Posture::Gated \
+                 (the default) or Posture::Public — set one of the two",
+            )),
+        };
         // Provider-less metadata: importing this module is itself the gate.
         let builder = match self.options.server {
             Some(server) => builder
@@ -172,5 +209,30 @@ mod tests {
         let unpinned: McpOptions = McpModule::for_root(None).options;
         assert!(unpinned.config.is_none());
         assert!(unpinned.server.is_none());
+        assert_eq!(
+            unpinned.posture,
+            Posture::Gated,
+            "gated unless opened in code"
+        );
+    }
+
+    #[module(imports = [McpModule::for_root(McpOptions {
+        posture: Posture::InBand,
+        ..Default::default()
+    })])]
+    struct InBandMcp;
+
+    #[tokio::test]
+    async fn a_posture_other_than_gated_or_public_fails_the_boot_naming_both() {
+        let Err(refused) = App::builder().module::<InBandMcp>().build().await else {
+            panic!("an MCP endpoint is gated or public");
+        };
+        let said = format!("{refused:#}");
+        assert!(
+            said.contains("InBand")
+                && said.contains("Posture::Gated")
+                && said.contains("Posture::Public"),
+            "{said}",
+        );
     }
 }

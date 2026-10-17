@@ -226,20 +226,22 @@ Both mask for the ambient principal, never per recipient: a `WsServer::emit`
 to other connections carries what the sender may read. Inside a decorated
 handler they bypass the posture nobody can then `rg` for.
 
-## Extractors and bridges
+## Extractors and the carried ability
 
 **`Bind<A, S>`** loads and authorizes through the service (404 absent, 403
 denied) and needs an `AbilityGuard` on the route; **`Scope<E, A>`** hands a
 hand-built query the explicit `Condition`.
 
-The authz bridges live in `nest-rs-authz` and the data-layer bridges in
+Each edge's authz half lives in `nest-rs-authz` and its data-layer half in
 `nest-rs-seaorm`, each behind the matching edge feature — **the split avoids a
 dependency cycle.** What they guarantee:
 
-- **The guard scopes the operation** on GraphQL and MCP: their bridges run the
-  guard chain in-band (one authn→authz ordering) and install the caller's
-  ability. WS has no bridge: a gateway's upgrade already ran the chain, and the
-  ability it attached crosses the connection into each message and hook.
+- **The guard attaches the ability, and the request carries it**: on every
+  edge `AbilityGuard` attaches the caller's ability at the request — a route's
+  guards, a gateway's upgrade, the `EndpointGuards` a module declares for
+  `/graphql` or `/mcp` (one authn→authz ordering) — and it is ambient for
+  every unit the request carries: each GraphQL operation and MCP tool call,
+  each WS message and hook. Nothing re-runs the chain below the request.
 - **A dataloader batch** runs off-task under what its request carries into a
   batch — the request's values, never one field's, and the pool — captured
   where a field asks the loader; nothing is bound for it.

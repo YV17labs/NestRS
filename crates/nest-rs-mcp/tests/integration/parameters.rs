@@ -4,7 +4,7 @@
 use nest_rs_core::module;
 use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Role};
 use nest_rs_mcp::rmcp::serde_json::json;
-use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, Parameters, input, mcp, tools};
+use nest_rs_mcp::{McpError, Parameters, input, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_method, call_tool_with, open_session, result};
 
@@ -44,7 +44,7 @@ impl ChargeTool {
     }
 }
 
-#[module(providers = [ChargeTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [ChargeTool])]
 struct ChargeModule;
 
 async fn boot() -> TestApp {

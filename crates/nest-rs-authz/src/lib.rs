@@ -17,10 +17,6 @@
 mod ability;
 mod action;
 mod builder;
-// Only the `Exempt`-edge transports run the chain themselves: HTTP gates in the
-// route shaper's pool, and a WS gateway's upgrade already ran it.
-#[cfg(any(feature = "graphql", feature = "mcp"))]
-mod chain;
 mod context;
 mod error;
 mod factory;

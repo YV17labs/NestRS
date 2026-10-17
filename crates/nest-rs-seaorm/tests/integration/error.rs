@@ -2,16 +2,15 @@
 //! fails, against a pool with no server behind it — a refused connection is a
 //! database failure like any other, and no Postgres is needed to provoke one.
 
+use nest_rs_graphql::GraphqlView;
+use nest_rs_http::EndpointGuards;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::problem::code;
 use nest_rs_core::{Layer, OPAQUE_CLIENT_MESSAGE, injectable, module};
-use nest_rs_graphql::{
-    GraphqlConfig, GraphqlModule, GraphqlOperationGuard, crud, operations, resolver,
-};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, crud, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_seaorm::{
     Creatable, CrudService, SeaOrmDatabaseModule, SeaOrmModule, ServiceError, expose,
@@ -82,7 +81,7 @@ impl Guard for AlwaysAuthenticated {
 
 impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
-type Bridge = GraphqlAbilityBridge<AlwaysAuthenticated, AbilityGuard<EveryWidget>>;
+type Bridge = EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<EveryWidget>)>;
 
 #[resolver]
 struct WidgetsResolver {
@@ -132,7 +131,7 @@ impl LedgerResolver {
         EveryWidget,
         AbilityGuard<EveryWidget>,
         AlwaysAuthenticated,
-        Bridge as dyn GraphqlOperationGuard,
+        Bridge,
         WidgetsResolver,
         LedgerResolver,
     ],

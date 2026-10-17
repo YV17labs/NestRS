@@ -390,8 +390,8 @@ module imported in that adapter's `module.rs`:
 |---|---|---|
 | HTTP controller | `AuthnGuard, AuthzGuard` | `AuthzModule` |
 | WS gateway | `AuthnGuard, AuthzGuard` — they run on the upgrade, an HTTP `GET` | `AuthzWsModule` |
-| GraphQL resolver | `AuthzGuard` — the module's bridge authenticates each operation | `AuthzGraphqlModule` |
-| MCP tool | none — the module's bridge gates every call at the endpoint | `AuthzMcpModule` |
+| GraphQL resolver | `AuthzGuard` — the guards the module declares for `/graphql` authenticate the request | `AuthzGraphqlModule` |
+| MCP tool | none — the guards the module declares for `/mcp` gate every call at its request | `AuthzMcpModule` |
 
 A guard bound where its check never runs is a compile error naming the edge it
 does check: `AuthnGuard` checks HTTP requests only, so a resolver refuses it.
@@ -401,10 +401,10 @@ writes that edge's module once auth exists, and `g http` / `g graphql` on a
 
 Two edges answer differently, by design. A **scheduled** tick is system work:
 its unit of work runs on `SeaOrmDatabaseModule`'s executor with no ability, so `Repo`
-runs unscoped and there is nothing to declare. **MCP** gates at the endpoint,
-through the global guard pool with the app's `dyn McpOperationGuard` added to
-it, either alone, else deny-all — so an `/mcp` endpoint with neither answers 401
-to every tool call.
+runs unscoped and there is nothing to declare. **MCP** gates at the endpoint's
+request, through the global guard pool and the `EndpointGuards` a module
+declares for it, either alone, else deny-all — so an `/mcp` endpoint with
+neither answers 401 to every tool call.
 
 **`AuthzAbility` is the whole policy, and it grants nothing until you say so.** A
 freshly scaffolded resource answers 403 on every route until a rule names its

@@ -263,12 +263,13 @@ nestrs g mcp posts         # MCP tool
 nestrs g events posts      # event listener, with its event at the port
 ```
 
-`g graphql`, `g ws` and `g mcp` also write that transport's **authz bridge**
+`g graphql`, `g ws` and `g mcp` also write that transport's **authz module**
 under `crates/features/src/authz/` when the workspace has a policy to enforce,
-and wire it into the app. It is not optional wiring: `/graphql` and `/mcp` gate
-in band, per operation, so without the bridge `/mcp` denies every call and
-`/graphql` runs operations with no ability installed. A gateway's bridge brings
-the guards whose ability crosses the connection and scopes its rows.
+and wire it into the app. It is not optional wiring: `/graphql` and `/mcp` run
+the guards a module declares at their request, so without it `/mcp` denies
+every call and `/graphql` runs operations with no ability attached. A gateway's
+module brings the guards whose ability crosses the connection and scopes its
+rows.
 
 <Aside type="note">
 Generated entities default to wire-only `#[expose]` (no GraphQL tokens) — see
@@ -338,11 +339,11 @@ controller together.
 The GraphQL adapter for a resource port is the `#[crud]` resolver behind the
 ability guard — `#[use_guards(AuthzGuard)]` alone, since `AuthnGuard` checks
 HTTP requests only and a resolver refuses it at compile time — and it comes with
-the per-operation bridge that authenticates each operation:
+the endpoint guards that authenticate the `/graphql` request:
 `crates/features/src/authz/graphql/` plus the `AuthzGraphqlModule` import in the
-adapter's `module.rs`. That folder is not optional decoration — `/graphql` runs
-no guard at the HTTP edge, so the bridge is the only thing that authenticates the
-caller and installs the ability the resolvers read. Over a
+adapter's `module.rs`. That folder is not optional decoration — no controller
+owns `/graphql`, so the guards its module declares are the only thing that
+authenticates the caller and attaches the ability the resolvers read. Over a
 plain `g feature` port there are no rows to guard, so the resolver stays the
 `#[public]` stand-in and nothing else is generated.
 

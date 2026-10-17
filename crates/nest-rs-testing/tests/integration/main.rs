@@ -14,6 +14,7 @@ mod cors;
 mod database;
 mod denial_lines;
 mod destructured_args;
+mod endpoint_guards;
 mod env_cascade;
 mod exception_filters;
 mod fail_secure_boot;

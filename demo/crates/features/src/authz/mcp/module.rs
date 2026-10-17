@@ -1,13 +1,12 @@
 use nest_rs::core::module;
-use nest_rs::mcp::McpOperationGuard;
+use nest_rs::http::EndpointGuards;
+use nest_rs::mcp::McpView;
 
-use super::bridge::AuthzMcpBridge;
-use crate::authz::AuthzModule;
+use crate::authn::AuthnGuard;
+use crate::authz::{AuthzGuard, AuthzModule};
 
 #[module(
     imports = [AuthzModule],
-    providers = [
-        AuthzMcpBridge as dyn McpOperationGuard,
-    ],
+    providers = [EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>],
 )]
 pub struct AuthzMcpModule;

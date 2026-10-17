@@ -1,6 +1,6 @@
-//! The class-level gate through the real macro: `#[authorize(Action, Entity)]`
-//! beside a `#[tool]` makes `#[mcp]` emit `nest_rs_authz::mcp::authorize`
-//! before the body — the host writes no gate call.
+//! The class gate through the real macro: `#[authorize(Action, Entity)]`
+//! beside a `#[tool]` makes `#[tools]` run `nest_rs_authz::class_gate` after the
+//! operation's guards — the host writes no gate call.
 //!
 //! Pinned: a caller with the grant proceeds, one without is refused, the
 //! anonymous caller is refused whatever the visitor branch granted, and a
@@ -8,14 +8,14 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::async_trait;
-use nest_rs_mcp::{McpError, McpOperationGuard, mcp, tools};
+use nest_rs_http::{EndpointGuards, async_trait};
+use nest_rs_mcp::{McpError, McpView, mcp, tools};
 
-use super::{PassGuard, widget};
+use crate::mcp::{PassGuard, call_as};
+use crate::widget;
 
 /// Builds the caller's ability from an `x-role` header. `visitor` is the
 /// anonymous branch — a *grant* it holds must still not satisfy the gate.
@@ -82,18 +82,16 @@ impl GateTool {
     }
 }
 
-type Bridge = McpAbilityBridge<PassGuard, AbilityInjector>;
-
 #[module(providers = [
     PassGuard,
     AbilityInjector,
-    Bridge as dyn McpOperationGuard,
+    EndpointGuards<McpView, (PassGuard, AbilityInjector)>,
     GateTool,
 ])]
 struct GateModule;
 
 async fn call(role: &str, tool: &str) -> String {
-    super::call_as::<GateModule>("/mcp/gate", role, tool).await
+    call_as::<GateModule>("/mcp/gate", role, tool).await
 }
 
 #[tokio::test]

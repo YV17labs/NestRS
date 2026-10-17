@@ -3,8 +3,8 @@ title: Glossary
 description: One-line definitions for the vocabulary NestRS uses across the docs.
 ---
 
-The docs lean on a small set of recurring terms — *shaper*, *bridge*,
-*ambient context*, *masking*. This page collects them in one place
+The docs lean on a small set of recurring terms — *shaper*, *endpoint
+guards*, *ambient context*, *masking*. This page collects them in one place
 with a one-line definition and a link to the canonical page that goes
 deep on each.
 
@@ -46,6 +46,10 @@ deep on each.
   `Ok(())` to let the request through or a typed `Denial` mapped to
   401/403/429, and may attach context the handler reads through
   `Ctx<T>`.
+- **[Endpoint guards](/security/authorization/endpoint-guards/)** —
+  `EndpointGuards<V, (G1, …)>`, the guards a module adds to the request of
+  `/graphql` or `/mcp`, beside the global pool; what they attach is ambient
+  for every operation the request carries.
 - **[Pipe](/fundamentals/pipes/)** — a stateless edge transform that
   parses and validates a single input, never a DI provider; bound to a
   handler argument through `Valid<E>` or `Piped<P, E>`.
@@ -146,10 +150,6 @@ deep on each.
   — the split-deploy pattern: the *issuer* app holds the signing key
   and mints tokens; the *resource server* holds only the public key
   and verifies them.
-- **[Bridge (transport bridge)](/security/authorization/per-transport-bridges/)**
-  — the per-transport seam that re-seeds the ambient ability and
-  executor at GraphQL/WS/MCP dispatch points so the data layer stays
-  transparent off the HTTP request path.
 
 ## Transports
 
@@ -207,10 +207,6 @@ deep on each.
   `crates/features`. One app is the starting point; a second workload is
   another `nestrs new` inside it. An app that needs a database of its own is a
   workspace of its own, in its own repository.
-- **[Marker guard](/security/authorization/per-transport-bridges/)** —
-  a unit guard with no logic that exists so the access graph can
-  prove a transport's authz seam is wired; omitting the authz module
-  fails the boot naming the missing guard.
 - **[Port + adapters](/fundamentals/modules/)** — the per-feature
   folder shape: the port (`entity.rs`, `service.rs`, `dto.rs`,
   `error.rs`, `module.rs`) at the root, one sub-folder per transport

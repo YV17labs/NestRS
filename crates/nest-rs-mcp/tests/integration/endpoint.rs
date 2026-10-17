@@ -1,5 +1,5 @@
 //! `#[mcp]` self-mounts its endpoint at its declared path, deny-all when no
-//! `dyn McpOperationGuard` is wired.
+//! guard runs at its request.
 
 use nest_rs_core::module;
 use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
@@ -25,7 +25,7 @@ async fn mcp_tool_self_mounts_and_fails_closed_without_a_guard() {
         .await
         .expect("boots");
 
-    // 401, not 404: mounted, and closed without an operation guard.
+    // 401, not 404: mounted, and closed with no guard at its request.
     let resp = app.http().post("/mcp").send().await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
 
@@ -75,10 +75,8 @@ impl ListeningTools {
     }
 }
 
-#[module(providers = [
-    ListeningTools,
-    nest_rs_mcp::AllowAllMcpGuard as dyn nest_rs_mcp::McpOperationGuard,
-])]
+#[module(imports = [crate::open_mcp()], providers = [
+    ListeningTools])]
 struct ListeningModule;
 
 /// The standalone `GET` stream has no end of its own: it ends cleanly at the

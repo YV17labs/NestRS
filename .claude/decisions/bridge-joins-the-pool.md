@@ -37,3 +37,23 @@ both runs `X` after authorization; neither the demo nor the docs list one there.
 
 The bridges and their slots are interim: the pipeline's endpoint guards
 replace them, keeping these tests (`one-execution-pipeline.md`).
+
+**2026-10-17 — `feat/endpoint-guards-and-class-gate`: endpoint guards replace
+the bridges.** A module declares `EndpointGuards<V, (G1, …)>` as a provider —
+`V` the view of the units the endpoint carries, `GraphqlView` or `McpView` —
+and the HTTP transport composes the request stage of every self-mount in one
+function: the pool, the mount's own guards, then the declared guards inserted
+where the pool lists the first one they name, else after it; each guard once,
+by `TypeId`, declarations of several modules in import order. What the
+bridges' `covers()` said, the declaration's list says. Being a provider, a
+declaration is module-gated by construction, and an app with no global pool
+is still authenticated by the feature module it imports. The stage is
+phase-validated at boot as a route's chain is. The operation guards, the pool
+runners and the bridges are gone; `/mcp` stays deny-all with neither pool nor
+declaration, and its one opening is `McpOptions::posture = Posture::Public`,
+which a declaration beside it refuses at boot rather than drop. The limit
+above is kept as it was: the declared guards run as one block, so a pooled
+guard listed between two of them runs after the block. The tests above keep
+their behaviour under the new names
+(`transport_parity::endpoint_guards_run_where_the_pool_lists_the_first_guard_they_name`,
+`…::a_guard_in_both_pool_and_endpoint_guards_runs_once`).

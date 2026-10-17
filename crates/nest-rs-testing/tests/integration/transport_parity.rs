@@ -1,7 +1,8 @@
-//! `/graphql` and `/mcp` answer the **same app wiring** the same way, gating
-//! in-band under three wirings: a global pool alone, a bridge registered, and
+//! `/graphql` and `/mcp` answer the **same app wiring** the same way, the
+//! transport running the guards at their request under three wirings: a global
+//! pool alone, guards a module declares for the endpoint (`EndpointGuards`), and
 //! neither. The pool always runs at the request — `/graphql`'s POST and its
-//! graphql-ws upgrade alike; a bridge adds its guards to it, and a guard listed
+//! graphql-ws upgrade alike; the endpoint's guards add to it, and a guard listed
 //! in both runs once.
 //!
 //! The deliberate difference: `/graphql` carries `Posture::InBand`, so a pooled
@@ -10,16 +11,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
-use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_core::{Layer, Posture, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
-use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
+use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::{HttpView, async_trait};
-use nest_rs_mcp::{
-    AllowAllMcpGuard, McpOperationGuard, ServerHandler, mcp, tool_handler, tool_router,
-};
+use nest_rs_http::{EndpointGuards, HttpView, async_trait};
+use nest_rs_mcp::{McpView, ServerHandler, mcp, tool_handler, tool_router};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
 use nest_rs_mcp::rmcp;
 use nest_rs_testing::mcp::{initialize_request, post_message, post_message_with};
@@ -52,8 +49,7 @@ impl Guard for BearerGuard {
 
 impl GuardFor<HttpView> for BearerGuard {}
 
-/// An IP allow-list or an API key: a check on the HTTP request alone, the
-/// shape a bridge used to keep off the in-band edges.
+/// An IP allow-list or an API key: a check on the HTTP request alone.
 #[injectable]
 #[derive(Default)]
 struct ApiKeyGuard;
@@ -125,8 +121,8 @@ impl Guard for PostureProbe {
     }
 }
 
-/// Admits everything: the authorization half of a bridge whose assertions are
-/// about its authentication half.
+/// Admits everything: the authorization half of endpoint guards whose
+/// assertions are about their authentication half.
 #[injectable]
 #[derive(Default)]
 struct PassGuard;
@@ -134,6 +130,8 @@ struct PassGuard;
 impl Layer for PassGuard {}
 
 impl Guard for PassGuard {}
+
+impl GuardFor<HttpView> for PassGuard {}
 
 /// The `check_http` calls of the recording guards below, in the order they ran.
 #[injectable]
@@ -169,6 +167,8 @@ macro_rules! recording_guard {
                 Ok(())
             }
         }
+
+        impl GuardFor<HttpView> for $name {}
     };
 }
 
@@ -199,7 +199,7 @@ impl ParityTool {}
 #[tool_handler]
 impl ServerHandler for ParityTool {}
 
-/// One module, both transports, **no** operation-guard bridge on either side.
+/// One module, both transports, **no** endpoint guards on either side.
 #[module(
     imports = [GraphqlModule::for_root(None)],
     providers = [
@@ -213,23 +213,21 @@ impl ServerHandler for ParityTool {}
 )]
 struct BothTransportsModule;
 
-/// Same, plus an MCP bridge — the "a bridge is registered" wiring.
+/// Same, plus guards declared for `/mcp` that admit every request.
 #[module(
     imports = [GraphqlModule::for_root(None)],
     providers = [
         BearerGuard,
+        PassGuard,
         ParityResolver,
         ParityTool,
-        AllowAllMcpGuard as dyn McpOperationGuard,
+        EndpointGuards<McpView, (PassGuard,)>,
     ],
 )]
-struct BridgedMcpModule;
+struct DeclaredMcpModule;
 
-type BearerGraphqlBridge = GraphqlAbilityBridge<BearerGuard, PassGuard>;
-type BearerMcpBridge = McpAbilityBridge<BearerGuard, PassGuard>;
-
-/// Both authz bridges authenticating a bearer, beside an HTTP-only guard the
-/// app lists in its pool.
+/// Both endpoints' guards authenticating a bearer, beside an HTTP-only guard
+/// the app lists in its pool.
 #[module(
     imports = [GraphqlModule::for_root(None)],
     providers = [
@@ -240,16 +238,13 @@ type BearerMcpBridge = McpAbilityBridge<BearerGuard, PassGuard>;
         PostureProbe,
         ParityResolver,
         ParityTool,
-        BearerGraphqlBridge as dyn GraphqlOperationGuard,
-        BearerMcpBridge as dyn McpOperationGuard,
+        EndpointGuards<GraphqlView, (BearerGuard, PassGuard)>,
+        EndpointGuards<McpView, (BearerGuard, PassGuard)>,
     ],
 )]
-struct AbilityBridgedModule;
+struct BearerDeclaredModule;
 
-type RecordingGraphqlBridge = GraphqlAbilityBridge<CoveredGuard, SecondGuard>;
-type RecordingMcpBridge = McpAbilityBridge<CoveredGuard, SecondGuard>;
-
-/// Both authz bridges over recording guards, the pool chosen per test.
+/// Both endpoints' guards over recording guards, the pool chosen per test.
 #[module(
     imports = [GraphqlModule::for_root(None)],
     providers = [
@@ -260,11 +255,11 @@ type RecordingMcpBridge = McpAbilityBridge<CoveredGuard, SecondGuard>;
         LastGuard,
         ParityResolver,
         ParityTool,
-        RecordingGraphqlBridge as dyn GraphqlOperationGuard,
-        RecordingMcpBridge as dyn McpOperationGuard,
+        EndpointGuards<GraphqlView, (CoveredGuard, SecondGuard)>,
+        EndpointGuards<McpView, (CoveredGuard, SecondGuard)>,
     ],
 )]
-struct RecordingBridgedModule;
+struct RecordingDeclaredModule;
 
 /// `initialize` against `/mcp`, returning the raw response.
 async fn mcp_initialize(app: &TestApp, bearer: Option<&str>) -> TestResponse {
@@ -387,9 +382,9 @@ async fn a_public_idiom_guard_checks_graphql() {
 }
 
 #[tokio::test]
-async fn a_registered_bridge_adds_to_the_pool() {
+async fn endpoint_guards_add_to_the_pool() {
     let app = TestApp::builder()
-        .module::<BridgedMcpModule>()
+        .module::<DeclaredMcpModule>()
         .use_guards_global([guard::<BearerGuard>()])
         .build()
         .await
@@ -406,11 +401,11 @@ async fn a_registered_bridge_adds_to_the_pool() {
 }
 
 /// The pool's refusal is answered as the pool's guard raised it, whatever the
-/// bridge decided: here the bridge authenticated the caller.
+/// endpoint's guards decided: here they authenticated the caller.
 #[tokio::test]
-async fn a_global_http_guard_refuses_graphql_with_a_bridge_registered() {
+async fn a_global_http_guard_refuses_graphql_beside_endpoint_guards() {
     let app = TestApp::builder()
-        .module::<AbilityBridgedModule>()
+        .module::<BearerDeclaredModule>()
         .use_guards_global([guard::<ApiKeyGuard>()])
         .build()
         .await
@@ -424,12 +419,12 @@ async fn a_global_http_guard_refuses_graphql_with_a_bridge_registered() {
         .assert_status(StatusCode::OK);
 }
 
-/// The graphql-ws upgrade runs the same pool and bridge as the POST, under the
-/// same posture: a refusal there opens no socket.
+/// The graphql-ws upgrade runs the same pool and endpoint guards as the POST,
+/// under the same posture: a refusal there opens no socket.
 #[tokio::test]
-async fn a_global_http_guard_refuses_the_graphql_ws_upgrade_with_a_bridge_registered() {
+async fn a_global_http_guard_refuses_the_graphql_ws_upgrade_beside_endpoint_guards() {
     let app = TestApp::builder()
-        .module::<AbilityBridgedModule>()
+        .module::<BearerDeclaredModule>()
         .use_guards_global([guard::<ApiKeyGuard>(), guard::<PostureProbe>()])
         .build()
         .await
@@ -451,9 +446,9 @@ async fn a_global_http_guard_refuses_the_graphql_ws_upgrade_with_a_bridge_regist
 }
 
 #[tokio::test]
-async fn a_global_http_guard_refuses_mcp_with_a_bridge_registered() {
+async fn a_global_http_guard_refuses_mcp_beside_endpoint_guards() {
     let app = TestApp::builder()
-        .module::<AbilityBridgedModule>()
+        .module::<BearerDeclaredModule>()
         .use_guards_global([guard::<ApiKeyGuard>()])
         .build()
         .await
@@ -475,9 +470,9 @@ async fn a_global_http_guard_refuses_mcp_with_a_bridge_registered() {
 }
 
 #[tokio::test]
-async fn a_guard_in_both_pool_and_bridge_runs_once() {
+async fn a_guard_in_both_pool_and_endpoint_guards_runs_once() {
     let app = TestApp::builder()
-        .module::<RecordingBridgedModule>()
+        .module::<RecordingDeclaredModule>()
         .use_guards_global([guard::<CoveredGuard>()])
         .build()
         .await
@@ -493,13 +488,13 @@ async fn a_guard_in_both_pool_and_bridge_runs_once() {
     assert_eq!(trail.take(), ["covered", "second"], "/mcp");
 }
 
-/// The bridge runs where the pool lists the first guard it covers, so a pooled
-/// guard reading the principal still runs after the authentication the bridge
-/// carries.
+/// The endpoint's guards run where the pool lists the first one they name, so
+/// a pooled guard reading the principal still runs after the authentication
+/// they carry.
 #[tokio::test]
-async fn the_bridge_runs_where_the_pool_lists_the_first_guard_it_covers() {
+async fn endpoint_guards_run_where_the_pool_lists_the_first_guard_they_name() {
     let app = TestApp::builder()
-        .module::<RecordingBridgedModule>()
+        .module::<RecordingDeclaredModule>()
         .use_guards_global([
             guard::<FirstGuard>(),
             guard::<CoveredGuard>(),
@@ -533,7 +528,7 @@ async fn the_bridge_runs_where_the_pool_lists_the_first_guard_it_covers() {
 }
 
 #[tokio::test]
-async fn with_neither_bridge_nor_pool_graphql_runs_open_and_mcp_refuses() {
+async fn with_neither_endpoint_guards_nor_pool_graphql_runs_open_and_mcp_refuses() {
     let app = TestApp::for_module::<BothTransportsModule>()
         .await
         .expect("boots");

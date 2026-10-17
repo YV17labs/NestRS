@@ -1,17 +1,18 @@
 //! [`Endpoint`], what answers a request, and the metadata a surface mounts
 //! one with.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use nest_rs_core::{Container, Handler, Posture};
+use nest_rs_core::{Container, Handler, UnitView};
+use nest_rs_guards::GuardSpec;
 
 use crate::detached::DetachedWork;
-use crate::error::Result;
+use crate::error::{OriginRefused, Result};
 use crate::request::Request;
 use crate::response::Response;
 use crate::routes::HttpRoutes;
@@ -167,21 +168,58 @@ type MountFn = dyn Fn(&Container, &mut HttpRoutes) + Send + Sync;
 /// anywhere else fails the boot naming both. Each entry sees the request's
 /// full URI, the global prefix included.
 ///
-/// Its [`Handler`] declares who may call it. The transport runs the global
-/// guard pool at the edge of a [`Gated`](Posture::Gated) one before the
-/// surface sees the request; a [`Public`](Posture::Public) one (the OpenAPI
-/// document) runs none, and an [`InBand`](Posture::InBand) one (`/graphql`)
-/// runs the pool itself, its operations each gated by their own posture.
+/// Its [`Handler`] declares who may call it, and the transport runs its
+/// request's guard stage in front of every entry, before the surface sees the
+/// request: none for a [`Public`](nest_rs_core::Posture::Public) one (the OpenAPI document);
+/// otherwise the global guard pool, with the surface's own guards
+/// ([`guarded_by`](Self::guarded_by), a gateway's) or, for an endpoint carrying
+/// in-band units ([`in_band`](Self::in_band)), the [`EndpointGuards`] the app's
+/// modules declare for them. An [`InBand`](nest_rs_core::Posture::InBand) one (`/graphql`)
+/// lets an authentication guard admit an anonymous request to its operations'
+/// own gates; a [`Gated`](nest_rs_core::Posture::Gated) in-band one with no guard at all
+/// denies every request.
+///
+/// [`EndpointGuards`]: crate::EndpointGuards
 pub struct HttpEndpointMeta {
     path: Cow<'static, str>,
     also: Vec<Cow<'static, str>>,
     label: Cow<'static, str>,
     owner: Option<Cow<'static, str>>,
     handler: &'static Handler,
-    in_band: bool,
-    self_guarded: bool,
+    guards: Vec<GuardSpec>,
+    in_band: Option<InBand>,
+    origin: Option<OriginGate>,
     detached: Option<DetachedWork>,
     mount: Arc<MountFn>,
+}
+
+/// The in-band units a self-mount's request carries, by their view.
+#[derive(Clone, Copy)]
+pub(crate) struct InBand {
+    /// The view's type, which [`EndpointGuards`](crate::EndpointGuards) names.
+    pub(crate) view: TypeId,
+    /// The view's name, as a boot error says it.
+    pub(crate) name: &'static str,
+}
+
+/// The requests of a self-mount on which the transport checks a browser's
+/// `Origin` before any guard runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginCheck {
+    /// A WebSocket upgrade, which a browser opens without consulting CORS
+    /// (RFC 6455 §10.2).
+    Upgrades,
+    /// Every request: the MCP transport's rule.
+    Every,
+}
+
+/// A self-mount's origin check, as it declared it.
+#[derive(Clone, Copy)]
+pub(crate) struct OriginGate {
+    /// Which requests it checks.
+    pub(crate) on: OriginCheck,
+    /// Files a refusal on the surface's own target.
+    pub(crate) refused: fn(&OriginRefused),
 }
 
 impl HttpEndpointMeta {
@@ -206,8 +244,9 @@ impl HttpEndpointMeta {
             label: label.into(),
             owner: None,
             handler,
-            in_band: false,
-            self_guarded: false,
+            guards: Vec::new(),
+            in_band: None,
+            origin: None,
             detached: None,
             mount: Arc::new(mount),
         }
@@ -246,16 +285,41 @@ impl HttpEndpointMeta {
         self
     }
 
-    /// Declare that this surface binds its own guards at its edge (a gateway's
-    /// `#[use_guards]`), which the transport cannot see inside the closure.
-    pub fn self_guarded(self) -> Self {
-        self.self_guarded_if(true)
+    /// The surface's own guards — a gateway's `#[use_guards]` — which the
+    /// transport runs at its request after the global pool, a guard the pool
+    /// lists running once, at the pool's place.
+    pub fn guarded_by(mut self, guards: Vec<GuardSpec>) -> Self {
+        self.guards = guards;
+        self
     }
 
-    /// [`self_guarded`](Self::self_guarded) driven by a flag, for a macro.
-    pub fn self_guarded_if(mut self, yes: bool) -> Self {
-        self.self_guarded = yes;
+    /// Declare that this surface's request carries in-band units whose view is
+    /// `V` — GraphQL operations, MCP operations — so the
+    /// [`EndpointGuards<V, _>`](crate::EndpointGuards) the app's modules declare
+    /// join the pool at its request.
+    pub fn in_band<V: UnitView>(mut self) -> Self {
+        self.in_band = Some(InBand {
+            view: TypeId::of::<V>(),
+            name: std::any::type_name::<V>(),
+        });
         self
+    }
+
+    /// The surface's own guards, as [`guarded_by`](Self::guarded_by) declared
+    /// them.
+    pub(crate) fn guards(&self) -> &[GuardSpec] {
+        &self.guards
+    }
+
+    /// The in-band units its request carries, as [`in_band`](Self::in_band)
+    /// declared them.
+    pub(crate) fn carries(&self) -> Option<InBand> {
+        self.in_band
+    }
+
+    /// Its origin check, as [`checks_origin`] declared it.
+    pub(crate) fn origin(&self) -> Option<OriginGate> {
+        self.origin
     }
 
     /// Declare the work this surface runs off the connections that ask for it
@@ -294,19 +358,6 @@ impl HttpEndpointMeta {
         self.handler
     }
 
-    /// Whether the transport runs the global guard pool at this surface's
-    /// edge: a [`Gated`](Posture::Gated) surface that does not run it itself.
-    pub fn guarded_at_the_edge(&self) -> bool {
-        self.handler.posture() == Posture::Gated && !self.in_band
-    }
-
-    /// Whether the self-mount's edge access is **implicit**: guarded at the
-    /// edge, declaring no guards of its own, and no global guard pool is
-    /// active. The transport warns on these at boot.
-    pub fn edge_access_is_implicit(&self, global_guards: bool) -> bool {
-        !global_guards && !self.self_guarded && self.guarded_at_the_edge()
-    }
-
     /// Register this surface's entries on `routes`, resolving its
     /// dependencies from `container`.
     pub fn mount(&self, container: &Container, routes: &mut HttpRoutes) {
@@ -314,16 +365,22 @@ impl HttpEndpointMeta {
     }
 }
 
-/// `meta` as a [`Gated`](Posture::Gated) surface that runs the global guard
-/// pool at its own request, beside guards of its own, rather than at the
-/// transport's edge (`/mcp`).
-pub fn guards_in_band(mut meta: HttpEndpointMeta) -> HttpEndpointMeta {
-    meta.in_band = true;
+/// `meta`, its browser `Origin` checked on the requests `on` names before any
+/// guard runs, against the transport's policy (`OriginPolicy`); `refused` files
+/// a refusal on the surface's own target before the transport answers `403`.
+pub fn checks_origin(
+    mut meta: HttpEndpointMeta,
+    on: OriginCheck,
+    refused: fn(&OriginRefused),
+) -> HttpEndpointMeta {
+    meta.origin = Some(OriginGate { on, refused });
     meta
 }
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::Posture;
+
     use super::*;
 
     #[derive(Clone)]
@@ -388,25 +445,30 @@ mod tests {
             meta: nest_rs_core::__private::MetaLevels::default,
         });
 
-    #[test]
-    fn a_gated_edge_is_implicit_only_without_a_global_pool() {
-        let m = HttpEndpointMeta::new(&UPGRADE, "/ws", "ws", |_c, _r| {});
-        assert!(m.guarded_at_the_edge());
-        assert!(m.edge_access_is_implicit(false));
-        assert!(!m.edge_access_is_implicit(true));
-        assert!(
-            !m.self_guarded().edge_access_is_implicit(false),
-            "a surface binding guards of its own is not implicit",
-        );
-    }
+    struct Socket;
+
+    impl UnitView for Socket {}
 
     #[test]
-    fn a_public_or_in_band_edge_is_never_implicit() {
-        let public = HttpEndpointMeta::new(&DOCUMENT, "/api", "openapi", |_c, _r| {});
-        assert!(!public.guarded_at_the_edge());
-        assert!(!public.edge_access_is_implicit(false));
-        let in_band = guards_in_band(HttpEndpointMeta::new(&UPGRADE, "/mcp", "mcp", |_c, _r| {}));
-        assert!(!in_band.guarded_at_the_edge());
-        assert!(!in_band.edge_access_is_implicit(false));
+    fn a_self_mount_declares_its_guards_its_in_band_units_and_its_origin_check() {
+        let bare = HttpEndpointMeta::new(&UPGRADE, "/ws", "ws", |_c, _r| {});
+        assert!(bare.guards().is_empty());
+        assert!(bare.carries().is_none());
+        assert!(bare.origin().is_none());
+
+        let declared = checks_origin(
+            HttpEndpointMeta::new(&UPGRADE, "/mcp", "mcp", |_c, _r| {}).in_band::<Socket>(),
+            OriginCheck::Every,
+            |_| {},
+        );
+        assert_eq!(
+            declared.carries().map(|units| units.view),
+            Some(TypeId::of::<Socket>())
+        );
+        assert_eq!(
+            declared.origin().map(|gate| gate.on),
+            Some(OriginCheck::Every)
+        );
+        assert_eq!(DOCUMENT.posture(), Posture::Public);
     }
 }

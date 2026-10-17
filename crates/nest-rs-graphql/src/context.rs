@@ -12,23 +12,19 @@ use async_graphql::{BatchRequest, Data, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
 use nest_rs_core::__private::serde::Serialize;
 use nest_rs_core::__private::serde::de::DeserializeOwned;
-use nest_rs_core::__private::{
-    HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler, install_pending,
-};
-use nest_rs_core::{Container, Handler, Posture, ReachableProviders, UnitContext};
-use nest_rs_guards::__private::{resolve_global_chain, split_at_covered};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+use nest_rs_core::{Container, Discovery, Handler, Posture, ReachableProviders, UnitContext};
+use nest_rs_guards::__private::global_guards_active;
 use nest_rs_http::__private::poem_bridge::{
     request_from_poem, response_from_poem, response_to_poem,
 };
-use nest_rs_http::__private::{
-    attached_pending, check_request_chain, denial_to_http_response, with_view,
-};
+use nest_rs_http::__private::{EndpointGuardsMeta, with_view};
 use nest_rs_http::{HeaderValue, Request, Response, StatusCode};
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 use poem::{Endpoint, Error, FromRequest, IntoResponse, RequestBody, Result};
 
 use crate::module::GraphqlModule;
+use crate::view::GraphqlView;
 
 /// A per-request forwarder, submitted via `inventory`, attaching values from
 /// the HTTP request (and the container) to the GraphQL request.
@@ -70,36 +66,9 @@ inventory::submit! {
     }
 }
 
-/// A boxed, `Send` future — the return type of an async method in a
-/// dyn-compatible GraphQL trait.
+/// A boxed, `Send` future: what the endpoint holds an execution or a socket's
+/// serving behind, and what a DataLoader batch runs as.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// Per-operation guard the GraphQL endpoint runs at every request,
-/// implemented by `nest_rs_authz::graphql`'s `GraphqlAbilityBridge`.
-///
-/// Bind with `providers = [MyBridge as dyn GraphqlOperationGuard]`. `/graphql`
-/// gates in band, so the request's guards run here: the global guard pool
-/// always runs, and a registered guard adds to it, never replaces it.
-pub trait GraphqlOperationGuard: Send + Sync + 'static {
-    /// Check the request before seeds forward it, keeping what the checks
-    /// attach on it (`nest_rs_http`'s request guard stage). Return
-    /// `Err(Response)` to reject the operation before parsing.
-    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>>;
-
-    /// Wrap `inner` for its duration. It scopes both one HTTP operation and one
-    /// graphql-ws socket, hence a `()` future rather than a `Response`. What
-    /// `before` attached is already ambient there; the default passes through.
-    fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
-        let _ = req;
-        inner
-    }
-
-    /// The guards [`before`](Self::before) runs itself, by type. The global pool
-    /// leaves each of them to this guard, so a guard listed in both runs once.
-    fn covers(&self) -> &[TypeId] {
-        &[]
-    }
-}
 
 /// The site every `/graphql` request runs as before its operations: an
 /// endpoint whose operations each declare their own posture, so an
@@ -123,17 +92,11 @@ pub static ENDPOINT: Handler = declare_handler(HandlerDeclaration {
 type ContextSeed = fn(&Request, &Container, GqlRequest) -> GqlRequest;
 
 /// What both `/graphql` endpoints — POST and graphql-ws — need from the
-/// container, resolved **once** at mount so the two cannot enforce different
-/// postures, nor run different global pipes.
+/// container, resolved **once** at mount so the two cannot run different
+/// global pipes, nor forward different seeds. Their request's guards run in
+/// front of both, in the transport.
 pub(crate) struct OperationBridge {
     pub(crate) container: Container,
-    /// The global pool's guards listed before the first one the bridge covers.
-    head: Vec<ResolvedLayer<dyn Guard>>,
-    /// The registered [`GraphqlOperationGuard`], run where the pool lists the
-    /// first guard it covers, else after the pool.
-    bridge: Option<Arc<dyn GraphqlOperationGuard>>,
-    /// The rest of the pool, minus what the bridge covers.
-    tail: Vec<ResolvedLayer<dyn Guard>>,
     /// The global pipes folded over each operation's variables.
     pipes: Arc<[Arc<dyn GlobalPipe>]>,
     /// The seeds that fire for this app, module-gated once at mount.
@@ -153,28 +116,25 @@ pub(crate) struct ContextEndpoint<E> {
 
 impl OperationBridge {
     pub(crate) fn new(container: Container) -> Self {
-        let bridge = container.get_dyn::<dyn GraphqlOperationGuard>();
-        let pool = resolve_global_chain(&container, "POST /graphql (operation)");
-        match (pool.is_empty(), &bridge) {
-            (false, bridge) => tracing::debug!(
+        let pool = global_guards_active(&container);
+        let endpoint_guards = Discovery::new(&container)
+            .meta::<EndpointGuardsMeta>()
+            .iter()
+            .any(|declared| declared.meta.endpoint() == TypeId::of::<GraphqlView>());
+        if pool || endpoint_guards {
+            tracing::debug!(
                 target: crate::TARGET,
-                mode = "global_guard_pool",
-                bridge = bridge.is_some(),
+                pool,
+                endpoint_guards,
                 "graphql operations gated",
-            ),
-            (true, Some(_)) => tracing::debug!(
-                target: crate::TARGET,
-                mode = "operation_guard",
-                "graphql operations gated",
-            ),
-            (true, None) => tracing::warn!(
+            );
+        } else {
+            tracing::warn!(
                 target: crate::TARGET,
                 mode = "unguarded",
-                "no operation guard registered — graphql operations run unguarded",
-            ),
+                "no guard runs at the /graphql request — graphql operations run unguarded",
+            );
         }
-        let covers = bridge.as_deref().map_or(&[][..], |bridge| bridge.covers());
-        let (head, tail) = split_at_covered(pool, covers);
         // Without `ReachableProviders`, owner-keyed seeds are skipped: fail-closed.
         let reachable = container.get::<ReachableProviders>();
         let active: Vec<&GraphqlContextSeed> = inventory::iter::<GraphqlContextSeed>()
@@ -193,9 +153,6 @@ impl OperationBridge {
         Self {
             connection_seeds,
             container,
-            head,
-            bridge,
-            tail,
             pipes,
             seeds,
         }
@@ -204,34 +161,6 @@ impl OperationBridge {
     /// The global pipes each operation's variables go through.
     pub(crate) fn pipes(&self) -> &Arc<[Arc<dyn GlobalPipe>]> {
         &self.pipes
-    }
-
-    /// Run the request's guards — the pool, the bridge where it covers — on
-    /// `req`, keeping what they attach on it; the refusal's answer otherwise.
-    pub(crate) async fn before(&self, req: &mut Request) -> Result<(), Response> {
-        // The pool's refusal keeps its status: a pooled throttler's `429` stays
-        // a `429`.
-        check_request_chain(&ENDPOINT, &self.head, req)
-            .await
-            .map_err(denied)?;
-        if let Some(bridge) = &self.bridge {
-            bridge.before(req).await?;
-        }
-        check_request_chain(&ENDPOINT, &self.tail, req)
-            .await
-            .map_err(denied)
-    }
-
-    /// `inner`, as the bridge wraps it.
-    pub(crate) fn around<'a>(
-        &'a self,
-        req: &'a Request,
-        inner: BoxFuture<'a, ()>,
-    ) -> BoxFuture<'a, ()> {
-        match &self.bridge {
-            Some(bridge) => bridge.around(req, inner),
-            None => inner,
-        }
     }
 
     fn seed(&self, req: &Request, gql: GqlRequest) -> GqlRequest {
@@ -251,11 +180,6 @@ impl OperationBridge {
             })
             .data
     }
-}
-
-/// A request guard's refusal, as the endpoint answers it.
-fn denied(denial: Denial) -> Response {
-    response_from_poem(denial_to_http_response(denial))
 }
 
 impl<E> ContextEndpoint<E> {
@@ -497,14 +421,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
     async fn call(&self, req: poem::Request) -> Result<poem::Response> {
         let (req, body) = req.split();
         let mut req = request_from_poem(req);
-        if let Err(resp) = self.bridge.before(&mut req).await {
-            return Ok(response_to_poem(resp));
-        }
-        // The rest of the request runs under what its guards attached: the
-        // seeds forward it, the operations read it.
-        install_pending(attached_pending(&req), self.answer(&mut req, body))
-            .await
-            .map(response_to_poem)
+        self.answer(&mut req, body).await.map(response_to_poem)
     }
 }
 
@@ -532,18 +449,17 @@ impl<E: Executor> ContextEndpoint<E> {
             }
         };
         let read_only = is_read_only(&mut batch);
-        // A local slot, since the guard scopes a `()` future.
+        // A local slot, since the executor scope wraps a `()` future.
         let mut answered: Option<Response> = None;
-        let inner: BoxFuture<()> = Box::pin(async {
+        let executed: BoxFuture<()> = Box::pin(async {
             answered = Some(response_from_poem(
                 GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response(),
             ));
         });
-        let guarded = self.bridge.around(req, inner);
         if read_only {
-            without_transaction(guarded).await;
+            without_transaction(executed).await;
         } else {
-            guarded.await;
+            executed.await;
         }
         Ok(answered.unwrap_or_else(|| {
             tracing::error!(

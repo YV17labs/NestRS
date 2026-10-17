@@ -183,7 +183,7 @@ pub mod __private {
 
     pub use crate::gateway::gateway_endpoint;
     pub use crate::guard::{
-        EventChain, EventLayerTable, check_ws_gateway, class_gate, guard_ws_upgrade, ws_event_chain,
+        EventChain, EventLayerTable, check_ws_gateway, class_gate, refused_origin, ws_event_chain,
     };
     pub use crate::namespace::WsNamespaceEntry;
 }

@@ -15,6 +15,7 @@ mod builder;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
 
+// One gate, every edge: its suite needs all four.
 #[cfg(all(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod gate;
 

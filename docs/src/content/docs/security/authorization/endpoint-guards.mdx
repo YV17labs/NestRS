@@ -1,0 +1,327 @@
+---
+title: Endpoint guards
+description: "How the ability reaches GraphQL operations, WebSocket messages and MCP tool calls: EndpointGuards on /graphql and /mcp, a gateway's guards on its upgrade."
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+HTTP handlers are not the only place a request reaches your code.
+GraphQL operations multiplex over a single `POST /graphql`, WebSocket
+messages over a single connection upgrade, MCP tool calls over their own
+JSON-RPC. Each of those edges has one HTTP request in front of the units it
+carries, and that request is where the ability is built: the same
+`AuthnGuard`, then `AuthzGuard`, a controller runs. What they attach is
+ambient for every operation, message or tool call the request carries, so your
+`AuthzAbility` stays the single source of truth across every transport.
+
+On `/graphql` and `/mcp` the guards are declared by a module, with
+[`EndpointGuards`](https://docs.rs/nest-rs-http/latest/nest_rs_http/struct.EndpointGuards.html);
+on a gateway, by the gateway itself, at its upgrade.
+
+GraphQL, WS and MCP each get a one-import `Authz<Transport>Module` in
+`crates/features/src/authz/`, so an app imports the module and lists nothing
+else. **HTTP has no such module**: `AbilityGuard` answers every transport, so
+`AuthzModule` provides it directly.
+
+You do not write them: `nestrs g auth` writes `authz/module.rs` and
+`authz/guard.rs`, and `nestrs g graphql|ws|mcp` writes that transport's module
+alongside the adapter and wires it into the app. The blocks below are what those
+generators produce — read them to understand the wiring, copy them only into a
+workspace that was not scaffolded.
+
+## The modules
+
+| Module | Provides | What runs at the request |
+|--------|----------|--------------------------|
+| `AuthzModule` | `AuthzGuard` (`AbilityGuard<AuthzAbility>`) | The route's own guards, on each HTTP request |
+| `AuthzGraphqlModule` | `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` | Both guards on each `/graphql` request; every operation it carries runs under the ability they attached, the dataloader batches it triggers included |
+| `AuthzWsModule` | nothing of its own: `AuthzModule` and `WsModule` | The gateway's guards, on its upgrade; the ability crosses the connection into each message |
+| `AuthzMcpModule` | `EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>` | Both guards on each `/mcp` request; each tool call runs under the ability they attached |
+
+An app imports the matching module along with its feature module:
+
+```rust title="apps/api/src/module.rs"
+#[module(
+    imports = [
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
+        AuthnModule,
+        AuthzModule,
+        AuthzGraphqlModule,
+        AuthzWsModule,
+        UsersHttpModule,
+        UsersGraphqlModule,
+        UsersWsModule,
+    ],
+)]
+pub struct ApiModule;
+```
+
+## HTTP — the direct case
+
+HTTP is the simplest because guards run on the actual request before
+the handler:
+
+```rust title="crates/features/src/users/http/controller.rs"
+#[controller(path = "/users")]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct UsersController { /* ... */ }
+```
+
+`AbilityGuard` reads the `Claims` an `AuthnGuard` attached, calls
+`AuthzAbility::define(&actor, &mut builder)`, and attaches the `Ability`
+with `cx.attach`. Once the guards pass it is ambient for the rest of the
+request, so `Repo::scoped` sees it in the handler and in a streaming body
+the route returns — on a route a response mask shapes. A route no mask
+shapes, every `#[sse]` stream included, reads nothing scoped: the ability
+is withheld there, so a read fails closed rather than answering what a
+mask would have narrowed.
+
+## `EndpointGuards` — guards a module adds to an endpoint's request
+
+`/graphql` and `/mcp` are endpoints no controller owns: the transport mounts
+them, and the units they carry come from every module that contributes a
+resolver or a tool. So the guards at their request are declared by a module,
+as a provider:
+
+```rust title="crates/features/src/authz/mcp/module.rs (from the demo)"
+use nest_rs::core::module;
+use nest_rs::http::EndpointGuards;
+use nest_rs::mcp::McpView;
+
+use crate::authn::AuthnGuard;
+use crate::authz::{AuthzGuard, AuthzModule};
+
+#[module(
+    imports = [AuthzModule],
+    providers = [EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>],
+)]
+pub struct AuthzMcpModule;
+```
+
+`EndpointGuards<V, (G1, G2, …)>` names the endpoint by the view of the units
+it carries — `GraphqlView` for `/graphql`, `McpView` for `/mcp` — and lists up
+to eight guards, run in the order written. Each checks an HTTP request, so each
+declares `GuardFor<HttpView>`; the boot refuses a list out of phase order
+(authorization before authentication) the way it refuses a route's.
+
+**It joins the app's global guard pool, never replaces it.** The transport runs
+every guard listed in `use_guards_global(...)` at the request, then the
+endpoint's guards — or, where the pool lists one of them, at the place of the
+first one it lists, so a pooled guard reading the principal still runs after
+the authentication it needs. Each guard runs once: an `AuthnGuard` in both the
+pool and the declaration runs once, and so do the same guards declared by two
+feature modules, in import order.
+
+**It is module-gated.** A module the app does not import declares nothing, so a
+linked crate never adds a guard to an app that did not ask for it — and an app
+with no global pool at all, such as an assistant serving `/mcp` alone, is
+authenticated by the feature module it imports.
+
+**The browser origin is checked first.** A foreign `Origin` on `/mcp`, or on a
+graphql-ws upgrade, is refused `403` before any guard runs, so a refused origin
+never pays for authentication.
+
+## GraphQL — one request, many operations
+
+A `POST /graphql` is one HTTP request that multiplexes many operations. What
+you write is the same as on a controller in spirit: import `AuthzGraphqlModule`,
+bind `AuthzGuard` on the resolver, and declare each operation's posture:
+
+```rust title="crates/features/src/users/graphql/resolver.rs"
+#[resolver]
+#[use_guards(AuthzGuard)]
+pub struct UsersResolver { /* ... */ }
+
+#[operations]
+impl UsersResolver { /* #[authorize(Action, Entity)] or #[public] per op */ }
+```
+
+`AuthzGuard` is the app's `AbilityGuard<AuthzAbility>` alias, and it is what
+`#[use_guards]` binds: its `check` refuses an operation no ability reaches,
+and it declares `GuardFor<GraphqlView>`, the bound `#[resolver]` emits. An
+`AuthnGuard` does **not** belong in that list — it checks HTTP requests only,
+so on a resolver it would run nothing; the module's endpoint guards already
+authenticated the request.
+
+The module is app code, like the rest of `authz/`: **`nestrs g graphql
+<feature>` writes it** into `crates/features/src/authz/graphql/` the first time
+a resource gets a GraphQL adapter, and imports it from that adapter's
+`module.rs`.
+[`demo/crates/features/src/authz/graphql/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/authz/graphql)
+is the same thing under version control:
+
+```rust title="crates/features/src/authz/graphql/module.rs (from the demo)"
+use nest_rs::core::module;
+use nest_rs::graphql::{GraphqlView, forward_principal};
+use nest_rs::http::EndpointGuards;
+
+use crate::Claims;
+use crate::authn::AuthnGuard;
+use crate::authz::{AuthzGuard, AuthzModule};
+
+#[module(
+    imports = [AuthzModule],
+    providers = [EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>],
+)]
+pub struct AuthzGraphqlModule;
+
+forward_principal!(Claims);
+```
+
+`/graphql` is **in band** (`Posture::InBand`) — one endpoint, posture declared
+per operation — so a caller with no credential is admitted at the request and
+takes the ability guard's *visitor* branch, while a bearer that does not verify
+is refused with `401 invalid_token`. The line is held one step later, by the
+operation's own posture: `#[authorize(...)]` refuses an ability with no
+principal behind it (`unauthenticated`), whatever `define_visitor` granted, and
+only `#[public]` operations read those grants.
+
+`forward_principal!(Claims)` copies the verified principal into every
+operation's GraphQL context. It binds nothing and gates on nothing, because it
+cannot fire without the guards that feed it: it copies `Claims` only when
+`AuthnGuard` attached them, and that guard runs only through the module that
+declares it. Omit the module and there is nothing to copy — the schema is
+anonymous because it was never authenticated, not because a guard was left out
+of a list. With no guard at the request at all, the boot says so once:
+`no guard runs at the /graphql request — graphql operations run unguarded`.
+
+A dataloader batch carries what its request carries, so relations that fan out
+across batches run under the same ability, on the pool — scoped without the
+resolver threading anything, and with nothing more to register.
+
+## WebSockets — per-message scope
+
+A WS connection is one HTTP upgrade; messages arrive over a long-lived socket
+and dispatch into separate handlers. The upgrade is the gateway's own request,
+so the gateway declares its guards itself, and `AuthzWsModule` only brings
+them:
+
+```rust title="crates/features/src/authz/ws/module.rs (from the demo)"
+#[module(imports = [AuthzModule, WsModule])]
+pub struct AuthzWsModule;
+```
+
+The ability the upgrade's guards attach crosses the connection into every
+message and connection hook, and the gateway runs each as a unit of work of its
+own — a transaction opened on its first query, committed unless the reply is
+an error frame — with no shared state across messages.
+
+The gateway struct binds the real guards; because the upgrade is an HTTP `GET`,
+they run once on it, after the browser origin is checked, and the access graph
+validates them like any HTTP binding (omit `AuthzWsModule` ⇒ the guards are
+unreachable ⇒ boot fails):
+
+```rust title="crates/features/src/chat/ws/gateway.rs"
+#[gateway(path = "/ws")]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct ChatGateway { /* ... */ }
+
+#[messages]
+impl ChatGateway {
+    #[subscribe_message("users.list")]
+    #[authorize(Read, users::Entity)]
+    async fn list(&self) -> Result<Vec<User>, ServiceError> {
+        Ok(self.svc.list().await?.iter().map(User::from).collect())
+    }
+}
+```
+
+`AuthnGuard` + `AuthzGuard` run at the upgrade — those are real HTTP
+guards on a real `GET`, so they declare `GuardFor<HttpView>`, not
+`GuardFor<WsView>`; `#[gateway]` emits that bound, and `GuardFor<WsView>` is
+what a guard bound beside a `#[subscribe_message]` owes instead.
+
+**Above that, a message declares its posture like an operation on any
+other transport**, and it is mandatory: `#[authorize(Action, Entity)]` or
+`#[public]`, or it does not compile. `#[authorize]` emits the class gate
+(`nest_rs::authz::class_gate`, every edge's) before the payload is deserialized and
+the reply mask afterwards — so a handler answering with entity rows
+writes **no masking call**. It fails closed when no ambient ability is
+present, which is exactly the state of a gateway whose app imported
+`AuthzModule` instead of `AuthzWsModule`.
+
+The mask acts on the serialized reply, so a withheld column is absent
+from the frame rather than an error — HTTP's behaviour, not GraphQL's,
+because an envelope promises no schema. See
+[WebSockets / Messages](/websockets/messages/) for the full contract.
+
+An optional per-message `#[use_guards(...)]` still adds event-level
+checks; such a guard runs `Guard::check` and must declare
+`GuardFor<WsView>` — see [WebSockets / Guards](/websockets/guards/).
+
+## MCP — gated unless you open it
+
+`AuthzMcpModule` declares `EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>`:
+on each MCP request the transport runs the same authenticate-then-authorize
+step controllers use, and what it attached — the caller's `Ability` — is
+ambient for the tool call, carried across rmcp's own task. A denial is returned
+**as raised**, so a `401`, a `403` and a throttler's `429` + `Retry-After` all
+reach the client intact.
+
+Each operation is a unit of work of its own, opened through the bound
+`dyn UnitOfWork`: it commits when the operation answers `Ok` without a tool
+error in band (`isError: true`), and rolls back otherwise.
+
+`/mcp` is **gated** (`Posture::Gated`): no posture declared per request, so a
+pooled `AuthnGuard` refuses an anonymous call. **With no guard at its request —
+neither pool nor endpoint guards — it denies every request**, said once at boot
+on `nest_rs::layers` (`a gated endpoint runs no guard at its request; it denies
+every request`) and once per refusal, so a missing wiring tells itself apart
+from a refused caller. A global `ThrottlerGuard` alone is enough to open it to
+whoever the throttler admits.
+
+An endpoint meant for anyone is opened in code, where a reviewer sees it:
+
+```rust
+McpModule::for_root(McpOptions {
+    posture: Posture::Public,
+    ..Default::default()
+})
+```
+
+A public `/mcp` runs no guard at its request, the global pool's included. A
+module declaring `EndpointGuards<McpView, _>` beside that opening fails the
+boot, naming the declaration — an opening never drops guards silently.
+
+What the endpoint runs is `check_http` — it holds a request, not an operation.
+A pooled guard's `check` runs in the **per-operation chain**, which folds the
+pool too, so a global guard overriding `check` gates every tool call even when
+the endpoint's guards already authenticated the caller who sent it.
+
+## Public handlers — opt out per transport
+
+A handler is "public" by **not** binding the transport's authz
+module's guard. The whole module import then becomes optional — the
+app lists `AuthzModule` only if other handlers need it.
+
+```rust title="crates/features/src/users/http/controller.rs"
+#[get("/health")]
+#[public]
+async fn health(&self) -> &'static str { "ok" }
+```
+
+`#[public]` makes `AuthnGuard` non-rejecting (anonymous requests pass
+through with no claims). The `AbilityGuard` then builds an empty
+`Ability` for the visitor; the row-level filter returns nothing
+unless `AbilityFactory` granted the visitor branch explicitly. See
+[Authorization](/security/authorization/) for the visitor-rule
+pattern.
+
+<Aside type="note">
+Cross-transport rule: **same `AuthzAbility` everywhere**. Each edge builds the
+ambient ability at its own request, but the factory that builds it stays the
+single source of truth. Splitting policy across transports is the drift the
+framework prevents — keep all rules in `crates/features/src/authz/ability.rs`.
+</Aside>
+
+## Going further
+
+- [Authorization](/security/authorization/) — the `AbilityFactory`
+  every edge reads.
+- [Row-level filtering](/security/authorization/row-level-filtering/)
+  — what runs inside `with_ability(...)` once the guards attached it.
+- [Response masking](/security/authorization/response-masking/) —
+  the HTTP-side shaper that wraps each request.

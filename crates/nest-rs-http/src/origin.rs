@@ -19,7 +19,8 @@ use nest_rs_core::Container;
 use crate::HttpConfig;
 use crate::client_ip::forwarded_param;
 use crate::cors::holds_wildcard;
-use crate::error::OriginRefused;
+use crate::endpoint::{BoxEndpoint, Endpoint, OriginCheck, OriginGate};
+use crate::error::{OriginRefused, ResponseError};
 
 /// The de-facto forwarding headers for the scheme and the host, which the
 /// `http` crate does not name.
@@ -183,6 +184,48 @@ fn forwarded(headers: &HeaderMap) -> (Option<&str>, Option<&str>) {
         named("proto", X_FORWARDED_PROTO),
         named("host", X_FORWARDED_HOST),
     )
+}
+
+/// An entry behind its surface's origin check, run before any guard: a refused
+/// origin never pays for authentication.
+pub(crate) struct OriginChecked {
+    policy: OriginPolicy,
+    gate: OriginGate,
+    inner: BoxEndpoint,
+}
+
+impl OriginChecked {
+    /// `inner`, the requests `gate` names checked against `policy`.
+    pub(crate) fn new(policy: OriginPolicy, gate: OriginGate, inner: BoxEndpoint) -> Self {
+        Self {
+            policy,
+            gate,
+            inner,
+        }
+    }
+}
+
+impl Endpoint for OriginChecked {
+    async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
+        let checked = match self.gate.on {
+            OriginCheck::Every => true,
+            OriginCheck::Upgrades => upgrades(&req),
+        };
+        if checked && let Err(refused) = self.policy.allows(&req) {
+            (self.gate.refused)(&refused);
+            return Ok(refused.as_response());
+        }
+        self.inner.call(req).await
+    }
+}
+
+/// Whether `req` asks to upgrade to a WebSocket: `Upgrade` decides, never
+/// `Connection`, a hop-by-hop header a proxy may rewrite.
+fn upgrades(req: &crate::Request) -> bool {
+    req.headers()
+        .get(header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
 }
 
 /// What [`OriginPolicy::allows`] reads off a request: its headers, the

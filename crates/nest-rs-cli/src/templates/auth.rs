@@ -307,36 +307,27 @@ use crate::authz::AuthzAbility;
 pub type AuthzGuard = AbilityGuard<AuthzAbility>;
 "#;
 
-// authz/graphql/ — the per-operation bridge (`nestrs g graphql`); without it a
-// GraphQL adapter installs no ability.
+// authz/graphql/ — the guards at `/graphql`'s request (`nestrs g graphql`);
+// without them a GraphQL adapter attaches no ability.
 
-pub(crate) const AUTHZ_GRAPHQL_MOD: &str = r#"mod bridge;
-mod module;
+pub(crate) const AUTHZ_GRAPHQL_MOD: &str = r#"mod module;
 
 pub use module::AuthzGraphqlModule;
 "#;
 
-/// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
-/// `AuthzGuard`) on the GraphQL request, then scopes the operation to the
-/// ability it produced — so one policy answers on both transports.
-pub(crate) const AUTHZ_GRAPHQL_BRIDGE: &str = r#"use nest_rs::authz::graphql::GraphqlAbilityBridge;
-
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
-
-pub type AuthzGraphqlBridge = GraphqlAbilityBridge<AuthnGuard, AuthzGuard>;
-"#;
-
+/// The controllers' own chain (`AuthnGuard`, then `AuthzGuard`) at the GraphQL
+/// request, joining the app's global pool: the ability it attaches is ambient
+/// for every operation — so one policy answers on both transports.
 pub(crate) const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::graphql::{GraphqlOperationGuard, forward_principal};
+use nest_rs::graphql::{GraphqlView, forward_principal};
+use nest_rs::http::EndpointGuards;
 
-use super::bridge::AuthzGraphqlBridge;
-use crate::authz::AuthzModule;
-use crate::authn::Claims;
+use crate::authn::{AuthnGuard, Claims};
+use crate::authz::{AuthzGuard, AuthzModule};
 
 #[module(
     imports = [AuthzModule],
-    providers = [AuthzGraphqlBridge as dyn GraphqlOperationGuard],
+    providers = [EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>],
 )]
 pub struct AuthzGraphqlModule;
 
@@ -364,37 +355,28 @@ use crate::authz::AuthzModule;
 pub struct AuthzWsModule;
 "#;
 
-// authz/mcp/ — the per-operation bridge (`nestrs g mcp`); without it `/mcp` is
-// deny-all.
+// authz/mcp/ — the guards at `/mcp`'s request (`nestrs g mcp`); without them, or
+// a global pool, `/mcp` is deny-all.
 
-pub(crate) const AUTHZ_MCP_MOD: &str = r#"mod bridge;
-mod module;
+pub(crate) const AUTHZ_MCP_MOD: &str = r#"mod module;
 
 pub use module::AuthzMcpModule;
 "#;
 
-/// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
-/// `AuthzGuard`) on the MCP request, then installs the ambient `Ability` a tool
-/// returns masked rows through — so one policy answers on every transport.
-pub(crate) const AUTHZ_MCP_BRIDGE: &str = r#"use nest_rs::authz::mcp::McpAbilityBridge;
+/// The controllers' own chain (`AuthnGuard`, then `AuthzGuard`) at the MCP
+/// request, joining the app's global pool: the ambient `Ability` it attaches is
+/// what a tool returns masked rows through — so one policy answers on every
+/// transport.
+pub(crate) const AUTHZ_MCP_MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::http::EndpointGuards;
+use nest_rs::mcp::McpView;
 
 use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
-
-pub type AuthzMcpBridge = McpAbilityBridge<AuthnGuard, AuthzGuard>;
-"#;
-
-pub(crate) const AUTHZ_MCP_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::mcp::McpOperationGuard;
-
-use super::bridge::AuthzMcpBridge;
-use crate::authz::AuthzModule;
+use crate::authz::{AuthzGuard, AuthzModule};
 
 #[module(
     imports = [AuthzModule],
-    providers = [
-        AuthzMcpBridge as dyn McpOperationGuard,
-    ],
+    providers = [EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>],
 )]
 pub struct AuthzMcpModule;
 "#;

@@ -21,9 +21,7 @@ use nest_rs_guards::__private::{
     run_stage, structured_reason,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
-use nest_rs_http::__private::{GuardedEndpoint, poem_bridge, refused_route};
-use poem::endpoint::BoxEndpoint;
-use poem::{EndpointExt, Response};
+use nest_rs_http::__private::OriginRefused;
 
 use crate::envelope::WsError;
 use crate::server::WsClient;
@@ -212,38 +210,15 @@ pub fn ws_event_chain(
     }
 }
 
-/// Run a gateway's upgrade behind its own `#[use_guards]`, as the unit the
-/// upgrade's `handler` declares, the first listed first. A guard the app-wide
-/// pool also holds is left to the pool, which the transport runs at the edge.
-pub fn guard_ws_upgrade(
-    container: &Container,
-    endpoint: BoxEndpoint<'static, Response>,
-    specs: &[GuardSpec],
-    path: &str,
-    handler: &'static Handler,
-) -> BoxEndpoint<'static, Response> {
-    let site = upgrade_site(path);
-    let host = match resolve_scoped(container, specs, LayerSite::Host, &site) {
-        Ok(host) => host,
-        Err(unresolved) => {
-            refuse_unresolved(container, unresolved);
-            return poem::endpoint::make_sync(|_| refused_route()).boxed();
-        }
-    };
-    let global = dedup_bucket(resolve_global_guards(container));
-    let chain: Vec<_> = compose_chain::<dyn Guard>(global, host, Vec::new(), &[], &site)
-        .into_iter()
-        .filter(|entry| entry.source != LayerSite::Global)
-        .collect();
-    if chain.is_empty() {
-        return endpoint;
-    }
-    poem_bridge::to_poem(GuardedEndpoint::new(
-        handler,
-        chain,
-        nest_rs_http::BoxEndpoint::new(poem_bridge::from_poem(endpoint)),
-    ))
-    .boxed()
+/// A gateway's upgrade from a browser origin the transport's policy refuses,
+/// filed on this edge's target.
+pub fn refused_origin(refused: &OriginRefused) {
+    tracing::warn!(
+        target: crate::TARGET,
+        origin = refused.origin(),
+        expected = refused.expected(),
+        "browser origin refused",
+    );
 }
 
 #[cfg(test)]

@@ -6,9 +6,7 @@ use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Role};
 // No `rmcp`, `tool`, `prompt` or `ServerHandler` import: `#[tools]` re-emits
 // them inside its generated module.
 use nest_rs_mcp::rmcp::serde_json::json;
-use nest_rs_mcp::{
-    AllowAllMcpGuard, McpError, McpOperationGuard, Parameters, Valid, hosts_on, input, mcp, tools,
-};
+use nest_rs_mcp::{McpError, Parameters, Valid, hosts_on, input, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{
     call_method, call_tool, call_tool_with, initialize, open_session, result,
@@ -128,7 +126,7 @@ impl WitnessTool {
     }
 }
 
-#[module(providers = [WitnessTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [WitnessTool])]
 struct WitnessModule;
 
 async fn boot() -> TestApp {

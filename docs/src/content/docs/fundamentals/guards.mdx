@@ -154,7 +154,7 @@ reports every route that binds no guard and is not marked `#[public]` in a
 single `warn` naming them ([below](#declare-on-the-provider)). Declaring
 the posture — a guard, or `#[public]` — is what makes it intentional.
 
-The HTTP adapter imports the auth bridges transitively — same pattern as
+The HTTP adapter imports the authz module transitively — same pattern as
 `UsersHttpModule` in the repo:
 
 ```rust title="crates/features/src/posts/http/module.rs (from the demo, abridged)"
@@ -524,20 +524,21 @@ its own seam:
 | `check` | once per `#[tool]` / `#[prompt]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
 
 `use_guards_global([...])` reaches every transport at every entry it
-implements. `/graphql` and `/mcp` run the pool **in band**: `check_http` once
-on their request, `check` once per operation it carries — so a global
-`ThrottlerGuard` rate-limits the `/mcp` request and each tool call, and a
-global guard overriding only `check` still refuses one.
+implements. `/graphql` and `/mcp` run the pool at their request and in each
+operation: `check_http` once on the request, `check` once per operation it
+carries — so a global `ThrottlerGuard` rate-limits the `/mcp` request and each
+tool call, and a global guard overriding only `check` still refuses one.
 
-The three multiplexed transports need one thing on top: a **bridge** above the
-resolver, the gateway and the tool, because a unit below the request does not
-see the request. The bridge runs the HTTP chain once on it, and what that
-chain attached — the caller's `Ability` — is ambient for every operation the
-request carries; below it you bind ordinary guards as usual. On `/graphql` and `/mcp` the bridge joins the global pool
-rather than replacing it: every pooled guard still runs, and one the bridge
-runs itself runs once. That wiring — `AuthzGraphqlModule`, `AuthzWsModule`,
-`AuthzMcpModule`, `forward_principal!`, and what each one gates — lives on
-[Authorization on GraphQL, WS & MCP](/security/authorization/per-transport-bridges/),
+The three multiplexed transports need one thing on top: the guards that build
+the caller's `Ability` at the request, because a unit below the request does
+not see the request. A gateway binds them on its struct, for its upgrade; on
+`/graphql` and `/mcp`, which no controller owns, a module declares them —
+`EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` — and the transport
+runs them beside the global pool, each guard once. What they attach is ambient
+for every operation the request carries; below it you bind ordinary guards as
+usual. That wiring — `AuthzGraphqlModule`, `AuthzWsModule`, `AuthzMcpModule`,
+`forward_principal!`, and what each one gates — lives on
+[Endpoint guards](/security/authorization/endpoint-guards/),
 with the connection-vs-message split on
 [WebSocket guards](/websockets/guards/).
 
@@ -559,8 +560,8 @@ Declare it next to the entry it covers — `impl GuardFor<GraphqlView> for
 RequireAdmin {}` — and the binding compiles. Bind a guard that lacks it and it
 does not, with a diagnostic naming the view and the way out. `AuthnGuard` is
 the guard it catches most often: it checks HTTP requests only, which is why a
-resolver binds `AuthzGuard` alone and leaves authentication to the
-per-operation bridge. Bound on one anyway:
+resolver binds `AuthzGuard` alone and leaves authentication to the guards
+at the `/graphql` request. Bound on one anyway:
 
 ```text frame="terminal"
 $ cargo check -p features
@@ -594,8 +595,8 @@ A guard on the `#[gateway]` **struct** declares `GuardFor<HttpView>`, not
 `GuardFor<WsView>` — the upgrade is an HTTP `GET`, and `WsView` belongs to the
 per-message scope.
 
-See [Security / per-transport bridges](/security/authorization/per-transport-bridges/)
-for the full HTTP / GraphQL / WS wiring, and
+See [Endpoint guards](/security/authorization/endpoint-guards/)
+for the full HTTP / GraphQL / WS / MCP wiring, and
 [WebSockets / Guards](/websockets/guards/) for the two WS scopes
 (connection vs message).
 

@@ -100,9 +100,10 @@ cooperate:
 - **HTTP** — the `Authorize` shaper installs `with_ability(ability,
   handler)` after the `AbilityGuard` attached the ability to the
   request. The handler sees it, and so does a streaming body it returns.
-- **GraphQL** — `GraphqlAbilityBridge::around` installs it for the
-  duration of the operation. Resolvers see it, and so do the dataloader
-  batches they trigger.
+- **GraphQL and MCP** — the [endpoint guards](/security/authorization/endpoint-guards/)
+  an app's modules declare attach it at the request, and every operation
+  the request carries runs under it. Resolvers see it, and so do the
+  dataloader batches they trigger; a tool sees it across rmcp's own task.
 - **WebSockets** — the gateway's upgrade guards attach it, and the
   connection carries it into every message and connection hook. The
   message handler sees it.

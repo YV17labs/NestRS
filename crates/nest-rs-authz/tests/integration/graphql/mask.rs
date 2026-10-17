@@ -5,9 +5,10 @@
 //! path (a required field the mask strips ⇒ GraphQL error, never unmasked
 //! data), and the `#[public]` opt-out.
 
+use nest_rs_graphql::GraphqlView;
+use nest_rs_http::EndpointGuards;
 use std::sync::Arc;
 
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{
     AbilityBuilder, Action, MaskReplyError, Read, WireModelDefaults, masked_reply, with_ability,
 };
@@ -16,7 +17,7 @@ use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamE
 use nest_rs_graphql::async_graphql::{
     Error as GqlError, Executor, Request as GqlRequest, Result as GqlResult, SimpleObject,
 };
-use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
@@ -79,7 +80,8 @@ struct StrictWidgetDto {
     name: String,
 }
 
-/// No-op stand-in for the bridge's authentication slot.
+/// No-op stand-in for the authentication guard ahead of the ability guard at
+/// the request.
 #[injectable]
 #[derive(Default)]
 struct PassGuard;
@@ -234,14 +236,14 @@ impl Default for WidgetFeed {
     }
 }
 
-type TestOpGuard = GraphqlAbilityBridge<PassGuard, AbilityInjector>;
+type TestOpGuard = EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>;
 
 #[module(
     imports = [GraphqlModule::for_root(None)],
     providers = [
         PassGuard,
         AbilityInjector,
-        TestOpGuard as dyn GraphqlOperationGuard,
+        TestOpGuard,
         WidgetFeed,
         MaskResolver,
     ],
@@ -405,11 +407,7 @@ fn ability_for(role: &str) -> Arc<nest_rs_authz::Ability> {
     Arc::new(builder.build().expect("valid test ability"))
 }
 
-/// One subscribe as `role`.
-///
-/// The ability rides in the context data, where the bridge installs it, so one
-/// test can be two callers at once.
-/// The subscription, its GraphQL context seeded with `role`'s ability as
+/// One subscribe as `role`: the subscription, its GraphQL context seeded with `role`'s ability as
 /// `/graphql`'s seed forwards it; the subscriber runs it under the same ability,
 /// ambient, as the request's ability guard leaves it.
 fn subscribe(app: &TestApp, role: &str) -> GqlRequest {
@@ -564,7 +562,7 @@ impl PostFeedResolver {
     providers = [
         PassGuard,
         AbilityInjector,
-        TestOpGuard as dyn GraphqlOperationGuard,
+        TestOpGuard,
         PostFeed,
         PostFeedResolver,
     ],
@@ -854,7 +852,7 @@ impl EntityMaskResolver {
     providers = [
         PassGuard,
         AbilityInjector,
-        TestOpGuard as dyn GraphqlOperationGuard,
+        TestOpGuard,
         EntityMaskResolver,
     ],
 )]

@@ -86,8 +86,8 @@ pub type AuthnStrategy = JwtStrategy<Claims>;
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 ```
 
-The same shape carries `AbilityGuard<F: AbilityFactory>` and the GraphQL and MCP
-bridges. This is the mode NestRS uses most.
+The same shape carries `AbilityGuard<F: AbilityFactory>` and
+`EndpointGuards<V, G>`. This is the mode NestRS uses most.
 
 **By configuration.** The import only **opens the gate** — for a social
 provider, the provider's own module beside `SocialModule`; configuration decides

@@ -2,12 +2,13 @@
 //! operation: a row the ability does not reach is not reachable by key either.
 
 use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, injectable, module};
+use nest_rs_graphql::GraphqlView;
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, async_trait, guard};
+use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::{
     Access, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError,
 };
@@ -117,7 +118,7 @@ impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
 /// The subgraph's operation guard, aliased because a `providers = [...]` entry
 /// is one type path — a generic's comma would read as the next provider.
-type Bridge = GraphqlAbilityBridge<AlwaysAuthenticated, PostsAbilityGuard>;
+type Bridge = EndpointGuards<GraphqlView, (AlwaysAuthenticated, PostsAbilityGuard)>;
 
 #[resolver]
 struct PostsResolver;
@@ -159,7 +160,7 @@ impl PostsResolver {
         PublishedOnly,
         PostsAbilityGuard,
         AlwaysAuthenticated,
-        Bridge as dyn GraphqlOperationGuard,
+        Bridge,
         PostsResolver,
     ],
 )]

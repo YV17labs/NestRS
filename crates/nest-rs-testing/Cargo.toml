@@ -113,9 +113,6 @@ nest-rs-testing = { path = ".", features = ["orm", "tls", "ws"] }
 # global pool × graphql × mcp), so it lives here rather than in any single
 # surface crate.
 nest-rs-mcp = { path = "../nest-rs-mcp" }
-# `transport_parity` registers the two authz bridges, whose `covers()` is what
-# keeps a guard listed both in the pool and in a bridge running once.
-nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql", "mcp"] }
 # `destructured_args` and `transport_parity` name `nest_rs_graphql` directly.
 # Without this the suite compiles only under `--workspace`, where feature
 # unification lends it `nest-rs-testing/graphql` from a crate two directories

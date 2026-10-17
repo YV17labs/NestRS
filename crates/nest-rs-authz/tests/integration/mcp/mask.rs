@@ -7,12 +7,13 @@
 //! escape the way GraphQL does: with no selection set to acquit it, a mask that
 //! strips a *required* field fails the operation rather than serving the row.
 
-use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, input, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::EndpointGuards;
 use nest_rs_http::async_trait;
-use nest_rs_mcp::{Json, McpError, McpOperationGuard, mcp, tools};
+use nest_rs_mcp::McpView;
+use nest_rs_mcp::{Json, McpError, mcp, tools};
 
 use super::{PassGuard, widget};
 use crate::post;
@@ -172,12 +173,10 @@ impl MaskTool {
     }
 }
 
-type Bridge = McpAbilityBridge<PassGuard, AbilityInjector>;
-
 #[module(providers = [
     PassGuard,
     AbilityInjector,
-    Bridge as dyn McpOperationGuard,
+    EndpointGuards<McpView, (PassGuard, AbilityInjector)>,
     MaskTool,
 ])]
 struct MaskModule;

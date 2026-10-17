@@ -15,9 +15,9 @@ use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
-    AllowAllMcpGuard, CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule,
-    McpOperationGuard, McpOptions, McpSetup, ServerHandler, hosts_on, mcp, prompt, prompt_handler,
-    prompt_router, tool, tool_handler, tool_router,
+    CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule, McpOptions,
+    McpSetup, ServerHandler, hosts_on, mcp, prompt, prompt_handler, prompt_router, tool,
+    tool_handler, tool_router,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -113,7 +113,7 @@ impl ServerHandler for BetaTool {
     }
 }
 
-#[module(providers = [AlphaTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [AlphaTool])]
 struct AlphaMcpModule;
 
 #[module(providers = [BetaTool])]
@@ -372,7 +372,7 @@ impl ServerHandler for OwnedTool {
     }
 }
 
-#[module(providers = [OwnedTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [OwnedTool])]
 struct OwnedMcpModule;
 
 #[module(imports = [OwnedMcpModule, app_identity()])]
@@ -775,7 +775,7 @@ impl RoutedTool {
 #[tool_handler]
 impl ServerHandler for RoutedTool {}
 
-#[module(providers = [ManualTool, RoutedTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [ManualTool, RoutedTool])]
 struct MixedHostModule;
 
 /// A host with no `tool_router()` gives `check_duplicate_tools` no names, so a
@@ -894,7 +894,8 @@ impl nest_rs_guards::Guard for AddressWitness {
 
 impl nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AddressWitness {}
 
-#[module(imports = [TwoPathApp], providers = [AddressWitness])]
+/// The two paths, gated: their requests run the pool.
+#[module(providers = [AlphaTool, BetaTool, OtherTool, AddressWitness])]
 struct WitnessedTwoPathApp;
 
 /// A guard keying on the site's address tells two endpoints apart.
@@ -1072,7 +1073,7 @@ impl ServerHandler for ModernVersionsTool {
     }
 }
 
-#[module(providers = [LegacyVersionsTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [LegacyVersionsTool])]
 struct LegacyVersionsModule;
 
 #[module(providers = [ModernVersionsTool])]
@@ -1266,7 +1267,7 @@ impl ServerHandler for UnpagedResourcesTool {
     }
 }
 
-#[module(providers = [PagedResourcesTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [PagedResourcesTool])]
 struct PagedResourcesModule;
 
 #[module(providers = [UnpagedResourcesTool])]
@@ -1330,7 +1331,7 @@ async fn a_dropped_cursor_names_the_host_whose_listing_is_truncated() {
     );
 }
 
-#[module(providers = [PagedResourcesTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [PagedResourcesTool])]
 struct LonePagedModule;
 
 #[tokio::test]

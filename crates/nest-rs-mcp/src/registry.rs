@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{Container, ContainerBuilder, Discovery, Handler, Posture};
-use nest_rs_http::__private::guards_in_band;
+use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
 use nest_rs_http::{
     DetachedWork, HttpBootCheck, HttpEndpointMeta, HttpRoutes, normalize_mount_path,
 };
@@ -25,6 +25,7 @@ use crate::endpoint::{McpMount, endpoint};
 use crate::host::McpHost;
 use crate::identity::{McpIdentity, ResolvedIdentity};
 use crate::module::McpModule;
+use crate::view::McpView;
 
 /// The `HttpEndpointMeta` label every MCP mount carries.
 pub(crate) const MCP_LABEL: &str = "mcp";
@@ -61,7 +62,7 @@ const fn mount_address(path: &'static str) -> &'static str {
 }
 
 /// The site of the endpoint at [`DEFAULT_PATH`], and of one an app mounts by
-/// hand through [`endpoint`](crate::endpoint()).
+/// hand through [`endpoint`].
 pub static ENDPOINT: Handler = declare_endpoint(DEFAULT_PATH);
 
 /// Build one host instance from the live container, per MCP session.
@@ -170,12 +171,15 @@ pub fn register_host<P: 'static>(
     let detached = DetachedWork::new();
     let mount_work = detached.clone();
     builder
-        .attach_meta::<P, HttpEndpointMeta>(guards_in_band(
+        .attach_meta::<P, HttpEndpointMeta>(checks_origin(
             HttpEndpointMeta::new(site, path, MCP_LABEL, move |container, routes| {
-                mount(container, routes, &mount_path, site, &mount_work);
+                mount(container, routes, &mount_path, &mount_work);
             })
+            .in_band::<McpView>()
             .runs_detached(detached)
             .owned_by(host),
+            OriginCheck::Every,
+            refused_origin,
         ))
         .attach_meta::<P, HttpBootCheck>(HttpBootCheck::new(move |container| {
             let path = check_path.as_str();
@@ -188,6 +192,17 @@ pub fn register_host<P: 'static>(
             warn_undeclared_tools(path, &hosts);
             check_protocol_versions(path, &hosts)
         }))
+}
+
+/// An MCP request from a browser origin the transport's policy refuses, filed on
+/// this edge's target.
+fn refused_origin(refused: &OriginRefused) {
+    tracing::warn!(
+        target: crate::TARGET,
+        origin = refused.origin(),
+        expected = refused.expected(),
+        "browser origin refused",
+    );
 }
 
 /// The identity the endpoint at `path` reports: the declaring host's
@@ -272,13 +287,7 @@ fn declared_names(meta: &McpHostMeta) -> impl Iterator<Item = Cow<'static, str>>
     meta.declared_tools().into_iter().map(|tool| tool.name)
 }
 
-fn mount(
-    container: &Container,
-    routes: &mut HttpRoutes,
-    path: &str,
-    site: &'static Handler,
-    detached: &DetachedWork,
-) {
+fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &DetachedWork) {
     let hosts = hosts_on(container, path);
 
     // Built once: rmcp's `#[tool_handler]` rebuilds the whole `ToolRouter` on every `get_tool`.
@@ -309,9 +318,7 @@ fn mount(
         .get::<crate::McpConfig>()
         .unwrap_or_default()
         .warn_when_operations_outlast_the_window(window, path);
-    let mount = McpMount::from_container(container)
-        .stopped_with(detached.clone())
-        .running_as(site);
+    let mount = McpMount::from_container(container).stopped_with(detached.clone());
     let tools = Arc::new(tools);
     let shared_path: Arc<str> = Arc::from(path);
     let container = container.clone();

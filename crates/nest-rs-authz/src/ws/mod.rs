@@ -69,9 +69,8 @@
 //! # }
 //! ```
 //!
-//! There is no `WsAbilityBridge`: a gateway is `Gated`, so the HTTP guards run
-//! on the upgrade, and the ability they attach crosses the connection into
-//! each message.
+//! A gateway is `Gated`, so the HTTP guards run on the upgrade, and the
+//! ability they attach crosses the connection into each message.
 
 mod mask;
 

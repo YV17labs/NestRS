@@ -1,19 +1,18 @@
 ---
 title: MCP authorization
-description: The operation guard every MCP capability is gated by, the mandatory posture, and what a deny-all endpoint looks like.
+description: The guards every MCP request runs, the mandatory posture per operation, and what a deny-all endpoint looks like.
 sidebar:
   order: 2
 ---
 
-The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To
-authenticate instead — bearer JWT, ability, row-level filtering — import
-`AuthzMcpModule`, which binds
-[`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
-endpoint's `dyn McpOperationGuard` (mirroring `AuthzModule`,
-`AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
-re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
-the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
-in the same order, through the same authenticate-then-authorize step, nothing
+The quickstart opened `/mcp` deliberately with `McpOptions { posture:
+Posture::Public, .. }`. To authenticate instead — bearer JWT, ability,
+row-level filtering — import `AuthzMcpModule`, which declares
+[`EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>`](/security/authorization/endpoint-guards/)
+(mirroring `AuthzModule`, `AuthzGraphqlModule`, and `AuthzWsModule` on the
+other transports). The transport runs your `AuthnGuard` + `AuthzGuard` on every
+MCP request, and every operation it carries runs under the `Ability` they
+attached — the same guards HTTP and GraphQL run, in the same order, nothing
 re-implemented per transport.
 
 ```rust title="apps/api/src/module.rs"
@@ -30,21 +29,23 @@ re-implemented per transport.
 pub struct AssistantModule;
 ```
 
-With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
-endpoint's guard, so the closed default is replaced, not silenced. It joins the
-app's global guard pool rather than replacing it: every guard listed in
-`use_guards_global(...)` still runs at the request, and one the bridge runs
-itself runs once. Tools then
+With `AuthzMcpModule` imported you drop the opening — keep `McpOptions` at its
+default, `Posture::Gated`: the module's guards are the endpoint's, so the
+closed default is met, not silenced, and a module declaring guards beside an
+opening fails the boot. They join the app's global guard pool rather than
+replacing it: every guard listed in `use_guards_global(...)` still runs at the
+request, and a guard in both runs once. Tools then
 read the ambient ability the same way HTTP handlers do: through a service that
 goes through `Repo`, which applies the ability's row-level filter automatically.
 A tool that lists users gets only the users the caller is allowed to see — same
 policy, same `AuthzAbility`, same audit log under `nest_rs::authz`. See the
-[per-transport bridges](/security/authorization/per-transport-bridges/) page for
-the four-transport story.
+[endpoint guards](/security/authorization/endpoint-guards/) page for the
+four-transport story.
 
 ## Every operation is traced
 
-The bridge answers *who is calling*, and it answers it in the logs too.
+The endpoint's guards answer *who is calling*, and they answer it in the logs
+too.
 Every operation runs in its own [`mcp.operation`
 span](/fundamentals/correlation/), under the trace of the HTTP request it
 arrived on and carrying the `actor_id` the authn guard resolved. A model
@@ -84,7 +85,7 @@ impl UsersTool {
 `#[authorize(Action, Entity)]` emits the class-level gate before the body and
 masks the returned value through the caller's field grants after it — the tool
 writes neither. `#[public]` is the other half: no gate, no mask, and the
-endpoint's own guard still authenticated the request.
+endpoint's own guards still authenticated the request.
 
 For an answer that is a **capability** rather than a row — a presigned URL, a
 computed report — there is no entity to gate, so bind a guard beside the
@@ -101,7 +102,7 @@ declared at two scopes still checks the operation once:
 
 One `Guard` impl serves both transports: `check_http` reads the ability
 `AuthzGuard` attached earlier in the route's stage, `check` the one the
-bridge attached to the `/mcp` request — both through `cx.ambient::<Ability>()`,
+endpoint's guards attached to the `/mcp` request — both through `cx.ambient::<Ability>()`,
 and the guard declares `GuardFor<HttpView>` and `GuardFor<McpView>`.
 
 Masking round-trips the value through the entity model, so it needs the full
@@ -144,6 +145,7 @@ for why a resource server that skips it can be handed someone else's token.
 ## Going further
 
 - [MCP](/mcp/) — writing the tool this page gates.
-- [Authorization](/security/authorization/) — the ability the bridge installs.
+- [Authorization](/security/authorization/) — the ability the endpoint's guards
+  attach.
 - [Response masking](/security/authorization/response-masking/) — what
   `#[authorize]` arms on the way out.

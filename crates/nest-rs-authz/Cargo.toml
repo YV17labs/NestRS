@@ -30,34 +30,31 @@ http = [
     "dep:nest-rs-http",
     "dep:poem",
 ]
-# GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
-# accessor + `ContextSeed`, and the response mask. The class gate is
-# `class_gate`, every edge's, at the crate root. The resolver-side `bind` helper
-# lives in `nest_rs_seaorm::graphql`.
+# GraphQL surface: the `ability` accessor + `ContextSeed`, and the response
+# mask. The class gate is `class_gate`, every edge's, at the crate root. The
+# resolver-side `bind` helper lives in `nest_rs_seaorm::graphql`.
 graphql = [
     "dep:nest-rs-graphql",
-    # The root `AbilityGuard` is what a resolver binds, and its `check_http`
-    # entry is what `GraphqlAbilityBridge` runs in band — so this surface needs
-    # `nest-rs-http`, which the GraphQL bindings alone never named.
+    # The root `AbilityGuard` is what `/graphql`'s request runs, through its
+    # `check_http` entry — so this surface needs `nest-rs-http`, which the
+    # GraphQL bindings alone never named.
     "dep:nest-rs-http",
     "dep:poem",
 ]
-# MCP surface: the operation-guard ability bridge (`McpAbilityBridge`), which
-# runs the guard chain and installs the ambient ability for the operation.
-# Masking inside a tool body is the transport-free `masked_output_ambient`; the
-# edge opens each operation's unit of work through the bound `UnitOfWork`.
+# MCP surface: the response mask. Masking inside a tool body is the
+# transport-free `masked_output_ambient`; the edge opens each operation's unit
+# of work through the bound `UnitOfWork`.
 mcp = [
     "dep:nest-rs-mcp",
-    # Same as GraphQL: the root guard's `check_http` is what `McpAbilityBridge`
-    # runs in band.
+    # Same as GraphQL: the root guard's `check_http` is what `/mcp`'s request runs.
     "dep:nest-rs-http",
     "dep:poem",
 ]
 # WebSocket surface: the per-message reply mask (`ws::masked_reply_for`) that
 # `#[messages]` emits from an `#[authorize(Action, Entity)]`, beside the class
-# gate every edge shares. There is no bridge here and deliberately so —
-# a gateway's upgrade already ran the real HTTP chain, and what a message needs
-# re-established is the ambient ability, which the connection carries.
+# gate every edge shares. A gateway's upgrade runs the HTTP chain, and what a
+# message needs re-established is the ambient ability, which the connection
+# carries.
 ws = [
     "dep:nest-rs-ws",
     # The root guard's `check_http` entry is what runs on the upgrade.
@@ -103,7 +100,7 @@ poem = { workspace = true, optional = true }
 # Self dev-dependency: turn on every transport binding for this crate's own
 # test targets. Without it `cargo nextest run --workspace` (the Definition of
 # done) builds this crate with `default = []`, so every `#[cfg(feature = …)]`
-# bridge test in `tests/integration/` compiles away — the http / graphql / mcp
+# edge test in `tests/integration/` compiles away — the http / graphql / mcp
 # suites would exist but never run. Dev-deps do not propagate, so no consumer
 # gains a feature from this.
 nest-rs-authz = { path = ".", features = ["full"] }
@@ -111,7 +108,7 @@ nest-rs-authz = { path = ".", features = ["full"] }
 # renders `condition_for` to SQL; the masking tests serialize a model via serde.
 sea-orm.workspace = true
 serde.workspace = true
-# Bridge mirror tests boot the full surface (HTTP + GraphQL); compiled when the
+# The edge tests boot the full surface (HTTP + GraphQL); compiled when the
 # corresponding feature is enabled (`cargo test -p nest-rs-authz --features full`).
 nest-rs-core = { path = "../nest-rs-core" }
 nest-rs-http = { path = "../nest-rs-http" }

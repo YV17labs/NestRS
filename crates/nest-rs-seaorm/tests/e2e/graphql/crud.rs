@@ -3,13 +3,14 @@
 //! and no incident, any other refusal the opaque `INTERNAL` filed once — and
 //! neither answer nor line carries the server's sentence or the input it quotes.
 
+use nest_rs_graphql::GraphqlView;
+use nest_rs_http::EndpointGuards;
 use std::sync::Arc;
 
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::problem::code;
 use nest_rs_core::{Layer, OPAQUE_CLIENT_MESSAGE, injectable, module};
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, crud, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, crud, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_seaorm::{
     Creatable, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, expose,
@@ -89,7 +90,7 @@ impl Guard for AlwaysAuthenticated {
 
 impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
-type Bridge = GraphqlAbilityBridge<AlwaysAuthenticated, AbilityGuard<EveryGizmo>>;
+type Bridge = EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<EveryGizmo>)>;
 
 #[resolver]
 struct GizmosResolver {
@@ -120,7 +121,7 @@ impl GizmosResolver {}
         EveryGizmo,
         AbilityGuard<EveryGizmo>,
         AlwaysAuthenticated,
-        Bridge as dyn GraphqlOperationGuard,
+        Bridge,
         GizmosResolver,
     ],
 )]

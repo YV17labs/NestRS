@@ -1,7 +1,8 @@
 //! GraphQL bindings (feature `graphql`) — the resolver analog of
-//! [`crate::http`]: [`GraphqlAbilityBridge`] is the per-operation guard that
-//! authenticates and installs the ambient ability; [`masked_value_for`] masks a
-//! resolver's return value; [`ability`] accesses the per-request ability.
+//! [`crate::http`]: [`masked_value_for`] masks a resolver's return value and
+//! [`ability`] accesses the per-request ability, which the guards at the
+//! `/graphql` request attached — the app's global pool, or
+//! `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` a module declares.
 //! Importing this module submits the `GraphqlContextSeed` that forwards
 //! `Arc<Ability>` into each operation's GraphQL context.
 //!
@@ -12,13 +13,12 @@
 //! Data-coupled bindings live in `nest_rs_seaorm::graphql` (`bind`).
 //!
 //! ```
-//! # use nest_rs_authz::graphql::GraphqlAbilityBridge;
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};
 //! # use nest_rs_core::{Layer, injectable, module};
 //! # use nest_rs_graphql::async_graphql::{Result, SimpleObject};
-//! # use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
+//! # use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 //! # use nest_rs_guards::{Denial, Guard, GuardFor};
-//! # use nest_rs_http::async_trait;
+//! # use nest_rs_http::{EndpointGuards, async_trait};
 //! # use nest_rs_testing::TestApp;
 //! # mod users {
 //! #     use sea_orm::entity::prelude::*;
@@ -75,10 +75,14 @@
 //! #       Ok(vec![User { id: 1, name: Some("ada".into()) }])
 //!     }
 //! }
-//! # type Bridge = GraphqlAbilityBridge<PassGuard, Grants>;
 //! # #[module(
 //! #     imports = [GraphqlModule::for_root(None)],
-//! #     providers = [PassGuard, Grants, Bridge as dyn GraphqlOperationGuard, UsersResolver],
+//! #     providers = [
+//! #         PassGuard,
+//! #         Grants,
+//! #         EndpointGuards<GraphqlView, (PassGuard, Grants)>,
+//! #         UsersResolver,
+//! #     ],
 //! # )]
 //! # struct UsersModule;
 //! # #[nest_rs_core::main]
@@ -96,10 +100,8 @@
 //! # }
 //! ```
 
-mod bridge;
 mod context;
 mod mask;
 
-pub use bridge::GraphqlAbilityBridge;
 pub use context::{ability, forbidden};
 pub use mask::{masked_item_for, masked_value_for};

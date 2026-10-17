@@ -58,7 +58,8 @@ client receives the response, and no socket is ever opened.
 
 A browser sends a page's cookies with any upgrade that page asks for, and
 never consults CORS first, so the upgrade's `Origin` is checked before the
-socket opens (RFC 6455 §10.2), once the gateway's guards have passed. With no
+socket opens (RFC 6455 §10.2), ahead of the gateway's guards: a refused origin
+never pays for authentication. With no
 CORS policy, a page on the server's own origin gets its socket; any other is
 answered `403`, with a `warn` on `nest_rs::ws` naming the origin sent and the
 one the server took for its own. Once `<PREFIX>_HTTP__CORS_ORIGINS` is set,
@@ -220,7 +221,7 @@ unit of work itself. Binding
 through `check`: it denies, fail-closed, when no ambient ability is present.
 
 See [Security](/security/) for the strategy + ability composition, and
-[per-transport bridges](/security/authorization/per-transport-bridges/) for
+[Endpoint guards](/security/authorization/endpoint-guards/) for
 `AuthzWsModule` beside its GraphQL and MCP siblings.
 
 ## Reference

@@ -79,10 +79,10 @@ impl {{resolver}} {
     // Before serving real rows, declare #[authorize(Action, Entity)] instead
     // (class gate + automatic response masking), bind #[use_guards(AuthzGuard)]
     // on the struct, and import AuthzGraphqlModule in this adapter's module.rs.
-    // `/graphql` has no guard at the HTTP edge: that module's bridge is what
-    // authenticates each operation, so AuthnGuard is not bound here — it has
-    // no GraphQL check, and binding it is a compile error. `nestrs g graphql`
-    // on a `g resource` port emits all three.
+    // `/graphql` authenticates at its request, through the guards that module
+    // declares for it, so AuthnGuard is not bound here — it has no GraphQL
+    // check, and binding it is a compile error. `nestrs g graphql` on a
+    // `g resource` port emits all three.
     #[query]
     #[public]
     async fn {{snake}}_count(&self) -> Result<usize> {
@@ -94,8 +94,8 @@ impl {{resolver}} {
 /// The GraphQL adapter for a **resource** port: the `#[crud]` resolver behind
 /// the app's guards, the twin of `resource::HTTP_CONTROLLER`.
 ///
-/// **One guard on the struct**: `/graphql` authenticates in band through
-/// `AuthzGraphqlModule`'s bridge, and `AuthnGuard` declares no
+/// **One guard on the struct**: `/graphql` authenticates at its request through
+/// the guards `AuthzGraphqlModule` declares, and `AuthnGuard` declares no
 /// `GuardFor<GraphqlView>`, so `#[resolver]` refuses it at compile time.
 pub(crate) const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 
@@ -104,10 +104,10 @@ use nest_rs::graphql::{crud, resolver};
 use crate::authz::AuthzGuard;
 use crate::{{snake}}::{{{create_op}}, Entity as {{entity}}Entity, {{entity}}, {{service}}, {{update_op}}};
 
-// `/graphql` has no guard at the HTTP edge: the bridge AuthzGraphqlModule
-// registers authenticates each operation in band, so the resolver binds the
-// ability guard alone — AuthnGuard has no GraphQL check, and binding it here is
-// a compile error.
+// `/graphql` authenticates at its request, through the guards
+// AuthzGraphqlModule declares for it, so the resolver binds the ability guard
+// alone — AuthnGuard has no GraphQL check, and binding it here is a compile
+// error.
 #[resolver]
 #[use_guards(AuthzGuard)]
 pub struct {{resolver}} {
@@ -298,11 +298,11 @@ pub struct {{event}} {
 
 pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!
-//! Security: the MCP endpoint gates through the global guard pool
-//! (`use_guards_global`) with the app's `dyn McpOperationGuard` added to it,
-//! either alone, else deny-all. Wire your app's `McpAbilityBridge`
-//! (`features::authz::mcp`) as `dyn McpOperationGuard` so callers are
-//! authenticated and the ambient `Ability` is installed.
+//! Security: the MCP endpoint gates at its request, through the global guard
+//! pool (`use_guards_global`) and the `EndpointGuards<McpView, _>` a module
+//! declares, either alone, else deny-all. Import `AuthzMcpModule`
+//! (`features::authz::mcp`) so callers are authenticated and the ambient
+//! `Ability` is attached.
 //!
 //! Every operation then declares its own posture, exactly as a `#[query]` or an
 //! HTTP verb does:

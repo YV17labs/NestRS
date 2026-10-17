@@ -86,8 +86,9 @@ async fn resolver_reads_a_per_request_value_a_guard_attached() {
     assert_eq!(tag, "hello");
 }
 
-/// A schema with no operation guard and no global pool is **unguarded**, and the
-/// boot says so once — a warn, since a public read API is a legitimate shape.
+/// A schema with no guard at its request — no global pool, no endpoint guards —
+/// is **unguarded**, and the boot says so once — a warn, since a public read
+/// API is a legitimate shape.
 mod an_unguarded_schema_announces_itself {
     use nest_rs_core::module;
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -144,7 +145,7 @@ mod an_unguarded_schema_announces_itself {
 
         let event = logs.expect_one(
             "nest_rs::graphql",
-            "no operation guard registered — graphql operations run unguarded",
+            "no guard runs at the /graphql request — graphql operations run unguarded",
         );
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("mode").as_deref(), Some("unguarded"));
@@ -250,88 +251,6 @@ mod a_resolver_no_module_lists {
         assert!(
             message.contains("providers"),
             "and carries the same remedy the warn does: {message}",
-        );
-    }
-}
-
-// An app bridge whose `around` never drives the operation must not yield an
-// empty `200`.
-
-mod an_operation_guard_that_never_runs_the_operation {
-    use nest_rs_core::{injectable, module};
-    use nest_rs_graphql::async_graphql::Result as GqlResult;
-    use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-    use nest_rs_http::{Request, Response};
-    use nest_rs_testing::{LogCapture, TestApp};
-
-    /// Returns without ever polling `inner`, so the operation never executes.
-    #[injectable]
-    #[derive(Default)]
-    struct NeverRunsTheOperation;
-
-    impl GraphqlOperationGuard for NeverRunsTheOperation {
-        fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
-            Box::pin(async move { Ok(()) })
-        }
-
-        fn around<'a>(&'a self, _req: &'a Request, _inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
-            Box::pin(async {})
-        }
-    }
-
-    #[resolver]
-    struct EchoResolver;
-
-    #[operations]
-    impl EchoResolver {
-        #[query]
-        #[public]
-        async fn echo(&self) -> GqlResult<String> {
-            Ok("echoed".into())
-        }
-    }
-
-    #[module(
-        imports = [GraphqlModule::for_root(None)],
-        providers = [EchoResolver, NeverRunsTheOperation as dyn GraphqlOperationGuard],
-    )]
-    struct BrokenBridgeModule;
-
-    #[tokio::test]
-    async fn is_reported_rather_than_answered_with_nothing() {
-        let logs = LogCapture::install();
-        let app = TestApp::for_module::<BrokenBridgeModule>()
-            .await
-            .expect("a bridge that misbehaves at runtime still boots");
-
-        let resp = app
-            .http()
-            .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ echo }" }))
-            .send()
-            .await;
-        resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
-        let body = resp
-            .0
-            .into_body()
-            .into_string()
-            .await
-            .expect("a response body");
-        assert!(
-            !body.contains("echoed"),
-            "the operation really did not run: {body}",
-        );
-
-        let event = logs.expect_one(
-            "nest_rs::graphql",
-            "the guarded operation produced no response",
-        );
-        assert_eq!(event.level, "error");
-        assert_eq!(
-            event.field("reason").as_deref(),
-            Some("no_response"),
-            "{:?}",
-            event.fields,
         );
     }
 }
@@ -457,56 +376,53 @@ async fn a_request_denial_keeping_its_cause_files_the_chain() {
     );
 }
 
-/// The in-band seams read and answer on nestrs's request: an operation guard
-/// reads the head and keeps what it reads on the request, a seed forwards it,
-/// and a refusal is the guard's own response, its text said as a problem
-/// document's `detail` as the edge says every plain-text error.
-mod the_in_band_seams_speak_the_request_vocabulary {
-    use nest_rs_core::{Container, injectable, module};
+/// The guards at the `/graphql` request read nestrs's request and attach what
+/// they read, a seed forwards it into the operation's context, and a refusal is
+/// the edge's problem document, its reason the `detail`.
+mod the_endpoint_guards_speak_the_request_vocabulary {
+    use nest_rs_core::{AmbientValue, Container, Layer, UnitContext, injectable, module};
     use nest_rs_graphql::async_graphql::{Context, Request as GqlRequest, Result as GqlResult};
     use nest_rs_graphql::{
-        BoxFuture, GraphqlContextSeed, GraphqlModule, GraphqlOperationGuard, SeedLifetime,
-        operations, resolver,
+        GraphqlContextSeed, GraphqlModule, GraphqlView, SeedLifetime, operations, resolver,
     };
-    use nest_rs_http::{HeaderValue, Request, Response, StatusCode, header};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_http::{EndpointGuards, HttpView, Request, async_trait};
     use nest_rs_testing::TestApp;
 
     #[derive(Clone)]
     struct Tenant(String);
 
-    /// Admits a request naming its tenant, kept on the request; refuses one
-    /// that names none with an answer of its own.
+    impl AmbientValue for Tenant {}
+
+    /// Admits a request naming its tenant, attaching it; refuses one that names
+    /// none.
     #[injectable]
     #[derive(Default)]
     struct TenantGate;
 
-    impl GraphqlOperationGuard for TenantGate {
-        fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
-            Box::pin(async move {
-                let Some(tenant) = req.header("x-tenant").map(str::to_owned) else {
-                    return Err(Response::builder()
-                        .status(StatusCode::FORBIDDEN)
-                        .header(header::WWW_AUTHENTICATE, HeaderValue::from_static("Tenant"))
-                        .body("name a tenant"));
-                };
-                req.extensions_mut().insert(Tenant(tenant));
-                Ok(())
-            })
-        }
+    impl Layer for TenantGate {}
 
-        fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
-            assert!(
-                req.extensions().get::<Tenant>().is_some(),
-                "`around` reads the request `before` admitted",
-            );
-            inner
+    #[async_trait]
+    impl Guard for TenantGate {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let Some(tenant) = HttpView::of(cx)?
+                .request()
+                .header("x-tenant")
+                .map(str::to_owned)
+            else {
+                return Err(Denial::forbidden("name a tenant"));
+            };
+            cx.attach(Tenant(tenant));
+            Ok(())
         }
     }
 
-    /// Forwards what the gate kept on the request.
-    fn forward_tenant(req: &Request, _container: &Container, gql: GqlRequest) -> GqlRequest {
-        match req.extensions().get::<Tenant>() {
-            Some(tenant) => gql.data(tenant.clone()),
+    impl GuardFor<HttpView> for TenantGate {}
+
+    /// Forwards what the gate attached.
+    fn forward_tenant(_req: &Request, _container: &Container, gql: GqlRequest) -> GqlRequest {
+        match nest_rs_core::ambient::<Tenant>() {
+            Some(tenant) => gql.data((*tenant).clone()),
             None => gql,
         }
     }
@@ -533,12 +449,12 @@ mod the_in_band_seams_speak_the_request_vocabulary {
 
     #[module(
         imports = [GraphqlModule::for_root(None)],
-        providers = [TenantResolver, TenantGate as dyn GraphqlOperationGuard],
+        providers = [TenantResolver, TenantGate, EndpointGuards<GraphqlView, (TenantGate,)>],
     )]
     struct TenantModule;
 
     #[tokio::test]
-    async fn a_seed_forwards_what_the_operation_guard_read_off_the_request() {
+    async fn a_seed_forwards_what_the_endpoint_guards_attached() {
         let app = TestApp::for_module::<TenantModule>().await.expect("boots");
 
         let resp = app
@@ -554,7 +470,7 @@ mod the_in_band_seams_speak_the_request_vocabulary {
     }
 
     #[tokio::test]
-    async fn an_operation_guards_refusal_is_its_own_response() {
+    async fn an_endpoint_guards_refusal_is_the_edges_problem_document() {
         let app = TestApp::for_module::<TenantModule>().await.expect("boots");
 
         let resp = app
@@ -565,7 +481,6 @@ mod the_in_band_seams_speak_the_request_vocabulary {
             .await;
 
         resp.assert_status(poem::http::StatusCode::FORBIDDEN);
-        resp.assert_header("www-authenticate", "Tenant");
         resp.json()
             .await
             .value()

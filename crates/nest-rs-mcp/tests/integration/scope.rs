@@ -4,9 +4,9 @@
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{Container, RequestScope};
+use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::{
-    AllowAllMcpGuard, CallToolResult, ContentBlock, McpError, McpMount, McpOperationGuard, Scoped,
-    ServerHandler, endpoint, tool, tool_handler, tool_router,
+    CallToolResult, ContentBlock, McpError, Scoped, ServerHandler, tool, tool_handler, tool_router,
 };
 use nest_rs_testing::mcp::call_tool;
 use poem::test::TestClient;
@@ -50,10 +50,7 @@ fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
 
 #[tokio::test]
 async fn ambient_request_scope_reaches_a_tool_body() {
-    let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
-    let app = with_scope_extension(endpoint(McpMount::deny_all().with_guard(guard), || {
-        ScopeProbeTool
-    }));
+    let app = with_scope_extension(endpoint(McpMount::new(), || ScopeProbeTool));
     let client = TestClient::new(app);
 
     let body = call_tool(&client, "/", "probe_scope", None).await;
@@ -107,9 +104,8 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
 
     let seen: SeenSpan = Arc::default();
     let host = SpanProbeTool { seen: seen.clone() };
-    let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
     let app = under_span(
-        endpoint(McpMount::deny_all().with_guard(guard), move || host.clone()),
+        endpoint(McpMount::new(), move || host.clone()),
         tracing::info_span!("http.request"),
     );
 

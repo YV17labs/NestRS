@@ -32,8 +32,9 @@ cargo add nest-rs --features mcp
 ```
 
 The `mcp` feature pulls the HTTP transport the endpoint mounts on and the guard
-surface that gates it: the endpoint runs a registered global pool itself, so
-`/mcp` is gated by it instead of staying deny-all.
+surface that gates it: the transport runs the global pool and the endpoint's
+guards at every `/mcp` request, so `/mcp` is gated by them instead of staying
+deny-all.
 None of that is a line you write.
 
 `rmcp` is not a dependency either, and it is not an import: `#[tools]` emits
@@ -74,35 +75,52 @@ nobody thought about does not compile, rather than shipping ungated to a model.
 [Authorization](/mcp/authorization/) covers the other form.
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
-default**. The endpoint runs the global guard pool
-(`App::builder().use_guards_global(...)`) with the app's
-`dyn McpOperationGuard` added to it, either one alone when the other is
-missing, and with neither it is **deny-all** — every request answers `401`, so
-a schema-added tool can never leak unauthenticated.
+default**. Its request runs the global guard pool
+(`App::builder().use_guards_global(...)`) and the
+[endpoint guards](/security/authorization/endpoint-guards/) the app's modules
+declare for it, either alone when the other is missing, and with neither it is
+**deny-all** — every request answers `401`, so a schema-added tool can never
+leak unauthenticated. The boot says so once, on `nest_rs::layers`:
 
-Which posture you got is in the boot line: `mode="deny_all"` with nothing
-registered, `mode="global_guard_pool"` once a pool is.
+```text frame="terminal"
+WARN nest_rs::layers: a gated endpoint runs no guard at its request; it denies every request path="/mcp" kind="mcp"
+```
 
-A *deliberately* public tool has to say so, by binding `AllowAllMcpGuard`:
+The feature lists its tool like any provider:
 
 ```rust title="crates/features/src/hello/module.rs"
 use nest_rs::core::module;
-use nest_rs::mcp::{AllowAllMcpGuard, McpOperationGuard};
 
 use crate::hello::tool::HelloTool;
 
-#[module(providers = [
-    HelloTool,
-    AllowAllMcpGuard as dyn McpOperationGuard,
-])]
+#[module(providers = [HelloTool])]
 pub struct HelloModule;
 ```
 
-`AllowAllMcpGuard` opens what the app's own pool admits, never past it: a
-pooled guard still runs first. `#[mcp]` mounts it on the existing HTTP
-transport — same port, same CORS, no second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
-tool called `hello` and can invoke it. (To authenticate instead of opening it,
-see [Authorization](/mcp/authorization/).)
+A *deliberately* public endpoint has to say so, where the app is composed:
+
+```rust title="apps/assistant/src/module.rs"
+use nest_rs::core::{Posture, module};
+use nest_rs::http::HttpModule;
+use nest_rs::mcp::{McpModule, McpOptions};
+
+use features::hello::HelloModule;
+
+#[module(imports = [
+    HttpModule::for_root(None),
+    McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() }),
+    HelloModule,
+])]
+pub struct AssistantModule;
+```
+
+A public `/mcp` runs no guard at its request, the global pool's included, so the
+opening belongs where the app is composed, never in a feature crate another app
+might import — and a module declaring guards for the endpoint beside it fails
+the boot rather than seeing them dropped. `#[mcp]` mounts the tool on the existing HTTP transport —
+same port, same CORS, no second server. An MCP client pointed at
+`http://localhost:3003/mcp` sees one tool called `hello` and can invoke it. (To
+authenticate instead of opening it, see [Authorization](/mcp/authorization/).)
 
 Two decorators, one per item shape:
 
@@ -142,7 +160,6 @@ $ nestrs run dev assistant
 
 ```text frame="terminal"
 INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
-DEBUG nest_rs::mcp: mcp operations gated mode="operation_guard"
 INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3003"
 ```
 
@@ -298,8 +315,8 @@ the access graph rejects accidental coupling at boot.
 
 ## Going further
 
-- [Authorization](/mcp/authorization/) — the bridge every tool call is
-  gated by, and the posture each operation declares.
+- [Authorization](/mcp/authorization/) — the guards every tool call's
+  request runs, and the posture each operation declares.
 - [Endpoints](/mcp/endpoints/) — several features on one URL, and what the
   client is told the server is.
 - [Configuration](/mcp/configuration/) — the env keys, and how a failing

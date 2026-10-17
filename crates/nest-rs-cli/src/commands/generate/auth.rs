@@ -294,7 +294,7 @@ pub(super) fn app_imports() -> [(&'static str, &'static str); 3] {
     [
         ("features::authn::AuthnModule", "AuthnModule"),
         ("features::authn::AuthnHttpModule", "AuthnHttpModule"),
-        (HTTP_BRIDGE.app_path, HTTP_BRIDGE.module),
+        (HTTP_AUTHZ.app_path, HTTP_AUTHZ.module),
     ]
 }
 
@@ -306,11 +306,11 @@ pub(super) fn exists(ws: &NestrsWorkspace) -> bool {
     ws.features_root().join("authz").is_dir()
 }
 
-/// One `authz/<dir>/` bridge: the files, the paths that name it, and the crates
+/// One `authz/<dir>/` adapter: the files, the paths that name it, and the crates
 /// it needs.
-pub(super) struct AuthzBridge {
-    /// Folder under `crates/features/src/authz/`. Empty for the base bridge,
-    /// whose providers sit at the `authz/` root — see [`HTTP_BRIDGE`].
+pub(super) struct AuthzAdapter {
+    /// Folder under `crates/features/src/authz/`. Empty for the base adapter,
+    /// whose providers sit at the `authz/` root — see [`HTTP_AUTHZ`].
     pub dir: &'static str,
     /// The module type the `authz/mod.rs` index, the adapter and the app name.
     pub module: &'static str,
@@ -320,22 +320,22 @@ pub(super) struct AuthzBridge {
     pub app_path: &'static str,
     /// `(file name, template)`, mirroring `demo/crates/features/src/authz/<dir>/`.
     pub files: &'static [(&'static str, &'static str)],
-    /// What this bridge buys, printed as the run's next steps.
+    /// What this adapter buys, printed as the run's next steps.
     pub rationale: &'static [&'static str],
-    /// Umbrella features the bridge's own source names.
+    /// Umbrella features the adapter's own source names.
     pub deps: &'static [&'static super::cargo::Dep],
     /// `g auth` writes this one as part of the base adapter, so an adapter
     /// generator must not re-create it. True for HTTP alone.
     pub written_by_g_auth: bool,
 }
 
-impl AuthzBridge {
+impl AuthzAdapter {
     /// Already on disk — a second `g <transport>` must not re-create it.
     pub(super) fn exists(&self, ws: &NestrsWorkspace) -> bool {
         ws.features_root().join("authz").join(self.dir).is_dir()
     }
 
-    /// The `authz/mod.rs` index lines this bridge adds, for a caller to fold into
+    /// The `authz/mod.rs` index lines this adapter adds, for a caller to fold into
     /// its single edit.
     pub(super) fn decls(&self) -> Vec<String> {
         vec![
@@ -344,7 +344,7 @@ impl AuthzBridge {
         ]
     }
 
-    /// Queue the bridge's files.
+    /// Queue the adapter's files.
     pub(super) fn queue(&self, s: &mut Scaffold, ws: &NestrsWorkspace) {
         let dir = ws.features_root().join("authz").join(self.dir);
         for (name, body) in self.files {
@@ -353,23 +353,23 @@ impl AuthzBridge {
     }
 }
 
-/// The bridge that enforces `transport`, whoever writes it — `None` for the
+/// The authz adapter that enforces `transport`, whoever writes it — `None` for the
 /// transports that need none: **queue**, **schedule** and **events** have no
 /// caller to authenticate, since their work runs on the app's own behalf.
-pub(super) fn bridge_for(transport: Transport) -> Option<&'static AuthzBridge> {
+pub(super) fn authz_for(transport: Transport) -> Option<&'static AuthzAdapter> {
     match transport {
-        Transport::Http => Some(&HTTP_BRIDGE),
-        Transport::Graphql => Some(&GRAPHQL_BRIDGE),
-        Transport::Ws => Some(&WS_BRIDGE),
-        Transport::Mcp => Some(&MCP_BRIDGE),
+        Transport::Http => Some(&HTTP_AUTHZ),
+        Transport::Graphql => Some(&GRAPHQL_AUTHZ),
+        Transport::Ws => Some(&WS_AUTHZ),
+        Transport::Mcp => Some(&MCP_AUTHZ),
         Transport::Queue | Transport::Schedule | Transport::Events => None,
     }
 }
 
-/// The base bridge, with no folder of its own: `AbilityGuard` answers every
+/// The base adapter, with no folder of its own: `AbilityGuard` answers every
 /// transport, so its guard and `AuthzModule` sit at the `authz/` root, written
 /// by `g auth` itself. `dir` and `files` are empty and never read.
-static HTTP_BRIDGE: AuthzBridge = AuthzBridge {
+static HTTP_AUTHZ: AuthzAdapter = AuthzAdapter {
     dir: "",
     module: "AuthzModule",
     feature_path: "crate::authz::AuthzModule",
@@ -384,22 +384,21 @@ static HTTP_BRIDGE: AuthzBridge = AuthzBridge {
     written_by_g_auth: true,
 };
 
-/// `/graphql` is one endpoint with no guard at the HTTP edge: authn and the
-/// ability run **in band, per operation**, through a `GraphqlOperationGuard`;
-/// without it no ability is installed.
-static GRAPHQL_BRIDGE: AuthzBridge = AuthzBridge {
+/// `/graphql` is one in-band endpoint: authn and the ability run at its
+/// request, through the `EndpointGuards` its module declares, and every
+/// operation runs under what they attach; without them no ability is attached.
+static GRAPHQL_AUTHZ: AuthzAdapter = AuthzAdapter {
     dir: "graphql",
     module: "AuthzGraphqlModule",
     feature_path: "crate::authz::AuthzGraphqlModule",
     app_path: "features::authz::AuthzGraphqlModule",
     files: &[
         ("mod.rs", auth::AUTHZ_GRAPHQL_MOD),
-        ("bridge.rs", auth::AUTHZ_GRAPHQL_BRIDGE),
         ("module.rs", auth::AUTHZ_GRAPHQL_MODULE),
     ],
     rationale: &[
-        "/graphql has no guard at the HTTP edge — authn and the ability run in band,",
-        "per operation, through AuthzGraphqlModule. Every resolver serving rows",
+        "AuthzGraphqlModule runs authn and the ability at the /graphql request, and",
+        "every operation runs under what they attach. Every resolver serving rows",
         "imports it and declares #[authorize(Action, Entity)] or #[public].",
     ],
     deps: &[
@@ -411,9 +410,9 @@ static GRAPHQL_BRIDGE: AuthzBridge = AuthzBridge {
 };
 
 /// A WS upgrade is an HTTP GET, so a gateway reuses the HTTP guards rather than
-/// a bridge of its own: the ability they attach crosses the connection into
+/// an adapter of its own: the ability they attach crosses the connection into
 /// every message.
-static WS_BRIDGE: AuthzBridge = AuthzBridge {
+static WS_AUTHZ: AuthzAdapter = AuthzAdapter {
     dir: "ws",
     module: "AuthzWsModule",
     feature_path: "crate::authz::AuthzWsModule",
@@ -435,21 +434,20 @@ static WS_BRIDGE: AuthzBridge = AuthzBridge {
     written_by_g_auth: false,
 };
 
-/// `/mcp` gates in band, per operation; with no `McpOperationGuard` registered
-/// it is **deny-all**.
-static MCP_BRIDGE: AuthzBridge = AuthzBridge {
+/// `/mcp` gates at its request; with no guard there — neither the global pool
+/// nor the `EndpointGuards` its module declares — it is **deny-all**.
+static MCP_AUTHZ: AuthzAdapter = AuthzAdapter {
     dir: "mcp",
     module: "AuthzMcpModule",
     feature_path: "crate::authz::AuthzMcpModule",
     app_path: "features::authz::AuthzMcpModule",
     files: &[
         ("mod.rs", auth::AUTHZ_MCP_MOD),
-        ("bridge.rs", auth::AUTHZ_MCP_BRIDGE),
         ("module.rs", auth::AUTHZ_MCP_MODULE),
     ],
     rationale: &[
-        "/mcp denies every request until an McpOperationGuard is bound. AuthzMcpModule",
-        "binds one: callers are authenticated and the ambient Ability is installed, so",
+        "/mcp denies every request until a guard runs at it. AuthzMcpModule declares",
+        "its guards: callers are authenticated and the ambient Ability is attached, so",
         "a tool can return entity rows through nest_rs::authz::masked_output_ambient.",
     ],
     deps: &[

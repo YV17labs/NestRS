@@ -25,7 +25,7 @@ impl Guard for TranscodeGuard {
 
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let ability = cx.ambient::<Ability>().ok_or_else(|| {
-            Denial::internal("TranscodeGuard requires the MCP authz bridge to run first")
+            Denial::internal("TranscodeGuard requires AuthzMcpModule's guards to run first")
         })?;
         Self::decide(&ability)
     }

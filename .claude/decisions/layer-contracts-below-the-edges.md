@@ -80,3 +80,12 @@ the other two families until they move into `nest-rs-core`, so a crate
 declaring a `#[routes]` reaches `nest-rs-interceptors`; the umbrella's `http`
 feature already brings it. `feat/endpoint-guards-and-class-gate` still owes the
 endpoint units and `McpOperationGuard`'s retirement.
+
+**2026-10-17 — `feat/endpoint-guards-and-class-gate` landed its part.**
+`GraphqlOperationGuard`, `McpOperationGuard` and the bridges are gone: the HTTP
+transport composes each self-mount's request stage — the pool, a gateway's
+guards, the `EndpointGuards` a module declares for `/graphql` or `/mcp` — in
+`nest-rs-http`, and no edge runs a request guard of its own. The posture's
+class gate is one function, `nest_rs_authz::class_gate`, in no edge feature,
+coercing to the pipeline's `ClassGate`. No slot is left. No departure from the
+record.

@@ -6,10 +6,7 @@ use std::sync::Arc;
 
 use nest_rs_core::{AmbientValue, injectable, module};
 use nest_rs_http::Request;
-use nest_rs_mcp::{
-    AllowAllMcpGuard, BoxFuture, Captured, McpError, McpOperationGuard, McpToolContext,
-    OperationOutcome, mcp, tools,
-};
+use nest_rs_mcp::{BoxFuture, Captured, McpError, McpToolContext, OperationOutcome, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool_as;
 use serde_json::json;
@@ -61,11 +58,9 @@ impl WhoamiTool {
     }
 }
 
-#[module(providers = [
+#[module(imports = [crate::open_mcp()], providers = [
     WhoamiTool,
-    CallerContext as dyn McpToolContext,
-    AllowAllMcpGuard as dyn McpOperationGuard,
-])]
+    CallerContext as dyn McpToolContext])]
 struct ContextModule;
 
 #[tokio::test]

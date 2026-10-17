@@ -30,6 +30,15 @@ use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+/// The MCP module with its endpoints opened in code, for a suite whose subject
+/// is not who may call them.
+pub(crate) fn open_mcp() -> nest_rs_mcp::McpSetup {
+    nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpOptions {
+        posture: nest_rs_core::Posture::Public,
+        ..Default::default()
+    })
+}
+
 /// What a store refusing the connection reports: the cause a guard keeps.
 #[derive(Debug)]
 struct ConnectionRefused;

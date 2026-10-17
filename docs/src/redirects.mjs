@@ -6,5 +6,6 @@
 // that is the form Astro serves and the form a page writes in a link.
 export const REDIRECTS = Object.freeze({
   '/graphql/dataloader/': '/database/dataloaders/',
+  '/security/authorization/per-transport-bridges/': '/security/authorization/endpoint-guards/',
   '/throttler/': '/rate-limiting/',
 });

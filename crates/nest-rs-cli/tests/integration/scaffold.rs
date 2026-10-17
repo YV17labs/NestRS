@@ -420,7 +420,7 @@ fn every_adapter_over_a_plain_port_compiles() {
 
 #[test]
 fn every_adapter_over_a_resource_port_compiles() {
-    // The authz bridges share the `authz/` tree and name providers behind
+    // The authz adapters share the `authz/` tree and name providers behind
     // features only a compile can judge. `http` is skipped: `g resource` writes it.
     let mut generate = vec![vec!["g", "resource", "post", "-p", "apps/hello"]];
     generate.extend(every_edge("post", &["http"]));

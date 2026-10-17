@@ -97,8 +97,8 @@ seaorm = [
 # (`resolver.rs`), so `graphql` owns them rather than inheriting them from a
 # feature the developer might not enable.
 # `authz` is strong, not `?`: a GraphQL posture is **mandatory**, so
-# `#[operations]` emits `::nest_rs_authz::graphql::{authorize, masked_value_for}`
-# on every operation it expands, and `#[expose(..., graphql)]` emits
+# `#[operations]` emits `::nest_rs_authz::class_gate` and
+# `::nest_rs_authz::graphql::masked_value_for` on every operation it expands, and `#[expose(..., graphql)]` emits
 # `::nest_rs_authz::masked_output_ambient` in the relation loader. Under the weak
 # form the crate stayed off and `::nest_rs::authz` did not resolve.
 graphql = [
@@ -113,8 +113,8 @@ graphql = [
 # guard on `GuardFor<WsView>`. The gateway reuses the HTTP guards at the upgrade,
 # so authz's `http` binding is what runs there; `nest-rs-authz/ws` is the
 # separate per-message half `#[messages]` emits from an
-# `#[authorize(Action, Entity)]` — the class gate and the reply mask. Both,
-# because a gateway needs the upgrade chain *and* the posture.
+# `#[authorize(Action, Entity)]` — the reply mask, beside the class gate every
+# edge shares. Both, because a gateway needs the upgrade chain *and* the posture.
 ws = [
     "dep:nest-rs-ws",
     "http",
@@ -122,8 +122,9 @@ ws = [
     "nest-rs-authz?/http",
     "nest-rs-authz?/ws",
 ]
-# `#[mcp]` mounts through `HttpEndpointMeta` and runs the global pool at its
-# request and in each operation's chain.
+# `#[mcp]` mounts through `HttpEndpointMeta`: the transport runs the global pool
+# and the endpoint's guards at its request, and each operation's chain runs the
+# pool again.
 mcp = [
     "dep:nest-rs-mcp",
     "http",

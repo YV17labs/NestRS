@@ -58,17 +58,16 @@ use tracing::Instrument;
 
 use crate::McpError;
 use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
-use crate::guard::{BoxFuture, McpOperationGuard};
+use crate::guard::BoxFuture;
 use nest_rs_core::__private::install_pending;
 
-/// Wraps a tool host so each operation runs with the request scope, the
-/// operation guard's ambient state, and the registered [`McpToolContext`]'s
-/// state installed, as a unit of work of its own.
+/// Wraps a tool host so each operation runs with the request scope, what the
+/// request's guards attached, and the registered [`McpToolContext`]'s state
+/// installed, as a unit of work of its own.
 ///
-/// Built by [`endpoint`](fn@crate::endpoint), never by hand.
+/// Built by [`endpoint`](crate::__private::endpoint), never by hand.
 pub struct PropagatingHandler<H> {
     inner: H,
-    guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
     detached: DetachedWork,
@@ -79,7 +78,6 @@ pub struct PropagatingHandler<H> {
 impl<H> PropagatingHandler<H> {
     pub(crate) fn new(
         inner: H,
-        guard: Arc<dyn McpOperationGuard>,
         context: Option<Arc<dyn McpToolContext>>,
         unit_of_work: Option<Arc<dyn UnitOfWork>>,
         detached: DetachedWork,
@@ -87,7 +85,6 @@ impl<H> PropagatingHandler<H> {
     ) -> Self {
         Self {
             inner,
-            guard,
             context,
             unit_of_work,
             detached,
@@ -96,7 +93,7 @@ impl<H> PropagatingHandler<H> {
     }
 
     /// The nesting every wrapped operation shares, outermost first: the
-    /// registered context, the guard's `around`, the request scope, the unit of
+    /// registered context, the request scope, the unit of
     /// work (the transaction), what the request's guards attached (the
     /// ability), the dispatch. The unit commits when the operation answers `Ok`
     /// with no tool error in band.
@@ -126,7 +123,6 @@ impl<H> PropagatingHandler<H> {
         let McpAmbient {
             scope,
             captured: context_captured,
-            guard_captured,
             attached,
             span,
             correlation,
@@ -206,14 +202,10 @@ impl<H> PropagatingHandler<H> {
         // Composed inside the instrumented block: an `around` opening a span of
         // its own does so when called, not when polled.
         async move {
-            let guarded = match &guard_captured {
-                Some(captured) => self.guard.around(captured, scoped),
-                None => scoped,
-            };
             let ran = async move {
                 match (context, &context_captured) {
-                    (Some(context), Some(captured)) => context.around(captured, guarded).await,
-                    _ => guarded.await,
+                    (Some(context), Some(captured)) => context.around(captured, scoped).await,
+                    _ => scoped.await,
                 }
             };
             let ended = self.detached.run(nest_rs_core::panic::contain(ran)).await;
@@ -592,7 +584,6 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::guards::AllowAllMcpGuard;
 
     /// Not `LATEST`, the default, so a substituted request shows.
     const THE_CALLER_ASKS_FOR: ProtocolVersion = ProtocolVersion::V_2025_06_18;
@@ -622,14 +613,8 @@ mod tests {
     /// tells a delegated call from an inherited one.
     #[test]
     fn the_wrapper_asks_the_inner_host_to_negotiate() {
-        let wrapper = PropagatingHandler::new(
-            NegotiatingHost,
-            Arc::new(AllowAllMcpGuard),
-            None,
-            None,
-            DetachedWork::new(),
-            None,
-        );
+        let wrapper =
+            PropagatingHandler::new(NegotiatingHost, None, None, DetachedWork::new(), None);
         let mut request = InitializeRequestParams::default();
         request.protocol_version = THE_CALLER_ASKS_FOR;
 

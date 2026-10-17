@@ -27,7 +27,7 @@ on the impl block. The reference feature wires both halves:
 The crate driving this page is
 [**`nest-rs-graphql`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-graphql),
 which builds on top of [async-graphql](https://async-graphql.github.io/async-graphql/).
-Schema discovery, dataloader registration, and the authz bridge come
+Schema discovery, dataloader registration, and the endpoint's guards come
 from the framework crate; the schema model itself is async-graphql's.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
@@ -91,13 +91,13 @@ ungated, unmasked operation can ship.
 
 Symmetry with the HTTP controller is intentional — the service is the
 same, the inputs are the same, the policy is the same, and so is the
-posture attribute. The other bridges differ:
+posture attribute. The other bindings differ:
 
 | HTTP | GraphQL | Job |
 |------|---------|-----|
 | `#[authorize(Create, users::Entity)]` attribute | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
 | `Bind<Read, UsersService>` extractor | `bind::<Read, UsersService>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
-| `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the authz bridge seeded |
+| `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the endpoint's guards attached |
 
 The same `#[use_guards(...)]` declaration on the resolver struct — the
 markers are the same, the access graph checks the same thing. It names
@@ -107,7 +107,7 @@ exactly once: scope chooses the site, never the count.
 
 ## The GraphQL module
 
-The adapter imports the port (`UsersModule`), the authz bridge
+The adapter imports the port (`UsersModule`), the authz module
 (`AuthzGraphqlModule`), and — because the entity exposes a
 `belongs_to` org relation (next section) — the org port whose service
 hosts the auto-emitted loader:
@@ -287,5 +287,5 @@ that needs a relation `blog` does not have.
 ## Going further
 
 - [Tutorial overview](/tutorial/) — recap the full `posts` build, start to finish.
-- [GraphQL](/graphql/) — the reference page for resolvers, dataloaders, and the authz bridge.
+- [GraphQL](/graphql/) — the reference page for resolvers, dataloaders, and the endpoint's guards.
 - [Publish](/publish/) — the reference workspace where this multi-transport feature ships.

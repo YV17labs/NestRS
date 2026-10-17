@@ -7,7 +7,8 @@ use nest_rs_authz::{AbilityBuilder, Action, Read, Update};
 use nest_rs_ws::{Gateway, WsClient, WsError, WsReply, gateway, messages};
 use std::sync::Arc;
 
-use super::{ability_for, body, dispatch_with, widget};
+use crate::widget;
+use crate::ws::{ability_for, body, dispatch_with};
 
 #[gateway(path = "/ws/gate")]
 #[derive(Default)]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use futures_util::Stream;
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::session::local::{LocalSessionManager, SessionConfig};
 use rmcp::transport::streamable_http_server::session::{
     EventStore, RestoreOutcome, ServerSseMessage, SessionId, SessionManager,
 };
@@ -23,8 +23,12 @@ pub(crate) struct BoundedSessions {
 }
 
 impl BoundedSessions {
-    /// `inner`, holding at most `max` live sessions.
-    pub(crate) fn new(inner: LocalSessionManager, max: usize) -> Self {
+    /// rmcp's local manager running each session on `session`, holding at
+    /// most `max` live sessions.
+    pub(crate) fn new(session: SessionConfig, max: usize) -> Self {
+        // `#[non_exhaustive]`: rmcp's default, its session config replaced.
+        let mut inner = LocalSessionManager::default();
+        inner.session_config = session;
         Self {
             inner,
             max,

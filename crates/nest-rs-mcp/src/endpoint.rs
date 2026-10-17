@@ -16,7 +16,6 @@ use rmcp::ServerHandler;
 use rmcp::model::{ClientJsonRpcMessage, ClientRequest};
 use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
 use crate::config::McpConfig;
@@ -192,10 +191,10 @@ where
     let handler_guard = guard.clone();
     let operation_timeout = config.operation_timeout;
 
-    // `#[non_exhaustive]`: rmcp's default, its session config replaced.
-    let mut local = LocalSessionManager::default();
-    local.session_config = config.to_session_config();
-    let sessions = Arc::new(BoundedSessions::new(local, config.max_concurrent_sessions));
+    let sessions = Arc::new(BoundedSessions::new(
+        config.to_session_config(),
+        config.max_concurrent_sessions,
+    ));
 
     // The stop, not the signal: rmcp ends every stream on this token, a POST's
     // answer included. A stateful session's operations miss it; the handler stops those.

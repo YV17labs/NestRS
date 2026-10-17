@@ -75,7 +75,7 @@ const SESSION_IDLE_TIMEOUT: DurationBounds = DurationBounds::secs(
 
 /// How long a new session waits for its `initialize` before it is closed —
 /// rmcp's default today, pinned so a release of it cannot move it.
-pub(crate) const SESSION_INIT_TIMEOUT: Duration = Duration::from_secs(60);
+const SESSION_INIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The stream keep-alive's range, every server-sent stream's.
 const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(

@@ -257,9 +257,10 @@ same block — same convention as `#[routes]` and `#[scheduled]`.
 
 Three modules, three roles:
 
-- **`RedisModule::for_root(None)`** — opens the one Redis connection every
-  Redis binding shares (`<PREFIX>_REDIS__URL`). Every app that touches Redis
-  needs it.
+- **`RedisModule::for_root(None)`** — opens the Redis connection every Redis
+  binding shares (`<PREFIX>_REDIS__URL`). Every app that touches Redis needs
+  it; a [second Valkey](/queue/topologies/#a-second-valkey) is a named
+  instance beside it.
 - **`RedisQueueModule`** — binds the queue port over that connection: the
   producer, as `Arc<dyn JobProducer>`, and the consumer the worker runs jobs
   through. Every app that enqueues or runs jobs imports it.

@@ -344,7 +344,10 @@ without naming any. A module that can be opened once per instance takes the
 marker in its `for_root` value: `x` for the default, `(Cache, x)` for the named
 one. Its config then reads `<PREFIX>_<VENDOR>__CACHE__*` (the vendor first,
 then the instance), and its resource is injected as `Arc<Resource<Cache>>`
-beside the default's `Arc<Resource>`. Each instance pins its config once; two
+beside the default's `Arc<Resource>` — Redis is one:
+`RedisModule::for_root((Cache, None))` opens
+[a second Valkey](/queue/topologies/#a-second-valkey), injected as
+`Arc<RedisConnection<Cache>>`. Each instance pins its config once; two
 instances never contest. A module generic over the instance is written by
 hand (`impl<I: Instance> Module for …`), since `#[module]` is not generic:
 `ForInstance` in `nest_rs::config` shows one whole.

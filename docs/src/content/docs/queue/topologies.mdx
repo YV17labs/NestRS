@@ -161,9 +161,47 @@ their state in exactly such keys, so a server holding either runs `noeviction`:
 
 A server holding the queue alone tolerates a `volatile-*` policy; one the rate
 limiter or the schedule shares runs `noeviction`, whatever else it holds. A
-cache, which wants eviction, belongs on another server. The boot cannot check
-the policy — reading it takes `CONFIG GET`, which no rule on these pages grants —
-so it is the deployment's to set.
+cache, which wants eviction, belongs on [another server](#a-second-valkey). The
+boot cannot check the policy — reading it takes `CONFIG GET`, which no rule on
+these pages grants — so it is the deployment's to set.
+
+## A second Valkey
+
+A cache that lives by evicting cannot share the server the queue runs on, so an
+app that does both opens a second connection: a named
+[instance](/fundamentals/providers/#instances--one-resource-opened-twice). You
+declare its marker, and pass it beside the config at `for_root`:
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::core::{instance, module};
+use nest_rs::redis::{RedisModule, RedisQueueModule};
+
+#[instance]
+pub struct Cache;
+
+#[module(imports = [
+    RedisModule::for_root(None),
+    RedisQueueModule,
+    RedisModule::for_root((Cache, None)),
+])]
+pub struct ApiModule;
+```
+
+The default connection reads `<PREFIX>_REDIS__*` as before; the cache reads the
+same keys with its name after the vendor — `<PREFIX>_REDIS__CACHE__URL`,
+`<PREFIX>_REDIS__CACHE__CONNECT_TIMEOUT_SECS`, `<PREFIX>_REDIS__CACHE__TLS_*` —
+on any topology its URL declares. A provider of yours injects it as
+`Arc<RedisConnection<Cache>>`, beside the default's `Arc<RedisConnection>`.
+
+A binding runs on the default instance unless its import names another:
+`RedisScheduleModule::<Locks>` claims on the `locks` instance, and a queue there
+reads its lease from `<PREFIX>_REDIS__LOCKS__QUEUE__LEASE_SECS`. A port still
+takes one binding, whichever instance it runs on, and the eviction table above
+holds on the server each binding reaches. Each instance is a connection of its
+own: its budget is held under the nets of the bindings over it, its refusals
+name its variables, and every line it files carries `instance` — `cache` here,
+empty for the default. Its users are created on its own servers, with the rules
+of the bindings it carries.
 
 ## ACL on Sentinel and Cluster
 
@@ -240,6 +278,6 @@ ACL SETUSER <user> reset on ><password> &+switch-master &+replica-reconf-done +c
 
 ## Going further
 
-- [Wiring](/queue/wiring/) — the one connection every binding shares.
+- [Wiring](/queue/wiring/) — the connection every binding shares.
 - [Delivery on Redis](/queue/delivery/) — what a job keeps through a crash, a timeout and a failover.
 - [Environment variables](/configuration/env-reference/) — every `<PREFIX>_REDIS__*`.

@@ -232,7 +232,7 @@ use nest_rs::throttler::ThrottlerModule;
 
 #[module(imports = [
     ThrottlerModule::for_root(None),   // the policy and the guard — unchanged
-    RedisModule::for_root(None),       // the one RedisConnection (<PREFIX>_REDIS__URL)
+    RedisModule::for_root(None),       // the RedisConnection (<PREFIX>_REDIS__URL)
     RedisThrottlerModule,              // the counters move to Redis
 ])]
 pub struct AppModule;

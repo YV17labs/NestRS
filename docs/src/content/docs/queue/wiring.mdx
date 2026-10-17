@@ -17,7 +17,7 @@ graph from each app's root.
 
 | Module | Role | Imported by |
 |---|---|---|
-| `RedisModule::for_root(cfg)` | Opens the **one** Redis connection every Redis binding shares — the queue's producer and consumer, the rate-limit store, the schedule's lock. | Every app that touches Redis. |
+| `RedisModule::for_root(cfg)` | Opens the Redis connection every Redis binding shares — the queue's producer and consumer, the rate-limit store, the schedule's lock; a [second Valkey](/queue/topologies/#a-second-valkey) is a named instance. | Every app that touches Redis. |
 | `RedisQueueModule` | Binds the queue port over that connection: the producer, `Arc<dyn JobProducer>`, the portable handle a feature injects to enqueue, and the consumer the worker runs jobs through. A bare import reads `<PREFIX>_REDIS__QUEUE__*`; `for_root(RedisQueueConfig { lease })` pins the base — see [Delivery on Redis](/queue/delivery/#configuration). | Every app that enqueues or runs jobs. |
 | `QueueModule::for_root(cfg)` | From `nest_rs::queue`: contributes the port's `QueueWorker` transport, which discovers the reachable `#[process]` methods at boot and runs each over the bound consumer; its own setting is the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`. | Worker apps only. |
 
@@ -207,7 +207,7 @@ opens the same connection, but logs no `attached transport=QueueWorker` and no
 ## Reference
 
 - `crates/nest-rs-redis/src/module.rs` — `RedisModule`,
-  `RedisSetup::collect` (config resolution + the one connection).
+  `RedisSetup::collect` (config resolution + the instance's connection).
 - `crates/nest-rs-redis/src/queue/module.rs` — `RedisQueueModule` binding
   `RedisQueueProducer` as `dyn JobProducer` and the Redis consumer as
   `BoundConsumer` over it.

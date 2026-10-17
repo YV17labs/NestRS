@@ -116,8 +116,9 @@ both the name check and the payload check, so it is never the default path.
 `Arc<dyn nest_rs::queue::JobProducer>` is the form to inject: the feature names
 no backend, so it compiles unchanged against a different driver.
 `RedisQueueModule` binds **both** that name and the concrete
-`nest_rs::redis::RedisQueueProducer` over the one connection `RedisModule`
-opens, so the concrete type resolves too when a service genuinely needs it.
+`nest_rs::redis::RedisQueueProducer` over the connection `RedisModule` opens
+for its instance ([a second Valkey](/queue/topologies/#a-second-valkey) has
+one of its own), so the concrete type resolves too when a service genuinely needs it.
 
 ## When a push fails
 

@@ -181,9 +181,12 @@ impl AppHealth {
 }
 ```
 
-`RedisConnection` is the one connection every Redis binding shares, so a
-command sent on a clone of it answers or fails within
-`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, like the framework's own. Sending one
+`RedisConnection` is the connection every Redis binding over its instance
+shares, so a command sent on a clone of it answers or fails within that
+instance's budget — `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, or
+`<PREFIX>_REDIS__CACHE__CONNECT_TIMEOUT_SECS` for
+[a second Valkey](/queue/topologies/#a-second-valkey) injected as
+`RedisConnection<Cache>` — like the framework's own. Sending one
 names the `redis` crate in your source, so your manifest carries it — on the
 line `nest-rs-redis` builds against, 0.32, whose `ConnectionLike` the connection
 implements.

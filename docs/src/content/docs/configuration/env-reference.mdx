@@ -133,10 +133,12 @@ on Postgres — the one engine the framework builds sea-orm with.
 
 ## `redis` — `<PREFIX>_REDIS__*`
 
-The one Redis connection every Redis binding shares — the queue's producer and
+The Redis connection every Redis binding shares — the queue's producer and
 consumer, the rate-limit store and the schedule's occurrence lock — opened by
 `RedisModule::for_root`, on one server, Sentinel or a Cluster alike. One connection, one variable: a throttler-only app sets
-the same `URL` a queue app does. The TLS material is read at boot, so a renewed file takes effect at the
+the same `URL` a queue app does. A [second Valkey](/queue/topologies/#a-second-valkey)
+reads the same keys under its instance — `<PREFIX>_REDIS__CACHE__URL` for
+`#[instance] struct Cache`. The TLS material is read at boot, so a renewed file takes effect at the
 next restart.
 
 | Key | Meaning |
@@ -151,7 +153,8 @@ next restart.
 The Redis queue binding's own settings, read by a bare `RedisQueueModule` import
 or pinned through `RedisQueueModule::for_root`. Two segments because the config
 sits in the crate's `queue/` folder: the crate's word, then the binding's —
-exactly the stem `RedisQueueConfig` is named from.
+exactly the stem `RedisQueueConfig` is named from. A queue on a named instance
+reads them with the instance between the two: `<PREFIX>_REDIS__CACHE__QUEUE__*`.
 
 | Key | Meaning |
 |---|---|

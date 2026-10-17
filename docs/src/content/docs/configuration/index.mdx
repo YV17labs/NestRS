@@ -189,6 +189,7 @@ McpModule::for_root(McpOptions {
         ..Default::default()
     }),
     server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
+    ..Default::default()
 }),
 ```
 

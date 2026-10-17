@@ -39,9 +39,9 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// posture** — forgetting one is a compile error, never a silently ungated
 /// operation:
 ///
-/// - `#[authorize(Action, Entity)]` — the macro emits the class-level gate
-///   (`nest_rs_authz::graphql::authorize`) before the call and automatic
-///   response masking (`masked_value_for`) after it. The mask sees through the
+/// - `#[authorize(Action, Entity)]` — the macro emits the class gate
+///   (`nest_rs_authz::class_gate`, run after the operation's guards) before the
+///   call and automatic response masking (`masked_value_for`) after it. The mask sees through the
 ///   wire DTO itself, `Option<…>` and `Vec<…>`; scalars pass through; an
 ///   irreconcilable value fails **closed**. Append `unmasked`
 ///   (`#[authorize(Read, E, unmasked)]`) to keep the gate but mask a custom
@@ -78,9 +78,9 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `impl Discoverable` (with a no-op `register`).
 ///
 /// Each delegating method runs the layered guard chain (global, resolver-scope
-/// and method guards), the posture's class gate
-/// (`nest_rs_authz::graphql::authorize`), the inherent method, then the response
-/// mask (`nest_rs_authz::graphql::masked_value_for`) over what it returned.
+/// and method guards), the posture's class gate (`nest_rs_authz::class_gate`) on
+/// the same field, the inherent method, then the response mask
+/// (`nest_rs_authz::graphql::masked_value_for`) over what it returned.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(resolver::operations(args, input).into()).into()

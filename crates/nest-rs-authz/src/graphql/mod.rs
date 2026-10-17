@@ -1,14 +1,13 @@
 //! GraphQL bindings (feature `graphql`) — the resolver analog of
 //! [`crate::http`]: [`GraphqlAbilityBridge`] is the per-operation guard that
-//! authenticates and installs the ambient ability; [`authorize`](fn@authorize) is the
-//! class-level gate; [`masked_value_for`] masks a resolver's return value;
-//! [`ability`] accesses the per-request ability. Importing this module submits
-//! the `GraphqlContextSeed` that forwards `Arc<Ability>` into each operation's
-//! GraphQL context.
+//! authenticates and installs the ambient ability; [`masked_value_for`] masks a
+//! resolver's return value; [`ability`] accesses the per-request ability.
+//! Importing this module submits the `GraphqlContextSeed` that forwards
+//! `Arc<Ability>` into each operation's GraphQL context.
 //!
 //! A resolver does not call these directly: `#[authorize(Action, Entity)]` on
-//! a `#[query]`/`#[mutation]` makes `#[resolver]` emit both the gate and the
-//! response mask — the GraphQL analog of the HTTP `Authorize<A, E>` extractor.
+//! a `#[query]`/`#[mutation]` makes `#[resolver]` emit the class gate
+//! ([`class_gate`](crate::class_gate), every edge's) and the response mask.
 //!
 //! Data-coupled bindings live in `nest_rs_seaorm::graphql` (`bind`).
 //!
@@ -97,12 +96,10 @@
 //! # }
 //! ```
 
-mod authorize;
 mod bridge;
 mod context;
 mod mask;
 
-pub use authorize::authorize;
 pub use bridge::GraphqlAbilityBridge;
 pub use context::{ability, forbidden};
 pub use mask::{masked_item_for, masked_value_for};

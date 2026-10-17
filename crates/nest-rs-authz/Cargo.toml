@@ -28,19 +28,18 @@ default = []
 # HTTP request, and each in-band feature declares its own edge's view.
 http = [
     "dep:nest-rs-http",
-    "dep:nest-rs-guards",
     "dep:poem",
 ]
 # GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
-# accessor + `ContextSeed`, and the `authorize` class-level gate. The
-# resolver-side `bind` helper lives in `nest_rs_seaorm::graphql`.
+# accessor + `ContextSeed`, and the response mask. The class gate is
+# `class_gate`, every edge's, at the crate root. The resolver-side `bind` helper
+# lives in `nest_rs_seaorm::graphql`.
 graphql = [
     "dep:nest-rs-graphql",
     # The root `AbilityGuard` is what a resolver binds, and its `check_http`
     # entry is what `GraphqlAbilityBridge` runs in band — so this surface needs
     # `nest-rs-http`, which the GraphQL bindings alone never named.
     "dep:nest-rs-http",
-    "dep:nest-rs-guards",
     "dep:poem",
 ]
 # MCP surface: the operation-guard ability bridge (`McpAbilityBridge`), which
@@ -52,19 +51,17 @@ mcp = [
     # Same as GraphQL: the root guard's `check_http` is what `McpAbilityBridge`
     # runs in band.
     "dep:nest-rs-http",
-    "dep:nest-rs-guards",
     "dep:poem",
 ]
-# WebSocket surface: the per-message class gate (`ws::authorize`) and reply mask
-# (`ws::masked_value_for`) that `#[messages]` emits from an
-# `#[authorize(Action, Entity)]`. There is no bridge here and deliberately so —
+# WebSocket surface: the per-message reply mask (`ws::masked_reply_for`) that
+# `#[messages]` emits from an `#[authorize(Action, Entity)]`, beside the class
+# gate every edge shares. There is no bridge here and deliberately so —
 # a gateway's upgrade already ran the real HTTP chain, and what a message needs
 # re-established is the ambient ability, which the connection carries.
 ws = [
     "dep:nest-rs-ws",
     # The root guard's `check_http` entry is what runs on the upgrade.
     "dep:nest-rs-http",
-    "dep:nest-rs-guards",
     "dep:poem",
 ]
 # Enable every transport binding at once — useful for
@@ -91,11 +88,13 @@ thiserror.workspace = true
 # optional while only the transport bindings named it, and the engine
 # naming it under `default = []` is what broke `authz` alone.
 nest-rs-core.workspace = true
+# The class gate answers with the guards' `Denial`, which every edge renders;
+# the guard contract depends on the kernel alone, so the gate stays ungated.
+nest-rs-guards.workspace = true
 
 # Optional dependencies — pulled in by the feature flags above.
 nest-rs-http = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
-nest-rs-guards = { workspace = true, optional = true }
 nest-rs-mcp = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }

@@ -3,11 +3,11 @@
 //! [`McpAbilityBridge`] is the endpoint's per-operation guard: it authenticates
 //! each `/mcp` request with the same chain controllers use and installs the
 //! caller's ambient [`Ability`](crate::Ability) for the operation's duration.
-//! [`authorize`](fn@authorize) is the class-level gate and [`masked_value_for`] masks an
-//! operation's return value.
+//! [`masked_value_for`] masks an operation's return value.
 //!
-//! A host does not call the last two directly: `#[authorize(Action, Entity)]`
-//! beside a `#[tool]` / `#[prompt]` makes `#[tools]` emit both, exactly as
+//! A host does not call it directly: `#[authorize(Action, Entity)]` beside a
+//! `#[tool]` / `#[prompt]` makes `#[tools]` emit the class gate
+//! ([`class_gate`](crate::class_gate), every edge's) and the mask, exactly as
 //! `#[operations]` does on GraphQL and `#[routes]` on HTTP.
 //!
 //! ```
@@ -94,10 +94,8 @@
 //! These read the *ambient* ability: rmcp dispatches an operation on its own
 //! task with no context value, so the operation guard installs it in its `around`.
 
-mod authorize;
 mod bridge;
 mod mask;
 
-pub use authorize::authorize;
 pub use bridge::McpAbilityBridge;
 pub use mask::masked_value_for;

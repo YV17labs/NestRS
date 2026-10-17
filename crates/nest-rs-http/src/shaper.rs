@@ -36,11 +36,20 @@ pub trait ResponseShaping: Send + 'static {
 ///
 /// `#[routes]` arms this by *type*: see the module docs.
 pub trait RouteResponseShaper {
-    /// The class gate a route declaring this type runs: the response refusing
-    /// the request, or `None` to admit it. It runs with the route's guards,
-    /// before any interceptor or filter the route declares, so a layer that
-    /// answers on the handler's behalf never answers a caller it refuses.
-    const GATE: Option<fn(&Request) -> Option<Response>> = None;
+    /// The class gate a route declaring this type runs — `nest_rs_authz`'s
+    /// `class_gate` for its `Authorize` — on the unit the route's guard stage
+    /// checked, right after its guards: a refusal is answered as the denial it
+    /// carries, before any interceptor or filter the route declares, so a layer
+    /// that answers on the handler's behalf never answers a caller it refuses.
+    #[expect(
+        clippy::type_complexity,
+        reason = "the pipeline's class gate written out, so a tier-1 signature names no hidden alias"
+    )]
+    const GATE: Option<
+        for<'b> fn(
+            &mut nest_rs_core::UnitContext<'b>,
+        ) -> std::result::Result<(), nest_rs_core::Failure>,
+    > = None;
 
     /// Snapshot what the shaper needs off the request before the handler takes
     /// ownership of it, or `None` to leave this request's response untouched.
@@ -51,8 +60,9 @@ pub trait RouteResponseShaper {
 /// shaper can be *selected* by the compiler and *carried* by a value.
 pub type CaptureFn = fn(&Request) -> Option<Box<dyn ResponseShaping>>;
 
-/// A route's class gate, as [`RouteResponseShaper::GATE`] declares it.
-pub type GateFn = fn(&Request) -> Option<Response>;
+/// A route's class gate, as [`RouteResponseShaper::GATE`] declares it: the
+/// pipeline's own.
+pub type GateFn = nest_rs_core::__private::ClassGate;
 
 /// Asks the compiler whether `T` is a [`RouteResponseShaper`].
 ///
@@ -381,8 +391,15 @@ mod tests {
     struct Gated;
 
     impl RouteResponseShaper for Gated {
-        const GATE: Option<GateFn> = Some(|req| {
-            (!req.headers().contains_key("x-pass")).then(|| StatusCode::FORBIDDEN.into_response())
+        const GATE: Option<GateFn> = Some(|cx| {
+            let passes = crate::HttpView::of(cx)?
+                .request()
+                .header("x-pass")
+                .is_some();
+            match passes {
+                true => Ok(()),
+                false => Err(nest_rs_guards::Denial::forbidden("no pass").into()),
+            }
         });
 
         fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
@@ -390,13 +407,45 @@ mod tests {
         }
     }
 
+    static GATED_ROUTE: nest_rs_core::Handler =
+        nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
+            unit: crate::unit::REQUEST,
+            host: std::any::TypeId::of::<Gated>(),
+            host_name: "Gated",
+            method: "route",
+            address: "/gated",
+            posture: nest_rs_core::Posture::Gated,
+            meta: nest_rs_core::__private::MetaLevels::default,
+        });
+
+    /// What `gate` answers on `request`, as the route's unit.
+    fn gated(
+        gate: GateFn,
+        request: crate::Request,
+    ) -> std::result::Result<(), nest_rs_core::Failure> {
+        let mut view = crate::HttpView::new(request);
+        let mut cx = nest_rs_core::__private::new_unit_context(&GATED_ROUTE, &mut view, None, None);
+        gate(&mut cx)
+    }
+
     #[test]
     fn the_probe_selects_a_gate_by_type_and_nothing_else() {
         let gate = __gate_of!(Gated).expect("a type declaring a gate selects it");
-        let refused = gate(&Request::default()).expect("no `x-pass`, refused");
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
-        let admitted = Request::builder().header("x-pass", "").finish();
-        assert!(gate(&admitted).is_none());
+        let refused =
+            gated(gate, crate::Request::builder().finish()).expect_err("no `x-pass`, refused");
+        assert_eq!(
+            refused
+                .find::<nest_rs_guards::Denial>()
+                .map(nest_rs_guards::Denial::http_status),
+            Some(403),
+        );
+        let admitted = crate::Request::builder()
+            .header(
+                crate::HeaderName::from_static("x-pass"),
+                crate::HeaderValue::from_static(""),
+            )
+            .finish();
+        assert!(gated(gate, admitted).is_ok());
 
         assert!(
             __gate_of!(Shout).is_none(),

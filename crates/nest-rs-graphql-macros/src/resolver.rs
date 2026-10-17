@@ -524,6 +524,10 @@ impl ChainSite {
 /// **Always emitted, whatever the operation returns**: the failure channel is
 /// the wrapper's ([`wrapper_output`]), never the developer's method
 /// (`.claude/decisions/operation-chain-any-return.md`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one thing the site declared; a struct would only rename them"
+)]
 fn layered_resolver_chain(
     self_ty: &Type,
     method_guards: &[Path],
@@ -532,6 +536,7 @@ fn layered_resolver_chain(
     route_label: &str,
     site: ChainSite,
     handler: &TokenStream2,
+    gate: &TokenStream2,
 ) -> TokenStream2 {
     let label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
     let method_specs = scoped_specs(method_guards, quote!(dyn ::nest_rs_guards::Guard));
@@ -554,6 +559,7 @@ fn layered_resolver_chain(
                 },
                 #site,
                 #handler,
+                #gate,
             ).await?
         };
     }
@@ -1014,19 +1020,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
             gsig.output = wrapper_output(&sig);
             let site_handler = nest_rs_codegen::handler_ref(&self_ty, &method_name);
-            let checks = layered_resolver_chain(
-                &self_ty,
-                &method_guards,
-                &force_method_guards,
-                &gctx,
-                &route_label,
-                if is_entity {
-                    ChainSite::Entity
-                } else {
-                    ChainSite::Operation
-                },
-                &site_handler,
-            );
             let authz_entity = |spec: &AuthorizeSpec| match &spec.entity {
                 Some(entity) => quote!(#entity),
                 None => {
@@ -1041,13 +1034,30 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity)
                 }
             };
-            let gate = authorize_spec.as_ref().map(|spec| {
-                let action = &spec.action;
-                let entity = authz_entity(spec);
-                quote! {
-                    ::nest_rs_authz::graphql::authorize::<#action, #entity>(#gctx)?;
+            let gate = match authorize_spec.as_ref() {
+                Some(spec) => {
+                    let action = &spec.action;
+                    let entity = authz_entity(spec);
+                    quote! {
+                        ::core::option::Option::Some(::nest_rs_authz::class_gate::<#action, #entity>)
+                    }
                 }
-            });
+                None => quote!(::core::option::Option::None),
+            };
+            let checks = layered_resolver_chain(
+                &self_ty,
+                &method_guards,
+                &force_method_guards,
+                &gctx,
+                &route_label,
+                if is_entity {
+                    ChainSite::Entity
+                } else {
+                    ChainSite::Operation
+                },
+                &site_handler,
+                &gate,
+            );
             // After the class gate, so a class-denied caller never reaches the database.
             let bind_prelude = bind_info.as_ref().map(|(service, _, id_ident, action)| {
                 quote! {
@@ -1138,7 +1148,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 // async-graphql's `#[Subscription]` awaits the method it is given.
                 let mut gsig = gsig;
                 gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
-                let rest = under_attached(quote! { #gate #bind_prelude #(#pipe_prelude)* #body });
+                let rest = under_attached(quote! { #bind_prelude #(#pipe_prelude)* #body });
                 quote! {
                     #(#deleg_attrs)*
                     #entity_attr
@@ -1147,7 +1157,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             } else {
                 let role_lit = LitStr::new(role_label, proc_macro2::Span::call_site());
                 let succeeded = quote!(::core::result::Result::is_ok);
-                let rest = under_attached(quote! { #gate #bind_prelude #(#pipe_prelude)* #body });
+                let rest = under_attached(quote! { #bind_prelude #(#pipe_prelude)* #body });
                 let mut gsig = gsig;
                 gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
                 quote! {
@@ -1396,6 +1406,7 @@ fn field_method(
         field_label,
         ChainSite::Field,
         &site_handler,
+        &quote!(::core::option::Option::None),
     );
     // By path: method lookup on a value tries a trait method taking `self` first.
     let call = call_as_result(

@@ -409,6 +409,9 @@ fn ability_for(role: &str) -> Arc<nest_rs_authz::Ability> {
 ///
 /// The ability rides in the context data, where the bridge installs it, so one
 /// test can be two callers at once.
+/// The subscription, its GraphQL context seeded with `role`'s ability as
+/// `/graphql`'s seed forwards it; the subscriber runs it under the same ability,
+/// ambient, as the request's ability guard leaves it.
 fn subscribe(app: &TestApp, role: &str) -> GqlRequest {
     let _ = app;
     GqlRequest::new("subscription { widgetFeed { id name } }").data(ability_for(role))
@@ -443,16 +446,22 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
         .get::<WidgetFeed>()
         .expect("the feed is a provider of the booted app");
 
-    let admin = schema
-        .execute_stream(subscribe(&app, "admin"), None)
-        .map(payload)
-        .take(3)
-        .collect::<Vec<_>>();
-    let auditor = schema
-        .execute_stream(subscribe(&app, "auditor"), None)
-        .map(payload)
-        .take(2)
-        .collect::<Vec<_>>();
+    let admin = nest_rs_authz::with_ability(
+        ability_for("admin"),
+        schema
+            .execute_stream(subscribe(&app, "admin"), None)
+            .map(payload)
+            .take(3)
+            .collect::<Vec<_>>(),
+    );
+    let auditor = nest_rs_authz::with_ability(
+        ability_for("auditor"),
+        schema
+            .execute_stream(subscribe(&app, "auditor"), None)
+            .map(payload)
+            .take(2)
+            .collect::<Vec<_>>(),
+    );
     let emit = async {
         // A stream registers its receiver on first poll: publish only once both
         // are polled, or the send lands nowhere and the test hangs.
@@ -583,14 +592,19 @@ async fn first_post_pushed(ability: AbilityBuilder, posts: &[(i32, i32)]) -> ser
         .get::<PostFeed>()
         .expect("the feed is a provider of the booted app");
     let ability = Arc::new(ability.build().expect("valid test ability"));
-    let received = schema
-        .execute_stream(
-            GqlRequest::new("subscription { postFeed { id orgId title } }").data(ability),
-            None,
-        )
-        .map(payload)
-        .take(1)
-        .collect::<Vec<_>>();
+    // Ambient, as the request's ability guard leaves it, and seeded into the
+    // GraphQL context, as `/graphql`'s seed forwards it.
+    let received = nest_rs_authz::with_ability(
+        Arc::clone(&ability),
+        schema
+            .execute_stream(
+                GqlRequest::new("subscription { postFeed { id orgId title } }").data(ability),
+                None,
+            )
+            .map(payload)
+            .take(1)
+            .collect::<Vec<_>>(),
+    );
     let emit = async {
         nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
             feed.tx.receiver_count() >= 1
@@ -614,7 +628,13 @@ async fn posts_read(ability: AbilityBuilder, query: &str) -> serde_json::Value {
         &nest_rs_graphql::GraphqlConfig::default(),
     );
     let ability = Arc::new(ability.build().expect("valid test ability"));
-    let response = schema.execute(GqlRequest::new(query).data(ability)).await;
+    // Ambient, as the request's ability guard leaves it, and seeded into the
+    // GraphQL context, as `/graphql`'s seed forwards it.
+    let response = nest_rs_authz::with_ability(
+        Arc::clone(&ability),
+        schema.execute(GqlRequest::new(query).data(ability)),
+    )
+    .await;
     serde_json::to_value(response).expect("a GraphQL response is JSON")
 }
 

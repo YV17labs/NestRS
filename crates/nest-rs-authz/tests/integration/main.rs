@@ -15,6 +15,9 @@ mod builder;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
 
+#[cfg(all(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod gate;
+
 #[cfg(feature = "http")]
 mod http;
 

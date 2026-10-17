@@ -426,8 +426,7 @@ fn wrapper(self_ty: &Type, op: &Operation, generic: bool) -> syn::Result<TokenSt
         &format!("{} {}::{}", role.label(), type_label(self_ty), name),
         name.span(),
     );
-    let chain = guard_chain(self_ty, op, &label, generic);
-    let gate = access_gate(posture);
+    let chain = guard_chain(self_ty, op, &label, generic, &class_gate(posture));
     let pipe_prelude = pipes.iter().map(pipe_statement);
     let call_args = forwarded_arg_idents(sig)?;
     let call = await_if_async(sig, quote!(<#self_ty>::#name(self, #(#call_args),*)));
@@ -448,7 +447,6 @@ fn wrapper(self_ty: &Type, op: &Operation, generic: bool) -> syn::Result<TokenSt
                 ::nest_rs_mcp::__private::install_pending(
                     ::core::clone::Clone::clone(&__nestrs_attached),
                     async {
-                        #gate
                         #(#pipe_prelude)*
                         ::core::result::Result::Ok((__nestrs_attached, #(#piped,)*))
                     },
@@ -465,13 +463,20 @@ fn wrapper(self_ty: &Type, op: &Operation, generic: bool) -> syn::Result<TokenSt
     })
 }
 
-/// Step 1 — the host-scope + operation-scope guard chain, run as the unit the
-/// operation's `Handler` declares; binds `__nestrs_attached`, what its guards
-/// attached, which the rest of the operation runs under.
+/// Steps 1 and 2 — the host-scope + operation-scope guard chain, then the
+/// posture's class `gate`, run as the unit the operation's `Handler` declares;
+/// binds `__nestrs_attached`, what its guards attached, which the rest of the
+/// operation runs under.
 ///
 /// Always emitted, even when the operation declares none: the impl half cannot
 /// see whether the host struct declared guards.
-fn guard_chain(self_ty: &Type, op: &Operation, label: &LitStr, generic: bool) -> TokenStream2 {
+fn guard_chain(
+    self_ty: &Type,
+    op: &Operation,
+    label: &LitStr,
+    generic: bool,
+    gate: &TokenStream2,
+) -> TokenStream2 {
     let method_specs = scoped_specs(&op.guards, quote!(dyn ::nest_rs_guards::Guard));
     let force = force_guard_typeids(&op.force_guards);
     let kind = op.role.kind();
@@ -497,6 +502,7 @@ fn guard_chain(self_ty: &Type, op: &Operation, label: &LitStr, generic: bool) ->
                     force: #force,
                 },
                 #handler,
+                #gate,
             ).await?
         };
     }
@@ -531,13 +537,14 @@ fn generic_operation_handler(self_ty: &Type, op: &Operation) -> TokenStream2 {
     }}
 }
 
-/// Step 2 — the class-level gate `#[authorize(Action, Entity)]` desugars to.
-fn access_gate(posture: &Posture) -> Option<TokenStream2> {
+/// Step 2 — the class gate `#[authorize(Action, Entity)]` desugars to, every
+/// edge's one, run on the operation its guards checked.
+fn class_gate(posture: &Posture) -> TokenStream2 {
     match posture {
-        Posture::Authorize { action, entity, .. } => Some(quote! {
-            ::nest_rs_authz::mcp::authorize::<#action, #entity>()?;
-        }),
-        Posture::Public => None,
+        Posture::Authorize { action, entity, .. } => quote! {
+            ::core::option::Option::Some(::nest_rs_authz::class_gate::<#action, #entity>)
+        },
+        Posture::Public => quote!(::core::option::Option::None),
     }
 }
 

@@ -24,8 +24,6 @@ mod chain;
 mod context;
 mod error;
 mod factory;
-// `http` included: `Authorize`'s extractor logs its denial through `gate::warn_denied`.
-#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod gate;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
@@ -45,8 +43,7 @@ pub use builder::{AbilityBuilder, RuleSpec};
 pub use context::{current_ability, with_ability};
 pub use error::{MalformedRuleError, MaskReplyError};
 pub use factory::AbilityFactory;
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-pub use gate::{GateVerdict, gate};
+pub use gate::class_gate;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 pub use guard::AbilityGuard;
 pub use mask::masked_output_ambient;

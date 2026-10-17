@@ -223,6 +223,20 @@ pub fn failure_chain(denial: &Denial) -> Option<String> {
     Error::source(denial).map(|_| nest_rs_core::error_message(denial))
 }
 
+/// The denial a class gate's `refused` carries, for the edge to render as it
+/// renders a guard's; an opaque one, filed at `error`, for a gate that failed
+/// with anything else — a gate's failure is a refusal, never a pass.
+pub fn denial_of(refused: &nest_rs_core::Failure) -> Denial {
+    refused.find::<Denial>().cloned().unwrap_or_else(|| {
+        tracing::error!(
+            target: nest_rs_core::target::LAYERS,
+            error = %nest_rs_core::error_message(refused.error()),
+            "a class gate refused with no denial",
+        );
+        Denial::internal("a class gate refused with no denial")
+    })
+}
+
 /// The reason, as a log line or a failure chain reads it.
 impl fmt::Display for Denial {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

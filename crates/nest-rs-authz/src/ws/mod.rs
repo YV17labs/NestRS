@@ -1,10 +1,10 @@
 //! WebSocket bindings (feature `ws`) — the per-message analog of [`crate::mcp`].
 //!
-//! [`authorize`](fn@authorize) is the class-level gate and [`masked_reply_for`] masks a
-//! message's reply. A gateway calls neither directly:
-//! `#[authorize(Action, Entity)]` beside a `#[subscribe_message]` makes
-//! `#[messages]` emit both, exactly as `#[tools]` does on MCP, `#[operations]` on
-//! GraphQL and `#[routes]` on HTTP.
+//! [`masked_reply_for`] masks a message's reply. A gateway does not call it
+//! directly: `#[authorize(Action, Entity)]` beside a `#[subscribe_message]`
+//! makes `#[messages]` emit the class gate ([`class_gate`](crate::class_gate),
+//! every edge's) and the mask, exactly as `#[tools]` does on MCP,
+//! `#[operations]` on GraphQL and `#[routes]` on HTTP.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -73,8 +73,6 @@
 //! on the upgrade, and the ability they attach crosses the connection into
 //! each message.
 
-mod authorize;
 mod mask;
 
-pub use authorize::authorize;
 pub use mask::masked_reply_for;

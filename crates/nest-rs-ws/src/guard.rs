@@ -11,14 +11,14 @@ use std::any::TypeId;
 use std::collections::HashMap;
 
 use nest_rs_core::__private::{
-    Pending, ResolvedLayer, compose_chain, dedup_bucket, new_unit_context, refuse_unresolved,
-    resolve_scoped,
+    ClassGate, Pending, ResolvedLayer, compose_chain, dedup_bucket, new_unit_context,
+    refuse_unresolved, resolve_scoped,
 };
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Handler, Peer};
 use nest_rs_guards::__private::{
-    boot_validate_guards, client_message, failure_chain, resolve_global_guards, run_stage,
-    structured_reason,
+    Refused, boot_validate_guards, client_message, denial_of, failure_chain, resolve_global_guards,
+    run_stage, structured_reason,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use nest_rs_http::__private::{GuardedEndpoint, poem_bridge, refused_route};
@@ -107,24 +107,41 @@ impl EventLayerTable {
         let mut view = WsView::new(client.clone(), event, data);
         let peer = Peer::new(None, Some(client.id()));
         let mut cx = new_unit_context(handler, &mut view, Some(peer), None);
-        let attached = run_stage(guards, &mut cx)
+        let attached = run_stage(guards, None, &mut cx)
             .await
-            .map_err(|(guard, denial)| {
-                // Structural floor mirroring the HTTP edge's, filed where the denial
-                // is still held; its text never reaches the line.
-                tracing::warn!(
-                    target: nest_rs_core::target::LAYERS,
-                    guard,
-                    conn_id = client.id(),
-                    event,
-                    status = denial.http_status(),
-                    error = failure_chain(&denial),
-                    "guard denied the message",
-                );
-                denial_to_ws_error(denial)
+            .map_err(|refused| match refused {
+                Refused::Guard(guard, denial) => {
+                    // Structural floor mirroring the HTTP edge's, filed where the
+                    // denial is still held; its text never reaches the line.
+                    tracing::warn!(
+                        target: nest_rs_core::target::LAYERS,
+                        guard,
+                        conn_id = client.id(),
+                        event,
+                        status = denial.http_status(),
+                        error = failure_chain(&denial),
+                        "guard denied the message",
+                    );
+                    denial_to_ws_error(denial)
+                }
+                Refused::Gate(denial) => denial_to_ws_error(denial),
             })?;
         Ok((attached, view.take_data()))
     }
+}
+
+/// Run the posture's class `gate` on a message `client` sent to the event
+/// `handler` declares, before its payload is read: the refusal's error frame,
+/// the gate's own line filed.
+pub fn class_gate(
+    client: &WsClient,
+    handler: &'static Handler,
+    gate: ClassGate,
+) -> Result<(), WsError> {
+    let mut view = WsView::piped(client.clone(), handler.address());
+    let peer = Peer::new(None, Some(client.id()));
+    let mut cx = new_unit_context(handler, &mut view, Some(peer), None);
+    gate(&mut cx).map_err(|refused| denial_to_ws_error(denial_of(&refused)))
 }
 
 /// Render a guard's [`Denial`] as the error frame one message answers with.

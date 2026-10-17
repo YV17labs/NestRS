@@ -173,11 +173,16 @@ frame the transport already speaks:
 ```json
 {
   "errors": [{
-    "message": "insufficient_scope",
+    "message": "the request requires higher privileges than provided by the access token",
     "extensions": { "code": "INSUFFICIENT_SCOPE", "requiredScopes": ["posts:write"] }
   }]
 }
 ```
+
+The sentence is RFC 6750 §3.1's own description of `insufficient_scope`, and
+it is the same on every transport: one class gate,
+[`class_gate`](/security/authorization/#one-class-gate-on-every-edge), decides
+an `#[authorize]` on HTTP, GraphQL, WebSocket and MCP alike.
 
 ## Advertise every scope you gate on
 

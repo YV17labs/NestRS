@@ -201,7 +201,8 @@ which is the limit (`.claude/decisions/mask-provenance.md`).
 
 `#[authorize(Action, Entity)]` beside the operation is the arming declaration
 on every edge; the decorator emits the gate and the mask, and that is what
-makes posture greppable:
+makes posture greppable. **The gate is one function**, `class_gate`, on every
+edge; the mask is each edge's, chosen by its protocol:
 
 - **HTTP** (`#[routes]`, which `#[crud]` emits under) — `Authorize<A, E>`'s
   class gate, run with the guards, plus the response shaper. A masked-out key

@@ -3,10 +3,10 @@
 
 use async_graphql::parser::types::OperationType;
 use async_graphql::{Context, Error as GraphqlError};
-use nest_rs_core::__private::{Pending, new_unit_context};
+use nest_rs_core::__private::{ClassGate, Pending, new_unit_context};
 use nest_rs_core::{Container, Handler};
 use nest_rs_guards::__private::{
-    GlobalBucket, SiteChainCell, SiteChainSources, failure_chain, run_stage,
+    GlobalBucket, Refused, SiteChainCell, SiteChainSources, failure_chain, run_stage,
 };
 use tracing::Instrument;
 
@@ -61,15 +61,20 @@ impl GraphqlSite {
     }
 }
 
-/// Run a resolver site's guard chain — called by `#[operations]` at the start
-/// of every resolver method, `handler` the site's declaration. Dedups the
-/// resolver's and the method's guards against the global chain, then runs each
-/// guard's `check` on the field: what they attached comes back, for the method
-/// to run under.
+/// Run a resolver site's guard chain, then its posture's class `gate` on the
+/// same field — called by `#[operations]` at the start of every resolver
+/// method, `handler` the site's declaration. Dedups the resolver's and the
+/// method's guards against the global chain, runs each guard's `check` on the
+/// field, then the gate: what the guards attached comes back, for the method to
+/// run under.
 ///
 /// `sources` is consulted only when the chain is composed. A `&dyn Fn` rather
 /// than an `impl Fn`, so this body codegens once rather than per resolver.
 /// GraphQL pipes run at the transport's request entry, not here.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one thing the decorator declared about its site; a struct would only rename them"
+)]
 pub async fn run_layered_graphql_chain(
     ctx: &Context<'_>,
     container: &Container,
@@ -78,6 +83,7 @@ pub async fn run_layered_graphql_chain(
     sources: &(dyn Fn() -> SiteChainSources + Sync),
     site: GraphqlSite,
     handler: &'static Handler,
+    gate: Option<ClassGate>,
 ) -> Result<Pending, GraphqlError> {
     let chain = cell
         .chain(container, route_label, sources, site.bucket())
@@ -87,19 +93,24 @@ pub async fn run_layered_graphql_chain(
     let operation: OperationType = ctx.query_env.operation.node.ty;
     let mut view = GraphqlView::new(handler.address(), operation, site.role());
     let mut cx = new_unit_context(handler, &mut view, None, None);
-    run_stage(&chain, &mut cx).await.map_err(|(guard, denial)| {
-        // Structural floor mirroring the HTTP edge's: every denial visible at
-        // warn+ regardless of what the individual guard logged.
-        tracing::warn!(
-            target: nest_rs_core::target::LAYERS,
-            guard,
-            route = route_label,
-            status = denial.http_status(),
-            error = failure_chain(&denial),
-            "guard denied the operation",
-        );
-        denial_to_graphql_error(denial)
-    })
+    run_stage(&chain, gate, &mut cx)
+        .await
+        .map_err(|refused| match refused {
+            Refused::Guard(guard, denial) => {
+                // Structural floor mirroring the HTTP edge's: every denial visible
+                // at warn+ regardless of what the individual guard logged.
+                tracing::warn!(
+                    target: nest_rs_core::target::LAYERS,
+                    guard,
+                    route = route_label,
+                    status = denial.http_status(),
+                    error = failure_chain(&denial),
+                    "guard denied the operation",
+                );
+                denial_to_graphql_error(denial)
+            }
+            Refused::Gate(denial) => denial_to_graphql_error(denial),
+        })
 }
 
 /// The field `ctx` resolves, as the client wrote it in the document (`listUsers`,

@@ -112,10 +112,10 @@ pub mod __private {
     pub use crate::chain::{
         Chain, GlobalBucket, SiteChainCell, SiteChainSources, split_at_covered,
     };
-    pub use crate::denial::failure_chain;
+    pub use crate::denial::{denial_of, failure_chain};
     pub use crate::reason::{client_message, denial_code, structured_reason};
     pub use crate::registry::{global_guards_active, resolve_global_chain, resolve_global_guards};
-    pub use crate::stage::run_stage;
+    pub use crate::stage::{Refused, run_stage};
     pub use crate::validate::{boot_validate_guards, validate_guard_chain};
 
     pub use nest_rs_core::__private::{ResolvedLayer, compose_chain};

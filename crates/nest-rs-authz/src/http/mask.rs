@@ -28,7 +28,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::authorize::{Authorize, class_gate};
+use super::authorize::Authorize;
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 
@@ -38,7 +38,7 @@ where
     S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned + Serialize,
 {
-    const GATE: Option<fn(&Request) -> Option<Response>> = Some(class_gate::<A, S>);
+    const GATE: Option<nest_rs_http::__private::GateFn> = Some(crate::class_gate::<A, S>);
 
     fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
         // A missing ability means the class gate already answered 500, so there

@@ -109,6 +109,28 @@ right after them, before any interceptor or filter the route declares, so
 nothing the route binds answers a caller the gate refuses. Every handler
 downstream sees an ambient `Ability` it does not have to thread.
 
+## One class gate on every edge
+
+`#[authorize(Action, Entity)]` means one thing wherever it is written — a
+route, a GraphQL operation, a WebSocket message, an MCP tool — because every
+decorator emits the same function, `nest_rs::authz::class_gate::<Action,
+Entity>`, run on the unit right after its guards:
+
+- no ability reached the unit — no ability guard ran: refused opaquely, and
+  one `error` on `nest_rs::authz` names the site and the remedy;
+- the caller is anonymous and the site is not `#[public]`: `401`, whatever
+  the visitor's rules grant — a grant written for
+  [public reads](/security/authorization/public-reads/) never satisfies an
+  `#[authorize]`;
+- no grant on the class: `403`, `forbidden`;
+- a grant the token's scopes withhold: `403` naming the scopes to ask for
+  ([Scopes](/security/authorization/scopes/)).
+
+Each refusal files one `warn`, `authorization denied`, with its `reason`, and
+reads the same on every edge, each answering in its own form. The gate is no
+feature of an edge: a package's decorator emits it for its own posture as the
+framework's do.
+
 ## Three places the framework reads it
 
 1. **`Repo::scoped(Action)` — the query pre-filter.**

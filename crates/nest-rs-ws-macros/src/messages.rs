@@ -365,9 +365,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // message never doubles as an existence oracle.
         let gate = match &posture {
             Posture::Authorize { action, entity, .. } => quote! {
-                if let ::core::result::Result::Err(__denied) =
-                    ::nest_rs_authz::ws::authorize::<#action, #entity>(#event)
-                {
+                if let ::core::result::Result::Err(__denied) = ::nest_rs_ws::__private::class_gate(
+                    __client,
+                    #message_handler,
+                    ::nest_rs_authz::class_gate::<#action, #entity>,
+                ) {
                     return ::nest_rs_ws::WsReply::Error(__denied);
                 }
             },

@@ -60,12 +60,15 @@ Review a new edge, or a change to one, against it:
    (`bind = Service`, `id_arg`); `#[routes]`' posture is optional, because a
    route may be gated by `#[use_guards]` alone, and it refuses `#[authorize]` on
    `#[sse]` and a posture bound to a handler parameter.
-3. **A class gate the posture emits** — `nest_rs_authz::<edge>::authorize` over
-   the shared `gate`, so `#[authorize]` cannot mean several things; a missing
-   ambient ability fails closed. HTTP's `Authorize` does not call `gate`: its
-   first rung refuses every visitor, and HTTP's public-reads pattern needs a
-   visitor grant to satisfy it — on HTTP the route's posture asks whether there
-   is a principal, on the in-band edges the gate does (`Ability::is_visitor`).
+3. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, E>`,
+   one function for every edge and ungated by any edge feature, run on the unit
+   right after its guards, so `#[authorize]` cannot mean several things; a
+   missing ambient ability fails closed. Off a `#[public]` site it refuses a
+   caller no principal backs (`Ability::is_visitor`) whatever the visitor's
+   rules grant, on HTTP as elsewhere; a hand-written `Authorize<A, E>` on a
+   `#[public]` route reads the visitor's grant, the public-reads pattern. One
+   refusal reads one sentence on every edge (RFC 6750 §3.1's for a scope) and
+   files one `warn`; an edge renders the `Denial` it carries.
 4. **Response masking armed by the posture**, never hand-written in a body,
    chosen by the protocol rather than by symmetry (`data-layer.md`, *Response
    masking*).

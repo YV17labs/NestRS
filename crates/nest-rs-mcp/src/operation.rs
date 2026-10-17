@@ -2,10 +2,10 @@
 
 use std::fmt;
 
-use nest_rs_core::__private::{Pending, new_unit_context};
+use nest_rs_core::__private::{ClassGate, Pending, new_unit_context};
 use nest_rs_core::{Container, Handler};
 use nest_rs_guards::__private::{
-    GlobalBucket, SiteChainCell, SiteChainSources, failure_chain, run_stage,
+    Chain, GlobalBucket, Refused, SiteChainCell, SiteChainSources, failure_chain, run_stage,
 };
 
 use crate::McpError;
@@ -44,17 +44,21 @@ impl fmt::Display for McpOperationKind {
     }
 }
 
-/// Run an operation site's guard chain — called by `#[tools]` at the start of
-/// every decorated operation, `handler` the site's declaration: the app-wide
-/// pool, the host's `#[use_guards]` and the operation's own, each guard's
-/// `check` on the operation; what they attached comes back, for the operation
-/// to run under.
+/// Run an operation site's guard chain, then its posture's class `gate` on the
+/// same operation — called by `#[tools]` at the start of every decorated
+/// operation, `handler` the site's declaration: the app-wide pool, the host's
+/// `#[use_guards]` and the operation's own, each guard's `check` on the
+/// operation; what they attached comes back, for the operation to run under.
 ///
 /// The pool is part of this chain, as on `/graphql`: the endpoint's request
 /// runs `check_http`, never `check`, so leaving the pool out here would leave a
 /// global guard overriding only `check` never consulted. `cell` memoizes the
 /// composed chain per app; `sources` is consulted only on the miss that
 /// composes it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one thing the decorator declared about its site; a struct would only rename them"
+)]
 pub async fn run_layered_mcp_chain(
     cell: &SiteChainCell,
     route_label: &'static str,
@@ -63,41 +67,48 @@ pub async fn run_layered_mcp_chain(
     name: &'static str,
     sources: &(dyn Fn() -> SiteChainSources + Sync),
     handler: &'static Handler,
+    gate: Option<ClassGate>,
 ) -> Result<Pending, McpError> {
-    let Some(container) = current_container() else {
-        // No app is ambient: declared guards cannot be resolved, so the
-        // operation fails closed; one that declared none loses nothing.
-        let declared = sources();
-        if declared.provider.is_empty() && declared.method.is_empty() {
-            return Ok(Pending::default());
+    let chain = match current_container() {
+        Some(container) => cell
+            .chain(&container, route_label, sources, |_| GlobalBucket::Fold)
+            .map_err(denial_to_mcp_error)?,
+        None => {
+            // No app is ambient: declared guards cannot be resolved, so the
+            // operation fails closed; one that declared none loses nothing.
+            let declared = sources();
+            if !declared.provider.is_empty() || !declared.method.is_empty() {
+                return Err(unresolvable_chain(route_label));
+            }
+            Chain::from(Vec::new())
         }
-        return Err(unresolvable_chain(route_label));
     };
-
-    let chain = cell
-        .chain(&container, route_label, sources, |_| GlobalBucket::Fold)
-        .map_err(denial_to_mcp_error)?;
-    if chain.is_empty() {
+    if chain.is_empty() && gate.is_none() {
         return Ok(Pending::default());
     }
 
     let mut view = McpView::new(kind, name, host);
     let mut cx = new_unit_context(handler, &mut view, None, None);
-    run_stage(&chain, &mut cx).await.map_err(|(guard, denial)| {
-        // Structural floor mirroring the HTTP edge's; host and operation stay
-        // separate fields for an incident query.
-        tracing::warn!(
-            target: nest_rs_core::target::LAYERS,
-            guard,
-            host,
-            kind = kind.as_str(),
-            operation = name,
-            status = denial.http_status(),
-            error = failure_chain(&denial),
-            "guard denied the operation",
-        );
-        denial_to_mcp_error(denial)
-    })
+    run_stage(&chain, gate, &mut cx)
+        .await
+        .map_err(|refused| match refused {
+            Refused::Guard(guard, denial) => {
+                // Structural floor mirroring the HTTP edge's; host and operation
+                // stay separate fields for an incident query.
+                tracing::warn!(
+                    target: nest_rs_core::target::LAYERS,
+                    guard,
+                    host,
+                    kind = kind.as_str(),
+                    operation = name,
+                    status = denial.http_status(),
+                    error = failure_chain(&denial),
+                    "guard denied the operation",
+                );
+                denial_to_mcp_error(denial)
+            }
+            Refused::Gate(denial) => denial_to_mcp_error(denial),
+        })
 }
 
 /// Whether an operation's description holds no prose — `str::trim` leaves

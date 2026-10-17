@@ -226,7 +226,7 @@ message.
 **Above that, a message declares its posture like an operation on any
 other transport**, and it is mandatory: `#[authorize(Action, Entity)]` or
 `#[public]`, or it does not compile. `#[authorize]` emits the class gate
-(`nest_rs::authz::ws::authorize`) before the payload is deserialized and
+(`nest_rs::authz::class_gate`, every edge's) before the payload is deserialized and
 the reply mask afterwards — so a handler answering with entity rows
 writes **no masking call**. It fails closed when no ambient ability is
 present, which is exactly the state of a gateway whose app imported

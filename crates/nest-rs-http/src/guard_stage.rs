@@ -14,8 +14,8 @@ use nest_rs_core::__private::{
     Pending, ResolvedLayer, UnmaskedReply, carries_ambient, install_pending, new_unit_context,
     take_pending,
 };
-use nest_rs_core::{AmbientValue, Handler};
-use nest_rs_guards::__private::failure_chain;
+use nest_rs_core::{AmbientValue, Failure, Handler};
+use nest_rs_guards::__private::{denial_of, failure_chain};
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
 use poem::http::{HeaderValue, StatusCode, header};
 use poem::{Error, IntoResponse, Request, Response};
@@ -23,6 +23,7 @@ use poem::{Error, IntoResponse, Request, Response};
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::poem_bridge::{request_from_poem, request_to_poem};
 use crate::problem::ProblemDetails;
+use crate::shaper::GateFn;
 use crate::view::HttpView;
 
 /// What a request's guard stages attached so far, held on the request between a
@@ -30,10 +31,18 @@ use crate::view::HttpView;
 #[derive(Clone, Default)]
 struct Attached(Pending);
 
+/// Why a guard stage refused its unit.
+enum Refused {
+    /// A guard's denial, beside the guard's name, as raised: the edge files it.
+    Guard(&'static str, Denial),
+    /// The posture's class gate: it filed its own refusal.
+    Gate(Failure),
+}
+
 /// Run each of `guards`' [`check_http`](Guard::check_http), in order, on
-/// `request` as the unit `handler` declares: the request back with what the
-/// stage attached, or the first refusal beside the name of the guard that
-/// raised it, as raised.
+/// `request` as the unit `handler` declares, then each of the route's class
+/// `gates` on the same unit: the request back with what the stage attached, or
+/// the first refusal.
 ///
 /// The stage runs under what an earlier stage of the same request attached,
 /// so a guard reads its predecessors' attachments through
@@ -41,8 +50,9 @@ struct Attached(Pending);
 async fn run_stage<'g>(
     handler: &'static Handler,
     guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
+    gates: &[GateFn],
     request: crate::Request,
-) -> (crate::Request, Result<Pending, (&'static str, Denial)>) {
+) -> (crate::Request, Result<Pending, Refused>) {
     let earlier = pending_in(request.extensions());
     let mut view = HttpView::new(request);
     let checked = install_pending(earlier, async {
@@ -51,7 +61,10 @@ async fn run_stage<'g>(
             guard
                 .check_http(&mut cx)
                 .await
-                .map_err(|denial| (name, denial))?;
+                .map_err(|denial| Refused::Guard(name, denial))?;
+        }
+        for gate in gates {
+            gate(&mut cx).map_err(Refused::Gate)?;
         }
         Ok(take_pending(&mut cx))
     })
@@ -63,10 +76,33 @@ async fn run_stage<'g>(
 async fn run_poem_stage<'g>(
     handler: &'static Handler,
     guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
+    gates: &[GateFn],
     request: Request,
-) -> (Request, Result<Pending, (&'static str, Denial)>) {
-    let (request, checked) = run_stage(handler, guards, request_from_poem(request)).await;
+) -> (Request, Result<Pending, Refused>) {
+    let (request, checked) = run_stage(handler, guards, gates, request_from_poem(request)).await;
     (request_to_poem(request), checked)
+}
+
+impl Refused {
+    /// The refusal's answer, a guard's denial filed first.
+    fn answer(self) -> Response {
+        match self {
+            Self::Guard(guard, denial) => deny_http(guard, denial),
+            Self::Gate(refused) => denial_to_http_response(denial_of(&refused)),
+        }
+    }
+
+    /// The denial a guard raised, its name filed with it — the in-band stage
+    /// renders it as its edge does — or a gate's, already filed.
+    fn into_denial(self) -> Denial {
+        match self {
+            Self::Guard(guard, denial) => {
+                file_denial(guard, &denial);
+                denial
+            }
+            Self::Gate(refused) => denial_of(&refused),
+        }
+    }
 }
 
 /// The guards of a composed chain, as the stage runs them: on the erased guard,
@@ -88,12 +124,9 @@ pub async fn check_request<'g>(
     req: &mut crate::Request,
 ) -> Result<(), Denial> {
     let taken = std::mem::replace(req, crate::Request::builder().finish());
-    let (request, checked) = run_stage(handler, guards, taken).await;
+    let (request, checked) = run_stage(handler, guards, &[], taken).await;
     *req = request;
-    let pending = checked.map_err(|(guard, denial)| {
-        file_denial(guard, &denial);
-        denial
-    })?;
+    let pending = checked.map_err(Refused::into_denial)?;
     let attached = req.extensions_mut();
     match attached.get_mut::<Attached>() {
         Some(Attached(earlier)) => earlier.merge(pending),
@@ -144,14 +177,16 @@ pub fn attached<T: AmbientValue>(req: &crate::Request) -> Option<Arc<T>> {
     req.extensions().get::<Attached>()?.0.get::<T>()
 }
 
-/// Run `chain` on `req` as the unit `handler` declares, then `rest` under what
-/// it attached — or the denial's answer, its structural `warn` filed.
+/// Run `chain` on `req` as the unit `handler` declares, then the route's class
+/// `gates` on the same unit, then `rest` under what the guards attached — or
+/// the refusal's answer, a guard's structural `warn` filed.
 ///
 /// `unmasked` says no response mask shapes what `rest` answers, so the reads
 /// a mask would scope are withheld from it ([`UnmaskedReply`]).
 pub(crate) async fn guard_then<F, Fut>(
     handler: &'static Handler,
     chain: &[ResolvedLayer<dyn Guard>],
+    gates: &[GateFn],
     req: Request,
     rest: F,
     unmasked: bool,
@@ -160,13 +195,13 @@ where
     F: FnOnce(Request) -> Fut,
     Fut: Future<Output = poem::Result<Response>>,
 {
-    // No guard to run: the request stays poem's, and nothing is attached.
-    let (req, pending) = if chain.is_empty() {
+    // Nothing to run: the request stays poem's, and nothing is attached.
+    let (req, pending) = if chain.is_empty() && gates.is_empty() {
         (req, Pending::default())
     } else {
-        match run_poem_stage(handler, erased(chain), req).await {
+        match run_poem_stage(handler, erased(chain), gates, req).await {
             (req, Ok(pending)) => (req, pending),
-            (_, Err((guard, denial))) => return Ok(deny_http(guard, denial)),
+            (_, Err(refused)) => return Ok(refused.answer()),
         }
     };
     install_pending(marked(pending, unmasked), rest(req)).await
@@ -208,12 +243,10 @@ impl GuardedEndpoint {
 
 impl Endpoint for GuardedEndpoint {
     async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
-        let (req, pending) = match run_stage(self.handler, erased(&self.chain), req).await {
+        let (req, pending) = match run_stage(self.handler, erased(&self.chain), &[], req).await {
             (req, Ok(pending)) => (req, pending),
-            (_, Err((guard, denial))) => {
-                return Ok(crate::poem_bridge::response_from_poem(deny_http(
-                    guard, denial,
-                )));
+            (_, Err(refused)) => {
+                return Ok(crate::poem_bridge::response_from_poem(refused.answer()));
             }
         };
         install_pending(marked(pending, false), self.inner.call(req)).await
@@ -690,7 +723,7 @@ mod tests {
             let marked = nest_rs_core::ambient::<UnmaskedReply>().is_some();
             Ok(Response::builder().body(if marked { "withheld" } else { "bare" }))
         };
-        let answer = guard_then(&ROUTE, chain, req, rest, true)
+        let answer = guard_then(&ROUTE, chain, &[], req, rest, true)
             .await
             .expect("answers");
         answer.into_body().into_string().await.expect("a body") == "withheld"

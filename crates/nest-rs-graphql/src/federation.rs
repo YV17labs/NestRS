@@ -25,7 +25,7 @@ use nest_rs_core::__private::{
     new_unit_context,
 };
 use nest_rs_core::{Container, Handler, Posture};
-use nest_rs_guards::__private::{failure_chain, resolve_global_chain, run_stage};
+use nest_rs_guards::__private::{Refused, failure_chain, resolve_global_chain, run_stage};
 use nest_rs_guards::{Guard, GuardSpecs};
 
 use crate::config::GraphqlConfig;
@@ -161,17 +161,23 @@ impl Extension for FederationExtension {
         let mut view =
             GraphqlView::new(site.address(), OperationType::Query, FieldRole::Federation);
         let mut cx = new_unit_context(site, &mut view, None, None);
-        let attached = run_stage(pool, &mut cx).await.map_err(|(guard, denial)| {
-            // Same structural floor as a resolver site's chain.
-            tracing::warn!(
-                target: nest_rs_core::target::LAYERS,
-                guard,
-                route = "POST /graphql (federation)",
-                field = site.address(),
-                status = denial.http_status(),
-                error = failure_chain(&denial),
-                "guard denied the federation field",
-            );
+        let attached = run_stage(pool, None, &mut cx).await.map_err(|refused| {
+            let denial = match refused {
+                Refused::Guard(guard, denial) => {
+                    // Same structural floor as a resolver site's chain.
+                    tracing::warn!(
+                        target: nest_rs_core::target::LAYERS,
+                        guard,
+                        route = "POST /graphql (federation)",
+                        field = site.address(),
+                        status = denial.http_status(),
+                        error = failure_chain(&denial),
+                        "guard denied the federation field",
+                    );
+                    denial
+                }
+                Refused::Gate(denial) => denial,
+            };
             denial_to_graphql_error(denial).into_server_error(info.field.name.pos)
         })?;
         install_pending(attached, next.run(ctx, info)).await

@@ -25,8 +25,8 @@ mod widget {
 #[tokio::test]
 async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy() {
     let logs = LogCapture::install();
-    // No `Arc<Ability>` in extensions: the shape a route gets when `#[authorize]`
-    // is written but `AuthzHttpModule` is not imported.
+    // No ambient `Ability`: the shape a route gets when `#[authorize]` is
+    // written but no ability guard runs on it.
     let req = Request::builder()
         .uri("/widgets/1".parse().unwrap())
         .finish();
@@ -38,18 +38,10 @@ async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy(
         .expect("a missing ambient ability is a wiring bug, not a pass");
     assert_eq!(err.status(), poem::http::StatusCode::INTERNAL_SERVER_ERROR);
 
-    let event = logs.expect_one(
-        "nest_rs::authz",
-        "missing request Ability — route is authorized but no ability guard ran",
-    );
+    let event = logs.expect_one("nest_rs::authz", "authorization denied");
     assert_eq!(event.level, "error");
-    // `original_uri` is `/` on a hand-built request; what matters is that each
-    // field is carried.
-    assert!(
-        event.field("path").is_some(),
-        "the event names the route, got {:?}",
-        event.fields,
-    );
+    assert_eq!(event.field("transport").as_deref(), Some("http"));
+    assert_eq!(event.field("reason").as_deref(), Some("no_ambient_ability"));
     assert!(
         event.field("subject").is_some_and(|s| s.contains("widget")),
         "the event names the subject, got {:?}",
@@ -57,7 +49,7 @@ async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy(
     );
     assert!(
         event
-            .field("hint")
+            .field("remedy")
             .is_some_and(|h| h.contains("AuthzModule")),
         "the event carries the remedy, got {:?}",
         event.fields,

@@ -59,7 +59,7 @@
 //!
 //! `#[authorize(Action, Entity)]` or `#[public]`, and **neither is optional** —
 //! a message with no posture does not compile. `#[authorize]` emits the class
-//! gate (`nest_rs_authz::ws::authorize`) before the payload is deserialized and
+//! gate (`nest_rs_authz::class_gate`) before the payload is deserialized and
 //! the reply mask (`nest_rs_authz::ws::masked_reply_for`) around the returned
 //! value. `#[public]` declares the message deliberately ungated: the guards bound
 //! on the gateway and beside the message still run.
@@ -183,7 +183,7 @@ pub mod __private {
 
     pub use crate::gateway::gateway_endpoint;
     pub use crate::guard::{
-        EventChain, EventLayerTable, check_ws_gateway, guard_ws_upgrade, ws_event_chain,
+        EventChain, EventLayerTable, check_ws_gateway, class_gate, guard_ws_upgrade, ws_event_chain,
     };
     pub use crate::namespace::WsNamespaceEntry;
 }

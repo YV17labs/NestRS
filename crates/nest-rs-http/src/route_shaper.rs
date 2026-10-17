@@ -52,9 +52,14 @@ where
     async fn call(&self, req: Request) -> Result<Response> {
         // What the guards attach is withheld from the reads a mask would scope
         // when no response shaper masks the route's reply.
+        // The class gates run in the guard stage, after the guards whose ability
+        // they read: before the pipes, so a refused caller pays for no
+        // validation, and outside every route-scoped interceptor and filter, so
+        // none answers or maps what they refuse.
         crate::guard_stage::guard_then(
             self.handler,
             &self.guards,
+            &self.gates,
             req,
             |req| self.after_the_guards(req),
             !self.masked,
@@ -69,15 +74,6 @@ where
 {
     /// Everything after the guard stage, under what it attached.
     async fn after_the_guards(&self, mut req: Request) -> Result<Response> {
-        // After the guards, whose ability it reads; before the pipes, so a
-        // refused caller pays for no validation; and outside every route-scoped
-        // interceptor and filter, so none answers or maps what it refuses.
-        for gate in &self.gates {
-            if let Some(refusal) = gate(&req) {
-                return Ok(refusal);
-            }
-        }
-
         if !self.pipes.is_empty() {
             // Boxed on purpose: inlining `apply_body_pipes`' large state machine
             // would bloat every route's future, which poem boxes per request.
@@ -513,9 +509,13 @@ mod tests {
     /// gate answering before it answers before them.
     #[tokio::test]
     async fn a_route_gate_alone_shapes_the_route_and_answers_before_the_endpoint() {
-        fn refuse_unless_admitted(req: &Request) -> Option<Response> {
-            (!req.headers().contains_key("x-admitted"))
-                .then(|| Response::builder().status(StatusCode::FORBIDDEN).finish())
+        fn refuse_unless_admitted(
+            cx: &mut nest_rs_core::UnitContext<'_>,
+        ) -> std::result::Result<(), nest_rs_core::Failure> {
+            match crate::HttpView::of(cx)?.request().header("x-admitted") {
+                Some(_) => Ok(()),
+                None => Err(Denial::forbidden("not admitted").into()),
+            }
         }
 
         let container = Container::default();

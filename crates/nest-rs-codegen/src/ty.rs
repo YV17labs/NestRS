@@ -211,6 +211,15 @@ pub fn returns_unit(output: &syn::ReturnType) -> bool {
     }
 }
 
+/// Where a type probe refuses what a method answers: its return type, or its
+/// name when it writes none.
+pub fn answer_span(sig: &syn::Signature) -> proc_macro2::Span {
+    match &sig.output {
+        syn::ReturnType::Type(_, ty) => syn::spanned::Spanned::span(ty),
+        syn::ReturnType::Default => sig.ident.span(),
+    }
+}
+
 /// What an impl half's expansion calls a decorated method through — the one
 /// thing about the receiver that differs between the nine decorators.
 #[derive(Clone, Copy, PartialEq, Eq)]

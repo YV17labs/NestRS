@@ -8,7 +8,6 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
 use syn::{
     Attribute, FnArg, GenericArgument, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path,
     PathArguments, Signature, Token, Type, parse_quote,
@@ -596,11 +595,7 @@ fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenS
         };
     }
     if root == RootKind::Subscription {
-        let span = match &sig.output {
-            syn::ReturnType::Type(_, ty) => ty.span(),
-            syn::ReturnType::Default => sig.ident.span(),
-        };
-        let probe = quote_spanned! {span=>
+        let probe = quote_spanned! {nest_rs_codegen::answer_span(sig)=>
             ::nest_rs_graphql::__private::answers_a_stream(::nest_rs_core::__private::Answer(&__answer).kind());
         };
         return quote! {{

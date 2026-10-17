@@ -14,7 +14,6 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
 use syn::{
     Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Path, Signature, Token, Type,
 };
@@ -438,11 +437,9 @@ fn wrapper(self_ty: &Type, op: &Operation, generic: bool) -> syn::Result<TokenSt
     // A refusal becomes the operation's answer at one site, typed by
     // `OperationAnswer`, so a non-`Result` return is refused once, at the return type.
     let piped: Vec<&syn::Ident> = pipes.iter().map(|arg| &arg.ident).collect();
-    let span = match &sig.output {
-        syn::ReturnType::Type(_, ty) => ty.span(),
-        syn::ReturnType::Default => sig.ident.span(),
+    let refused = quote_spanned! {nest_rs_codegen::answer_span(sig)=>
+        ::nest_rs_mcp::__private::refused(__nestrs_refusal)
     };
-    let refused = quote_spanned! {span=> ::nest_rs_mcp::__private::refused(__nestrs_refusal) };
     Ok(quote! {
         #role_attr
         #wire_sig {

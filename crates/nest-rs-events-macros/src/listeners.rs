@@ -5,12 +5,11 @@ use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
+use syn::ImplItem;
 use syn::ext::IdentExt;
-use syn::spanned::Spanned;
-use syn::{ImplItem, ReturnType};
 
 use nest_rs_codegen::{
-    VersionedEdge, await_if_async, cfg_attrs, impl_self_ident, parse_on_event_args,
+    VersionedEdge, answer_span, await_if_async, cfg_attrs, impl_self_ident, parse_on_event_args,
     payload_arg_type, snake_case,
 };
 
@@ -119,11 +118,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             quote!(<#self_ty>::#method_ident(&__provider, __event)),
         );
         // What the method answers is read by its type, refused at its return type.
-        let answer_span = match &method.sig.output {
-            ReturnType::Type(_, ty) => ty.span(),
-            ReturnType::Default => method.sig.ident.span(),
-        };
-        let answered = quote_spanned! {answer_span=>
+        let answered = quote_spanned! {answer_span(&method.sig)=>
             ::nest_rs_events::__private::answered(__nestrs_answer)
         };
 

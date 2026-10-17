@@ -179,6 +179,14 @@ impl From<Response> for poem::Response {
     }
 }
 
+/// A nestrs response answered by a handler still mounted on poem, as
+/// `#[sse]`'s is.
+impl poem::IntoResponse for Response {
+    fn into_response(self) -> poem::Response {
+        response_to_poem(self)
+    }
+}
+
 /// A poem error as nestrs's: an [`HttpError`] that crossed into poem comes
 /// back whole, with what poem's side added to it; any other answers as poem
 /// renders it, its `set_data` values kept inside it — they reach the response,

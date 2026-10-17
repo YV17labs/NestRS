@@ -81,6 +81,15 @@ Each event carries an `id`, so a browser that reconnects sends the last one
 back as `Last-Event-ID`; `Header<StreamResumeDto>` reads it, and the stream
 resumes rather than replays.
 
+nestrs writes each event itself, as the browser reads it
+([WHATWG HTML §9.2](https://html.spec.whatwg.org/multipage/server-sent-events.html)).
+Every line of the data — split on `\r\n`, `\n` or `\r`, the three breaks an
+`EventSource` splits on — goes on a `data:` line of its own, so no payload can
+open a field of its own; an `id` or an event type holds one line, and any line
+break in it is dropped. `.retry(Duration)` tells the browser how long to wait
+before it reconnects, and an event with no data sets its `id` or retry hint
+without dispatching anything.
+
 `SseEvent` and `SseStream` come from `nest_rs::http`, which also re-exports
 `futures_util` — so a controller that streams declares no transport crate of
 its own. `SseStream::new` is what makes the stream

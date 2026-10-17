@@ -1,13 +1,14 @@
-//! Attribute-referenced layers (`#[use_guards/filters/interceptors]`) and
-//! every edge host's dependencies, optional ones included, satisfy the access
-//! contract: one whose module isn't imported fails the boot.
+//! Attribute-referenced layers (`#[use_guards/filters/interceptors]`), every
+//! edge host's dependencies, optional ones included, and the providers a
+//! handler's parameters resolve satisfy the access contract: one whose module
+//! isn't imported fails the boot.
 
 use std::sync::Arc;
 
-use nest_rs_core::{AccessGraphError, App, Layer, injectable, module};
+use nest_rs_core::{AccessGraphError, App, Layer, MissingDependencyError, injectable, module};
 use nest_rs_graphql::{async_graphql, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_http::{Scoped, async_trait, controller, routes};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
@@ -294,4 +295,82 @@ async fn an_edge_hosts_optional_dependency_another_reached_module_provides_needs
         assert_eq!(error.consumer, host);
         assert_eq!(error.owner, "DirectoryModule", "{host}");
     }
+}
+
+#[injectable(scope = request)]
+struct Basket;
+
+#[module(providers = [Basket])]
+struct BasketModule;
+
+#[controller(path = "/basket")]
+struct BasketController;
+
+#[routes]
+impl BasketController {
+    #[get("/")]
+    async fn basket(&self, _basket: Scoped<Basket>) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [BasketController])]
+struct BasketHttpModule;
+
+/// The basket's module is reached through a sibling, never imported by the
+/// controller's own.
+#[module(imports = [BasketModule, BasketHttpModule])]
+struct StrayBasketRoot;
+
+#[module(imports = [BasketModule], providers = [BasketController])]
+struct ImportedBasketModule;
+
+#[tokio::test]
+async fn a_handler_scoped_parameter_whose_module_is_not_imported_fails_the_boot() {
+    let access = built_boot_error::<StrayBasketRoot>("a handler's `Scoped` parameter").await;
+    assert_eq!(access.consumer, "BasketController");
+    assert_eq!(access.owner, "BasketModule");
+}
+
+/// Offered by no module.
+#[injectable(scope = request)]
+struct Coupon;
+
+#[controller(path = "/coupon")]
+struct CouponController;
+
+#[routes]
+impl CouponController {
+    #[get("/")]
+    async fn coupon(&self, _coupon: Scoped<Coupon>) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [CouponController])]
+struct CouponHttpModule;
+
+#[tokio::test]
+async fn a_handler_scoped_parameter_no_module_offers_fails_the_boot_naming_it() {
+    let missing = match App::builder().module::<CouponHttpModule>().build().await {
+        Ok(_) => panic!("a `Scoped` parameter no module offers must fail the boot"),
+        Err(err) => err
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|err| panic!("not the unmet dependency: {err:#}")),
+    };
+    assert_eq!(missing.consumer, "CouponController");
+    assert!(
+        missing.dependency.ends_with("::Coupon"),
+        "{}",
+        missing.dependency
+    );
+}
+
+#[tokio::test]
+async fn a_handler_scoped_parameter_on_a_request_scoped_provider_it_imports_boots() {
+    App::builder()
+        .module::<ImportedBasketModule>()
+        .build()
+        .await
+        .expect("a request is the consumer, so a request-scoped provider is the point");
 }

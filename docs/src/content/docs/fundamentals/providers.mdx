@@ -151,6 +151,15 @@ async fn trace(&self, log: Scoped<RequestLogger>) -> String {
 }
 ```
 
+**A `Scoped<T>` parameter is inside the access contract**, like an
+`#[inject]` field: `RequestLogger` must be provided by the controller's module
+or a module it imports. One reached through no import fails the boot with an
+`AccessGraphError`, and one no module provides with a
+`MissingDependencyError` naming it — never a `500` at the first request. A
+request-scoped provider is the point of the parameter, so the boot checks where
+it comes from, never its scope. `nest_rs::seaorm::Bind<A, S>` is held the same
+way for the service `S` it loads through.
+
 HTTP, GraphQL, and MCP each install a fresh request scope per call
 (one per request for HTTP, one per operation for GraphQL and MCP).
 Within a scope, request-scoped providers are cached and shared; across

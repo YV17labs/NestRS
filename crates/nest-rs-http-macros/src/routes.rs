@@ -14,8 +14,8 @@ use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::{
     Collision, Conditional, DispatchKeys, HostBorrow, RoutePath, await_if_async, cfg_attrs,
     force_guard_typeids, guard_capability_bounds, impl_self_ident, injected_methods_with_layers,
-    layer_deps, mixed_site_ident, normalize_forwarded_args, nth_generic_type, scoped_specs,
-    shared_receiver, take_flag_attr,
+    injected_per_request_method, layer_deps, mixed_site_ident, normalize_forwarded_args,
+    nth_generic_type, scoped_specs, shared_receiver, take_flag_attr,
 };
 
 use crate::attr::opt_str;
@@ -37,6 +37,9 @@ struct RouteHandler {
     /// The type `#[authorize]` declares, then every parameter type, in order:
     /// arming a shaper and selecting a class gate are type-directed.
     probe_types: Vec<Type>,
+    /// Every parameter type, in order: the providers an extractor resolves per
+    /// request are read off them.
+    param_types: Vec<Type>,
     /// The type `#[authorize]` declares, or a parameter *spelled*
     /// `Authorize<..>` / `Bind<..>`, kept so one not implementing the shaper
     /// trait is a spanned compile error.
@@ -498,6 +501,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             filters,
             interceptors,
             probe_types,
+            param_types: param_types(&inputs),
             named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
             has_extractors: !inputs.is_empty(),
             handler: nest_rs_codegen::handler_ref(&self_ty, &method_name),
@@ -783,6 +787,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }),
     );
     let injected_methods = injected_methods_with_layers(&self_ty, &route_layers);
+    // A provider a parameter resolves per request is checked like an `#[inject]`
+    // one: an unimported `Scoped<T>` or `Bind<A, S>` target fails the boot.
+    let injected_per_request = injected_per_request_method(
+        routes_by_path
+            .iter()
+            .flat_map(|group| group.handlers.iter())
+            .flat_map(|handler| {
+                handler.param_types.iter().map(|item| Conditional {
+                    cfgs: &handler.cfgs,
+                    item,
+                })
+            }),
+    );
 
     // `Guard::check_http` defaults to `Ok(())`, so a guard without the HTTP
     // capability would pass every request.
@@ -902,6 +919,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods
+
+            #injected_per_request
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
@@ -1145,6 +1164,7 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
 fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
     let RouteHandler {
         verb: _,
+        param_types: _,
         deprecation_header,
         versions: _,
         cfgs: _,

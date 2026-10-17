@@ -98,10 +98,12 @@ Review a new edge, or a change to one, against it:
    never a second refusal: a cell is built, pending (refused as a silent no-op
    until the edge runs the family) or refused with its fact, and the change
    that builds a family flips its cell.
-9. **Request scope and a unit of work** — `Scoped<T>`, and each dispatch run
-   through `nest_rs_database::run_unit` over the `dyn UnitOfWork` resolved at
-   mount, committing on the edge's own outcome, so commit and rollback cannot
-   drift (`data-layer.md`).
+9. **Request scope and a unit of work** — `Scoped<T>`, a parameter the boot
+   checks (its provider is inside the access contract, through
+   `ResolvesProvider` and the impl half's probe — HTTP's today), and each
+   dispatch run through `nest_rs_database::run_unit` over the `dyn UnitOfWork`
+   resolved at mount, committing on the edge's own outcome, so commit and
+   rollback cannot drift (`data-layer.md`).
 10. **A `#[config]` and its `for_root`** (`container.md`).
 11. **Error opacity** — an error that is neither the edge's own deliberate
     error, a `nest_rs_core::ToProblem` error where the edge reads one, nor

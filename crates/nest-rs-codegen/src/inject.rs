@@ -4,9 +4,9 @@
 
 use std::collections::HashSet;
 
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Group, Spacing, TokenStream as TokenStream2, TokenTree};
 use quote::{ToTokens, quote};
-use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Signature};
+use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Signature, Type};
 
 use crate::attrs::Conditional;
 use crate::ty::{arc_inner, nth_generic_type, type_label};
@@ -462,6 +462,77 @@ pub fn injected_methods_with_layers(
     }
 }
 
+/// `Discoverable::injected_per_request` for an impl half whose dispatched
+/// methods take extractors: each parameter type asked of
+/// `nest_rs_core::__private::ParamProbe`, on `&&ParamProbe<T>` — the autoref
+/// depth its unit tests pin — so the providers they resolve per request join
+/// the access graph, each under its method's `#[cfg]`s. Nothing is emitted when
+/// no method takes a parameter, which keeps the trait's empty default.
+pub fn injected_per_request_method<'a>(
+    params: impl IntoIterator<Item = Conditional<'a, Type>>,
+) -> TokenStream2 {
+    let mut seen = HashSet::new();
+    let probes: Vec<TokenStream2> = params
+        .into_iter()
+        .filter_map(|Conditional { cfgs, item }| {
+            let ty = lifetimes_static(item.to_token_stream());
+            seen.insert(format!("{} {ty}", quote!(#(#cfgs)*))).then(|| {
+                quote! {
+                    #(#cfgs)*
+                    let () = __nestrs_resolved.extend(
+                        (&&::nest_rs_core::__private::ParamProbe::<#ty>::new())
+                            .resolved_provider(),
+                    );
+                }
+            })
+        })
+        .collect();
+    if probes.is_empty() {
+        return quote! {};
+    }
+    quote! {
+        fn injected_per_request() -> ::std::vec::Vec<(::core::any::TypeId, &'static str)> {
+            #[allow(
+                unused_imports,
+                reason = "the probe's two arms are in scope for autoref, which no lint sees"
+            )]
+            use ::nest_rs_core::__private::{ParamProbeFallback as _, ParamProbeResolves as _};
+            let mut __nestrs_resolved = ::std::vec::Vec::new();
+            #(#probes)*
+            __nestrs_resolved
+        }
+    }
+}
+
+/// `tokens` with every named lifetime read as `'static`: a probe in a method
+/// body names no lifetime of the signature it was read off, and a provider's
+/// key is `'static` anyway.
+fn lifetimes_static(tokens: TokenStream2) -> TokenStream2 {
+    let mut out = Vec::new();
+    let mut tokens = tokens.into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        match token {
+            TokenTree::Punct(tick)
+                if tick.as_char() == '\'' && tick.spacing() == Spacing::Joint =>
+            {
+                out.push(TokenTree::Punct(tick));
+                if let Some(TokenTree::Ident(name)) = tokens.peek() {
+                    let span = name.span();
+                    tokens.next();
+                    out.push(TokenTree::Ident(Ident::new("static", span)));
+                }
+            }
+            TokenTree::Group(group) => {
+                let mut read = Group::new(group.delimiter(), lifetimes_static(group.stream()));
+                read.set_span(group.span());
+                out.push(TokenTree::Group(read));
+            }
+            other => out.push(other),
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// `Discoverable::dependencies` for eagerly-built providers — drives
 /// register-phase ordering.
 pub fn dependencies_method(dep_keys: &[TokenStream2]) -> TokenStream2 {
@@ -557,6 +628,45 @@ mod tests {
     use syn::parse_quote;
 
     use super::*;
+
+    #[test]
+    fn a_probe_names_no_lifetime_of_the_signature_it_was_read_off() {
+        let read: Type = parse_quote!(Pair<'a, &'b Request, &'static str, &'_ Body>);
+        assert_eq!(
+            lifetimes_static(read.to_token_stream()).to_string(),
+            quote!(Pair<'static, &'static Request, &'static str, &'static Body>).to_string(),
+        );
+    }
+
+    #[test]
+    fn each_parameter_type_is_probed_once_under_its_methods_cfgs() {
+        let scoped: Type = parse_quote!(Scoped<Cart>);
+        let json: Type = parse_quote!(Json<Order>);
+        let gated = [quote!(#[cfg(feature = "carts")])];
+        let emitted = injected_per_request_method([
+            Conditional::from(&scoped),
+            Conditional::from(&json),
+            Conditional::from(&scoped),
+            Conditional {
+                cfgs: &gated,
+                item: &scoped,
+            },
+        ])
+        .to_string();
+        assert_eq!(
+            emitted.matches("ParamProbe :: < Scoped < Cart >").count(),
+            2
+        );
+        assert_eq!(emitted.matches("ParamProbe :: < Json < Order >").count(), 1);
+        assert!(
+            emitted.contains("# [cfg (feature = \"carts\")]"),
+            "{emitted}"
+        );
+        assert!(
+            injected_per_request_method(std::iter::empty()).is_empty(),
+            "no parameter keeps the trait's default",
+        );
+    }
 
     fn refusal(mut item: ItemStruct) -> String {
         match build_injectable_body(&mut item) {

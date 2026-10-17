@@ -88,7 +88,9 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `nest_rs_http::Endpoint` wrapper per route, `impl nest_rs_http::Controller`
 /// (registers each route on the transport's `HttpRoutes` with its
 /// guard/pipe/filter/interceptor pools), and `impl nest_rs_core::Discoverable`
-/// attaching the `HttpControllerMeta` route table the transport mounts.
+/// attaching the `HttpControllerMeta` route table the transport mounts and
+/// declaring, per parameter type, the provider an extractor resolves per
+/// request (`Scoped<T>`, `Bind<A, S>`), which the boot's access graph checks.
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(routes::routes(args, input).into()).into()

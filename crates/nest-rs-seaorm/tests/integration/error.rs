@@ -81,8 +81,6 @@ impl Guard for AlwaysAuthenticated {
 
 impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
-type Bridge = EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<EveryWidget>)>;
-
 #[resolver]
 struct WidgetsResolver {
     #[inject]
@@ -131,7 +129,7 @@ impl LedgerResolver {
         EveryWidget,
         AbilityGuard<EveryWidget>,
         AlwaysAuthenticated,
-        Bridge,
+        EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<EveryWidget>)>,
         WidgetsResolver,
         LedgerResolver,
     ],

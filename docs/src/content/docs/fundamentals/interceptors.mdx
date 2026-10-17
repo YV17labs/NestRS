@@ -28,8 +28,9 @@ pub trait Interceptor: Layer {
 <Aside type="caution">
 **HTTP only.** Per-resolver (GraphQL) and per-message (WS) wrapping are not
 offered — a reserved seam for them was removed rather than shipped unwired.
-For GraphQL, the equivalent hook is the operation guard's `around`; for WS, the
-socket context's per-dispatch wrap. A `wrap_graphql` / `wrap_ws` method on an
+GraphQL has no per-operation wrap: what the guards at the `/graphql` request
+attach is ambient for every operation it carries. For WS, the socket
+context's per-dispatch wrap is the equivalent hook. A `wrap_graphql` / `wrap_ws` method on an
 `Interceptor` impl is an `E0407` (`method is not a member of trait`).
 </Aside>
 

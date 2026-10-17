@@ -94,8 +94,6 @@ impl Guard for AlwaysAuthenticated {
 
 impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
-type Bridge = EndpointGuards<GraphqlView, (AlwaysAuthenticated, GhostAbilityGuard)>;
-
 #[resolver]
 struct GhostsResolver;
 
@@ -128,7 +126,7 @@ impl GhostsResolver {
         ReadEverything,
         GhostAbilityGuard,
         AlwaysAuthenticated,
-        Bridge,
+        EndpointGuards<GraphqlView, (AlwaysAuthenticated, GhostAbilityGuard)>,
         GhostsResolver,
     ],
 )]

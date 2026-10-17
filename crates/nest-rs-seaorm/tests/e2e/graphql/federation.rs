@@ -116,10 +116,6 @@ impl Guard for AlwaysAuthenticated {
 
 impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
-/// The subgraph's operation guard, aliased because a `providers = [...]` entry
-/// is one type path — a generic's comma would read as the next provider.
-type Bridge = EndpointGuards<GraphqlView, (AlwaysAuthenticated, PostsAbilityGuard)>;
-
 #[resolver]
 struct PostsResolver;
 
@@ -160,7 +156,7 @@ impl PostsResolver {
         PublishedOnly,
         PostsAbilityGuard,
         AlwaysAuthenticated,
-        Bridge,
+        EndpointGuards<GraphqlView, (AlwaysAuthenticated, PostsAbilityGuard)>,
         PostsResolver,
     ],
 )]

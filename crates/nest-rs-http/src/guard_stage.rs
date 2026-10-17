@@ -2,10 +2,9 @@
 //! read through the edge's [`HttpView`], and a [`Denial`] rendered as the
 //! RFC 9457 problem the edge answers.
 //!
-//! What the guards attach is ambient once the whole stage passed: a stage that
-//! wraps the rest of the request installs it there; an in-band endpoint whose
-//! request runs several stages, one after another, keeps it on the request
-//! until it runs the rest ([`install_attached`]).
+//! What the guards attach is ambient once the whole stage passed, for the rest
+//! of the request, and stays on the request for work the endpoint runs off its
+//! task ([`attached_pending`]).
 
 use std::future::Future;
 use std::sync::Arc;
@@ -87,12 +86,11 @@ fn erased(chain: &[ResolvedLayer<dyn Guard>]) -> impl Iterator<Item = (&'static 
     chain.iter().map(|entry| (entry.name, entry.layer.as_ref()))
 }
 
-/// Run `guards`' HTTP entry on `req`, the unit `handler` declares, keeping what
-/// they attach on the request for [`install_attached`] — the stage an in-band
-/// endpoint runs before the rest of its request.
+/// Run `guards`' HTTP entry on `req`, the unit `handler` declares, as the
+/// transport's stage runs them, keeping what they attach on the request
+/// ([`attached`]): the seam a guard's tests check a request through.
 ///
-/// A refusal is filed here, as on a route, and comes back as raised: the
-/// endpoint renders it as its edge does.
+/// A refusal is filed here, as on a route, and comes back as raised.
 pub async fn check_request<'g>(
     handler: &'static Handler,
     guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
@@ -110,14 +108,6 @@ pub async fn check_request<'g>(
         }
     }
     Ok(())
-}
-
-/// Run `fut` under what `req`'s guard stages attached.
-pub fn install_attached<F: Future>(
-    req: &crate::Request,
-    fut: F,
-) -> impl Future<Output = F::Output> {
-    install_pending(attached_pending(req), fut)
 }
 
 /// What `req`'s guard stages attached so far, to install around what runs
@@ -554,7 +544,10 @@ mod tests {
             .await
             .expect("the second stage reads the first one's tenant and the declared throttle");
 
-        let seen = install_attached(&req, async { nest_rs_core::ambient::<Tenant>() }).await;
+        let seen = install_pending(attached_pending(&req), async {
+            nest_rs_core::ambient::<Tenant>()
+        })
+        .await;
         assert_eq!(seen.as_deref(), Some(&Tenant("acme")));
         assert_eq!(attached::<Tenant>(&req).as_deref(), Some(&Tenant("acme")));
         assert!(

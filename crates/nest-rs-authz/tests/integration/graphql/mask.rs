@@ -236,14 +236,12 @@ impl Default for WidgetFeed {
     }
 }
 
-type TestOpGuard = EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>;
-
 #[module(
     imports = [GraphqlModule::for_root(None)],
     providers = [
         PassGuard,
         AbilityInjector,
-        TestOpGuard,
+        EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>,
         WidgetFeed,
         MaskResolver,
     ],
@@ -562,7 +560,7 @@ impl PostFeedResolver {
     providers = [
         PassGuard,
         AbilityInjector,
-        TestOpGuard,
+        EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>,
         PostFeed,
         PostFeedResolver,
     ],
@@ -852,7 +850,7 @@ impl EntityMaskResolver {
     providers = [
         PassGuard,
         AbilityInjector,
-        TestOpGuard,
+        EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>,
         EntityMaskResolver,
     ],
 )]

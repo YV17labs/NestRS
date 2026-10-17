@@ -388,10 +388,10 @@ fn generate_queue_adapter_brings_the_queue_binding_feature() {
     );
 }
 
-/// The `mcp` feature seeds the fallback operation guard, without which a
-/// registered global pool cannot gate `/mcp`.
+/// `#[mcp]` expands to names behind the `mcp` feature, so the generator turns
+/// the feature on.
 #[test]
-fn generate_mcp_adapter_brings_the_guard_fallback() {
+fn generate_mcp_adapter_enables_the_mcp_feature() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let root = dir.path().to_str().unwrap();
@@ -402,7 +402,7 @@ fn generate_mcp_adapter_brings_the_guard_fallback() {
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(
         features_cargo.contains("nest-rs") && features_cargo.contains("\"mcp\""),
-        "the mcp guard fallback rides the `mcp` feature: {features_cargo}",
+        "`#[mcp]` needs the `mcp` feature: {features_cargo}",
     );
 }
 

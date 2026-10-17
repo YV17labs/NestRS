@@ -90,8 +90,6 @@ impl Guard for AlwaysAuthenticated {
 
 impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
-type Bridge = EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<EveryGizmo>)>;
-
 #[resolver]
 struct GizmosResolver {
     #[inject]
@@ -121,7 +119,7 @@ impl GizmosResolver {}
         EveryGizmo,
         AbilityGuard<EveryGizmo>,
         AlwaysAuthenticated,
-        Bridge,
+        EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<EveryGizmo>)>,
         GizmosResolver,
     ],
 )]

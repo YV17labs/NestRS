@@ -34,8 +34,8 @@ async-graphql.workspace = true
 # re-exported `ValidateProbe` (global validation, the NestJS `ValidationPipe`
 # analog); re-exported so a crud consumer needs no direct nest-rs-pipes dep.
 nest-rs-pipes.workspace = true
-# Re-exported as `nest_rs_graphql::async_trait` for implementors of the async
-# seams (operation guards).
+# Re-exported as `nest_rs_graphql::async_trait` for implementors of its async
+# seams.
 async-trait.workspace = true
 # The edge runs its guards itself: the pool at the request, each field's chain,
 # the federation gate; it renders a denial in GraphQL's error form.

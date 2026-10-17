@@ -999,7 +999,7 @@ fn posture_rules(role: Role) -> PostureRules {
     PostureRules {
         operation: role.attr(),
         public_means: "no gate and no mask — `#[use_guards]` guards still run, and the \
-                       endpoint's own operation guard still authenticated the request",
+                       guards at the endpoint's request already authenticated it",
         transport: "MCP",
         bind_unsupported_because: "an operation takes one `Parameters<T>` struct, not the named \
                                    id argument the binding reads. Keep \

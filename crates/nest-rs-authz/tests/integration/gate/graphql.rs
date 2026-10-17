@@ -105,16 +105,12 @@ impl WidgetResolver {
     }
 }
 
-/// The same shape `crates/features` wires for the real app:
-/// `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>`.
-type TestOpGuard = EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>;
-
 #[module(
     imports = [GraphqlModule::for_root(None)],
     providers = [
         PassGuard,
         AbilityInjector,
-        TestOpGuard,
+        EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>,
         WidgetResolver,
     ],
 )]

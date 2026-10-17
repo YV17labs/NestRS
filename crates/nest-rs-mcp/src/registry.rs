@@ -175,7 +175,7 @@ pub fn register_host<P: 'static>(
             HttpEndpointMeta::new(site, path, MCP_LABEL, move |container, routes| {
                 mount(container, routes, &mount_path, &mount_work);
             })
-            .in_band::<McpView>()
+            .carries::<McpView>()
             .runs_detached(detached)
             .owned_by(host),
             OriginCheck::Every,

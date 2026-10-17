@@ -1,0 +1,23 @@
+error[E0277]: no HTTP endpoint's request carries `WsView` units
+  --> tests/integration/diagnostics/http/endpoint_guards_for_a_view_no_endpoint_carries.rs:25:36
+   |
+25 | #[module(providers = [ApiKeyGuard, EndpointGuards<WsView, (ApiKeyGuard,)>])]
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `EndpointGuards` names an endpoint by the view of the units its request carries
+   |
+   = help: the trait `CarriedView` is not implemented for `WsView`
+   = note: `GraphqlView` names `/graphql` and `McpView` names `/mcp`; a route and a gateway's upgrade take their guards from `#[use_guards]`
+help: the following other types implement trait `CarriedView`
+  --> $WORKSPACE/crates/nest-rs-graphql/src/view.rs
+   |
+   | impl CarriedView for GraphqlView {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `GraphqlView`
+   |
+  ::: $WORKSPACE/crates/nest-rs-mcp/src/view.rs
+   |
+   | impl CarriedView for McpView {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `McpView`
+note: required by a bound in `EndpointGuards`
+  --> $WORKSPACE/crates/nest-rs-http/src/endpoint_guards.rs
+   |
+   | pub struct EndpointGuards<V: CarriedView, G: GuardList>(PhantomData<fn() -> (V, G)>);
+   |                              ^^^^^^^^^^^ required by this bound in `EndpointGuards`

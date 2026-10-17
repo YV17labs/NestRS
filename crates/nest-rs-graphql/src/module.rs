@@ -185,7 +185,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             // still verified.
             routes.route_any_poem(options.path.as_str(), method);
         })
-        .in_band::<GraphqlView>()
+        .carries::<GraphqlView>()
         .runs_detached(carried),
         OriginCheck::Upgrades,
         refused_origin,

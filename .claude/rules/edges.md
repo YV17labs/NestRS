@@ -238,7 +238,10 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   the request, and the `EndpointGuards` a module declares add to it, never
   replace it — each guard once, the declared guards where the pool lists the
   first one they name, else after it; declared by several modules, in import
-  order. They are providers, so module-gated by construction. GraphQL's
+  order. They are providers, so module-gated by construction; `V` is a
+  `CarriedView`, a view some endpoint's request carries (a self-mount says so
+  with `HttpEndpointMeta::carries`), and a declaration whose endpoint the app
+  does not mount fails the boot. GraphQL's
   `InBand` posture lets `AuthnGuard` admit anonymous operations to resolver
   gates; `/mcp` is `Gated`, and with neither pool nor endpoint guards it is
   deny-all, said once at boot and per refusal. The one opening is

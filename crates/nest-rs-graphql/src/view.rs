@@ -2,6 +2,7 @@
 
 use async_graphql::parser::types::OperationType;
 use nest_rs_core::UnitView;
+use nest_rs_http::CarriedView;
 
 /// The GraphQL edge's view of one field a guard checks: which field, under
 /// which kind of operation, in which role.
@@ -17,6 +18,9 @@ pub struct GraphqlView {
 }
 
 impl UnitView for GraphqlView {}
+
+/// `/graphql`'s request carries its operations.
+impl CarriedView for GraphqlView {}
 
 impl GraphqlView {
     /// The view of `field`, declared at its site, run under `operation`.

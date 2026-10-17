@@ -40,14 +40,17 @@ replace them, keeping these tests (`one-execution-pipeline.md`).
 
 **2026-10-17 — `feat/endpoint-guards-and-class-gate`: endpoint guards replace
 the bridges.** A module declares `EndpointGuards<V, (G1, …)>` as a provider —
-`V` the view of the units the endpoint carries, `GraphqlView` or `McpView` —
-and the HTTP transport composes the request stage of every self-mount in one
+`V` a `CarriedView`, the view of the units the endpoint's request carries,
+`GraphqlView` or `McpView`, so no other view compiles there — and the HTTP
+transport composes the request stage of every self-mount in one
 function: the pool, the mount's own guards, then the declared guards inserted
 where the pool lists the first one they name, else after it; each guard once,
 by `TypeId`, declarations of several modules in import order. What the
 bridges' `covers()` said, the declaration's list says. Being a provider, a
 declaration is module-gated by construction, and an app with no global pool
-is still authenticated by the feature module it imports. The stage is
+is still authenticated by the feature module it imports; a declaration whose
+endpoint the app does not mount fails the boot, since its guards would run
+nowhere. The stage is
 phase-validated at boot as a route's chain is. The operation guards, the pool
 runners and the bridges are gone; `/mcp` stays deny-all with neither pool nor
 declaration, and its one opening is `McpOptions::posture = Posture::Public`,

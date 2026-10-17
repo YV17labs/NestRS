@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::edge::EdgeEndpoint;
 use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta};
-use crate::endpoint_guards::{RequestStage, request_stage};
+use crate::endpoint_guards::{RequestStage, check_declarations_reached, request_stage};
 use crate::error::RouteError;
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
 use crate::guard_stage::{DeniedEndpoint, GuardedEndpoint};
@@ -527,6 +528,7 @@ impl Transport for HttpTransport {
         let mut unguarded_edges: Vec<String> = Vec::new();
         let origins = OriginPolicy::from_container(container);
         let mut endpoint_owner: HashMap<String, String> = HashMap::new();
+        let mut carried: Vec<TypeId> = Vec::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
             let owner = format!("{} endpoint {}", d.meta.label(), d.meta.owner());
             // Nested whole at its path; what it routes below is its own template.
@@ -581,9 +583,10 @@ impl Transport for HttpTransport {
             // registers its entries as they are.
             let site = format!("the {} request at {}", d.meta.label(), d.meta.path());
             let handler = d.meta.handler();
+            carried.extend(d.meta.carried().map(|units| units.view));
             let guarded: Option<Wrap> = match request_stage(container, &d.meta, &site)? {
                 RequestStage::Open => {
-                    if handler.posture() == Posture::Gated && d.meta.carries().is_none() {
+                    if handler.posture() == Posture::Gated && d.meta.carried().is_none() {
                         unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
                     }
                     None
@@ -596,7 +599,7 @@ impl Transport for HttpTransport {
                         target: nest_rs_core::target::LAYERS,
                         path = d.meta.path(),
                         kind = d.meta.label(),
-                        units = d.meta.carries().map(|units| units.name),
+                        units = d.meta.carried().map(|units| units.name),
                         hint = "list a global guard pool, declare EndpointGuards for these \
                                 units, or open the endpoint in code",
                         "a gated endpoint runs no guard at its request; it denies every request",
@@ -625,6 +628,7 @@ impl Transport for HttpTransport {
             d.meta.mount(container, &mut routes);
             routes.settle()?;
         }
+        check_declarations_reached(container, &carried)?;
         if !unguarded_edges.is_empty() {
             tracing::warn!(
                 target: nest_rs_core::target::LAYERS,

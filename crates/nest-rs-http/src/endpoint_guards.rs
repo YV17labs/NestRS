@@ -13,49 +13,33 @@ use nest_rs_core::{Container, ContainerBuilder, Discoverable, Discovery, Posture
 use nest_rs_guards::__private::{resolve_global_guards, split_at_covered, validate_guard_chain};
 use nest_rs_guards::{Guard, GuardFor, GuardSpec, guard};
 
-use crate::endpoint::{HttpEndpointMeta, InBand};
+use crate::endpoint::{Carried, HttpEndpointMeta};
 use crate::view::HttpView;
 
-/// Guards a module adds to the request of the in-band endpoint whose units are
-/// `V` — `/graphql` for `GraphqlView`, `/mcp` for `McpView` — composed with the
+/// A view whose units an HTTP endpoint's request carries — `GraphqlView` on
+/// `/graphql`, `McpView` on `/mcp` — and so the view an [`EndpointGuards`]
+/// names that endpoint by. A route and a gateway's messages are no such units:
+/// their guards are their own `#[use_guards]`.
+#[diagnostic::on_unimplemented(
+    message = "no HTTP endpoint's request carries `{Self}` units",
+    label = "`EndpointGuards` names an endpoint by the view of the units its request carries",
+    note = "`GraphqlView` names `/graphql` and `McpView` names `/mcp`; a route and a gateway's \
+            upgrade take their guards from `#[use_guards]`"
+)]
+pub trait CarriedView: UnitView {}
+
+/// Guards a module adds to the request of the endpoint whose units are `V` —
+/// `/graphql` for `GraphqlView`, `/mcp` for `McpView` — composed with the
 /// app's global guard pool and run once each, never instead of it. Listed as a
 /// provider, so it is module-gated: a module the app does not import adds
-/// nothing.
-///
-/// ```
-/// use nest_rs_core::{Layer, UnitView, injectable, module};
-/// use nest_rs_guards::{Denial, Guard, GuardFor};
-/// use nest_rs_http::{EndpointGuards, HttpView, async_trait};
-/// # struct ReportView;
-/// # impl UnitView for ReportView {}
-///
-/// #[injectable]
-/// #[derive(Default)]
-/// struct ApiKeyGuard;
-///
-/// impl Layer for ApiKeyGuard {}
-///
-/// #[async_trait]
-/// impl Guard for ApiKeyGuard {
-///     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-///         match HttpView::of(cx)?.request().header("x-api-key") {
-///             Some(_) => Ok(()),
-///             None => Err(Denial::unauthorized("an API key is required")),
-///         }
-///     }
-/// }
-///
-/// impl GuardFor<HttpView> for ApiKeyGuard {}
-///
-/// #[module(providers = [ApiKeyGuard, EndpointGuards<ReportView, (ApiKeyGuard,)>])]
-/// struct ReportsModule;
-/// ```
+/// nothing, and a declaration whose endpoint the app does not serve fails the
+/// boot. `McpView`'s example declares it for `/mcp`.
 ///
 /// Where the pool lists a guard the endpoint's guards name, they run at that
 /// guard's place, the first one they name, so a pooled guard reading the
 /// principal still runs after the authentication they carry; otherwise after
 /// the pool. Declared by several modules, they run in import order, each once.
-pub struct EndpointGuards<V: UnitView, G: GuardList>(PhantomData<fn() -> (V, G)>);
+pub struct EndpointGuards<V: CarriedView, G: GuardList>(PhantomData<fn() -> (V, G)>);
 
 /// A tuple of guards that check an HTTP request — `(AuthnGuard,)` to eight of
 /// them — run in the order written. Sealed: only tuples are lists.
@@ -90,7 +74,7 @@ guard_list!(A, B, C, D, E, F);
 guard_list!(A, B, C, D, E, F, G);
 guard_list!(A, B, C, D, E, F, G, H);
 
-impl<V: UnitView, G: GuardList> Discoverable for EndpointGuards<V, G> {
+impl<V: CarriedView, G: GuardList> Discoverable for EndpointGuards<V, G> {
     fn injected() -> Vec<TypeId> {
         G::__specs().iter().map(|spec| spec.type_id).collect()
     }
@@ -143,7 +127,7 @@ pub struct EndpointPosture {
 
 impl EndpointPosture {
     /// `posture` for the endpoint whose units are `V`.
-    pub fn of<V: UnitView>(posture: Posture) -> Self {
+    pub fn of<V: CarriedView>(posture: Posture) -> Self {
         Self {
             endpoint: TypeId::of::<V>(),
             posture,
@@ -157,14 +141,14 @@ pub(crate) enum RequestStage {
     Open,
     /// These guards, in the order they run.
     Guarded(Vec<ResolvedLayer<dyn Guard>>),
-    /// A gated surface carrying in-band units with no guard at all: every
-    /// request is refused.
+    /// A gated surface carrying units, with no guard at all: every request is
+    /// refused.
     Denied,
 }
 
 /// Compose the guard stage at `meta`'s request, named `site` in boot errors:
 /// the global pool, the surface's own guards, and the [`EndpointGuards`] the
-/// app's modules declare for the in-band units it carries — or nothing for a
+/// app's modules declare for the units it carries — or nothing for a
 /// public surface, the app's opening ([`EndpointPosture`]) included.
 pub(crate) fn request_stage(
     container: &Container,
@@ -172,13 +156,13 @@ pub(crate) fn request_stage(
     site: &str,
 ) -> anyhow::Result<RequestStage> {
     let discovery = Discovery::new(container);
-    let carries = meta.carries();
-    let posture = match carries {
+    let carried = meta.carried();
+    let posture = match carried {
         Some(units) => declared_posture(&discovery, units, site)?,
         None => None,
     }
     .unwrap_or_else(|| meta.handler().posture());
-    let declared: Vec<Arc<EndpointGuardsMeta>> = match carries {
+    let declared: Vec<Arc<EndpointGuardsMeta>> = match carried {
         Some(units) => discovery
             .meta::<EndpointGuardsMeta>()
             .into_iter()
@@ -217,18 +201,41 @@ pub(crate) fn request_stage(
     let chain = compose_chain::<dyn Guard>(broadest, host, Vec::new(), &[], site);
     validate_guard_chain(site, &chain).map_err(anyhow::Error::msg)?;
     log_effective_chain(site, "guards", &chain);
-    Ok(match (chain.is_empty(), posture, carries) {
+    Ok(match (chain.is_empty(), posture, carried) {
         (false, ..) => RequestStage::Guarded(chain),
         (true, Posture::Gated, Some(_)) => RequestStage::Denied,
         (true, ..) => RequestStage::Open,
     })
 }
 
+/// Refuse every [`EndpointGuards`] whose units no mounted endpoint's request
+/// carries — `carried`, the views the self-mounts declared: its guards would
+/// run nowhere while the module reads as protected.
+pub(crate) fn check_declarations_reached(
+    container: &Container,
+    carried: &[TypeId],
+) -> anyhow::Result<()> {
+    let unreached: Vec<&'static str> = Discovery::new(container)
+        .meta::<EndpointGuardsMeta>()
+        .into_iter()
+        .filter(|found| !carried.contains(&found.meta.endpoint))
+        .map(|found| found.meta.declared_by)
+        .collect();
+    if unreached.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "guards declared for an endpoint the app does not mount would run nowhere: {} — import \
+         the module that serves that endpoint, or remove the declaration",
+        unreached.join(", "),
+    )
+}
+
 /// The posture the app declared for the endpoint carrying `units`, if it
 /// declared one; two that disagree fail the boot.
 fn declared_posture(
     discovery: &Discovery<'_>,
-    units: InBand,
+    units: Carried,
     site: &str,
 ) -> anyhow::Result<Option<Posture>> {
     let mut declared = discovery

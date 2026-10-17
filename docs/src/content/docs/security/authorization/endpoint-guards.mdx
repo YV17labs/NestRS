@@ -102,8 +102,10 @@ pub struct AuthzMcpModule;
 ```
 
 `EndpointGuards<V, (G1, G2, …)>` names the endpoint by the view of the units
-it carries — `GraphqlView` for `/graphql`, `McpView` for `/mcp` — and lists up
-to eight guards, run in the order written. Each checks an HTTP request, so each
+its request carries — `GraphqlView` for `/graphql`, `McpView` for `/mcp` — and
+lists up to eight guards, run in the order written. No other view compiles
+there: `EndpointGuards<WsView, _>` is refused, because a gateway's messages take
+their guards from its `#[use_guards]`. Each checks an HTTP request, so each
 declares `GuardFor<HttpView>`; the boot refuses a list out of phase order
 (authorization before authentication) the way it refuses a route's.
 
@@ -118,7 +120,10 @@ feature modules, in import order.
 **It is module-gated.** A module the app does not import declares nothing, so a
 linked crate never adds a guard to an app that did not ask for it — and an app
 with no global pool at all, such as an assistant serving `/mcp` alone, is
-authenticated by the feature module it imports.
+authenticated by the feature module it imports. A declaration for an endpoint
+the app does not mount — `EndpointGuards<GraphqlView, _>` where no
+`GraphqlModule` is imported — fails the boot, naming it: its guards would run
+nowhere.
 
 **The browser origin is checked first.** A foreign `Origin` on `/mcp`, or on a
 graphql-ws upgrade, is refused `403` before any guard runs, so a refused origin

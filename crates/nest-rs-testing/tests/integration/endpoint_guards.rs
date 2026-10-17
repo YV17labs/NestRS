@@ -1,7 +1,8 @@
 //! `EndpointGuards` as a portable feature declares them: a module adds guards
 //! to the request of the in-band endpoint whose units it serves, in an app with
 //! no global pool, each guard running once however many modules declare it,
-//! and a module the app does not import adding nothing. A browser origin the
+//! a module the app does not import adding nothing, and a declaration for an
+//! endpoint the app does not mount failing the boot. A browser origin the
 //! transport refuses pays for no guard.
 
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, Posture, UnitContext, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
-use nest_rs_graphql::{GraphqlModule, operations, resolver};
+use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{EndpointGuards, HttpView, StatusCode, async_trait};
 use nest_rs_mcp::rmcp;
@@ -128,6 +129,25 @@ async fn a_module_the_app_does_not_import_contributes_nothing() {
         initialize(&app, Some("Bearer t")).await,
         StatusCode::UNAUTHORIZED,
         "no guard at the request: the gated endpoint denies every request",
+    );
+}
+
+/// Guards declared for `/graphql` in an app that mounts none: they would run
+/// nowhere while the module reads as protected.
+#[module(providers = [Checks, Bearer, AssistantTool, EndpointGuards<GraphqlView, (Bearer,)>])]
+struct GraphqlGuardsWithoutGraphql;
+
+#[tokio::test]
+async fn guards_declared_for_an_endpoint_the_app_does_not_mount_fail_the_boot() {
+    let Err(refused) = TestApp::for_module::<GraphqlGuardsWithoutGraphql>().await else {
+        panic!("a declaration no endpoint reads must not boot as a protection");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("EndpointGuards")
+            && said.contains("GraphqlView")
+            && said.contains("does not mount"),
+        "the refusal names the declaration and why: {said}",
     );
 }
 

@@ -8,10 +8,11 @@ use std::future::Future;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use nest_rs_core::{Container, Handler, UnitView};
+use nest_rs_core::{Container, Handler};
 use nest_rs_guards::GuardSpec;
 
 use crate::detached::DetachedWork;
+use crate::endpoint_guards::CarriedView;
 use crate::error::{OriginRefused, Result};
 use crate::request::Request;
 use crate::response::Response;
@@ -170,14 +171,14 @@ type MountFn = dyn Fn(&Container, &mut HttpRoutes) + Send + Sync;
 ///
 /// Its [`Handler`] declares who may call it, and the transport runs its
 /// request's guard stage in front of every entry, before the surface sees the
-/// request: none for a [`Public`](nest_rs_core::Posture::Public) one (the OpenAPI document);
-/// otherwise the global guard pool, with the surface's own guards
-/// ([`guarded_by`](Self::guarded_by), a gateway's) or, for an endpoint carrying
-/// in-band units ([`in_band`](Self::in_band)), the [`EndpointGuards`] the app's
-/// modules declare for them. An [`InBand`](nest_rs_core::Posture::InBand) one (`/graphql`)
-/// lets an authentication guard admit an anonymous request to its operations'
-/// own gates; a [`Gated`](nest_rs_core::Posture::Gated) in-band one with no guard at all
-/// denies every request.
+/// request: none for a [`Public`](nest_rs_core::Posture::Public) one (the
+/// OpenAPI document); otherwise the global guard pool, with the surface's own
+/// guards (a gateway's) or, for an endpoint whose request carries units of its
+/// own ([`carries`](Self::carries)), the [`EndpointGuards`] the app's modules
+/// declare for them. An [`InBand`](nest_rs_core::Posture::InBand) one
+/// (`/graphql`) lets an authentication guard admit an anonymous request to its
+/// operations' own gates; a [`Gated`](nest_rs_core::Posture::Gated) one
+/// carrying units, with no guard at all, denies every request.
 ///
 /// [`EndpointGuards`]: crate::EndpointGuards
 pub struct HttpEndpointMeta {
@@ -187,15 +188,15 @@ pub struct HttpEndpointMeta {
     owner: Option<Cow<'static, str>>,
     handler: &'static Handler,
     guards: Vec<GuardSpec>,
-    in_band: Option<InBand>,
+    carried: Option<Carried>,
     origin: Option<OriginGate>,
     detached: Option<DetachedWork>,
     mount: Arc<MountFn>,
 }
 
-/// The in-band units a self-mount's request carries, by their view.
+/// The units a self-mount's request carries, by their view.
 #[derive(Clone, Copy)]
-pub(crate) struct InBand {
+pub(crate) struct Carried {
     /// The view's type, which [`EndpointGuards`](crate::EndpointGuards) names.
     pub(crate) view: TypeId,
     /// The view's name, as a boot error says it.
@@ -245,7 +246,7 @@ impl HttpEndpointMeta {
             owner: None,
             handler,
             guards: Vec::new(),
-            in_band: None,
+            carried: None,
             origin: None,
             detached: None,
             mount: Arc::new(mount),
@@ -285,36 +286,27 @@ impl HttpEndpointMeta {
         self
     }
 
-    /// The surface's own guards — a gateway's `#[use_guards]` — which the
-    /// transport runs at its request after the global pool, a guard the pool
-    /// lists running once, at the pool's place.
-    pub fn guarded_by(mut self, guards: Vec<GuardSpec>) -> Self {
-        self.guards = guards;
-        self
-    }
-
-    /// Declare that this surface's request carries in-band units whose view is
-    /// `V` — GraphQL operations, MCP operations — so the
+    /// Declare that this surface's request carries units whose view is `V` —
+    /// GraphQL operations, MCP operations — so the
     /// [`EndpointGuards<V, _>`](crate::EndpointGuards) the app's modules declare
     /// join the pool at its request.
-    pub fn in_band<V: UnitView>(mut self) -> Self {
-        self.in_band = Some(InBand {
+    pub fn carries<V: CarriedView>(mut self) -> Self {
+        self.carried = Some(Carried {
             view: TypeId::of::<V>(),
             name: std::any::type_name::<V>(),
         });
         self
     }
 
-    /// The surface's own guards, as [`guarded_by`](Self::guarded_by) declared
-    /// them.
+    /// The surface's own guards, as [`guarded_by`] declared them.
     pub(crate) fn guards(&self) -> &[GuardSpec] {
         &self.guards
     }
 
-    /// The in-band units its request carries, as [`in_band`](Self::in_band)
-    /// declared them.
-    pub(crate) fn carries(&self) -> Option<InBand> {
-        self.in_band
+    /// The units its request carries, as [`carries`](Self::carries) declared
+    /// them.
+    pub(crate) fn carried(&self) -> Option<Carried> {
+        self.carried
     }
 
     /// Its origin check, as [`checks_origin`] declared it.
@@ -363,6 +355,14 @@ impl HttpEndpointMeta {
     pub fn mount(&self, container: &Container, routes: &mut HttpRoutes) {
         (self.mount)(container, routes);
     }
+}
+
+/// `meta`, its own guards — a gateway's `#[use_guards]`, whose emitter asserts
+/// each one checks HTTP requests — run at its request after the global pool, a
+/// guard the pool lists running once, at the pool's place.
+pub fn guarded_by(mut meta: HttpEndpointMeta, guards: Vec<GuardSpec>) -> HttpEndpointMeta {
+    meta.guards = guards;
+    meta
 }
 
 /// `meta`, its browser `Origin` checked on the requests `on` names before any
@@ -447,22 +447,24 @@ mod tests {
 
     struct Socket;
 
-    impl UnitView for Socket {}
+    impl nest_rs_core::UnitView for Socket {}
+
+    impl CarriedView for Socket {}
 
     #[test]
-    fn a_self_mount_declares_its_guards_its_in_band_units_and_its_origin_check() {
+    fn a_self_mount_declares_its_guards_its_carried_units_and_its_origin_check() {
         let bare = HttpEndpointMeta::new(&UPGRADE, "/ws", "ws", |_c, _r| {});
         assert!(bare.guards().is_empty());
-        assert!(bare.carries().is_none());
+        assert!(bare.carried().is_none());
         assert!(bare.origin().is_none());
 
         let declared = checks_origin(
-            HttpEndpointMeta::new(&UPGRADE, "/mcp", "mcp", |_c, _r| {}).in_band::<Socket>(),
+            HttpEndpointMeta::new(&UPGRADE, "/mcp", "mcp", |_c, _r| {}).carries::<Socket>(),
             OriginCheck::Every,
             |_| {},
         );
         assert_eq!(
-            declared.carries().map(|units| units.view),
+            declared.carried().map(|units| units.view),
             Some(TypeId::of::<Socket>())
         );
         assert_eq!(

@@ -568,6 +568,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 let __carried = __sockets.clone();
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
                     ::nest_rs_ws::nest_rs_http::__private::checks_origin(
+                    ::nest_rs_ws::nest_rs_http::__private::guarded_by(
                     ::nest_rs_ws::nest_rs_http::HttpEndpointMeta::new(
                         <#self_ty>::__NESTRS_UPGRADE,
                         <#self_ty>::__nestrs_mount_path(),
@@ -592,8 +593,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         },
                     )
                     .owned_by(#gateway_name)
-                    .guarded_by(<#self_ty>::__nestrs_edge_guard_specs())
                     .runs_detached(__sockets),
+                    <#self_ty>::__nestrs_edge_guard_specs(),
+                    ),
                     ::nest_rs_ws::nest_rs_http::__private::OriginCheck::Upgrades,
                     ::nest_rs_ws::__private::refused_origin,
                 ))

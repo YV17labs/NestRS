@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use futures_util::FutureExt as _;
 use futures_util::future::Either;
-use nest_rs_core::__private::LifecycleUnitOfWork;
+use nest_rs_core::__private::{HookFuture, LifecycleUnitOfWork};
 use nest_rs_core::anyhow;
 use nest_rs_core::operation_log::Unit;
 use nest_rs_core::{Container, ContainerBuilder, FactoryInputs};
@@ -161,22 +161,20 @@ struct HookUnits(Arc<dyn UnitOfWork>);
 
 impl LifecycleUnitOfWork for HookUnits {
     fn run<'a>(&'a self, deadline: Option<Instant>, hook: HookFuture<'a>) -> HookFuture<'a> {
-        let spec = UnitSpec::new(
-            nest_rs_core::unit::HOOK,
-            ExecutorScope::Job,
-            TransactionPolicy::PerUnit,
-        );
-        let spec = match deadline {
-            Some(deadline) => spec.with_deadline(deadline),
-            None => spec,
+        let spec = UnitSpec {
+            deadline,
+            ..UnitSpec::new(
+                nest_rs_core::unit::HOOK,
+                ExecutorScope::Job,
+                TransactionPolicy::PerUnit,
+            )
         };
-        Box::pin(run_unit(Some(&self.0), spec, hook, Result::is_ok, |why| {
+        run_unit(Some(&self.0), spec, hook, Result::is_ok, |why| {
             Err(anyhow::Error::new(why))
-        }))
+        })
+        .boxed()
     }
 }
-
-type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
 /// The driver's half of the port: one per app, bound as `Arc<dyn UnitOfWork>`
 /// by the driver's binding, and the one trait a data-layer driver implements to

@@ -74,11 +74,11 @@ impl<E: EntityTrait> Repo<E> {
             // Logged: on the wire it is the constant `"internal error"`.
             const HINT: &str = "a Repo query runs against the executor of the unit of work its \
                  edge runs it in — an HTTP request, a WS message or hook, an MCP operation, a \
-                 queue attempt, a scheduled tick, a lifecycle hook — which each opens through the \
-                 bound `dyn UnitOfWork`, SeaOrmDatabaseModule's; a dataloader batch, a streaming body \
-                 and after-commit work run on the pool of the unit they continue, and a task \
-                 spawned off a unit carries none, so it opens its own — no unit of work runs on \
-                 this path";
+                 queue attempt, a scheduled tick, a lifecycle hook — which each opens through \
+                 the bound `dyn UnitOfWork`, SeaOrmDatabaseModule's; a dataloader batch, a \
+                 streaming body and after-commit work run on the pool of the unit they continue, \
+                 and a task spawned off a unit carries none, so it opens its own — no unit of \
+                 work runs on this path";
             tracing::error!(
                 target: crate::target::ORM,
                 entity = std::any::type_name::<E>(),

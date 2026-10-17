@@ -233,7 +233,7 @@ pub mod __private {
         log_effective_chain, refuse_unresolved, report_unresolved, resolve_global_layers,
         resolve_scoped,
     };
-    pub use crate::lifecycle::__private::{LifecycleHook, LifecycleUnitOfWork};
+    pub use crate::lifecycle::__private::{HookFuture, LifecycleHook, LifecycleUnitOfWork};
     #[cfg(feature = "logging")]
     pub use crate::logging::__private::{
         ConsoleWriter, JsonFormat, TextFormat, install_global_subscriber,

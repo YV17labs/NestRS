@@ -3,13 +3,11 @@
 //! run as one `lifecycle.hook` unit of work.
 
 use nest_rs_core::{operation_log, target};
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::__private::LifecycleUnitOfWork;
+use nest_rs_core::__private::{HookFuture, LifecycleUnitOfWork};
 use nest_rs_core::{App, LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, hooks, injectable, module};
 use nest_rs_testing::{CapturedEvent, LogCapture};
 
@@ -962,8 +960,6 @@ tokio::task_local! {
     /// deadline it opened its unit with.
     static IN_UNIT: Option<tokio::time::Instant>;
 }
-
-type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
 /// A unit of work that runs each hook with the deadline it was given ambient.
 struct UnitsOnRecord;

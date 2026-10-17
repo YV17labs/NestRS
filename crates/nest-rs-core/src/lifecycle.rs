@@ -5,8 +5,6 @@
 use std::any::{Any, TypeId};
 use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -80,19 +78,23 @@ impl LifecyclePhase {
     }
 }
 
-type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
-
 pub(crate) use self::__private::{LifecycleHook, LifecycleUnitOfWork};
 
 /// `lifecycle` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
+    use std::future::Future;
+    use std::pin::Pin;
 
     use tokio::time::Instant;
 
-    use super::{HookFuture, LifecyclePhase};
+    use super::LifecyclePhase;
     use crate::container::Container;
+
+    /// One hook's run, as [`LifecycleHook::run`] starts it and a
+    /// [`LifecycleUnitOfWork`] wraps it.
+    pub type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
     /// The unit of work every lifecycle hook runs in, bound by the data-layer
     /// driver's binding through `nest_rs_database::provide_unit_of_work`; with
@@ -444,6 +446,7 @@ pub(crate) async fn run_phase_lenient(
 
 #[cfg(test)]
 mod tests {
+    use super::__private::HookFuture;
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

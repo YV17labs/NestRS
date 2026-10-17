@@ -383,10 +383,6 @@ mod tests {
 
     use crate::users::UsersService;
 
-    fn users_service_disconnected() -> Arc<UsersService> {
-        Arc::new(UsersService)
-    }
-
     fn oauth_service(ttl: Duration) -> OAuthService {
         let jwt_svc = Arc::new(jwt_with_ttl(ttl));
         let providers = Arc::new(SocialRegistry::default());
@@ -402,7 +398,7 @@ mod tests {
             }],
             default_org_id: Uuid::now_v7(),
         });
-        OAuthService::new(jwt_svc, providers, users_service_disconnected(), config)
+        OAuthService::new(jwt_svc, providers, Arc::new(UsersService), config)
     }
 
     #[test]

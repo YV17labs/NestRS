@@ -16,9 +16,7 @@ use nest_rs_seaorm::{
 };
 use poem::Request;
 use sea_orm::prelude::Uuid;
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set};
 
 /// A strategy that injects nothing, so only the pool's ambience reaches it.
 #[injectable]
@@ -100,9 +98,9 @@ impl Creatable for RowsService {
     type Create = CreateRow;
 }
 
-/// The suite's pool, the rows table ready and every row labelled `label`
-/// gone, so a count is this test's alone.
-async fn pool_without(label: &str) -> Arc<DatabaseConnection> {
+/// The suite's pool, the rows table ready and every row labelled one of
+/// `labels` gone, so a count is this test's alone.
+async fn pool_without(labels: &[&str]) -> Arc<DatabaseConnection> {
     let conn = crate::harness::connect_arc().await;
     crate::harness::setup_shared_table(
         &conn,
@@ -114,7 +112,7 @@ async fn pool_without(label: &str) -> Arc<DatabaseConnection> {
     )
     .await;
     row::Entity::delete_many()
-        .filter(row::Column::Label.eq(label))
+        .filter(row::Column::Label.is_in(labels.iter().copied()))
         .exec(&*conn)
         .await
         .expect("the test's rows are cleared");
@@ -166,7 +164,7 @@ struct SeedingModule;
 
 #[tokio::test]
 async fn an_init_hook_writes_through_its_services_repo_and_its_ok_commits() {
-    let conn = pool_without(SEEDED).await;
+    let conn = pool_without(&[SEEDED]).await;
     let app = booted::<SeedingModule>(&conn).await;
     app.init()
         .await
@@ -197,7 +195,7 @@ struct RefusingModule;
 
 #[tokio::test]
 async fn an_init_hook_that_writes_then_answers_err_leaves_no_row() {
-    let conn = pool_without(REFUSED).await;
+    let conn = pool_without(&[REFUSED]).await;
     let app = booted::<RefusingModule>(&conn).await;
     let refused = app.init().await.expect_err("the hook fails the boot");
     assert!(
@@ -214,10 +212,12 @@ async fn an_init_hook_that_writes_then_answers_err_leaves_no_row() {
 
 const COUNTED: &str = "hook-counted";
 
-/// What the shutdown hook read, seeded so the test still holds it once the
-/// app is gone.
+/// What the shutdown hook read, held by the test past the close.
+#[injectable]
 #[derive(Default)]
-struct ShutdownReading(Mutex<Option<u64>>);
+struct ShutdownReading {
+    counted: Mutex<Option<u64>>,
+}
 
 #[injectable]
 struct CountsAtShutdown {
@@ -235,49 +235,41 @@ impl CountsAtShutdown {
             .await?;
         *self
             .reading
-            .0
+            .counted
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(counted);
         Ok(())
     }
 }
 
-#[module(imports = [SeaOrmDatabaseModule], providers = [CountsAtShutdown])]
+#[module(
+    imports = [SeaOrmDatabaseModule],
+    providers = [ShutdownReading, CountsAtShutdown],
+)]
 struct CountingModule;
 
 #[tokio::test]
 async fn a_shutdown_hook_reads_through_repo() {
-    let conn = pool_without(COUNTED).await;
-    conn.execute_unprepared(&format!(
-        "INSERT INTO hook_unit_rows (id, label) VALUES ('{}', '{COUNTED}')",
-        Uuid::now_v7()
-    ))
-    .await
-    .expect("the row the hook counts is seeded");
-    let reading = Arc::new(ShutdownReading::default());
-    let app = App::builder()
-        .provide_arc(Arc::clone(&conn))
-        .provide(SeaOrmConfig {
-            url: crate::harness::url(),
-            ..SeaOrmConfig::default()
-        })
-        .provide_arc(Arc::clone(&reading))
-        .module::<CountingModule>()
-        .build()
+    let conn = pool_without(&[COUNTED]).await;
+    row::Entity::insert(CreateRow(COUNTED).into_active_model())
+        .exec(&*conn)
         .await
-        .expect("the module boots");
+        .expect("the row the hook counts is seeded");
+    let app = booted::<CountingModule>(&conn).await;
+    let reading = app
+        .container()
+        .get::<ShutdownReading>()
+        .expect("the reading is provided");
     app.init().await.expect("the init phases drain");
     app.close().await;
     assert_eq!(
-        *reading.0.lock().unwrap_or_else(PoisonError::into_inner),
+        *reading
+            .counted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
         Some(1),
         "the shutdown hook read through `Repo` in its unit",
     );
-    row::Entity::delete_many()
-        .filter(row::Column::Label.eq(COUNTED))
-        .exec(&*conn)
-        .await
-        .expect("cleanup");
 }
 
 const EMITTER: &str = "hook-emitter";
@@ -335,14 +327,7 @@ struct EmittingModule;
 
 #[tokio::test]
 async fn a_listener_a_hook_emits_to_runs_in_a_unit_of_its_own_settled_on_its_answer() {
-    let conn = pool_without(EMITTER).await;
-    for label in [LISTENER_OK, LISTENER_ERR] {
-        row::Entity::delete_many()
-            .filter(row::Column::Label.eq(label))
-            .exec(&*conn)
-            .await
-            .expect("the test's rows are cleared");
-    }
+    let conn = pool_without(&[EMITTER, LISTENER_OK, LISTENER_ERR]).await;
     let app = booted::<EmittingModule>(&conn).await;
     app.init()
         .await

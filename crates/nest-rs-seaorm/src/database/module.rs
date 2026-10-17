@@ -10,8 +10,8 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
 /// Binds the `nest-rs-database` port: [`SeaOrmUnitOfWork`] as `dyn
 /// UnitOfWork`, which every edge opens its units of work through and every
-/// lifecycle hook runs in, the `DbContext` request interceptor for HTTP (feature
-/// `http`). A bare import beside
+/// lifecycle hook runs in, the `DbContext` request interceptor for HTTP
+/// (feature `http`). A bare import beside
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 pub struct SeaOrmDatabaseModule;
 
@@ -22,20 +22,21 @@ impl Module for SeaOrmDatabaseModule {
             .fold(builder, ContainerBuilder::provide_meta);
         // Queued after the pool's and config's factories, so a missing one is
         // named before any later factory dials.
-        let builder = provide_unit_of_work::<(DatabaseConnection, SeaOrmConfig, Settles), _, _>(
+        provide_unit_of_work::<(DatabaseConnection, SeaOrmConfig, Settles), _, _>(
             builder,
-            |container| async move { Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>) },
-        );
-        builder
-            // Installed after the pool, so its close drains every settle still
-            // running before the pool's closes.
-            .provide_factory_after::<Settles, (DatabaseConnection,), _, _>(|_| async {
-                Ok(Settles::default())
-            })
-            .provide_close::<Settles, _, _>(|settles| async move {
-                settles.drain().await;
-                Ok(())
-            })
+            |container| async move {
+                Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
+            },
+        )
+        // Installed after the pool, so its close drains every settle still
+        // running before the pool's closes.
+        .provide_factory_after::<Settles, (DatabaseConnection,), _, _>(|_| async {
+            Ok(Settles::default())
+        })
+        .provide_close::<Settles, _, _>(|settles| async move {
+            settles.drain().await;
+            Ok(())
+        })
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {

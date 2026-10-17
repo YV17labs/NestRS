@@ -424,6 +424,46 @@ fn ids(items: &[serde_json::Value]) -> Vec<i64> {
         .collect()
 }
 
+/// What the harness's socket promises: the ability it attaches is the ambient
+/// one the class gate reads and the one the seed forwards to the mask, as an
+/// upgrade's guards leave it.
+#[tokio::test]
+async fn a_socket_attaching_an_ability_reaches_a_gated_masked_subscription() {
+    let app = boot().await;
+    let feed = app
+        .container()
+        .get::<WidgetFeed>()
+        .expect("the feed is a provider of the booted app");
+    let mut socket = app.graphql_socket().attach(ability_for("auditor")).open();
+    socket.connect().await;
+    socket.subscribe("1", "subscription { widgetFeed { id name } }");
+    let emit = async {
+        nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+            feed.tx.receiver_count() >= 1
+        })
+        .await;
+        feed.tx
+            .send(WidgetDto {
+                id: 1,
+                name: Some("ada".into()),
+            })
+            .expect("the subscriber is live");
+    };
+
+    let (item, ()) = tokio::join!(socket.next_item("1"), emit);
+
+    let item = item.expect("an item");
+    assert_eq!(
+        item["data"]["widgetFeed"]["id"], 1,
+        "the gate admitted: {item}"
+    );
+    assert_eq!(
+        item["data"]["widgetFeed"]["name"],
+        serde_json::Value::Null,
+        "the mask read the auditor's ability: {item}",
+    );
+}
+
 /// The load-bearing one. Two subscribers, one emitted sequence: the item the
 /// auditor may not read never reaches them — it is **absent**, not delivered
 /// with its fields nulled.

@@ -135,14 +135,7 @@ impl OperationBridge {
                 "no guard runs at the /graphql request — graphql operations run unguarded",
             );
         }
-        // Without `ReachableProviders`, owner-keyed seeds are skipped: fail-closed.
-        let reachable = container.get::<ReachableProviders>();
-        let active: Vec<&GraphqlContextSeed> = inventory::iter::<GraphqlContextSeed>()
-            .filter(|reg| match (reg.owner_type_id)() {
-                None => true,
-                Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
-            })
-            .collect();
+        let active = active_seeds(&container);
         let seeds: Arc<[_]> = active.iter().map(|reg| reg.seed).collect();
         let connection_seeds: Arc<[_]> = active
             .iter()
@@ -180,6 +173,32 @@ impl OperationBridge {
             })
             .data
     }
+}
+
+/// The seeds that fire for the app `container` holds: every framework-level
+/// one, and those whose owner it reaches.
+fn active_seeds(container: &Container) -> Vec<&'static GraphqlContextSeed> {
+    // Without `ReachableProviders`, owner-keyed seeds are skipped: fail-closed.
+    let reachable = container.get::<ReachableProviders>();
+    inventory::iter::<GraphqlContextSeed>()
+        .filter(|reg| match (reg.owner_type_id)() {
+            None => true,
+            Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
+        })
+        .collect()
+}
+
+/// `data` with what a graphql-ws connection on `req` inherits from its
+/// upgrade: the app's connection seeds, folded under what is ambient where
+/// this runs.
+pub fn connection_data(container: &Container, req: &Request, data: Data) -> Data {
+    let mut gql = GqlRequest::new("");
+    gql.data = data;
+    active_seeds(container)
+        .into_iter()
+        .filter(|reg| reg.lifetime == SeedLifetime::Connection)
+        .fold(gql, |gql, reg| (reg.seed)(req, container, gql))
+        .data
 }
 
 impl<E> ContextEndpoint<E> {

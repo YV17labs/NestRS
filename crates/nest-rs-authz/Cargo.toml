@@ -126,7 +126,8 @@ nest-rs-ws = { path = "../nest-rs-ws" }
 # a versionless dev-edge keeps that from being a cycle a publish cannot order.
 # `http`, for the class gate's order on a `#[crud]` controller.
 nest-rs-seaorm = { path = "../nest-rs-seaorm", features = ["http"] }
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `graphql`: a gated subscription driven as a caller (`graphql_socket`).
+nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql"] }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
 # since the generated `#[Object]` code names `async_graphql::` paths.
 async-graphql.workspace = true

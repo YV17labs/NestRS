@@ -18,6 +18,7 @@ mod endpoint_guards;
 mod env_cascade;
 mod exception_filters;
 mod fail_secure_boot;
+mod graphql;
 mod guard_markers;
 mod guards;
 mod harness_parity;

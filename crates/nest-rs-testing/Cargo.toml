@@ -106,8 +106,9 @@ sea-orm-migration = { workspace = true, optional = true }
 [dev-dependencies]
 # Self dev-dependency: the suite proves the fixture against a TLS double, so it
 # runs with `EphemeralDatabase` and `TestAuthority` on whatever features a
-# caller builds with, and `guard_markers` opens a real socket (`build_ws`).
-nest-rs-testing = { path = ".", features = ["orm", "tls", "ws"] }
+# caller builds with, `guard_markers` opens a real socket (`build_ws`), and
+# `graphql` drives a subscription (`graphql_socket`).
+nest-rs-testing = { path = ".", features = ["graphql", "orm", "tls", "ws"] }
 # `transport_parity` boots one module serving both in-band endpoints to pin
 # that they answer one app wiring identically. That is cross-crate wiring (the
 # global pool × graphql × mcp), so it lives here rather than in any single

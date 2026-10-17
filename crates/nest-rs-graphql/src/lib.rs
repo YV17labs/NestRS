@@ -50,7 +50,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::context::ENDPOINT;
+    pub use crate::context::{ENDPOINT, connection_data};
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate};
     pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};
     pub use crate::operation::{

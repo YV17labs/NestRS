@@ -444,7 +444,7 @@ bound. (`graphql-ws` is the *legacy* subprotocol identifier, which the mount
 also negotiates and this driver does not speak.)
 
 ```rust title="apps/api/tests/e2e/subscription.rs"
-let mut socket = app.graphql_socket().data(ability).open();
+let mut socket = app.graphql_socket().attach(ability).open();
 socket.connect().await;
 socket.subscribe("1", "subscription { postPublished { id title } }");
 
@@ -452,10 +452,13 @@ let item = socket.next_item("1").await.expect("an item");
 assert_eq!(item["data"]["postPublished"]["title"], "Launch");
 ```
 
-`data(..)` carries what the operation guard would install on a real
-upgrade — the caller's `Ability`. What this does *not* exercise is the
-upgrade itself: the guard that authenticates it, the socket-lifetime
-ceiling that bounds it, and `max_connection`. Those need a real connection, so
+`attach(..)` takes what the guards at a real upgrade would attach — the
+caller's `Arc<Ability>`, a principal — and the socket carries it the way a real
+one does: ambient for every operation, where `#[authorize]`'s class gate reads
+it, and forwarded into the connection's context by the app's seeds, where the
+response mask reads it. `data(..)` adds a value to that context alone. What this
+does *not* exercise is the upgrade itself: the guards that authenticate it,
+the socket-lifetime ceiling that bounds it, and `max_connection`. Those need a real connection, so
 a suite that must cover them binds a transport (`build_headless` +
 `spawn_transport`) and
 connects a WebSocket client to it.

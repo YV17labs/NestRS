@@ -6,8 +6,10 @@
 //!
 //! No socket is bound: the mount's own protocol engine
 //! ([`async_graphql::http::WebSocket`]) runs over a channel. The upgrade itself
-//! — its guard, its lifetime ceiling, the protocol negotiation,
-//! `GraphqlConfig::max_connection` — needs a real socket and an app's e2e suite.
+//! — its guards, its lifetime ceiling, the protocol negotiation,
+//! `GraphqlConfig::max_connection` — needs a real socket and an app's e2e suite;
+//! what its guards would attach, the caller's `Ability` among them, a test
+//! attaches itself ([`attach`](crate::graphql::GraphqlSocketBuilder::attach)).
 //!
 //! ```
 //! # use nest_rs_core::module;
@@ -57,12 +59,15 @@
 //! ```
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_graphql::Data;
+use async_graphql::futures_util::FutureExt;
 use async_graphql::futures_util::stream::{Stream, StreamExt};
 use async_graphql::http::WsMessage;
-use nest_rs_core::Container;
+use nest_rs_core::__private::{Pending, install_pending};
+use nest_rs_core::{AmbientValue, Container, Continuation, RequestContinuation};
 use nest_rs_graphql::GraphqlConfig;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -74,6 +79,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct GraphqlSocketBuilder {
     container: Container,
     data: Data,
+    attached: Pending,
 }
 
 impl GraphqlSocketBuilder {
@@ -81,11 +87,23 @@ impl GraphqlSocketBuilder {
         Self {
             container,
             data: Data::default(),
+            attached: Pending::default(),
         }
     }
 
-    /// Attach a value to the connection's context, as the operation guard does
-    /// on a real upgrade (the caller's `Ability`, a principal).
+    /// Attach `value` as the guards at a real upgrade would — the caller's
+    /// `Ability`, a principal: ambient for every operation the socket runs
+    /// when its type crosses into a connection, and forwarded into the
+    /// connection's context by the app's seeds.
+    #[must_use]
+    pub fn attach<T: AmbientValue>(mut self, value: Arc<T>) -> Self {
+        self.attached.attach(value);
+        self
+    }
+
+    /// Put `value` in the connection's context, beside what the app's seeds
+    /// forward; a value the guards would attach goes through
+    /// [`attach`](Self::attach).
     #[must_use]
     pub fn data<T: Send + Sync + 'static>(mut self, value: T) -> Self {
         self.data.insert(value);
@@ -100,6 +118,7 @@ impl GraphqlSocketBuilder {
             .get::<GraphqlConfig>()
             .map(|config| (*config).clone())
             .unwrap_or_default();
+        let (data, carried) = upgraded(&self.container, self.attached, self.data);
         let executor = nest_rs_graphql::__private::compose_schema(self.container, &config);
         let (to_server, rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let client = tokio_stream_from(rx);
@@ -108,12 +127,33 @@ impl GraphqlSocketBuilder {
             client,
             async_graphql::http::WebSocketProtocols::GraphQLWS,
         )
-        .connection_data(self.data);
+        .connection_data(data);
         GraphqlSocket {
             to_server,
             from_server: Box::pin(from_server),
+            carried,
         }
     }
+}
+
+/// What an upgrade whose guards attached `attached` hands its socket: `data`
+/// with what the app's connection seeds forward from them, and what of them
+/// crosses into the connection.
+fn upgraded(
+    container: &Container,
+    attached: Pending,
+    data: Data,
+) -> (Data, Option<RequestContinuation>) {
+    let upgrade = nest_rs_http::Request::builder().finish();
+    // The seeds are synchronous, so the install completes on its first poll.
+    install_pending(attached, async {
+        (
+            nest_rs_graphql::__private::connection_data(container, &upgrade, data),
+            RequestContinuation::capture(Continuation::Connection),
+        )
+    })
+    .now_or_never()
+    .expect("a context seed runs without awaiting")
 }
 
 fn tokio_stream_from(
@@ -158,6 +198,9 @@ pub enum GraphqlRefusal {
 pub struct GraphqlSocket {
     to_server: mpsc::UnboundedSender<Vec<u8>>,
     from_server: Pin<Box<dyn Stream<Item = WsMessage> + Send>>,
+    /// Installed while the engine runs, as a real socket carries its
+    /// upgrade's.
+    carried: Option<RequestContinuation>,
 }
 
 impl GraphqlSocket {
@@ -223,7 +266,15 @@ impl GraphqlSocket {
 
     /// [`next_event`](Self::next_event) with an explicit budget.
     pub async fn next_event_within(&mut self, within: Duration) -> GraphqlEvent {
-        let Ok(next) = tokio::time::timeout(within, self.from_server.next()).await else {
+        let carried = self.carried.clone();
+        let next = self.from_server.next();
+        let next = async move {
+            match carried {
+                Some(carried) => carried.scope(next).await,
+                None => next.await,
+            }
+        };
+        let Ok(next) = tokio::time::timeout(within, next).await else {
             return GraphqlEvent::Silent;
         };
         match next {

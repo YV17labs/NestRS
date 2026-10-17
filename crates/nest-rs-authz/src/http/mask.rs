@@ -16,10 +16,10 @@
 //! `S::Model` yields 500 rather than shipping data unmasked.
 
 use crate::ability::{Provenance, mask_reason};
-use crate::gate::transport;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use nest_rs_core::Edge;
 use nest_rs_http::{ResponseShaping, RouteFuture, RouteResponseShaper};
 use poem::http::StatusCode;
 use poem::{Request, Response};
@@ -238,7 +238,7 @@ fn mask_failure<S>(
         action,
         reason,
         detail,
-        Some(transport::HTTP),
+        Some(Edge::Http.as_str()),
         None,
         err,
     );

@@ -137,9 +137,7 @@ fn checked<A: ActionMarker, S: Subject>() -> std::result::Result<(), Denial> {
             remedy: Some(EXTRACTED_UNREACHED),
             ..refusal
         });
-        return Err(Denial::internal(
-            "no ability reached a unit its posture gates",
-        ));
+        return Err(Denial::internal(crate::gate::NO_AMBIENT_ABILITY));
     };
     decide(&ability, A::ACTION, TypeId::of::<S>(), Posture::Public).map_err(|(why, denial)| {
         warn_denied(Refusal {

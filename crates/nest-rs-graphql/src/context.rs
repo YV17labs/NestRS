@@ -66,8 +66,8 @@ inventory::submit! {
     }
 }
 
-/// A boxed, `Send` future: what the endpoint holds an execution or a socket's
-/// serving behind, and what a DataLoader batch runs as.
+/// A boxed, `Send` future: what the endpoint holds a socket's serving behind,
+/// and what a DataLoader batch runs as.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The site every `/graphql` request runs as before its operations: an
@@ -281,7 +281,7 @@ fn is_read_only(batch: &mut BatchRequest) -> bool {
 
 /// Run `fut` on a non-transactional handle when the ambient executor can hand
 /// one out ([`nest_rs_database::Executor::non_transactional`]).
-async fn without_transaction(fut: BoxFuture<'_, ()>) {
+async fn without_transaction<F: Future>(fut: F) -> F::Output {
     match nest_rs_database::current_executor().and_then(|executor| executor.non_transactional()) {
         Some(executor) => nest_rs_database::with_request_executor(executor, fut).await,
         None => fut.await,
@@ -449,28 +449,15 @@ impl<E: Executor> ContextEndpoint<E> {
             }
         };
         let read_only = is_read_only(&mut batch);
-        // A local slot, since the executor scope wraps a `()` future.
-        let mut answered: Option<Response> = None;
-        let executed: BoxFuture<()> = Box::pin(async {
-            answered = Some(response_from_poem(
+        let executed = async {
+            response_from_poem(
                 GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response(),
-            ));
-        });
-        if read_only {
-            without_transaction(executed).await;
-        } else {
-            executed.await;
-        }
-        Ok(answered.unwrap_or_else(|| {
-            tracing::error!(
-                target: crate::TARGET,
-                reason = "no_response",
-                "the guarded operation produced no response",
-            );
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .finish()
-        }))
+            )
+        };
+        Ok(match read_only {
+            true => without_transaction(executed).await,
+            false => executed.await,
+        })
     }
 }
 

@@ -5,6 +5,7 @@
 //! `#[operations]` after every `#[authorize(Action, Entity)]`-declared operation —
 //! a hand-written resolver never calls it.
 
+use nest_rs_core::Edge;
 use nest_rs_graphql::async_graphql::{Context, Error};
 use sea_orm::EntityTrait;
 use serde::Serialize;
@@ -13,7 +14,7 @@ use serde::de::DeserializeOwned;
 use super::ability;
 use super::context::forbidden_fields;
 use crate::ability::{Provenance, mask_reason};
-use crate::gate::{Refusal, reason, transport};
+use crate::gate::{Refusal, reason};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 
@@ -207,7 +208,7 @@ fn refused_selection(
         action: Some(action),
         fields: Some(&joined),
         reason: Some(reason::FIELD_NOT_GRANTED),
-        ..Refusal::on(transport::GRAPHQL)
+        ..Refusal::on(Edge::Graphql.as_str())
     });
     let refused: Vec<String> = refused.into_iter().map(str::to_owned).collect();
     Some(forbidden_fields(&refused))
@@ -226,7 +227,7 @@ fn mask_failure<E>(
         action,
         reason,
         detail,
-        Some(transport::GRAPHQL),
+        Some(Edge::Graphql.as_str()),
         None,
         Some(err),
     );

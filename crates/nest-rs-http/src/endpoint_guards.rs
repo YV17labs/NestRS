@@ -149,16 +149,6 @@ impl EndpointPosture {
             posture,
         }
     }
-
-    /// The view of the units the endpoint carries.
-    pub(crate) fn endpoint(&self) -> TypeId {
-        self.endpoint
-    }
-
-    /// The posture declared.
-    pub(crate) fn posture(&self) -> Posture {
-        self.posture
-    }
 }
 
 /// What runs at a self-mount's request, before its surface sees it.
@@ -245,8 +235,8 @@ fn declared_posture(
         .meta::<EndpointPosture>()
         .into_iter()
         .map(|found| found.meta)
-        .filter(|declared| declared.endpoint() == units.view)
-        .map(|declared| declared.posture());
+        .filter(|declared| declared.endpoint == units.view)
+        .map(|declared| declared.posture);
     let Some(first) = declared.next() else {
         return Ok(None);
     };

@@ -257,7 +257,7 @@ pub mod __private {
     pub use crate::error::OriginRefused;
     pub use crate::guard_stage::{
         GuardedEndpoint, attached, attached_pending, check_request, denial_to_http_error,
-        denial_to_http_response, deny_http, install_attached,
+        denial_to_http_response, install_attached,
     };
     pub use crate::interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
     pub use crate::origin::{OriginFacts, OriginPolicy};

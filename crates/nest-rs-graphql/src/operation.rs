@@ -6,7 +6,7 @@ use async_graphql::{Context, Error as GraphqlError};
 use nest_rs_core::__private::{ClassGate, Pending, new_unit_context};
 use nest_rs_core::{Container, Handler};
 use nest_rs_guards::__private::{
-    GlobalBucket, Refused, SiteChainCell, SiteChainSources, failure_chain, run_stage,
+    GlobalBucket, SiteChainCell, SiteChainSources, failure_chain, run_stage,
 };
 use tracing::Instrument;
 
@@ -93,24 +93,20 @@ pub async fn run_layered_graphql_chain(
     let operation: OperationType = ctx.query_env.operation.node.ty;
     let mut view = GraphqlView::new(handler.address(), operation, site.role());
     let mut cx = new_unit_context(handler, &mut view, None, None);
-    run_stage(&chain, gate, &mut cx)
-        .await
-        .map_err(|refused| match refused {
-            Refused::Guard(guard, denial) => {
-                // Structural floor mirroring the HTTP edge's: every denial visible
-                // at warn+ regardless of what the individual guard logged.
-                tracing::warn!(
-                    target: nest_rs_core::target::LAYERS,
-                    guard,
-                    route = route_label,
-                    status = denial.http_status(),
-                    error = failure_chain(&denial),
-                    "guard denied the operation",
-                );
-                denial_to_graphql_error(denial)
-            }
-            Refused::Filed(denial) => denial_to_graphql_error(denial),
-        })
+    run_stage(&chain, gate, &mut cx).await.map_err(|refused| {
+        denial_to_graphql_error(refused.into_denial(|guard, denial| {
+            // Structural floor mirroring the HTTP edge's: every denial visible at
+            // warn+ regardless of what the individual guard logged.
+            tracing::warn!(
+                target: nest_rs_core::target::LAYERS,
+                guard,
+                route = route_label,
+                status = denial.http_status(),
+                error = failure_chain(denial),
+                "guard denied the operation",
+            );
+        }))
+    })
 }
 
 /// The field `ctx` resolves, as the client wrote it in the document (`listUsers`,

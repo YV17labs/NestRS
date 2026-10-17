@@ -27,6 +27,18 @@ impl Refused {
             false => Self::Guard(name, denial),
         }
     }
+
+    /// The denial to render, a guard's nobody filed passed first to `file`, the
+    /// edge's structural floor.
+    pub fn into_denial(self, file: impl FnOnce(&'static str, &Denial)) -> Denial {
+        match self {
+            Self::Guard(guard, denial) => {
+                file(guard, &denial);
+                denial
+            }
+            Self::Filed(denial) => denial,
+        }
+    }
 }
 
 /// Run every guard of `chain` on the unit `cx` describes through its in-band

@@ -77,22 +77,7 @@ async fn run_poem_stage<'g>(
 
 /// A refusal's answer, filing first a guard's denial nobody filed.
 fn answer(refused: Refused) -> Response {
-    match refused {
-        Refused::Guard(guard, denial) => deny_http(guard, denial),
-        Refused::Filed(denial) => denial_to_http_response(denial),
-    }
-}
-
-/// The denial a refusal carries, filing first a guard's nobody filed — the
-/// in-band stage renders it as its edge does.
-fn into_denial(refused: Refused) -> Denial {
-    match refused {
-        Refused::Guard(guard, denial) => {
-            file_denial(guard, &denial);
-            denial
-        }
-        Refused::Filed(denial) => denial,
-    }
+    denial_to_http_response(refused.into_denial(file_denial))
 }
 
 /// The guards of a composed chain, as the stage runs them: on the erased guard,
@@ -116,7 +101,7 @@ pub async fn check_request<'g>(
     let taken = std::mem::replace(req, crate::Request::builder().finish());
     let (request, checked) = run_stage(handler, guards, &[], taken).await;
     *req = request;
-    let pending = checked.map_err(into_denial)?;
+    let pending = checked.map_err(|refused| refused.into_denial(file_denial))?;
     let attached = req.extensions_mut();
     match attached.get_mut::<Attached>() {
         Some(Attached(earlier)) => earlier.merge(pending),
@@ -222,13 +207,11 @@ impl GuardedEndpoint {
 
 impl Endpoint for GuardedEndpoint {
     async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
-        let (req, pending) = match run_stage(self.handler, erased(&self.chain), &[], req).await {
-            (req, Ok(pending)) => (req, pending),
-            (_, Err(refused)) => {
-                return Ok(crate::poem_bridge::response_from_poem(answer(refused)));
-            }
+        let (mut req, checked) = run_stage(self.handler, erased(&self.chain), &[], req).await;
+        let pending = match checked {
+            Ok(pending) => pending,
+            Err(refused) => return Ok(crate::poem_bridge::response_from_poem(answer(refused))),
         };
-        let mut req = req;
         req.extensions_mut().insert(Attached(pending.clone()));
         install_pending(marked(pending, false), self.inner.call(req)).await
     }
@@ -260,12 +243,6 @@ impl Endpoint for DeniedEndpoint {
             )),
         ))
     }
-}
-
-/// A denial on an HTTP site, filed, then its answer.
-pub fn deny_http(guard: &'static str, denial: Denial) -> Response {
-    file_denial(guard, &denial);
-    denial_to_http_response(denial)
 }
 
 /// The one `warn` that keeps every denial of an HTTP request visible whatever

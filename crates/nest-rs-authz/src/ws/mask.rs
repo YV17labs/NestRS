@@ -10,6 +10,7 @@
 //! reconstructing the handler's type: a WS frame, like an HTTP body, has no
 //! schema promising a key, so a stripped key is simply absent.
 
+use nest_rs_core::Edge;
 use nest_rs_guards::Denial;
 use nest_rs_ws::WsError;
 use nest_rs_ws::denial_to_ws_error;
@@ -19,7 +20,6 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::ability::{Provenance, mask_reason};
-use crate::gate::transport;
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Action, ActionMarker, WireModelDefaults, current_ability};
 
@@ -92,7 +92,7 @@ where
         action,
         reason,
         detail,
-        Some(transport::WS),
+        Some(Edge::Ws.as_str()),
         Some(event),
         err.map(|e| e as &(dyn std::error::Error + 'static)),
     );

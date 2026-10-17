@@ -17,7 +17,7 @@ use nest_rs_core::__private::{
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Handler, Peer};
 use nest_rs_guards::__private::{
-    Refused, boot_validate_guards, client_message, denial_of, failure_chain, resolve_global_guards,
+    boot_validate_guards, client_message, denial_of, failure_chain, resolve_global_guards,
     run_stage, structured_reason,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
@@ -105,25 +105,21 @@ impl EventLayerTable {
         let mut view = WsView::new(client.clone(), event, data);
         let peer = Peer::new(None, Some(client.id()));
         let mut cx = new_unit_context(handler, &mut view, Some(peer), None);
-        let attached = run_stage(guards, None, &mut cx)
-            .await
-            .map_err(|refused| match refused {
-                Refused::Guard(guard, denial) => {
-                    // Structural floor mirroring the HTTP edge's, filed where the
-                    // denial is still held; its text never reaches the line.
-                    tracing::warn!(
-                        target: nest_rs_core::target::LAYERS,
-                        guard,
-                        conn_id = client.id(),
-                        event,
-                        status = denial.http_status(),
-                        error = failure_chain(&denial),
-                        "guard denied the message",
-                    );
-                    denial_to_ws_error(denial)
-                }
-                Refused::Filed(denial) => denial_to_ws_error(denial),
-            })?;
+        let attached = run_stage(guards, None, &mut cx).await.map_err(|refused| {
+            denial_to_ws_error(refused.into_denial(|guard, denial| {
+                // Structural floor mirroring the HTTP edge's, filed where the
+                // denial is still held; its text never reaches the line.
+                tracing::warn!(
+                    target: nest_rs_core::target::LAYERS,
+                    guard,
+                    conn_id = client.id(),
+                    event,
+                    status = denial.http_status(),
+                    error = failure_chain(denial),
+                    "guard denied the message",
+                );
+            }))
+        })?;
         Ok((attached, view.take_data()))
     }
 }

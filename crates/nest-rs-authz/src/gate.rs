@@ -21,6 +21,10 @@ const FORBIDDEN: &str = "forbidden";
 pub(crate) const INSUFFICIENT_SCOPE: &str =
     "the request requires higher privileges than provided by the access token";
 
+/// What a unit no ability reached is refused with, opaquely: a wiring defect,
+/// one sentence wherever the gate runs.
+pub(crate) const NO_AMBIENT_ABILITY: &str = "no ability reached a unit its posture gates";
+
 /// The machine-readable denial reasons, spelled once.
 pub(crate) mod reason {
     /// No principal at all — the gate's first rung.
@@ -36,22 +40,6 @@ pub(crate) mod reason {
     /// Only the edges handing a typed value back reach it; HTTP and WS drop the key.
     #[cfg(any(feature = "graphql", feature = "mcp"))]
     pub(crate) const FIELD_NOT_GRANTED: &str = "field_not_granted";
-}
-
-/// The edge a mask's refusal was filed on, spelled once per edge.
-pub(crate) mod transport {
-    /// The HTTP edge — a route's response mask.
-    #[cfg(feature = "http")]
-    pub(crate) const HTTP: &str = "http";
-    /// The GraphQL edge — a resolver operation or a federation root field.
-    #[cfg(feature = "graphql")]
-    pub(crate) const GRAPHQL: &str = "graphql";
-    /// The WebSocket edge — one message on an established connection.
-    #[cfg(feature = "ws")]
-    pub(crate) const WS: &str = "ws";
-    /// The MCP edge — one tool call or prompt fetch.
-    #[cfg(feature = "mcp")]
-    pub(crate) const MCP: &str = "mcp";
 }
 
 /// Everything the one `authorization denied` event can carry, and the only
@@ -237,7 +225,7 @@ pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Resu
             ),
             ..refusal
         });
-        return Err(Denial::internal("no ability reached a unit its posture gates").into());
+        return Err(Denial::internal(NO_AMBIENT_ABILITY).into());
     };
     let posture = cx.reflector().posture();
     decide(&ability, A::ACTION, TypeId::of::<S>(), posture).map_err(|(why, denial)| {

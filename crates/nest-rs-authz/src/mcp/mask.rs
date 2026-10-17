@@ -7,6 +7,7 @@
 //! primitive for a hand-written `ServerHandler` surface, which no decorator
 //! reaches.
 
+use nest_rs_core::Edge;
 use nest_rs_guards::Denial;
 use nest_rs_mcp::McpError;
 use nest_rs_mcp::denial_to_mcp_error;
@@ -15,7 +16,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::ability::{Provenance, mask_reason};
-use crate::gate::{Refusal, reason, transport};
+use crate::gate::{Refusal, reason};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults, current_ability};
 
@@ -120,7 +121,7 @@ where
             reason::FIELD_NOT_GRANTED
         }),
         remedy: (!whole_subject).then_some(NULLABLE_REMEDY),
-        ..Refusal::on(transport::MCP)
+        ..Refusal::on(Edge::Mcp.as_str())
     });
     // The gate's own vocabulary: a mask refusal tells no more than a gate's.
     denial_to_mcp_error(Denial::forbidden("forbidden"))
@@ -142,7 +143,7 @@ where
         action,
         reason,
         detail,
-        Some(transport::MCP),
+        Some(Edge::Mcp.as_str()),
         None,
         err.map(|e| e as &(dyn std::error::Error + 'static)),
     );

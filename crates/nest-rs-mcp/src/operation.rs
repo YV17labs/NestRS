@@ -5,7 +5,7 @@ use std::fmt;
 use nest_rs_core::__private::{ClassGate, Pending, new_unit_context};
 use nest_rs_core::{Container, Handler};
 use nest_rs_guards::__private::{
-    Chain, GlobalBucket, Refused, SiteChainCell, SiteChainSources, failure_chain, run_stage,
+    Chain, GlobalBucket, SiteChainCell, SiteChainSources, failure_chain, run_stage,
 };
 
 use crate::McpError;
@@ -89,26 +89,22 @@ pub async fn run_layered_mcp_chain(
 
     let mut view = McpView::new(kind, name, host);
     let mut cx = new_unit_context(handler, &mut view, None, None);
-    run_stage(&chain, gate, &mut cx)
-        .await
-        .map_err(|refused| match refused {
-            Refused::Guard(guard, denial) => {
-                // Structural floor mirroring the HTTP edge's; host and operation
-                // stay separate fields for an incident query.
-                tracing::warn!(
-                    target: nest_rs_core::target::LAYERS,
-                    guard,
-                    host,
-                    kind = kind.as_str(),
-                    operation = name,
-                    status = denial.http_status(),
-                    error = failure_chain(&denial),
-                    "guard denied the operation",
-                );
-                denial_to_mcp_error(denial)
-            }
-            Refused::Filed(denial) => denial_to_mcp_error(denial),
-        })
+    run_stage(&chain, gate, &mut cx).await.map_err(|refused| {
+        denial_to_mcp_error(refused.into_denial(|guard, denial| {
+            // Structural floor mirroring the HTTP edge's; host and operation stay
+            // separate fields for an incident query.
+            tracing::warn!(
+                target: nest_rs_core::target::LAYERS,
+                guard,
+                host,
+                kind = kind.as_str(),
+                operation = name,
+                status = denial.http_status(),
+                error = failure_chain(denial),
+                "guard denied the operation",
+            );
+        }))
+    })
 }
 
 /// Whether an operation's description holds no prose — `str::trim` leaves

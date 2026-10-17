@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::Problem;
 use nest_rs_core::problem::code;
+use nest_rs_core::{Edge, Problem};
 use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 use nest_rs_graphql::{GraphqlContextSeed, SeedLifetime};
 use nest_rs_guards::Denial;
@@ -35,7 +35,7 @@ pub fn ability(ctx: &Context<'_>) -> Result<Arc<Ability>> {
         // Every GraphQL fail-closed exit funnels through here.
         crate::gate::error_unreached(Refusal {
             remedy: Some(UNREACHED),
-            ..Refusal::on(crate::gate::transport::GRAPHQL)
+            ..Refusal::on(Edge::Graphql.as_str())
         });
         nest_rs_graphql::denial_to_graphql_error(Denial::internal(
             "no ability reached the GraphQL operation",

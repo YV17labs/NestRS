@@ -1,13 +1,14 @@
 //! Covers `src/module.rs`: the pool declares its budget, so the boot holds it
-//! under the net of a guard whose strategy injects the pool; and what Postgres
-//! refuses on every attempt refuses the boot at once.
+//! under the net of a guard whose strategy injects the pool; what Postgres
+//! refuses on every attempt refuses the boot at once; and the pool closes once
+//! every unit settled, whatever a connection still checked out waits on.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
-use nest_rs_core::{App, BudgetPastNetError, injectable, module};
+use nest_rs_core::{App, BudgetPastNetError, hooks, injectable, module};
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmModule};
 use poem::Request;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
@@ -329,6 +330,140 @@ async fn closing_the_app_closes_every_connection_its_pool_opened() {
     );
     nest_rs_testing::wait_for(Duration::from_secs(5), || async {
         connections_named(&observer, &name).await == 0
+    })
+    .await;
+}
+
+/// A request's unit, as the HTTP edge declares it.
+const REQUEST: nest_rs_core::operation_log::Unit = nest_rs_core::__private::declare_unit(
+    "nest-rs-http",
+    "nest_rs::http",
+    nest_rs_core::operation_log::Kind::Server,
+    "http.request",
+);
+
+/// A shutdown hook that needs a connection while the way down runs.
+#[injectable]
+#[derive(Default)]
+struct ReadsAtShutdown;
+
+#[hooks]
+impl ReadsAtShutdown {
+    #[on_application_shutdown]
+    async fn read(&self) -> anyhow::Result<()> {
+        nest_rs_seaorm::current_executor()
+            .ok_or_else(|| anyhow::anyhow!("the hook runs outside its unit"))?
+            .execute_unprepared("SELECT 1")
+            .await?;
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [SeaOrmModule::for_root(None), nest_rs_seaorm::SeaOrmDatabaseModule],
+    providers = [ReadsAtShutdown],
+)]
+struct ClosingModule;
+
+/// How many of the server's connections named `name` sit idle, asked from
+/// `observer`.
+async fn idle_connections_named(observer: &DatabaseConnection, name: &str) -> i64 {
+    let row = observer
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "SELECT count(*) AS idle FROM pg_stat_activity \
+             WHERE application_name = $1 AND state = 'idle'",
+            [name.into()],
+        ))
+        .await
+        .expect("pg_stat_activity answers")
+        .expect("a count is one row");
+    row.try_get::<i64>("", "idle").expect("the count")
+}
+
+/// A pool unit cut while Postgres still runs its statement leaves its
+/// connection checked out until the statement ends; the pool closes anyway once
+/// every hook's unit ended, never waiting it out to the hooks' budget, and the
+/// connections it can reach still say goodbye.
+#[tokio::test]
+async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let name = format!("nestrs-cut-close-{}", std::process::id());
+    let app = App::builder()
+        .provide(SeaOrmConfig {
+            url: with_application_name(&crate::harness::url(), &name),
+            ..config(None)
+        })
+        .module::<ClosingModule>()
+        .build()
+        .await
+        .expect("boots");
+    app.init().await.expect("the init phases drain");
+    let binding = app
+        .container()
+        .get_dyn::<dyn nest_rs_database::UnitOfWork>()
+        .expect("the binding");
+    let cut = tokio::time::timeout(
+        Duration::from_millis(300),
+        nest_rs_database::run_unit(
+            Some(&binding),
+            nest_rs_database::UnitSpec::new(
+                REQUEST,
+                nest_rs_database::ExecutorScope::Request,
+                nest_rs_database::TransactionPolicy::Pool,
+            ),
+            async {
+                nest_rs_seaorm::current_executor()
+                    .expect("the unit's pool")
+                    .execute_unprepared("SELECT pg_sleep(10)")
+                    .await
+                    .map(drop)
+            },
+            Result::is_ok,
+            |_| Ok(()),
+        ),
+    )
+    .await;
+    assert!(
+        cut.is_err(),
+        "the unit is cut while Postgres still runs its statement"
+    );
+    let observer = crate::harness::connect().await;
+
+    let started = std::time::Instant::now();
+    app.close().await;
+    let took = started.elapsed();
+
+    assert!(
+        took < Duration::from_secs(2),
+        "the close waited on a connection no unit holds: {took:?}"
+    );
+    logs.expect_none(
+        nest_rs_core::target::LIFECYCLE,
+        "resource close abandoned: the shutdown hooks' budget was spent while it waited, and \
+         the closes after it still start",
+    );
+    let left = logs.expect_one(
+        nest_rs_seaorm::target::ORM,
+        "pool closed with connections still checked out: each closes as it comes back",
+    );
+    assert_eq!(left.level, "warn");
+    assert_eq!(left.field("checked_out").as_deref(), Some("1"));
+    let read = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_core::unit::HOOK.name(),
+        )
+        .into_iter()
+        .find(|line| line.field("method").as_deref() == Some("read"))
+        .expect("the shutdown hook's line");
+    assert_eq!(
+        read.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "the hook got a connection while the cut one was still out",
+    );
+    nest_rs_testing::wait_for(Duration::from_secs(5), || async {
+        idle_connections_named(&observer, &name).await == 0
     })
     .await;
 }

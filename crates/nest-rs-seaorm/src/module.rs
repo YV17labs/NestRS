@@ -5,7 +5,7 @@ use std::time::Duration;
 use nest_rs_config::{ClientTls, ConfigModule, DurationBounds, Namespaced};
 use nest_rs_core::{
     Attempt, Backoff, Budget, Collecting, ContainerBuilder, DynamicModule, Module, Proving,
-    Registering, Unproved, process_seed, prove,
+    Registering, SHUTDOWN_SETTLE_TIMEOUT, Unproved, process_seed, prove,
 };
 use sea_orm::sqlx::Connection as _;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgConnection};
@@ -75,11 +75,7 @@ impl Module for SeaOrmOpening {
                     connect(&config, config.app_connect_options()?).await
                 },
             )
-            // Waits for checked-out connections: one an abandoned unit still
-            // holds keeps it to the hooks' deadline, where it is abandoned.
-            .provide_close::<DatabaseConnection, _, _>(
-                |db| async move { Ok(db.close_by_ref().await?) },
-            )
+            .provide_close::<DatabaseConnection, _, _>(|db| async move { close(&db).await })
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
@@ -178,6 +174,51 @@ fn acquire_budget(db: &DatabaseConnection) -> Option<Duration> {
         ),
         _ => None,
     }
+}
+
+/// How often the pool's close looks for a connection a settled unit is still
+/// handing back.
+const RETURN_POLL: Duration = Duration::from_millis(5);
+
+/// Close `db`'s pool once every unit of work settled — the binding's close
+/// drains them first: each connection says goodbye as it comes back, waited for
+/// [`SHUTDOWN_SETTLE_TIMEOUT`] at most, and one still checked out then closes
+/// when it returns, said at `warn`.
+///
+/// Not sqlx's close alone, which says goodbye to none until every connection
+/// is back (`.claude/decisions/pool-closes-at-the-settle.md`).
+async fn close(db: &DatabaseConnection) -> anyhow::Result<()> {
+    let DatabaseConnectionType::SqlxPostgresPoolConnection(_) = db.inner else {
+        return Ok(db.close_by_ref().await?);
+    };
+    let pool = db.get_postgres_connection_pool();
+    let started = tokio::time::Instant::now();
+    // A settled unit hands its connection back on a task of sqlx's, after a
+    // round trip, and no event says when: each is taken as it lands, before the
+    // pool is marked closed, which refuses every acquire.
+    let mut idle = Vec::new();
+    loop {
+        idle.extend(std::iter::from_fn(|| pool.try_acquire()));
+        if idle.len() >= pool.size() as usize || started.elapsed() >= SHUTDOWN_SETTLE_TIMEOUT {
+            break;
+        }
+        tokio::time::sleep(RETURN_POLL).await;
+    }
+    let checked_out = (pool.size() as usize).saturating_sub(idle.len());
+    let closing = pool.close();
+    // Handed back to a closed pool, each says its goodbye on a task of sqlx's.
+    drop(idle);
+    if checked_out == 0 {
+        closing.await;
+        return Ok(());
+    }
+    tracing::warn!(
+        target: crate::target::ORM,
+        checked_out,
+        waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "pool closed with connections still checked out: each closes as it comes back",
+    );
+    Ok(())
 }
 
 /// Open a standalone connection from `<PREFIX>_SEAORM__*`, resolving the same

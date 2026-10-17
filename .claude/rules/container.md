@@ -473,7 +473,10 @@ and the teardown in `way_down.rs`'s `//!`:
   container then drops off the runtime thread within what is left of it: a
   provider whose `Drop` blocks is abandoned with a line. Every end of an app —
   `run`, `close`, a failed init — shares this tail; a build that fails runs
-  the closes, and what it built drops by ownership.
+  the closes, and what it built drops by ownership. Every unit has settled
+  before a close runs, so what is still lent out then has no owner: a close
+  waits for it `SHUTDOWN_SETTLE_TIMEOUT` at most and names what it leaves at
+  `warn` (`decisions/pool-closes-at-the-settle.md`).
 - **Developer code on the way down gets a hook's budget** — a scheduled tick
   still running gets it *before* the hooks, so no tick runs through the hooks it
   may depend on.

@@ -45,8 +45,9 @@ use crate::trace_context::Correlation;
 /// The scheduler reads it as the window of a tick still running at shutdown.
 pub const SHUTDOWN_HOOKS_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long an edge that stops its running work on the way down waits for that
-/// work to unwind, once stopped ([`SHUTDOWN_HOOKS_TIMEOUT`] tabulates the way down).
+/// How long what stops its running work on the way down waits for that work to
+/// unwind: an edge once stopped, and a resource's close for what its units lent
+/// out to come back ([`SHUTDOWN_HOOKS_TIMEOUT`] tabulates the way down).
 ///
 /// Without it, a stopped unit may still be unwinding when the shutdown hooks start.
 pub const SHUTDOWN_SETTLE_TIMEOUT: Duration = Duration::from_millis(500);

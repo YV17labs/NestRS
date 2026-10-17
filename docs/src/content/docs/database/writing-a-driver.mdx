@@ -361,7 +361,10 @@ the config when nothing resolved it: a factory returns it with `?`, a
 What the factory opens, the module closes. `provide_close` hands the kernel a
 close for the handle — a pool's goodbye to its server — which runs once the app
 ends, after every shutdown hook, last opened first, within what the hooks left
-of their five seconds; one still waiting then is abandoned at `warn`. Attach it
+of their five seconds; one still waiting then is abandoned at `warn`. Every
+unit of work has settled before it runs, so what a close still waits for has no
+owner: wait half a second at most (`SHUTDOWN_SETTLE_TIMEOUT`) for what your
+units handed back, then say what you leave. Attach it
 in `collect`, beside its factory: a boot whose later factory fails still closes
 the handle, which a close attached in `register` would never reach. A handle
 the app seeded instead (a test's database) is the app's to close, and the

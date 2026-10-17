@@ -3,7 +3,8 @@
 //!
 //! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
 //!   and opens the one `sea_orm::DatabaseConnection` every binding shares,
-//!   closing it when the app ends, after every shutdown hook.
+//!   closing it when the app ends, after every shutdown hook, without waiting
+//!   past the settle for a connection no unit holds.
 //! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port:
 //!   [`SeaOrmUnitOfWork`], which every edge — an HTTP request, a WS message, an
 //!   MCP operation, a queue attempt, a scheduled tick — and every lifecycle hook

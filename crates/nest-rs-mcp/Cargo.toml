@@ -55,7 +55,6 @@ nest-rs-core = { path = "../nest-rs-core" }
 # non-authn guard's `429` — the behaviour `/mcp` could not have before.
 nest-rs-throttler = { path = "../nest-rs-throttler" }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
-poem = { workspace = true, features = ["test"] }
 # `Transport::serve` takes the token that asks it to stop — what the shutdown
 # suite drives a real transport with.
 tokio-util.workspace = true

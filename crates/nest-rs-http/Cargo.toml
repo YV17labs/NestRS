@@ -85,12 +85,10 @@ serde.workspace = true
 # `nest-rs-interceptors`, so any test using `#[routes]` needs it in scope. An
 # allowed dev-dependency cycle: the interceptors depend on this crate.
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
-# `tests/global_prefix.rs` drives an in-process server through poem's
-# `TestClient`, gated behind poem's `test` feature. `websocket` lets
-# `tests/integration/transport.rs` hold a real WebSocket open across a shutdown —
-# an upgraded connection is the one the shutdown window neither waits for nor
-# closes, and the transport's report has to say so.
-poem = { workspace = true, features = ["test", "websocket"] }
+# `websocket` lets `tests/integration/transport.rs` hold a real WebSocket open
+# across a shutdown — an upgraded connection is the one the shutdown window
+# neither waits for nor closes, and the transport's report has to say so.
+poem = { workspace = true, features = ["websocket"] }
 # `test-util` (not part of tokio's `full`) pauses time, so the shutdown window is
 # proved at its default length without the suite waiting it out.
 tokio = { workspace = true, features = ["test-util"] }
@@ -108,7 +106,7 @@ figment = { workspace = true, features = ["test"] }
 # accepts and the wire refuses.
 nest-rs-codegen = { path = "../nest-rs-codegen" }
 # `tests/integration/tls.rs` needs a *real* TLS client: the certificate swap is
-# only observable through a handshake, which poem's in-process `TestClient`
+# only observable through a handshake, which the kit's in-process `TestClient`
 # never performs.
 reqwest.workspace = true
 # `tests/integration/body_limit.rs` gzips a request body, so the cap is proved

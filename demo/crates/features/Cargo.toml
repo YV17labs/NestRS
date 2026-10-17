@@ -42,7 +42,6 @@ nest-rs = { workspace = true, features = ["testing"] }
 # Enables `features::testing` for this crate's own e2e suite.
 features = { path = ".", features = ["test-support"] }
 tokio.workspace = true
-poem = { workspace = true, features = ["test"] }
 serde_json.workspace = true
 async-graphql.workspace = true
 sea-orm.workspace = true

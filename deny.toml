@@ -34,11 +34,6 @@ allow = [
     "Unlicense",
     "Zlib",
 ]
-# MPL-2.0 binds the files it covers, not the crates linking them, so it is
-# accepted crate by crate rather than for any dependency that turns up with it.
-exceptions = [
-    { crate = "sse-codec", allow = ["MPL-2.0"] },
-]
 unused-allowed-license = "deny"
 unused-license-exception = "deny"
 

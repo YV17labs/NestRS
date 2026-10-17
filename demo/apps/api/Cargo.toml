@@ -18,7 +18,6 @@ tokio.workspace = true
 nest-rs = { workspace = true, features = ["testing"] }
 # Enables `features::testing` (dev keypair, org id, tokens, Redis databases) for e2e.
 features = { workspace = true, features = ["test-support"] }
-poem = { workspace = true, features = ["test"] }
 migrations = { workspace = true }
 # The audio-storage e2e boots a worker to drain the `audio` queue and talks to
 # real RustFS directly: `nest-rs-storage` builds the client that ensures the

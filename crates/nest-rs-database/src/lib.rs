@@ -27,8 +27,9 @@
 //!    [`UnitSpec`] an edge declares — a transaction opened on the unit's first
 //!    touch for [`TransactionPolicy::PerUnit`], the pool for
 //!    [`TransactionPolicy::Pool`] — whose `settle` commits or rolls back.
-//!    Bind it once, as `Arc<dyn UnitOfWork>`, from your module: every edge
-//!    then opens its units through it.
+//!    Bind it once, through [`provide_unit_of_work`] from your module: every
+//!    edge then opens its units through it, and every lifecycle hook runs in
+//!    one.
 //! 3. Provide your own `Repo`-equivalent query API that calls
 //!    [`current_executor`] and downcasts to your concrete type.
 //! 4. Override [`Executor::after_commit`] on every handle a unit settles a
@@ -60,5 +61,5 @@ pub use executor::{
 };
 pub use unit::{
     BACKEND_REMEDY, JobRef, OpenUnit, Settlement, TransactionPolicy, UnitOfWork, UnitSpec,
-    current_unit_of_work, run_unit,
+    current_unit_of_work, provide_unit_of_work, run_unit,
 };

@@ -65,6 +65,7 @@ commits on its own outcome — you list nothing for it:
 | WebSocket connect or disconnect hook | the hook ran to its end |
 | MCP operation | it answered `Ok`, with no `isError: true` in the tool's result |
 | Queue attempt, scheduled tick | the method returned `Ok` (or the pool, on `transactional = false`) |
+| Lifecycle hook | the hook returned `Ok` |
 
 A read is a touch: a message or a tool that only reads still opens the
 transaction on its first query, and commits it.
@@ -135,8 +136,9 @@ An [event](/events/) emitted inside the transaction is dispatched **after**
 the commit, and dropped when the transaction rolls back or fails to commit, or
 the request fails — an event announces a fact, and a write that did not land is
 not one. The same holds at every boundary that settles a transaction: a
-WebSocket message, an MCP operation, a queue attempt, a scheduled tick. The
-listeners run outside the transaction they waited for, each a unit of work of
+WebSocket message, an MCP operation, a queue attempt, a scheduled tick, a
+lifecycle hook. The listeners run outside the transaction they waited for,
+each a unit of work of
 its own — a transaction committed on the `Result` it answers and bounded by
 its own `timeout` — with the caller's scope, ability and every value the
 emitter carries; the response leaves once they have — or at the unit's

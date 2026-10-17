@@ -425,9 +425,13 @@ first, as declared), then `providers` order; a host no module lists (a seed, a
 factory's output, a hand-written registration) runs before every listed one at
 init and after them at shutdown; a host's own hooks run in the order its `impl`
 declares them, the same both ways (across several `impl`s, by module path
-first); one hook at a time. A provider orders its hooks after another's
-by injecting it — the graph is the only order, never a name or a priority
-(held by `nest-rs-core`'s lifecycle suite). The init phases run once per `App`, whether
+first); one hook at a time. A provider orders its hooks after another's by
+injecting it — the graph is the only order, never a name or a priority (held by
+`nest-rs-core`'s lifecycle suite). Each hook is a unit of work,
+`lifecycle.hook`, with a trace and a line of its own and the data context a
+tick gets: one transaction through the unit of work the driver's binding
+provides with `provide_unit_of_work`, committed on its `Ok`, bare with none
+bound (held by `nest-rs-core`'s and `nest-rs-database`'s suites). The init phases run once per `App`, whether
 `init` or `run` reaches them first; an init hook that fails or panics aborts the
 boot naming it, then the shutdown phases run for every host and the resources
 close, and the app refuses its init again (`InitFailedError`).

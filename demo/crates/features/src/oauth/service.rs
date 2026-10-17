@@ -380,12 +380,11 @@ mod tests {
 
     use nest_rs::oauth::server::RegisteredClient;
     use nest_rs::social::SocialRegistry;
-    use sea_orm::DatabaseConnection;
 
     use crate::users::UsersService;
 
     fn users_service_disconnected() -> Arc<UsersService> {
-        Arc::new(UsersService::new(Arc::new(DatabaseConnection::default())))
+        Arc::new(UsersService)
     }
 
     fn oauth_service(ttl: Duration) -> OAuthService {

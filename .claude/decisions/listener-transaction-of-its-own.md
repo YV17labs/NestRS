@@ -43,3 +43,13 @@ has none, so its listeners run bare on whatever the emitter installed, a
 caller's `Executor::Txn` included: there they are passengers. Closing it takes
 a binding the bus reaches without its emitter, the one the container provides,
 read when the listeners are wired; the bus holds no container today.
+
+## 2026-10-17 — a lifecycle hook is a unit of work, so its emits reach the binding
+
+Each lifecycle hook now runs as a `lifecycle.hook` unit through the binding
+the driver provides, so a listener a hook emits to opens a unit of its own
+like any other: its `Err` rolls back what it wrote, its `Ok` commits it in a
+transaction of its own, and the dispatch waits for the hook's commit. The
+limit keeps its other members — a task handed to `TaskContext`, a binary of
+one's own, a test — and closing those still takes a binding the bus reaches
+without its emitter.

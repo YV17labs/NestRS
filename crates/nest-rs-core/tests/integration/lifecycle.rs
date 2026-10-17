@@ -1,12 +1,32 @@
 //! Covers `src/lifecycle.rs` — hook shapes, a host bound as `dyn Trait`, the
-//! order hosts run in, and shutdown hooks that fail, hang or panic.
+//! order hosts run in, shutdown hooks that fail, hang or panic, and each hook
+//! run as one `lifecycle.hook` unit of work.
 
-use nest_rs_core::target;
+use nest_rs_core::{operation_log, target};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::{App, SHUTDOWN_HOOKS_TIMEOUT, hooks, injectable, module};
-use nest_rs_testing::LogCapture;
+use nest_rs_core::__private::LifecycleUnitOfWork;
+use nest_rs_core::{App, LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, hooks, injectable, module};
+use nest_rs_testing::{CapturedEvent, LogCapture};
+
+/// Every `lifecycle.hook` line `logs` holds.
+fn hook_lines(logs: &LogCapture) -> Vec<CapturedEvent> {
+    logs.find(operation_log::TARGET, nest_rs_core::unit::HOOK.name())
+}
+
+/// The `lifecycle.hook` line of the hook named `method`, filed once.
+fn hook_line(logs: &LogCapture, method: &str) -> CapturedEvent {
+    let mut lines: Vec<_> = hook_lines(logs)
+        .into_iter()
+        .filter(|line| line.field("method").as_deref() == Some(method))
+        .collect();
+    assert_eq!(lines.len(), 1, "one line for `{method}`, got {lines:#?}");
+    lines.remove(0)
+}
 
 trait Bridge: Send + Sync {}
 
@@ -286,6 +306,23 @@ async fn a_shutdown_hook_that_never_returns_is_abandoned_at_the_budget_and_the_r
         event.field("budget_ms"),
         Some(SHUTDOWN_HOOKS_TIMEOUT.as_millis().to_string()),
     );
+    let flush = hook_line(&logs, "flush");
+    assert_eq!(
+        flush.field("outcome").as_deref(),
+        Some(operation_log::CANCELLED),
+        "the hook abandoned at the budget files its unit cancelled",
+    );
+    assert_eq!(
+        event.trace_id, flush.trace_id,
+        "the abandonment is said in the hook's own trace",
+    );
+    for method in ["release", "announce", "close"] {
+        assert_eq!(
+            hook_line(&logs, method).field("outcome").as_deref(),
+            Some(operation_log::OK),
+            "{method}",
+        );
+    }
 }
 
 #[injectable]
@@ -585,6 +622,7 @@ struct WarmsThenWaitsModule;
 
 #[tokio::test(start_paused = true)]
 async fn an_init_dropped_while_a_hook_waits_is_refused_again_without_a_hook_running() {
+    let logs = LogCapture::install();
     let app = App::new::<WarmsThenWaitsModule>().expect("the module boots");
     tokio::time::timeout(Duration::from_secs(1), app.init())
         .await
@@ -604,6 +642,15 @@ async fn an_init_dropped_while_a_hook_waits_is_refused_again_without_a_hook_runn
         WARMED_BEFORE_THE_DROP.load(Ordering::SeqCst),
         1,
         "the hook that finished ran once"
+    );
+    assert_eq!(
+        hook_line(&logs, "warm").field("outcome").as_deref(),
+        Some(operation_log::OK),
+    );
+    assert_eq!(
+        hook_line(&logs, "announce").field("outcome").as_deref(),
+        Some(operation_log::CANCELLED),
+        "the hook dropped with the init files its unit cancelled",
     );
 }
 
@@ -781,19 +828,18 @@ impl Payouts {
 struct PayoutsModule;
 
 #[tokio::test]
-async fn each_shutdown_hook_is_named_at_debug_as_it_starts_in_reverse_host_order() {
+async fn each_shutdown_hook_files_its_unit_line_in_reverse_host_order() {
     let logs = LogCapture::install();
     let app = App::new::<PayoutsModule>().expect("the module boots");
     app.init().await.expect("the init phases drain");
 
     app.close().await;
 
-    let ran: Vec<_> = logs
-        .find(target::LIFECYCLE, "running lifecycle hook")
+    let ran: Vec<_> = hook_lines(&logs)
         .into_iter()
         .filter(|event| event.field("phase").as_deref() == Some("OnModuleDestroy"))
         .map(|event| {
-            assert_eq!(event.level, "debug");
+            assert_eq!(event.level, "info");
             assert!(
                 event
                     .field("origin")
@@ -811,5 +857,244 @@ async fn each_shutdown_hook_is_named_at_debug_as_it_starts_in_reverse_host_order
             (Some("Ledger".to_owned()), Some("seal".to_owned())),
         ],
         "the dependent's hook first, as an operator reads the way down",
+    );
+}
+
+#[injectable]
+#[derive(Default)]
+struct Audited;
+
+#[hooks]
+impl Audited {
+    #[on_module_init]
+    async fn open(&self) {}
+
+    #[on_module_destroy]
+    async fn reconcile(&self) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("the ledger refused the reconciliation"))
+    }
+
+    #[on_application_shutdown]
+    async fn report(&self) {
+        panic!("the report writer was already gone");
+    }
+}
+
+#[module(providers = [Audited])]
+struct AuditedModule;
+
+#[tokio::test]
+async fn each_hook_files_one_unit_line_naming_it_and_how_it_ended() {
+    let logs = LogCapture::install();
+    let app = App::new::<AuditedModule>().expect("the module boots");
+    app.init().await.expect("the init phases drain");
+    app.close().await;
+
+    for (method, phase, outcome) in [
+        ("open", "OnModuleInit", operation_log::OK),
+        ("reconcile", "OnModuleDestroy", operation_log::ERROR),
+        ("report", "OnApplicationShutdown", operation_log::PANIC),
+    ] {
+        let line = hook_line(&logs, method);
+        assert_eq!(line.level, "info", "{method}");
+        assert_eq!(line.field("outcome").as_deref(), Some(outcome), "{method}");
+        assert_eq!(line.field("phase").as_deref(), Some(phase), "{method}");
+        assert_eq!(
+            line.field("provider").as_deref(),
+            Some("Audited"),
+            "{method}"
+        );
+        assert!(
+            line.field("origin")
+                .is_some_and(|origin| origin.ends_with("::lifecycle")),
+            "{method}: {:?}",
+            line.fields,
+        );
+        assert!(line.field(operation_log::DURATION_MS).is_some(), "{method}");
+        assert!(
+            line.trace_id.is_some() && line.span_id.is_some(),
+            "{method}: a hook's line carries the trace minted for it",
+        );
+        assert!(
+            line.actor_id.is_none(),
+            "{method}: a hook has no caller, so no actor"
+        );
+    }
+    let traces: std::collections::BTreeSet<_> = ["open", "reconcile", "report"]
+        .into_iter()
+        .map(|method| hook_line(&logs, method).trace_id)
+        .collect();
+    assert_eq!(traces.len(), 3, "each hook is a trace of its own");
+
+    let failed = logs.expect_one(target::LIFECYCLE, "lifecycle hook failed");
+    assert_eq!(
+        failed.trace_id,
+        hook_line(&logs, "reconcile").trace_id,
+        "the failure's detail is said in the hook's trace",
+    );
+    let reconcile = hook_line(&logs, "reconcile");
+    let spans: Vec<_> = logs
+        .spans()
+        .into_iter()
+        .filter(|span| {
+            span.target == target::LIFECYCLE
+                && span.name == nest_rs_core::unit::HOOK.name()
+                && span.field("method").as_deref() == Some("reconcile")
+        })
+        .collect();
+    assert_eq!(spans.len(), 1, "one span for the hook: {spans:#?}");
+    assert_eq!(spans[0].field("otel.kind").as_deref(), Some("internal"));
+    assert_eq!(spans[0].field("provider").as_deref(), Some("Audited"));
+    assert_eq!(
+        spans[0].field("span_id"),
+        reconcile.span_id,
+        "the line names the span it closes",
+    );
+    assert!(
+        logs.find(target::LIFECYCLE, "running lifecycle hook")
+            .is_empty(),
+        "the unit line replaces the hook's debug line",
+    );
+}
+
+tokio::task_local! {
+    /// What the hook running now was handed by the bound unit of work: the
+    /// deadline it opened its unit with.
+    static IN_UNIT: Option<tokio::time::Instant>;
+}
+
+type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
+
+/// A unit of work that runs each hook with the deadline it was given ambient.
+struct UnitsOnRecord;
+
+impl LifecycleUnitOfWork for UnitsOnRecord {
+    fn run<'a>(
+        &'a self,
+        deadline: Option<tokio::time::Instant>,
+        hook: HookFuture<'a>,
+    ) -> HookFuture<'a> {
+        Box::pin(IN_UNIT.scope(deadline, hook))
+    }
+}
+
+/// The deadline each hook saw its unit opened with, by phase; `None` for a
+/// hook run outside any unit.
+static SEEN_IN_UNIT: std::sync::Mutex<Vec<(LifecyclePhase, Option<Option<tokio::time::Instant>>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn record_unit(phase: LifecyclePhase) {
+    SEEN_IN_UNIT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((phase, IN_UNIT.try_with(|deadline| *deadline).ok()));
+}
+
+fn seen_in_unit() -> Vec<(LifecyclePhase, Option<Option<tokio::time::Instant>>)> {
+    SEEN_IN_UNIT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+#[injectable]
+#[derive(Default)]
+struct UnitWitness;
+
+#[hooks]
+impl UnitWitness {
+    #[on_module_init]
+    async fn init(&self) {
+        record_unit(LifecyclePhase::OnModuleInit);
+    }
+
+    #[on_application_bootstrap]
+    async fn bootstrap(&self) {
+        record_unit(LifecyclePhase::OnApplicationBootstrap);
+    }
+
+    #[on_module_destroy]
+    async fn destroy(&self) {
+        record_unit(LifecyclePhase::OnModuleDestroy);
+    }
+
+    #[on_application_shutdown]
+    async fn shutdown(&self) {
+        record_unit(LifecyclePhase::OnApplicationShutdown);
+    }
+}
+
+#[module(providers = [UnitWitness])]
+struct UnitWitnessModule;
+
+#[tokio::test(start_paused = true)]
+async fn every_hook_runs_inside_the_bound_unit_of_work_the_shutdown_ones_to_the_budget() {
+    let app = App::builder()
+        .provide_dyn::<dyn LifecycleUnitOfWork>(Arc::new(UnitsOnRecord))
+        .module::<UnitWitnessModule>()
+        .build()
+        .await
+        .expect("the module boots");
+    app.init().await.expect("the init phases drain");
+    let closing = tokio::time::Instant::now();
+    app.close().await;
+
+    let seen = seen_in_unit();
+    let phases: Vec<_> = seen.iter().map(|(phase, _)| *phase).collect();
+    assert_eq!(
+        phases,
+        [
+            LifecyclePhase::OnModuleInit,
+            LifecyclePhase::OnApplicationBootstrap,
+            LifecyclePhase::OnModuleDestroy,
+            LifecyclePhase::OnApplicationShutdown,
+        ],
+    );
+    for (phase, deadline) in &seen[..2] {
+        assert_eq!(
+            *deadline,
+            Some(None),
+            "{phase:?}: in a unit, cut by nothing"
+        );
+    }
+    for (phase, deadline) in &seen[2..] {
+        let deadline = deadline
+            .unwrap_or_else(|| panic!("{phase:?} ran outside the unit of work"))
+            .unwrap_or_else(|| panic!("{phase:?}'s unit carries no deadline"));
+        assert_eq!(
+            deadline,
+            closing + SHUTDOWN_HOOKS_TIMEOUT,
+            "{phase:?}: the shutdown hooks' one budget"
+        );
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct BareWitness;
+
+#[hooks]
+impl BareWitness {
+    #[on_module_init]
+    async fn init(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            IN_UNIT.try_with(|_| ()).is_err(),
+            "the hook ran inside a unit of work no app bound",
+        );
+        Ok(())
+    }
+}
+
+#[module(providers = [BareWitness])]
+struct BareWitnessModule;
+
+#[tokio::test]
+async fn with_no_unit_of_work_bound_a_hook_runs_bare() {
+    let logs = LogCapture::install();
+    let app = App::new::<BareWitnessModule>().expect("the module boots");
+    app.init().await.expect("the hook runs bare");
+    assert_eq!(
+        hook_line(&logs, "init").field("outcome").as_deref(),
+        Some(operation_log::OK),
     );
 }

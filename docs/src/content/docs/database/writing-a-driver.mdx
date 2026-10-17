@@ -8,8 +8,8 @@ sidebar:
 The [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database)
 crate is a port: one `UnitOfWork` trait every edge runs its units of work
 through — an HTTP request, a WebSocket message, an MCP operation, a queue
-attempt, a scheduled tick — and an object-safe `Executor` trait for the handle
-each unit's body reads from the request's ambient context, which carries it
+attempt, a scheduled tick, a lifecycle hook — and an object-safe `Executor`
+trait for the handle each unit's body reads from the request's ambient context, which carries it
 across every layer. The seam names no store and no
 query API — a handle is a handle. The same scaffold fits a SQL pool, a
 document-store client, a key-value session, a graph driver, an in-memory
@@ -249,7 +249,8 @@ What your binding owes:
   split them too.
 
 No caller means no ambient ability: a unit declared `ExecutorScope::Job` — a
-queue attempt, a tick — runs unscoped, which is correct for system work.
+queue attempt, a tick, a lifecycle hook — runs unscoped, which is correct for
+system work.
 
 ## Step 3 — The request interceptor
 
@@ -340,10 +341,14 @@ logged once at `warn`.
 
 The activation seam an app imports. A `DynamicModule` that seeds the
 connection at the factory phase, registers the interceptor, and binds your
-unit of work as `Arc<dyn UnitOfWork>` — a **declaration** carrying the port's
-`BACKEND_REMEDY`, so a second database driver imported beside yours fails the
-boot naming both. Every edge resolves that binding once, when it mounts or
-boots. Every field of the config is settable
+unit of work through `provide_unit_of_work`: as `Arc<dyn UnitOfWork>` — a
+**declaration** carrying the port's `BACKEND_REMEDY`, so a second database
+driver imported beside yours fails the boot naming both — and as the unit of
+work every lifecycle hook runs in. A binding that declares
+`Arc<dyn UnitOfWork>` by hand, outside `provide_unit_of_work`, still serves
+every edge but leaves every lifecycle hook bare: no transaction, and `Repo`
+finds no executor in it. Every edge resolves that binding once, when
+it mounts or boots. Every field of the config is settable
 from both the environment (`<PREFIX>_<NAMESPACE>__<KEY>`) and a pinned
 struct — the framework-wide dual-path rule.
 
@@ -367,7 +372,7 @@ use std::any::TypeId;
 use std::sync::Arc;
 use nest_rs::config::ConfigModule;
 use nest_rs::core::{Collecting, ContainerBuilder, DynamicModule, Registering};
-use nest_rs::database::{BACKEND_REMEDY, UnitOfWork};
+use nest_rs::database::{UnitOfWork, provide_unit_of_work};
 
 pub struct YourDbModule;
 
@@ -391,22 +396,18 @@ impl DynamicModule for YourDbSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        builder
+        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder)
             .provide_factory_after::</* YourHandle */, (YourConfig,), _, _>(|container| async move {
                 let config = ConfigModule::resolved::<YourConfig>(&container)?;
                 // Your code: build your pool / client from `config`.
             })
             .provide_close::</* YourHandle */, _, _>(|handle| async move {
                 // Your code: end every session the handle holds.
-            })
-            .provide_declared_factory_after::<Arc<dyn UnitOfWork>, (/* YourHandle */,), _, _>(
-                BACKEND_REMEDY,
-                |container| async move {
-                    let unit = YourUnitOfWork::new(/* the handle from `container` */);
-                    Ok(Arc::new(unit) as Arc<dyn UnitOfWork>)
-                },
-            )
+            });
+        provide_unit_of_work::<(/* YourHandle */,), _, _>(builder, |container| async move {
+            let unit = YourUnitOfWork::new(/* the handle from `container` */);
+            Ok(Arc::new(unit) as Arc<dyn UnitOfWork>)
+        })
     }
 }
 ```

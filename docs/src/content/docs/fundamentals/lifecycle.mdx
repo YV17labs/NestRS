@@ -222,6 +222,40 @@ that hang would spend twenty seconds — which is why it is a budget.
 Error: lifecycle hook api::migrations::MigrationGuard::check (OnModuleInit) failed: pending migrations
 ```
 
+## A hook is a unit of work
+
+Each hook runs as one `lifecycle.hook` unit of work, the way a request or a
+scheduled tick does. It gets a trace of its own — a hook has no caller — and
+files one line on `nest_rs::operation` when it ends, with its `phase`,
+`provider`, `method`, `origin` and `outcome`. A shutdown hook abandoned at the
+budget, or an init hook a signal stopped, files `outcome="cancelled"`.
+
+It also gets the data context a tick gets. With `SeaOrmDatabaseModule`
+imported, a hook runs in one transaction, opened on its first data-layer touch,
+committed when it returns `Ok` and rolled back on an error, a panic or an
+abandonment at the budget. So a hook reaches the database through its service and `Repo`, like
+any handler:
+
+```rust title="crates/features/src/users/service.rs (from the demo)"
+#[hooks]
+impl UsersService {
+    #[on_application_shutdown]
+    async fn report(&self) -> Result<()> {
+        let count = Repo::<Users>::scoped(Action::Read)
+            .count(&Repo::<Users>::conn()?)
+            .await?;
+        tracing::debug!(target: crate::users::TARGET, count, "users present at shutdown");
+        Ok(())
+    }
+}
+```
+
+A hook is system work: no ability is attached, so `Repo` reads unscoped, as a
+job does. A commit that fails is the hook's error, so at init it aborts the
+boot. An event the hook emits waits for its commit, and each listener runs in a
+transaction of its own. Shutdown hooks run before the pool closes, so they have
+it too. With no database binding imported, a hook runs bare.
+
 ## Where it sits in the run
 
 `App::run` walks a fixed sequence. The hooks bracket the serving window:
@@ -519,8 +553,9 @@ can prove its shutdown hooks.
   sets.
 
 The `UsersService` in the Publish workspace uses
-`#[on_application_shutdown]` to log how many users exist at teardown —
-a one-method `#[hooks]` block beside the service's main `impl`.
+`#[on_application_shutdown]` to count its users through `Repo` at teardown —
+a one-method `#[hooks]` block beside the service's main `impl`, shown
+[above](#a-hook-is-a-unit-of-work).
 
 ## Going further
 

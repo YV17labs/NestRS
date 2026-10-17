@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
-use nest_rs_database::{BACKEND_REMEDY, UnitOfWork};
+use nest_rs_database::{UnitOfWork, provide_unit_of_work};
 use sea_orm::DatabaseConnection;
 
 use crate::module::{BudgetReach, SUBSTRATE_REMEDY, budgets};
@@ -9,8 +9,9 @@ use crate::unit::Settles;
 use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
 /// Binds the `nest-rs-database` port: [`SeaOrmUnitOfWork`] as `dyn
-/// UnitOfWork`, which every edge opens its units of work through, the
-/// `DbContext` request interceptor for HTTP (feature `http`). A bare import beside
+/// UnitOfWork`, which every edge opens its units of work through and every
+/// lifecycle hook runs in, the `DbContext` request interceptor for HTTP (feature
+/// `http`). A bare import beside
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 pub struct SeaOrmDatabaseModule;
 
@@ -19,17 +20,13 @@ impl Module for SeaOrmDatabaseModule {
         let builder = budgets(BudgetReach::Ambient)
             .into_iter()
             .fold(builder, ContainerBuilder::provide_meta);
+        // Queued after the pool's and config's factories, so a missing one is
+        // named before any later factory dials.
+        let builder = provide_unit_of_work::<(DatabaseConnection, SeaOrmConfig, Settles), _, _>(
+            builder,
+            |container| async move { Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>) },
+        );
         builder
-            // Queued after the pool's and config's factories, so a missing one
-            // is named before any later factory dials.
-            .provide_declared_factory_after::<
-                Arc<dyn UnitOfWork>,
-                (DatabaseConnection, SeaOrmConfig, Settles),
-                _,
-                _,
-            >(BACKEND_REMEDY, |container| async move {
-                Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
-            })
             // Installed after the pool, so its close drains every settle still
             // running before the pool's closes.
             .provide_factory_after::<Settles, (DatabaseConnection,), _, _>(|_| async {
@@ -81,7 +78,7 @@ fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use nest_rs_core::{App, ContestedDeclarationError, LateFactoryError};
-    use nest_rs_database::{OpenUnit, Unhonoured, UnitSpec};
+    use nest_rs_database::{BACKEND_REMEDY, OpenUnit, Unhonoured, UnitSpec};
 
     use super::*;
 

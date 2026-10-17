@@ -143,7 +143,7 @@ async fn a_known_identity_wins_over_a_drifted_email() {
     seed_org(conn.as_ref(), org_id).await;
 
     with_request_executor(Executor::Pool((*conn).clone()), async {
-        let svc = UsersService::new(Arc::clone(&conn));
+        let svc = UsersService;
 
         let created = svc
             .resolve_social_identity(&github("42", "ada@first.example", true), org_id)
@@ -186,7 +186,7 @@ async fn a_verified_email_links_to_an_existing_account_exactly_once() {
     let carol = seed_user(conn.as_ref(), org_id, "carol@example.com").await;
 
     with_request_executor(Executor::Pool((*conn).clone()), async {
-        let svc = UsersService::new(Arc::clone(&conn));
+        let svc = UsersService;
 
         let first = svc
             .resolve_social_identity(&github("77", "carol@example.com", true), org_id)
@@ -225,7 +225,7 @@ async fn an_unverified_email_never_links_to_an_existing_account() {
     seed_user(conn.as_ref(), org_id, "dave@example.com").await;
 
     with_request_executor(Executor::Pool((*conn).clone()), async {
-        let svc = UsersService::new(Arc::clone(&conn));
+        let svc = UsersService;
 
         let outcome = svc
             .resolve_social_identity(&github("7", "dave@example.com", false), org_id)
@@ -259,7 +259,7 @@ async fn an_unknown_verified_identity_provisions_a_user_and_its_identity() {
     seed_org(conn.as_ref(), org_id).await;
 
     with_request_executor(Executor::Pool((*conn).clone()), async {
-        let svc = UsersService::new(Arc::clone(&conn));
+        let svc = UsersService;
 
         let user = svc
             .resolve_social_identity(&github("1000", "erin@example.com", true), org_id)
@@ -296,12 +296,11 @@ async fn concurrent_first_logins_resolve_to_a_single_user() {
     seed_org(conn.as_ref(), org_id).await;
 
     let pool = (*conn).clone();
-    let (c1, c2) = (Arc::clone(&conn), Arc::clone(&conn));
     let (p1, p2) = (pool.clone(), pool);
 
     let t1 = tokio::spawn(async move {
         with_request_executor(Executor::Pool(p1), async move {
-            UsersService::new(c1)
+            UsersService
                 .resolve_social_identity(&github("999", "frank@example.com", true), org_id)
                 .await
         })
@@ -309,7 +308,7 @@ async fn concurrent_first_logins_resolve_to_a_single_user() {
     });
     let t2 = tokio::spawn(async move {
         with_request_executor(Executor::Pool(p2), async move {
-            UsersService::new(c2)
+            UsersService
                 .resolve_social_identity(&github("999", "frank@example.com", true), org_id)
                 .await
         })
@@ -354,10 +353,10 @@ async fn resolve_in_a_mutating_request(
 ) -> (Result<features::users::Model, AuthError>, FinalizeOutcome) {
     let request = Arc::new(LazyTransaction::new((*conn).clone(), "test"));
     let resolving = tokio::spawn({
-        let (conn, request) = (Arc::clone(&conn), Arc::clone(&request));
+        let request = Arc::clone(&request);
         async move {
             with_request_executor(Executor::Lazy(request), async move {
-                UsersService::new(conn)
+                UsersService
                     .resolve_social_identity(&identity, org_id)
                     .await
             })

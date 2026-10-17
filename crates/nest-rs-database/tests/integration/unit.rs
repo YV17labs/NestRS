@@ -1,6 +1,8 @@
 //! `run_unit` against bindings written the way a driver writes one: the body
 //! runs inside the unit the binding opened, the binding settles on the edge's
-//! own outcome, and what it could not honour replaces a success.
+//! own outcome, and what it could not honour replaces a success. A binding
+//! provided through `provide_unit_of_work` runs every lifecycle hook as a unit
+//! of its own.
 
 use std::any::Any;
 use std::future::Future;
@@ -10,10 +12,14 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use nest_rs_core::operation_log::{Kind, Unit};
-use nest_rs_core::{Continuation, RequestContinuation};
+use nest_rs_core::{
+    App, Collecting, ContainerBuilder, ContestedDeclarationError, Continuation, Module,
+    Registering, RequestContinuation, hooks, injectable, module,
+};
 use nest_rs_database::{
-    Executor, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork,
-    UnitSpec, current_executor, current_executor_scope, current_unit_of_work, run_unit,
+    BACKEND_REMEDY, Executor, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured,
+    UnitOfWork, UnitSpec, current_executor, current_executor_scope, current_unit_of_work,
+    provide_unit_of_work, run_unit,
 };
 
 const MESSAGE: Unit =
@@ -32,10 +38,12 @@ impl Executor for Handle {
     }
 }
 
-/// What a stub binding saw: every unit it opened, and how each was settled.
+/// What a stub binding saw: every unit it opened, the deadline each was
+/// opened with, and how each was settled.
 #[derive(Default)]
 struct Seen {
     opened: Vec<(&'static str, ExecutorScope, TransactionPolicy)>,
+    deadlines: Vec<Option<tokio::time::Instant>>,
     settled: Vec<bool>,
 }
 
@@ -66,11 +74,11 @@ struct StubUnit {
 
 impl UnitOfWork for Stub {
     fn open(&self, spec: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
-        self.seen
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .opened
+        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
+        seen.opened
             .push((spec.unit.name(), spec.scope, spec.policy));
+        seen.deadlines.push(spec.deadline);
+        drop(seen);
         Ok(Box::new(StubUnit {
             policy: spec.policy,
             seen: Arc::clone(&self.seen),
@@ -558,4 +566,196 @@ async fn a_commit_that_did_not_answer_in_time_fails_the_unit_in_doubt_never_retr
             "its writes may have landed"
         )
     };
+}
+
+/// The input a stub driver's binding is built from, as a real driver reads its
+/// pool and config.
+struct StubDriver {
+    binding: Arc<dyn UnitOfWork>,
+}
+
+/// A driver's binding module, bound through the port's one helper.
+struct StubDatabaseModule;
+
+impl Module for StubDatabaseModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        provide_unit_of_work::<(StubDriver,), _, _>(builder, |container| async move {
+            container
+                .get::<StubDriver>()
+                .map(|driver| Arc::clone(&driver.binding))
+                .ok_or_else(|| nest_rs_core::anyhow::anyhow!("no stub driver was seeded"))
+        })
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+}
+
+/// A second driver's binding, imported beside the first.
+struct OtherDatabaseModule;
+
+impl Module for OtherDatabaseModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        provide_unit_of_work::<(StubDriver,), _, _>(builder, |container| async move {
+            container
+                .get::<StubDriver>()
+                .map(|driver| Arc::clone(&driver.binding))
+                .ok_or_else(|| nest_rs_core::anyhow::anyhow!("no stub driver was seeded"))
+        })
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+}
+
+/// What a hook reads of the unit it runs in.
+fn in_a_job_unit() -> nest_rs_core::anyhow::Result<()> {
+    nest_rs_core::anyhow::ensure!(
+        current_executor_scope() == Some(ExecutorScope::Job),
+        "a hook is system work, run under the Job scope"
+    );
+    nest_rs_core::anyhow::ensure!(
+        current_unit_of_work().is_some(),
+        "the binding is ambient for what the hook emits"
+    );
+    Ok(())
+}
+
+#[injectable]
+#[derive(Default)]
+struct Migrations;
+
+#[hooks]
+impl Migrations {
+    #[on_module_init]
+    async fn verify(&self) -> nest_rs_core::anyhow::Result<()> {
+        in_a_job_unit()
+    }
+
+    #[on_application_shutdown]
+    async fn report(&self) -> nest_rs_core::anyhow::Result<()> {
+        in_a_job_unit()
+    }
+}
+
+#[module(imports = [StubDatabaseModule], providers = [Migrations])]
+struct MigrationsModule;
+
+async fn booted<M: Module>(binding: Arc<dyn UnitOfWork>) -> App {
+    App::builder()
+        .provide(StubDriver { binding })
+        .module::<M>()
+        .build()
+        .await
+        .expect("the module boots")
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_lifecycle_hook_runs_in_a_job_unit_of_the_binding_the_helper_provides() {
+    let (binding, record) = Stub::answering(Settlement::Settled);
+    let app = booted::<MigrationsModule>(binding).await;
+    app.init().await.expect("the init hook ran in its unit");
+    let closing = tokio::time::Instant::now();
+    app.close().await;
+
+    let seen = seen(&record);
+    let hook = (
+        nest_rs_core::unit::HOOK.name(),
+        ExecutorScope::Job,
+        TransactionPolicy::PerUnit,
+    );
+    assert_eq!(seen.opened, [hook, hook], "one unit per hook");
+    assert_eq!(
+        seen.settled,
+        [true, true],
+        "each committed on its hook's Ok"
+    );
+    assert_eq!(
+        seen.deadlines,
+        [None, Some(closing + nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT)],
+        "an init hook is cut by nothing; a shutdown hook by the hooks' one budget",
+    );
+}
+
+#[injectable]
+#[derive(Default)]
+struct RefusingSeed;
+
+#[hooks]
+impl RefusingSeed {
+    #[on_module_init]
+    async fn seed(&self) -> nest_rs_core::anyhow::Result<()> {
+        Err(nest_rs_core::anyhow::anyhow!(
+            "the seed found a duplicate key"
+        ))
+    }
+}
+
+#[module(imports = [StubDatabaseModule], providers = [RefusingSeed])]
+struct RefusingSeedModule;
+
+#[tokio::test]
+async fn a_hook_answering_err_rolls_its_unit_back_and_fails_the_boot() {
+    let (binding, record) = Stub::answering(Settlement::Settled);
+    let app = booted::<RefusingSeedModule>(binding).await;
+    let refused = app
+        .init()
+        .await
+        .expect_err("the hook's error fails the boot");
+    assert!(
+        format!("{refused:#}").contains("duplicate key"),
+        "{refused:#}"
+    );
+    assert_eq!(seen(&record).settled, [false], "rolled back");
+}
+
+#[injectable]
+#[derive(Default)]
+struct Warmer;
+
+#[hooks]
+impl Warmer {
+    #[on_module_init]
+    async fn warm(&self) {}
+}
+
+#[module(imports = [StubDatabaseModule], providers = [Warmer])]
+struct WarmerModule;
+
+#[tokio::test]
+async fn a_commit_the_binding_could_not_honour_fails_the_boot_saying_why() {
+    let why = Unhonoured::retryable("the unit's transaction could not be committed");
+    let (binding, record) = Stub::answering(Settlement::Unhonoured(why));
+    let app = booted::<WarmerModule>(binding).await;
+    let refused = app
+        .init()
+        .await
+        .expect_err("a hook whose writes did not land did not succeed");
+    assert!(
+        refused
+            .chain()
+            .any(|cause| cause.downcast_ref::<Unhonoured>() == Some(&why)),
+        "{refused:#}"
+    );
+    assert_eq!(seen(&record).settled, [true]);
+}
+
+#[tokio::test]
+async fn two_bindings_through_the_helper_fail_the_boot_in_the_ports_words() {
+    let (binding, _) = Stub::answering(Settlement::Settled);
+    let Err(refused) = App::builder()
+        .provide(StubDriver { binding })
+        .module::<StubDatabaseModule>()
+        .module::<OtherDatabaseModule>()
+        .build()
+        .await
+    else {
+        panic!("one binding would run every unit, the other none");
+    };
+    let contested = refused
+        .downcast_ref::<ContestedDeclarationError>()
+        .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
+    assert_eq!(contested.remedy, BACKEND_REMEDY);
 }

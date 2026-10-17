@@ -64,7 +64,7 @@ let every_post = posts::Entity::find()
 
 An injected `Arc<DatabaseConnection>` goes one step further — it has no
 executor and no ability at all, the sanctioned bypass for a truly
-contextless path such as a shutdown hook:
+contextless path such as a one-shot command run outside every unit of work:
 
 ```rust title="crates/features/src/sessions/reaper.rs"
 #[injectable]
@@ -168,8 +168,8 @@ read:
 1. **Grep for `Repo::conn()`** in feature code. Confirm each call site
    is a sanctioned unfiltered read, not a forgotten scope.
 2. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
-   Each injection should be a contextless path (a hook), never a request
-   handler.
+   Each injection should be a contextless path (a one-shot command), never
+   a request handler or a lifecycle hook, which runs in a unit of work.
 3. **Confirm every `#[processor]` re-scopes.** Trace the tenant —
    `current_tenant_id()`, or the id a tick puts in the payload — into the
    service's query. A load-by-id with no `org_id` predicate is the bug.

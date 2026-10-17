@@ -142,6 +142,7 @@ mod testing;
 pub mod trace_context;
 pub mod transport;
 mod type_name;
+pub mod unit;
 mod unit_context;
 mod way_down;
 mod wiring;
@@ -232,7 +233,7 @@ pub mod __private {
         log_effective_chain, refuse_unresolved, report_unresolved, resolve_global_layers,
         resolve_scoped,
     };
-    pub use crate::lifecycle::__private::LifecycleHook;
+    pub use crate::lifecycle::__private::{LifecycleHook, LifecycleUnitOfWork};
     #[cfg(feature = "logging")]
     pub use crate::logging::__private::{
         ConsoleWriter, JsonFormat, TextFormat, install_global_subscriber,

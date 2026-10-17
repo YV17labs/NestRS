@@ -6,9 +6,9 @@
 //!   closing it when the app ends, after every shutdown hook.
 //! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port:
 //!   [`SeaOrmUnitOfWork`], which every edge — an HTTP request, a WS message, an
-//!   MCP operation, a queue attempt, a scheduled tick — runs its unit of work
-//!   through, on an ambient [`Executor`]: the pool, or a transaction opened on
-//!   the unit's first data-layer touch.
+//!   MCP operation, a queue attempt, a scheduled tick — and every lifecycle hook
+//!   runs its unit of work through, on an ambient [`Executor`]: the pool, or a
+//!   transaction opened on the unit's first data-layer touch.
 //! - [`SeaOrmHealthModule`] (bare, feature `health`) binds a health indicator.
 //!
 //! Services query through [`Repo`]: every call runs on the ambient executor,

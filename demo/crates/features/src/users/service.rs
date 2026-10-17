@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use anyhow::Result;
 use nest_rs::authn::{AuthError, CredentialError, burn_verify, hash_password, verify_password};
@@ -11,9 +10,7 @@ use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, DbOutcome, Deletable, Executor, Repo, ServiceError,
     Updatable,
 };
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DbErr, PaginatorTrait, QueryFilter, Set};
 use uuid::Uuid;
 use validator::Validate;
 
@@ -26,10 +23,8 @@ use super::entities::user_identity::{self, Entity as UserIdentities};
 const DEFAULT_ROLE: UserRole = UserRole::User;
 
 #[injectable]
-pub struct UsersService {
-    #[inject]
-    db: Arc<DatabaseConnection>,
-}
+#[derive(Default)]
+pub struct UsersService;
 
 impl CrudService for UsersService {
     type Entity = Users;
@@ -46,10 +41,6 @@ impl Updatable for UsersService {
 impl Deletable for UsersService {}
 
 impl UsersService {
-    pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
-    }
-
     pub async fn authenticate(
         &self,
         email: &str,
@@ -393,7 +384,9 @@ impl UsersService {
 impl UsersService {
     #[on_application_shutdown]
     async fn report(&self) -> Result<()> {
-        let count = Users::find().count(self.db.as_ref()).await?;
+        let count = Repo::<Users>::scoped(Action::Read)
+            .count(&Repo::<Users>::conn()?)
+            .await?;
         tracing::debug!(target: crate::users::TARGET, count, "users present at shutdown");
         Ok(())
     }
@@ -630,20 +623,16 @@ mod tests {
         assert_eq!(ok.id, id);
     }
 
-    fn users_service_disconnected() -> UsersService {
-        UsersService::new(Arc::new(DatabaseConnection::default()))
-    }
-
     #[tokio::test]
     async fn by_name_returns_empty_without_touching_the_executor_when_no_keys() {
-        let svc = users_service_disconnected();
+        let svc = UsersService;
         let out = svc.by_name(&[]).await.expect("empty keys short-circuit");
         assert!(out.is_empty());
     }
 
     #[tokio::test]
     async fn authenticate_surfaces_a_missing_executor_as_infrastructure_failure() {
-        let svc = users_service_disconnected();
+        let svc = UsersService;
         let err = svc
             .authenticate("ada@example.com", "hunter2")
             .await
@@ -656,7 +645,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_with_password_surfaces_executor_error_as_db_variant() {
-        let svc = users_service_disconnected();
+        let svc = UsersService;
         let err = svc
             .register_with_password("ada@example.com", "ada", "hunter2", Uuid::now_v7())
             .await
@@ -667,7 +656,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_with_password_surfaces_validation_error_before_touching_the_db() {
-        let svc = users_service_disconnected();
+        let svc = UsersService;
         let err = svc
             .register_with_password("not-an-email", "ada", "hunter2", Uuid::now_v7())
             .await
@@ -677,7 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_in_org_surfaces_executor_error_as_db_variant() {
-        let svc = users_service_disconnected();
+        let svc = UsersService;
         let err = svc
             .create_in_org(
                 CreateUser {
@@ -693,7 +682,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_in_org_surfaces_validation_error_before_touching_the_db() {
-        let svc = users_service_disconnected();
+        let svc = UsersService;
         let err = svc
             .create_in_org(
                 CreateUser {
@@ -709,7 +698,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_social_identity_surfaces_executor_error_as_unavailable() {
-        let svc = users_service_disconnected();
+        let svc = UsersService;
         let identity = SocialIdentity {
             provider: "github",
             subject: "42".into(),
@@ -750,15 +739,6 @@ mod tests {
             blank.verified_email().is_none(),
             "a blank email is not verified-usable"
         );
-    }
-
-    #[test]
-    fn new_constructs_a_service_carrying_the_supplied_connection() {
-        let db = Arc::new(DatabaseConnection::default());
-        let svc = UsersService::new(Arc::clone(&db));
-        assert!(Arc::strong_count(&db) >= 2);
-        drop(svc);
-        assert_eq!(Arc::strong_count(&db), 1);
     }
 
     #[test]

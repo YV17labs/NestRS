@@ -211,9 +211,9 @@ every action but `Create` and `Delete`, as every `Repo` read leaves it out;
 A row a route bound through `Bind<Update, S>` was already authorized for
 `Update` in SQL, and needs neither check.
 
-`current_ability()` returns `None` outside a request (worker job,
-shutdown hook). Worker jobs run **unscoped** by design — system work
-should not be filtered by a caller's ability. See
+`current_ability()` returns `None` outside a request (worker job, cron
+tick, init or shutdown hook). That work runs **unscoped** by design — system
+work should not be filtered by a caller's ability. See
 [Threat model](/security/threat-model/) for what that buys and what
 it does not.
 

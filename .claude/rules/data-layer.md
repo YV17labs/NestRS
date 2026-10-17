@@ -36,8 +36,10 @@ its callers must clear; the method's doc is the authority, not this list.
   soft-deleted rows: an administrator's view of deleted records, a retention
   job. Every other read hides them. It reads only: no `Repo` write un-deletes
   a row (`Repo::restore` is planned for 7.x).
-- **A truly contextless path** — a shutdown hook — keeps an injected
-  `Arc<DatabaseConnection>`, because no executor exists there.
+- **A truly contextless path** — a one-shot command bootstrapped outside
+  every unit of work — keeps an injected `Arc<DatabaseConnection>`, because no
+  executor exists there. A lifecycle hook is a unit, and reaches `Repo` like
+  any handler.
 
 No webhook ingress exists; `Repo::unscoped`'s rustdoc states the bar a
 signature-authenticated one must clear before it ships. Auditing the escapes
@@ -92,19 +94,21 @@ the one port, `nest_rs_database::run_unit`, over the `dyn UnitOfWork` the
 driver's binding provides — resolved once at mount or boot, never per unit,
 or read by the bus off the unit its emitter ran under;
 with none bound a unit runs bare and `Repo` fails closed. A driver implements
-that one trait and serves every edge; an app lists no data context. Each edge
-commits on its own unit's outcome: an HTTP request on 2xx/3xx without a
-`MappedError` (a safe method runs on the pool, the unit opened by the
-`DbContext` interceptor in the innermost band, and so does a request carrying
-units of its own, `/graphql` and `/mcp`); a GraphQL operation once it executed,
-each mutation root field in a savepoint of it rolled back when its answer
-carries an error (`.claude/decisions/graphql-transactions.md`); a WS message unless it answers
-an error frame, a connection hook unless it unwound; an MCP operation on `Ok`
-with no tool error in band (`isError`); a queue attempt, a tick and a
-listener call on `Ok`. A
-unit of its own gets a **lazy** transaction — `BEGIN` deferred to the first
-data-layer touch, **a read included**. Guards run inside the unit, so a denied
-unit never touches the data layer and opens no transaction at all.
+that one trait and binds it through `nest_rs_database::provide_unit_of_work`,
+which serves every edge and the kernel's lifecycle hooks; an app lists no data
+context. Each edge commits on its own unit's outcome: an HTTP request on
+2xx/3xx without a `MappedError` (a safe method runs on the pool, the unit
+opened by the `DbContext` interceptor in the innermost band, and so does a
+request carrying units of its own, `/graphql` and `/mcp`); a GraphQL operation
+once it executed, each mutation root field in a savepoint of it rolled back
+when its answer carries an error (`.claude/decisions/graphql-transactions.md`);
+a WS message unless it answers an error frame, a connection hook unless it
+unwound; an MCP operation on `Ok` with no tool error in band (`isError`); a
+queue attempt, a tick, a listener call and a lifecycle hook (system work,
+under the Job scope) on `Ok`. A unit of its own gets a **lazy** transaction —
+`BEGIN` deferred to the first data-layer touch, **a read included**. Guards
+run inside the unit, so a denied unit never touches the data layer and opens
+no transaction at all.
 
 **The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
 rest of the unit once its guard stage passed. A route no response mask shapes,
@@ -141,7 +145,8 @@ chain goes on — so an event a listener emits waits for that listener's commit.
 
 - **Waits:** every unit of its own — a mutating HTTP request, a GraphQL
   operation (a savepoint per mutation root field), a WS message or connection
-  hook, an MCP operation, a queue attempt, a scheduled tick, a listener call.
+  hook, an MCP operation, a queue attempt, a scheduled tick, a listener call, a
+  lifecycle hook.
 - **Runs at once:** a pool — a safe request, a GraphQL query, a subscription,
   `transactional = false`.
 - **Not waited for:** a transaction the caller opened itself (`Executor::Txn`,

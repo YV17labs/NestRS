@@ -1,8 +1,8 @@
 //! Lifecycle hooks: `#[hooks]` submits methods to a link-time `inventory`
 //! registry that [`crate::App::run`] drains per phase, dependencies first at
-//! init and in reverse at shutdown.
+//! init and in reverse at shutdown, each hook one `lifecycle.hook` unit of work.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::future::Future;
@@ -10,6 +10,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use tokio::time::Instant;
+use tracing::Instrument as _;
 
 use crate::access::positions;
 use crate::app::BootStep;
@@ -17,6 +18,8 @@ use crate::app_lifecycle::AppLifecycle;
 use crate::container::Container;
 use crate::millis::millis;
 use crate::panic;
+use crate::request_scope::RequestContinuation;
+use crate::trace_context::Correlation;
 
 /// How long the shutdown hooks may run, all of them together, before what still
 /// waits is abandoned.
@@ -78,15 +81,27 @@ impl LifecyclePhase {
 
 type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
-pub(crate) use self::__private::LifecycleHook;
+pub(crate) use self::__private::{LifecycleHook, LifecycleUnitOfWork};
 
 /// `lifecycle` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
 
+    use tokio::time::Instant;
+
     use super::{HookFuture, LifecyclePhase};
     use crate::container::Container;
+
+    /// The unit of work every lifecycle hook runs in, bound by the data-layer
+    /// driver's binding through `nest_rs_database::provide_unit_of_work`; with
+    /// none bound, a hook runs bare.
+    pub trait LifecycleUnitOfWork: Send + Sync + 'static {
+        /// Run `hook` as one `lifecycle.hook` unit of system work, its deadline
+        /// the shutdown hooks' budget (`None` at init): committed on `Ok`,
+        /// rolled back otherwise, and a commit that fails is the hook's `Err`.
+        fn run<'a>(&'a self, deadline: Option<Instant>, hook: HookFuture<'a>) -> HookFuture<'a>;
+    }
 
     /// One lifecycle hook submitted to the link-time registry by `#[hooks]`.
     #[derive(Debug)]
@@ -209,6 +224,117 @@ pub(crate) struct HookFailure {
     pub(crate) error: anyhow::Error,
 }
 
+/// How a hook's unit ended, its panic contained.
+type HookEnd = Result<anyhow::Result<()>, Box<dyn Any + Send>>;
+
+/// One hook run as a `lifecycle.hook` unit of work: a trace of its own — a hook
+/// has no caller — and its span.
+struct HookUnit {
+    phase: LifecyclePhase,
+    hook: &'static LifecycleHook,
+    correlation: Correlation,
+    continuation: RequestContinuation,
+    span: tracing::Span,
+}
+
+impl HookUnit {
+    fn open(phase: LifecyclePhase, hook: &'static LifecycleHook) -> Self {
+        let correlation = Correlation::minted(None);
+        let span = crate::operation_span!(
+            crate::unit::HOOK,
+            &correlation,
+            phase = ?phase,
+            provider = hook.provider,
+            method = hook.method,
+            origin = hook.origin,
+        );
+        let continuation = RequestContinuation::new(None, correlation.clone());
+        Self {
+            phase,
+            hook,
+            correlation,
+            continuation,
+            span,
+        }
+    }
+
+    /// Run the hook against `container`, inside the unit `unit_of_work` opens
+    /// for it — bare with none — and file its line with how it ended.
+    async fn run(
+        &self,
+        container: &Container,
+        unit_of_work: Option<&dyn LifecycleUnitOfWork>,
+        deadline: Option<Instant>,
+    ) -> HookEnd {
+        let line = HookLine {
+            unit: self,
+            started: std::time::Instant::now(),
+            filed: false,
+        };
+        let hook = (self.hook.run)(container);
+        let body = match unit_of_work {
+            Some(unit_of_work) => unit_of_work.run(deadline, hook),
+            None => hook,
+        };
+        let ended = crate::with_request_scope(None, self.correlation.clone(), panic::contain(body))
+            .instrument(self.span.clone())
+            .await;
+        line.file(match &ended {
+            Ok(Ok(())) => crate::operation_log::OK,
+            Ok(Err(_)) => crate::operation_log::ERROR,
+            Err(_) => crate::operation_log::PANIC,
+        });
+        ended
+    }
+
+    /// Say `f`'s events in the hook's trace, as its line is.
+    fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
+        self.continuation.enter(f)
+    }
+}
+
+/// A hook's `lifecycle.hook` line, filed exactly once: with how its unit ended,
+/// or `cancelled` when it is dropped first — abandoned at the shutdown hooks'
+/// budget, or stopped by a boot signal.
+struct HookLine<'a> {
+    unit: &'a HookUnit,
+    started: std::time::Instant,
+    filed: bool,
+}
+
+impl HookLine<'_> {
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+    }
+
+    fn emit(&mut self, outcome: &'static str) {
+        self.filed = true;
+        let HookUnit {
+            phase, hook, span, ..
+        } = self.unit;
+        self.unit.enter(|| {
+            crate::operation_line!(
+                crate::unit::HOOK,
+                span: span,
+                outcome: outcome,
+                started: self.started,
+                phase = ?phase,
+                provider = hook.provider,
+                method = hook.method,
+                origin = hook.origin,
+            );
+        });
+    }
+}
+
+impl Drop for HookLine<'_> {
+    fn drop(&mut self) {
+        if !self.filed {
+            self.emit(crate::operation_log::CANCELLED);
+        }
+    }
+}
+
 /// Init-phase runner: aborts on the first error or panic, and at a stop asked
 /// while a hook waits.
 pub(crate) async fn run_phase(
@@ -216,42 +342,38 @@ pub(crate) async fn run_phase(
     lifecycle: &AppLifecycle,
     phase: LifecyclePhase,
 ) -> Result<(), HookFailure> {
+    let unit_of_work = container.get_dyn::<dyn LifecycleUnitOfWork>();
     for hook in hooks_for(phase, container) {
         if !(hook.present)(container) {
             report_inert_hook(container, hook, phase);
             continue;
         }
-        tracing::debug!(
-            target: crate::target::LIFECYCLE,
-            ?phase,
-            provider = hook.provider,
-            method = hook.method,
-            origin = hook.origin,
-            "running lifecycle hook",
-        );
         let step = BootStep::InitHook {
             phase,
             provider: hook.provider,
             method: hook.method,
             origin: hook.origin,
         };
+        let unit = HookUnit::open(phase, hook);
         let error = match lifecycle
-            .boot(&step, panic::contain((hook.run)(container)))
+            .boot(&step, unit.run(container, unit_of_work.as_deref(), None))
             .await
         {
             Ok(Ok(Ok(()))) => continue,
             Err(interrupted) => interrupted.into(),
             Ok(Ok(Err(err))) => err.context(format!("{step} failed")),
             Ok(Err(payload)) => {
-                crate::contained_panic!(
-                    target: crate::target::LIFECYCLE,
-                    payload.as_ref(),
-                    "lifecycle hook panicked; the boot is aborted",
-                    ?phase,
-                    provider = hook.provider,
-                    method = hook.method,
-                    origin = hook.origin,
-                );
+                unit.enter(|| {
+                    crate::contained_panic!(
+                        target: crate::target::LIFECYCLE,
+                        payload.as_ref(),
+                        "lifecycle hook panicked; the boot is aborted",
+                        ?phase,
+                        provider = hook.provider,
+                        method = hook.method,
+                        origin = hook.origin,
+                    );
+                });
                 anyhow::anyhow!("{step} panicked")
             }
         };
@@ -267,24 +389,24 @@ pub(crate) async fn run_phase_lenient(
     phase: LifecyclePhase,
     deadline: Instant,
 ) {
+    let unit_of_work = container.get_dyn::<dyn LifecycleUnitOfWork>();
     for hook in hooks_for(phase, container) {
         if !(hook.present)(container) {
             report_inert_hook(container, hook, phase);
             continue;
         }
-        tracing::debug!(
-            target: crate::target::LIFECYCLE,
-            ?phase,
-            provider = hook.provider,
-            method = hook.method,
-            origin = hook.origin,
-            "running lifecycle hook",
-        );
         crate::way_down::hook(phase, hook.provider, hook.method, hook.origin);
+        let unit = HookUnit::open(phase, hook);
         let started = Instant::now();
         // `timeout_at` polls the hook before its timer, so past the deadline
-        // it still runs once.
-        match tokio::time::timeout_at(deadline, panic::contain((hook.run)(container))).await {
+        // it still runs once; a hook it drops is abandoned whole, its unit with
+        // it, as the scheduler drops a tick at its shutdown bound.
+        let ended = tokio::time::timeout_at(
+            deadline,
+            unit.run(container, unit_of_work.as_deref(), Some(deadline)),
+        )
+        .await;
+        unit.enter(|| match ended {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(err))) => tracing::error!(
                 target: crate::target::LIFECYCLE,
@@ -315,7 +437,7 @@ pub(crate) async fn run_phase_lenient(
                 "shutdown hook abandoned: the shutdown hooks' budget was spent while it waited, \
                  and the hooks after it still start",
             ),
-        }
+        });
     }
 }
 

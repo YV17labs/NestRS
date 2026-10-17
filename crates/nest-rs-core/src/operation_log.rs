@@ -2,7 +2,7 @@
 //!
 //! A unit's canonical name is `<edge>.<unit>` for a framework edge's,
 //! `lifecycle.<unit>` for the kernel's and `<crate>.<unit>` for any other
-//! crate's, declared once as a [`Unit`] through [`unit!`](crate::unit) by the
+//! crate's, declared once as a [`Unit`] through [`unit!`](macro@crate::unit) by the
 //! crate it belongs to, and read by [`operation_span!`](crate::operation_span)
 //! and [`operation_line!`](crate::operation_line).
 //!
@@ -95,7 +95,7 @@ impl Edge {
 /// One unit of work: its canonical name, the target its span is emitted on, its
 /// [`Kind`] and, for a framework edge's, its [`Edge`].
 ///
-/// Declared only through [`unit!`](crate::unit); the accessors are `const` so
+/// Declared only through [`unit!`](macro@crate::unit); the accessors are `const` so
 /// the reading macros can put them in `tracing`'s static callsite metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unit {
@@ -125,7 +125,7 @@ impl Unit {
     }
 
     /// The framework edge that dispatches this unit, read off its name when
-    /// [`unit!`](crate::unit) declared it; `None` for a unit no edge
+    /// [`unit!`](macro@crate::unit) declared it; `None` for a unit no edge
     /// dispatches.
     pub const fn edge(&self) -> Option<Edge> {
         self.edge
@@ -145,7 +145,7 @@ pub(crate) mod __private {
         Edge, KERNEL, KERNEL_WORD, Kind, Unit, eq_bytes, is_crate_root, is_edge_root, is_lib_name,
     };
 
-    /// Evaluated in a `const` by [`unit!`](crate::unit), which passes the
+    /// Evaluated in a `const` by [`unit!`](macro@crate::unit), which passes the
     /// declaring crate as `owner`: a framework edge's unit, a kernel unit, or
     /// any other crate's under its own name.
     #[expect(

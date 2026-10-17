@@ -108,7 +108,7 @@ cooperate:
   connection carries it into every message and connection hook. The
   message handler sees it.
 
-Outside any request (worker job, cron tick, shutdown hook),
+Outside any request (worker job, cron tick, init or shutdown hook),
 `current_ability()` returns `None` — the query runs **unscoped**.
 That is correct for system work: a cron deleting expired sessions
 should not be filtered by a caller's ability because there is no
@@ -121,8 +121,8 @@ Two paths reach `Repo::scoped(...)` without an ability, and they get
 opposite treatment. `Repo` tells them apart by the ambient executor's
 scope (`current_executor_scope()`):
 
-- **Worker jobs and cron ticks** — system work, no caller, no filter.
-  The query runs unscoped. Correct.
+- **Worker jobs, cron ticks and lifecycle hooks** — system work, no
+  caller, no filter. The query runs unscoped. Correct.
 - **A request-scoped executor with no ability** — an HTTP handler
   whose controller imported neither `AuthzModule` nor a
   transport-specific authz module. This **fails closed**: the filter

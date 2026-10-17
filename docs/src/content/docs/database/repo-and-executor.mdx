@@ -100,7 +100,7 @@ Three scopes coexist:
 | Scope    | Installed by                                          | What it carries                       |
 |----------|-------------------------------------------------------|---------------------------------------|
 | Request  | an HTTP request, a GraphQL operation, a WS message or hook, an MCP operation | Pool on safe routes and queries, txn otherwise |
-| Job      | a queue attempt, a scheduled tick                     | One transaction per attempt (or pool) |
+| Job      | a queue attempt, a scheduled tick, a lifecycle hook   | One transaction per attempt (or pool) |
 | Unscoped | nothing                                               | `Repo::conn()` errors                 |
 
 Every edge installs it the same way: it runs each unit of work through
@@ -109,8 +109,9 @@ Every edge installs it the same way: it runs each unit of work through
 context of their own.
 
 `current_executor_scope()` distinguishes Request from Job — `Repo` uses it
-to fail closed when a request runs with no ambient ability, while a worker
-runs unscoped (no caller ⇒ no scope to apply). See
+to fail closed when a request runs with no ambient ability, while a job — a
+worker's attempt, a tick, a lifecycle hook — runs unscoped (no caller ⇒ no
+scope to apply). See
 [Security](/security/) for the ability half.
 
 An anonymous caller is a request, not a job: on a `#[public]` route the
@@ -259,28 +260,16 @@ Both are for a *programmatic* boundary in a service, not for a job body (see
 
 ## The contextless-path exception
 
-A truly contextless path — a shutdown hook that runs after every transport
-has closed, a one-shot command run between `init()` and `close()`
-([running without serving](/fundamentals/lifecycle/#running-without-serving))
-— has no ambient executor to read. That is the one documented `Repo` bypass: inject
-an `Arc<DatabaseConnection>` and call SeaORM directly.
-
-```rust title="crates/features/src/users/service.rs"
-#[hooks]
-impl UsersService {
-    #[on_application_shutdown]
-    async fn report(&self) -> anyhow::Result<()> {
-        let count = Users::find().count(self.db.as_ref()).await?;
-        tracing::info!(count, "users present at shutdown");
-        Ok(())
-    }
-}
-```
-
-`self.db` is an `Arc<DatabaseConnection>` injected on the service —
-unscoped, no ability filter applies, no transaction. This is the **only**
-documented bypass; if you find yourself reaching for it in a request
-handler, something else is wrong.
+Every unit of work has an executor: a request, a message, an operation, a
+job, a tick, a listener call, and a [lifecycle
+hook](/fundamentals/lifecycle/#a-hook-is-a-unit-of-work), which reaches `Repo`
+through its service like any handler. A truly contextless path has none: a
+one-shot command run between `init()` and `close()`
+([running without serving](/fundamentals/lifecycle/#running-without-serving)),
+which calls a provider outside every unit. That is the one documented `Repo`
+bypass: inject an `Arc<DatabaseConnection>` and call SeaORM directly —
+unscoped, with no ability filter and no transaction. If you find yourself
+reaching for it in a request handler or a hook, something else is wrong.
 
 ## Going further
 

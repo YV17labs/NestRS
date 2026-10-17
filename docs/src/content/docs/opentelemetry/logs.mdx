@@ -133,9 +133,10 @@ export builds its tree from.
 
 The ids relate lines to each other; they do not say what the work **was**. That
 is a separate line, one per unit of work, on the shared target `nest_rs::operation`
-— and every edge files one, not just HTTP:
+— and every edge files one, not just HTTP, as the kernel does for each
+lifecycle hook:
 
-| Edge | Canonical name | Names |
+| Unit | Canonical name | Names |
 |---|---|---|
 | HTTP request | `http.request` | method, path, status, bytes, client |
 | WS message | `ws.message` | event, `conn_id` |
@@ -148,6 +149,7 @@ is a separate line, one per unit of work, on the shared target `nest_rs::operati
 | GraphQL root field | `graphql.field` | role, operation |
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |
 | Event dispatch | `events.dispatch` | event, listener |
+| Lifecycle hook | `lifecycle.hook` | phase, provider, method, origin |
 
 A GraphQL document files one `graphql.operation` line per query or mutation
 it runs — `error` when its response carries an error — and one `graphql.field`
@@ -159,7 +161,9 @@ reaches the client as a field error.
 **The name is `<edge>.<unit>`, and it is the same string the operation's span
 carries.** It is declared once, by the crate that owns the edge, as
 `<crate>::unit::<UNIT>` — `nest_rs_http::unit::REQUEST`,
-`nest_rs_ws::unit::MESSAGE`, `nest_rs_queue::unit::JOB`, and so on. It is
+`nest_rs_ws::unit::MESSAGE`, `nest_rs_queue::unit::JOB`, and so on. A lifecycle
+hook is the kernel's own unit, `lifecycle.hook`, declared by `nest-rs-core` as
+`nest_rs_core::unit::HOOK` on `nest_rs::lifecycle`: no edge dispatches it. It is
 then read three times: by the span, by the log record's event name (what an
 OTLP exporter reports as `event.name`), and by the message a console prints. The *grammar* is
 `nest_rs_core::operation_log`'s, and so is the closed list of edges; the names
@@ -196,6 +200,7 @@ a handler's return, so every edge builds both, and every edge files them:
 | Queue | an attempt its worker stopped, a drain whose window closed included | an attempt whose handler unwound |
 | Events | a listener dropped with its emitter | a listener, contained; the next one runs |
 | Schedule | a tick still running at the scheduler's shutdown bound | a tick whose job unwound |
+| Kernel (lifecycle hooks) | a shutdown hook abandoned at the hooks' budget, an init hook a signal stopped | a hook that unwound — at init it aborts the boot, at shutdown the next hook runs |
 
 So one query answers "what did this deployment do", and "what failed" is
 `outcome != ok` or `status >= 400`.

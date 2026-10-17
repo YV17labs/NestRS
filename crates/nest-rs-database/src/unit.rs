@@ -5,7 +5,11 @@ use std::time::Duration;
 
 use futures_util::FutureExt as _;
 use futures_util::future::Either;
+use nest_rs_core::__private::LifecycleUnitOfWork;
+use nest_rs_core::anyhow;
 use nest_rs_core::operation_log::Unit;
+use nest_rs_core::{Container, ContainerBuilder, FactoryInputs};
+use tokio::time::Instant;
 
 use crate::error::Unhonoured;
 use crate::executor::{Executor, ExecutorScope, install_unit};
@@ -124,6 +128,55 @@ pub enum TransactionPolicy {
 pub const BACKEND_REMEDY: &str = "Import exactly one unit-of-work binding: \
      `nest_rs::seaorm::SeaOrmDatabaseModule` runs every edge's units of work over SeaORM's \
      executor; with none, a unit runs bare.";
+
+/// Bind the unit of work `factory` builds once `I` is provided, from a driver's
+/// `Module::collect`: as the app's one `Arc<dyn UnitOfWork>`, which every edge
+/// opens its units through, and as the unit of work every lifecycle hook runs
+/// in — so a driver implements one trait and serves the kernel too.
+///
+/// A second binding imported beside it fails the boot with
+/// [`BACKEND_REMEDY`].
+pub fn provide_unit_of_work<I, F, Fut>(builder: ContainerBuilder, factory: F) -> ContainerBuilder
+where
+    I: FactoryInputs,
+    F: FnOnce(Container) -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<Arc<dyn UnitOfWork>>> + Send + 'static,
+{
+    builder
+        .provide_declared_factory_after::<Arc<dyn UnitOfWork>, I, _, _>(BACKEND_REMEDY, factory)
+        .provide_factory_after::<Arc<dyn LifecycleUnitOfWork>, (Arc<dyn UnitOfWork>,), _, _>(
+            |container| async move {
+                let unit_of_work = container.get_dyn::<dyn UnitOfWork>().ok_or_else(|| {
+                    anyhow::anyhow!("no unit of work was bound for the lifecycle hooks to run in")
+                })?;
+                Ok(Arc::new(HookUnits(unit_of_work)) as Arc<dyn LifecycleUnitOfWork>)
+            },
+        )
+}
+
+/// The kernel's lifecycle hooks, each run as one `lifecycle.hook` unit of the
+/// bound unit of work: system work in one transaction, its deadline the
+/// runner's.
+struct HookUnits(Arc<dyn UnitOfWork>);
+
+impl LifecycleUnitOfWork for HookUnits {
+    fn run<'a>(&'a self, deadline: Option<Instant>, hook: HookFuture<'a>) -> HookFuture<'a> {
+        let spec = UnitSpec::new(
+            nest_rs_core::unit::HOOK,
+            ExecutorScope::Job,
+            TransactionPolicy::PerUnit,
+        );
+        let spec = match deadline {
+            Some(deadline) => spec.with_deadline(deadline),
+            None => spec,
+        };
+        Box::pin(run_unit(Some(&self.0), spec, hook, Result::is_ok, |why| {
+            Err(anyhow::Error::new(why))
+        }))
+    }
+}
+
+type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
 /// The driver's half of the port: one per app, bound as `Arc<dyn UnitOfWork>`
 /// by the driver's binding, and the one trait a data-layer driver implements to

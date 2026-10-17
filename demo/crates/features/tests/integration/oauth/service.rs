@@ -7,7 +7,6 @@ use nest_rs::authn::{JwtOptions, JwtService};
 use nest_rs::oauth::server::TokenError;
 use nest_rs::social::SocialRegistry;
 use nest_rs::testing::{CapturedEvent, LogCapture};
-use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
 fn oauth_service() -> OAuthService {
@@ -16,9 +15,7 @@ fn oauth_service() -> OAuthService {
             .expect("jwt service"),
     );
     let providers = Arc::new(SocialRegistry::default());
-    let users_svc = Arc::new(features::users::UsersService::new(Arc::new(
-        DatabaseConnection::default(),
-    )));
+    let users_svc = Arc::new(features::users::UsersService);
     let config = Arc::new(OAuthConfig {
         clients: vec![],
         default_org_id: Uuid::nil(),

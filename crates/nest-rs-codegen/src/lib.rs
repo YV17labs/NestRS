@@ -22,6 +22,7 @@ mod identity;
 mod inject;
 mod instance;
 mod job;
+pub mod layers;
 mod mcp;
 mod meta;
 mod mount;
@@ -44,8 +45,8 @@ pub use args::{
     require_str_lit, site, takes_value, unknown_argument, unknown_value,
 };
 pub use attrs::{
-    Conditional, cfg_attrs, delegated_attrs, reject_http_only_layers, repeated_attribute,
-    take_flag_attr, take_path_list, take_single_attr,
+    Conditional, cfg_attrs, delegated_attrs, repeated_attribute, take_flag_attr, take_path_list,
+    take_single_attr,
 };
 pub use capability::guard_capability_bounds;
 pub use casing::{pascal_case, snake_case};

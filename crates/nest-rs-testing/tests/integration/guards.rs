@@ -644,7 +644,6 @@ struct ReplayedScope;
 #[routes]
 impl ReplayedScope {
     #[get("/x")]
-    #[use_guards(FreshSessionGuard)]
     #[force_guards(FreshSessionGuard)]
     async fn x(&self) -> &'static str {
         "ok"

@@ -1,6 +1,7 @@
 //! `#[indicators]`: strips each probe attribute and submits one
 //! `HealthIndicator` per method; `Discoverable` stays with `#[injectable]`.
 
+use nest_rs_codegen::layers::{LayerScope, take_layers};
 use nest_rs_codegen::pair;
 use nest_rs_codegen::{
     HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit, shared_receiver,
@@ -40,6 +41,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
+    if let Err(err) = refuse_layers(&mut item) {
+        return err.to_compile_error().into();
+    }
     let self_ty = item.self_ty.clone();
     let host_check = pair::INDICATORS.provider_host_check(&self_ty);
     let provider = match impl_self_ident(&self_ty, "#[indicators]") {
@@ -132,4 +136,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         #(#submissions)*
     };
     out.into()
+}
+
+/// Refuse every layer attribute and `#[meta]` on the block and its methods:
+/// the layer table takes none on this pair.
+fn refuse_layers(item: &mut syn::ItemImpl) -> syn::Result<()> {
+    take_layers(&pair::INDICATORS, LayerScope::Host, &mut item.attrs)?;
+    for entry in &mut item.items {
+        if let ImplItem::Fn(method) = entry {
+            take_layers(&pair::INDICATORS, LayerScope::Method, &mut method.attrs)?;
+        }
+    }
+    Ok(())
 }

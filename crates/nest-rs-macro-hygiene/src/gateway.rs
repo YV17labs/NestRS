@@ -1,10 +1,11 @@
 //! `#[gateway]` + `#[use_guards]` + `#[messages]`: the guard-layer emission,
-//! the message dispatch table and the versioned mount.
+//! a guard `#[force_guards]` binds on a message alone, the message dispatch
+//! table and the versioned mount.
 
 use nest_rs::core::{Layer, UnitContext, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs::http::HttpView;
-use nest_rs::ws::{gateway, messages};
+use nest_rs::ws::{WsView, gateway, messages};
 
 /// Bound on the gateway struct, so it runs on the upgrade and owes
 /// `GuardFor<HttpView>`.
@@ -25,6 +26,21 @@ impl Guard for HygieneWsGuard {
 
 impl GuardFor<HttpView> for HygieneWsGuard {}
 
+/// Forced on a message: bound there, and re-run past the app-wide pool.
+#[injectable]
+pub struct HygieneMessageGuard;
+
+impl Layer for HygieneMessageGuard {}
+
+#[async_trait]
+impl Guard for HygieneMessageGuard {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<WsView> for HygieneMessageGuard {}
+
 /// A value `#[meta]` declares, read by type.
 pub struct HygieneLimit(pub u32);
 
@@ -40,6 +56,11 @@ impl HygieneGateway {
     #[meta(HygieneLimit(10))]
     #[public]
     async fn ping(&self) {}
+
+    #[subscribe_message("hygiene.again")]
+    #[public]
+    #[force_guards(HygieneMessageGuard)]
+    async fn again(&self) {}
 
     #[subscribe_message("hygiene.sync")]
     #[public]

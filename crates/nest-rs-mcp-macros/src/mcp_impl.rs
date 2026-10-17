@@ -19,12 +19,12 @@ use syn::{
     Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Path, Signature, Token, Type,
 };
 
+use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::{
     Collision, Conditional, DispatchKeys, HostBorrow, PipeWrapper, Posture, PostureRules,
     await_if_async, cfg_attrs, force_guard_typeids, forwarded_arg_idents, generic_args,
     guard_capability_bounds, impl_self_ident, layer_deps, normalize_forwarded_args,
-    nth_generic_type, pipe_wrapper, reject_http_only_layers, scoped_specs, shared_receiver,
-    snake_case, take_path_list, type_label,
+    nth_generic_type, pipe_wrapper, scoped_specs, shared_receiver, snake_case, type_label,
 };
 
 /// The decorated methods of one authored `impl`, partitioned by router.
@@ -158,7 +158,6 @@ pub(crate) fn mcp_impl(args: TokenStream, item: ItemImpl) -> TokenStream {
 }
 
 fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
-    reject_http_only_layers(&item.attrs, "MCP", "host")?;
     pair::MCP.reject_host_layers(&item.attrs)?;
     nest_rs_codegen::reject_meta_on_operations(&pair::MCP, &item.attrs)?;
 
@@ -240,13 +239,10 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // guard fails the boot rather than the first call.
     let operation_guards = || {
         operations.all().flat_map(|op| {
-            op.guards
-                .iter()
-                .chain(op.force_guards.iter())
-                .map(|item| Conditional {
-                    cfgs: &op.cfgs,
-                    item,
-                })
+            op.guards.iter().map(|item| Conditional {
+                cfgs: &op.cfgs,
+                item,
+            })
         })
     };
     // `Guard::check` admits by default: the bound makes a guard declare MCP.
@@ -727,11 +723,13 @@ fn take_operation(
     // Left on the authored method, rmcp would route it as a second tool of the same name.
     method.attrs.remove(index);
 
-    reject_http_only_layers(&method.attrs, "MCP", "operation")?;
-    let guards = take_path_list(&mut method.attrs, "use_guards")?;
-    let force_guards = take_path_list(&mut method.attrs, "force_guards")?;
+    let Layers {
+        guards,
+        force_guards,
+        meta: metas,
+        ..
+    } = take_layers(&pair::MCP, LayerScope::Method, &mut method.attrs)?;
     let posture = posture_rules(role).take(method)?;
-    let metas = nest_rs_codegen::take_meta(&mut method.attrs)?;
     if posture.masks() && result_ok_type(&method.sig).is_none() {
         return Err(syn::Error::new_spanned(
             &method.sig.output,

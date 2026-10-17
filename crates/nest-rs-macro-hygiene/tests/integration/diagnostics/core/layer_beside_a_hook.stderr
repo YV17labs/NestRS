@@ -1,0 +1,5 @@
+error: `#[use_guards]` is not taken on a `#[hooks]` method: a lifecycle hook has no caller and no site, so no layer runs around it and nothing reads a value declared on it
+  --> tests/integration/diagnostics/core/layer_beside_a_hook.rs:18:5
+   |
+18 |     #[use_guards(AllowAll)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,3 +1,4 @@
+use nest_rs_codegen::layers::{LayerScope, take_layers};
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -40,6 +41,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
+    if let Err(err) = refuse_layers(&mut item) {
+        return err.to_compile_error().into();
+    }
     let self_ty = item.self_ty.clone();
     let base = match impl_self_ident(&self_ty, "#[hooks]") {
         Ok(base) => base,
@@ -148,4 +152,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         #(#submissions)*
     }
     .into()
+}
+
+/// Refuse every layer attribute and `#[meta]` on the block and its methods:
+/// the layer table takes none on this pair.
+fn refuse_layers(item: &mut syn::ItemImpl) -> syn::Result<()> {
+    take_layers(&pair::HOOKS, LayerScope::Host, &mut item.attrs)?;
+    for entry in &mut item.items {
+        if let ImplItem::Fn(method) = entry {
+            take_layers(&pair::HOOKS, LayerScope::Method, &mut method.attrs)?;
+        }
+    }
+    Ok(())
 }

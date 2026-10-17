@@ -1,6 +1,6 @@
-//! `#[use_interceptors]` is not bridged on MCP, so binding one is a named
-//! compile error rather than a layer that silently never runs — the defect
-//! `reject_http_only_layers` exists to prevent, pinned on the fifth edge as it
+//! `#[use_interceptors]` does not run on MCP yet, so binding one is a named
+//! compile error rather than a layer that silently never runs — the defect the
+//! layer table's pending cells exist to prevent, pinned on the fifth edge as it
 //! already is on GraphQL and WS.
 //!
 //! Impl half only, for the reason spelled out in `tool_without_posture`.

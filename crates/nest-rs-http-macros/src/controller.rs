@@ -7,10 +7,11 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::LitStr;
 
+use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
     injected_keys_with_layers, injected_names_with_layers, injected_optional_fns, layer_deps,
-    scoped_specs, take_path_list,
+    scoped_specs,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -28,30 +29,19 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     // Inert class-level attributes: each must sit below `#[controller]`.
-    let interceptors = match take_path_list(&mut item.attrs, "use_interceptors") {
-        Ok(paths) => paths,
+    let Layers {
+        guards,
+        pipes,
+        interceptors,
+        exception_filters,
+        filters,
+        meta,
+        ..
+    } = match take_layers(&pair::HTTP, LayerScope::Host, &mut item.attrs) {
+        Ok(layers) => layers,
         Err(err) => return err.to_compile_error().into(),
     };
-    let guards = match take_path_list(&mut item.attrs, "use_guards") {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let filters = match take_path_list(&mut item.attrs, "use_filters") {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let pipes = match take_path_list(&mut item.attrs, "use_pipes") {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let exception_filters = match take_path_list(&mut item.attrs, "use_exception_filters") {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
-        Ok(values) => nest_rs_codegen::host_meta_fn(&values),
-        Err(err) => return err.to_compile_error().into(),
-    };
+    let host_meta = nest_rs_codegen::host_meta_fn(&meta);
 
     let InjectableBody {
         ctor,

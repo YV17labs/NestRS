@@ -69,7 +69,8 @@ Review a new edge, or a change to one, against it:
 4. **Response masking armed by the posture**, never hand-written in a body,
    chosen by the protocol rather than by symmetry (`data-layer.md`, *Response
    masking*).
-5. **Guards at two scopes** plus `#[force_guards]`, composed once per site and
+5. **Guards at two scopes** plus `#[force_guards]` on a method, which binds
+   the guard there and re-runs it, composed once per site and
    deduplicated by `TypeId`; a denial renders through one
    `denial_to_<edge>_error`, so a guard's refusal and a gate's look the same.
 6. **A view, `<Edge>View` in the edge crate's `view.rs`, and the bound the
@@ -84,8 +85,11 @@ Review a new edge, or a change to one, against it:
 7. **Per-argument pipes**, run **after** the gate, so a refused caller never pays
    for validation and a validation message is never an existence oracle; a
    rejection is the edge's native error.
-8. **A named compile error for every layer family the edge does not bridge** —
-   extend `reject_http_only_layers`, never add a second.
+8. **A named compile error for every layer family the edge does not run** —
+   one row in `nest_rs_codegen::layers`' table, read through `take_layers`,
+   never a second refusal: a cell is built, pending (refused as a silent no-op
+   until the edge runs the family) or refused with its fact, and the change
+   that builds a family flips its cell.
 9. **Request scope and a unit of work** — `Scoped<T>`, and each dispatch run
    through `nest_rs_database::run_unit` over the `dyn UnitOfWork` resolved at
    mount, committing on the edge's own outcome, so commit and rollback cannot

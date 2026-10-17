@@ -271,43 +271,6 @@ fn listed_noun(ident: &str) -> String {
     }
 }
 
-/// Every layer family whose binding attribute is **HTTP-only**; guards are
-/// bridged at all four edges.
-const HTTP_ONLY_LAYERS: [&str; 4] = [
-    "use_interceptors",
-    "use_filters",
-    "use_pipes",
-    "use_exception_filters",
-];
-
-/// Reject the `HTTP_ONLY_LAYERS` binding attributes on a transport where
-/// binding one would be a silent no-op.
-///
-/// `transport` (e.g. `"WebSockets"`) and `site` name the rejecting context;
-/// pass the site the compiler is underlining (`"operation"`), not its host.
-pub fn reject_http_only_layers(
-    attrs: &[Attribute],
-    transport: &str,
-    site: &str,
-) -> syn::Result<()> {
-    for attr in attrs {
-        for name in HTTP_ONLY_LAYERS {
-            if attr.path().is_ident(name) {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    format!(
-                        "`#[{name}]` is not bridged on {transport} yet — it would be a silent \
-                         no-op on this {site}. Remove it, or move the layer onto an HTTP \
-                         `#[controller]` / `#[routes]`, where the pooled layer families run. \
-                         `#[use_guards]` is bridged at every edge and works here.",
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use syn::parse_quote;

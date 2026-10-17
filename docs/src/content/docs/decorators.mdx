@@ -45,13 +45,36 @@ whether you type it, not how the compiler resolves it.
 | `#[redirect]` | method | Issues a redirect and discards the handler payload | [Responses](/http/responses/) |
 | `#[use_guards]` | struct or method | Binds container-resolved Guards, first listed outermost | [Guards](/fundamentals/guards/) |
 | `#[use_interceptors]` | struct or method | Binds container-resolved Interceptors | [Interceptors](/fundamentals/interceptors/) |
-| `#[use_filters]` | struct or method | Binds error-mapping Filters (response mapping; the global pool runs at the transport band) | [Exception filters](/fundamentals/exception-filters/#route-bound-filters-via-use_filters) |
+| `#[use_filters]` | struct or method | Binds error-mapping Filters (response mapping; the global pool runs at the transport band); HTTP only | [Exception filters](/fundamentals/exception-filters/#route-bound-filters-via-use_filters) |
 | `#[use_exception_filters]` | struct or method | Binds typed ExceptionFilters — downcast catch, the layer closest to the handler | [Exception filters](/fundamentals/exception-filters/#typed-catches-via-exceptionfilter) |
 | `#[meta]` | struct, impl block or method | Declares typed metadata, the method's over its host's (repeatable); read back by a guard through `cx.reflector()`, on every edge | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[interceptor]` | struct | Marks a struct as a global HTTP interceptor | [Interceptors](/fundamentals/interceptors/) |
 | `#[version]` | method | Narrows a route to one of the controller's declared versions | [Versioning](/http/versioning/) |
-| `#[force_guards]` | struct or method | Re-runs a guard the broader scope already ran — the opt-out from dedup | [Guards](/fundamentals/guards/#declare-on-the-provider) |
+| `#[force_guards]` | method | Binds a guard and re-runs it though the broader scope already ran it — the opt-out from dedup | [Guards](/fundamentals/guards/#re-running-one-on-purpose-force_guards) |
+
+## Layer attributes, pair by pair
+
+One grammar holds every decorator pair: each layer attribute is taken where
+its edge runs that family, and anywhere else it is a compile error that says
+why — never a layer that silently never runs. Two kinds of site do not read
+it yet: `#[processor]`, `#[scheduled]` and `#[listeners]`, and the WebSocket
+`#[on_connect]` / `#[on_disconnect]` hooks, take `#[meta]` alone, so a layer
+attribute there still meets the compiler's `cannot find attribute` rather
+than the reason the table gives.
+
+| Attribute | HTTP | GraphQL | WebSockets | MCP | Queue, schedule, events | Hooks, indicators |
+|---|---|---|---|---|---|---|
+| `#[use_guards]` | struct, method | struct, method | struct (the upgrade), method | struct, method | — no caller to gate | — |
+| `#[force_guards]` | method | method | method | method | — | — |
+| `#[use_pipes]` | struct, method | — bind a per-argument pipe | not yet | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
+| `#[use_interceptors]` | struct, method | not yet | not yet | not yet | not yet | — |
+| `#[use_exception_filters]` | struct, method | not yet | not yet | not yet | not yet; listeners — | — |
+| `#[use_filters]` | struct, method | — use `#[use_exception_filters]` | — | — | — | — |
+| `#[meta]` | struct, method | struct, method | struct, method | struct, method | impl block, method | — |
+
+**Not yet** marks a family the edge does not run yet: the compiler refuses it
+today, as a silent no-op would be worse, and the edge takes it once it runs it.
 
 ## Wire types
 

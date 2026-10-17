@@ -11,11 +11,12 @@ use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
+use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::{
     Collision, Conditional, DispatchKeys, HostBorrow, PipeWrapper, Posture, PostureRules,
     await_if_async, cfg_attrs, force_guard_typeids, guard_capability_bounds, impl_self_ident,
-    injected_methods_with_layers, layer_deps, pipe_wrapper, reject_http_only_layers, returns_unit,
-    scoped_specs, shared_receiver, take_flag_attr, take_path_list,
+    injected_methods_with_layers, layer_deps, pipe_wrapper, returns_unit, scoped_specs,
+    shared_receiver, take_flag_attr,
 };
 
 /// WS's half of the shared posture grammar, mandatory per message.
@@ -235,23 +236,17 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             );
         });
 
-        if let Err(err) = reject_http_only_layers(&method.attrs, "WebSockets", "message") {
-            return err.to_compile_error().into();
-        }
-        let guards = match take_path_list(&mut method.attrs, "use_guards") {
-            Ok(paths) => paths,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        let force_guards = match take_path_list(&mut method.attrs, "force_guards") {
-            Ok(paths) => paths,
+        let Layers {
+            guards,
+            force_guards,
+            meta: metas,
+            ..
+        } = match take_layers(&pair::WS, LayerScope::Method, &mut method.attrs) {
+            Ok(layers) => layers,
             Err(err) => return err.to_compile_error().into(),
         };
         let posture = match POSTURE.take(method) {
             Ok(posture) => posture,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
-            Ok(values) => values,
             Err(err) => return err.to_compile_error().into(),
         };
         handler_consts.push(nest_rs_codegen::handler_const(
@@ -270,12 +265,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 cfgs: &cfgs,
             },
         ));
-        all_message_layers.extend(
-            guards
-                .iter()
-                .chain(&force_guards)
-                .map(|guard| (cfgs.clone(), guard.clone())),
-        );
+        all_message_layers.extend(guards.iter().map(|guard| (cfgs.clone(), guard.clone())));
 
         let method_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
         let force_typeids = force_guard_typeids(&force_guards);

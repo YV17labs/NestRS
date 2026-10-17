@@ -1,6 +1,6 @@
-//! `#[use_filters]` on a gateway would be a silent no-op (filters are not
-//! bridged on WebSockets) — the macro rejects it and points to the HTTP home
-//! where the layer actually runs.
+//! `#[use_filters]` beside a gateway is refused for good, naming
+//! `#[use_exception_filters]`: an exception filter catching
+//! `dyn Error + Send + Sync` is what replaces HTTP's untyped `Filter`.
 
 use nest_rs::ws::gateway;
 

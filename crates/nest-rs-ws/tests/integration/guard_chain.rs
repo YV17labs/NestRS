@@ -233,3 +233,60 @@ async fn an_upgrade_guard_no_module_provides_fails_the_boot_naming_it_and_the_ga
         "the refusal names the guard and the gateway declaring it: {chain}",
     );
 }
+
+static FORCED_CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts every message check, so a replay is seen.
+#[injectable]
+#[derive(Default)]
+struct CountingGuard;
+
+impl Layer for CountingGuard {}
+
+#[async_trait]
+impl Guard for CountingGuard {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        FORCED_CHECKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for CountingGuard {}
+impl GuardFor<nest_rs_ws::WsView> for CountingGuard {}
+
+#[gateway(path = "/ws/replayed")]
+struct ReplayedGateway;
+
+#[messages]
+impl ReplayedGateway {
+    #[subscribe_message("again")]
+    #[public]
+    #[force_guards(CountingGuard)]
+    async fn again(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(imports = [WsModule], providers = [ReplayedGateway, CountingGuard])]
+struct ReplayedModule;
+
+#[tokio::test]
+async fn a_guard_forced_alone_on_a_message_runs_again_after_the_global_pool() {
+    let app = TestApp::builder()
+        .module::<ReplayedModule>()
+        .use_guards_global([nest_rs_guards::guard::<CountingGuard>()])
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+
+    let mut socket = app.socket("/ws/replayed").connect().await;
+    socket.send("again", serde_json::Value::Null).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(reply["data"], "ok", "{reply}");
+    assert_eq!(
+        FORCED_CHECKS.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the pool's check, then the replay `#[force_guards]` binds on the message",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}

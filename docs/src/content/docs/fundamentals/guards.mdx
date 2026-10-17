@@ -466,7 +466,9 @@ line at boot.
 
 Dedup is what makes redeclaring free, so the one thing it takes away is
 running a guard *twice on purpose*. `#[force_guards(...)]` is the opt-out,
-and it takes the same list `#[use_guards]` does:
+and it takes the same list `#[use_guards]` does. It binds the guard on the
+method as well, so the guard is not also listed in `#[use_guards]` — the
+compiler refuses that second listing:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[patch("/{id}/publish")]
@@ -483,8 +485,7 @@ execution nobody asked for, so the default stays dedup.
 **Per operation only.** `#[use_guards]` binds on the struct or the method;
 `#[force_guards]` is read only from the method, because re-running a guard is a
 decision about one operation rather than a posture a whole controller takes.
-Writing it on the struct is `cannot find attribute 'force_guards' in this
-scope`.
+Writing it on the struct is a compile error that says so.
 
 **Declare layers on the provider that needs them, not only at the app
 boundary.** A `crates/features` controller is designed to be portable — if

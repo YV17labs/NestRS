@@ -10,11 +10,12 @@ use syn::{
     Attribute, Expr, FnArg, ImplItem, LitStr, Meta, Path, ReturnType, Token, Type, parse_quote,
 };
 
+use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::{
     Collision, Conditional, DispatchKeys, HostBorrow, RoutePath, await_if_async, cfg_attrs,
     force_guard_typeids, guard_capability_bounds, impl_self_ident, injected_methods_with_layers,
     layer_deps, mixed_site_ident, normalize_forwarded_args, nth_generic_type, scoped_specs,
-    shared_receiver, take_flag_attr, take_path_list,
+    shared_receiver, take_flag_attr,
 };
 
 use crate::attr::opt_str;
@@ -259,33 +260,20 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             ReturnType::Type(_, ty) => quote! { #ty },
         };
 
-        let guards = match take_path_list(&mut method.attrs, "use_guards") {
-            Ok(paths) => paths,
+        let Layers {
+            guards,
+            force_guards,
+            pipes: method_pipes,
+            interceptors,
+            exception_filters: method_exception_filters,
+            filters,
+            meta: metas,
+        } = match take_layers(&pair::HTTP, LayerScope::Method, &mut method.attrs) {
+            Ok(layers) => layers,
             Err(err) => return err.to_compile_error().into(),
         };
         let method_guarded = !guards.is_empty();
         let method_throttled = guards.iter().any(guard_path_is_throttler);
-        let force_guards = match take_path_list(&mut method.attrs, "force_guards") {
-            Ok(paths) => paths,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        let filters = match take_path_list(&mut method.attrs, "use_filters") {
-            Ok(paths) => paths,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        let interceptors = match take_path_list(&mut method.attrs, "use_interceptors") {
-            Ok(paths) => paths,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        let method_pipes = match take_path_list(&mut method.attrs, "use_pipes") {
-            Ok(paths) => paths,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        let method_exception_filters =
-            match take_path_list(&mut method.attrs, "use_exception_filters") {
-                Ok(paths) => paths,
-                Err(err) => return err.to_compile_error().into(),
-            };
         if let Err(err) =
             nest_rs_codegen::refuse_rust_deprecated(&method.attrs, "a `#[routes]` handler")
         {
@@ -476,10 +464,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         });
 
-        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
-            Ok(values) => values,
-            Err(err) => return err.to_compile_error().into(),
-        };
         handler_consts.push(nest_rs_codegen::handler_const(
             &nest_rs_codegen::HandlerSite {
                 unit: quote!(::nest_rs_http::unit::REQUEST),
@@ -792,7 +776,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     .iter()
                     .chain(&handler.filters)
                     .chain(&handler.interceptors)
-                    .chain(&handler.force_guards)
                     .chain(&handler.pipes)
                     .chain(&handler.exception_filters)
                     .map(|item| Conditional {
@@ -810,14 +793,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .iter()
             .flat_map(|group| group.handlers.iter())
             .flat_map(|handler| {
-                handler
-                    .guards
-                    .iter()
-                    .chain(&handler.force_guards)
-                    .map(|item| Conditional {
-                        cfgs: &handler.cfgs,
-                        item,
-                    })
+                handler.guards.iter().map(|item| Conditional {
+                    cfgs: &handler.cfgs,
+                    item,
+                })
             }),
         quote!(::nest_rs_guards::GuardFor<::nest_rs_http::HttpView>),
     );

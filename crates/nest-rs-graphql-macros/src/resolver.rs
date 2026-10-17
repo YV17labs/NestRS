@@ -14,14 +14,14 @@ use syn::{
     PathArguments, Signature, Token, Type, parse_quote,
 };
 
+use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::{
     Collision, Conditional, DispatchKeys, HostBorrow, InjectableBody, PipeWrapper, VersionedEdge,
     await_if_async, build_injectable_body, cfg_attrs, delegated_attrs, force_guard_typeids,
     forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
     impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, layer_deps, normalize_forwarded_args,
-    pipe_wrapper, reject_http_only_layers, scoped_specs, shared_receiver, take_flag_attr,
-    take_path_list, type_label,
+    pipe_wrapper, scoped_specs, shared_receiver, take_flag_attr, type_label,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -98,17 +98,12 @@ fn reject_resolver_args(args: &TokenStream2) -> syn::Result<()> {
 /// `#[resolver]` on the struct: construction + provider-scope layer
 /// declarations, read back by `#[operations]` through `__nestrs_resolver_*_specs()`.
 fn resolver_struct(mut item: ItemStruct) -> TokenStream {
-    if let Err(err) = reject_http_only_layers(&item.attrs, "GraphQL", "resolver") {
-        return err.to_compile_error().into();
-    }
-    let guards = match take_use_guards(&mut item.attrs) {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
-        Ok(values) => nest_rs_codegen::host_meta_fn(&values),
-        Err(err) => return err.to_compile_error().into(),
-    };
+    let Layers { guards, meta, .. } =
+        match take_layers(&pair::GRAPHQL, LayerScope::Host, &mut item.attrs) {
+            Ok(layers) => layers,
+            Err(err) => return err.to_compile_error().into(),
+        };
+    let host_meta = nest_rs_codegen::host_meta_fn(&meta);
 
     let InjectableBody {
         ctor,
@@ -188,14 +183,6 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         #descriptor
     }
     .into()
-}
-
-fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    take_path_list(attrs, "use_guards")
-}
-
-fn take_force_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    take_path_list(attrs, "force_guards")
 }
 
 /// `#[authorize(Action, Entity)]` parsed off an operation: its declared access posture.
@@ -713,7 +700,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     pair::GRAPHQL.reject_host_layers(&item.attrs)?;
     nest_rs_codegen::reject_meta_on_operations(&pair::GRAPHQL, &item.attrs)?;
-    reject_http_only_layers(&item.attrs, "GraphQL", "resolver")?;
 
     let query_obj = format_ident!("__{}Query", base);
     let mutation_obj = format_ident!("__{}Mutation", base);
@@ -777,19 +763,20 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             entity_refusals(&verb_attr, &method.attrs, &method.sig)?;
         }
 
-        reject_http_only_layers(&method.attrs, "GraphQL", "operation")?;
-        let method_guards = take_use_guards(&mut method.attrs)?;
-        let force_method_guards = take_force_guards(&mut method.attrs)?;
+        let Layers {
+            guards: method_guards,
+            force_guards: force_method_guards,
+            meta: metas,
+            ..
+        } = take_layers(&pair::GRAPHQL, LayerScope::Method, &mut method.attrs)?;
         let authorize_spec = take_authorize(&mut method.attrs)?;
         let is_public = take_flag_attr(&mut method.attrs, "public")?;
         all_guard_paths.extend(
             method_guards
                 .iter()
-                .chain(&force_method_guards)
                 .map(|guard| (cfgs.clone(), guard.clone())),
         );
         let is_field = verb_attr.path().is_ident("field_resolver");
-        let metas = nest_rs_codegen::take_meta(&mut method.attrs)?;
         if is_field && !metas.is_empty() {
             return Err(syn::Error::new_spanned(
                 &method.sig.ident,

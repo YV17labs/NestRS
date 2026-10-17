@@ -4,11 +4,11 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Expr, ItemStruct, LitStr};
 
+use nest_rs_codegen::layers::{LayerAttribute, LayerScope, Layers, take_layers};
 use nest_rs_codegen::{
     InjectableBody, VersionedEdge, build_injectable_body, from_container_method,
     guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers,
-    injected_optional_method, injected_optional_names_method, layer_deps, reject_http_only_layers,
-    scoped_specs, take_path_list,
+    injected_optional_method, injected_optional_names_method, layer_deps, scoped_specs,
 };
 
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -43,17 +43,12 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         Err(err) => return refused_beside(err, item),
     };
 
-    if let Err(err) = reject_http_only_layers(&item.attrs, "MCP", "host") {
-        return refused_beside(err, item);
-    }
-    let guards = match take_path_list(&mut item.attrs, "use_guards") {
-        Ok(paths) => paths,
-        Err(err) => return refused_beside(err, item),
-    };
-    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
-        Ok(values) => nest_rs_codegen::host_meta_fn(&values),
-        Err(err) => return refused_beside(err, item),
-    };
+    let Layers { guards, meta, .. } =
+        match take_layers(&pair::MCP, LayerScope::Host, &mut item.attrs) {
+            Ok(layers) => layers,
+            Err(err) => return refused_beside(err, item),
+        };
+    let host_meta = nest_rs_codegen::host_meta_fn(&meta);
     let capability_bounds = guard_capability_bounds(
         guards.iter(),
         quote!(::nest_rs_guards::GuardFor<::nest_rs_mcp::McpView>),
@@ -167,14 +162,9 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
 /// attributes come off, or rustc reports them as unknown.
 fn refused_beside(err: syn::Error, mut item: ItemStruct) -> TokenStream {
     item.attrs.retain(|attr| {
-        ![
-            "use_guards",
-            "use_interceptors",
-            "use_filters",
-            "use_exception_filters",
-        ]
-        .iter()
-        .any(|consumed| attr.path().is_ident(consumed))
+        !LayerAttribute::ALL
+            .iter()
+            .any(|consumed| attr.path().is_ident(consumed.name()))
     });
     if let syn::Fields::Named(fields) = &mut item.fields {
         for field in &mut fields.named {

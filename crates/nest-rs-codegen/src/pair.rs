@@ -32,6 +32,8 @@ use syn::{Item, ItemImpl, ItemStruct};
 /// One edge's decorator pair: the vocabulary its two wrong-shape diagnostics are
 /// built from.
 pub struct DecoratorPair {
+    /// Which pair this is, for a table keyed on every pair.
+    kind: PairKind,
     /// The struct half as written, e.g. `"#[controller]"`.
     host: &'static str,
     /// How to name the struct the host half decorates, e.g. `"controller
@@ -43,8 +45,34 @@ pub struct DecoratorPair {
     collects: &'static str,
 }
 
+/// Which of [`ALL`] a pair is — what a table over every pair matches on, so a
+/// pair added without its row is a compile error there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PairKind {
+    /// [`HTTP`].
+    Http,
+    /// [`GRAPHQL`].
+    Graphql,
+    /// [`WS`].
+    Ws,
+    /// [`MCP`].
+    Mcp,
+    /// [`HOOKS`].
+    Hooks,
+    /// [`PROCESSOR`].
+    Processor,
+    /// [`INDICATORS`].
+    Indicators,
+    /// [`SCHEDULED`].
+    Scheduled,
+    /// [`LISTENERS`].
+    Listeners,
+}
+
 /// The HTTP edge: `#[controller]` / `#[routes]`, and `#[crud]` beside them.
 pub const HTTP: DecoratorPair = DecoratorPair::edge(
+    PairKind::Http,
     "#[controller]",
     "controller struct",
     "#[routes]",
@@ -53,6 +81,7 @@ pub const HTTP: DecoratorPair = DecoratorPair::edge(
 
 /// The GraphQL edge: `#[resolver]` / `#[operations]`, and `#[crud]` beside them.
 pub const GRAPHQL: DecoratorPair = DecoratorPair::edge(
+    PairKind::Graphql,
     "#[resolver]",
     "resolver struct",
     "#[operations]",
@@ -61,6 +90,7 @@ pub const GRAPHQL: DecoratorPair = DecoratorPair::edge(
 
 /// The WebSocket edge: `#[gateway]` / `#[messages]`.
 pub const WS: DecoratorPair = DecoratorPair::edge(
+    PairKind::Ws,
     "#[gateway]",
     "gateway struct",
     "#[messages]",
@@ -68,29 +98,43 @@ pub const WS: DecoratorPair = DecoratorPair::edge(
 );
 
 /// The MCP edge: `#[mcp]` / `#[tools]`.
-pub const MCP: DecoratorPair =
-    DecoratorPair::edge("#[mcp]", "host struct", "#[tools]", "#[tool] / #[prompt]");
+pub const MCP: DecoratorPair = DecoratorPair::edge(
+    PairKind::Mcp,
+    "#[mcp]",
+    "host struct",
+    "#[tools]",
+    "#[tool] / #[prompt]",
+);
 
 /// Lifecycle hooks on a provider.
 pub const HOOKS: DecoratorPair = DecoratorPair::on_provider(
+    PairKind::Hooks,
     "#[hooks]",
     "#[on_module_init] / #[on_application_bootstrap] / #[on_module_destroy] / \
      #[before_application_shutdown] / #[on_application_shutdown]",
 );
 
 /// A queue processor.
-pub const PROCESSOR: DecoratorPair = DecoratorPair::on_provider("#[processor]", "#[process]");
+pub const PROCESSOR: DecoratorPair =
+    DecoratorPair::on_provider(PairKind::Processor, "#[processor]", "#[process]");
 
 /// Health indicators on a provider.
-pub const INDICATORS: DecoratorPair =
-    DecoratorPair::on_provider("#[indicators]", "#[liveness] / #[readiness] / #[startup]");
+pub const INDICATORS: DecoratorPair = DecoratorPair::on_provider(
+    PairKind::Indicators,
+    "#[indicators]",
+    "#[liveness] / #[readiness] / #[startup]",
+);
 
 /// Scheduled tasks on a provider.
-pub const SCHEDULED: DecoratorPair =
-    DecoratorPair::on_provider("#[scheduled]", "#[every] / #[cron] / #[after]");
+pub const SCHEDULED: DecoratorPair = DecoratorPair::on_provider(
+    PairKind::Scheduled,
+    "#[scheduled]",
+    "#[every] / #[cron] / #[after]",
+);
 
 /// Event listeners on a provider.
-pub const LISTENERS: DecoratorPair = DecoratorPair::on_provider("#[listeners]", "#[on_event]");
+pub const LISTENERS: DecoratorPair =
+    DecoratorPair::on_provider(PairKind::Listeners, "#[listeners]", "#[on_event]");
 
 /// Every pair the framework declares.
 pub const ALL: [&DecoratorPair; 9] = [
@@ -108,12 +152,14 @@ pub const ALL: [&DecoratorPair; 9] = [
 impl DecoratorPair {
     /// An edge's pair: its own struct decorator and the impl half beside it.
     pub(crate) const fn edge(
+        kind: PairKind,
         host: &'static str,
         subject: &'static str,
         operations: &'static str,
         collects: &'static str,
     ) -> Self {
         Self {
+            kind,
             host,
             subject,
             operations,
@@ -121,9 +167,34 @@ impl DecoratorPair {
         }
     }
 
+    /// Which pair this is.
+    pub const fn kind(&self) -> PairKind {
+        self.kind
+    }
+
+    /// Whether the struct half is the generic `#[injectable]`, so the impl
+    /// block is the host — lifecycle hooks, a processor, health indicators,
+    /// scheduled tasks, event listeners.
+    pub const fn on_a_provider(&self) -> bool {
+        matches!(
+            self.kind,
+            PairKind::Hooks
+                | PairKind::Processor
+                | PairKind::Indicators
+                | PairKind::Scheduled
+                | PairKind::Listeners
+        )
+    }
+
     /// The struct half as written, e.g. `"#[controller]"`.
     pub const fn host(&self) -> &'static str {
         self.host
+    }
+
+    /// How the struct the host half decorates is named, e.g. `"controller
+    /// struct"`.
+    pub(crate) const fn subject(&self) -> &'static str {
+        self.subject
     }
 
     /// The impl half as written, e.g. `"#[routes]"`.
@@ -138,36 +209,25 @@ impl DecoratorPair {
 }
 
 impl DecoratorPair {
-    /// Refuse a host-scope layer written on the impl half, naming the struct
-    /// half it belongs on. `#[use_guards]` is no attribute macro of its own, so
-    /// unrefused it reaches rustc as `cannot find attribute`.
+    /// Refuse a layer attribute written on the impl half's block: on an edge,
+    /// naming the struct half its host's layers go on — or, for one the host
+    /// does not take either, the table's refusal (`crate::layers`) for that
+    /// block; on a provider pair, whose block is its host, the table's refusal.
+    /// A `#[meta]` there is
+    /// [`reject_meta_on_operations`](crate::reject_meta_on_operations)'s.
     pub fn reject_host_layers(&self, attrs: &[syn::Attribute]) -> syn::Result<()> {
-        const HOST_SCOPE: [&str; 2] = ["use_guards", "force_guards"];
-        for attr in attrs {
-            let Some(name) = HOST_SCOPE.iter().find(|name| attr.path().is_ident(name)) else {
-                continue;
-            };
-            return Err(syn::Error::new_spanned(
-                attr,
-                format!(
-                    "`#[{name}(...)]` belongs on the {subject} beside `{host}`, not on \
-                     this `{operations}` block — the struct half declares the host's \
-                     access posture, and this half declares its {collects}. A layer \
-                     scoped to one operation goes on that operation's method.",
-                    subject = self.subject,
-                    host = self.host,
-                    operations = self.operations,
-                    collects = self.collects,
-                ),
-            ));
-        }
-        Ok(())
+        crate::layers::reject_on_operations(self, attrs)
     }
 
     /// A pair whose struct half is the generic `#[injectable]` — a queue
     /// processor, a scheduled-task host, an event-listener host.
-    pub(crate) const fn on_provider(operations: &'static str, collects: &'static str) -> Self {
+    pub(crate) const fn on_provider(
+        kind: PairKind,
+        operations: &'static str,
+        collects: &'static str,
+    ) -> Self {
         Self {
+            kind,
             host: "#[injectable]",
             subject: "provider struct",
             operations,
@@ -303,22 +363,10 @@ impl DecoratorPair {
     }
 }
 
-/// The attributes every impl half consumes off a method or its block, whatever
-/// else the half takes — the layers, the posture, and the two HTTP-only keys a
-/// half refuses by name elsewhere.
-const CONSUMED_BY_EVERY_HALF: [&str; 11] = [
-    "use_guards",
-    "force_guards",
-    "use_interceptors",
-    "use_filters",
-    "use_pipes",
-    "use_exception_filters",
-    "public",
-    "authorize",
-    "version",
-    "api",
-    "meta",
-];
+/// The attributes every impl half consumes off a method or its block besides
+/// the layer attributes — the posture, and the HTTP-only keys a half refuses by
+/// name elsewhere.
+const CONSUMED_BY_EVERY_HALF: [&str; 4] = ["public", "authorize", "version", "api"];
 
 impl DecoratorPair {
     /// What an impl half emits: `expansion` when it expanded, and when it refused
@@ -350,10 +398,11 @@ impl DecoratorPair {
             let Some(last) = attr.path().segments.last() else {
                 return false;
             };
-            helpers
-                .iter()
-                .chain(CONSUMED_BY_EVERY_HALF.iter())
-                .any(|name| last.ident == name)
+            crate::layers::LayerAttribute::of(attr).is_some()
+                || helpers
+                    .iter()
+                    .chain(CONSUMED_BY_EVERY_HALF.iter())
+                    .any(|name| last.ident == name)
         };
         item.attrs.retain(|attr| !consumed(attr));
         for entry in &mut item.items {
@@ -441,7 +490,7 @@ mod tests {
     }
 
     fn on_provider(pair: &DecoratorPair) -> bool {
-        pair.host() == "#[injectable]"
+        pair.on_a_provider()
     }
 
     #[test]
@@ -516,7 +565,12 @@ mod tests {
         let attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[use_guards(AuthGuard)])];
         for pair in ALL {
             let msg = refusal(pair.reject_host_layers(&attrs), pair.operations());
-            assert!(msg.contains(pair.host()), "{}: {msg}", pair.operations());
+            let named = if on_provider(pair) {
+                pair.operations()
+            } else {
+                pair.host()
+            };
+            assert!(msg.contains(named), "{}: {msg}", pair.operations());
         }
     }
 

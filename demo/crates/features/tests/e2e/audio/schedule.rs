@@ -31,12 +31,8 @@ pub struct CountingProcessor;
 impl CountingProcessor {
     #[process(queue = AudioQueue)]
     async fn count(&self, job: TranscodeCommand) -> Result<()> {
-        if let Some(ms) = job
-            .file
-            .strip_prefix("track-")
-            .and_then(|rest| rest.strip_suffix(".mp3"))
-            .and_then(|stem| stem.parse::<u128>().ok())
-            && ms >= started_ms()
+        if let Some((secs, nanos)) = job.file.get_timestamp().map(|minted| minted.to_unix())
+            && u128::from(secs) * 1000 + u128::from(nanos / 1_000_000) >= started_ms()
         {
             SCHEDULED_FIRES.fetch_add(1, Ordering::SeqCst);
         }

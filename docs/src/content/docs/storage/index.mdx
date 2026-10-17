@@ -111,15 +111,16 @@ ours runs against them.
 ## Presigned uploads
 
 The canonical flow keeps bytes off the API. A handler injects `Storage`
-and returns a signed `PUT` URL; the client uploads straight to the
-object store; a later call reads the object's metadata to finalize.
+and returns a signed `PUT`; the client uploads straight to the object
+store; a later call reads the object's metadata to finalize.
 
 ```rust title="crates/features/src/audio/service.rs"
 use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs::core::injectable;
-use nest_rs::storage::{Result, Storage};
+use nest_rs::storage::{ObjectMetadata, PresignedRequest, Result, SignedPut, Storage};
+use uuid::Uuid;
 
 #[injectable]
 pub struct AudioService {
@@ -128,22 +129,56 @@ pub struct AudioService {
 }
 
 impl AudioService {
-    /// Hand the client a short-lived URL to PUT the original directly.
-    pub async fn request_upload(&self, key: &str) -> Result<String> {
-        self.storage.presign_put(key, Duration::from_secs(900)).await
+    pub async fn request_upload(&self) -> Result<(Uuid, PresignedRequest)> {
+        let key = Uuid::now_v7();
+        let upload = self
+            .storage
+            .presign_put(
+                &key.to_string(),
+                &SignedPut::new("audio/mpeg"),
+                Duration::from_secs(900),
+            )
+            .await?;
+        Ok((key, upload))
     }
 
-    /// After the client uploads, read the size back to finalize the record.
-    /// `None` ⇒ the client never completed the upload.
-    pub async fn confirm_upload(&self, key: &str) -> Result<Option<i64>> {
-        Ok(self.storage.head(key).await?.map(|info| info.byte_size))
+    pub async fn confirm_upload(&self, key: Uuid) -> Result<Option<ObjectMetadata>> {
+        self.storage.head(&key.to_string()).await
     }
 }
 ```
 
-`head` reports the object's size but not its `Content-Type`: `object_store`'s
-`ObjectMeta` does not carry it, so keep the type you were given at
-upload-request time. `put_bytes` still *sets* it on write.
+The service mints the key, a UUID, and hands it back beside the request, so
+[a client names no path](/http/file-uploads/#mint-the-key-never-take-it).
+The `PresignedRequest` is everything the uploader needs: the `url`, its
+`method`, the `headers` to send verbatim, and `expires_at`. Hand the client
+all of it — the URL alone is not enough.
+
+`SignedPut::new(content_type)` folds the type into the signature, so the
+store refuses an upload that sends another `Content-Type`, or none, with a
+`403`: a client can no longer store `text/html` or `image/svg+xml` under a
+key your app later serves. The type is required — accepting any is
+`SignedPut::new("application/octet-stream")`, an opening in sight. A type no
+header carries as sent — a control character, a letter beyond ASCII, a blank
+or padded value — is refused at the call with `StorageError::Unsignable`,
+naming the argument and never the value. `expires` is SigV4's, one second to
+seven days, for `presign_get` too; anything else is refused the same way,
+rather than minting a URL the store would refuse when it is used.
+
+`head` reads back what was stored: `byte_size`, `content_type`, `etag` and
+`last_modified`, or `None` while the client has not uploaded.
+
+<Aside type="caution">
+A presigned `PUT` does not bound the upload's size. `object_store` refuses
+to sign `Content-Length`, so `SignedPut` has no length to bind: read
+`byte_size` back with `head` once the upload lands and delete what exceeds
+your bound. S3 caps a single `PUT` at 5 GiB.
+</Aside>
+
+The suite proves RustFS refuses a type other than the signed one; AWS S3
+checks every signed header, as SigV4 defines. A server speaking the S3 API
+that skipped signed headers would accept any type, so prove another server
+with the same request before relying on the binding.
 
 ## Server-side read and write
 
@@ -183,9 +218,9 @@ the key and what stopped the body.
 |---|---|
 | `connect(&config)` | open and prove a store outside the container — a tool, a test |
 | `url() -> &str` | the store's URL, shown without what a URL may carry beside its bucket and prefix |
-| `presign_put(key, expires) -> String` | signed `PUT` URL for direct client upload |
-| `presign_get(key, expires) -> String` | signed `GET` URL for serving private originals |
-| `head(key) -> Option<ObjectMetadata>` | object size; `None` if absent |
+| `presign_put(key, &put, expires) -> PresignedRequest` | a signed `PUT` for direct client upload, binding `put`'s content type |
+| `presign_get(key, expires) -> PresignedRequest` | a signed `GET` for serving private originals |
+| `head(key) -> Option<ObjectMetadata>` | the object's size, content type, ETag and last write; `None` if absent |
 | `get_bytes(key) -> Bytes` | download full bytes (server-side) |
 | `get_stream(key) -> impl Stream<Item = Result<Bytes>>` | download chunk by chunk, never buffering the whole object |
 | `list(prefix) -> impl Stream<Item = Result<ObjectEntry>>` | the keys under a prefix, streamed page by page; `""` lists every key the URL reaches |
@@ -268,16 +303,20 @@ carrying the SigV4 signature. Point it at an `https://` endpoint, or set
   for a seam that keeps a generic module's providers in the access graph
   ([instances](/fundamentals/providers/#instances--one-resource-opened-twice)); the default store's spelling
   stays when they arrive.
+- **An upload is bound by its type, not its size.** `object_store` signs no
+  `Content-Length`, so a presigned `PUT` takes any size up to S3's 5 GiB:
+  check `head`'s `byte_size` once it lands.
 - **Redirects are object_store's.** The framework's outbound clients follow no
   redirect; object_store follows S3's, and offers no option to refuse them.
 
 ## Reference
 
-- `crates/nest-rs-storage/` — `Storage`, `ObjectMetadata`, `ObjectEntry`,
-  `StorageConfig`, `StorageModule`, `StorageError`.
+- `crates/nest-rs-storage/` — `Storage`, `SignedPut`, `PresignedRequest`,
+  `ObjectMetadata`, `ObjectEntry`, `StorageConfig`, `StorageModule`,
+  `StorageError`.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
-  — presigns an upload URL, and the worker reads the stored object and writes
-  a derived one.
+  — mints the key, presigns an upload bound to `audio/mpeg`, and the worker
+  reads the stored object and writes a derived one.
 
 ## Going further
 

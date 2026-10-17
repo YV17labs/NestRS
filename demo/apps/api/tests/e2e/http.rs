@@ -145,7 +145,6 @@ async fn a_body_under_another_media_type_answers_415_naming_only_the_expected_ty
         ("PUT", format!("/posts/{any}")),
         ("POST", "/orgs".to_owned()),
         ("PUT", format!("/orgs/{any}")),
-        ("POST", "/audio/uploads".to_owned()),
         ("POST", "/audio/transcode".to_owned()),
     ];
     let multipart_bodies = [("POST", "/audio/uploads/direct".to_owned())];

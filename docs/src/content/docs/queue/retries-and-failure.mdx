@@ -18,7 +18,7 @@ a backoff, as the same job, until the budget is spent.
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-    self.svc.transcode(&job.file).await
+    self.svc.transcode(job.file).await
 }
 ```
 
@@ -139,7 +139,7 @@ An attempt runs for at most **ten minutes** unless its decorator says otherwise.
 ```rust
 #[process(queue = AudioQueue, retries = 3, timeout = "30m")]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-    self.svc.transcode(&job.file).await
+    self.svc.transcode(job.file).await
 }
 ```
 
@@ -243,7 +243,7 @@ dead-letter logic, and the pattern is the same on any backend:
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-    match self.svc.transcode(&job.file).await {
+    match self.svc.transcode(job.file).await {
         Ok(()) => Ok(()),
         Err(e) => {
             self.svc.report_dead(&job, &e).await?;

@@ -18,19 +18,17 @@ one delegation:
 async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
     Ok(Json(
         self.svc
-            .store_upload(&upload.filename, upload.part.into_byte_stream())
+            .store_upload(upload.part.into_byte_stream())
             .await?,
     ))
 }
 ```
 
-`UploadedAudio` walks the form to its `file` part and validates the filename
-before anything is stored — a `FromRequest`, so `#[routes]` passes it through
-like any other handler argument:
+`UploadedAudio` walks the form to its `file` part — a `FromRequest`, so
+`#[routes]` passes it through like any other handler argument:
 
-```rust title="crates/features/src/audio/http/uploaded_audio.rs (from the demo, abridged)"
+```rust title="crates/features/src/audio/http/uploaded_audio.rs (from the demo)"
 pub struct UploadedAudio {
-    pub filename: String,
     pub part: Field,
 }
 
@@ -38,32 +36,20 @@ impl<'a> FromRequest<'a> for UploadedAudio {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
         let mut form = Multipart::from_request(req, body).await?;
         while let Some(part) = form.next_field().await? {
-            if part.name() != Some("file") {
-                continue;
+            if part.name() == Some("file") {
+                return Ok(Self { part });
             }
-            let upload = UploadRequestDto {
-                filename: part.file_name().map(str::to_owned).unwrap_or_default(),
-            };
-            if upload.validate().is_err() {
-                return Err(HttpError::from(
-                    ProblemDetails::unprocessable()
-                        .with_detail("the `file` part's filename is not an accepted audio name"),
-                ));
-            }
-            return Ok(Self {
-                filename: upload.filename,
-                part,
-            });
         }
-        // … no `file` part: 400
+        Err(HttpError::from(
+            ProblemDetails::bad_request().with_detail("multipart body has no `file` part"),
+        ))
     }
 }
 ```
 
-Two lines carry the weight: the filename is validated **before** it becomes
-an object key, and `into_byte_stream()` hands the part to storage as it
-arrives, so it never exists whole in memory. The refusal says what the name had
-to be and never quotes the one sent: a client value has no place in a reply.
+Two choices carry the weight: the part's filename is never read, so the
+client names no object key, and `into_byte_stream()` hands the part to
+storage as it arrives, so it never exists whole in memory.
 
 ## Stream the part instead of buffering it
 
@@ -75,10 +61,9 @@ shape [`Storage::put_stream`](/storage/) consumes:
 ```rust title="crates/features/src/audio/service.rs (from the demo, abridged)"
 pub async fn store_upload(
     &self,
-    filename: &str,
     part: impl Stream<Item = std::io::Result<Bytes>> + Send,
 ) -> Result<PresignedUrlDto, AudioError> {
-    let key = format!("{}-{filename}", Uuid::now_v7());
+    let key = Uuid::now_v7().to_string();
     self.storage
         .put_stream(&key, AUDIO_CONTENT_TYPE, part)
         .await?;
@@ -90,13 +75,14 @@ The service names a stream, not a transport type, so the same method serves a
 multipart part, a proxied download, or a test fixture. Peak memory is one
 multipart chunk plus one object-store part, whatever the file's size.
 
-## Validate the filename at the edge
+## Mint the key, never take it
 
-A multipart part's filename is attacker-controlled — never let it become
-an object key unchecked. Reuse the same validated DTO the rest of the
-slice binds (`UploadRequestDto`), so one anti-traversal allowlist covers
-both the presigned and the direct path. A rejected name is a `422`, never
-a stored object.
+A multipart part's filename is the client's choice — never let it become an
+object key, or reach a log line or a reply. The service mints the key, a
+UUID, and the response hands it back: every later call (`/audio/transcode`,
+`/audio/results`) takes that key, parsed as a UUID at the edge, so a client
+can name no path, traverse no prefix and smuggle no text into a log. The
+[presigned flow](/storage/#presigned-uploads) mints its key the same way.
 
 ## Document the form
 

@@ -16,7 +16,7 @@ decorator, `#[sse]`.
 // … #[meta(…)], #[api(…)]
 async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
     let file = query.into_inner().file;
-    match self.svc.open_result(&file).await? {
+    match self.svc.open_result(file).await? {
         Some(stream) => Ok(Response::builder()
             .content_type(HeaderValue::from_static("audio/mpeg"))
             .body(Body::from_stream(stream))),

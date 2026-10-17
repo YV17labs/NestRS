@@ -14,7 +14,6 @@ use super::uploaded_audio::UploadedAudio;
 use crate::audio::TranscodeGuard;
 use crate::audio::{
     AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,
-    UploadRequestDto,
 };
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -32,33 +31,30 @@ impl AudioController {
     #[meta(Throttle::per_minute(20))]
     #[api(
         summary = "Mint a presigned PUT URL for a direct audio upload",
-        description = "Returns a short-lived presigned PUT URL plus the object key it addresses. \
-                       The client pushes the file bytes straight to object storage (the server \
-                       never proxies the payload), then calls `POST /audio/transcode` with the \
-                       returned key. The `filename` is validated against the same anti-traversal \
-                       allowlist as the transcode request. Requires a bearer JWT and the admin \
-                       capability (`Manage` on the caller's org)."
+        description = "Returns a short-lived presigned PUT URL, the method and headers the upload \
+                       sends verbatim, and the object key the server minted for it. The URL binds \
+                       `Content-Type: audio/mpeg`: object storage refuses an upload sending \
+                       another type, or none. The client pushes the file bytes straight to object \
+                       storage (the server never proxies the payload), then calls \
+                       `POST /audio/transcode` with the returned key. Requires a bearer JWT and \
+                       the admin capability (`Manage` on the caller's org)."
     )]
-    async fn create_upload(
-        &self,
-        body: Valid<Json<UploadRequestDto>>,
-    ) -> Result<Json<PresignedUrlDto>> {
-        let req = body.into_inner();
-        Ok(Json(self.svc.presign_upload(&req.filename).await?))
+    async fn create_upload(&self) -> Result<Json<PresignedUrlDto>> {
+        Ok(Json(self.svc.presign_upload().await?))
     }
 
     #[get("/results")]
     #[meta(Throttle::per_minute(60))]
     #[api(
         summary = "Fetch a presigned GET URL for a transcoded object",
-        description = "Given the source object `key` (query param `file`, validated like the \
-                       transcode request), returns a short-lived presigned GET URL for the \
-                       derived object the worker produced, or `404` while it does not exist yet. \
-                       Requires a bearer JWT and the admin capability."
+        description = "Given the source object `key` an upload returned (query param `file`, a \
+                       UUID), returns a short-lived presigned GET URL for the derived object the \
+                       worker produced, or `404` while it does not exist yet. Requires a bearer \
+                       JWT and the admin capability."
     )]
     async fn result(&self, query: Valid<Query<TranscodeDto>>) -> Result<Json<PresignedUrlDto>> {
         let file = query.into_inner().file;
-        match self.svc.presign_result(&file).await? {
+        match self.svc.presign_result(file).await? {
             Some(ticket) => Ok(Json(ticket)),
             None => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
         }
@@ -71,15 +67,15 @@ impl AudioController {
         description = "The single-round-trip alternative to the presigned flow: the client posts a \
                        `multipart/form-data` body with a `file` part, which streams straight into \
                        the object store — the file never sits whole in server memory — and the \
-                       response carries the object key plus a presigned GET URL. The part's \
-                       filename is validated against the same anti-traversal allowlist as the \
-                       presigned path. Requires a bearer JWT and the admin capability.",
+                       response carries the object key the server minted plus a presigned GET \
+                       URL. The part's filename is never read: no client names a storage key. \
+                       Requires a bearer JWT and the admin capability.",
         multipart = DirectUploadDto
     )]
     async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
         Ok(Json(
             self.svc
-                .store_upload(&upload.filename, upload.part.into_byte_stream())
+                .store_upload(upload.part.into_byte_stream())
                 .await?,
         ))
     }
@@ -88,17 +84,17 @@ impl AudioController {
     #[meta(Throttle::per_minute(60))]
     #[api(
         summary = "Stream a transcoded object back through the server",
-        description = "Given the source object `key` (query param `file`), streams the derived \
-                       object's bytes chunk by chunk as the response body — the large file never \
-                       sits whole in server memory — or `404` while the worker has not produced it \
-                       yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; \
-                       this endpoint is the streamed proxy. Requires a bearer JWT and the admin \
-                       capability.",
+        description = "Given the source object `key` (query param `file`, a UUID), streams the \
+                       derived object's bytes chunk by chunk as the response body — the large \
+                       file never sits whole in server memory — or `404` while the worker has not \
+                       produced it yet. The presigned `GET /audio/results` URL is the zero-proxy \
+                       alternative; this endpoint is the streamed proxy. Requires a bearer JWT \
+                       and the admin capability.",
         response_content_type = "audio/mpeg"
     )]
     async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
         let file = query.into_inner().file;
-        match self.svc.open_result(&file).await? {
+        match self.svc.open_result(file).await? {
             Some(stream) => Ok(Response::builder()
                 .content_type(HeaderValue::from_static("audio/mpeg"))
                 .body(Body::from_stream(stream))),
@@ -154,15 +150,16 @@ impl AudioController {
     #[api(
         summary = "Enqueue a transcode job for the worker to process",
         description = "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the \
-                       shared `audio` queue; the separate worker deployable consumes it over \
-                       Redis (two apps exchanging, no RPC). Requires a bearer JWT, is admin-only \
-                       (`Manage` on the caller's org, enforced by `TranscodeGuard`), rate-limited \
-                       by `ThrottlerGuard`, and its `file` is validated against a filename \
-                       allowlist that blocks path traversal."
+                       shared `audio` queue, answering `202` once it is queued; the separate \
+                       worker deployable consumes it over Redis (two apps exchanging, no RPC). \
+                       Requires a bearer JWT, is admin-only (`Manage` on the caller's org, \
+                       enforced by `TranscodeGuard`) and rate-limited by `ThrottlerGuard`; its \
+                       `file` is the key an upload returned, a UUID, so no client names a \
+                       storage path."
     )]
-    async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<Json<TranscodeDto>> {
-        let job = body.into_inner();
-        self.svc.enqueue_transcode(job.file.clone()).await?;
-        Ok(Json(job))
+    #[http_code(202)]
+    async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<()> {
+        self.svc.enqueue_transcode(body.into_inner().file).await?;
+        Ok(())
     }
 }

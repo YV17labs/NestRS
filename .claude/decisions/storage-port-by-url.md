@@ -47,3 +47,29 @@ no store for through `parse_url_opts` and every process variable,
 `AWS_ALLOW_INVALID_CERTIFICATES` among them — a store opened past
 `StorageConfig`'s refusals and `ClientTls`, as the two parsers above open one.
 `clippy.toml` disallows the type beside them.
+
+## 2026-10-17 — a presigned `PUT` binds its content type; its length waits
+
+`presign_put` takes a `SignedPut` and folds its `content_type` into the SigV4
+signature (`X-Amz-SignedHeaders=content-type;host`): the store refuses an
+upload sending another type, or none, so a client can no longer store
+`text/html` under a key the app serves. `content_type` is required — a caller
+accepting any type writes `application/octet-stream`, a visible line — and a
+value no header carries as sent is refused at the call, naming the argument.
+Both presigns refuse a lifetime outside SigV4's `X-Amz-Expires`, 1 second to 7
+days, which S3 would refuse only when the URL is used. `head` reads the stored
+type, ETag and last write through `get_opts` with `head: true`, since
+object_store's `head` keeps only `ObjectMeta`.
+
+**Refused:**
+
+- **Binding the length (`SignedPut::with_content_length`) in 7.0.** object_store
+  0.14 refuses `content-length` among a presigned URL's signed headers
+  (`RESERVED_SIGNED_HEADERS`) and leaves it out of every canonical request, so
+  the field could only be a promise the store never checks. A size bound is
+  read back with `head` once the upload lands. It is a minor once object_store
+  signs `content-length` on a presigned URL, or a POST policy's
+  `content-length-range`: `SignedPut` is `#[non_exhaustive]`.
+- **Signing with a SigV4 implementation of our own, or a second signer beside
+  object_store's** to reach the length: a signature improvised, or the
+  bucket's URL built twice.

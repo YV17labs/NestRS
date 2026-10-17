@@ -204,7 +204,16 @@
       },
       "PresignedUrlDto": {
         "properties": {
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "key": {
+            "type": "string"
+          },
+          "method": {
             "type": "string"
           },
           "url": {
@@ -213,7 +222,9 @@
         },
         "required": [
           "key",
-          "url"
+          "url",
+          "method",
+          "headers"
         ],
         "type": "object"
       },
@@ -295,8 +306,7 @@
         "additionalProperties": false,
         "properties": {
           "file": {
-            "maxLength": 255,
-            "minLength": 1,
+            "format": "uuid",
             "type": "string"
           }
         },
@@ -348,20 +358,6 @@
         "required": [
           "name",
           "email"
-        ],
-        "type": "object"
-      },
-      "UploadRequestDto": {
-        "additionalProperties": false,
-        "properties": {
-          "filename": {
-            "maxLength": 255,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "filename"
         ],
         "type": "object"
       },
@@ -422,7 +418,7 @@
   "paths": {
     "/audio/download": {
       "get": {
-        "description": "Given the source object `key` (query param `file`), streams the derived object's bytes chunk by chunk as the response body — the large file never sits whole in server memory — or `404` while the worker has not produced it yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; this endpoint is the streamed proxy. Requires a bearer JWT and the admin capability.",
+        "description": "Given the source object `key` (query param `file`, a UUID), streams the derived object's bytes chunk by chunk as the response body — the large file never sits whole in server memory — or `404` while the worker has not produced it yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; this endpoint is the streamed proxy. Requires a bearer JWT and the admin capability.",
         "operationId": "audio_download",
         "parameters": [
           {
@@ -430,8 +426,7 @@
             "name": "file",
             "required": true,
             "schema": {
-              "maxLength": 255,
-              "minLength": 1,
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -539,8 +534,7 @@
             "name": "file",
             "required": true,
             "schema": {
-              "maxLength": 255,
-              "minLength": 1,
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -652,7 +646,7 @@
     },
     "/audio/results": {
       "get": {
-        "description": "Given the source object `key` (query param `file`, validated like the transcode request), returns a short-lived presigned GET URL for the derived object the worker produced, or `404` while it does not exist yet. Requires a bearer JWT and the admin capability.",
+        "description": "Given the source object `key` an upload returned (query param `file`, a UUID), returns a short-lived presigned GET URL for the derived object the worker produced, or `404` while it does not exist yet. Requires a bearer JWT and the admin capability.",
         "operationId": "audio_result",
         "parameters": [
           {
@@ -660,8 +654,7 @@
             "name": "file",
             "required": true,
             "schema": {
-              "maxLength": 255,
-              "minLength": 1,
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -760,7 +753,7 @@
     },
     "/audio/transcode": {
       "post": {
-        "description": "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the shared `audio` queue; the separate worker deployable consumes it over Redis (two apps exchanging, no RPC). Requires a bearer JWT, is admin-only (`Manage` on the caller's org, enforced by `TranscodeGuard`), rate-limited by `ThrottlerGuard`, and its `file` is validated against a filename allowlist that blocks path traversal.",
+        "description": "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the shared `audio` queue, answering `202` once it is queued; the separate worker deployable consumes it over Redis (two apps exchanging, no RPC). Requires a bearer JWT, is admin-only (`Manage` on the caller's org, enforced by `TranscodeGuard`) and rate-limited by `ThrottlerGuard`; its `file` is the key an upload returned, a UUID, so no client names a storage path.",
         "operationId": "audio_transcode",
         "requestBody": {
           "content": {
@@ -773,15 +766,8 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TranscodeDto"
-                }
-              }
-            },
-            "description": "OK"
+          "202": {
+            "description": "Accepted"
           },
           "400": {
             "content": {
@@ -876,18 +862,8 @@
     },
     "/audio/uploads": {
       "post": {
-        "description": "Returns a short-lived presigned PUT URL plus the object key it addresses. The client pushes the file bytes straight to object storage (the server never proxies the payload), then calls `POST /audio/transcode` with the returned key. The `filename` is validated against the same anti-traversal allowlist as the transcode request. Requires a bearer JWT and the admin capability (`Manage` on the caller's org).",
+        "description": "Returns a short-lived presigned PUT URL, the method and headers the upload sends verbatim, and the object key the server minted for it. The URL binds `Content-Type: audio/mpeg`: object storage refuses an upload sending another type, or none. The client pushes the file bytes straight to object storage (the server never proxies the payload), then calls `POST /audio/transcode` with the returned key. Requires a bearer JWT and the admin capability (`Manage` on the caller's org).",
         "operationId": "audio_create_upload",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UploadRequestDto"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
@@ -898,16 +874,6 @@
               }
             },
             "description": "OK"
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -937,16 +903,6 @@
               }
             },
             "description": "Forbidden"
-          },
-          "413": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -992,7 +948,7 @@
     },
     "/audio/uploads/direct": {
       "post": {
-        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part, which streams straight into the object store — the file never sits whole in server memory — and the response carries the object key plus a presigned GET URL. The part's filename is validated against the same anti-traversal allowlist as the presigned path. Requires a bearer JWT and the admin capability.",
+        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part, which streams straight into the object store — the file never sits whole in server memory — and the response carries the object key the server minted plus a presigned GET URL. The part's filename is never read: no client names a storage key. Requires a bearer JWT and the admin capability.",
         "operationId": "audio_upload_direct",
         "requestBody": {
           "content": {

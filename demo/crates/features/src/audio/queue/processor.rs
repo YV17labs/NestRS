@@ -16,7 +16,7 @@ pub struct AudioProcessor {
 impl AudioProcessor {
     #[process(queue = AudioQueue, retries = 3, concurrency = 4)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-        self.svc.transcode(&job.file).await?;
+        self.svc.transcode(job.file).await?;
         Ok(())
     }
 }

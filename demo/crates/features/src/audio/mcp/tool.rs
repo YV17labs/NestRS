@@ -27,12 +27,10 @@ impl AudioTool {
     ) -> Result<String, McpError> {
         let params = params.into_inner();
 
-        Ok(
-            match self.svc.presign_result(&params.file).await.opaque()? {
-                Some(ticket) => format!("ready — download (15 min): {}", ticket.url),
-                None => format!("pending — no transcoded object for {} yet", params.file),
-            },
-        )
+        Ok(match self.svc.presign_result(params.file).await.opaque()? {
+            Some(ticket) => format!("ready — download (15 min): {}", ticket.url),
+            None => "pending — no transcoded object yet".to_owned(),
+        })
     }
 }
 

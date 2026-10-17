@@ -24,10 +24,11 @@ work itself.
 ```rust title="crates/features/src/audio/command.rs (from the demo)"
 use nest_rs::queue::{Queue, queue};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscodeCommand {
-    pub file: String,
+    pub file: Uuid,
 }
 
 #[queue(name = "audio", job = TranscodeCommand)]
@@ -71,8 +72,9 @@ use std::sync::Arc;
 
 use nest_rs::core::{error_message, injectable};
 use nest_rs::queue::{JobProducer, JobProducerExt};
+use uuid::Uuid;
 
-use super::command::{AudioQueue, TranscodeCommand};
+use super::command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
 use super::error::AudioError;
 
 #[injectable]
@@ -82,11 +84,11 @@ pub struct AudioService {
 }
 
 impl AudioService {
-    pub async fn enqueue_transcode(&self, file: String) -> Result<(), AudioError> {
+    pub async fn enqueue_transcode(&self, file: Uuid) -> Result<(), AudioError> {
         self.queue
-            .push(AudioQueue, TranscodeCommand { file: file.clone() }, None)
+            .push(AudioQueue, TranscodeCommand { file }, None)
             .await?;
-        tracing::debug!(target: crate::audio::TARGET, file, "enqueued transcode job");
+        tracing::debug!(target: crate::audio::TARGET, queue = AUDIO_QUEUE, "enqueued transcode job");
         Ok(())
     }
 }
@@ -228,7 +230,7 @@ let pushed = self
     .queue
     .push(
         AudioQueue,
-        TranscodeCommand { file: file.clone() },
+        TranscodeCommand { file },
         PushOptions::default().with_unique(format!("transcode-{file}")),
     )
     .await;
@@ -298,7 +300,8 @@ for one a delivery runs. See [Delivery on Redis](/queue/delivery/#cancels).
 
 The controller is a thin transport. It accepts a `TranscodeDto` — the
 REST body, a distinct type from the queue's `TranscodeCommand` — calls
-the service, returns the wire response. No queue knowledge of its own.
+the service, and answers `202`: the job is queued, not done, and the reply
+echoes nothing the client sent. No queue knowledge of its own.
 
 Declare the DTO with `#[input]`: a `Json<T>` handler argument requires
 `schemars::JsonSchema` (see [extractors](/http/extractors/)), and `#[input]`
@@ -307,12 +310,16 @@ derives it along with `Deserialize` and `Validate`. A hand-derived DTO needs
 
 ```rust title="crates/features/src/audio/dtos/transcode_dto.rs (from the demo, abridged)"
 use nest_rs::http::input;
+use uuid::Uuid;
 
 #[input]
 pub struct TranscodeDto {
-    pub file: String,
+    pub file: Uuid,
 }
 ```
+
+`file` is the key an upload minted, parsed as a UUID at the edge: a name the
+client chose is a `400` before the service runs.
 
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
 use std::sync::Arc;
@@ -326,7 +333,6 @@ use nest_rs::throttler::{Throttle, ThrottlerGuard};
 use crate::audio::TranscodeGuard;
 use crate::audio::{
     AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,
-    UploadRequestDto,
 };
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -342,10 +348,11 @@ pub struct AudioController {
 impl AudioController {
     #[post("/transcode")]
     #[meta(Throttle::per_minute(20))]
-    async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<Json<TranscodeDto>> {
-        let job = body.into_inner();
-        self.svc.enqueue_transcode(job.file.clone()).await?;
-        Ok(Json(job))
+    // … #[api(…)]
+    #[http_code(202)]
+    async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<()> {
+        self.svc.enqueue_transcode(body.into_inner().file).await?;
+        Ok(())
     }
 }
 ```

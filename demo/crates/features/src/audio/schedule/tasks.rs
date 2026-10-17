@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nest_rs::core::injectable;
@@ -22,8 +21,7 @@ impl AudioTasks {
         if !self.config.synthetic_seed {
             return Ok(());
         }
-        let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc.seed_and_enqueue(format!("track-{id}.mp3")).await?;
+        self.svc.seed_and_enqueue().await?;
         Ok(())
     }
 

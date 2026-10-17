@@ -68,6 +68,15 @@ pub enum StorageError {
         /// The backend that cannot (`"memory"`).
         backend: &'static str,
     },
+    /// A presign's argument holds what no signature binds: refused before
+    /// anything is signed, naming the argument and never its value.
+    #[error("refusing to presign a URL: `{argument}` {reason}")]
+    Unsignable {
+        /// The argument refused (`"SignedPut::content_type"`, `"expires"`).
+        argument: &'static str,
+        /// What a signature takes in its place.
+        reason: &'static str,
+    },
     /// Signing a presigned URL failed.
     #[error("failed to presign a {method} URL for the object store {store}")]
     Presign {

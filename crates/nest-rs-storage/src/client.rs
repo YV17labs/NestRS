@@ -1,17 +1,18 @@
 use std::any::TypeId;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use http::Method;
+use http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Budget, ContainerBuilder, Discoverable, ProviderResidency, TaskContext};
 use object_store::path::Path;
-use object_store::signer::Signer;
+use object_store::signer::{SignedUrlOptions, Signer};
 use object_store::{
-    Attribute, Attributes, MultipartUpload, ObjectStoreExt, PutMultipartOptions, PutOptions,
-    PutPayload,
+    Attribute, Attributes, GetOptions, MultipartUpload, ObjectStoreExt, PutMultipartOptions,
+    PutOptions, PutPayload,
 };
 
 use crate::config::{OPERATION_TIMEOUT, StorageConfig};
@@ -22,6 +23,10 @@ use crate::transfer::download;
 /// Bytes buffered before a multipart part is shipped: S3 requires every part
 /// but the last to be at least 5 MiB.
 pub const MULTIPART_PART_SIZE: usize = 5 * 1024 * 1024;
+
+/// The lifetimes a SigV4 presigned URL may carry, in whole seconds
+/// (`X-Amz-Expires`): S3 refuses a URL past seven days when it is used.
+const PRESIGN_LIFETIME: std::ops::RangeInclusive<u64> = 1..=7 * 24 * 60 * 60;
 
 /// The injectable object-store client: the store [`StorageConfig::url`] names,
 /// opened over the [`object_store`] backend its scheme picks and proved when
@@ -110,45 +115,107 @@ impl Storage {
         &self.store.url
     }
 
-    /// Sign a short-lived URL for `method` against `key`.
-    async fn presigned_url(&self, method: Method, key: &str, expires: Duration) -> Result<String> {
+    /// Sign a short-lived request for `method` against `key`, binding each of
+    /// `headers` — its name, the argument that set it, and its value — to the
+    /// signature.
+    async fn presigned(
+        &self,
+        method: Method,
+        key: &str,
+        headers: &[(HeaderName, &'static str, &str)],
+        expires: Duration,
+    ) -> Result<PresignedRequest> {
         let signer = self.store.signer()?;
+        let lifetime = expires.as_secs();
+        if !PRESIGN_LIFETIME.contains(&lifetime) {
+            return Err(StorageError::Unsignable {
+                argument: "expires",
+                reason: "is outside what SigV4 signs, 1 second to 7 days",
+            });
+        }
+        let options = headers.iter().try_fold(
+            SignedUrlOptions::new(),
+            |options, &(ref name, argument, value)| {
+                let value = header_value(value).ok_or(StorageError::Unsignable {
+                    argument,
+                    reason: "is not a header value: printable ASCII, neither blank nor padded",
+                })?;
+                Ok::<_, StorageError>(options.with_signed_header(name.clone(), value))
+            },
+        )?;
+        let expires = Duration::from_secs(lifetime);
+        // SigV4 dates a signature to its second (`X-Amz-Date`): the second read
+        // before signing is at or before it, so the URL never lapses before this.
+        let expires_at = whole_second(SystemTime::now()) + expires;
         let url = self
-            .answered(signer.signed_url(method.clone(), &self.store.rooted(key), expires))
+            .answered(signer.signed_url_opts(
+                method.clone(),
+                &self.store.rooted(key),
+                expires,
+                &options,
+            ))
             .await
             .map_err(|source| StorageError::Presign {
-                method,
+                method: method.clone(),
                 store: self.store.shown.clone(),
                 source: Box::new(source),
             })?;
-        Ok(url.to_string())
+        Ok(PresignedRequest {
+            url: url.into(),
+            method,
+            headers: headers
+                .iter()
+                .map(|(name, _, value)| (name.as_str().to_owned(), (*value).to_owned()))
+                .collect(),
+            expires_at,
+        })
     }
 
-    /// Presigned `PUT` URL the client uploads bytes to directly; the content
-    /// type is not signed, so the uploading client sets it. A backend that
-    /// cannot sign — `memory` — answers [`StorageError::Unsupported`].
-    pub async fn presign_put(&self, key: &str, expires: Duration) -> Result<String> {
-        self.presigned_url(Method::PUT, key, expires).await
-    }
-
-    /// Presigned `GET` URL — for serving private originals on demand. A
-    /// backend that cannot sign — `memory` — answers
-    /// [`StorageError::Unsupported`].
-    pub async fn presign_get(&self, key: &str, expires: Duration) -> Result<String> {
-        self.presigned_url(Method::GET, key, expires).await
-    }
-
-    /// Byte size of an uploaded object, `None` if it does not exist yet.
+    /// A presigned `PUT` the client uploads its bytes with, directly: the URL
+    /// binds what `put` names, so the store refuses an upload sending other
+    /// values for [`PresignedRequest::headers`].
     ///
-    /// `object_store` does not report the stored `Content-Type`: a caller that
-    /// needs it keeps the one it supplied at upload.
+    /// `expires` is SigV4's, 1 second to 7 days; a backend that cannot sign —
+    /// `memory` — answers [`StorageError::Unsupported`].
+    pub async fn presign_put(
+        &self,
+        key: &str,
+        put: &SignedPut,
+        expires: Duration,
+    ) -> Result<PresignedRequest> {
+        self.presigned(
+            Method::PUT,
+            key,
+            &[(CONTENT_TYPE, "SignedPut::content_type", &put.content_type)],
+            expires,
+        )
+        .await
+    }
+
+    /// A presigned `GET`, for serving a private object on demand.
+    ///
+    /// `expires` is SigV4's, 1 second to 7 days; a backend that cannot sign —
+    /// `memory` — answers [`StorageError::Unsupported`].
+    pub async fn presign_get(&self, key: &str, expires: Duration) -> Result<PresignedRequest> {
+        self.presigned(Method::GET, key, &[], expires).await
+    }
+
+    /// An object's size, content type, ETag and last write, `None` if it
+    /// does not exist yet.
     pub async fn head(&self, key: &str) -> Result<Option<ObjectMetadata>> {
+        let head = GetOptions::new().with_head(true);
         match self
-            .answered(self.store.objects.head(&Path::from(key)))
+            .answered(self.store.objects.get_opts(&Path::from(key), head))
             .await
         {
-            Ok(meta) => Ok(Some(ObjectMetadata {
-                byte_size: meta.size as i64,
+            Ok(found) => Ok(Some(ObjectMetadata {
+                byte_size: found.meta.size,
+                content_type: found
+                    .attributes
+                    .get(&Attribute::ContentType)
+                    .map(|value| value.as_ref().to_owned()),
+                etag: found.meta.e_tag,
+                last_modified: found.meta.last_modified.into(),
             })),
             Err(object_store::Error::NotFound { .. }) => Ok(None),
             Err(e) => Err(StorageError::Head {
@@ -253,7 +320,7 @@ impl Storage {
         entries.map(move |meta| match meta {
             Ok(meta) => Ok(ObjectEntry {
                 key: meta.location.as_ref().to_string(),
-                byte_size: meta.size as i64,
+                byte_size: meta.size,
                 last_modified: meta.last_modified.into(),
             }),
             Err(e) => Err(StorageError::List {
@@ -543,12 +610,88 @@ async fn abort_upload(
     }
 }
 
+/// `value` as a header carries it, or `None` for what a signature cannot
+/// bind as the uploader sends it: anything but printable ASCII, a blank
+/// value, or one padded with spaces the signature would trim.
+fn header_value(value: &str) -> Option<HeaderValue> {
+    let printable = value.bytes().all(|byte| matches!(byte, b' '..=b'~'));
+    if !printable || value.trim().is_empty() || value.trim() != value {
+        return None;
+    }
+    HeaderValue::from_str(value).ok()
+}
+
+/// `at`, down to the start of its second.
+fn whole_second(at: SystemTime) -> SystemTime {
+    match at.duration_since(UNIX_EPOCH) {
+        Ok(after) => at - Duration::from_nanos(after.subsec_nanos().into()),
+        Err(before) => match before.duration().subsec_nanos() {
+            0 => at,
+            short => at - (Duration::from_secs(1) - Duration::from_nanos(short.into())),
+        },
+    }
+}
+
+/// What a presigned `PUT` binds: the uploader sends exactly these headers,
+/// with these values, or the store refuses the upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SignedPut {
+    /// The `Content-Type` the object is stored with, and the only one the URL
+    /// accepts — `application/octet-stream` for any.
+    pub content_type: String,
+}
+
+impl SignedPut {
+    /// A `PUT` storing its object as `content_type`.
+    pub fn new(content_type: impl Into<String>) -> Self {
+        Self {
+            content_type: content_type.into(),
+        }
+    }
+}
+
+/// A signed request: the URL, its method, the headers to send verbatim, and
+/// when it lapses.
+///
+/// The URL is a credential until then: its `Debug` withholds it.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct PresignedRequest {
+    /// The signed URL, query included.
+    pub url: String,
+    /// The method the URL is signed for, `PUT` or `GET`.
+    pub method: Method,
+    /// The headers the signature binds, by lowercase name: the request sends
+    /// each, verbatim.
+    pub headers: Vec<(String, String)>,
+    /// When the store stops accepting the URL, to the second, and never later
+    /// than it does.
+    pub expires_at: SystemTime,
+}
+
+impl std::fmt::Debug for PresignedRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PresignedRequest")
+            .field("method", &self.method)
+            .field("headers", &self.headers)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Result of a [`Storage::head`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ObjectMetadata {
     /// The object's size in bytes, as the store reports it.
-    pub byte_size: i64,
+    pub byte_size: u64,
+    /// The `Content-Type` the object was stored with, if it was given one.
+    pub content_type: Option<String>,
+    /// The object's ETag, if the store reports one.
+    pub etag: Option<String>,
+    /// When the object was last written.
+    pub last_modified: SystemTime,
 }
 
 /// One object yielded by [`Storage::list`].
@@ -558,7 +701,7 @@ pub struct ObjectEntry {
     /// The object's key, relative to the prefix of the store's URL.
     pub key: String,
     /// The object's size in bytes, as the store reports it.
-    pub byte_size: i64,
+    pub byte_size: u64,
     /// When the object was last written.
     pub last_modified: SystemTime,
 }
@@ -717,9 +860,12 @@ mod tests {
             .await
             .expect("https is always allowed");
         assert!(
-            signed.starts_with("https://s3.example/bucket/k?"),
-            "{signed}"
+            signed.url.starts_with("https://s3.example/bucket/k?"),
+            "{}",
+            signed.url
         );
+        assert_eq!(signed.method, Method::GET);
+        assert!(signed.headers.is_empty(), "{:?}", signed.headers);
     }
 
     #[tokio::test]
@@ -729,12 +875,205 @@ mod tests {
             ..s3_at("https://s3.example", false)
         });
         let signed = storage
-            .presign_put("covers/a.png", Duration::from_secs(900))
+            .presign_put(
+                "covers/a.png",
+                &SignedPut::new("image/png"),
+                Duration::from_secs(900),
+            )
             .await
             .expect("signing is local");
         assert!(
-            signed.starts_with("https://s3.example/bucket/tenants/acme/covers/a.png?"),
-            "{signed}"
+            signed
+                .url
+                .starts_with("https://s3.example/bucket/tenants/acme/covers/a.png?"),
+            "{}",
+            signed.url
+        );
+    }
+
+    /// The query parameters of a signed URL, decoded.
+    fn signed_query(url: &str) -> Vec<(String, String)> {
+        url::Url::parse(url)
+            .expect("a signed URL parses")
+            .query_pairs()
+            .into_owned()
+            .collect()
+    }
+
+    /// When the store stops accepting a signed URL, read off the URL itself:
+    /// its `X-Amz-Date`, in the format object_store writes it, plus its
+    /// `X-Amz-Expires`.
+    fn lapse_of(url: &str) -> SystemTime {
+        let query = signed_query(url);
+        let param = |name: &str| {
+            query
+                .iter()
+                .find_map(|(key, value)| (key == name).then_some(value.as_str()))
+                .expect("a signed URL carries its date and its lifetime")
+        };
+        let signed_at =
+            chrono::NaiveDateTime::parse_from_str(param("X-Amz-Date"), "%Y%m%dT%H%M%SZ")
+                .expect("X-Amz-Date is SigV4's basic format")
+                .and_utc();
+        let lifetime = param("X-Amz-Expires")
+            .parse()
+            .expect("X-Amz-Expires is whole seconds");
+        SystemTime::from(signed_at) + Duration::from_secs(lifetime)
+    }
+
+    #[test]
+    fn an_instant_is_taken_down_to_its_second_on_either_side_of_the_epoch() {
+        let ms = Duration::from_millis;
+        for (at, second) in [
+            (UNIX_EPOCH, UNIX_EPOCH),
+            (UNIX_EPOCH + ms(1_300), UNIX_EPOCH + ms(1_000)),
+            (UNIX_EPOCH + ms(2_000), UNIX_EPOCH + ms(2_000)),
+            (UNIX_EPOCH - ms(1_300), UNIX_EPOCH - ms(2_000)),
+            (UNIX_EPOCH - ms(2_000), UNIX_EPOCH - ms(2_000)),
+        ] {
+            assert_eq!(whole_second(at), second, "{at:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_presigned_url_never_lapses_before_its_expires_at_for_either_method() {
+        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let expires = Duration::from_secs(900);
+        let put = storage
+            .presign_put("k", &SignedPut::new("image/png"), expires)
+            .await
+            .expect("signing is local");
+        let get = storage
+            .presign_get("k", expires)
+            .await
+            .expect("signing is local");
+        for signed in [put, get] {
+            let lapse = lapse_of(&signed.url);
+            assert!(
+                lapse
+                    .duration_since(signed.expires_at)
+                    .is_ok_and(|ahead| ahead <= Duration::from_secs(1)),
+                "{}: expires_at {:?} is at or before the URL's own lapse {lapse:?}, \
+                 within a second of it",
+                signed.method,
+                signed.expires_at,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_presigned_put_binds_its_content_type_for_the_uploader_to_send() {
+        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let put = storage
+            .presign_put(
+                "covers/a.png",
+                &SignedPut::new("image/png"),
+                Duration::from_secs(900),
+            )
+            .await
+            .expect("signing is local");
+
+        assert_eq!(put.method, Method::PUT);
+        assert_eq!(
+            put.headers,
+            [("content-type".to_owned(), "image/png".to_owned())],
+            "the uploader sends the signed type verbatim"
+        );
+        assert!(
+            signed_query(&put.url)
+                .contains(&("X-Amz-SignedHeaders".into(), "content-type;host".into())),
+            "the type is folded into the signature: {:?}",
+            signed_query(&put.url)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_content_type_no_header_carries_is_refused_naming_the_field_never_the_value() {
+        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        for content_type in [
+            "",
+            " ",
+            "text/html\r\nx-injected: yes",
+            " audio/mpeg",
+            "audio/mpeg\t",
+            "audio/mpég",
+            "audio/\u{7f}mpeg",
+        ] {
+            let refused = storage
+                .presign_put("k", &SignedPut::new(content_type), Duration::from_secs(60))
+                .await
+                .expect_err("no header can carry it");
+            assert!(
+                matches!(
+                    refused,
+                    StorageError::Unsignable {
+                        argument: "SignedPut::content_type",
+                        ..
+                    }
+                ),
+                "{content_type:?}: {refused:?}"
+            );
+            let said = nest_rs_core::error_message(&refused);
+            assert!(said.contains("SignedPut::content_type"), "{said}");
+            for part in ["x-injected", "mpeg", "mpég"] {
+                assert!(
+                    !content_type.contains(part) || !said.contains(part),
+                    "{content_type:?}: the value is described, never quoted: {said}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_expiry_sigv4_cannot_sign_is_refused_for_either_method() {
+        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let week = Duration::from_secs(7 * 24 * 60 * 60);
+        for expires in [
+            Duration::ZERO,
+            Duration::from_millis(999),
+            week + Duration::from_secs(1),
+            Duration::MAX,
+        ] {
+            let put = storage
+                .presign_put("k", &SignedPut::new("image/png"), expires)
+                .await
+                .expect_err("SigV4 signs 1 second to 7 days");
+            let get = storage
+                .presign_get("k", expires)
+                .await
+                .expect_err("SigV4 signs 1 second to 7 days");
+            for refused in [put, get] {
+                assert!(
+                    matches!(
+                        refused,
+                        StorageError::Unsignable {
+                            argument: "expires",
+                            ..
+                        }
+                    ),
+                    "{expires:?}: {refused:?}"
+                );
+            }
+        }
+        for expires in [Duration::from_secs(1), week] {
+            storage
+                .presign_get("k", expires)
+                .await
+                .expect("SigV4's bounds are signed");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_presigned_requests_debug_withholds_the_signed_url() {
+        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let get = storage
+            .presign_get("users/ada/avatar.png", Duration::from_secs(60))
+            .await
+            .expect("signing is local");
+        let shown = format!("{get:?}");
+        assert!(
+            shown.contains("GET") && !shown.contains("X-Amz-Signature") && !shown.contains("ada"),
+            "a signed URL is a credential until it lapses: {shown}"
         );
     }
 
@@ -813,7 +1152,7 @@ mod tests {
         .await
         .expect("memory opens in a test profile");
         let refused = storage
-            .presign_get("k", Duration::from_secs(60))
+            .presign_put("k", &SignedPut::new("image/png"), Duration::from_secs(60))
             .await
             .expect_err("no signer");
         assert!(

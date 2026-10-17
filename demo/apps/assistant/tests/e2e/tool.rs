@@ -1,8 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use nest_rs::core::Discovery;
 use nest_rs::http::HttpEndpointMeta;
 use nest_rs::http::StatusCode;
+use nest_rs::testing::LogCapture;
 use nest_rs::testing::mcp::{initialize_request, open_session, post_message};
 use serde_json::json;
 
@@ -55,11 +54,7 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
 
     let session = open_session(app.http(), SHARED_ENDPOINT, Some(&auth)).await;
 
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let file = format!("e2e-mcp-{}-{}.mp3", std::process::id(), nonce);
+    let file = Uuid::now_v7().to_string();
     let call = |id: u32, file: String| {
         json!({
             "jsonrpc": "2.0",
@@ -69,6 +64,7 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
         })
     };
 
+    let logs = LogCapture::install();
     let pending = post_message(
         app.http(),
         SHARED_ENDPOINT,
@@ -83,6 +79,16 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
         body.contains("pending"),
         "a fresh key has no derived object yet: {body}",
     );
+    assert!(
+        !body.contains(&file)
+            && logs
+                .events()
+                .iter()
+                .all(|event| !format!("{:?}", event.fields).contains(&file)),
+        "a poll for an unknown key replies and logs none of it: {body} {:#?}",
+        logs.events(),
+    );
+    drop(logs);
 
     storage_client()
         .await

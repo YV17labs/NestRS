@@ -40,7 +40,6 @@ recurring job.
 
 ```rust title="crates/features/src/audio/schedule/tasks.rs (from the demo, abridged)"
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nest_rs::core::injectable;
@@ -63,8 +62,7 @@ impl AudioTasks {
         if !self.config.synthetic_seed {
             return Ok(());
         }
-        let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc.seed_and_enqueue(format!("track-{id}.mp3")).await?;
+        self.svc.seed_and_enqueue().await?;
         Ok(())
     }
     // …
@@ -309,7 +307,7 @@ $ nestrs run dev api
  INFO nest_rs::schedule: scheduled job (cron) provider="AudioTasks" method="heartbeat" timezone="UTC" replicas="each"
  INFO features::audio: audio pipeline ready to enqueue phase="warmup" trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
  INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
-DEBUG features::audio: enqueued transcode job file="track-1787069800014.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+DEBUG features::audio: enqueued transcode job queue="audio" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
  INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="one" occurrence=1787069800000 outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
 ```
 

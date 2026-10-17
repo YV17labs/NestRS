@@ -6,7 +6,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use futures_util::StreamExt;
 use nest_rs_storage::__private::MULTIPART_PART_SIZE;
-use nest_rs_storage::{StorageConfig, StorageError, TARGET};
+use nest_rs_storage::{PresignedRequest, SignedPut, StorageConfig, StorageError, TARGET};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
@@ -72,6 +72,14 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Events {
     }
 }
 
+/// `request` as the uploader sends it: its method, URL and headers, verbatim.
+fn sent(http: &reqwest::Client, request: &PresignedRequest) -> reqwest::RequestBuilder {
+    request.headers.iter().fold(
+        http.request(request.method.clone(), &request.url),
+        |sent, (name, value)| sent.header(name, value),
+    )
+}
+
 #[tokio::test]
 async fn presign_put_get_round_trip() {
     let s = storage().await;
@@ -81,13 +89,11 @@ async fn presign_put_get_round_trip() {
     let key = key.as_str();
     let body = b"object_store presign round-trip \xf0\x9f\x9a\x80".to_vec();
 
-    let put_url = s
-        .presign_put(key, Duration::from_secs(300))
+    let put = s
+        .presign_put(key, &SignedPut::new("text/plain"), Duration::from_secs(300))
         .await
         .expect("presign_put");
-    let put_resp = http
-        .put(&put_url)
-        .header("content-type", "text/plain")
+    let put_resp = sent(&http, &put)
         .body(body.clone())
         .send()
         .await
@@ -100,11 +106,11 @@ async fn presign_put_get_round_trip() {
     );
     eprintln!("PUT  {key} -> 200");
 
-    let get_url = s
+    let get = s
         .presign_get(key, Duration::from_secs(300))
         .await
         .expect("presign_get");
-    let got = http.get(&get_url).send().await.expect("GET send");
+    let got = sent(&http, &get).send().await.expect("GET send");
     assert!(
         got.status().is_success(),
         "presigned GET failed: {}",
@@ -123,7 +129,8 @@ async fn presign_put_get_round_trip() {
     );
 
     let info = s.head(key).await.expect("head").expect("object present");
-    assert_eq!(info.byte_size, body.len() as i64, "head size mismatch");
+    assert_eq!(info.byte_size, body.len() as u64, "head size mismatch");
+    assert_eq!(info.content_type.as_deref(), Some("text/plain"));
     eprintln!("head           {} -> size={}", key, info.byte_size);
 
     let absent = s
@@ -144,6 +151,72 @@ async fn presign_put_get_round_trip() {
 
     s.delete(key).await.expect("delete key");
     s.delete(key2).await.expect("delete key2");
+}
+
+#[tokio::test]
+async fn a_presigned_put_lands_only_with_the_type_it_signed() {
+    let s = storage().await;
+    let http = reqwest::Client::new();
+
+    let key = unique("bound.mp3");
+    let put = s
+        .presign_put(
+            &key,
+            &SignedPut::new("audio/mpeg"),
+            Duration::from_secs(300),
+        )
+        .await
+        .expect("presign_put");
+
+    let html = http
+        .request(put.method.clone(), &put.url)
+        .header("content-type", "text/html")
+        .body(b"<script>alert(1)</script>".to_vec())
+        .send()
+        .await
+        .expect("PUT send");
+    assert_eq!(
+        html.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "a type other than the signed one is refused: {}",
+        html.text().await.unwrap_or_default()
+    );
+    let untyped = http
+        .request(put.method.clone(), &put.url)
+        .body(b"no type at all".to_vec())
+        .send()
+        .await
+        .expect("PUT send");
+    assert_eq!(
+        untyped.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "and so is no type at all: {}",
+        untyped.text().await.unwrap_or_default()
+    );
+    assert!(
+        s.head(&key).await.expect("head").is_none(),
+        "nothing landed under the key"
+    );
+
+    let payload = b"ID3 nestrs signed audio".to_vec();
+    let landed = sent(&http, &put)
+        .body(payload.clone())
+        .send()
+        .await
+        .expect("PUT send");
+    assert!(
+        landed.status().is_success(),
+        "the signed type lands: {} — {}",
+        landed.status(),
+        landed.text().await.unwrap_or_default()
+    );
+    let stored = s.head(&key).await.expect("head").expect("object present");
+    assert_eq!(stored.content_type.as_deref(), Some("audio/mpeg"));
+    assert_eq!(stored.byte_size, payload.len() as u64);
+    assert!(stored.etag.is_some(), "{stored:?}");
+    eprintln!("PUT(signed type) {key} -> {:?}", stored.content_type);
+
+    s.delete(&key).await.expect("delete");
 }
 
 #[tokio::test]
@@ -175,14 +248,14 @@ async fn put_stream_uploads_in_parts_and_keeps_the_content_type() {
     assert!(got.as_ref() == expected, "streamed upload bytes mismatch");
 
     let info = s.head(&key).await.expect("head").expect("object present");
-    assert_eq!(info.byte_size, expected.len() as i64, "head size mismatch");
+    assert_eq!(info.byte_size, expected.len() as u64, "head size mismatch");
+    assert_eq!(info.content_type.as_deref(), Some("audio/mpeg"));
 
-    // `head` cannot report the content type, so it is read off the wire.
-    let get_url = s
+    let get = s
         .presign_get(&key, Duration::from_secs(300))
         .await
         .expect("presign_get");
-    let served = http.get(&get_url).send().await.expect("GET send");
+    let served = sent(&http, &get).send().await.expect("GET send");
     assert!(
         served.status().is_success(),
         "GET failed: {}",
@@ -300,7 +373,7 @@ async fn a_successful_streamed_upload_discards_nothing() {
     }
 
     let info = s.head(&key).await.expect("head").expect("object present");
-    assert_eq!(info.byte_size, expected as i64);
+    assert_eq!(info.byte_size, expected as u64);
     assert!(
         events.keys_for(DISCARDED).is_empty() && events.keys_for(DANGLING).is_empty(),
         "a completed upload aborted nothing",
@@ -336,13 +409,13 @@ async fn list_streams_exactly_the_objects_under_a_prefix() {
     }
     entries.sort_by(|a, b| a.key.cmp(&b.key));
 
-    let listed: Vec<(String, i64)> = entries
+    let listed: Vec<(String, u64)> = entries
         .iter()
         .map(|e| (e.key.clone(), e.byte_size))
         .collect();
-    let expected: Vec<(String, i64)> = inside
+    let expected: Vec<(String, u64)> = inside
         .iter()
-        .map(|(key, body)| (key.clone(), body.len() as i64))
+        .map(|(key, body)| (key.clone(), body.len() as u64))
         .collect();
     assert_eq!(listed, expected, "listing does not match what was written");
     for entry in &entries {

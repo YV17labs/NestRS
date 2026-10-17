@@ -1,11 +1,11 @@
 //! Every call of [`Storage`](nest_rs_storage::Storage) (`src/client.rs`) on
 //! the in-process store, as an app's service makes it.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use nest_rs_storage::StorageError;
+use nest_rs_storage::{SignedPut, StorageError};
 
 use crate::booted;
 
@@ -33,6 +33,44 @@ async fn bytes_round_trip_and_an_absent_key_reads_as_none() {
         Some(3)
     );
     assert!(storage.head("covers/b.png").await.expect("head").is_none());
+}
+
+#[tokio::test]
+async fn head_reads_back_the_type_an_upload_stored() {
+    let (_app, storage) = booted().await;
+    let before = SystemTime::now();
+    storage
+        .put_bytes("covers/a.png", vec![1_u8, 2, 3], "image/png")
+        .await
+        .expect("put");
+    storage
+        .put_stream(
+            "audio/a.mp3",
+            "audio/mpeg",
+            futures_util::stream::iter([Ok(Bytes::from_static(b"mp3"))]),
+        )
+        .await
+        .expect("put_stream");
+
+    let png = storage
+        .head("covers/a.png")
+        .await
+        .expect("head")
+        .expect("the object is stored");
+    assert_eq!(png.content_type.as_deref(), Some("image/png"));
+    assert_eq!(png.byte_size, 3);
+    assert!(png.etag.is_some(), "{png:?}");
+    assert!(
+        png.last_modified >= before - Duration::from_secs(1),
+        "{png:?}"
+    );
+
+    let mp3 = storage
+        .head("audio/a.mp3")
+        .await
+        .expect("head")
+        .expect("the object is stored");
+    assert_eq!(mp3.content_type.as_deref(), Some("audio/mpeg"));
 }
 
 #[tokio::test]
@@ -93,7 +131,13 @@ async fn list_matches_path_segments_and_delete_is_idempotent() {
 async fn presigning_answers_unsupported_naming_the_backend() {
     let (_app, storage) = booted().await;
     for signed in [
-        storage.presign_put("a.png", Duration::from_secs(60)).await,
+        storage
+            .presign_put(
+                "a.png",
+                &SignedPut::new("image/png"),
+                Duration::from_secs(60),
+            )
+            .await,
         storage.presign_get("a.png", Duration::from_secs(60)).await,
     ] {
         let refused = signed.expect_err("memory signs nothing");

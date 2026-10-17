@@ -1,40 +1,58 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use features::audio::AudioQueueModule;
 use nest_rs::core::module;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::queue::{QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::testing::HeadlessApp;
+use nest_rs::testing::{HeadlessApp, LogCapture};
 use nest_rs::testing::{TestForm, TestFormField};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::*;
+
+fn quoted_in_a_log(logs: &LogCapture, text: &str) -> bool {
+    logs.events()
+        .iter()
+        .any(|event| format!("{:?}", event.fields).contains(text))
+}
 
 #[tokio::test]
 async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {
     let (_db, app) = boot().await;
+    let file = Uuid::now_v7().to_string();
 
     app.http()
         .post("/audio/transcode")
-        .body_json(&json!({ "file": "track-1.mp3" }))
+        .body_json(&json!({ "file": file }))
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
     let bearer = format!("Bearer {}", login().await);
+    let logs = LogCapture::install();
     let resp = app
         .http()
         .post("/audio/transcode")
         .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "file": "track-1.mp3" }))
+        .body_json(&json!({ "file": file }))
         .send()
         .await;
-    resp.assert_status_is_ok();
-    assert_eq!(
-        resp.json().await.value().object().get("file").string(),
-        "track-1.mp3",
+    resp.assert_status(StatusCode::ACCEPTED);
+    let body = resp.0.into_body().into_string().await.expect("body");
+    assert!(
+        body.is_empty() && !quoted_in_a_log(&logs, &file),
+        "a key the client sends back reaches no reply or log line: {body:?} {:#?}",
+        logs.events(),
     );
+
+    app.http()
+        .post("/audio/transcode")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "file": "track-1.mp3" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -42,20 +60,21 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
     let (_db, app) = boot().await;
     let bearer = format!("Bearer {}", login().await);
 
+    let file = Uuid::now_v7();
     for _ in 0..20 {
         app.http()
             .post("/audio/transcode")
             .header(header::AUTHORIZATION, &bearer)
-            .body_json(&json!({ "file": "track-throttle.mp3" }))
+            .body_json(&json!({ "file": file }))
             .send()
             .await
-            .assert_status_is_ok();
+            .assert_status(StatusCode::ACCEPTED);
     }
     let denied = app
         .http()
         .post("/audio/transcode")
         .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "file": "track-throttle.mp3" }))
+        .body_json(&json!({ "file": file }))
         .send()
         .await;
     denied.assert_status(StatusCode::TOO_MANY_REQUESTS);
@@ -89,27 +108,42 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
         .expect("the worker's QueueWorker drains the audio queue");
 
     let bearer = format!("Bearer {}", login().await);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let filename = format!("e2e-{}-{}.mp3", std::process::id(), nonce);
 
     let ticket = app
         .http()
         .post("/audio/uploads")
         .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "filename": filename }))
         .send()
         .await;
     ticket.assert_status_is_ok();
-    let ticket = ticket.json().await;
-    let key = ticket.value().object().get("key").string().to_owned();
-    let put_url = ticket.value().object().get("url").string().to_owned();
+    let ticket: Value = ticket.json().await.value().deserialize();
+    let key = ticket["key"].as_str().expect("the minted key").to_owned();
+    let put_url = ticket["url"].as_str().expect("the signed URL").to_owned();
+    assert!(Uuid::parse_str(&key).is_ok(), "the key is minted: {key}");
+    assert_eq!(ticket["method"], "PUT");
+    assert_eq!(ticket["headers"], json!({ "content-type": "audio/mpeg" }));
+
+    let html = http
+        .put(&put_url)
+        .header("content-type", "text/html")
+        .body(b"<script>alert(1)</script>".to_vec())
+        .send()
+        .await
+        .expect("PUT to the presigned upload URL");
+    assert_eq!(
+        html.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "the URL binds the audio type"
+    );
 
     let payload = b"nestrs audio A4 e2e \xf0\x9f\x8e\xb5 payload".to_vec();
-    let put = http
-        .put(&put_url)
+    let put = ticket["headers"]
+        .as_object()
+        .expect("the headers to send")
+        .iter()
+        .fold(http.put(&put_url), |put, (name, value)| {
+            put.header(name, value.as_str().expect("a header value"))
+        })
         .body(payload.clone())
         .send()
         .await
@@ -129,7 +163,7 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
             .body_json(&json!({ "file": key }))
             .send()
             .await
-            .assert_status_is_ok();
+            .assert_status(StatusCode::ACCEPTED);
 
         for _ in 0..20 {
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -194,17 +228,13 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
         .expect("the worker's QueueWorker drains the audio queue");
 
     let bearer = format!("Bearer {}", login().await);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let filename = format!("e2e-multipart-{}-{}.mp3", std::process::id(), nonce);
+    let filename = "../../escape.mp3";
     let payload = b"nestrs multipart + streaming payload \xf0\x9f\x8e\xa7".to_vec();
 
     let form = TestForm::new().field(
         TestFormField::bytes(payload.clone())
             .name("file")
-            .filename(&filename),
+            .filename(filename),
     );
     let up = app
         .http()
@@ -222,6 +252,10 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
         .get("key")
         .string()
         .to_owned();
+    assert!(
+        Uuid::parse_str(&key).is_ok(),
+        "the key is minted, never the part's filename: {key}"
+    );
 
     let mut downloaded: Option<Vec<u8>> = None;
     'outer: for _ in 0..5 {
@@ -231,7 +265,7 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
             .body_json(&json!({ "file": key }))
             .send()
             .await
-            .assert_status_is_ok();
+            .assert_status(StatusCode::ACCEPTED);
 
         for _ in 0..20 {
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -290,7 +324,8 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
          reconnecting client last saw: {resumed:?}",
     );
 
-    let never = format!("absent-{}-{}.mp3", std::process::id(), nonce);
+    let never = Uuid::now_v7().to_string();
+    let logs = LogCapture::install();
     let skipped = app
         .http()
         .get(format!("/audio/events?file={never}"))
@@ -305,6 +340,12 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
         !skipped.contains("id: 0") && skipped.contains("id: 6"),
         "the progress ticks the client already has are not replayed: {skipped:?}",
     );
+    assert!(
+        !skipped.contains(&never) && !quoted_in_a_log(&logs, &never),
+        "a poll for an unknown key replies and logs none of it: {skipped:?} {:#?}",
+        logs.events(),
+    );
+    drop(logs);
 
     let malformed = app
         .http()

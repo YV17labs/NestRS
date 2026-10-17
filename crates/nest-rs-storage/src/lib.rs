@@ -58,11 +58,12 @@
 //!
 //! ## API surface
 //!
-//! - [`Storage::presign_put`] / [`Storage::presign_get`] — short-lived signed
-//!   URLs handed to a client to upload/download directly.
-//! - [`Storage::head`] — size of an uploaded object (`None` if absent).
-//!   `object_store` does not expose the stored `Content-Type`, so [`ObjectMetadata`]
-//!   carries only the byte size.
+//! - [`Storage::presign_put`] / [`Storage::presign_get`] — short-lived
+//!   [`PresignedRequest`]s handed to a client to upload or download directly;
+//!   a `PUT` binds the content type its [`SignedPut`] names, so the store
+//!   refuses an upload sending another.
+//! - [`Storage::head`] — an object's size, stored content type, ETag and last
+//!   write ([`ObjectMetadata`]), `None` if absent.
 //! - [`Storage::get_bytes`] / [`Storage::put_bytes`] — server-side byte
 //!   read/write (e.g. a worker transforming an original).
 //! - [`Storage::get_stream`] / [`Storage::put_stream`] — the same read/write
@@ -113,7 +114,7 @@ mod module;
 mod store;
 mod transfer;
 
-pub use client::{ObjectEntry, ObjectMetadata, Storage};
+pub use client::{ObjectEntry, ObjectMetadata, PresignedRequest, SignedPut, Storage};
 pub use config::StorageConfig;
 pub use error::{Result, StorageError};
 pub use module::{StorageModule, StorageSetup};

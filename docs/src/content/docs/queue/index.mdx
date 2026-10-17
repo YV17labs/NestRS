@@ -57,10 +57,11 @@ this is the artifact both sides reach for:
 ```rust title="crates/features/src/audio/command.rs (from the demo)"
 use nest_rs::queue::{Queue, queue};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscodeCommand {
-    pub file: String,
+    pub file: Uuid,
 }
 
 #[queue(name = "audio", job = TranscodeCommand)]
@@ -101,7 +102,7 @@ pub struct AudioProcessor {
 impl AudioProcessor {
     #[process(queue = AudioQueue, retries = 3, concurrency = 4)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-        self.svc.transcode(&job.file).await?;
+        self.svc.transcode(job.file).await?;
         Ok(())
     }
 }
@@ -270,7 +271,7 @@ pub struct AudioProcessor {
 impl AudioProcessor {
     #[process(queue = AudioQueue, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-        self.audio_svc.transcode(&job.file).await
+        self.audio_svc.transcode(job.file).await
     }
 
     #[process(queue = AudioPreviewQueue, retries = 1)]
@@ -376,7 +377,7 @@ $ nestrs run dev worker
 ```text frame="terminal"
  INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
  INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=4
-DEBUG features::audio: transcoded file="track-1787069801760.mp3" derived_key="transcoded/track-1787069801760.mp3" trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
+DEBUG features::audio: transcoded file=01a015a9-2520-7f30-8c45-9e1a7b3d5f62 derived_key="transcoded/01a015a9-2520-7f30-8c45-9e1a7b3d5f62" trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
  INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf87-732d-9226-abd166aa514c backend_id="1790442131336-0" attempt=1 outcome="ok" duration_ms=32.129 trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
 ```
 

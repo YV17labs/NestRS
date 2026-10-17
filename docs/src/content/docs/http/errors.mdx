@@ -134,10 +134,15 @@ the right tool for the leftovers — never the goal.
 Everything above decides how an error is *shaped*. `Opaque` decides whether
 the client sees it at all.
 
-`ServiceError` is wire-safe by construction — its `Db` variant displays as
-`"database error"`, never the `DbErr` underneath, and its log line says the
+`ServiceError` is wire-safe by construction — its `Db`, `Masking` and
+`Internal` variants answer the constant `"internal error"` and display no
+cause, even wrapped in an error of yours, and its log line says the
 database's failure by its SQLSTATE, never by the server's message, which
-quotes the input it refused. **A feature's own error
+quotes the input it refused. A failure of your own that is no database error
+keeps its cause the same way:
+`ServiceError::internal_because("could not sign the export", err)` answers
+`"internal error"` whatever `err` holds, and the operator's line reads the
+detail, then `err`'s chain. **A feature's own error
 type has no such discipline imposed on it**, and a `Display` that wraps a
 driver error carries SQL, column names and sometimes row values into the
 response body.

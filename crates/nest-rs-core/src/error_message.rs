@@ -154,13 +154,28 @@ where
 pub(crate) mod __private {
     use std::error::Error;
 
-    /// The first `T` in `error`'s chain, `error` itself first: how an edge
-    /// finds the framework vocabulary a failure carries wherever it was wrapped.
+    /// The first `T` in `error`'s chain, `error` itself first, down to an
+    /// opaque failure's cause: how an edge finds the framework vocabulary a
+    /// failure carries wherever it was wrapped.
     pub fn find_in_chain<'e, T: Error + 'static>(
         error: &'e (dyn Error + 'static),
     ) -> Option<&'e T> {
-        std::iter::successors(Some(error), |&link| link.source())
-            .find_map(|link| link.downcast_ref::<T>())
+        answerable_links(error).find_map(|link| link.downcast_ref::<T>())
+    }
+
+    /// `error`'s chain, `error` itself first, ending at an
+    /// [`OpaqueCause`](crate::__private::OpaqueCause): what is beneath one is
+    /// the operator's to read, never the client's to be answered.
+    pub(crate) fn answerable_links<'e>(
+        error: &'e (dyn Error + 'static),
+    ) -> impl Iterator<Item = &'e (dyn Error + 'static)> {
+        std::iter::successors(Some(error), |&link| {
+            if link.is::<crate::__private::OpaqueCause>() {
+                None
+            } else {
+                link.source()
+            }
+        })
     }
 }
 
@@ -363,6 +378,36 @@ mod tests {
         assert!(
             find_in_chain::<Wrapped>(&error)
                 .is_some_and(|top| top.message.starts_with("the queue"))
+        );
+    }
+
+    #[test]
+    fn what_an_opaque_failure_keeps_is_said_and_never_found() {
+        use std::sync::Arc;
+
+        use super::__private::find_in_chain;
+        use crate::__private::OpaqueCause;
+
+        let opaque = Wrapped {
+            message: "internal error",
+            cause: Some(Box::new(OpaqueCause::new(
+                "the upstream reply did not decode",
+                Some(Arc::new(secret())),
+            ))),
+        };
+        let wrapped = boxed_error(anyhow::Error::new(opaque).context("syncing the ledger"));
+
+        assert_eq!(
+            error_message(&*wrapped),
+            format!(
+                "syncing the ledger: internal error: the upstream reply did not decode: {REPORT}"
+            )
+        );
+        assert!(find_in_chain::<serde_json::Error>(&*wrapped).is_none());
+        assert!(DecodeError::in_chain(&*wrapped).is_none());
+        assert!(
+            find_in_chain::<Wrapped>(&*wrapped).is_some(),
+            "above it, found"
         );
     }
 

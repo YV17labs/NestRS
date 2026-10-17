@@ -106,6 +106,7 @@ pub mod __private {
     pub use crate::error::crud_error;
     #[cfg(feature = "graphql")]
     pub use crate::error::graphql_crud_error;
+    pub use crate::error::masking;
 
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use inventory;

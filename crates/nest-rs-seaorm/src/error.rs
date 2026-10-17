@@ -6,6 +6,12 @@
 //! error by its SQLSTATE and the names the server reported, never by the
 //! server's message, which quotes the input it refused.
 
+use std::borrow::Cow;
+use std::error::Error;
+use std::sync::Arc;
+
+use nest_rs_core::__private::OpaqueCause;
+use nest_rs_core::DecodeError;
 use nest_rs_database::AtomicError;
 use sea_orm::sqlx::error::DatabaseError;
 use sea_orm::sqlx::postgres::PgDatabaseError;
@@ -14,8 +20,9 @@ use validator::ValidationErrors;
 
 /// Failure modes shared by every service method. The business variants carry a
 /// client-facing message and map to their 4xx; the opaque ones (`Db`,
-/// `Internal`, `Masking`) put a constant on the wire and keep the detail for
-/// `tracing`.
+/// `Internal`, `Masking`) answer a constant on every edge and keep their cause,
+/// said through [`error_message`](fn@nest_rs_core::error_message), for the
+/// operator's line.
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum ServiceError {
@@ -30,10 +37,15 @@ pub enum ServiceError {
     #[error("database error")]
     Db(#[source] DbErr),
     /// Response masking could not reconcile a loaded row into its wire DTO: a
-    /// 500. A `String`, not the `serde_json::Error`, so the enum stays `Clone`
-    /// for dataloaders.
+    /// 500. The decode failure is kept as its [`DecodeError`] report, never
+    /// serde's sentence, which quotes the row's values. Built by the
+    /// relation loaders `#[expose]` emits.
     #[error("response masking failed")]
-    Masking(String),
+    #[non_exhaustive]
+    Masking {
+        /// What did not decode, without the value.
+        source: DecodeError,
+    },
     /// A well-formed request the service rejects on business grounds (empty
     /// body, non-positive amount). Maps to **422**; the message is client-facing.
     #[error("{0}")]
@@ -51,10 +63,20 @@ pub enum ServiceError {
     #[error("{0}")]
     NotFound(String),
     /// An internal failure that is not a `DbErr` (a hash, an enqueue push, an
-    /// upstream call). Maps to **500**; like `Db`, the detail stays for
-    /// `tracing` and the wire sees a constant string.
+    /// upstream call). Maps to **500**: it displays the constant every edge
+    /// answers, and its [`source`](Error::source) says the detail, then the
+    /// cause's chain, for the operator's line. Built by
+    /// [`internal`](Self::internal) or, with what failed,
+    /// [`internal_because`](Self::internal_because).
     #[error("{}", nest_rs_core::OPAQUE_CLIENT_MESSAGE)]
-    Internal(String),
+    #[non_exhaustive]
+    Internal {
+        /// The detail and its cause, shared so the error stays `Clone` for
+        /// dataloaders; read through [`Error::source`].
+        #[doc(hidden)]
+        #[source]
+        cause: OpaqueCause,
+    },
 }
 
 impl ServiceError {
@@ -78,10 +100,39 @@ impl ServiceError {
         Self::NotFound(msg.into())
     }
 
-    /// **500** — an internal failure that is not a database error. The detail is
-    /// kept for `tracing` only; the wire sees a constant string.
-    pub fn internal(msg: impl Into<String>) -> Self {
-        Self::Internal(msg.into())
+    /// **500** — an internal failure that is not a database error. The detail
+    /// reaches the operator's line only; the wire sees a constant string. It
+    /// names what failed, never a value the request carried.
+    pub fn internal(detail: impl Into<Cow<'static, str>>) -> Self {
+        Self::Internal {
+            cause: OpaqueCause::new(detail, None),
+        }
+    }
+
+    /// [`internal`](Self::internal), keeping what failed beneath the detail:
+    /// the operator's line says the detail, then the cause's chain, and no
+    /// edge answers anything the cause carries. A source never quotes a value
+    /// the request carried — a decode failure or a driver's error is said
+    /// without it, any other error as it displays.
+    ///
+    /// ```
+    /// use nest_rs_seaorm::ServiceError;
+    ///
+    /// let refused = std::io::Error::other("the key store refused the connection");
+    /// let err = ServiceError::internal_because("could not sign the export", refused);
+    /// assert_eq!(err.to_string(), nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+    /// assert_eq!(
+    ///     nest_rs_core::error_message(&err),
+    ///     "internal error: could not sign the export: the key store refused the connection",
+    /// );
+    /// ```
+    pub fn internal_because(
+        detail: impl Into<Cow<'static, str>>,
+        source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
+    ) -> Self {
+        Self::Internal {
+            cause: OpaqueCause::new(detail, Some(Arc::from(nest_rs_core::boxed_error(source)))),
+        }
     }
 
     /// The field-level errors a [`Validation`](Self::Validation) failure carries,
@@ -92,6 +143,15 @@ impl ServiceError {
             Self::Validation(errors) => Some(nest_rs_pipes::validation_details(errors)),
             _ => None,
         }
+    }
+}
+
+/// A response mask's decode failure, said without the row's values: what the
+/// relation loaders `#[expose]` emits answer. Reached through the crate's
+/// `__private`.
+pub fn masking(failure: &serde_json::Error) -> ServiceError {
+    ServiceError::Masking {
+        source: DecodeError::new(failure),
     }
 }
 
@@ -112,16 +172,18 @@ impl From<DbErr> for ServiceError {
 }
 
 /// An atomic block that could not keep its promise: a database refusal by its
-/// [`DbOutcome`], anything else an opaque [`Internal`](ServiceError::Internal).
+/// [`DbOutcome`], anything else an opaque [`Internal`](ServiceError::Internal)
+/// whose cause is the `AtomicError`.
 impl From<AtomicError> for ServiceError {
     fn from(err: AtomicError) -> Self {
-        match err {
+        let err = match err {
             AtomicError::Database(source) => match source.downcast::<DbErr>() {
-                Ok(db) => Self::from(*db),
-                Err(other) => Self::Internal(nest_rs_core::error_message(&*other)),
+                Ok(db) => return Self::from(*db),
+                Err(other) => AtomicError::Database(other),
             },
-            other => Self::Internal(other.to_string()),
-        }
+            other => other,
+        };
+        Self::internal_because("the atomic block failed", err)
     }
 }
 
@@ -331,7 +393,7 @@ impl nest_rs_core::ToProblem for ServiceError {
             Self::Conflict(_) => Problem::new(409, code::CONFLICT),
             Self::Forbidden(_) => Problem::new(403, code::FORBIDDEN),
             Self::NotFound(_) => Problem::new(404, code::NOT_FOUND),
-            Self::Db(_) | Self::Masking(_) | Self::Internal(_) => return None,
+            Self::Db(_) | Self::Masking { .. } | Self::Internal { .. } => return None,
         };
         Some(problem.with_detail(self.to_string()))
     }
@@ -446,6 +508,45 @@ mod graphql {
             assert!(filed.contains("22P02"), "{filed}");
             assert!(!filed.contains("secret-123"), "{filed}");
         }
+
+        #[test]
+        fn an_internal_failure_answers_opaquely_and_files_its_detail() {
+            let logs = nest_rs_testing::LogCapture::install();
+
+            let refused = std::io::Error::other("the key store refused the connection");
+            let error = Error::from(crate::ServiceError::internal_because(
+                "could not sign the export",
+                refused,
+            ));
+            assert_eq!(error.message, OPAQUE_CLIENT_MESSAGE);
+
+            let event = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
+            assert_eq!(
+                event.field("error").as_deref(),
+                Some(
+                    "internal error: could not sign the export: the key store refused the connection"
+                ),
+            );
+        }
+
+        #[test]
+        fn a_wrapped_opaque_failure_answers_the_constant_whatever_its_cause() {
+            use nest_rs_graphql::__private::{ErrorReport, ErrorReportChain};
+
+            let logs = nest_rs_testing::LogCapture::install();
+            for failure in crate::error::tests::opaque_over_a_decode_failure() {
+                let wrapped = anyhow::Error::from(failure).context("syncing the ledger");
+                let error = ErrorReport(wrapped).into_graphql_error();
+                assert_eq!(error.message, OPAQUE_CLIENT_MESSAGE);
+                let extensions = serde_json::to_value(&error.extensions).expect("serialize");
+                assert_eq!(extensions[CODE_EXTENSION], code::INTERNAL.as_str());
+            }
+            for event in logs.find(nest_rs_graphql::TARGET, "graphql operation failed") {
+                let filed = event.field("error").unwrap_or_default();
+                assert!(filed.contains("expected u64"), "{filed}");
+                assert!(!filed.contains("sk_live"), "{filed}");
+            }
+        }
     }
 }
 
@@ -453,6 +554,7 @@ mod graphql {
 mod http {
     use std::borrow::Cow;
 
+    use nest_rs_core::ToProblem;
     use nest_rs_http::ProblemDetails;
     use poem::error::ResponseError;
     use poem::http::StatusCode;
@@ -469,19 +571,26 @@ mod http {
                 ServiceError::Conflict(_) => StatusCode::CONFLICT,
                 ServiceError::Forbidden(_) => StatusCode::FORBIDDEN,
                 ServiceError::NotFound(_) => StatusCode::NOT_FOUND,
-                ServiceError::Db(_) | ServiceError::Masking(_) | ServiceError::Internal(_) => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
+                ServiceError::Db(_)
+                | ServiceError::Masking { .. }
+                | ServiceError::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             }
         }
 
         /// Render the failure as an RFC 9457 `application/problem+json` whose
-        /// `detail` is the wire-safe `Display`; the one place an opaque
-        /// variant's cause is logged.
+        /// `detail` is a business variant's message, or the constant every
+        /// edge answers an opaque one with; the one place an opaque variant's
+        /// cause is logged.
         fn as_response(&self) -> Response {
             let status = self.status();
-            log_opaque(self);
-            let mut problem = ProblemDetails::from_status(status).with_detail(self.to_string());
+            let detail = match self.to_problem() {
+                Some(problem) => problem.client_message(),
+                None => {
+                    log_opaque(self);
+                    Cow::Borrowed(nest_rs_core::OPAQUE_CLIENT_MESSAGE)
+                }
+            };
+            let mut problem = ProblemDetails::from_status(status).with_detail(detail);
             if let Some(fields) = self.field_errors() {
                 problem = problem.with_extension("errors", fields);
             }
@@ -489,18 +598,17 @@ mod http {
         }
     }
 
-    /// Emit the cause behind an opaque 5xx; a 4xx stays silent.
+    /// Emit the chain behind an opaque 5xx.
     fn log_opaque(err: &ServiceError) {
-        let (kind, said): (&str, Cow<'_, str>) = match err {
-            ServiceError::Db(e) => ("db", nest_rs_core::error_message(e).into()),
-            ServiceError::Masking(e) => ("masking", e.into()),
-            ServiceError::Internal(e) => ("internal", e.into()),
-            _ => return,
+        let kind = match err {
+            ServiceError::Db(_) => "db",
+            ServiceError::Masking { .. } => "masking",
+            _ => "internal",
         };
         tracing::error!(
             target: crate::target::ORM,
             kind,
-            error = %said,
+            error = %nest_rs_core::error_message(err),
             "service error surfaced as 500",
         );
     }
@@ -596,6 +704,24 @@ mod http {
         }
 
         #[test]
+        fn a_masking_500_files_the_decode_failure_without_the_row_value() {
+            let logs = nest_rs_testing::LogCapture::install();
+            let failure = serde_json::from_str::<std::collections::HashMap<String, u64>>(
+                r#"{"n":"secret-value"}"#,
+            )
+            .expect_err("a string is no u64");
+            let _ = crate::error::masking(&failure).as_response();
+
+            let event = logs.expect_one(crate::target::ORM, "service error surfaced as 500");
+            assert_eq!(event.field("kind").as_deref(), Some("masking"));
+            for (name, value) in &event.fields {
+                assert!(!value.contains("secret-value"), "{name} = {value}");
+            }
+            let said = event.field("error").unwrap_or_default();
+            assert!(said.contains("expected u64"), "the failure stays: {said}");
+        }
+
+        #[test]
         fn a_business_4xx_emits_nothing() {
             let logs = nest_rs_testing::LogCapture::install();
             let _ = ServiceError::not_found("no such widget").as_response();
@@ -658,10 +784,33 @@ mod http {
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
             assert_eq!(ct.as_deref(), Some("application/problem+json"));
             assert_eq!(body["status"], 500);
-            assert_eq!(body["detail"], "database error");
+            assert_eq!(body["detail"], nest_rs_core::OPAQUE_CLIENT_MESSAGE);
             assert!(
                 !body.to_string().contains("password_hash"),
                 "the driver message must not reach the wire: {body}",
+            );
+        }
+
+        #[tokio::test]
+        async fn an_internal_500_answers_the_constant_and_files_its_detail_and_cause() {
+            let logs = nest_rs_testing::LogCapture::install();
+            let refused = std::io::Error::other("the key store refused the connection");
+            let (status, _, body) = body_json(ServiceError::internal_because(
+                "could not sign the export",
+                refused,
+            ))
+            .await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(body["detail"], nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+            assert!(!body.to_string().contains("key store"), "{body}");
+
+            let event = logs.expect_one(crate::target::ORM, "service error surfaced as 500");
+            assert_eq!(event.field("kind").as_deref(), Some("internal"));
+            assert_eq!(
+                event.field("error").as_deref(),
+                Some(
+                    "internal error: could not sign the export: the key store refused the connection"
+                ),
             );
         }
 
@@ -772,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn every_other_atomic_failure_is_internal_and_says_its_own_sentence() {
+    fn every_other_atomic_failure_is_internal_and_keeps_it_as_its_cause() {
         for (err, said) in [
             (
                 AtomicError::Poisoned { retryable: false },
@@ -786,11 +935,26 @@ mod tests {
                 AtomicError::Unsupported,
                 "no ambient executor offers an atomic block",
             ),
+            (
+                AtomicError::Database(Box::new(std::io::Error::other("savepoint refused"))),
+                "the atomic block could not be settled: savepoint refused",
+            ),
         ] {
-            let ServiceError::Internal(detail) = ServiceError::from(err) else {
-                panic!("an atomic failure is opaque to the client");
-            };
-            assert_eq!(detail, said);
+            let internal = ServiceError::from(err);
+            assert!(
+                matches!(internal, ServiceError::Internal { .. }),
+                "an atomic failure is opaque to the client: {internal:?}"
+            );
+            assert!(
+                internal
+                    .source()
+                    .and_then(Error::source)
+                    .is_some_and(|cause| cause.is::<AtomicError>())
+            );
+            assert_eq!(
+                error_message(&internal),
+                format!("internal error: the atomic block failed: {said}")
+            );
         }
     }
 
@@ -954,8 +1118,91 @@ mod tests {
 
     #[test]
     fn internal_display_is_wire_safe_constant() {
-        let err = ServiceError::internal("stripe key rejected: sk_live_… ");
-        assert_eq!(err.to_string(), nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+        for err in [
+            ServiceError::internal("stripe key rejected: sk_live_123"),
+            ServiceError::internal_because(
+                "stripe key rejected: sk_live_123",
+                std::io::Error::other("refused"),
+            ),
+        ] {
+            assert_eq!(err.to_string(), nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+        }
+    }
+
+    #[test]
+    fn an_internal_failure_keeps_its_detail_and_cause_and_stays_clone() {
+        let refused = std::io::Error::other("the key store refused the connection");
+        let err = ServiceError::internal_because("could not sign the export", refused);
+        let copy = err.clone();
+        for err in [&err, &copy] {
+            let detail = err.source().expect("the detail is the source");
+            assert_eq!(detail.to_string(), "could not sign the export");
+            let cause = detail.source().expect("the cause is the detail's source");
+            assert!(cause.is::<std::io::Error>(), "{cause:?}");
+            assert_eq!(
+                error_message(err),
+                "internal error: could not sign the export: the key store refused the connection"
+            );
+        }
+        let bare = ServiceError::internal("could not sign the export");
+        assert_eq!(
+            error_message(&bare),
+            "internal error: could not sign the export"
+        );
+        assert!(bare.source().and_then(Error::source).is_none());
+    }
+
+    /// Each opaque failure whose chain holds an upstream's decode failure.
+    pub(super) fn opaque_over_a_decode_failure() -> [ServiceError; 3] {
+        let upstream =
+            || serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+        [
+            ServiceError::internal_because("the upstream reply did not decode", upstream()),
+            ServiceError::internal_because(
+                "the upstream reply did not decode",
+                anyhow::Error::from(upstream()).context("reading the reply"),
+            ),
+            masking(&upstream()),
+        ]
+    }
+
+    #[test]
+    fn a_wrapped_opaque_failure_answers_a_websocket_client_the_constant_whatever_its_cause() {
+        let logs = nest_rs_testing::LogCapture::install();
+        for failure in opaque_over_a_decode_failure() {
+            let wrapped = anyhow::Error::from(failure).context("syncing the ledger");
+            let nest_rs_ws::WsReply::Error(frame) =
+                nest_rs_ws::WsReply::from_handler_error("sync", wrapped)
+            else {
+                panic!("a handler's error answers an error frame");
+            };
+            assert_eq!(frame.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+        }
+        let filed = logs.find(nest_rs_ws::TARGET, "websocket message failed");
+        assert_eq!(filed.len(), 3, "{:#?}", logs.events());
+        for event in filed {
+            let said = event.field("error").unwrap_or_default();
+            assert!(said.contains("expected u64"), "{said}");
+            assert!(!said.contains("sk_live"), "{said}");
+        }
+    }
+
+    #[test]
+    fn a_cause_quoting_a_value_is_said_without_it() {
+        let quoting =
+            || serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+        for err in [
+            ServiceError::internal_because("the upstream reply did not decode", quoting()),
+            ServiceError::internal_because(
+                "the upstream reply did not decode",
+                anyhow::Error::from(quoting()).context("reading the reply"),
+            ),
+            masking(&quoting()),
+        ] {
+            let said = error_message(&err);
+            assert!(!said.contains("sk_live"), "{said}");
+            assert!(said.contains("expected u64"), "{said}");
+        }
     }
 
     #[test]
@@ -1043,7 +1290,7 @@ mod tests {
         );
         for opaque in [
             ServiceError::Db(DbErr::Custom("relation \"posts\" does not exist".into())),
-            ServiceError::Masking("row 7".into()),
+            masking(&serde_json::from_str::<u64>(r#""row 7""#).expect_err("not a number")),
             ServiceError::internal("hash failed"),
         ] {
             assert_eq!(opaque.to_problem(), None, "{opaque:?}");

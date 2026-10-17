@@ -139,6 +139,16 @@ error through its `SafeLink`; no sentence formats a raw `ValidationErrors`, a
 serde error, a driver's error or a configured string. Held by review: no lint
 reads a `Display`.
 
+**A port error's internal-failure variant carries its cause**: a detail and an
+optional source, built by `<variant>(detail)` or `<variant>_because(detail,
+source)` (`ServiceError::internal_because`), never a cause flattened into the
+detail with `format!`. The `error` field is `error_message` of the error, never
+a hand-flattened detail, so the detail and the cause's chain reach the line
+together, a decode failure or a driver's error in it said without its value;
+the variant displays the edge's constant, and the cause sits beneath an
+`OpaqueCause` link, where an edge's search for what to answer stops. Held by
+each type's unit tests.
+
 Three deviations from OpenTelemetry's log data model, each deliberate:
 
 - **`actor_id` is a top-level key.** The model's nearest equivalent is the

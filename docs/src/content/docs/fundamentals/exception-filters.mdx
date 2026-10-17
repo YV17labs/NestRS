@@ -69,7 +69,7 @@ types with their HTTP mapping already wired:
 
 | Error | Source | Maps to |
 |-------|--------|---------|
-| `DbErr`, through `?` into `ServiceError` | `nest_rs::seaorm` | `409` for a unique violation, `404` for a row a write found gone, else `500` (body: `"database error"`) |
+| `DbErr`, through `?` into `ServiceError` | `nest_rs::seaorm` | `409` for a unique violation, `404` for a row a write found gone, else `500` (body: `"internal error"`) |
 | `ServiceError::Validation(ValidationErrors)` | `nest_rs::seaorm` | `422` |
 | `AuthError::*` | `nest_rs::authn` | `401` + `WWW-Authenticate: Bearer` |
 | `AuthError::Unavailable` | `nest_rs::authn` | `503`, a `Retry-After` when the failing party gave one, logged at `error` — an outage is not a credential signal |

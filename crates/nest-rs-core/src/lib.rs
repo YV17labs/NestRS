@@ -222,6 +222,7 @@ pub mod __private {
         ConsoleWriter, JsonFormat, TextFormat, install_global_subscriber,
     };
     pub use crate::module::__private::{dynamic_import_module, module_registered};
+    pub use crate::opaque::__private::OpaqueCause;
     pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
     pub use crate::outcome::__private::{caught_problem, settled};
     pub use crate::panic::__private::{Unwound, unwound};

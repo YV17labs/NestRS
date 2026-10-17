@@ -114,9 +114,7 @@ fn emit_pk_loader(
                         Entity,
                         #wire,
                     >(&__row)
-                    .map_err(|__e| ::nest_rs_seaorm::ServiceError::Masking(
-                        ::std::string::ToString::to_string(&__e),
-                    ))?;
+                    .map_err(|__e| ::nest_rs_seaorm::__private::masking(&__e))?;
                     __map.insert(__row.#pk_ident, __wire);
                 }
                 ::core::result::Result::Ok(__map)
@@ -319,9 +317,7 @@ fn emit_fk_loaders(
                                     Entity,
                                     #wire,
                                 >(__row)
-                                .map_err(|__e| ::nest_rs_seaorm::ServiceError::Masking(
-                                    ::std::string::ToString::to_string(&__e),
-                                ))?;
+                                .map_err(|__e| ::nest_rs_seaorm::__private::masking(&__e))?;
                                 __edges.push((
                                     ::std::string::ToString::to_string(&__row.#pk_ident),
                                     __wire,

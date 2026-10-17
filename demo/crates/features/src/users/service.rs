@@ -323,7 +323,7 @@ pub(crate) fn prepare_new_user(
     let password_hash = match password {
         Some(plain) => Some(
             hash_password(plain)
-                .map_err(|e| ServiceError::internal(format!("password hashing failed: {e}")))?,
+                .map_err(|e| ServiceError::internal_because("password hashing failed", e))?,
         ),
         None => None,
     };

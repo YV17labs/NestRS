@@ -8,7 +8,7 @@ use async_graphql::{Result, SimpleObject};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardSpecs, async_trait, guard};
-use nest_rs_http::poem::http::StatusCode;
+use nest_rs_http::StatusCode;
 use nest_rs_testing::TestApp;
 
 /// A schema configured as a subgraph, which every `#[entity]` below needs.

@@ -7,7 +7,7 @@ use nest_rs_http::{
     BoxEndpoint, HttpConfig, HttpEndpointMeta, HttpRoutes, Method, Request, Response, controller,
     endpoint_fn, routes,
 };
-use poem::http::{StatusCode, header};
+use nest_rs_http::{StatusCode, header};
 
 use crate::Client;
 use crate::transport::{PATIENCE, connect, read_head, serve_module};

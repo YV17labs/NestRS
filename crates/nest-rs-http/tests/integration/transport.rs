@@ -821,7 +821,7 @@ async fn echo_four(mut socket: impl AsyncRead + tokio::io::AsyncWrite + Unpin) {
 fn poem_side(req: &poem::Request) -> poem::Response {
     let Ok(upgrade) = req.take_upgrade() else {
         return poem::Response::builder()
-            .status(poem::http::StatusCode::UPGRADE_REQUIRED)
+            .status(nest_rs_http::StatusCode::UPGRADE_REQUIRED)
             .finish();
     };
     tokio::spawn(async move {

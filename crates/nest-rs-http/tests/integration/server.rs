@@ -224,7 +224,7 @@ async fn h2_by_prior_knowledge_on_plaintext_reads_the_stream_cap() {
         .await
         .expect("the HTTP/2 preface is accepted");
     let mut client = client.ready().await.expect("a stream can open");
-    let request = poem::http::Request::get(format!("http://127.0.0.1:{port}/server/ping"))
+    let request = http::Request::get(format!("http://127.0.0.1:{port}/server/ping"))
         .body(())
         .expect("a request");
     let (response, _) = client.send_request(request, true).expect("sent");
@@ -608,7 +608,7 @@ async fn h2_client(
 /// `GET path` on a new stream of `client`, its `200` head read: the body to come.
 async fn h2_get(client: &h2::client::SendRequest<Bytes>, port: u16, path: &str) -> h2::RecvStream {
     let mut client = client.clone().ready().await.expect("a stream can open");
-    let request = poem::http::Request::get(format!("http://127.0.0.1:{port}{path}"))
+    let request = http::Request::get(format!("http://127.0.0.1:{port}{path}"))
         .body(())
         .expect("a request");
     let (response, _) = client.send_request(request, true).expect("sent");

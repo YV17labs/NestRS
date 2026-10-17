@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+use nest_rs_http::StatusCode;
 use nest_rs_interceptors::{Interceptor, InterceptorExt, Next};
-use poem::http::StatusCode;
 use poem::{Endpoint, IntoResponse, Request, Response, Result, endpoint::make_sync};
 
 /// A shared, ordered trace of who ran, in the order they ran.

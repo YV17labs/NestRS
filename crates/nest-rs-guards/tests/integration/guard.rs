@@ -10,7 +10,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use nest_rs_core::{Layer, UnitContext, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::poem::http::StatusCode;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, HttpView, RawBody, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 

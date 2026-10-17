@@ -2,8 +2,8 @@
 //! requires on a `405`, through a real `#[routes]` mount.
 
 use nest_rs_core::module;
+use nest_rs_http::{StatusCode, header};
 use nest_rs_http::{controller, routes};
-use poem::http::{StatusCode, header};
 
 #[controller(path = "/posts")]
 struct PostsController;

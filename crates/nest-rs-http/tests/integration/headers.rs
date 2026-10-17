@@ -2,8 +2,8 @@
 //! order, and the rejection reaching the client as a status.
 
 use nest_rs_core::module;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{Header, Valid, controller, routes};
-use poem::http::StatusCode;
 use serde::Deserialize;
 use validator::Validate;
 
@@ -149,7 +149,7 @@ async fn a_field_naming_something_that_is_not_a_header_is_refused() {
         .header("X-Request-Id", "abc-123")
         .send()
         .await;
-    resp.assert_status(poem::http::StatusCode::BAD_REQUEST);
+    resp.assert_status(nest_rs_http::StatusCode::BAD_REQUEST);
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
         body.contains("is not a valid header name"),

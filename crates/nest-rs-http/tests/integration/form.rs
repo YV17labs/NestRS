@@ -1,7 +1,7 @@
 //! `src/form.rs`: a posted `Form<T>` through a mounted route.
 
+use nest_rs_http::StatusCode;
 use nest_rs_http::{Form, FromRequest, HttpConfig, IntoResponse, Method};
-use poem::http::StatusCode;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

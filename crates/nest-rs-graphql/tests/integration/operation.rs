@@ -431,7 +431,7 @@ async fn a_field_that_panics_files_its_line_panic() {
         .body_json(&serde_json::json!({ "query": "{ explode }" }))
         .send()
         .await
-        .assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR);
 
     let filed = lines(&logs);
     assert_eq!(filed.len(), 1, "one line for the field: {filed:#?}");
@@ -472,7 +472,7 @@ async fn a_field_torn_down_by_a_sibling_that_panics_files_cancelled() {
         .body_json(&serde_json::json!({ "query": "{ slow explode }" }))
         .send()
         .await
-        .assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR);
 
     let filed = lines(&logs);
     let outcome = |operation: &str| {

@@ -514,7 +514,7 @@ async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_say
         async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
     });
     let client =
-        poem::test::TestClient::new(nest_rs_http::__private::poem_bridge::from_poem(scoped));
+        nest_rs_testing::TestClient::new(nest_rs_http::__private::poem_bridge::from_poem(scoped));
     let logs = nest_rs_testing::LogCapture::install();
 
     let body = call_tool(&client, "/", "reveal", None).await;

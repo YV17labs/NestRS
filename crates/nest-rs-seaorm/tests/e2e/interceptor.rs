@@ -4,10 +4,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use nest_rs_http::{Method, StatusCode};
 use nest_rs_interceptors::InterceptorExt;
 use nest_rs_seaorm::{DbContext, SeaOrmConfig, current_executor};
 use poem::endpoint::make;
-use poem::http::{Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 

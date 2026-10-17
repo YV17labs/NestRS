@@ -92,7 +92,7 @@ impl ExceptionFilter for GhostExceptionFilter {
     type Exception = std::fmt::Error;
 
     async fn catch(&self, _err: std::fmt::Error) -> Response {
-        poem::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
     }
 }
 

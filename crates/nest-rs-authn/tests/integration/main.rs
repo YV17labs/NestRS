@@ -19,7 +19,7 @@ mod password;
 mod service;
 mod strategies;
 
-use poem::http::header;
+use nest_rs_http::header;
 use poem::{Body, Request};
 
 /// Ed25519 key pair used across nestrs dev and e2e apps.

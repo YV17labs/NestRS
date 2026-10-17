@@ -1,7 +1,7 @@
 //! `src/json.rs`: `Json<T>` read and answered through a mounted route.
 
+use nest_rs_http::StatusCode;
 use nest_rs_http::{FromRequest, HttpConfig, IntoResponse, Json, Method};
-use poem::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]

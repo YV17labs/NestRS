@@ -6,8 +6,8 @@ use nest_rs_core::module;
 use nest_rs_http::{
     ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpModule, controller, routes,
 };
+use nest_rs_http::{StatusCode, header};
 use nest_rs_testing::TestApp;
-use poem::http::{StatusCode, header};
 
 #[controller(path = "/widgets", version = "1")]
 struct WidgetsController;

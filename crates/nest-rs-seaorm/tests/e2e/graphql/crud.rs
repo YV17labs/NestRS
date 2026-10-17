@@ -12,11 +12,11 @@ use nest_rs_core::problem::code;
 use nest_rs_core::{Layer, OPAQUE_CLIENT_MESSAGE, injectable, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, crud, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs_http::StatusCode;
 use nest_rs_seaorm::{
     Creatable, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, expose,
 };
 use nest_rs_testing::{LogCapture, TestApp};
-use poem::http::StatusCode;
 use sea_orm::prelude::Uuid;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use serde_json::{Value, json};

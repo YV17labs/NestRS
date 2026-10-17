@@ -461,7 +461,7 @@ async fn an_h2_client_over_tls_reads_the_stream_cap() {
         .await
         .expect("the HTTP/2 preface is accepted");
     let mut client = client.ready().await.expect("a stream can open");
-    let request = poem::http::Request::get(format!("https://{HOST_A}:{port}/ping"))
+    let request = http::Request::get(format!("https://{HOST_A}:{port}/ping"))
         .body(())
         .expect("a request");
     let (response, _) = client.send_request(request, true).expect("sent");

@@ -1,7 +1,7 @@
 use features::authz::constants::{POSTS_READ, POSTS_WRITE};
 use features::{Claims, Role};
+use nest_rs::http::StatusCode;
 use nest_rs::testing::{TestApp, TestResponse};
-use poem::http::StatusCode;
 
 use super::harness::*;
 

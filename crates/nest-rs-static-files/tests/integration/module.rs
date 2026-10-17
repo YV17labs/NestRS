@@ -4,11 +4,11 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_static_files::{Embedded, StaticFilesConfig, StaticFilesModule, StaticFilesOptions};
 use nest_rs_testing::{LogCapture, TestApp};
-use poem::http::StatusCode;
 
 use crate::embedded::Site;
 use crate::{NAVIGATION, SCRIPT, SITE, files_in, is_problem_404, serve, serve_in, site, text};

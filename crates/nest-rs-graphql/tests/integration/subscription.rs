@@ -309,7 +309,7 @@ async fn an_upgrade_on_the_graphql_path_is_not_answered_by_the_playground() {
 async fn a_bare_get_without_the_playground_is_a_method_error() {
     let app = boot().await;
     let resp = app.http().get("/graphql").send().await;
-    resp.assert_status(poem::http::StatusCode::METHOD_NOT_ALLOWED);
+    resp.assert_status(nest_rs_http::StatusCode::METHOD_NOT_ALLOWED);
 }
 
 /// `0` disables the ceiling; unset keeps the 4-hour default, as
@@ -815,7 +815,7 @@ async fn a_browser_upgrade_from_another_origin_is_refused_while_cors_is_off() {
         .expect_refused()
         .await;
 
-    assert_eq!(status, poem::http::StatusCode::FORBIDDEN);
+    assert_eq!(status, nest_rs_http::StatusCode::FORBIDDEN);
     let refused = logs.expect_one(nest_rs_graphql::TARGET, "browser origin refused");
     assert_eq!(refused.level, "warn");
     assert_eq!(refused.field("origin").as_deref(), Some(ELSEWHERE));
@@ -871,14 +871,14 @@ async fn once_cors_is_set_only_the_origins_it_lists_open_a_socket() {
             .header("origin", ELSEWHERE)
             .expect_refused()
             .await,
-        poem::http::StatusCode::FORBIDDEN,
+        nest_rs_http::StatusCode::FORBIDDEN,
     );
     assert_eq!(
         graphql_ws(&app)
             .header("origin", format!("http://{}", app.addr()))
             .expect_refused()
             .await,
-        poem::http::StatusCode::FORBIDDEN,
+        nest_rs_http::StatusCode::FORBIDDEN,
         "the server's own origin, unlisted",
     );
     logs.expect_none(nest_rs_graphql::TARGET, "browser origin refused");

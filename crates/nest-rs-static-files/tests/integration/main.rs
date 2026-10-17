@@ -17,8 +17,8 @@ use std::path::Path;
 
 use nest_rs_core::Module;
 use nest_rs_static_files::{StaticFilesConfig, StaticFilesModule};
+use nest_rs_testing::TestResponse;
 use nest_rs_testing::{TestApp, TestAppBuilder};
-use poem::test::TestResponse;
 use tempfile::TempDir;
 
 /// The tree both sources serve, as the working directory sees it.
@@ -104,7 +104,7 @@ pub(crate) async fn text(resp: TestResponse) -> String {
 /// Whether `resp` is the framework's `404` problem document, which an API
 /// client parses — never a page.
 pub(crate) async fn is_problem_404(resp: TestResponse) -> bool {
-    resp.0.status() == poem::http::StatusCode::NOT_FOUND
+    resp.0.status() == nest_rs_http::StatusCode::NOT_FOUND
         && header(&resp, "content-type").as_deref() == Some("application/problem+json")
         && !text(resp).await.contains('<')
 }

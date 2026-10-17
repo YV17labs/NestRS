@@ -3,13 +3,13 @@
 //! is rendered by.
 
 use nest_rs_core::{App, Layer, Transport, injectable, module};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
     Result, Valid, async_trait, controller, input, routes,
 };
 use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
-use poem::http::StatusCode;
-use poem::test::TestClient;
+use nest_rs_testing::TestClient;
 use serde::{Deserialize, Serialize};
 
 const SECRET: &str = "sk_live_51HsecretTOKEN";
@@ -196,7 +196,7 @@ fn server_problem() -> nest_rs_core::Problem {
 #[module(providers = [FailureController])]
 struct FailureModule;
 
-type Client = TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>>;
+type Client = TestClient;
 
 /// An interceptor that only forwards: registering any wrap moves the rendering
 /// of a still-unhandled `Err` to the `ERROR_RESOLVE` band, below every wrap.
@@ -247,7 +247,7 @@ async fn clients() -> [Client; 3] {
     ]
 }
 
-async fn detail(resp: poem::test::TestResponse) -> String {
+async fn detail(resp: nest_rs_testing::TestResponse) -> String {
     resp.assert_status(StatusCode::BAD_REQUEST);
     let body: serde_json::Value = resp.json().await.value().deserialize();
     body["detail"].as_str().unwrap_or_default().to_owned()
@@ -377,7 +377,7 @@ async fn an_opaque_decode_failure_is_logged_without_its_value() {
     );
 }
 
-async fn problem_json(resp: poem::test::TestResponse) -> serde_json::Value {
+async fn problem_json(resp: nest_rs_testing::TestResponse) -> serde_json::Value {
     resp.json().await.value().deserialize()
 }
 
@@ -419,7 +419,7 @@ async fn a_problem_answers_its_status_and_its_code_member() {
 
     let taken = client.get("/failure/taken").send().await;
     taken.assert_status(StatusCode::CONFLICT);
-    taken.assert_header(poem::http::header::RETRY_AFTER, "30");
+    taken.assert_header(nest_rs_http::header::RETRY_AFTER, "30");
     let body = problem_json(taken).await;
     assert_eq!(body["code"], "CONFLICT", "{body}");
     assert_eq!(body["detail"], "the handle is taken", "{body}");
@@ -436,7 +436,7 @@ async fn a_server_problem_answers_its_status_and_files_the_chain_it_withholds() 
         let client = crate::boot::<FailureModule>().await;
         let resp = client.get(path).send().await;
         resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-        resp.assert_header(poem::http::header::RETRY_AFTER, "30");
+        resp.assert_header(nest_rs_http::header::RETRY_AFTER, "30");
         let body = problem_json(resp).await;
         assert_eq!(body["code"], "UNAVAILABLE", "{path}: {body}");
         assert!(!body.to_string().contains("10.0.0.1"), "{path}: {body}");
@@ -455,7 +455,7 @@ async fn a_server_problem_answers_its_status_and_files_the_chain_it_withholds() 
     let client = crate::boot::<FailureModule>().await;
     let bare = client.get("/failure/unavailable").send().await;
     bare.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    bare.assert_header(poem::http::header::RETRY_AFTER, "30");
+    bare.assert_header(nest_rs_http::header::RETRY_AFTER, "30");
     assert_eq!(problem_json(bare).await["code"], "UNAVAILABLE");
     for path in ["/failure/carried", "/failure/taken"] {
         let resp = client.get(path).send().await;

@@ -4,9 +4,9 @@
 
 use std::time::Duration;
 
+use nest_rs_http::StatusCode;
 use nest_rs_static_files::StaticFilesConfig;
 use nest_rs_testing::LogCapture;
-use poem::http::StatusCode;
 
 use crate::{INDEX, NAVIGATION, SCRIPT, header, is_problem_404, serve, site, text};
 

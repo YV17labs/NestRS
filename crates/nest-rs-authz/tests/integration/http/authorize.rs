@@ -68,11 +68,11 @@ mod gate_order {
     use nest_rs_core::{Layer, injectable, module};
     use nest_rs_filters::{Filter, RequestSnapshot};
     use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_http::StatusCode;
     use nest_rs_http::{Json, async_trait, controller, crud, routes};
     use nest_rs_interceptors::{Interceptor, Next};
     use nest_rs_seaorm::CrudService;
     use nest_rs_testing::TestApp;
-    use poem::http::StatusCode;
     use poem::{Request, Response};
 
     mod secret {

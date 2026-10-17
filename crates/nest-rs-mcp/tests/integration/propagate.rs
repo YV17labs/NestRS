@@ -33,10 +33,10 @@ use nest_rs_mcp::model::{
 use nest_rs_mcp::rmcp::serde_json::{self, json};
 use nest_rs_mcp::service::{NotificationContext, RequestContext, RoleServer};
 use nest_rs_mcp::{McpError, PropagatingHandler, ServerHandler, mcp, tools};
+use nest_rs_testing::TestClient;
 use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with};
 use nest_rs_testing::{LogCapture, TestApp};
 use poem::IntoEndpoint as _;
-use poem::test::TestClient;
 use tokio::sync::Notify;
 
 type Seen = Arc<Mutex<BTreeSet<&'static str>>>;
@@ -455,8 +455,8 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
 
 /// POST one stateless `2026-07-28` request: no session id, the negotiated
 /// version in the header, and whatever SEP-2243 standard headers the case needs.
-async fn post_modern<E: poem::Endpoint>(
-    client: &TestClient<E>,
+async fn post_modern(
+    client: &TestClient,
     method: &str,
     params: serde_json::Value,
     headers: &[(&str, &str)],

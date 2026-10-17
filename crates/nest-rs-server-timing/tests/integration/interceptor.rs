@@ -4,7 +4,7 @@
 use nest_rs_core::{Discovery, Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::__private::HttpEndpointWrap;
-use nest_rs_http::poem::http::StatusCode;
+use nest_rs_http::StatusCode;
 use nest_rs_http::poem::{Request, Response};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};

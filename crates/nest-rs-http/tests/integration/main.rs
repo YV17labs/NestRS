@@ -43,8 +43,7 @@ mod versioning;
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{App, Handler, Module, Posture, Transport};
 use nest_rs_http::{HttpConfig, HttpTransport};
-use poem::endpoint::BoxEndpoint;
-use poem::test::TestClient;
+use nest_rs_testing::TestClient;
 
 /// The suite's own self-mounts.
 struct Mounts;
@@ -73,7 +72,7 @@ pub(crate) static PUBLIC_MOUNT: Handler = declare_handler(HandlerDeclaration {
 
 /// Boot `M` through a real `HttpTransport` and hand back a client over the
 /// composed endpoint; `nest-rs-testing`'s `TestApp` would be a dependency cycle.
-pub(crate) async fn boot<M>() -> TestClient<BoxEndpoint<'static, poem::Response>>
+pub(crate) async fn boot<M>() -> TestClient
 where
     M: Module + 'static,
 {
@@ -96,9 +95,7 @@ pub(crate) fn built(config: &HttpConfig) -> HttpTransport {
 }
 
 /// The same boot, on the transport `config` describes.
-pub(crate) async fn boot_on<M>(
-    config: HttpConfig,
-) -> TestClient<BoxEndpoint<'static, poem::Response>>
+pub(crate) async fn boot_on<M>(config: HttpConfig) -> TestClient
 where
     M: Module + 'static,
 {
@@ -127,7 +124,7 @@ pub(crate) fn answering(body: &'static str) -> nest_rs_http::BoxEndpoint {
 }
 
 /// The client the suite drives a composed endpoint through.
-pub(crate) type Client = TestClient<BoxEndpoint<'static, poem::Response>>;
+pub(crate) type Client = TestClient;
 
 /// One route at `template` on the transport `config` describes, answered by
 /// `handler` with the request's head and body set apart, as a handler written
@@ -173,12 +170,12 @@ where
 
 /// What a client reads of an answer: its status, its `Content-Type` and its
 /// body.
-pub(crate) async fn answered(resp: poem::test::TestResponse) -> (u16, String, String) {
+pub(crate) async fn answered(resp: nest_rs_testing::TestResponse) -> (u16, String, String) {
     let status = resp.0.status().as_u16();
     let content_type = resp
         .0
         .headers()
-        .get(poem::http::header::CONTENT_TYPE)
+        .get(nest_rs_http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_owned();
@@ -187,8 +184,6 @@ pub(crate) async fn answered(resp: poem::test::TestResponse) -> (u16, String, St
 }
 
 /// The kit's client over the transport's endpoint.
-pub(crate) fn client(
-    endpoint: nest_rs_http::BoxEndpoint,
-) -> TestClient<BoxEndpoint<'static, poem::Response>> {
+pub(crate) fn client(endpoint: nest_rs_http::BoxEndpoint) -> TestClient {
     TestClient::new(endpoint)
 }

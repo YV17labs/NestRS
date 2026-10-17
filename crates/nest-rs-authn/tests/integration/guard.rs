@@ -15,10 +15,10 @@ use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, i
 use nest_rs_core::{AmbientValue, Handler, Posture, injectable, module};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::{attached, attached_pending, check_request};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, RejectedCredential, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
 use poem::Request;
-use poem::http::StatusCode;
 
 /// A principal with an audit identity.
 #[derive(Clone, Debug, PartialEq)]
@@ -656,9 +656,9 @@ mod graphql {
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_guards::guard;
     use nest_rs_http::HttpModule;
+    use nest_rs_http::{StatusCode, header};
     use nest_rs_testing::{LogCapture, TestApp};
     use poem::Request;
-    use poem::http::{StatusCode, header};
 
     use super::{
         REACHED, StalledAuthn, StalledStrategy, assert_refused_at_the_bound,
@@ -785,10 +785,10 @@ mod mcp {
     use nest_rs_core::module;
     use nest_rs_guards::guard;
     use nest_rs_http::HttpModule;
+    use nest_rs_http::StatusCode;
     use nest_rs_mcp::{McpError, mcp, tools};
     use nest_rs_testing::mcp::initialize_request;
     use nest_rs_testing::{LogCapture, TestApp};
-    use poem::http::StatusCode;
 
     use super::{
         REACHED, StalledAuthn, StalledStrategy, assert_refused_at_the_bound,
@@ -845,9 +845,9 @@ mod mcp {
 mod ws {
     use nest_rs_core::module;
     use nest_rs_http::HttpModule;
+    use nest_rs_http::{StatusCode, header};
     use nest_rs_testing::{LogCapture, TestApp};
     use nest_rs_ws::{WsModule, gateway, messages};
-    use poem::http::{StatusCode, header};
 
     use super::{
         REACHED, StalledAuthn, StalledStrategy, assert_refused_at_the_bound,

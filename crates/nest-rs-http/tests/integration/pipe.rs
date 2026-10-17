@@ -2,9 +2,9 @@
 //! what the value had to be, never the value.
 
 use nest_rs_core::module;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{Path, Piped, controller, routes};
 use nest_rs_pipes::ParseArray;
-use poem::http::StatusCode;
 
 #[controller(path = "/pipe")]
 struct PipeController;

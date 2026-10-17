@@ -18,10 +18,10 @@ use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{EndpointGuards, HttpView, async_trait};
 use nest_rs_mcp::{McpView, ServerHandler, mcp, tool_handler, tool_router};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
+use nest_rs_http::StatusCode;
 use nest_rs_mcp::rmcp;
 use nest_rs_testing::mcp::{initialize_request, post_message, post_message_with};
 use nest_rs_testing::{TestApp, TestResponse};
-use poem::http::StatusCode;
 
 /// Stands in for `AuthnGuard`: requires a bearer unless the surface admits an
 /// anonymous caller — a public handler, or an in-band endpoint whose

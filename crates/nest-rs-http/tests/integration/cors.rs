@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpCors, controller, routes};
-use poem::http::{Method, StatusCode, header};
+use nest_rs_http::{Method, StatusCode, header};
 
 #[controller(path = "/cors")]
 struct PagesController;

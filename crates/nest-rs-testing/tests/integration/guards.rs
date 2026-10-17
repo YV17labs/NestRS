@@ -7,9 +7,9 @@ use nest_rs_core::{AmbientValue, Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{Ctx, HttpView, async_trait, controller, routes};
 use nest_rs_testing::{HeadlessApp, TestApp};
-use poem::http::StatusCode;
 use tokio::sync::Mutex;
 
 use crate::refused_wiring;
@@ -506,7 +506,7 @@ async fn a_missing_context_is_a_bare_500_without_leaking_the_rust_type() {
         .expect("boots");
 
     let resp = app.http().get("/ctx-bare/whoami").send().await;
-    resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+    resp.assert_status(nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR);
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
         !body.contains("Tenant"),

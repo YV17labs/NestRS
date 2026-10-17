@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use features::notifications::NotificationsQueueModule;
 use nest_rs::core::module;
+use nest_rs::http::{StatusCode, header};
 use nest_rs::queue::{QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::HeadlessApp;
-use poem::http::{StatusCode, header};
 use serde_json::json;
 use uuid::Uuid;
 

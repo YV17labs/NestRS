@@ -10,12 +10,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use futures_util::StreamExt;
 use nest_rs_core::{AmbientValue, Layer, UnitContext, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Body, Bytes, Ctx, HttpConfig, HttpModule, HttpView, RawBody, async_trait, controller, routes,
 };
 use nest_rs_pipes::GlobalPipe;
 use nest_rs_testing::{LogCapture, TestApp};
-use poem::http::StatusCode;
 
 const CAP: usize = 64;
 

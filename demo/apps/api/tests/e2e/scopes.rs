@@ -1,7 +1,7 @@
 use features::authz::constants;
 use features::testing::{ORG_ID, token_with_scopes};
+use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::TestApp;
-use poem::http::{StatusCode, header};
 use serde_json::json;
 use uuid::Uuid;
 

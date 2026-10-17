@@ -14,12 +14,12 @@ use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, async_trait, controller, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool_as;
 use nest_rs_ws::{WsError, WsReply, gateway, messages};
-use poem::http::StatusCode;
 
 use crate::widget;
 
@@ -137,7 +137,7 @@ async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_ev
     let challenge = http
         .0
         .headers()
-        .get(poem::http::header::WWW_AUTHENTICATE)
+        .get(nest_rs_http::header::WWW_AUTHENTICATE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_owned();

@@ -4,8 +4,7 @@
 
 use nest_rs_core::{Module, module};
 use nest_rs_http::{HttpConfig, HttpSecurityHeaders, controller, routes};
-use poem::endpoint::BoxEndpoint;
-use poem::test::TestClient;
+use nest_rs_testing::TestClient;
 
 #[controller(path = "/pages")]
 struct PagesController;
@@ -30,9 +29,7 @@ struct PagesModule;
 
 /// [`crate::boot`], with a `HttpSecurityHeaders` pinned in code rather than
 /// resolved from the environment.
-async fn boot_with<M>(
-    headers: HttpSecurityHeaders,
-) -> TestClient<BoxEndpoint<'static, poem::Response>>
+async fn boot_with<M>(headers: HttpSecurityHeaders) -> TestClient
 where
     M: Module + 'static,
 {

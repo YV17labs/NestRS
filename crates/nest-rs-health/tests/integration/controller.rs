@@ -120,7 +120,7 @@ mod under_a_global_prefix {
             .get("/health/live")
             .send()
             .await
-            .assert_status(poem::http::StatusCode::NOT_FOUND);
+            .assert_status(nest_rs_http::StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

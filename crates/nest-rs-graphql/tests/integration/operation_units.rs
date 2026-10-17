@@ -598,7 +598,7 @@ async fn an_operation_whose_root_field_panics_files_its_line_panic() {
         .body_json(&json!({ "query": "query Exploding { explode }" }))
         .send()
         .await
-        .assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR);
 
     let lines = operation_lines(&logs);
     assert_eq!(lines.len(), 1, "{lines:#?}");
@@ -623,7 +623,7 @@ async fn an_operation_torn_down_by_a_sibling_that_panics_files_cancelled() {
         ]))
         .send()
         .await
-        .assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR);
 
     let lines = operation_lines(&logs);
     assert_eq!(lines.len(), 2, "one line per operation: {lines:#?}");
@@ -712,7 +712,7 @@ async fn a_query_past_the_request_deadline_is_cut_by_the_edge() {
         .body_json(&json!({ "query": "{ slowRead }" }))
         .send()
         .await;
-    resp.assert_status(poem::http::StatusCode::SERVICE_UNAVAILABLE);
+    resp.assert_status(nest_rs_http::StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(started.elapsed(), Duration::from_secs(1));
 }
 

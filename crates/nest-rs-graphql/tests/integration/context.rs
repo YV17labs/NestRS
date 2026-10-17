@@ -272,7 +272,7 @@ async fn a_body_that_is_not_a_graphql_request_is_answered_with_an_error_entry_an
         .send()
         .await;
 
-    resp.assert_status(poem::http::StatusCode::BAD_REQUEST);
+    resp.assert_status(nest_rs_http::StatusCode::BAD_REQUEST);
     let body: serde_json::Value = serde_json::from_str(
         &resp
             .0
@@ -318,7 +318,7 @@ async fn a_multipart_part_that_does_not_decode_is_answered_without_its_value() {
         .send()
         .await;
 
-    resp.assert_status(poem::http::StatusCode::BAD_REQUEST);
+    resp.assert_status(nest_rs_http::StatusCode::BAD_REQUEST);
     let body = resp
         .0
         .into_body()
@@ -357,7 +357,7 @@ async fn a_request_denial_keeping_its_cause_files_the_chain() {
         .send()
         .await;
 
-    resp.assert_status(poem::http::StatusCode::SERVICE_UNAVAILABLE);
+    resp.assert_status(nest_rs_http::StatusCode::SERVICE_UNAVAILABLE);
     let body = resp
         .0
         .into_body()
@@ -480,7 +480,7 @@ mod the_endpoint_guards_speak_the_request_vocabulary {
             .send()
             .await;
 
-        resp.assert_status(poem::http::StatusCode::FORBIDDEN);
+        resp.assert_status(nest_rs_http::StatusCode::FORBIDDEN);
         resp.json()
             .await
             .value()

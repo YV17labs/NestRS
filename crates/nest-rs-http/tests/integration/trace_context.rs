@@ -2,9 +2,9 @@
 //! and `{method} {route}` need the router, so they are asserted through a mounted app.
 
 use nest_rs_core::module;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{controller, routes};
 use nest_rs_testing::LogCapture;
-use poem::http::StatusCode;
 use tokio::sync::Notify;
 
 use crate::boot;

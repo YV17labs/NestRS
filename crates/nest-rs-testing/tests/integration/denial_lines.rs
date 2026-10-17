@@ -7,12 +7,12 @@ use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, async_trait, controller, routes};
 use nest_rs_mcp::{McpError, McpView, mcp, tools};
 use nest_rs_testing::mcp::{call_tool_as, initialize_request, post_message};
 use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};
 use nest_rs_ws::{WsModule, WsView, gateway, messages};
-use poem::http::StatusCode;
 
 /// What a guard filing its own line files for each denial.
 const FILED: &str = "the guard refused and said so";

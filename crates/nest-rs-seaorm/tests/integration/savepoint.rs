@@ -45,7 +45,7 @@ impl TouchResolver {
 )]
 struct TouchModule;
 
-async fn mutate(field: &str) -> (poem::http::StatusCode, String) {
+async fn mutate(field: &str) -> (nest_rs_http::StatusCode, String) {
     let app = TestApp::builder()
         .provide(DatabaseConnection::default())
         .provide(SeaOrmConfig::default())
@@ -68,7 +68,7 @@ async fn mutate(field: &str) -> (poem::http::StatusCode, String) {
 #[tokio::test]
 async fn a_mutation_that_never_touches_the_database_sends_no_savepoint() {
     let (status, body) = mutate("touchNothing").await;
-    assert_eq!(status, poem::http::StatusCode::OK, "{body}");
+    assert_eq!(status, nest_rs_http::StatusCode::OK, "{body}");
     assert_eq!(
         serde_json::from_str::<Value>(&body).expect("a GraphQL body"),
         json!({ "data": { "touchNothing": true } }),
@@ -78,7 +78,7 @@ async fn a_mutation_that_never_touches_the_database_sends_no_savepoint() {
     let (status, _) = mutate("touch").await;
     assert_eq!(
         status,
-        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+        nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR,
         "the control: SeaORM's disconnected pool fails any statement sent to it"
     );
 }

@@ -8,6 +8,7 @@ use nest_rs_core::{Container, injectable, module};
 use nest_rs_graphql::async_graphql::{InputObject, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 // Two `Valid` carriers (the orphan rule): the HTTP one wraps a poem extractor.
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpModule, Valid as HttpValid, controller, routes};
 use nest_rs_http::{Json, Path};
 use nest_rs_pipes::{Pipe, PipeError, Piped, Valid};
@@ -15,7 +16,6 @@ use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::{Capabilities, ProcessMethod, QueueBackend, QueueName, processor, queue};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, gateway, messages};
-use poem::http::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use validator::Validate;

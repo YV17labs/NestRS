@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_exception_filters::{ExceptionFilter, exception_filter};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{controller, routes};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 use tokio::sync::Mutex;
 
 static DOMAIN_CATCH_COUNTER: AtomicUsize = AtomicUsize::new(0);

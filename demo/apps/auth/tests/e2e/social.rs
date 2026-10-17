@@ -1,6 +1,6 @@
+use nest_rs::http::StatusCode;
 use nest_rs::oauth::client::{OAuthClient, TARGET};
 use nest_rs::testing::LogCapture;
-use poem::http::StatusCode;
 
 use super::harness::*;
 

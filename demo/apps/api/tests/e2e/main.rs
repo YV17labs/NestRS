@@ -19,9 +19,9 @@ mod users;
 
 use api::ApiModule;
 use nest_rs::authn::AuthnConfig;
+use nest_rs::http::{StatusCode, header};
+use nest_rs::testing::TestResponse;
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
-use poem::http::{StatusCode, header};
-use poem::test::TestResponse;
 use serde_json::json;
 use uuid::Uuid;
 

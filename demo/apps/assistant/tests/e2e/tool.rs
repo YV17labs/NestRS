@@ -2,8 +2,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nest_rs::core::Discovery;
 use nest_rs::http::HttpEndpointMeta;
+use nest_rs::http::StatusCode;
 use nest_rs::testing::mcp::{initialize_request, open_session, post_message};
-use poem::http::StatusCode;
 use serde_json::json;
 
 use crate::*;

@@ -3,13 +3,13 @@
 //! sits outside the global prefix, and it is handed the request whole.
 
 use nest_rs_core::{App, ContainerBuilder, Discoverable, Transport, module};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{
     ApiVersioning, BoxEndpoint, HttpConfig, HttpEndpointMeta, HttpFallbackMeta, Method, Request,
     Response, controller, endpoint_fn, routes,
 };
 use nest_rs_testing::LogCapture;
-use poem::http::StatusCode;
-use poem::test::TestClient;
+use nest_rs_testing::TestClient;
 
 #[controller(path = "/")]
 struct HomeController;
@@ -103,7 +103,7 @@ struct TwoFallbacksModule;
 #[module(providers = [DocsMount, DocsFallback])]
 struct FallbackUnderAMountModule;
 
-type Client = TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>>;
+type Client = TestClient;
 
 async fn text(client: &Client, path: &str) -> (StatusCode, String) {
     let resp = client.get(path).header("x-probe", "kept").send().await;

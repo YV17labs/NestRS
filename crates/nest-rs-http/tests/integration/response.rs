@@ -8,7 +8,7 @@ use nest_rs_http::Result as NestResult;
 use nest_rs_http::{
     HeaderValue, IntoResponse, Response, ResponseError, StatusCode, controller, header, routes,
 };
-use poem::test::TestClient;
+use nest_rs_testing::TestClient;
 
 #[controller(path = "/")]
 struct DecoratorProbeController;
@@ -107,7 +107,7 @@ impl ResponseError for ForbiddenError {
 #[module(providers = [DecoratorProbeController])]
 struct DecoratorProbeModule;
 
-async fn boot() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
+async fn boot() -> TestClient {
     crate::boot::<DecoratorProbeModule>().await
 }
 

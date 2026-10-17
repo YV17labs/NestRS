@@ -4,13 +4,13 @@ use nest_rs_config::Config;
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::Multipart;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{
     ApiVersioning, Header, HttpConfig, HttpModule, HttpSecurityHeaders, async_trait, controller,
     input, routes,
 };
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 use serde_json::Value;
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]

@@ -23,8 +23,8 @@ use nest_rs_authn::{
 };
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
+use nest_rs_http::{StatusCode, header};
 use nest_rs_testing::{LogCapture, TestApp, TestAuthority, TestCertificate, wait_until};
-use poem::http::{StatusCode, header};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;

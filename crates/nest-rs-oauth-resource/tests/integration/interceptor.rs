@@ -8,11 +8,11 @@ use crate::AlwaysUnauthorized;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::{StatusCode, header};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule, WELL_KNOWN_PATH};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsModule, gateway, messages};
-use poem::http::{StatusCode, header};
 
 use crate::{EchoTool, challenge};
 
@@ -398,7 +398,7 @@ async fn a_challenge_carrying_an_error_code_keeps_it_and_gains_the_pointer() {
         .header("authorization", "Bearer expired-token")
         .send()
         .await;
-    response.assert_status(poem::http::StatusCode::UNAUTHORIZED);
+    response.assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
 
     let challenge = crate::challenge(&response.0);
 

@@ -1,4 +1,4 @@
-use nest_rs::http::poem::http::StatusCode;
+use nest_rs::http::StatusCode;
 use nest_rs::ws::CloseCode;
 use serde_json::{Value, json};
 

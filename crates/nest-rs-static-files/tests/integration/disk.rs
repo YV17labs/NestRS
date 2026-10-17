@@ -127,7 +127,7 @@ async fn a_large_file_is_streamed_whole_and_in_part() {
         .header("range", "bytes=150000-150009")
         .send()
         .await;
-    part.assert_status(poem::http::StatusCode::PARTIAL_CONTENT);
+    part.assert_status(nest_rs_http::StatusCode::PARTIAL_CONTENT);
     assert_eq!(
         part.0.into_body().into_bytes().await.unwrap(),
         &bytes[150_000..150_010]

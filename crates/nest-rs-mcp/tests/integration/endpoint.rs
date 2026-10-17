@@ -2,12 +2,12 @@
 //! guard runs at its request.
 
 use nest_rs_core::module;
+use nest_rs_http::StatusCode;
 use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
     SessionState, SessionStore, SessionStoreError,
 };
 use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 
 #[mcp]
 #[derive(Clone)]
@@ -305,7 +305,7 @@ async fn an_initialize_past_the_session_cap_is_refused_until_a_session_closes() 
     )
     .await;
     refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    refused.assert_header(poem::http::header::RETRY_AFTER, "5");
+    refused.assert_header(nest_rs_http::header::RETRY_AFTER, "5");
     refused.assert_content_type("application/problem+json");
     let problem: serde_json::Value = refused.json().await.value().deserialize();
     assert_eq!(problem["status"], 503, "{problem}");

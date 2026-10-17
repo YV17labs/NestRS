@@ -226,7 +226,7 @@ async fn without_a_visitor_grant_a_public_route_is_forbidden() {
 
     // `#[public]` opens the route, it grants nothing.
     let resp = app.http().get("/posts").send().await;
-    resp.assert_status(poem::http::StatusCode::FORBIDDEN);
+    resp.assert_status(nest_rs_http::StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

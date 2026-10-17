@@ -9,8 +9,8 @@ use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, McpError, Scoped, ServerHandler, tool, tool_handler, tool_router,
 };
+use nest_rs_testing::TestClient;
 use nest_rs_testing::mcp::call_tool;
-use poem::test::TestClient;
 use poem::{Endpoint, EndpointExt, IntoEndpoint};
 use tracing::Instrument;
 

@@ -9,10 +9,10 @@ use std::time::Duration;
 
 use nest_rs_core::module;
 use nest_rs_database::{Executor, OpenUnit, Settlement, Unhonoured, UnitOfWork, UnitSpec};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 use sea_orm::DatabaseConnection;
 use tokio::time::Instant;
 
@@ -113,7 +113,7 @@ async fn a_handler_past_the_request_timeout_is_cut_and_answered_503() {
     let started = Instant::now();
     let resp = app.http().post("/probe/slow").send().await;
     resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    resp.assert_header(poem::http::header::RETRY_AFTER, "1");
+    resp.assert_header(nest_rs_http::header::RETRY_AFTER, "1");
     assert_eq!(started.elapsed(), Duration::from_secs(1));
 }
 

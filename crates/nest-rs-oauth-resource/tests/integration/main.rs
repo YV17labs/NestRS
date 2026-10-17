@@ -14,8 +14,8 @@ mod interceptor;
 use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
+use nest_rs_http::header;
 use nest_rs_mcp::{ServerHandler, mcp, rmcp, tool_handler, tool_router};
-use poem::http::header;
 
 /// Refuses every caller through `Denial::unauthorized`, the ordinary guard path.
 #[injectable]

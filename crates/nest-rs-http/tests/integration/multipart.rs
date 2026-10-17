@@ -1,9 +1,9 @@
 //! `src/multipart.rs`: `Multipart` read through a mounted route, under the
 //! transport's cap.
 
+use nest_rs_http::StatusCode;
 use nest_rs_http::{FromRequest, HttpConfig, IntoResponse, Method, Multipart};
-use poem::http::StatusCode;
-use poem::test::TestForm;
+use nest_rs_testing::TestForm;
 
 async fn uploads_on(config: HttpConfig) -> crate::Client {
     crate::vocabulary_route_on(

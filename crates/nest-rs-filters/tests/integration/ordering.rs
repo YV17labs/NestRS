@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use nest_rs_core::Layer;
 use nest_rs_filters::{Filter, FilterExt, RequestSnapshot};
-use poem::http::StatusCode;
+use nest_rs_http::StatusCode;
 use poem::{Endpoint, IntoResponse, Request, Response, endpoint::make};
 
 type Trace = Arc<Mutex<Vec<String>>>;

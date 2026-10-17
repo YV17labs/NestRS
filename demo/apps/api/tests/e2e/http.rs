@@ -1,7 +1,7 @@
 use api::ApiModule;
 use nest_rs::authn::AuthnConfig;
+use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
-use poem::http::{StatusCode, header};
 use serde_json::json;
 
 use crate::*;

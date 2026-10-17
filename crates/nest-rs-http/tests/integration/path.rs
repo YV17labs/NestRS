@@ -1,9 +1,9 @@
 //! `src/path.rs`: `Path<T>` through a mounted route — the router's decoding,
 //! then the parameters read by position or by name.
 
+use nest_rs_http::StatusCode;
 use nest_rs_http::{FromRequest, IntoResponse, Method, Path};
 use nest_rs_testing::LogCapture;
-use poem::http::StatusCode;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

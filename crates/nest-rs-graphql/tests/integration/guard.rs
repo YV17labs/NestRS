@@ -7,9 +7,9 @@ use nest_rs_graphql::{
     GraphqlContextSeed, GraphqlModule, SeedLifetime, async_trait, operations, resolver,
 };
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::StatusCode;
 use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 
 #[derive(Clone)]
 struct Role(String);
@@ -579,8 +579,8 @@ mod owned_chain {
     use nest_rs_graphql::async_graphql::Result;
     use nest_rs_graphql::{GraphqlModule, async_trait, operations, resolver};
     use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_http::StatusCode;
     use nest_rs_testing::TestApp;
-    use poem::http::StatusCode;
 
     static DROPPED: AtomicUsize = AtomicUsize::new(0);
 

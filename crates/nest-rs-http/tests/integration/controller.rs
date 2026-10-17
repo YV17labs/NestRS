@@ -3,7 +3,7 @@
 
 use nest_rs_core::module;
 use nest_rs_http::{ClientIp, Json, Path, Query, controller, routes};
-use poem::test::TestClient;
+use nest_rs_testing::TestClient;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -68,7 +68,7 @@ impl HygieneController {
 #[module(providers = [HygieneController])]
 struct HygieneModule;
 
-async fn boot() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
+async fn boot() -> TestClient {
     crate::boot::<HygieneModule>().await
 }
 
@@ -113,7 +113,7 @@ async fn the_collision_stays_closed_under_a_response_shaper() {
         .body_json(&serde_json::json!({ "name": "shaped" }))
         .send()
         .await;
-    resp.assert_status(poem::http::StatusCode::CREATED);
+    resp.assert_status(nest_rs_http::StatusCode::CREATED);
     resp.assert_header("x-hygiene", "ok");
     resp.assert_text("shaped tagged 0.0.0.0").await;
 }

@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, SseEvent, SseStream, controller, routes};
-use poem::http::{StatusCode, header};
-use poem::test::TestClient;
+use nest_rs_http::{StatusCode, header};
+use nest_rs_testing::TestClient;
 
 #[controller(path = "/echo")]
 struct EchoController;
@@ -48,9 +48,7 @@ impl EchoController {
 #[module(providers = [EchoController])]
 struct EchoModule;
 
-async fn boot(
-    compression: bool,
-) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
+async fn boot(compression: bool) -> TestClient {
     crate::boot_on::<EchoModule>(HttpConfig {
         compression,
         ..HttpConfig::default()

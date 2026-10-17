@@ -3,9 +3,9 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 
 #[derive(Clone)]
 struct RequiredRoles(&'static [&'static str]);

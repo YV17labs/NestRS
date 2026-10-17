@@ -93,7 +93,7 @@ async fn call_guarded(guard: DecisionGuard) -> poem::Response {
 #[tokio::test]
 async fn an_allowing_guard_lets_the_request_reach_the_handler() {
     let resp = call_guarded(DecisionGuard::allow(Arc::new(AtomicU32::new(0)))).await;
-    assert_eq!(resp.status(), poem::http::StatusCode::OK);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::OK);
 }
 
 #[tokio::test]
@@ -103,7 +103,7 @@ async fn an_unauthorized_denial_renders_401() {
         Arc::new(AtomicU32::new(0)),
     ))
     .await;
-    assert_eq!(resp.status(), poem::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -113,7 +113,7 @@ async fn a_forbidden_denial_renders_403() {
         Arc::new(AtomicU32::new(0)),
     ))
     .await;
-    assert_eq!(resp.status(), poem::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -123,7 +123,7 @@ async fn a_rate_limit_denial_renders_429_with_retry_after() {
         Arc::new(AtomicU32::new(0)),
     ))
     .await;
-    assert_eq!(resp.status(), poem::http::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
         resp.headers()
             .get("retry-after")
@@ -152,7 +152,7 @@ async fn a_denial_short_circuits_before_the_handler_runs() {
         .call(Request::builder().finish())
         .await
         .expect("denial is Ok(Response)");
-    assert_eq!(resp.status(), poem::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::FORBIDDEN);
     assert_eq!(
         handler_ran.load(Ordering::SeqCst),
         0,
@@ -170,7 +170,7 @@ async fn a_denial_at_this_site_is_visible_at_warn() {
         Arc::new(AtomicU32::new(0)),
     ))
     .await;
-    assert_eq!(resp.status(), poem::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::UNAUTHORIZED);
 
     let event = logs.expect_one("nest_rs::layers", "guard denied the request");
     assert_eq!(event.level, "warn", "a denial is a warn+ event");
@@ -190,7 +190,7 @@ async fn an_allowed_request_logs_no_denial() {
     // The floor must not fire on the happy path, or the signal is worthless.
     let logs = LogCapture::install();
     let resp = call_guarded(DecisionGuard::allow(Arc::new(AtomicU32::new(0)))).await;
-    assert_eq!(resp.status(), poem::http::StatusCode::OK);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::OK);
     logs.expect_none("nest_rs::layers", "guard denied the request");
 }
 
@@ -209,7 +209,7 @@ async fn every_guard_of_the_stage_runs_when_each_allows() {
         .call(Request::builder().finish())
         .await
         .expect("both allow");
-    assert_eq!(resp.status(), poem::http::StatusCode::OK);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::OK);
     assert_eq!(first_ran.load(Ordering::SeqCst), 1, "the first guard ran");
     assert_eq!(second_ran.load(Ordering::SeqCst), 1, "the second guard ran");
 }
@@ -231,7 +231,7 @@ async fn a_denial_short_circuits_the_guards_listed_after_it() {
         .call(Request::builder().finish())
         .await
         .expect("denial is Ok(Response)");
-    assert_eq!(resp.status(), poem::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), nest_rs_http::StatusCode::UNAUTHORIZED);
     assert_eq!(
         second_ran.load(Ordering::SeqCst),
         0,

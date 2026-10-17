@@ -1,12 +1,12 @@
 //! Covers `src/document.rs` — what the served document says about a version.
 
 use nest_rs_core::module;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{
     ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpModule, controller, routes,
 };
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 use serde_json::Value;
 
 #[controller(path = "/posts", version = "1")]

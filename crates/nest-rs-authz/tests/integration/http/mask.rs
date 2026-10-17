@@ -577,7 +577,7 @@ async fn a_body_with_no_declared_media_type_fails_closed() {
         .header("x-role", "admin")
         .send()
         .await;
-    resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+    resp.assert_status(nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR);
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
         !body.contains("secret") && !body.contains("s1"),

@@ -14,8 +14,8 @@ use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{
     Body, HttpConfig, HttpError, HttpView, Json, RawBody, async_trait, controller, routes,
 };
-use poem::http::{StatusCode, header};
-use poem::test::TestClient;
+use nest_rs_http::{StatusCode, header};
+use nest_rs_testing::TestClient;
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -68,13 +68,11 @@ impl BodyController {
 #[module(providers = [BodyController])]
 struct BodyModule;
 
-async fn boot() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
+async fn boot() -> TestClient {
     boot_with(false).await
 }
 
-async fn boot_with(
-    compression: bool,
-) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
+async fn boot_with(compression: bool) -> TestClient {
     crate::boot_on::<BodyModule>(HttpConfig {
         max_body_bytes: Some(CAP),
         compression,
@@ -425,10 +423,9 @@ async fn a_stalled_body_on_http2_is_answered_408_and_its_connection_keeps_servin
         .expect("the HTTP/2 preface is accepted");
     let connection = tokio::spawn(connection);
     let mut client = client.ready().await.expect("a stream can open");
-    let request =
-        poem::http::Request::post(format!("http://127.0.0.1:{}/read/counted", serving.port))
-            .body(())
-            .expect("a request");
+    let request = http::Request::post(format!("http://127.0.0.1:{}/read/counted", serving.port))
+        .body(())
+        .expect("a request");
     let (response, mut body) = client.send_request(request, false).expect("sent");
     body.send_data(bytes::Bytes::from_static(b"part"), false)
         .expect("a first frame");
@@ -448,7 +445,7 @@ async fn a_stalled_body_on_http2_is_answered_408_and_its_connection_keeps_servin
         .ready()
         .await
         .expect("the connection opens another stream");
-    let next = poem::http::Request::post(format!("http://127.0.0.1:{}/read/counted", serving.port))
+    let next = http::Request::post(format!("http://127.0.0.1:{}/read/counted", serving.port))
         .body(())
         .expect("a request");
     let (next, _) = client.send_request(next, true).expect("sent");

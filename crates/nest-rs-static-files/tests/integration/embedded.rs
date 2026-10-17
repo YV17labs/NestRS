@@ -2,9 +2,9 @@
 //! the same rules as a directory, tagged by the digest of its bytes.
 
 use nest_rs_core::module;
+use nest_rs_http::StatusCode;
 use nest_rs_static_files::{Embed, Embedded, StaticFilesModule};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 
 use crate::{SCRIPT, header, is_problem_404, text};
 

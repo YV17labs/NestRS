@@ -3,9 +3,9 @@
 
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::module;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, caller_path, controller, routes, set_created_location};
-use poem::http::StatusCode;
-use poem::test::TestClient;
+use nest_rs_testing::TestClient;
 
 /// The id the create route below hands back.
 const NEW_ORG_ID: &str = "018f3f9c-0000-7000-8000-000000000001";
@@ -45,9 +45,7 @@ impl OrgsController {
 #[module(providers = [UsersController, OrgsController])]
 struct TwoControllersModule;
 
-async fn boot_with_prefix(
-    prefix: Option<&str>,
-) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
+async fn boot_with_prefix(prefix: Option<&str>) -> TestClient {
     crate::boot_on::<TwoControllersModule>(HttpConfig {
         global_prefix: prefix.map(Into::into),
         ..HttpConfig::default()
@@ -78,7 +76,7 @@ async fn a_created_location_carries_the_global_prefix() {
         let created = client.post(path).send().await;
         created.assert_status(StatusCode::CREATED);
         created.assert_header(
-            poem::http::header::LOCATION,
+            nest_rs_http::header::LOCATION,
             format!("/api/orgs/{NEW_ORG_ID}"),
         );
     }
@@ -90,7 +88,10 @@ async fn a_created_location_without_a_prefix_is_the_declared_collection() {
 
     let created = client.post("/orgs").send().await;
     created.assert_status(StatusCode::CREATED);
-    created.assert_header(poem::http::header::LOCATION, format!("/orgs/{NEW_ORG_ID}"));
+    created.assert_header(
+        nest_rs_http::header::LOCATION,
+        format!("/orgs/{NEW_ORG_ID}"),
+    );
 }
 
 #[tokio::test]
@@ -100,11 +101,11 @@ async fn global_prefix_hides_controllers_from_their_unprefixed_paths() {
     let users = client.get("/users").send().await;
     assert_eq!(
         users.0.status(),
-        poem::http::StatusCode::NOT_FOUND,
+        nest_rs_http::StatusCode::NOT_FOUND,
         "without the prefix the controller must not be reachable",
     );
     let orgs = client.get("/orgs").send().await;
-    assert_eq!(orgs.0.status(), poem::http::StatusCode::NOT_FOUND);
+    assert_eq!(orgs.0.status(), nest_rs_http::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -143,8 +144,7 @@ async fn global_prefix_root_slash_is_a_noop() {
 
 /// Boot the same controller surface, resolving the prefix through
 /// `HttpConfig::from_env`.
-async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>>
-{
+async fn boot_with_env_config() -> TestClient {
     let cfg = HttpConfig::from_env(&ConfigService::for_namespace("http"), Default::default())
         .expect("HttpConfig::from_env succeeds");
     crate::boot_on::<TwoControllersModule>(cfg).await
@@ -171,7 +171,7 @@ fn global_prefix_is_picked_up_from_nestrs_http_global_prefix_env() {
             let unprefixed = client.get("/users").send().await;
             assert_eq!(
                 unprefixed.0.status(),
-                poem::http::StatusCode::NOT_FOUND,
+                nest_rs_http::StatusCode::NOT_FOUND,
                 "without the env-set prefix the controller must not be reachable",
             );
         });

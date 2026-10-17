@@ -135,7 +135,7 @@ async fn an_aliased_authorize_still_gates_at_class_level() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = boot().await;
     let denied = app.http().get("/gadgets/aliased/probe").send().await;
-    assert_eq!(denied.0.status(), poem::http::StatusCode::FORBIDDEN);
+    assert_eq!(denied.0.status(), nest_rs_http::StatusCode::FORBIDDEN);
 
     // The operator's half: the denial event an incident queries.
     let event = logs

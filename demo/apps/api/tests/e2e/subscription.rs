@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use nest_rs::authn::AuthnConfig;
-use nest_rs::http::poem::http::header;
+use nest_rs::http::header;
 use nest_rs::http::{HttpConfig, HttpTransport};
 use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
 use serde_json::{Value, json};

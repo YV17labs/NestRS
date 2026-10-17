@@ -1,7 +1,7 @@
 //! CORS via `HttpConfig.cors`, seeded: the policy wraps the whole route tree.
 
 use nest_rs_core::module;
-use nest_rs_http::poem::http::Method;
+use nest_rs_http::Method;
 use nest_rs_http::{HttpConfig, HttpCors, controller, routes};
 use nest_rs_testing::TestApp;
 

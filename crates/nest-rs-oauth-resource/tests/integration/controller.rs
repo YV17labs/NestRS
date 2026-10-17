@@ -12,10 +12,10 @@
 use crate::AlwaysUnauthorized;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::module;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule, WELL_KNOWN_PATH};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 use serde_json::Value;
 
 /// This deployment's canonical URI: the loopback origin, as `TestClient` speaks paths.

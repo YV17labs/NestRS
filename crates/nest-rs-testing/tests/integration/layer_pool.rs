@@ -9,10 +9,10 @@ use nest_rs_core::{Layer, injectable, module};
 use nest_rs_filters::{Filter, RequestSnapshot, filter};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::MappedError;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
 use poem::{Request, Response};
 use tokio::sync::Mutex;
 

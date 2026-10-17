@@ -96,7 +96,7 @@ async fn a_fallible_open_is_known_by_its_type_whatever_it_is_called() {
         .get("/feed/closed")
         .send()
         .await
-        .assert_status(poem::http::StatusCode::SERVICE_UNAVAILABLE);
+        .assert_status(nest_rs_http::StatusCode::SERVICE_UNAVAILABLE);
     let resp = client.get("/feed/open").send().await;
     resp.assert_status_is_ok();
     let body = resp.0.into_body().into_string().await.unwrap_or_default();
@@ -360,7 +360,7 @@ async fn a_stream_that_panics_over_http2_resets_its_stream_alone() {
         .expect("the HTTP/2 preface is accepted");
     let connection = tokio::spawn(connection);
     let get = |path: &str| {
-        poem::http::Request::get(format!("http://127.0.0.1:{port}{path}"))
+        http::Request::get(format!("http://127.0.0.1:{port}{path}"))
             .body(())
             .expect("a request")
     };

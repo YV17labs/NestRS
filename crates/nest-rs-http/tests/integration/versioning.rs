@@ -5,10 +5,8 @@ use nest_rs_core::{App, Transport, module};
 use nest_rs_http::{
     ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpEndpointMeta, Method, controller, routes,
 };
-use poem::Response;
-use poem::endpoint::BoxEndpoint;
-use poem::http::{StatusCode, header};
-use poem::test::TestClient;
+use nest_rs_http::{StatusCode, header};
+use nest_rs_testing::TestClient;
 
 #[controller(path = "/fund", version = "1")]
 struct FundV1Controller;
@@ -158,10 +156,7 @@ fn versioned(strategy: ApiVersioning, default: Option<String>) -> HttpConfig {
 
 /// Boot the same three controllers on `config` and, optionally, a global
 /// prefix.
-async fn boot_with(
-    config: HttpConfig,
-    prefix: Option<&str>,
-) -> TestClient<BoxEndpoint<'static, Response>> {
+async fn boot_with(config: HttpConfig, prefix: Option<&str>) -> TestClient {
     let app = App::builder()
         .module::<VersionedModule>()
         .build()
@@ -445,7 +440,7 @@ impl FundDraftsController {
 ])]
 struct EdgeCaseModule;
 
-async fn boot_edge_cases(default: Option<&str>) -> TestClient<BoxEndpoint<'static, Response>> {
+async fn boot_edge_cases(default: Option<&str>) -> TestClient {
     let app = App::builder()
         .module::<EdgeCaseModule>()
         .build()
@@ -620,7 +615,7 @@ impl LiveController {
 ])]
 struct RouteShapeModule;
 
-async fn boot_route_shapes(default: Option<&str>) -> TestClient<BoxEndpoint<'static, Response>> {
+async fn boot_route_shapes(default: Option<&str>) -> TestClient {
     let app = App::builder()
         .module::<RouteShapeModule>()
         .build()
@@ -742,7 +737,7 @@ async fn a_version_header_that_is_not_text_is_refused_rather_than_read_as_silenc
     resp.assert_status_is_ok();
 
     let undecodable =
-        poem::http::HeaderValue::from_bytes(&[b'2', 0xff]).expect("a legal header value");
+        nest_rs_http::HeaderValue::from_bytes(&[b'2', 0xff]).expect("a legal header value");
     client
         .get("/unversioned/ping")
         .header(DEFAULT_VERSION_HEADER, undecodable)
@@ -765,7 +760,7 @@ async fn an_accept_header_that_is_not_text_is_refused_too() {
         .expect("configures");
     let client = crate::client(transport.take_endpoint().expect("an endpoint"));
 
-    let undecodable = poem::http::HeaderValue::from_bytes(b"application/json; version=2\xff")
+    let undecodable = nest_rs_http::HeaderValue::from_bytes(b"application/json; version=2\xff")
         .expect("a legal header value");
     client
         .get("/unversioned/ping")

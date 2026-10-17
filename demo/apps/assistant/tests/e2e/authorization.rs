@@ -1,4 +1,4 @@
-use nest_rs::http::poem::http::{StatusCode, header};
+use nest_rs::http::{StatusCode, header};
 use serde_json::Value;
 
 use features::testing::AUDIENCE as RESOURCE;

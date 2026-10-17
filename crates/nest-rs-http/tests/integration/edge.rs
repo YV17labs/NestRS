@@ -4,9 +4,9 @@
 
 use nest_rs_core::module;
 use nest_rs_core::panic::{FIELD, LOCATION_FIELD};
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, controller, routes};
 use nest_rs_testing::LogCapture;
-use poem::http::StatusCode;
 
 use crate::transport::{PATIENCE, Serving, ask, connect, read_answer, request, serve_module};
 
@@ -218,7 +218,7 @@ async fn a_panic_answers_its_http2_stream_500_and_the_connection_keeps_serving()
         .expect("the HTTP/2 preface is accepted");
     let connection = tokio::spawn(connection);
     let get = |path: &str| {
-        poem::http::Request::get(format!("http://127.0.0.1:{port}{path}"))
+        http::Request::get(format!("http://127.0.0.1:{port}{path}"))
             .body(())
             .expect("a request")
     };

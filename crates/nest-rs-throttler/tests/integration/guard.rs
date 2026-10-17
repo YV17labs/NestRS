@@ -11,13 +11,13 @@ use std::time::Duration;
 
 use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, module};
 use nest_rs_guards::guard;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
 use nest_rs_throttler::{
     BACKEND_REMEDY, Decision, HIT_TIMEOUT, Throttle, ThrottlerConfig, ThrottlerGuard,
     ThrottlerModule, ThrottlerStore, ThrottlerStoreError,
 };
-use poem::http::StatusCode;
 
 #[controller(path = "/rated")]
 struct RatedController;
@@ -989,10 +989,10 @@ mod self_mount {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
     use nest_rs_core::{ContainerBuilder, Discoverable, Handler, Posture, module};
     use nest_rs_guards::guard;
+    use nest_rs_http::StatusCode;
     use nest_rs_http::{HttpEndpointMeta, Method, Response, endpoint_fn};
     use nest_rs_testing::{LogCapture, TestApp};
     use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
-    use poem::http::StatusCode;
 
     struct Files;
 

@@ -107,7 +107,7 @@ impl<'a, T: DeserializeOwned> FromRequest<'a> for Path<T> {
 /// `T` read from `params`; a refusal no parameter claimed is the one
 /// parameter's when the route declares one — a type refusing after it read
 /// its text.
-fn read<T: DeserializeOwned>(params: &[Param]) -> std::result::Result<T, PathError> {
+fn read<T: DeserializeOwned>(params: &[Param]) -> Result<T, PathError> {
     T::deserialize(Params(params)).map_err(|refused| match params {
         [(name, _)] => refused.against(name),
         _ => refused,
@@ -122,7 +122,7 @@ struct Params<'de>(&'de [Param]);
 
 impl<'de> Params<'de> {
     /// The one parameter a single value reads.
-    fn single(&self) -> std::result::Result<Value<'de>, PathError> {
+    fn single(&self) -> Result<Value<'de>, PathError> {
         match self.0 {
             [param] => Ok(Value::of(param)),
             params => Err(PathError::Arity {
@@ -134,7 +134,7 @@ impl<'de> Params<'de> {
 
     /// Exactly `read` parameters, for a tuple of that many: a shorter one
     /// would bind the route's first parameters in place of the ones it means.
-    fn exactly(&self, read: usize) -> std::result::Result<(), PathError> {
+    fn exactly(&self, read: usize) -> Result<(), PathError> {
         if self.0.len() != read {
             return Err(PathError::Arity {
                 declared: self.0.len(),
@@ -149,7 +149,7 @@ impl<'de> Params<'de> {
 macro_rules! single_arms {
     ($($method:ident),* $(,)?) => {
         $(
-            fn $method<V: Visitor<'de>>(self, visitor: V) -> std::result::Result<V::Value, PathError> {
+            fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
                 let value = self.single()?;
                 let name = value.name;
                 value.$method(visitor).map_err(|refused| refused.against(name))
@@ -168,45 +168,27 @@ impl<'de> Deserializer<'de> for Params<'de> {
         deserialize_string, deserialize_byte_buf,
     }
 
-    fn deserialize_any<V: Visitor<'de>>(
-        self,
-        _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, PathError> {
         Err(PathError::Unsupported("a self-describing value"))
     }
 
-    fn deserialize_bytes<V: Visitor<'de>>(
-        self,
-        _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_bytes<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, PathError> {
         Err(PathError::Unsupported("bytes"))
     }
 
-    fn deserialize_option<V: Visitor<'de>>(
-        self,
-        _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_option<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, PathError> {
         Err(PathError::Unsupported("an `Option`"))
     }
 
-    fn deserialize_identifier<V: Visitor<'de>>(
-        self,
-        _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_identifier<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, PathError> {
         Err(PathError::Unsupported("an identifier"))
     }
 
-    fn deserialize_ignored_any<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_unit()
     }
 
-    fn deserialize_unit<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_unit()
     }
 
@@ -214,7 +196,7 @@ impl<'de> Deserializer<'de> for Params<'de> {
         self,
         _name: &'static str,
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         visitor.visit_unit()
     }
 
@@ -222,14 +204,11 @@ impl<'de> Deserializer<'de> for Params<'de> {
         self,
         _name: &'static str,
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         visitor.visit_newtype_struct(self)
     }
 
-    fn deserialize_seq<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_seq(Positions(self.0))
     }
 
@@ -237,7 +216,7 @@ impl<'de> Deserializer<'de> for Params<'de> {
         self,
         len: usize,
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         self.exactly(len)?;
         visitor.visit_seq(Positions(self.0))
     }
@@ -247,15 +226,11 @@ impl<'de> Deserializer<'de> for Params<'de> {
         _name: &'static str,
         len: usize,
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
-        self.exactly(len)?;
-        visitor.visit_seq(Positions(self.0))
+    ) -> Result<V::Value, PathError> {
+        self.deserialize_tuple(len, visitor)
     }
 
-    fn deserialize_map<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_map(Names {
             params: self.0,
             value: None,
@@ -267,7 +242,7 @@ impl<'de> Deserializer<'de> for Params<'de> {
         _name: &'static str,
         _fields: &'static [&'static str],
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         self.deserialize_map(visitor)
     }
 
@@ -276,7 +251,7 @@ impl<'de> Deserializer<'de> for Params<'de> {
         name: &'static str,
         variants: &'static [&'static str],
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         let value = self.single()?;
         let param = value.name;
         value
@@ -294,7 +269,7 @@ impl<'de> SeqAccess<'de> for Positions<'de> {
     fn next_element_seed<T: DeserializeSeed<'de>>(
         &mut self,
         seed: T,
-    ) -> std::result::Result<Option<T::Value>, PathError> {
+    ) -> Result<Option<T::Value>, PathError> {
         let Some((param, rest)) = self.0.split_first() else {
             return Ok(None);
         };
@@ -319,7 +294,7 @@ impl<'de> MapAccess<'de> for Names<'de> {
     fn next_key_seed<K: DeserializeSeed<'de>>(
         &mut self,
         seed: K,
-    ) -> std::result::Result<Option<K::Value>, PathError> {
+    ) -> Result<Option<K::Value>, PathError> {
         let Some((param, rest)) = self.params.split_first() else {
             return Ok(None);
         };
@@ -328,10 +303,7 @@ impl<'de> MapAccess<'de> for Names<'de> {
         seed.deserialize(Key(&param.0)).map(Some)
     }
 
-    fn next_value_seed<V: DeserializeSeed<'de>>(
-        &mut self,
-        seed: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value, PathError> {
         // serde's contract asks for a value only after its key.
         let Some(param) = self.value.take() else {
             return Err(PathError::Refused);
@@ -350,10 +322,7 @@ struct Key<'de>(&'de str);
 impl<'de> Deserializer<'de> for Key<'de> {
     type Error = PathError;
 
-    fn deserialize_any<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_borrowed_str(self.0)
     }
 
@@ -380,14 +349,10 @@ impl<'de> Value<'de> {
     }
 
     /// `seed` read from this value, its refusal named against the parameter.
-    fn read<T: DeserializeSeed<'de>>(self, seed: T) -> std::result::Result<T::Value, PathError> {
+    fn read<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value, PathError> {
         let name = self.name;
         seed.deserialize(self)
             .map_err(|refused| refused.against(name))
-    }
-
-    fn unsupported<V>(self, shape: &'static str) -> std::result::Result<V, PathError> {
-        Err(PathError::Unsupported(shape))
     }
 }
 
@@ -396,7 +361,7 @@ impl<'de> Value<'de> {
 macro_rules! parse_arms {
     ($($method:ident => $visit:ident, $ty:ty, $expected:literal;)*) => {
         $(
-            fn $method<V: Visitor<'de>>(self, visitor: V) -> std::result::Result<V::Value, PathError> {
+            fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
                 match self.text.parse::<$ty>() {
                     Ok(value) => visitor.$visit(value),
                     Err(_) => Err(PathError::malformed(self.name, $expected)),
@@ -426,52 +391,31 @@ impl<'de> Deserializer<'de> for Value<'de> {
         deserialize_char => visit_char, char, "a single character";
     }
 
-    fn deserialize_any<V: Visitor<'de>>(
-        self,
-        _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
-        self.unsupported("a self-describing value")
+    fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, PathError> {
+        Err(PathError::Unsupported("a self-describing value"))
     }
 
-    fn deserialize_str<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_borrowed_str(self.text)
     }
 
-    fn deserialize_string<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_string<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_borrowed_str(self.text)
     }
 
-    fn deserialize_bytes<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_borrowed_bytes(self.text.as_bytes())
     }
 
-    fn deserialize_byte_buf<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_byte_buf<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_borrowed_bytes(self.text.as_bytes())
     }
 
-    fn deserialize_option<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_some(self)
     }
 
-    fn deserialize_unit<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_unit()
     }
 
@@ -479,7 +423,7 @@ impl<'de> Deserializer<'de> for Value<'de> {
         self,
         _name: &'static str,
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         visitor.visit_unit()
     }
 
@@ -487,23 +431,20 @@ impl<'de> Deserializer<'de> for Value<'de> {
         self,
         _name: &'static str,
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         visitor.visit_newtype_struct(self)
     }
 
-    fn deserialize_seq<V: Visitor<'de>>(
-        self,
-        _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
-        self.unsupported("a list")
+    fn deserialize_seq<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, PathError> {
+        Err(PathError::Unsupported("a list"))
     }
 
     fn deserialize_tuple<V: Visitor<'de>>(
         self,
         _len: usize,
         _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
-        self.unsupported("a tuple")
+    ) -> Result<V::Value, PathError> {
+        Err(PathError::Unsupported("a tuple"))
     }
 
     fn deserialize_tuple_struct<V: Visitor<'de>>(
@@ -511,15 +452,12 @@ impl<'de> Deserializer<'de> for Value<'de> {
         _name: &'static str,
         _len: usize,
         _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
-        self.unsupported("a tuple")
+    ) -> Result<V::Value, PathError> {
+        Err(PathError::Unsupported("a tuple"))
     }
 
-    fn deserialize_map<V: Visitor<'de>>(
-        self,
-        _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
-        self.unsupported("a map")
+    fn deserialize_map<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, PathError> {
+        Err(PathError::Unsupported("a map"))
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -527,15 +465,12 @@ impl<'de> Deserializer<'de> for Value<'de> {
         _name: &'static str,
         _fields: &'static [&'static str],
         _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
-        self.unsupported("a struct")
+    ) -> Result<V::Value, PathError> {
+        Err(PathError::Unsupported("a struct"))
     }
 
-    fn deserialize_identifier<V: Visitor<'de>>(
-        self,
-        _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
-        self.unsupported("an identifier")
+    fn deserialize_identifier<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, PathError> {
+        Err(PathError::Unsupported("an identifier"))
     }
 
     /// An enum-typed parameter: its text names a unit variant.
@@ -544,14 +479,11 @@ impl<'de> Deserializer<'de> for Value<'de> {
         _name: &'static str,
         _variants: &'static [&'static str],
         visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         visitor.visit_enum(Variant(self.text))
     }
 
-    fn deserialize_ignored_any<V: Visitor<'de>>(
-        self,
-        visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, PathError> {
         visitor.visit_unit()
     }
 }
@@ -566,7 +498,7 @@ impl<'de> EnumAccess<'de> for Variant<'de> {
     fn variant_seed<V: DeserializeSeed<'de>>(
         self,
         seed: V,
-    ) -> std::result::Result<(V::Value, UnitOnly), PathError> {
+    ) -> Result<(V::Value, UnitOnly), PathError> {
         Ok((seed.deserialize(Key(self.0))?, UnitOnly))
     }
 }
@@ -577,14 +509,14 @@ struct UnitOnly;
 impl<'de> VariantAccess<'de> for UnitOnly {
     type Error = PathError;
 
-    fn unit_variant(self) -> std::result::Result<(), PathError> {
+    fn unit_variant(self) -> Result<(), PathError> {
         Ok(())
     }
 
     fn newtype_variant_seed<T: DeserializeSeed<'de>>(
         self,
         _seed: T,
-    ) -> std::result::Result<T::Value, PathError> {
+    ) -> Result<T::Value, PathError> {
         Err(PathError::Unsupported("a variant carrying a value"))
     }
 
@@ -592,7 +524,7 @@ impl<'de> VariantAccess<'de> for UnitOnly {
         self,
         _len: usize,
         _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         Err(PathError::Unsupported("a variant carrying a value"))
     }
 
@@ -600,7 +532,7 @@ impl<'de> VariantAccess<'de> for UnitOnly {
         self,
         _fields: &'static [&'static str],
         _visitor: V,
-    ) -> std::result::Result<V::Value, PathError> {
+    ) -> Result<V::Value, PathError> {
         Err(PathError::Unsupported("a variant carrying a value"))
     }
 }
@@ -636,7 +568,7 @@ mod tests {
             .collect()
     }
 
-    fn read<T: DeserializeOwned>(values: &[(&str, &str)]) -> std::result::Result<T, PathError> {
+    fn read<T: DeserializeOwned>(values: &[(&str, &str)]) -> Result<T, PathError> {
         super::read(&params(values))
     }
 
@@ -740,7 +672,7 @@ mod tests {
         #[derive(Debug)]
         struct Even;
         impl<'de> Deserialize<'de> for Even {
-            fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
                 let text = <&str>::deserialize(d)?;
                 Err(D::Error::custom(format!("`{text}` is odd")))
             }

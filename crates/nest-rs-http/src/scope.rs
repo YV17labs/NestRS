@@ -62,15 +62,15 @@ impl<T: Send + Sync + 'static> Scoped<T> {
             );
             return None;
         };
-        let provider = scope.get::<T>();
-        if provider.is_none() {
+        let Some(provider) = scope.get::<T>() else {
             tracing::error!(
                 target: crate::target::HTTP,
                 provider = type_name::<T>(),
                 "no provider for a request-scoped parameter — add it to a module's providers",
             );
-        }
-        provider.map(Scoped)
+            return None;
+        };
+        Some(Scoped(provider))
     }
 }
 

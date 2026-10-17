@@ -114,7 +114,7 @@ impl Field {
     /// The whole part, buffered, as UTF-8 text; a part that is not answers
     /// `400`.
     pub async fn text(self) -> Result<String> {
-        let bytes = self.reader.bytes().await?;
+        let bytes = self.bytes().await?;
         String::from_utf8(bytes.into())
             .map_err(|refused| MultipartError::Malformed(Box::new(refused)).into())
     }

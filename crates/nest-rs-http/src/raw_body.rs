@@ -79,7 +79,7 @@ impl RawBody {
 
     /// [`extract_with_limit`](Self::extract_with_limit) over poem's body, which
     /// `#[routes]` still hands its extractors.
-    async fn extract_poem_with_limit(
+    pub(crate) async fn extract_poem_with_limit(
         body: &mut poem::RequestBody,
         limit: usize,
     ) -> poem::Result<Self> {

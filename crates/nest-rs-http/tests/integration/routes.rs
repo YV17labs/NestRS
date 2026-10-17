@@ -7,13 +7,10 @@ use nest_rs_http::{
     BoxEndpoint, HttpConfig, HttpEndpointMeta, HttpRoutes, Method, Request, Response, controller,
     endpoint_fn, routes,
 };
-use poem::endpoint::BoxEndpoint as PoemBoxEndpoint;
 use poem::http::{StatusCode, header};
-use poem::test::TestClient;
 
+use crate::Client;
 use crate::transport::{PATIENCE, connect, read_head, serve_module};
-
-type Client = TestClient<PoemBoxEndpoint<'static, poem::Response>>;
 
 /// The table one self-mount at `/` registers, served under `prefix`; the
 /// boot's refusal when the table refuses it.

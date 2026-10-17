@@ -723,12 +723,6 @@ pub(crate) struct PathParameterError {
     pub(crate) name: std::sync::Arc<str>,
 }
 
-/// What a body extractor says of a `Content-Type` it does not read: the media
-/// type it expected, never the one sent, which the client chose.
-fn not_of_media_type(f: &mut fmt::Formatter<'_>, expected: &str) -> fmt::Result {
-    write!(f, "the request's content type is not {expected}")
-}
-
 /// What [`Json`](crate::Json) refused.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum JsonError {
@@ -803,12 +797,13 @@ impl ResponseError for MultipartError {
     }
 }
 
-/// An expected media type, as a body extractor's refusal says it.
+/// What a body extractor says of a `Content-Type` it does not read: the media
+/// type it expected, never the one sent, which the client chose.
 struct MediaType(&'static str);
 
 impl fmt::Display for MediaType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        not_of_media_type(f, self.0)
+        write!(f, "the request's content type is not {}", self.0)
     }
 }
 

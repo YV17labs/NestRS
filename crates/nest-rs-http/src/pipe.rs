@@ -14,12 +14,12 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 
-use http::StatusCode;
 use nest_rs_pipes::{Pipe, PipeError, ValidationPipe};
-use poem::error::ReadBodyError;
 use validator::Validate;
 
-use crate::{Form, FromRequest, Header, Json, Path, ProblemDetails, Query, Request, RequestBody};
+use crate::{
+    Form, FromRequest, Header, Json, Path, ProblemDetails, Query, RawBody, Request, RequestBody,
+};
 
 /// Owned-unwrap for an extractor, so a pipe can take the value it carries
 /// without cloning.
@@ -97,15 +97,8 @@ async fn cap_poem_body(body: &mut poem::RequestBody) -> poem::Result<()> {
     if body.is_none() {
         return Ok(());
     }
-    let limit = crate::current_body_limit();
-    let taken = body.take().map_err(poem::Error::from)?;
-    let bytes = match taken.into_bytes_limit(limit).await {
-        Ok(bytes) => bytes,
-        Err(ReadBodyError::PayloadTooLarge) => {
-            return Err(poem::Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
-        }
-        Err(err) => return Err(poem::Error::from(err)),
-    };
+    let RawBody(bytes) =
+        RawBody::extract_poem_with_limit(body, crate::current_body_limit()).await?;
     *body = poem::RequestBody::new(poem::Body::from_bytes(bytes));
     Ok(())
 }
@@ -222,7 +215,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use http::{HeaderValue, header};
+    use http::{HeaderValue, StatusCode, header};
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -261,15 +254,7 @@ mod tests {
             "validation failed",
             serde_json::json!({ "email": ["not an email"] }),
         );
-        let json: serde_json::Value = serde_json::from_str(
-            &rejection(err)
-                .into_response()
-                .into_body()
-                .into_string()
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let (_, json, _) = problem_of(rejection(err).into()).await;
         assert_eq!(json["detail"], "validation failed");
         assert_eq!(json["errors"]["email"][0], "not an email");
     }

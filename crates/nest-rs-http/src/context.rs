@@ -56,25 +56,21 @@ impl<T> Deref for Ctx<T> {
 }
 
 /// Why no guard's value is there to read.
-enum Absent {
-    /// A `#[public]` route admitted a credential it refused: the deferred `401`,
-    /// with what the guard would have denied with.
-    Deferred {
-        client_message: String,
-        bearer_error: Option<&'static str>,
-    },
+enum Absent<'a> {
+    /// A `#[public]` route admitted a credential it refused: the deferred `401`.
+    Deferred(&'a RejectedCredential),
     /// The guard that attaches the value never ran: a wiring `500`.
     Unwired,
 }
 
-impl Absent {
+impl RejectedCredential {
     /// The deferred `401`: the guard's client-safe message, and the RFC 6750
     /// challenge it would have stamped.
-    fn deferred(client_message: String, bearer_error: Option<&'static str>) -> Response {
+    fn deferred(&self) -> Response {
         let mut response = ProblemDetails::unauthorized()
-            .with_detail(client_message)
+            .with_detail(self.client_message.clone())
             .into_response();
-        if let Some(code) = bearer_error {
+        if let Some(code) = self.bearer_error {
             crate::challenge::stamp_bearer_error_on(response.headers_mut(), code);
         }
         response
@@ -83,7 +79,7 @@ impl Absent {
 
 impl<T: AmbientValue + Clone> Ctx<T> {
     /// What a guard attached, or why it is absent.
-    fn read(extensions: &Extensions) -> Result<Self, Absent> {
+    fn read(extensions: &Extensions) -> Result<Self, Absent<'_>> {
         if let Some(value) = nest_rs_core::ambient::<T>() {
             return Ok(Ctx(T::clone(&value)));
         }
@@ -96,10 +92,7 @@ impl<T: AmbientValue + Clone> Ctx<T> {
                 context_type = std::any::type_name::<T>(),
                 "public route needs the principal a rejected credential never produced — answering the deferred 401",
             );
-            return Err(Absent::Deferred {
-                client_message: rejected.client_message.clone(),
-                bearer_error: rejected.bearer_error,
-            });
+            return Err(Absent::Deferred(rejected));
         }
         // The type name belongs in the log, never the response body.
         tracing::error!(
@@ -117,12 +110,9 @@ impl<'a, T: AmbientValue + Clone> poem::FromRequest<'a> for Ctx<T> {
         _body: &mut poem::RequestBody,
     ) -> poem::Result<Self> {
         Self::read(req.extensions()).map_err(|absent| match absent {
-            Absent::Deferred {
-                client_message,
-                bearer_error,
-            } => poem::Error::from_response(crate::poem_bridge::response_to_poem(
-                Absent::deferred(client_message, bearer_error),
-            )),
+            Absent::Deferred(rejected) => poem::Error::from_response(
+                crate::poem_bridge::response_to_poem(rejected.deferred()),
+            ),
             Absent::Unwired => poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR),
         })
     }
@@ -134,10 +124,7 @@ impl<'a, T: AmbientValue + Clone> crate::FromRequest<'a> for Ctx<T> {
         _body: &mut crate::RequestBody,
     ) -> crate::Result<Self> {
         Self::read(req.extensions()).map_err(|absent| match absent {
-            Absent::Deferred {
-                client_message,
-                bearer_error,
-            } => crate::HttpError::from_response(Absent::deferred(client_message, bearer_error)),
+            Absent::Deferred(rejected) => crate::HttpError::from_response(rejected.deferred()),
             Absent::Unwired => crate::HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR),
         })
     }

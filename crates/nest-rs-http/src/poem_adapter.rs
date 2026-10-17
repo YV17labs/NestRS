@@ -129,9 +129,7 @@ impl PoemAdapter {
 
     /// `uri`'s query string decoded into `T`, or what the decoder refused, in
     /// its words.
-    pub(crate) fn query<T: DeserializeOwned>(
-        uri: &Uri,
-    ) -> std::result::Result<T, serde::de::value::Error> {
+    pub(crate) fn query<T: DeserializeOwned>(uri: &Uri) -> Result<T, serde::de::value::Error> {
         poem::Request::builder()
             .uri(uri.clone())
             .finish()
@@ -181,10 +179,11 @@ pub(crate) struct MultipartReader(poem::web::Multipart);
 impl MultipartReader {
     /// The next part, or `None` past the last.
     pub(crate) async fn next_field(&mut self) -> Result<Option<FieldReader>> {
-        match self.0.next_field().await {
-            Ok(field) => Ok(field.map(FieldReader)),
-            Err(refused) => Err(multipart_refusal(refused.into())),
-        }
+        self.0
+            .next_field()
+            .await
+            .map(|field| field.map(FieldReader))
+            .map_err(|refused| multipart_refusal(refused.into()))
     }
 }
 

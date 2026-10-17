@@ -1,4 +1,4 @@
-//! HTTP binding for nestrs pipes — the poem adapter that applies a
+//! HTTP binding for nestrs pipes — the extractor wrappers that apply a
 //! [`nest_rs_pipes::Pipe`] to a handler parameter between extraction and the
 //! handler.
 //!
@@ -14,16 +14,14 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 
+use http::StatusCode;
 use nest_rs_pipes::{Pipe, PipeError, ValidationPipe};
 use poem::error::ReadBodyError;
-use poem::http::StatusCode;
-use poem::web::{Json, Path, Query};
-use poem::{Body, Error, FromRequest, Request, RequestBody, Result};
 use validator::Validate;
 
-use crate::{Header, ProblemDetails};
+use crate::{Form, FromRequest, Header, Json, Path, ProblemDetails, Query, Request, RequestBody};
 
-/// Owned-unwrap for poem extractors, so a pipe can take the value they carry
+/// Owned-unwrap for an extractor, so a pipe can take the value it carries
 /// without cloning.
 pub trait IntoInner {
     /// The value the wrapping extractor carries.
@@ -32,71 +30,83 @@ pub trait IntoInner {
     fn into_inner(self) -> Self::Inner;
 }
 
-impl<T> IntoInner for Json<T> {
-    type Inner = T;
-    fn into_inner(self) -> T {
-        self.0
-    }
+/// `IntoInner` for each single-value extractor: its value, out of its wrapper.
+macro_rules! into_inner {
+    ($($extractor:ty),* $(,)?) => {
+        $(
+            impl<T> IntoInner for $extractor {
+                type Inner = T;
+                fn into_inner(self) -> T {
+                    self.0
+                }
+            }
+        )*
+    };
 }
 
-impl<T> IntoInner for Path<T> {
-    type Inner = T;
-    fn into_inner(self) -> T {
-        self.0
-    }
-}
+into_inner!(
+    Json<T>,
+    Path<T>,
+    Query<T>,
+    Form<T>,
+    Header<T>,
+    poem::web::Json<T>,
+    poem::web::Path<T>,
+    poem::web::Query<T>,
+);
 
-impl<T> IntoInner for Query<T> {
-    type Inner = T;
-    fn into_inner(self) -> T {
-        self.0
-    }
-}
-
-impl<T> IntoInner for Header<T> {
-    type Inner = T;
-    fn into_inner(self) -> T {
-        self.0
-    }
-}
-
-fn reject(err: PipeError) -> Error {
+/// A pipe's refusal, as the `400` problem every edge's rejection is.
+fn rejection(err: PipeError) -> ProblemDetails {
     let mut problem = ProblemDetails::bad_request().with_detail(err.message().to_owned());
     if let Some(details) = err.into_details() {
         problem = problem.with_extension("errors", details);
     }
-    Error::from(problem)
+    problem
 }
 
-/// Extract `E` and unwrap it to its inner value. The future is boxed: a generic
-/// `async fn` delegating to another's trips rustc#100013.
-async fn extract_inner<'a, E>(req: &'a Request, body: &mut RequestBody) -> Result<E::Inner>
+/// Extract `E` from poem's request and unwrap it to its inner value. The future
+/// is boxed: a generic `async fn` delegating to another's trips rustc#100013.
+async fn extract_poem_inner<'a, E>(
+    req: &'a poem::Request,
+    body: &mut poem::RequestBody,
+) -> poem::Result<E::Inner>
 where
-    E: FromRequest<'a> + IntoInner,
+    E: poem::FromRequest<'a> + IntoInner,
 {
-    cap_body(req, body).await?;
-    let extract: Pin<Box<dyn Future<Output = Result<E>> + Send + '_>> =
+    cap_poem_body(body).await?;
+    let extract: Pin<Box<dyn Future<Output = poem::Result<E>> + Send + '_>> =
         Box::pin(E::from_request(req, body));
     Ok(extract.await?.into_inner())
 }
 
-/// Re-seat the request body bounded to the configured limit before the inner
-/// extractor reads it: poem's `Json` ignores the ambient cap. `413` past it.
-async fn cap_body(req: &Request, body: &mut RequestBody) -> Result<()> {
+/// Extract `E` and unwrap it to its inner value; each extractor of the
+/// vocabulary that reads the body reads it under the cap itself.
+async fn extract_inner<'a, E>(req: &'a Request, body: &mut RequestBody) -> crate::Result<E::Inner>
+where
+    E: FromRequest<'a> + IntoInner,
+{
+    let extract: Pin<Box<dyn Future<Output = crate::Result<E>> + Send + '_>> =
+        Box::pin(E::from_request(req, body));
+    Ok(extract.await?.into_inner())
+}
+
+/// Re-seat poem's request body bounded to the configured limit before the
+/// inner extractor reads it: poem's `Json` ignores the ambient cap. `413` past
+/// it.
+async fn cap_poem_body(body: &mut poem::RequestBody) -> poem::Result<()> {
     if body.is_none() {
         return Ok(());
     }
-    let _ = req;
     let limit = crate::current_body_limit();
-    let taken = body.take().map_err(Error::from)?;
+    let taken = body.take().map_err(poem::Error::from)?;
     let bytes = match taken.into_bytes_limit(limit).await {
         Ok(bytes) => bytes,
         Err(ReadBodyError::PayloadTooLarge) => {
-            return Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
+            return Err(poem::Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
         }
-        Err(err) => return Err(Error::from(err)),
+        Err(err) => return Err(poem::Error::from(err)),
     };
-    *body = RequestBody::new(Body::from_bytes(bytes));
+    *body = poem::RequestBody::new(poem::Body::from_bytes(bytes));
     Ok(())
 }
 
@@ -112,6 +122,13 @@ impl<P: Pipe, E> Piped<P, E> {
     pub fn into_inner(self) -> P::Out {
         self.value
     }
+
+    fn of(value: P::Out) -> Self {
+        Self {
+            value,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<P: Pipe, E> Deref for Piped<P, E> {
@@ -121,18 +138,34 @@ impl<P: Pipe, E> Deref for Piped<P, E> {
     }
 }
 
+impl<'a, P, E> poem::FromRequest<'a> for Piped<P, E>
+where
+    P: Pipe + Send + Sync,
+    P::Out: Send,
+    E: poem::FromRequest<'a> + IntoInner<Inner = P::In>,
+{
+    async fn from_request(
+        req: &'a poem::Request,
+        body: &mut poem::RequestBody,
+    ) -> poem::Result<Self> {
+        let input = extract_poem_inner::<E>(req, body).await?;
+        P::transform(input)
+            .map(Self::of)
+            .map_err(|refused| rejection(refused).into())
+    }
+}
+
 impl<'a, P, E> FromRequest<'a> for Piped<P, E>
 where
     P: Pipe + Send + Sync,
     P::Out: Send,
     E: FromRequest<'a> + IntoInner<Inner = P::In>,
 {
-    async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
-        let value = P::transform(extract_inner::<E>(req, body).await?).map_err(reject)?;
-        Ok(Self {
-            value,
-            _marker: PhantomData,
-        })
+    async fn from_request(req: &'a Request, body: &mut RequestBody) -> crate::Result<Self> {
+        let input = extract_inner::<E>(req, body).await?;
+        P::transform(input)
+            .map(Self::of)
+            .map_err(|refused| rejection(refused).into())
     }
 }
 
@@ -158,36 +191,61 @@ impl<E: IntoInner> Deref for Valid<E> {
     }
 }
 
+impl<'a, E> poem::FromRequest<'a> for Valid<E>
+where
+    E: poem::FromRequest<'a> + IntoInner,
+    E::Inner: Validate,
+{
+    async fn from_request(
+        req: &'a poem::Request,
+        body: &mut poem::RequestBody,
+    ) -> poem::Result<Self> {
+        let input = extract_poem_inner::<E>(req, body).await?;
+        ValidationPipe::<E::Inner>::transform(input)
+            .map(Valid)
+            .map_err(|refused| rejection(refused).into())
+    }
+}
+
 impl<'a, E> FromRequest<'a> for Valid<E>
 where
     E: FromRequest<'a> + IntoInner,
     E::Inner: Validate,
 {
-    async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
-        let value = ValidationPipe::<E::Inner>::transform(extract_inner::<E>(req, body).await?)
-            .map_err(reject)?;
-        Ok(Valid(value))
+    async fn from_request(req: &'a Request, body: &mut RequestBody) -> crate::Result<Self> {
+        let input = extract_inner::<E>(req, body).await?;
+        ValidationPipe::<E::Inner>::transform(input)
+            .map(Valid)
+            .map_err(|refused| rejection(refused).into())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use http::{HeaderValue, header};
+    use serde::{Deserialize, Serialize};
+
     use super::*;
+    use crate::{HttpError, IntoResponse};
+
+    async fn problem_of(err: HttpError) -> (StatusCode, serde_json::Value, String) {
+        let resp = err.into_response();
+        let status = resp.status();
+        let text = resp.into_body().into_string().await.expect("body");
+        let json = serde_json::from_str(&text).unwrap_or_default();
+        (status, json, text)
+    }
 
     #[tokio::test]
-    async fn reject_emits_a_problem_json_400_with_the_message() {
-        let err = PipeError::new("not a uuid");
-        let resp = reject(err).into_response();
+    async fn a_rejection_is_a_problem_json_400_with_the_message() {
+        let resp = rejection(PipeError::new("not a uuid")).into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
-            resp.headers()
-                .get(poem::http::header::CONTENT_TYPE)
-                .map(|v| v.as_bytes()),
-            Some(b"application/problem+json".as_slice()),
+            resp.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
         );
-
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        let json: serde_json::Value =
+            serde_json::from_str(&resp.into_body().into_string().await.unwrap()).unwrap();
         assert_eq!(json["status"], 400);
         assert_eq!(json["title"], "Bad Request");
         assert_eq!(json["detail"], "not a uuid");
@@ -198,62 +256,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reject_carries_field_errors_as_an_extension_member() {
+    async fn a_rejection_carries_field_errors_as_an_extension_member() {
         let err = PipeError::with_details(
             "validation failed",
             serde_json::json!({ "email": ["not an email"] }),
         );
-        let resp = reject(err).into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        let json: serde_json::Value = serde_json::from_str(
+            &rejection(err)
+                .into_response()
+                .into_body()
+                .into_string()
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(json["detail"], "validation failed");
         assert_eq!(json["errors"]["email"][0], "not an email");
     }
 
     #[test]
-    fn into_inner_for_json_unwraps_the_payload() {
-        let j = Json(42i32);
-        assert_eq!(j.into_inner(), 42);
-    }
-
-    #[test]
-    fn into_inner_for_path_unwraps_the_payload() {
-        let p = Path("/users/123".to_string());
-        assert_eq!(p.into_inner(), "/users/123");
-    }
-
-    #[test]
-    fn into_inner_for_query_unwraps_the_payload() {
-        #[derive(Debug, PartialEq)]
-        struct Q {
-            first: u32,
-        }
-        let q = Query(Q { first: 7 });
-        assert_eq!(q.into_inner(), Q { first: 7 });
-    }
-
-    #[test]
-    fn into_inner_for_header_unwraps_the_payload() {
-        #[derive(Debug, PartialEq)]
-        struct H {
-            request_id: String,
-        }
-        let h = Header(H {
-            request_id: "abc".into(),
-        });
-        assert_eq!(
-            h.into_inner(),
-            H {
-                request_id: "abc".into(),
-            },
-        );
+    fn into_inner_unwraps_each_single_value_extractor() {
+        assert_eq!(IntoInner::into_inner(Json(42)), 42);
+        assert_eq!(IntoInner::into_inner(Path("/users/123")), "/users/123");
+        assert_eq!(IntoInner::into_inner(Query(7)), 7);
+        assert_eq!(IntoInner::into_inner(Form(8)), 8);
+        assert_eq!(IntoInner::into_inner(Header("abc")), "abc");
+        assert_eq!(IntoInner::into_inner(poem::web::Json(1)), 1);
+        assert_eq!(IntoInner::into_inner(poem::web::Path(2)), 2);
+        assert_eq!(IntoInner::into_inner(poem::web::Query(3)), 3);
     }
 
     struct ToUpper;
 
-    impl nest_rs_pipes::Pipe for ToUpper {
+    impl Pipe for ToUpper {
         type In = String;
         type Out = String;
         fn transform(input: String) -> std::result::Result<String, PipeError> {
@@ -261,48 +296,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn piped_into_inner_yields_the_transformed_value() {
-        let p: Piped<ToUpper, Json<String>> = Piped {
-            value: "HELLO".into(),
-            _marker: PhantomData,
-        };
-        assert_eq!(p.into_inner(), "HELLO");
+    struct AlwaysReject;
+
+    impl Pipe for AlwaysReject {
+        type In = String;
+        type Out = String;
+        fn transform(_: String) -> std::result::Result<String, PipeError> {
+            Err(PipeError::new("nope"))
+        }
     }
 
     #[test]
-    fn piped_deref_borrows_the_transformed_value() {
-        let p: Piped<ToUpper, Json<String>> = Piped {
-            value: "world".into(),
-            _marker: PhantomData,
-        };
+    fn piped_and_valid_hand_back_and_lend_their_value() {
+        let p: Piped<ToUpper, Json<String>> = Piped::of("HELLO".into());
         assert_eq!(p.len(), 5);
-        assert_eq!(&*p, "world");
-    }
-
-    #[test]
-    fn valid_into_inner_yields_the_validated_value() {
+        assert_eq!(p.into_inner(), "HELLO");
         let v: Valid<Json<String>> = Valid("ok".into());
-        assert_eq!(v.into_inner(), "ok");
-    }
-
-    #[test]
-    fn valid_deref_borrows_the_validated_value() {
-        let v: Valid<Json<String>> = Valid("ok".into());
-        assert_eq!(v.len(), 2);
         assert_eq!(&*v, "ok");
-    }
-
-    use poem::Body;
-    use serde::{Deserialize, Serialize};
-    use validator::Validate;
-
-    fn json_request<T: Serialize>(payload: &T) -> (Request, poem::RequestBody) {
-        let body = Body::from_json(payload).expect("body serializes");
-        let req = Request::builder()
-            .content_type("application/json")
-            .body(body);
-        req.split()
+        assert_eq!(v.into_inner(), "ok");
     }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Validate)]
@@ -311,44 +322,48 @@ mod tests {
         msg: String,
     }
 
+    #[derive(Debug, Serialize, Deserialize, Validate)]
+    struct Login {
+        #[validate(length(min = 8))]
+        password: String,
+    }
+
+    fn json_request<T: Serialize>(payload: &T) -> (Request, RequestBody) {
+        Request::builder()
+            .header(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            )
+            .body(serde_json::to_vec(payload).expect("body serializes"))
+            .split()
+    }
+
     #[tokio::test]
-    async fn piped_from_request_pipes_the_extracted_value() {
-        let (req, mut body) = json_request(&"hello".to_string());
-        let piped: Piped<ToUpper, Json<String>> = Piped::from_request(&req, &mut body)
+    async fn piped_pipes_the_extracted_value() {
+        let (req, mut body) = json_request(&"hello".to_owned());
+        let piped = Piped::<ToUpper, Json<String>>::from_request(&req, &mut body)
             .await
             .expect("happy path");
         assert_eq!(piped.into_inner(), "HELLO");
     }
 
-    struct AlwaysReject;
-
-    impl nest_rs_pipes::Pipe for AlwaysReject {
-        type In = String;
-        type Out = String;
-        fn transform(_: String) -> std::result::Result<String, PipeError> {
-            Err(PipeError::new("nope"))
-        }
-    }
-
     #[tokio::test]
-    async fn piped_from_request_rejects_when_the_pipe_returns_an_error() {
-        let (req, mut body) = json_request(&"hello".to_string());
-        let err = match Piped::<AlwaysReject, Json<String>>::from_request(&req, &mut body).await {
-            Ok(_) => panic!("the pipe should have rejected"),
-            Err(e) => e,
+    async fn piped_rejects_when_the_pipe_returns_an_error() {
+        let (req, mut body) = json_request(&"hello".to_owned());
+        let Err(err) = Piped::<AlwaysReject, Json<String>>::from_request(&req, &mut body).await
+        else {
+            panic!("the pipe should have rejected");
         };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        let (status, json, _) = problem_of(err).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["detail"], "nope");
     }
 
     #[tokio::test]
-    async fn valid_from_request_returns_the_validated_payload() {
+    async fn valid_returns_the_validated_payload() {
         let payload = Greeting { msg: "hi".into() };
         let (req, mut body) = json_request(&payload);
-        let v: Valid<Json<Greeting>> = Valid::from_request(&req, &mut body)
+        let v = Valid::<Json<Greeting>>::from_request(&req, &mut body)
             .await
             .expect("validation passes");
         assert_eq!(v.into_inner(), payload);
@@ -356,54 +371,41 @@ mod tests {
 
     #[tokio::test]
     async fn valid_rejects_a_body_past_the_configured_limit_with_413() {
-        let payload = Greeting {
+        let (req, mut body) = json_request(&Greeting {
             msg: "well over four bytes".into(),
-        };
-        let (req, mut body) = Request::builder()
-            .content_type("application/json")
-            .body(Body::from_json(&payload).expect("body serializes"))
-            .split();
-
-        let err = match crate::raw_body::with_body_limit(
+        });
+        let Err(err) = crate::raw_body::with_body_limit(
             4,
             Valid::<Json<Greeting>>::from_request(&req, &mut body),
         )
         .await
-        {
-            Ok(_) => panic!("body exceeds the cap"),
-            Err(e) => e,
+        else {
+            panic!("body exceeds the cap");
         };
-        assert_eq!(err.into_response().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(err.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
     async fn valid_accepts_a_body_within_the_configured_limit() {
         let payload = Greeting { msg: "hi".into() };
-        let (req, mut body) = Request::builder()
-            .content_type("application/json")
-            .body(Body::from_json(&payload).expect("body serializes"))
-            .split();
-
-        let v: Valid<Json<Greeting>> =
-            crate::raw_body::with_body_limit(4096, Valid::from_request(&req, &mut body))
-                .await
-                .expect("body fits under the cap");
+        let (req, mut body) = json_request(&payload);
+        let v = crate::raw_body::with_body_limit(
+            4096,
+            Valid::<Json<Greeting>>::from_request(&req, &mut body),
+        )
+        .await
+        .expect("body fits under the cap");
         assert_eq!(v.into_inner(), payload);
     }
 
     #[tokio::test]
-    async fn valid_from_request_rejects_with_400_and_field_details_on_invalid_input() {
-        // Empty `msg` fails the `length(min = 1)` rule.
-        let payload = Greeting { msg: String::new() };
-        let (req, mut body) = json_request(&payload);
-        let err = match Valid::<Json<Greeting>>::from_request(&req, &mut body).await {
-            Ok(_) => panic!("validation should have rejected"),
-            Err(e) => e,
+    async fn valid_rejects_with_400_and_field_details_on_invalid_input() {
+        let (req, mut body) = json_request(&Greeting { msg: String::new() });
+        let Err(err) = Valid::<Json<Greeting>>::from_request(&req, &mut body).await else {
+            panic!("validation should have rejected");
         };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        let (status, json, _) = problem_of(err).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["status"], 400);
         assert!(
             json.get("errors").and_then(|d| d.get("msg")).is_some(),
@@ -411,34 +413,63 @@ mod tests {
         );
     }
 
-    #[derive(Debug, Serialize, Deserialize, Validate)]
-    struct Login {
-        #[validate(length(min = 8))]
-        password: String,
-    }
-
     #[tokio::test]
-    async fn valid_rejection_does_not_echo_the_submitted_value_in_the_400_body() {
-        let payload = Login {
-            password: "hunter2".into(), // 7 chars — fails `min = 8`
+    async fn a_valid_rejection_does_not_echo_the_submitted_value_in_the_400_body() {
+        let (req, mut body) = json_request(&Login {
+            password: "hunter2".into(),
+        });
+        let Err(err) = Valid::<Json<Login>>::from_request(&req, &mut body).await else {
+            panic!("validation should have rejected");
         };
-        let (req, mut body) = json_request(&payload);
-        let err = match Valid::<Json<Login>>::from_request(&req, &mut body).await {
-            Ok(_) => panic!("validation should have rejected"),
-            Err(e) => e,
-        };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let text = std::str::from_utf8(&bytes).expect("utf8 body");
+        let (status, json, text) = problem_of(err).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
             !text.contains("hunter2"),
-            "the submitted value must not be echoed in the 400 body: {text}",
+            "the submitted value is echoed: {text}"
         );
-        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert!(
             json.get("errors").and_then(|d| d.get("password")).is_some(),
             "errors should still name the failing field: {json}",
         );
+    }
+
+    /// The poem twin `#[routes]` still calls answers the same refusals, under
+    /// the same cap.
+    #[tokio::test]
+    async fn the_poem_reading_answers_as_the_vocabulary_does() {
+        let poem_json = |payload: &Greeting| {
+            poem::Request::builder()
+                .content_type("application/json")
+                .body(serde_json::to_vec(payload).expect("body serializes"))
+                .split()
+        };
+
+        let (req, mut body) = poem_json(&Greeting { msg: String::new() });
+        let Err(err) =
+            <Valid<poem::web::Json<Greeting>> as poem::FromRequest>::from_request(&req, &mut body)
+                .await
+        else {
+            panic!("validation should have rejected");
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let json: serde_json::Value =
+            serde_json::from_slice(&resp.into_body().into_bytes().await.unwrap()).unwrap();
+        assert!(json["errors"]["msg"].is_array(), "{json}");
+
+        let (req, mut body) = poem_json(&Greeting {
+            msg: "well over four bytes".into(),
+        });
+        let Err(err) = crate::raw_body::with_body_limit(
+            4,
+            <Piped<ValidationPipe<Greeting>, poem::web::Json<Greeting>> as poem::FromRequest>::from_request(
+                &req, &mut body,
+            ),
+        )
+        .await
+        else {
+            panic!("body exceeds the cap");
+        };
+        assert_eq!(err.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

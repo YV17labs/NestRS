@@ -5,11 +5,11 @@
 use std::any::TypeId;
 use std::ops::Deref;
 
+use http::{Extensions, StatusCode};
 use nest_rs_core::AmbientValue;
-use poem::http::StatusCode;
-use poem::{Error, FromRequest, Request, RequestBody, Result};
 
 use crate::problem::ProblemDetails;
+use crate::response::{IntoResponse, Response};
 
 /// Recorded on a request when an authentication guard evaluated a presented
 /// credential, rejected it, and admitted the request anyway because the route
@@ -55,13 +55,39 @@ impl<T> Deref for Ctx<T> {
     }
 }
 
-impl<'a, T: AmbientValue + Clone> FromRequest<'a> for Ctx<T> {
-    async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
+/// Why no guard's value is there to read.
+enum Absent {
+    /// A `#[public]` route admitted a credential it refused: the deferred `401`,
+    /// with what the guard would have denied with.
+    Deferred {
+        client_message: String,
+        bearer_error: Option<&'static str>,
+    },
+    /// The guard that attaches the value never ran: a wiring `500`.
+    Unwired,
+}
+
+impl Absent {
+    /// The deferred `401`: the guard's client-safe message, and the RFC 6750
+    /// challenge it would have stamped.
+    fn deferred(client_message: String, bearer_error: Option<&'static str>) -> Response {
+        let mut response = ProblemDetails::unauthorized()
+            .with_detail(client_message)
+            .into_response();
+        if let Some(code) = bearer_error {
+            crate::challenge::stamp_bearer_error_on(response.headers_mut(), code);
+        }
+        response
+    }
+}
+
+impl<T: AmbientValue + Clone> Ctx<T> {
+    /// What a guard attached, or why it is absent.
+    fn read(extensions: &Extensions) -> Result<Self, Absent> {
         if let Some(value) = nest_rs_core::ambient::<T>() {
             return Ok(Ctx(T::clone(&value)));
         }
-        if let Some(rejected) = req
-            .extensions()
+        if let Some(rejected) = extensions
             .get::<RejectedCredential>()
             .filter(|r| r.principal == TypeId::of::<T>())
         {
@@ -70,13 +96,10 @@ impl<'a, T: AmbientValue + Clone> FromRequest<'a> for Ctx<T> {
                 context_type = std::any::type_name::<T>(),
                 "public route needs the principal a rejected credential never produced — answering the deferred 401",
             );
-            let mut response = poem::IntoResponse::into_response(
-                ProblemDetails::unauthorized().with_detail(rejected.client_message.clone()),
-            );
-            if let Some(code) = rejected.bearer_error {
-                crate::challenge::stamp_bearer_error(&mut response, code);
-            }
-            return Err(poem::Error::from_response(response));
+            return Err(Absent::Deferred {
+                client_message: rejected.client_message.clone(),
+                bearer_error: rejected.bearer_error,
+            });
         }
         // The type name belongs in the log, never the response body.
         tracing::error!(
@@ -84,13 +107,46 @@ impl<'a, T: AmbientValue + Clone> FromRequest<'a> for Ctx<T> {
             context_type = std::any::type_name::<T>(),
             "missing request context — the guard that attaches it did not run on this route",
         );
-        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+        Err(Absent::Unwired)
+    }
+}
+
+impl<'a, T: AmbientValue + Clone> poem::FromRequest<'a> for Ctx<T> {
+    async fn from_request(
+        req: &'a poem::Request,
+        _body: &mut poem::RequestBody,
+    ) -> poem::Result<Self> {
+        Self::read(req.extensions()).map_err(|absent| match absent {
+            Absent::Deferred {
+                client_message,
+                bearer_error,
+            } => poem::Error::from_response(crate::poem_bridge::response_to_poem(
+                Absent::deferred(client_message, bearer_error),
+            )),
+            Absent::Unwired => poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR),
+        })
+    }
+}
+
+impl<'a, T: AmbientValue + Clone> crate::FromRequest<'a> for Ctx<T> {
+    async fn from_request(
+        req: &'a crate::Request,
+        _body: &mut crate::RequestBody,
+    ) -> crate::Result<Self> {
+        Self::read(req.extensions()).map_err(|absent| match absent {
+            Absent::Deferred {
+                client_message,
+                bearer_error,
+            } => crate::HttpError::from_response(Absent::deferred(client_message, bearer_error)),
+            Absent::Unwired => crate::HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{FromRequest, Request, Result};
 
     #[derive(Clone)]
     struct Principal(&'static str);
@@ -102,11 +158,43 @@ mod tests {
         Ctx::<Principal>::from_request(&req, &mut body).await
     }
 
+    async fn extract_poem(req: poem::Request) -> poem::Result<Ctx<Principal>> {
+        let (req, mut body) = req.split();
+        <Ctx<Principal> as poem::FromRequest>::from_request(&req, &mut body).await
+    }
+
+    /// The poem twin `#[routes]` still calls answers each absence alike.
+    #[tokio::test]
+    async fn the_poem_reading_answers_as_the_vocabulary_does() {
+        let unwired = extract_poem(poem::Request::default())
+            .await
+            .err()
+            .expect("no guard ran");
+        assert_eq!(unwired.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let mut req = poem::Request::default();
+        req.extensions_mut().insert(RejectedCredential {
+            principal: TypeId::of::<Principal>(),
+            client_message: "authentication failed".into(),
+            bearer_error: Some(crate::challenge::INVALID_TOKEN),
+        });
+        let deferred = extract_poem(req)
+            .await
+            .err()
+            .expect("credential was rejected");
+        let response = deferred.into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()[http::header::WWW_AUTHENTICATE],
+            r#"Bearer error="invalid_token""#
+        );
+    }
+
     #[tokio::test]
     async fn an_attached_principal_extracts() {
         let extracted = nest_rs_core::with_ambient(
             std::sync::Arc::new(Principal("ada")),
-            extract(Request::default()),
+            extract(Request::builder().finish()),
         )
         .await;
         assert_eq!(extracted.expect("attached").0.0, "ada");
@@ -114,7 +202,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_value_in_the_requests_extensions_is_not_an_attachment() {
-        let mut req = Request::default();
+        let mut req = Request::builder().finish();
         req.extensions_mut().insert(Principal("mallory"));
         let err = extract(req).await.err().expect("nothing was attached");
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -123,7 +211,7 @@ mod tests {
     #[tokio::test]
     async fn a_missing_principal_with_no_rejection_stays_a_wiring_500() {
         let logs = nest_rs_testing::LogCapture::install();
-        let err = extract(Request::default())
+        let err = extract(Request::builder().finish())
             .await
             .err()
             .expect("no guard ran");
@@ -145,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_rejected_credential_turns_the_missing_principal_into_the_deferred_401() {
-        let mut req = Request::default();
+        let mut req = Request::builder().finish();
         req.extensions_mut().insert(RejectedCredential {
             principal: TypeId::of::<Principal>(),
             client_message: "authentication failed".into(),
@@ -158,7 +246,7 @@ mod tests {
         assert_eq!(
             response
                 .headers()
-                .get(poem::http::header::WWW_AUTHENTICATE)
+                .get(http::header::WWW_AUTHENTICATE)
                 .and_then(|v| v.to_str().ok()),
             Some(r#"Bearer error="invalid_token""#),
         );
@@ -172,7 +260,7 @@ mod tests {
     /// 9110 §11.6.1 still requires the bare challenge.
     #[tokio::test]
     async fn a_rejection_with_no_code_defers_a_401_whose_challenge_names_none() {
-        let mut req = Request::default();
+        let mut req = Request::builder().finish();
         req.extensions_mut().insert(RejectedCredential {
             principal: TypeId::of::<Principal>(),
             client_message: "authentication failed".into(),
@@ -183,7 +271,7 @@ mod tests {
         let challenge = err
             .into_response()
             .headers()
-            .get(poem::http::header::WWW_AUTHENTICATE)
+            .get(http::header::WWW_AUTHENTICATE)
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned)
             .expect("a 401 always carries a challenge");
@@ -198,7 +286,7 @@ mod tests {
 
         impl AmbientValue for SomethingElse {}
 
-        let mut req = Request::default();
+        let mut req = Request::builder().finish();
         req.extensions_mut().insert(RejectedCredential {
             principal: TypeId::of::<SomethingElse>(),
             client_message: "authentication failed".into(),

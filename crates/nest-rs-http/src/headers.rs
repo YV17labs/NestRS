@@ -1,4 +1,4 @@
-//! Typed request-header extractor — the header-map twin of poem's `Query<T>`.
+//! Typed request-header extractor — the header-map twin of [`Query<T>`](crate::Query).
 //!
 //! [`Header<T>`] deserializes `T` from the request's headers: one struct field
 //! per header, `#[serde(rename = "…")]` spelling the wire name, and an
@@ -17,8 +17,7 @@
 
 use std::ops::Deref;
 
-use poem::http::HeaderMap;
-use poem::{Error, FromRequest, Request, RequestBody, Result};
+use http::HeaderMap;
 use serde::de::{
     DeserializeOwned, DeserializeSeed, Deserializer, IntoDeserializer, MapAccess, Visitor,
 };
@@ -82,18 +81,34 @@ impl<T> Deref for Header<T> {
     }
 }
 
-impl<'a, T: DeserializeOwned> FromRequest<'a> for Header<T> {
-    async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        T::deserialize(FromHeaders {
-            headers: req.headers(),
-        })
-        .map(Header)
-        .map_err(reject)
+impl<T: DeserializeOwned> Header<T> {
+    /// `T` read from `headers`, or the refusal naming the header.
+    fn bind(headers: &HeaderMap) -> std::result::Result<Self, HeaderError> {
+        T::deserialize(FromHeaders { headers }).map(Header)
     }
 }
 
-fn reject(err: HeaderError) -> Error {
-    Error::from(ProblemDetails::bad_request().with_detail(err.to_string()))
+/// A header refusal, as the `400` problem every edge's rejection is.
+fn rejection(refused: &HeaderError) -> ProblemDetails {
+    ProblemDetails::bad_request().with_detail(refused.to_string())
+}
+
+impl<'a, T: DeserializeOwned> poem::FromRequest<'a> for Header<T> {
+    async fn from_request(
+        req: &'a poem::Request,
+        _body: &mut poem::RequestBody,
+    ) -> poem::Result<Self> {
+        Self::bind(req.headers()).map_err(|refused| rejection(&refused).into())
+    }
+}
+
+impl<'a, T: DeserializeOwned> crate::FromRequest<'a> for Header<T> {
+    async fn from_request(
+        req: &'a crate::Request,
+        _body: &mut crate::RequestBody,
+    ) -> crate::Result<Self> {
+        Self::bind(req.headers()).map_err(|refused| rejection(&refused).into())
+    }
 }
 
 /// serde's `expected one of \`a\`, \`b\`` list, without the value its own
@@ -123,7 +138,7 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
             let Some(raw) = self.headers.get(*field) else {
                 // `http` answers an invalid name as absent, so a bad `rename` would
                 // bind `None` forever; a hit has already proved its name valid.
-                if poem::http::HeaderName::from_bytes(field.as_bytes()).is_err() {
+                if http::HeaderName::from_bytes(field.as_bytes()).is_err() {
                     return Err(HeaderError::not_a_header_name(field));
                 }
                 continue;
@@ -353,10 +368,11 @@ impl<'de> Deserializer<'de> for Part {
 mod tests {
     use std::collections::HashMap;
 
-    use poem::http::{HeaderValue, StatusCode};
+    use http::{HeaderName, HeaderValue, StatusCode};
     use serde::Deserialize;
 
     use super::*;
+    use crate::{FromRequest, HttpError, Request, Result};
 
     #[derive(Debug, Deserialize)]
     struct Tracing {
@@ -371,7 +387,8 @@ mod tests {
     async fn extract<T: DeserializeOwned>(headers: &[(&str, HeaderValue)]) -> Result<Header<T>> {
         let mut builder = Request::builder();
         for (name, value) in headers {
-            builder = builder.header(*name, value.clone());
+            let name = HeaderName::from_bytes(name.as_bytes()).expect("a header name");
+            builder = builder.header(name, value.clone());
         }
         let (req, mut body) = builder.finish().split();
         Header::<T>::from_request(&req, &mut body).await
@@ -381,12 +398,12 @@ mod tests {
         HeaderValue::from_str(v).expect("a header value")
     }
 
-    async fn detail_of(err: Error) -> String {
+    async fn detail_of(err: HttpError) -> String {
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.headers()
-                .get(poem::http::header::CONTENT_TYPE)
+                .get(http::header::CONTENT_TYPE)
                 .map(|v| v.as_bytes()),
             Some(b"application/problem+json".as_slice()),
             "a header rejection renders as RFC-9457, like every other edge error",

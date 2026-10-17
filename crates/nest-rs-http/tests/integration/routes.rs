@@ -21,6 +21,22 @@ pub(crate) async fn table_under(
     prefix: Option<&str>,
     mount: impl Fn(&mut HttpRoutes) + Send + Sync + 'static,
 ) -> Result<Client, String> {
+    table_on(
+        HttpConfig {
+            global_prefix: prefix.map(str::to_owned),
+            ..HttpConfig::default()
+        },
+        mount,
+    )
+    .await
+}
+
+/// The table one self-mount at `/` registers, served on the transport `config`
+/// describes; the boot's refusal when the table refuses it.
+pub(crate) async fn table_on(
+    config: HttpConfig,
+    mount: impl Fn(&mut HttpRoutes) + Send + Sync + 'static,
+) -> Result<Client, String> {
     let app = App::builder()
         .provide_meta(
             HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/", "probe", move |_c, routes| {
@@ -31,10 +47,7 @@ pub(crate) async fn table_under(
         .build()
         .await
         .expect("the app builds — the table is the transport's");
-    let mut transport = crate::built(&HttpConfig {
-        global_prefix: prefix.map(str::to_owned),
-        ..HttpConfig::default()
-    });
+    let mut transport = crate::built(&config);
     transport
         .configure(app.container())
         .await

@@ -165,18 +165,18 @@ A webhook's signature is a credential, so it is verified in a guard that reads
 the same bytes and hands them on, never in the handler — see
 [Read the body in a guard](/fundamentals/guards/#read-the-body-in-a-guard).
 
-For a tighter cap on a specific route, take the body manually:
+For a tighter cap on a specific route, take the body and read it under
+your own:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::RawBody;
-use nest_rs::http::poem::{Result, RequestBody};
 use nest_rs::http::poem::web::Path;
+use nest_rs::http::poem::{Body, Result};
 use uuid::Uuid;
 
 #[put("/{id}/summary")]
-async fn replace_summary(&self, id: Path<Uuid>, mut body: RequestBody) -> Result<()> {
-    let raw = RawBody::extract_with_limit(&mut body, 16 * 1024).await?;
-    self.svc.replace_summary(*id, raw.into_inner()).await
+async fn replace_summary(&self, id: Path<Uuid>, body: Body) -> Result<()> {
+    let summary = body.into_bytes_limit(16 * 1024).await?;
+    self.svc.replace_summary(*id, summary).await
 }
 ```
 
@@ -260,9 +260,10 @@ Two contracts hold:
   `#[inject]` on the controller. Reserve `Scoped<T>` for genuinely
   request-scoped state.
 - The framework installs the request scope as the outermost HTTP wrap
-  (before guards and interceptors). A missing scope is a transport
-  wiring bug, surfaced as `500` with a diagnostic naming the missing
-  provider.
+  (before guards and interceptors). A provider the request still cannot
+  reach — the scope not installed, or `T` offered by no module — answers
+  an opaque `500`, and the type goes to an `error` line on
+  `nest_rs::http`, never to the client.
 
 See [Providers](/fundamentals/providers/) for the scope rules — a
 request-scoped provider may inject singletons, never the reverse, never

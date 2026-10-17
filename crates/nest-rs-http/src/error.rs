@@ -723,6 +723,230 @@ pub(crate) struct PathParameterError {
     pub(crate) name: std::sync::Arc<str>,
 }
 
+/// What a body extractor says of a `Content-Type` it does not read: the media
+/// type it expected, never the one sent, which the client chose.
+fn not_of_media_type(f: &mut fmt::Formatter<'_>, expected: &str) -> fmt::Result {
+    write!(f, "the request's content type is not {expected}")
+}
+
+/// What [`Json`](crate::Json) refused.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum JsonError {
+    /// No `Content-Type`, or one that is not JSON: `415`.
+    #[error("{}", MediaType("`application/json` or a `+json` type"))]
+    MediaType,
+    /// The body is not the JSON the type reads: `400`, said without its value.
+    #[error("the JSON body does not decode: {0}")]
+    Malformed(#[source] serde_json::Error),
+}
+
+impl ResponseError for JsonError {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::MediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::Malformed(_) => StatusCode::BAD_REQUEST,
+        }
+    }
+}
+
+/// What [`Query`](crate::Query) refused: the query string is not what the type
+/// reads, `400`, in serde's words said without its value.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct QueryError(#[source] pub(crate) serde::de::value::Error);
+
+impl ResponseError for QueryError {
+    fn status(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
+    }
+}
+
+/// What [`Form`](crate::Form) refused.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FormError {
+    /// A body whose `Content-Type` is missing or not a form's: `415`.
+    #[error("{}", MediaType("`application/x-www-form-urlencoded`"))]
+    MediaType,
+    /// The form is not what the type reads: `400`, said without its value.
+    #[error("url decode: {0}")]
+    Malformed(#[source] serde::de::value::Error),
+}
+
+impl ResponseError for FormError {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::MediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::Malformed(_) => StatusCode::BAD_REQUEST,
+        }
+    }
+}
+
+/// What [`Multipart`](crate::Multipart) refused.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MultipartError {
+    /// No `Content-Type`, or one that is not `multipart/form-data`: `415`.
+    #[error("{}", MediaType("`multipart/form-data`"))]
+    MediaType,
+    /// The body does not parse as parts, or a part's text is not UTF-8:
+    /// `400`. What the parser said is kept for the log, never answered: it
+    /// may name what the client sent.
+    #[error("the multipart body is malformed")]
+    Malformed(#[source] BoxError),
+}
+
+impl ResponseError for MultipartError {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::MediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::Malformed(_) => StatusCode::BAD_REQUEST,
+        }
+    }
+}
+
+/// An expected media type, as a body extractor's refusal says it.
+struct MediaType(&'static str);
+
+impl fmt::Display for MediaType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        not_of_media_type(f, self.0)
+    }
+}
+
+/// What a path binding can fail on. A value is never carried: a refusal names
+/// the parameter and what its type reads.
+#[derive(Debug)]
+pub(crate) enum PathError {
+    /// The parameter is present but its text is not what the field's type
+    /// reads: `400`.
+    Malformed {
+        name: String,
+        expected: Cow<'static, str>,
+    },
+    /// serde recognised the shape and refused the content, before the
+    /// parameter was known; [`against`](Self::against) names it.
+    Unexpected(Cow<'static, str>),
+    /// A type's own refusal, whose message may quote the value: only the fact
+    /// is carried.
+    Refused,
+    /// The handler reads a parameter the route does not declare: a
+    /// handler-signature mistake, `500`.
+    Undeclared(String),
+    /// The route declares a parameter the handler's type refuses to leave
+    /// unread: a handler-signature mistake, `500`.
+    Unread(String),
+    /// The handler reads another number of parameters than the route
+    /// declares: a handler-signature mistake, `500`.
+    Arity { declared: usize, read: usize },
+    /// The handler reads a parameter as a shape one segment cannot hold: a
+    /// handler-signature mistake, `500`.
+    Unsupported(&'static str),
+}
+
+impl PathError {
+    pub(crate) fn malformed(name: &str, expected: impl Into<Cow<'static, str>>) -> Self {
+        Self::Malformed {
+            name: name.to_owned(),
+            expected: expected.into(),
+        }
+    }
+
+    /// Attribute a content refusal to the parameter it was read from: serde's
+    /// constructors cannot know it. Idempotent on named variants.
+    pub(crate) fn against(self, name: &str) -> Self {
+        match self {
+            Self::Unexpected(expected) => Self::malformed(name, expected),
+            Self::Refused => Self::malformed(name, ACCEPTED),
+            named => named,
+        }
+    }
+}
+
+impl fmt::Display for PathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Malformed { name, expected } => {
+                write!(f, "path parameter `{name}` is not {expected}")
+            }
+            Self::Unexpected(expected) => write!(f, "path parameter is not {expected}"),
+            Self::Refused => write!(f, "path parameter is not {ACCEPTED}"),
+            Self::Undeclared(name) => {
+                write!(
+                    f,
+                    "the handler reads `{name}`, a path parameter its route does not declare"
+                )
+            }
+            Self::Unread(name) => {
+                write!(
+                    f,
+                    "the route declares `{name}`, a path parameter the handler does not read"
+                )
+            }
+            Self::Arity { declared, read } => write!(
+                f,
+                "the handler reads {read} path parameters where its route declares {declared}",
+            ),
+            Self::Unsupported(shape) => {
+                write!(
+                    f,
+                    "the handler reads a path parameter as {shape}, which one segment cannot hold"
+                )
+            }
+        }
+    }
+}
+
+impl serde::de::Error for PathError {
+    /// The message is dropped unread: it is the type's, and may quote the
+    /// parameter it refused.
+    fn custom<T: fmt::Display>(_msg: T) -> Self {
+        Self::Refused
+    }
+
+    fn missing_field(field: &'static str) -> Self {
+        Self::Undeclared(field.to_owned())
+    }
+
+    /// serde's default message opens with the value read off the path.
+    fn unknown_variant(_variant: &str, expected: &'static [&'static str]) -> Self {
+        Self::Unexpected(one_of(expected).into())
+    }
+
+    /// A key is a parameter's name, the route's own: a struct refusing it
+    /// leaves a declared parameter unread.
+    fn unknown_field(field: &str, _expected: &'static [&'static str]) -> Self {
+        Self::Unread(field.to_owned())
+    }
+
+    /// serde's default quotes the value in full.
+    fn invalid_value(
+        _unexpected: serde::de::Unexpected<'_>,
+        expected: &dyn serde::de::Expected,
+    ) -> Self {
+        Self::Unexpected(expected.to_string().into())
+    }
+
+    /// serde's default quotes the value in full.
+    fn invalid_type(
+        _unexpected: serde::de::Unexpected<'_>,
+        expected: &dyn serde::de::Expected,
+    ) -> Self {
+        Self::Unexpected(expected.to_string().into())
+    }
+}
+
+impl std::error::Error for PathError {}
+
+impl ResponseError for PathError {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::Malformed { .. } | Self::Unexpected(_) | Self::Refused => StatusCode::BAD_REQUEST,
+            Self::Undeclared(_) | Self::Unread(_) | Self::Arity { .. } | Self::Unsupported(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }
+    }
+}
+
 /// What an [`OriginRefused`] says, to the client and in its error: never the
 /// origin sent.
 pub(crate) const ORIGIN_REFUSED: &str =

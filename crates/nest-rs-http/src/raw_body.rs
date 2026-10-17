@@ -11,9 +11,10 @@
 use std::ops::Deref;
 
 use bytes::Bytes;
+use http::StatusCode;
 use poem::error::ReadBodyError;
-use poem::http::StatusCode;
-use poem::{Error, FromRequest, Request, RequestBody, Result};
+
+use crate::request::{FromRequest, Request, RequestBody};
 
 tokio::task_local! {
     /// The edge's configured whole-body cap for the current request. Not
@@ -58,13 +59,35 @@ impl RawBody {
         self.0
     }
 
-    /// Extract with a caller-chosen byte cap.
-    pub async fn extract_with_limit(body: &mut RequestBody, limit: usize) -> Result<Self> {
+    /// Read the body under a caller-chosen byte cap, for an extractor of
+    /// its own that wants a tighter one than the transport's: `413` past it.
+    ///
+    /// ```
+    /// use nest_rs_http::{RawBody, Request, StatusCode};
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    ///
+    /// let (_, mut body) = Request::builder().body("twelve bytes").split();
+    /// let refused = RawBody::extract_with_limit(&mut body, 8).await.unwrap_err();
+    /// assert_eq!(refused.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn extract_with_limit(body: &mut RequestBody, limit: usize) -> crate::Result<Self> {
+        Ok(Self(body.take()?.into_bytes_limit(limit).await?))
+    }
+
+    /// [`extract_with_limit`](Self::extract_with_limit) over poem's body, which
+    /// `#[routes]` still hands its extractors.
+    async fn extract_poem_with_limit(
+        body: &mut poem::RequestBody,
+        limit: usize,
+    ) -> poem::Result<Self> {
         let raw = body.take()?;
         match raw.into_bytes_limit(limit).await {
             Ok(bytes) => Ok(Self(bytes)),
             Err(ReadBodyError::PayloadTooLarge) => {
-                Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE))
+                Err(poem::Error::from_status(StatusCode::PAYLOAD_TOO_LARGE))
             }
             Err(err) => Err(err.into()),
         }
@@ -78,8 +101,17 @@ impl Deref for RawBody {
     }
 }
 
+impl<'a> poem::FromRequest<'a> for RawBody {
+    async fn from_request(
+        _req: &'a poem::Request,
+        body: &mut poem::RequestBody,
+    ) -> poem::Result<Self> {
+        Self::extract_poem_with_limit(body, crate::current_body_limit()).await
+    }
+}
+
 impl<'a> FromRequest<'a> for RawBody {
-    async fn from_request(_req: &'a Request, body: &mut RequestBody) -> Result<Self> {
+    async fn from_request(_req: &'a Request, body: &mut RequestBody) -> crate::Result<Self> {
         Self::extract_with_limit(body, crate::current_body_limit()).await
     }
 }
@@ -87,11 +119,23 @@ impl<'a> FromRequest<'a> for RawBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use poem::Body;
+    use crate::Body;
 
     fn request_with_body(payload: impl Into<Body>) -> (Request, RequestBody) {
         Request::builder().body(payload).split()
+    }
+
+    /// The poem twin `#[routes]` still calls reads under the same cap.
+    #[tokio::test]
+    async fn the_poem_reading_answers_the_same_413() {
+        let (req, mut body) = poem::Request::builder().body(vec![b'x'; 64]).split();
+        let err = with_body_limit(
+            32,
+            <RawBody as poem::FromRequest>::from_request(&req, &mut body),
+        )
+        .await
+        .expect_err("over the ambient cap");
+        assert_eq!(err.into_response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]

@@ -77,6 +77,41 @@ impl Routed {
     }
 }
 
+/// A `Content-Type`'s type and subtype, its parameters dropped: what a body
+/// extractor decides on.
+pub(crate) struct Essence<'a> {
+    kind: &'a str,
+    subtype: &'a str,
+}
+
+impl Essence<'_> {
+    /// Whether this is exactly `kind/subtype`, ignoring case.
+    pub(crate) fn is_exactly(&self, kind: &str, subtype: &str) -> bool {
+        self.kind.eq_ignore_ascii_case(kind) && self.subtype.eq_ignore_ascii_case(subtype)
+    }
+
+    /// Whether this is `kind/subtype` or carries `subtype` as its structured
+    /// syntax suffix (`application/problem+json`, RFC 6839 §3.1), ignoring case.
+    pub(crate) fn is(&self, kind: &str, subtype: &str) -> bool {
+        self.kind.eq_ignore_ascii_case(kind)
+            && (self.subtype.eq_ignore_ascii_case(subtype)
+                || self
+                    .subtype
+                    .rsplit_once('+')
+                    .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case(subtype)))
+    }
+}
+
+/// `content_type`'s essence, or `None` when it names no `type/subtype`.
+pub(crate) fn essence(content_type: &str) -> Option<Essence<'_>> {
+    let essence = content_type
+        .split_once(';')
+        .map_or(content_type, |(essence, _)| essence)
+        .trim();
+    let (kind, subtype) = essence.split_once('/')?;
+    (!kind.is_empty() && !subtype.is_empty()).then_some(Essence { kind, subtype })
+}
+
 /// The facts riding a request's extensions while a library that speaks `http`
 /// holds it.
 #[derive(Clone)]
@@ -334,6 +369,15 @@ impl Request {
             .iter()
             .find(|(key, _)| &**key == name)
             .map(|(_, value)| value.as_str())
+    }
+
+    /// Every path parameter the router decoded, in the template's order: none
+    /// before routing.
+    pub(crate) fn path_params(&self) -> &[(Arc<str>, String)] {
+        self.facts
+            .route
+            .as_ref()
+            .map_or(&[], |routed| routed.params.as_slice())
     }
 
     /// The body, leaving an empty one in its place.
@@ -617,8 +661,8 @@ impl RequestBody {
         Self(Some(body))
     }
 
-    /// The body; a second take is [`BodyError::AlreadyTaken`], a `500`: two
-    /// parameters of one handler read the body.
+    /// The body; a second take is [`BodyError::AlreadyTaken`], a `500` filed
+    /// at `error`: two parameters of one handler read the body.
     ///
     /// ```
     /// use nest_rs_http::{Body, RequestBody, StatusCode};
@@ -628,7 +672,15 @@ impl RequestBody {
     /// assert_eq!(body.take().unwrap_err().status(), StatusCode::INTERNAL_SERVER_ERROR);
     /// ```
     pub fn take(&mut self) -> Result<Body> {
-        self.0.take().ok_or_else(|| BodyError::AlreadyTaken.into())
+        self.0.take().ok_or_else(|| {
+            let refused = BodyError::AlreadyTaken;
+            tracing::error!(
+                target: crate::target::HTTP,
+                error = %nest_rs_core::error_message(&refused),
+                "two parameters of a handler read the request body",
+            );
+            refused.into()
+        })
     }
 }
 
@@ -721,6 +773,29 @@ mod tests {
             again.downcast_ref::<BodyError>(),
             Some(BodyError::AlreadyTaken)
         ));
+    }
+
+    #[test]
+    fn a_second_read_of_the_body_is_filed_at_error() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut body = RequestBody::new(Body::from("once"));
+        assert!(body.take().is_ok());
+        logs.expect_none(
+            crate::target::HTTP,
+            "two parameters of a handler read the request body",
+        );
+
+        let again = body.take().unwrap_err();
+        assert_eq!(again.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        let filed = logs.expect_one(
+            crate::target::HTTP,
+            "two parameters of a handler read the request body",
+        );
+        assert_eq!(filed.level, "error");
+        assert_eq!(
+            filed.field("error").as_deref(),
+            Some("the request body was already read")
+        );
     }
 
     #[tokio::test]

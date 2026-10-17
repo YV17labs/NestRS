@@ -175,3 +175,121 @@ async fn a_flattened_field_matches_its_header_in_lowercase() {
         resp.assert_text("abc-123").await;
     }
 }
+
+/// Each route above on the vocabulary's extractors, answering what its 6.x
+/// twin answers.
+async fn on_the_vocabulary<T, F>(template: &'static str, answer: F) -> crate::Client
+where
+    T: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(T) -> String + Copy + Send + Sync + 'static,
+{
+    crate::vocabulary_route(
+        nest_rs_http::Method::GET,
+        template,
+        move |req, mut body| async move {
+            let header =
+                <Header<T> as nest_rs_http::FromRequest>::from_request(&req, &mut body).await?;
+            Ok(nest_rs_http::IntoResponse::into_response(answer(
+                header.into_inner(),
+            )))
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn the_vocabulary_answers_each_case_as_6x_did() {
+    type Sent = &'static [(&'static str, &'static str)];
+    let trace = on_the_vocabulary::<Trace, _>("/headers/trace", |trace| {
+        format!("{} {}", trace.request_id, trace.retry.unwrap_or_default())
+    })
+    .await;
+    let tenant = crate::vocabulary_route(
+        nest_rs_http::Method::GET,
+        "/headers/tenant",
+        |req, mut body| async move {
+            let tenant =
+                <Valid<Header<Tenant>> as nest_rs_http::FromRequest>::from_request(&req, &mut body)
+                    .await?;
+            Ok(nest_rs_http::IntoResponse::into_response(
+                tenant.into_inner().tenant,
+            ))
+        },
+    )
+    .await;
+    let bad_name = on_the_vocabulary::<BadName, _>("/edge/bad-name", |headers| {
+        headers.request_id.unwrap_or_default()
+    })
+    .await;
+    let flat = on_the_vocabulary::<Wrapper, _>("/edge/flat", |headers| {
+        headers.inner.request_id.unwrap_or_default()
+    })
+    .await;
+    let six_headers = crate::boot::<HeadersApp>().await;
+    let six_edge = crate::boot::<EdgeModule>().await;
+
+    let cases: [(&crate::Client, &crate::Client, &str, Sent); 9] = [
+        (
+            &trace,
+            &six_headers,
+            "/headers/trace",
+            &[("x-request-id", "abc-123"), ("X-Retry-Count", "4")],
+        ),
+        (
+            &trace,
+            &six_headers,
+            "/headers/trace",
+            &[("X-Request-Id", "abc-123")],
+        ),
+        (&trace, &six_headers, "/headers/trace", &[]),
+        (
+            &trace,
+            &six_headers,
+            "/headers/trace",
+            &[("X-Request-Id", "a"), ("X-Retry-Count", "sk_live_51")],
+        ),
+        (
+            &tenant,
+            &six_headers,
+            "/headers/tenant",
+            &[("X-Tenant", "acme")],
+        ),
+        (
+            &tenant,
+            &six_headers,
+            "/headers/tenant",
+            &[("X-Tenant", "ab")],
+        ),
+        (
+            &bad_name,
+            &six_edge,
+            "/edge/bad-name",
+            &[("X-Request-Id", "abc-123")],
+        ),
+        (
+            &flat,
+            &six_edge,
+            "/edge/flat",
+            &[("X-Request-Id", "abc-123")],
+        ),
+        (
+            &flat,
+            &six_edge,
+            "/edge/flat",
+            &[("X-REQUEST-ID", "abc-123")],
+        ),
+    ];
+    for (seven, six, path, sent) in cases {
+        let mut on_seven = seven.get(path);
+        let mut on_six = six.get(path);
+        for (name, value) in sent {
+            on_seven = on_seven.header(*name, *value);
+            on_six = on_six.header(*name, *value);
+        }
+        assert_eq!(
+            crate::answered(on_seven.send().await).await,
+            crate::answered(on_six.send().await).await,
+            "{path} {sent:?}",
+        );
+    }
+}

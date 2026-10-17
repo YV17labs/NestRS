@@ -282,8 +282,8 @@ refused up front, unread. Past the cap a read fails and the request is answered
 NESTRS_HTTP__MAX_BODY_BYTES=4194304   # 4 MiB
 ```
 
-A single route that needs a different cap overrides it per call with
-`RawBody::extract_with_limit`; the config value is the default for
+A single route that needs a tighter cap reads its body under its own (see
+[`RawBody`](/http/extractors/)); the config value is the default for
 everything else.
 
 ## Request timeout

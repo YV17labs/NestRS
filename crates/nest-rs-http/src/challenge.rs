@@ -56,7 +56,12 @@ fn bearer_error_value(code: &str) -> Option<HeaderValue> {
 /// whatever stood there; a code that cannot be encoded leaves the response
 /// untouched.
 pub fn stamp_bearer_error(res: &mut Response, code: &str) {
+    stamp_bearer_error_on(res.headers_mut(), code);
+}
+
+/// [`stamp_bearer_error`] on a head's headers, whichever response holds them.
+pub(crate) fn stamp_bearer_error_on(headers: &mut http::HeaderMap, code: &str) {
     if let Some(value) = bearer_error_value(code) {
-        res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
+        headers.insert(header::WWW_AUTHENTICATE, value);
     }
 }

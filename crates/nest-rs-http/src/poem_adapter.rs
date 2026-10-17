@@ -1,30 +1,35 @@
 //! The HTTP library the transport adapts, poem, behind one crate-private type:
-//! the router the route table compiles into, and the CORS and compression
-//! answered around the edge. What those do on the wire is pinned by black-box
-//! suites (`tests/integration/{routes,cors,compression}.rs`), so a later
-//! library replaces this file and passes them unchanged
+//! the router the route table compiles into, the CORS and compression
+//! answered around the edge, and the query, form and multipart decoders the
+//! extractors read through. What those do on the wire is pinned by black-box
+//! suites (`tests/integration/{routes,cors,compression,query,form,multipart}.rs`),
+//! so a later library replaces this file and passes them unchanged
 //! (`.claude/decisions/http-server.md`).
 
 use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Context;
+use bytes::Bytes;
 use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_RANGE, CONTENT_TYPE, Entry, VARY};
-use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use poem::error::NotFoundError;
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
+use poem::error::{NotFoundError, ParseFormError, ParseMultipartError};
 use poem::middleware::{Compression, Cors};
 use poem::web::{Compress, CompressionAlgo};
-use poem::{EndpointExt, IntoResponse, PathPattern};
+use poem::{EndpointExt, FromRequest, IntoResponse, PathPattern};
+use serde::de::DeserializeOwned;
+use tokio::io::AsyncRead;
 
 use crate::accept_encoding::{AcceptEncoding, Coding};
 use crate::allow::{Chosen, Methods, head_of};
+use crate::body::Body;
 use crate::cors::{FRAMEWORK_SENT, HttpCors, listed};
 use crate::endpoint::{BoxEndpoint, Endpoint};
-use crate::error::{HttpError, PathParameterError, Result, RouteError};
+use crate::error::{FormError, HttpError, MultipartError, PathParameterError, Result, RouteError};
 use crate::matched::MatchedRoute;
 use crate::poem_bridge::{
-    error_from_poem, error_to_poem, from_poem, note_route, request_from_poem, request_to_poem,
-    response_from_poem, response_to_poem, to_poem,
+    body_to_poem, error_from_poem, error_to_poem, from_poem, note_route, request_from_poem,
+    request_to_poem, response_from_poem, response_to_poem, to_poem,
 };
 use crate::request::{Request, Routed};
 use crate::response::Response;
@@ -120,6 +125,109 @@ impl PoemAdapter {
             endpoint = VariesOnOrigin(endpoint.with(cors)).boxed();
         }
         BoxEndpoint::new(from_poem(endpoint))
+    }
+
+    /// `uri`'s query string decoded into `T`, or what the decoder refused, in
+    /// its words.
+    pub(crate) fn query<T: DeserializeOwned>(
+        uri: &Uri,
+    ) -> std::result::Result<T, serde::de::value::Error> {
+        poem::Request::builder()
+            .uri(uri.clone())
+            .finish()
+            .params::<T>()
+            .map_err(|refused| refused.0)
+    }
+
+    /// An `application/x-www-form-urlencoded` body, already read, decoded into
+    /// `T`.
+    pub(crate) async fn form<T: DeserializeOwned>(bytes: Bytes) -> Result<T> {
+        let (request, mut body) = poem::Request::builder()
+            .method(Method::POST)
+            .content_type("application/x-www-form-urlencoded")
+            .body(bytes)
+            .split();
+        match poem::web::Form::<T>::from_request(&request, &mut body).await {
+            Ok(poem::web::Form(value)) => Ok(value),
+            Err(refused) => Err(match refused.downcast::<ParseFormError>() {
+                Ok(ParseFormError::UrlDecode(malformed)) => FormError::Malformed(malformed).into(),
+                Ok(other) => error_from_poem(other.into()),
+                Err(other) => error_from_poem(other),
+            }),
+        }
+    }
+
+    /// The parts of a `multipart/form-data` body, read as they arrive, the
+    /// boundary read off `content_type`.
+    pub(crate) async fn multipart(
+        content_type: HeaderValue,
+        body: Body,
+    ) -> Result<MultipartReader> {
+        let (request, mut body) = poem::Request::builder()
+            .method(Method::POST)
+            .header(CONTENT_TYPE, content_type)
+            .body(body_to_poem(body))
+            .split();
+        poem::web::Multipart::from_request(&request, &mut body)
+            .await
+            .map(MultipartReader)
+            .map_err(multipart_refusal)
+    }
+}
+
+/// A multipart body's parts, as the library reads them.
+pub(crate) struct MultipartReader(poem::web::Multipart);
+
+impl MultipartReader {
+    /// The next part, or `None` past the last.
+    pub(crate) async fn next_field(&mut self) -> Result<Option<FieldReader>> {
+        match self.0.next_field().await {
+            Ok(field) => Ok(field.map(FieldReader)),
+            Err(refused) => Err(multipart_refusal(refused.into())),
+        }
+    }
+}
+
+/// One part of a multipart body, as the library reads it.
+pub(crate) struct FieldReader(poem::web::Field);
+
+impl FieldReader {
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.0.name()
+    }
+
+    pub(crate) fn file_name(&self) -> Option<&str> {
+        self.0.file_name()
+    }
+
+    pub(crate) fn content_type(&self) -> Option<&str> {
+        self.0.content_type()
+    }
+
+    /// The whole part.
+    pub(crate) async fn bytes(self) -> Result<Bytes> {
+        self.0
+            .bytes()
+            .await
+            .map(Bytes::from)
+            .map_err(|refused| multipart_refusal(refused.into()))
+    }
+
+    /// The part's bytes as they arrive.
+    pub(crate) fn into_async_read(self) -> impl AsyncRead + Send + 'static {
+        self.0.into_async_read()
+    }
+}
+
+/// What the library's multipart reader refused, said in nestrs's words: its
+/// own may name what the client sent.
+fn multipart_refusal(refused: poem::Error) -> HttpError {
+    match refused.downcast::<ParseMultipartError>() {
+        Ok(
+            ParseMultipartError::ContentTypeRequired | ParseMultipartError::InvalidContentType(_),
+        ) => MultipartError::MediaType.into(),
+        Ok(malformed) => MultipartError::Malformed(Box::new(malformed)).into(),
+        Err(other) => error_from_poem(other),
     }
 }
 

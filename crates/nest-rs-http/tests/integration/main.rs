@@ -16,13 +16,18 @@ mod cors;
 mod edge;
 mod exclusive_paths;
 mod fallback;
+mod form;
 mod global_prefix;
 mod guard_stage;
 mod headers;
 mod input;
+mod json;
+mod multipart;
 mod opaque;
+mod path;
 mod pipe;
 mod problem;
+mod query;
 mod response_body;
 mod route_decorators;
 mod route_shaper;
@@ -119,6 +124,66 @@ pub(crate) fn answering(body: &'static str) -> nest_rs_http::BoxEndpoint {
     nest_rs_http::BoxEndpoint::new(nest_rs_http::endpoint_fn(move |_| async move {
         Ok(nest_rs_http::Response::builder().body(body))
     }))
+}
+
+/// The client the suite drives a composed endpoint through.
+pub(crate) type Client = TestClient<BoxEndpoint<'static, poem::Response>>;
+
+/// One route at `template` on the transport `config` describes, answered by
+/// `handler` with the request's head and body set apart, as a handler written
+/// on the vocabulary reads them.
+pub(crate) async fn vocabulary_route_on<F, Fut>(
+    config: HttpConfig,
+    method: nest_rs_http::Method,
+    template: &'static str,
+    handler: F,
+) -> Client
+where
+    F: Fn(nest_rs_http::Request, nest_rs_http::RequestBody) -> Fut + Copy + Send + Sync + 'static,
+    Fut:
+        std::future::Future<Output = nest_rs_http::Result<nest_rs_http::Response>> + Send + 'static,
+{
+    routes::table_on(config, move |routes| {
+        routes.route(
+            method.clone(),
+            template,
+            nest_rs_http::endpoint_fn(move |req: nest_rs_http::Request| {
+                let (req, body) = req.split();
+                handler(req, body)
+            }),
+        );
+    })
+    .await
+    .unwrap_or_else(|refused| panic!("the route boots: {refused}"))
+}
+
+/// [`vocabulary_route_on`] on the default transport.
+pub(crate) async fn vocabulary_route<F, Fut>(
+    method: nest_rs_http::Method,
+    template: &'static str,
+    handler: F,
+) -> Client
+where
+    F: Fn(nest_rs_http::Request, nest_rs_http::RequestBody) -> Fut + Copy + Send + Sync + 'static,
+    Fut:
+        std::future::Future<Output = nest_rs_http::Result<nest_rs_http::Response>> + Send + 'static,
+{
+    vocabulary_route_on(HttpConfig::default(), method, template, handler).await
+}
+
+/// What a client reads of an answer: its status, its `Content-Type` and its
+/// body.
+pub(crate) async fn answered(resp: poem::test::TestResponse) -> (u16, String, String) {
+    let status = resp.0.status().as_u16();
+    let content_type = resp
+        .0
+        .headers()
+        .get(poem::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let body = resp.0.into_body().into_string().await.expect("a text body");
+    (status, content_type, body)
 }
 
 /// poem's client over the transport's endpoint.

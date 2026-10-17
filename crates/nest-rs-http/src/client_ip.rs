@@ -18,9 +18,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use http::{HeaderMap, header};
 use nest_rs_core::current_request_scope;
-use poem::http::{HeaderMap, header};
-use poem::{FromRequest, Request, RequestBody, Result};
 
 use crate::HttpConfig;
 
@@ -61,7 +60,7 @@ impl ClientOrigin {
     }
 
     /// [`of`](Self::of) for a request the router hands over as poem's.
-    fn of_poem(req: &Request) -> Self {
+    fn of_poem(req: &poem::Request) -> Self {
         let config = configured();
         Self::of_head(
             req.headers(),
@@ -327,9 +326,21 @@ fn parse_forwarded_entry(raw: &str) -> Option<IpAddr> {
     trimmed.parse::<SocketAddr>().ok().map(|sa| sa.ip())
 }
 
-impl<'a> FromRequest<'a> for ClientIp {
-    async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
+impl<'a> poem::FromRequest<'a> for ClientIp {
+    async fn from_request(
+        req: &'a poem::Request,
+        _body: &mut poem::RequestBody,
+    ) -> poem::Result<Self> {
         Ok(ClientOrigin::of_poem(req).into())
+    }
+}
+
+impl<'a> crate::FromRequest<'a> for ClientIp {
+    async fn from_request(
+        req: &'a crate::Request,
+        _body: &mut crate::RequestBody,
+    ) -> crate::Result<Self> {
+        Ok(ClientOrigin::of(req).into())
     }
 }
 
@@ -347,6 +358,7 @@ fn trusted_proxies(config: Option<&HttpConfig>) -> &[IpAddr] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Request;
 
     fn ip(s: &str) -> IpAddr {
         s.parse().expect("test literal is an IP")
@@ -702,29 +714,53 @@ mod tests {
         }
     }
 
-    /// A request carrying a real transport peer, which poem's builder cannot set.
+    /// A request carrying a real transport peer.
     fn req_from(peer: &str, headers: &[(&str, &str)]) -> Request {
+        let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
+        let mut builder = Request::builder().peer_addr(socket);
+        for (name, value) in headers {
+            builder = builder.header(
+                http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                http::HeaderValue::from_str(value).expect("header value"),
+            );
+        }
+        builder.finish()
+    }
+
+    /// The same request as poem's, for the twin `#[routes]` still calls.
+    fn poem_req_from(peer: &str, headers: &[(&str, &str)]) -> poem::Request {
         use poem::Addr;
         use poem::web::{LocalAddr, RemoteAddr};
 
         let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
-        let (mut parts, _) = poem::http::Request::new(()).into_parts();
+        let (mut parts, _) = http::Request::new(()).into_parts();
         for (name, value) in headers {
             parts.headers.insert(
-                poem::http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
-                poem::http::HeaderValue::from_str(value).expect("header value"),
+                http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                http::HeaderValue::from_str(value).expect("header value"),
             );
         }
-        Request::from_parts(
+        poem::Request::from_parts(
             (
                 parts,
                 LocalAddr::default(),
                 RemoteAddr(Addr::socket(socket)),
-                poem::http::uri::Scheme::HTTP,
+                http::uri::Scheme::HTTP,
             )
                 .into(),
             poem::Body::empty(),
         )
+    }
+
+    #[tokio::test]
+    async fn the_poem_reading_resolves_the_same_peer() {
+        let (req, mut body) =
+            poem_req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]).split();
+        let extracted = <ClientIp as poem::FromRequest>::from_request(&req, &mut body)
+            .await
+            .expect("the extractor is infallible");
+        assert_eq!(extracted.ip, ip("10.0.0.1"));
+        assert!(!extracted.forwarded);
     }
 
     /// Extract under an ambient request scope over a container holding `config`.
@@ -786,7 +822,7 @@ mod tests {
 
     async fn extract(req: Request) -> ClientIp {
         let (req, mut body) = req.split();
-        ClientIp::from_request(&req, &mut body)
+        <ClientIp as crate::FromRequest>::from_request(&req, &mut body)
             .await
             .expect("the extractor is infallible")
     }
@@ -801,8 +837,14 @@ mod tests {
     #[tokio::test]
     async fn headers_alone_never_set_forwarded() {
         let req = Request::builder()
-            .header("x-forwarded-for", "9.9.9.9")
-            .header("x-real-ip", "9.9.9.9")
+            .header(
+                http::HeaderName::from_static("x-forwarded-for"),
+                http::HeaderValue::from_static("9.9.9.9"),
+            )
+            .header(
+                http::HeaderName::from_static("x-real-ip"),
+                http::HeaderValue::from_static("9.9.9.9"),
+            )
             .finish();
         let extracted = extract(req).await;
         assert_eq!(extracted, ClientIp::unknown());

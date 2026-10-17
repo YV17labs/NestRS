@@ -482,10 +482,12 @@ What the window does depends on what the connection is doing:
   own.
 
 What the transport stopped at the close gets half a second to unwind, once for
-all of it — the HTTP/2 streams it cut and every mount's work together — so none
-of it is still running when the shutdown hooks start, and the transport is back
-within its stop bound, the window and that half second; what still runs then —
-a unit blocking its thread — is named at `error`.
+all of it — the connections it cut, the HTTP/2 streams they ran and every
+mount's work together — so none of it is still running when the shutdown hooks
+start, and the transport is back within its stop bound, the window and that half
+second. What still runs then — a handler or a unit blocking its thread — is left
+to end on its own and named: a connection or a stream at `warn`, a mount's work
+at `error`.
 When the window closes on open connections, one `warn` on `nest_rs::http`
 counts them: `cut`, the connections it closed, and `upgraded_open`, the sockets
 a hand-built self-mount left open. The shutdown hooks run once every transport has

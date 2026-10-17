@@ -233,6 +233,20 @@ mod tests {
         );
     }
 
+    /// The settle runs from the bound, whatever of it the transport spent
+    /// cutting its own streams before the call: the two share one settle.
+    #[tokio::test(start_paused = true)]
+    async fn the_settle_runs_from_the_bound_whatever_of_it_was_spent_before_the_call() {
+        let work = DetachedWork::new();
+        let _never_ends = work.running.track_future(std::future::pending::<()>());
+        let bound = Instant::now();
+        tokio::time::advance(SHUTDOWN_SETTLE_TIMEOUT / 2).await;
+
+        DetachedWork::stop_at(&mounted("/probe", &work), Some(bound)).await;
+
+        assert_eq!(Instant::now(), bound + SHUTDOWN_SETTLE_TIMEOUT);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn every_mount_is_stopped_and_waited_for_together() {
         let (first, second) = (DetachedWork::new(), DetachedWork::new());

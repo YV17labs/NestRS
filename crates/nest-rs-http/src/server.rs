@@ -203,23 +203,39 @@ impl Server {
             }
         };
         if let Some(bound) = cut_at {
-            // Each socket drops past the bound, so the drain counts it as cut; an
-            // HTTP/2 connection dropped resets its streams, which wakes their tasks.
-            connections.abort_all();
-            while connections.join_next().await.is_some() {}
-            // The settle the transport's detached work shares, from the bound.
-            let settled = bound + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
-            if tokio::time::timeout_at(settled, streams.wait())
-                .await
-                .is_err()
-            {
-                tracing::warn!(
-                    target: crate::target::HTTP,
-                    streams = streams.len(),
-                    "HTTP/2 stream tasks still ran after their connections were cut; they are left to end on their own",
-                );
-            }
+            cut(connections, &streams, bound).await;
         }
+    }
+}
+
+/// Cut every connection still open at `bound`, then wait for their tasks and
+/// the HTTP/2 streams they ran until the settle past `bound` — the one the
+/// transport's detached work shares — and no longer, naming what is left.
+///
+/// Each socket drops past the bound, so the drain counts it as cut; an HTTP/2
+/// connection dropped resets its streams, which wakes their tasks. An HTTP/1.1
+/// connection runs its handler inside its own task, so a handler whose drop
+/// blocks its thread holds that task past any wait.
+async fn cut(mut connections: JoinSet<()>, streams: &TaskTracker, bound: Instant) {
+    connections.abort_all();
+    let settled = bound + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
+    let joined = async { while connections.join_next().await.is_some() {} };
+    if tokio::time::timeout_at(settled, joined).await.is_err() {
+        tracing::warn!(
+            target: crate::target::HTTP,
+            connections = connections.len(),
+            "HTTP connection tasks still ran after they were cut; they are left to end on their own",
+        );
+    }
+    if tokio::time::timeout_at(settled, streams.wait())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            target: crate::target::HTTP,
+            streams = streams.len(),
+            "HTTP/2 stream tasks still ran after their connections were cut; they are left to end on their own",
+        );
     }
 }
 
@@ -1104,33 +1120,145 @@ mod tests {
         cancel.cancel();
     }
 
-    /// Set when the future holding it is dropped, after its drop has blocked its
-    /// thread for `blocking`: a handler whose cleanup takes time.
-    struct SetOnDrop {
-        dropped: Arc<std::sync::atomic::AtomicBool>,
-        blocking: Duration,
+    /// How long a test waits on what it is owed before it fails: a backstop,
+    /// never a measure.
+    const PATIENCE: Duration = Duration::from_secs(10);
+
+    /// What the cut files for a connection it left running.
+    const CONNECTIONS_LEFT: &str =
+        "HTTP connection tasks still ran after they were cut; they are left to end on their own";
+
+    /// What the cut files for an HTTP/2 stream it left running.
+    const STREAMS_LEFT: &str = "HTTP/2 stream tasks still ran after their connections were cut; they are left to end on their own";
+
+    /// A cut connection's task ends at once: the cut aborts it, and waits for
+    /// no settle.
+    #[tokio::test(start_paused = true)]
+    async fn the_cut_aborts_every_connection_at_once() {
+        let logs = LogCapture::install();
+        let mut connections = JoinSet::new();
+        connections.spawn(std::future::pending::<()>());
+        let streams = TaskTracker::new();
+        streams.close();
+        let bound = Instant::now();
+
+        cut(connections, &streams, bound).await;
+
+        assert_eq!(Instant::now(), bound);
+        logs.expect_none(crate::target::HTTP, CONNECTIONS_LEFT);
+        logs.expect_none(crate::target::HTTP, STREAMS_LEFT);
     }
 
-    impl Drop for SetOnDrop {
+    /// A stream that ends inside the settle is waited for, until it ends.
+    #[tokio::test(start_paused = true)]
+    async fn the_cut_waits_for_a_stream_that_ends_inside_the_settle() {
+        let logs = LogCapture::install();
+        let streams = TaskTracker::new();
+        let bound = Instant::now();
+        tokio::spawn(streams.track_future(tokio::time::sleep(
+            nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT / 2,
+        )));
+        streams.close();
+
+        cut(JoinSet::new(), &streams, bound).await;
+
+        assert_eq!(
+            Instant::now(),
+            bound + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT / 2
+        );
+        logs.expect_none(crate::target::HTTP, STREAMS_LEFT);
+    }
+
+    /// The settle runs from the bound, whatever of it was spent before the cut,
+    /// so the transport's detached work shares it: a stream that will not end
+    /// is waited for until then and no longer, and named.
+    #[tokio::test(start_paused = true)]
+    async fn the_cut_settles_from_the_bound_and_names_a_stream_that_will_not_end() {
+        let logs = LogCapture::install();
+        let streams = TaskTracker::new();
+        let _never_ends = streams.track_future(std::future::pending::<()>());
+        streams.close();
+        let bound = Instant::now();
+        tokio::time::advance(nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT / 2).await;
+
+        cut(JoinSet::new(), &streams, bound).await;
+
+        assert_eq!(
+            Instant::now(),
+            bound + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
+        );
+        let line = logs.expect_one(crate::target::HTTP, STREAMS_LEFT);
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("streams").as_deref(), Some("1"));
+        logs.expect_none(crate::target::HTTP, CONNECTIONS_LEFT);
+    }
+
+    /// A handler's cleanup that cannot unwind in time: its drop blocks its
+    /// thread until the test releases it — for twice [`PATIENCE`] at most, so a
+    /// failing test still ends.
+    ///
+    /// Through `block_in_place`: a plain blocking drop on the worker that last
+    /// held tokio's driver stops every timer of the runtime, the test's own
+    /// backstop included, which no wait of the loop's can bound.
+    struct BlocksUntilReleased {
+        release: std::sync::mpsc::Receiver<()>,
+        dropping: Arc<tokio::sync::Notify>,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Drop for BlocksUntilReleased {
         fn drop(&mut self) {
-            std::thread::sleep(self.blocking);
+            self.dropping.notify_one();
+            tokio::task::block_in_place(|| self.release.recv_timeout(PATIENCE * 2)).ok();
             self.dropped
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
-    /// The accept loop serving one HTTP/2 stream whose handler never answers
-    /// and takes `blocking` to drop, its shutdown window `window`: whether the
-    /// handler had been dropped by the time the loop returned.
-    async fn an_http2_stream_cut_after(window: Duration, blocking: Duration) -> bool {
+    /// The protocol a cut connection speaks.
+    #[derive(Clone, Copy)]
+    enum Spoken {
+        Http1,
+        Http2,
+    }
+
+    /// The accept loop, its one connection's handler held past the shutdown
+    /// window and its drop blocking until [`release`](Self::release) is sent.
+    struct Held {
+        serving: tokio::task::JoinHandle<()>,
+        release: std::sync::mpsc::Sender<()>,
+        dropping: Arc<tokio::sync::Notify>,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+        _client: Box<dyn std::any::Any + Send>,
+    }
+
+    /// Serve one request over `spoken` whose handler never answers, then signal
+    /// the loop, its shutdown window `window`.
+    async fn held_past(window: Duration, spoken: Spoken) -> Held {
+        let (release, released) = std::sync::mpsc::channel();
+        let released = Arc::new(Mutex::new(Some(released)));
         let started = Arc::new(tokio::sync::Notify::new());
+        let dropping = Arc::new(tokio::sync::Notify::new());
         let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let endpoint = endpoint_fn({
-            let (started, dropped) = (Arc::clone(&started), Arc::clone(&dropped));
+            let (started, dropping, dropped) = (
+                Arc::clone(&started),
+                Arc::clone(&dropping),
+                Arc::clone(&dropped),
+            );
             move |_| {
-                let (started, dropped) = (Arc::clone(&started), Arc::clone(&dropped));
+                let held = BlocksUntilReleased {
+                    release: released
+                        .lock()
+                        .expect("the release lock")
+                        .take()
+                        .expect("one request"),
+                    dropping: Arc::clone(&dropping),
+                    dropped: Arc::clone(&dropped),
+                };
+                let started = Arc::clone(&started);
                 async move {
-                    let _held = SetOnDrop { dropped, blocking };
+                    let _held = held;
                     started.notify_one();
                     std::future::pending::<()>().await;
                     Ok(Response::default())
@@ -1159,72 +1287,99 @@ mod tests {
                 drain.begin(window);
             }
         };
-        // Read as the loop returns, before anything else runs: what follows it
-        // in `serve` (the shutdown hooks) must not meet the handler still alive.
-        let running = tokio::spawn({
-            let dropped = Arc::clone(&dropped);
-            async move {
-                server.run(signal).await;
-                dropped.load(std::sync::atomic::Ordering::SeqCst)
-            }
-        });
+        let serving = tokio::spawn(server.run(signal));
         let socket = tokio::net::TcpStream::connect(local)
             .await
             .expect("connects");
-        let (client, connection) = h2::client::handshake(socket)
-            .await
-            .expect("the HTTP/2 preface is accepted");
-        tokio::spawn(connection);
-        let request = http::Request::get(format!("http://{local}/"))
-            .body(())
-            .expect("a request");
-        let _answer = client
-            .ready()
-            .await
-            .expect("a stream can open")
-            .send_request(request, true)
-            .expect("sent");
-        tokio::time::timeout(Duration::from_secs(5), started.notified())
+        let client: Box<dyn std::any::Any + Send> = match spoken {
+            Spoken::Http1 => {
+                let mut socket = socket;
+                socket
+                    .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n")
+                    .await
+                    .expect("the request is sent");
+                Box::new(socket)
+            }
+            Spoken::Http2 => {
+                let (client, connection) = h2::client::handshake(socket)
+                    .await
+                    .expect("the HTTP/2 preface is accepted");
+                tokio::spawn(connection);
+                let request = http::Request::get(format!("http://{local}/"))
+                    .body(())
+                    .expect("a request");
+                let answer = client
+                    .ready()
+                    .await
+                    .expect("a stream can open")
+                    .send_request(request, true)
+                    .expect("sent");
+                Box::new(answer)
+            }
+        };
+        tokio::time::timeout(PATIENCE, started.notified())
             .await
             .expect("the handler runs");
 
         cancel.cancel();
-        running.await.expect("the loop returns")
+        Held {
+            serving,
+            release,
+            dropping,
+            dropped,
+            _client: client,
+        }
     }
 
-    /// An HTTP/2 stream still running when the shutdown window closes is cut
-    /// with its connection, and the loop waits for its task: its handler is
-    /// dropped before the loop returns, never left to end on a worker of its
-    /// own after it. On several workers, so the stream's task and the loop
-    /// run at once; real time, which only the current-thread runtime pauses.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_http2_stream_outliving_the_window_is_cut_at_its_close() {
+    /// The loop, `held` past its window: it cut the connection, dropping the
+    /// handler, and returned while that drop still held its thread.
+    async fn returned_while_the_drop_held(held: &mut Held) {
+        tokio::time::timeout(PATIENCE, held.dropping.notified())
+            .await
+            .expect("the cut drops the handler");
+        tokio::time::timeout(PATIENCE, &mut held.serving)
+            .await
+            .expect("the loop returns while the drop is held")
+            .expect("the loop does not panic");
         assert!(
-            an_http2_stream_cut_after(Duration::from_millis(200), Duration::from_millis(150)).await,
-            "the stream's handler was dropped by the time the loop returned",
+            !held.dropped.load(std::sync::atomic::Ordering::SeqCst),
+            "the loop returned before the drop ended",
         );
     }
 
-    /// The wait for a cut stream's task is bounded: one whose handler takes
-    /// longer than the settle to drop is left to end on its own, and said so.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_cut_stream_that_will_not_end_is_waited_for_no_longer_than_the_settle() {
+    /// An HTTP/2 stream still running when the window closes is cut with its
+    /// connection, its handler dropped, and its task waited for until the
+    /// settle and no longer: real time for the drop alone, which holds its
+    /// thread until the test releases it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn an_http2_stream_whose_handler_will_not_drop_is_cut_and_left_past_the_settle() {
         let logs = LogCapture::install_global();
-        let dropped = an_http2_stream_cut_after(
-            Duration::from_millis(100),
-            nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT + Duration::from_secs(1),
-        )
-        .await;
-        assert!(
-            !dropped,
-            "the loop returned before the handler's drop ended"
-        );
-        let line = logs.expect_one(
-            crate::target::HTTP,
-            "HTTP/2 stream tasks still ran after their connections were cut; they are left to end on their own",
-        );
+        let mut held = held_past(Duration::from_millis(100), Spoken::Http2).await;
+
+        returned_while_the_drop_held(&mut held).await;
+
+        let line = logs.expect_one(crate::target::HTTP, STREAMS_LEFT);
         assert_eq!(line.level, "warn");
         assert_eq!(line.field("streams").as_deref(), Some("1"));
+        logs.expect_none(crate::target::HTTP, CONNECTIONS_LEFT);
+        held.release.send(()).expect("the drop is waiting");
+    }
+
+    /// An HTTP/1.1 connection runs its handler inside its own task, so the wait
+    /// for a cut connection is bounded as a stream's is: one whose handler will
+    /// not drop is left past the settle, and named.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn an_http1_connection_whose_handler_will_not_drop_is_cut_and_left_past_the_settle() {
+        let logs = LogCapture::install_global();
+        let mut held = held_past(Duration::from_millis(100), Spoken::Http1).await;
+
+        returned_while_the_drop_held(&mut held).await;
+
+        let line = logs.expect_one(crate::target::HTTP, CONNECTIONS_LEFT);
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("connections").as_deref(), Some("1"));
+        logs.expect_none(crate::target::HTTP, STREAMS_LEFT);
+        held.release.send(()).expect("the drop is waiting");
     }
 
     /// Every connection the loop's listener yields is written without Nagle's

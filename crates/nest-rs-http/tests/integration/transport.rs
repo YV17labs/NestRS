@@ -3,6 +3,7 @@
 
 use std::net::TcpListener as StdTcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -1077,16 +1078,30 @@ async fn bound_on_port_zero_the_ready_line_carries_the_real_port() {
     assert_eq!(listening.field("addr").as_deref(), Some(address.as_str()));
 }
 
+/// Released by the test once it has read what `serve` did while the blocking
+/// handler's drop still held its thread.
+static RELEASE: Mutex<Option<std::sync::mpsc::Receiver<()>>> = Mutex::new(None);
+
 /// Set once the blocking handler's drop has ended.
 static BLOCKING_DROPPED: AtomicBool = AtomicBool::new(false);
 
-/// Blocks its thread for longer than the settle when dropped: a handler whose
-/// cleanup cannot unwind in time.
+/// A handler whose cleanup cannot unwind in time: dropped, it blocks its thread
+/// until the test releases it, for twice [`PATIENCE`] at most.
+///
+/// Through `block_in_place`: a plain blocking drop on the worker that last held
+/// tokio's driver stops every timer of the runtime, which no wait of the
+/// transport's can bound.
 struct BlocksOnDrop;
 
 impl Drop for BlocksOnDrop {
     fn drop(&mut self) {
-        std::thread::sleep(nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT * 3);
+        let release = RELEASE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(release) = release {
+            tokio::task::block_in_place(|| release.recv_timeout(PATIENCE * 2)).ok();
+        }
         BLOCKING_DROPPED.store(true, Ordering::SeqCst);
     }
 }
@@ -1125,17 +1140,19 @@ impl nest_rs_core::Discoverable for BlockingMount {
 struct BlockingModule;
 
 /// An HTTP/2 stream whose handler blocks as it is cut and detached work that
-/// never unwinds share one settle: `serve` comes back within its stated
-/// `stop_bound`, never a settle past it. Real time on several workers, since
-/// a blocking drop holds a thread the paused clock would not move past.
+/// never unwinds share one settle: `serve` comes back while the drop still
+/// holds its thread, having named both, and waits on neither. When it comes
+/// back is the paused clock's to prove (`detached.rs`, `server.rs`); real time
+/// here only for the drop, which no paused clock moves past.
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn a_blocking_stream_and_blocking_detached_work_end_within_the_stop_bound() {
-    let window = Duration::from_secs(1);
+async fn a_blocking_stream_and_blocking_detached_work_are_named_and_never_waited_on() {
+    let logs = LogCapture::install_global();
+    let (release, released) = std::sync::mpsc::channel();
+    *RELEASE.lock().unwrap_or_else(PoisonError::into_inner) = Some(released);
     let config = HttpConfig {
-        shutdown_timeout: window,
+        shutdown_timeout: Duration::from_secs(1),
         ..HttpConfig::default()
     };
-    let stop_bound = crate::built(&config).stop_bound();
     let serving = serve_module::<BlockingModule>(config).await;
 
     let mut detached = request(serving.port, "/settle-a").await;
@@ -1162,21 +1179,27 @@ async fn a_blocking_stream_and_blocking_detached_work_end_within_the_stop_bound(
         .await
         .expect("the blocking handler runs");
 
-    let asked = std::time::Instant::now();
     serving.cancel.cancel();
-    serving
-        .task
+    tokio::time::timeout(PATIENCE, serving.task)
         .await
+        .expect("serve comes back while the drop holds its thread")
         .expect("serve does not panic")
         .expect("serve stops cleanly");
-    let took = asked.elapsed();
 
     assert!(
-        took < stop_bound + Duration::from_millis(250),
-        "serve came back within its stop bound {stop_bound:?}: took {took:?}",
-    );
-    assert!(
         !BLOCKING_DROPPED.load(Ordering::SeqCst),
-        "the handler was still dropping: the settle was shared, not waited out"
+        "serve waited on neither the drop nor the detached work",
     );
+    let streams = logs.expect_one(
+        nest_rs_http::target::HTTP,
+        "HTTP/2 stream tasks still ran after their connections were cut; they are left to end on \
+         their own",
+    );
+    assert_eq!(streams.field("streams").as_deref(), Some("1"));
+    let detached = logs.expect_one(
+        nest_rs_http::target::HTTP,
+        "stopped work did not unwind within its bound; it runs on through the shutdown hooks",
+    );
+    assert_eq!(detached.field("still_running").as_deref(), Some("1"));
+    release.send(()).expect("the drop is waiting");
 }

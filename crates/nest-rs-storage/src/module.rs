@@ -35,8 +35,9 @@ pub type StorageSetup = ConfigSetup<StorageModule, StorageConfig>;
 
 /// The import of [`StorageModule`]'s that opens the store in the factory
 /// phase, once the config resolved — so the boot proves it before any
-/// provider is built. Its output is this crate's alone: `Storage`, which a
-/// module lists, is what the access graph gates.
+/// provider is built; a test overriding `Storage` opens none. Its output is
+/// this crate's alone: `Storage`, which a module lists, is what the access
+/// graph gates.
 struct StorageOpening;
 
 impl StorageOpening {
@@ -52,6 +53,9 @@ impl DynamicModule for StorageOpening {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        if nest_rs_core::__private::overrides_any(&builder, &[TypeId::of::<Storage>()]) {
+            return builder;
+        }
         builder.provide_factory_after::<Store, (StorageConfig,), _, _>(|container| async move {
             let config = ConfigModule::resolved::<StorageConfig>(&container)?;
             Ok(Store::open(&config).await?)

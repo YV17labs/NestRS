@@ -1,25 +1,16 @@
 //! The OAuth2 `client_credentials` grant: authenticating a registered machine
 //! client against a static registry, in constant time.
-//!
-//! The framework owns the credential check and the principal shape; the app
-//! supplies the per-client payload `P` (a tenant id, a role set, …) — nest-rs
-//! never names it. Pairs with the Authorization Code flow in
-//! `nest-rs-oauth-client`: this is the machine-to-machine grant, that is the
-//! user-delegated one — and they are opposite ends of the same wire, which is
-//! why they no longer share a module word.
 
-use subtle::ConstantTimeEq;
+use aws_lc_rs::constant_time::verify_slices_are_equal;
 
 use nest_rs_authn::AuthError;
 use nest_rs_authn::PrincipalIdentity;
+use nest_rs_core::AmbientValue;
 
 /// A machine client permitted to use the `client_credentials` grant, as loaded
 /// from configuration. Generic over the principal payload `P` the app attaches
 /// (deserialized from the `payload` field next to the credentials).
-///
-/// [`Debug`] is hand-written and **redacts `client_secret`** — a registry is
-/// exactly the kind of value that ends up in a `{:?}` of an app config, and the
-/// sibling secret holders in this crate (`OAuthClientConfig`, `JwtConfig`) drop `Debug` entirely for the same reason.
+/// [`Debug`] is hand-written and redacts `client_secret`.
 #[derive(Clone, serde::Deserialize)]
 pub struct RegisteredClient<P> {
     /// The client's public identifier, matched in constant time.
@@ -57,17 +48,15 @@ pub struct AuthenticatedClient<P> {
     pub scopes: Vec<String>,
 }
 
+impl<P: Send + Sync + 'static> AmbientValue for AuthenticatedClient<P> {}
+
 impl<P> PrincipalIdentity for AuthenticatedClient<P> {
     fn actor_id(&self) -> Option<String> {
         None
     }
 
-    /// `Some`, always — this is the framework's own OAuth credential, so it is
-    /// scope-aware by construction and an empty registry entry means *delegated
-    /// nothing*, never *scope does not apply here*. Inheriting the `None`
-    /// default conflated the two, and that is the fail-open reading: a client
-    /// registered for `posts:read` satisfied every `.requires_scope(…)` rule in
-    /// the policy, including the ones the registry never granted.
+    /// `Some`, always: an empty entry means *delegated nothing*, where `None` would
+    /// read as not scope-aware and pass every scope rule.
     fn scopes(&self) -> Option<&[String]> {
         Some(&self.scopes)
     }
@@ -75,7 +64,7 @@ impl<P> PrincipalIdentity for AuthenticatedClient<P> {
 
 /// Authenticate a `client_id` + `client_secret` pair against a static registry,
 /// returning the matching principal. Both comparisons run in **constant time**
-/// (`subtle`) and every entry is visited, so neither a valid `client_id` nor a
+/// (AWS-LC's `CRYPTO_memcmp`) and every entry is visited, so neither a valid `client_id` nor a
 /// secret prefix is observable through a timing side-channel. Returns
 /// [`AuthError::Failed`] with an opaque message when no entry matches.
 pub fn authenticate_against_registry<P: Clone>(
@@ -85,12 +74,12 @@ pub fn authenticate_against_registry<P: Clone>(
 ) -> Result<AuthenticatedClient<P>, AuthError> {
     let mut matched: Option<&RegisteredClient<P>> = None;
     for client in clients {
-        let id_ok = client.client_id.as_bytes().ct_eq(client_id.as_bytes());
-        let secret_ok = client
-            .client_secret
-            .as_bytes()
-            .ct_eq(client_secret.as_bytes());
-        if bool::from(id_ok & secret_ok) && matched.is_none() {
+        let id_ok =
+            verify_slices_are_equal(client.client_id.as_bytes(), client_id.as_bytes()).is_ok();
+        let secret_ok =
+            verify_slices_are_equal(client.client_secret.as_bytes(), client_secret.as_bytes())
+                .is_ok();
+        if id_ok & secret_ok && matched.is_none() {
             matched = Some(client);
         }
     }
@@ -141,15 +130,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_unknown_client_id() {
-        let registry = [client("ci", "s3cret", &["read"])];
-        assert!(authenticate_against_registry(&registry, "ghost", "s3cret").is_err());
-    }
-
-    #[test]
     fn rejects_an_empty_registry() {
         let registry: [RegisteredClient<u32>; 0] = [];
         assert!(authenticate_against_registry(&registry, "any", "any").is_err());
+    }
+
+    #[test]
+    fn a_credential_matches_only_byte_for_byte_whatever_its_length() {
+        let registry = [client("ci", "s3cret", &["read"])];
+        for (id, secret, matches) in [
+            ("ci", "s3cret", true),
+            ("ci", "s3creT", false),
+            ("ci", "s3cre", false),
+            ("ci", "s3crets", false),
+            ("ci", "", false),
+            ("cI", "s3cret", false),
+            ("c", "s3cret", false),
+            ("cii", "s3cret", false),
+            ("ghost", "s3cret", false),
+        ] {
+            assert_eq!(
+                authenticate_against_registry(&registry, id, secret).is_ok(),
+                matches,
+                "{id:?} / {secret:?}"
+            );
+        }
     }
 
     #[test]
@@ -171,10 +176,6 @@ mod tests {
 
     #[test]
     fn machine_principal_reports_the_scopes_the_registry_granted() {
-        // The one thing `AuthnGuard` publishes as `GrantedScopes`. Returning the
-        // trait's `None` default here said "not scope-aware", which withholds
-        // nothing — so a client registered for `read` alone passed a rule
-        // requiring `write`.
         let registry = [client("ci", "s3cret", &["read"])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
         assert_eq!(auth.scopes(), Some(["read".to_string()].as_slice()));
@@ -182,8 +183,6 @@ mod tests {
 
     #[test]
     fn a_client_granted_nothing_is_delegated_nothing_not_unrestricted() {
-        // `Some(&[])` and `None` are the two answers this trait separates, and
-        // this registry entry is the one that must not read as the second.
         let registry = [client("ci", "s3cret", &[])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
         assert_eq!(

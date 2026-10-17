@@ -20,6 +20,9 @@ nest-rs-core.workspace = true
 # rooted at `::nest_rs_queue::*`, so the macro and the abstractions ship from
 # the same import root.
 nest-rs-queue-macros.workspace = true
+# `QueueConfig`, the drain window of the port's own worker, read like every
+# other module's settings.
+nest-rs-config.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 # Typed producer errors (`QueueError`) — the framework owns queue plumbing
@@ -27,33 +30,47 @@ anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# Re-exported for the `#[processor]` macro emission so the call site doesn't
-# need a direct `tracing` dependency for the unversioned-payload warning.
+# The job span, the attempt's events and the operation line `consume` files.
 tracing.workspace = true
-# Re-exported for the same reason: `#[process]` runs each handler inside the
-# ambient `JobContext`, so the expansion names the worker seam. Routing it
-# through this crate keeps `nest_rs_queue` the single import a `#[processor]`
-# call site needs — a bare `::nest_rs_worker::` path would resolve against the
+# Re-exported for the same reason: `#[process]` runs each attempt as a unit of
+# work through `run_unit`, so the expansion names the port. Routing it through
+# this crate keeps `nest_rs_queue` the single import a `#[processor]` call site
+# needs — a bare `::nest_rs_database::` path would resolve against the
 # consumer's extern prelude and break any app that hasn't added the crate.
-nest-rs-worker.workspace = true
-# `consume::attempt` catches a handler panic itself (`catch_unwind` on the job
-# future), so the event lands inside the per-job span instead of unwinding past
-# it into a backend's panic layer.
+nest-rs-database.workspace = true
+# `BoxFuture`, the future a backend hands the worker for one delivery and for
+# its upkeep.
 futures-util.workspace = true
+# The `JobId` a push mints: a UUID v7, so ids sort in push order.
+uuid.workspace = true
+# The net on every backend call (`BACKEND_TIMEOUT`): a backend that never
+# answers fails the push, the cancel or the checkpoint at it, rather than holding
+# its caller for as long as it stays silent.
+tokio.workspace = true
+# The worker's shutdown token and the tracker its drain waits on.
+tokio-util.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
-# `consume`'s tests assert the events a job attempt files, not only its outcome.
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `test-util` (not part of tokio's `full`) pauses time, so a backend that never
+# answers meets the net without the suite waiting its eighteen seconds out.
+tokio = { workspace = true, features = ["test-util"] }
+# `consume`'s tests assert the events a job attempt files, not only its outcome;
+# `queue` is the behaviour kit the worker's suite runs over an in-memory backend.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["queue"] }
 serde.workspace = true
-# Snapshot-tests the `#[process]` compile diagnostics
-# (tests/integration/diagnostics/).
-trybuild.workspace = true
-# The diagnostics fixtures put a `#[process]` on an `#[injectable]`
+# The suite and the doc examples put `#[process]` on an `#[injectable]`
 # provider, the shape a real processor has.
 nest-rs-core = { path = "../nest-rs-core" }
 # `anyhow::Result<()>` is the `#[process]` method's return type.
 anyhow.workspace = true
+# Pins the decorator's compile-time copy of the queue name rule against
+# `QueueName`'s (tests/integration/queue_name.rs).
+nest-rs-codegen = { path = "../nest-rs-codegen" }
+# A `Piped<P, T>` job argument, run by an attempt (tests/integration/consume.rs).
+nest-rs-pipes = { path = "../nest-rs-pipes" }
+# The HTTP edge's default request timeout, which `BACKEND_TIMEOUT` sits under
+# (tests/integration/producer.rs).
+nest-rs-http = { path = "../nest-rs-http" }
 
 [lints]
 workspace = true

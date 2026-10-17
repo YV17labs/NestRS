@@ -1,7 +1,6 @@
 ---
 title: Env-var reference
-description: "Every NESTRS_* environment variable, by namespace — the dual-path rule means each one also has a pinned-struct field."
-tier: all-options
+description: "Every `<PREFIX>_*` environment variable, by namespace — the dual-path rule means each one also has a pinned-struct field."
 sidebar:
   order: 6
 ---
@@ -9,7 +8,7 @@ sidebar:
 Every framework module reads its config from a namespaced env prefix
 **and** from a pinned struct — the framework-wide **dual-path rule**
 ([Configuration](/configuration/#the-dual-path-rule)). The variable name is
-`NESTRS_<NAMESPACE>__<KEY>` (double underscore between namespace and key). This
+`<PREFIX>_<NAMESPACE>__<KEY>` (double underscore between namespace and key). This
 page lists the variables; each maps one-to-one to a field on the module's
 config struct, so anything here is also settable in code — and, because the
 override is per field, setting one here works even when the app pins its
@@ -20,28 +19,60 @@ neighbours in `module.rs`.
 with that prefix instead — `ACME_HTTP__PORT`, `ACME_LOG` — and the `NESTRS_`
 spellings resolve nothing.
 
+**Every namespaced variable can also be given as a file.**
+`<PREFIX>_<NAMESPACE>__<KEY>_FILE` names a file whose content is the value — the
+form a mounted secret takes, [read the same way for every key](/configuration/#configservice-api).
+The tables below name the `_FILE` spelling only where a key is usually given
+that way.
+
+**Every TLS client reads the same three keys.** In each namespace whose module
+opens a TLS connection — `redis`, `storage`, `authn`, `oauth__client`,
+`opentelemetry` — `TLS_CA_CERT` names the
+authorities the peer's certificate must chain to, replacing the system's, and
+`TLS_CERT` / `TLS_KEY` the certificate and key presented to a peer that
+requires one, both or neither. The certificate is verified whatever is set, and
+a client that cannot present a certificate fails the boot rather than ignoring
+one.
+
 **The namespace is the path of the crate that parses it — never chosen.** It is
 the same stem the config type is named from: the crate's word, then the
 binding folder's when the config sits in one, joined by `__`. `HttpConfig` reads
-`NESTRS_HTTP__*`; `SeaOrmConfig` reads `NESTRS_SEAORM__*`; `RedisWorkerConfig`
-(in `nest-rs-redis`'s `worker/` folder) reads `NESTRS_REDIS__WORKER__*`;
-`SocialGithubConfig` reads `NESTRS_SOCIAL__GITHUB__*`. So from any variable on
+`<PREFIX>_HTTP__*`; `SeaOrmConfig` reads `<PREFIX>_SEAORM__*`; `RedisQueueConfig`
+(in `nest-rs-redis`'s `queue/` folder) reads `<PREFIX>_REDIS__QUEUE__*`;
+`GithubSocialConfig` reads `<PREFIX>_SOCIAL__GITHUB__*`. A crate in a family puts
+the family first: `OAuthClientConfig`, in `nest-rs-oauth-client`, reads
+`<PREFIX>_OAUTH__CLIENT__*` — the same string as its path,
+`nest_rs::oauth::client`. So from any variable on
 this page you can name the type and the file that parse it, and from any
 `<X>Module::for_root` in a composition root you can name its variables: the
 vendor is in the variable exactly when it is in the type. That is also why there
-is no `NESTRS_DATABASE__URL` — the universal convention, but a word that names
+is no `<PREFIX>_DATABASE__URL` — the universal convention, but a word that names
 neither the crate nor the type, so a reader could not find the code from it.
 
-## Logging — `NESTRS_LOG*`
+**A named instance inserts its name after the vendor.** A module an app opens
+more than once reads one namespace per
+[instance](/fundamentals/providers/#instances--one-resource-opened-twice): the
+default reads the namespace above, and the instance `#[instance] struct Cache`
+reads it with `CACHE` after the vendor — `<PREFIX>_<VENDOR>__CACHE__*`, and a
+binding of it `<PREFIX>_<VENDOR>__CACHE__<PORT>__*`: vendor, instance, port, in
+that order. An instance whose namespace another config already declares fails the
+boot naming both.
+
+## Logging — `<PREFIX>_LOG*`
 
 The baseline console logger is part of `nest-rs-core` — no module to
-import, no config struct. It reads two process-level variables:
+import, no config struct. It reads three process-level variables:
 
 | Key | Meaning |
 |---|---|
-| `NESTRS_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info` |
-| `NESTRS_LOG_FORMAT` | `json` (the release default) or `text` (the dev default) |
-| `NESTRS_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
+| `<PREFIX>_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info` |
+| `<PREFIX>_LOG_FORMAT` | `json` (the release default) or `text` (the dev default) |
+| `<PREFIX>_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
+
+Unset or blank keeps the default. A value that does not parse stops the
+boot, naming the variable and never its value — a mistyped
+`<PREFIX>_LOG_FORMAT=jsno` is said, never quietly replaced by the profile's
+default.
 
 An app that installs its own subscriber first (e.g. through
 [OpenTelemetry](/opentelemetry/)) keeps it — the baseline logger only
@@ -49,118 +80,163 @@ activates when none is set. The same three variables drive the console
 layer of the [OpenTelemetry](/opentelemetry/) subscriber too, so log
 config survives adopting or dropping the observability stack.
 
-## `http` — `NESTRS_HTTP__*`
+## `http` — `<PREFIX>_HTTP__*`
 
 | Key | Meaning |
 |---|---|
 | `HOST` | listen address (default `0.0.0.0`) |
 | `PORT` | listen port |
-| `GLOBAL_PREFIX` | path prefix for every route (unset ⇒ none) |
-| `MAX_BODY_BYTES` | request body cap |
-| `REQUEST_TIMEOUT_SECS` | per-request timeout — default `30`, `0` ⇒ no timeout. An overrun answers `503` with a `Retry-After`, not `504`: this transport is the origin, not a gateway |
-| `FAIL_SECURE_STRICT` | fail boot (vs warn) on an unguarded self-mount under global guards — default `true` |
+| `GLOBAL_PREFIX` | path prefix for every route (unset ⇒ none). One literal path: template syntax (`{` `}`) or what the router reads as a parameter (`:` `*` `<`) fails the boot |
+| `MAX_BODY_BYTES` | request body cap, counted as the body is read — by its extractor, a guard or a global pipe, after routing and the guards; past it the request is answered `413`, and a declared `Content-Length` past it is refused unread |
+| `MAX_CONCURRENT_CONNECTIONS` | connections served at once, an upgraded socket included until it closes — default `10000`; whole numbers from `1` to `1048576`, refused outside. Past it a new connection waits — the next one held by the server, the rest in the listen backlog — and one `warn` names the variable: see [Connections](/http/configuration/#connections) |
+| `HEADER_READ_TIMEOUT_SECS` | how long a connection has for its first request head, counted from accept with a TLS handshake inside it, and on HTTP/1 a later head from its first byte — default `30`; whole seconds from `1` to `300`, refused outside, `0` included. Past it the connection is closed: see [Connection deadlines](/http/configuration/#connection-deadlines) |
+| `BODY_READ_TIMEOUT_SECS` | how long a request body may go without a byte once something reads it — default `10`; whole seconds from `1` to `3600`, refused outside, `0` included. Past it the request is answered `408`, closing an HTTP/1 connection; on HTTP/2 that stream alone ends. Keep it under `REQUEST_TIMEOUT_SECS`, which counts from the request's arrival: at or past it, a body that stops arriving is answered that timeout's `503` first, and one `warn` says so at boot |
+| `IDLE_TIMEOUT_SECS` | how long a kept-alive connection waits for its next request — default `75`; whole seconds from `1` to `3600`, refused outside, `0` included. Past it an HTTP/1 connection is closed and an HTTP/2 one sent `GOAWAY`; behind a load balancer, keep it above the balancer's own idle timeout |
+| `SEND_TIMEOUT_SECS` | how long a write waits on a peer that takes nothing, counted from the moment it starts waiting — default `60`; whole seconds from `1` to `3600`, refused outside, `0` included. Past it the connection is dropped, an event stream or a WebSocket included, and on HTTP/2 a stream the peer grants no window is reset |
+| `REQUEST_TIMEOUT_SECS` | per-request timeout, counted from the request's arrival, its body's reading included — default `20`, the shutdown window's own; whole seconds from `1` to `3600`, or `0` ⇒ no timeout. An overrun answers `503` with a `Retry-After`, not `504`: this transport is the origin, not a gateway. A timeout past `SHUTDOWN_TIMEOUT_SECS`, or `0`, files one `warn` at boot |
+| `SHUTDOWN_TIMEOUT_SECS` | how long open connections may finish after a shutdown signal — default `20`, so the window, the half second what it stopped takes to unwind, the shutdown hooks' 5 s, OpenTelemetry's 3 s flush and the console's 1 s end inside the 30 s a Kubernetes pod gets before `SIGKILL`; whole seconds from `1` to `3600`, refused outside, and `0` is refused rather than read as off. What is still open when it closes is cut — a running request goes unanswered, a download is cut — and one `warn` counts it. What has no end of its own — an event stream, a gateway's WebSocket, a graphql-ws socket — ends at the signal instead: see [Shutdown](/http/configuration/#shutdown) |
 | `SECURITY_HEADERS` | master switch for the secure-by-default response headers |
 | `HSTS` · `FRAME_OPTIONS` · `CONTENT_TYPE_OPTIONS` · `SERVER_HEADER` | individual security-header controls |
-| `REFERRER_POLICY` · `CROSS_ORIGIN_OPENER_POLICY` · `CROSS_ORIGIN_RESOURCE_POLICY` | the rest of the default-on set — `strict-origin-when-cross-origin`, `same-origin`, `same-origin`; an empty value drops one |
+| `REFERRER_POLICY` · `CROSS_ORIGIN_OPENER_POLICY` · `CROSS_ORIGIN_RESOURCE_POLICY` | the rest of the default-on set — `strict-origin-when-cross-origin`, `same-origin`, `same-origin`; `off` drops one, a blank value fails the boot, and an empty one keeps the default |
 | `CONTENT_SECURITY_POLICY` · `CROSS_ORIGIN_EMBEDDER_POLICY` · `PERMISSIONS_POLICY` | settable, off by default — each governs a *document* whose sources the framework cannot speak for; see [HTTP configuration](/http/configuration/) |
-| `TLS_CERT` / `TLS_KEY` | PEM cert + key for HTTPS (inline); `TLS_CERT_FILE` / `TLS_KEY_FILE` read from a path instead. Unset ⇒ plain HTTP |
-| `TLS_RELOAD_SECS` | how often a file-sourced pair is re-read, so a renewal swaps in without a restart — default `60`, `0` disables |
+| `TLS_CERT` / `TLS_KEY` | PEM cert + key for HTTPS (inline); `TLS_CERT_FILE` / `TLS_KEY_FILE` read from a path instead. One half without the other fails the boot, and so do both spellings of one half in the same tier. Unset ⇒ plain HTTP |
+| `TLS_RELOAD_SECS` | how often a file-sourced pair is re-read, so a renewal swaps in without a restart — default `60`; from `1` to `86400` (a day), or `0` disables |
 | `VERSIONING` | how a caller selects an API version — `uri` (default), `header`, `media_type` |
-| `VERSION_HEADER` | the header the `header` strategy reads — default `X-API-Version` |
+| `VERSION_HEADER` | the header the `header` strategy reads — default `X-API-Version`; a value that is no HTTP header name fails the boot, set or pinned |
 | `DEFAULT_VERSION` | the version served to a caller that states none; unset ⇒ the unversioned routes |
-| `CORS_ORIGINS` | comma-separated allowed origins; unset ⇒ no CORS layer |
+| `CORS_ORIGINS` | comma-separated allowed origins; unset ⇒ no CORS layer. Also the browser origins that may open a WebSocket or GraphQL socket and call MCP: unset, the server's own alone; set, those listed alone, the server's own included only when listed |
 | `CORS_METHODS` | comma-separated allowed request methods |
 | `CORS_HEADERS` | comma-separated allowed request headers |
-| `CORS_EXPOSED` | comma-separated response headers exposed to the browser |
+| `CORS_EXPOSED` | comma-separated response headers exposed to the browser, beside `Link`, `Location` and `Retry-After`, always exposed |
 | `CORS_CREDENTIALS` | allow credentialed requests — default `false` |
 | `CORS_MAX_AGE` | preflight cache lifetime in seconds |
 | `COMPRESSION` | negotiate response compression from `Accept-Encoding` — default `false` (leave it to the proxy unless the app terminates responses) |
-| `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h), `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
-| `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`, `0` ⇒ none sent |
+| `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h); from `1` to `86400` (a day), or `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
+| `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`; from `1` to `3600`, or `0` ⇒ none sent |
 | `ACCESS_LOG` | emit one access-log event per request on `nest_rs::operation` — default `true`. Owned by the HTTP transport, so it needs no observability crate; `trace_id` joins the line only when one is mounted |
-| `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `Forwarded` (RFC 7239) / `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/) and the trace context; an unparseable entry aborts the boot |
+| `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `Forwarded` (RFC 7239) / `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/), the trace context and the browser-origin check, which reads `Forwarded` / `X-Forwarded-Proto` / `X-Forwarded-Host` for the origin the browser was on; an unparseable entry aborts the boot |
 
-## `seaorm` — `NESTRS_SEAORM__*`
+## `seaorm` — `<PREFIX>_SEAORM__*`
 
-The one pool every SeaORM binding shares, opened by `SeaOrmModule::for_root`.
-The engine is in the URL's scheme (`postgres://`, `mysql://`, `sqlite://`) —
-sea-orm picks it, the variable does not change.
+The one pool every SeaORM binding shares, opened by `SeaOrmModule::for_root`,
+on Postgres — the one engine the framework builds sea-orm with.
 
 | Key | Meaning |
 |---|---|
-| `URL` | database connection string |
+| `URL` | database connection string. TLS is verified or off: with no `sslmode` the connection asks for `verify-full`, the server's certificate checked against the system's authorities — or the file `sslrootcert` names; libpq's `sslrootcert=system` is the system's too — and its name against the host; `sslmode=disable` is plaintext, written where it is meant. `allow`, `prefer`, `require` and `verify-ca`, which encrypt without that check or may, fail the boot naming this variable. Every connection the framework opens holds to it — the pool, `connect_from_env`, `EphemeralDatabase` — through `SeaOrmConfig::connect_options` |
 | `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
 | `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
-| `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds |
+| `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, and the boot's budget to open the pool — what Postgres refuses on every attempt (credentials, the database, TLS) fails the boot at once, the rest (a server not listening yet, starting or full, a name that does not resolve yet) is retried within it, each attempt a `warn` on `nest_rs::orm` — from `1` to `3600` (unset ⇒ `10`, below the authentication guard's 18-second net and the HTTP request timeout, so a pool that runs dry answers with its own error; `Repo` reaches the pool from any strategy, so an app running the authentication guard keeps it under that net: the boot refuses one at or past it) — `0` fails the boot rather than time out every acquire, and past an hour the request that asked for a connection has long been abandoned |
+| `STATEMENT_TIMEOUT_SECS` | how long one statement runs before Postgres cancels it (`statement_timeout`), in seconds, from `1` to `3600` (unset ⇒ `15`, below the authentication guard's 18-second net and the HTTP request timeout) — a unit of work's `BEGIN` / `COMMIT` / `ROLLBACK` included; a statement it cancels answers `503` / `UNAVAILABLE`, and a commit that does not answer within it plus a second is in doubt; the boot refuses one at or past a net reaching the pool, as it refuses `CONNECT_TIMEOUT_SECS`. `migrate` and `seed`, opened by `connect_from_env`, run without it |
 | `SQLX_LOGGING` | log SQL statements |
 | `OBSERVE_SERIALIZATION_CONFLICTS` | tag commit-time serialization conflicts at `warn` |
 
-## `redis` — `NESTRS_REDIS__*`
+## `redis` — `<PREFIX>_REDIS__*`
 
-The one Redis connection every Redis binding shares — the queue producer, the
-worker and the rate-limit store — opened by `RedisModule::for_root`. One
-connection, one variable: a throttler-only app sets the same `URL` a queue app
-does.
-
-| Key | Meaning |
-|---|---|
-| `URL` | Redis connection string |
-| `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error; defaults to `10`, and `0` is rejected. Each attempt warns on `nest_rs::redis`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes |
-
-## `redis__worker` — `NESTRS_REDIS__WORKER__*`
-
-The consumer binding's own settings, resolved by `RedisWorkerModule::for_root`.
-Two segments because the config sits in the crate's `worker/` folder: the
-crate's word, then the binding's — exactly the stem `RedisWorkerConfig` is named
-from.
+The Redis connection every Redis binding shares — the queue's producer and
+consumer, the rate-limit store and the schedule's occurrence lock — opened by
+`RedisModule::for_root`, on one server, Sentinel or a Cluster alike. One connection, one variable: a throttler-only app sets
+the same `URL` a queue app does. A [second Valkey](/queue/topologies/#a-second-valkey)
+reads the same keys under its instance — `<PREFIX>_REDIS__CACHE__URL` for
+`#[instance] struct Cache`. The TLS material is read at boot, so a renewed file takes effect at the
+next restart.
 
 | Key | Meaning |
 |---|---|
-| `SHUTDOWN_TIMEOUT_SECS` | how long the worker waits for in-flight jobs after a shutdown signal; defaults to `30` |
+| `URL` | Redis connection string, whose scheme declares the [topology](/queue/topologies/): `redis://` / `rediss://` one server, `redis-sentinel://` / `rediss-sentinel://` the primary the sentinels it lists name (`node=` each further sentinel, `sentinelServiceName=` required), `redis-cluster://` / `rediss-cluster://` a Cluster read from the seeds it lists. An `s` scheme encrypts every connection and verifies each certificate for the host dialled; `#insecure`, which skips that, and a parameter the topology does not take, fail the boot. Required unless the process declares a development or test profile, whose defaults dial `redis://127.0.0.1/`; a config pinned over `RedisConfig::default()` has no URL in any profile, so an unset one fails the boot by name |
+| `TLS_CA_CERT` | PEM certificates of the authorities Redis's certificate must chain to, replacing the system's, which are trusted otherwise — read once at boot, `SSL_CERT_FILE` and `SSL_CERT_DIR` honoured; `TLS_CA_CERT_FILE` reads them from a path instead. Beside a `redis://` URL, fails the boot |
+| `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a Redis that requires one — its default under TLS (`tls-auth-clients yes`); `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
+| `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error, then the most any command a caller waits on may take from end to end — a push, a rate-limit check, a command of your own — past which it fails as a timeout — and how long the socket waits, a second at the least, before it probes an idle Redis or gives up on bytes Redis never acknowledged. A queue worker's blocking read, on a connection of its own, waits its one second plus this budget; defaults to `10`; whole seconds from `1` to `3600` — an hour, past which a Redis silent that long is gone rather than slow — refused outside, and in code anything above zero up to an hour, a sub-second budget included. An app importing the queue or the rate limiter binding keeps it under their net, 18 seconds, one importing the schedule binding under the scheduler's, 50 seconds, and one whose authentication strategy injects the connection under the guard's, 18 seconds — each would otherwise give up on a command still answering: the boot refuses one at or past it. Each boot attempt warns on `nest_rs::redis`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes. Refused credentials and an ACL denying the connection's `PING` fail at once, and so does a database the server will not select — an index it does not have, past a Cluster's `cluster-databases`, an ACL user without `+select` — named by the index the URL ends in, and a server that is not the topology the URL declares; a Redis loading its dataset, busy running a script or failing over is retried within the budget, and one still not ready when it runs out fails naming its last answer |
 
-## `storage` — `NESTRS_STORAGE__*`
+## `redis__queue` — `<PREFIX>_REDIS__QUEUE__*`
+
+The Redis queue binding's own settings, read by a bare `RedisQueueModule` import
+or pinned through `RedisQueueModule::for_root`. Two segments because the config
+sits in the crate's `queue/` folder: the crate's word, then the binding's —
+exactly the stem `RedisQueueConfig` is named from. A queue on a named instance
+reads them with the instance between the two: `<PREFIX>_REDIS__CACHE__QUEUE__*`.
 
 | Key | Meaning |
 |---|---|
-| `ENDPOINT` | S3 endpoint (empty ⇒ real AWS S3) |
-| `REGION` | region |
-| `ACCESS_KEY` / `SECRET_KEY` | static credentials |
-| `BUCKET` | target bucket |
-| `FORCE_PATH_STYLE` | path-style vs virtual-hosted addressing |
-| `ALLOW_HTTP` | reach the endpoint over plain `http://` — default `true` in dev/test, `false` in staging/production so credentials never travel unencrypted by omission. `false` + an `http://` `ENDPOINT` **fails boot**, naming the variable; the refusal covers presigned URLs, which are signed locally and would otherwise ship a working plaintext URL |
+| `LEASE_SECS` | how long a delivery holds its job without a renewal. The worker renews it every third of this while the attempt runs; once it lapses, the next worker that asks takes the job, so it is also how long a crashed replica's job waits before another runs it. Defaults to `30`; below `1` or above `3600` is rejected, and so is a lease of no more than one and a half times `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`: a renewal sent a third into the lease may wait out the whole budget, and would land after the lease lapsed |
 
-## `opentelemetry` — `NESTRS_OPENTELEMETRY__*`
+## `queue` — `<PREFIX>_QUEUE__*`
+
+The queue port's worker settings, read once `QueueModule` is imported, and
+pinned through `QueueModule::for_root`. The port's own word, so the window
+survives a swap of the backend underneath.
+
+| Key | Meaning |
+|---|---|
+| `SHUTDOWN_TIMEOUT_SECS` | the drain window after a shutdown signal: running attempts finish inside it, less a reserve, and one still running as it closes is interrupted and its job handed back to the queue before it ends. Defaults to `20`, so the way down fits Kubernetes' default grace period; below `1` or above `3600` is rejected |
+
+## `storage` — `<PREFIX>_STORAGE__*`
+
+| Key | Meaning |
+|---|---|
+| `URL` | the store, whose scheme picks the backend: `s3://<bucket>[/<prefix>]`, or `memory:///` in a declared development or test profile alone. `s3://nestrs` in a development or test profile's defaults, none otherwise and none in `StorageConfig::default()`, so an unset URL fails the boot by name; another scheme fails it naming the scheme, never quoting the URL. The boot proves the bucket: one that does not exist fails it naming this variable. Beside `memory:///`, any S3 key below set in the deployment fails the boot naming it |
+| `ENDPOINT` | S3 only: the server's endpoint (unset ⇒ AWS) — `https://rustfs:9000` in a development or test profile's defaults; an `https://` endpoint's certificate is verified against the system's authorities, or `TLS_CA_CERT`'s |
+| `TLS_CA_CERT` | S3 only: PEM certificates of the authorities the endpoint's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or beside an `http://` endpoint, fails the boot |
+| `TLS_CERT` / `TLS_KEY` | refused: `object_store` presents no client certificate, so either fails the boot, naming it |
+| `REGION` | S3 only: the region requests are signed for |
+| `ACCESS_KEY` / `SECRET_KEY` | S3 only: static credentials — the dev container's pair in a declared development or test profile's defaults, none otherwise and none in `StorageConfig::default()`, so an unset pair fails the boot by name. A pair the store refuses to list with boots on with one `warn` naming both |
+| `FORCE_PATH_STYLE` | S3 only: path-style vs virtual-hosted addressing |
+| `ALLOW_HTTP` | S3 only: reach the endpoint over plain `http://` — `true` in a declared development or test profile's defaults, `false` otherwise and in `StorageConfig::default()`, so credentials never travel unencrypted by omission. `false` + an `http://` `ENDPOINT` **fails boot**, naming the variable; the refusal covers presigned URLs, which are signed locally and would otherwise ship a working plaintext URL |
+| `OPERATION_TIMEOUT_SECS` | the most a call waits for the store's answer, every retry included, and the boot's proof of the bucket — an upload's body is part of its request, and `put_stream` moves each 5 MiB part within it. Retries stop once half of it is spent, so a call whose attempts keep failing ends on the store's error and its cause; past it a call the store never answered fails as its own error naming this variable. Defaults to `15`; whole seconds from `1` to `3600`, refused outside. An app whose authentication strategy injects `Storage` keeps it under the guard's 18 seconds: the boot refuses one at or past it |
+| `READ_TIMEOUT_SECS` | the most a download waits for its next bytes while it is read: one that stalls longer is cut and resumed from where it stopped, provided the object is still the version it started on, and fails naming this variable when the resumed body sends nothing within it; one that moves, or whose reader pauses, is never cut. Defaults to `30`; whole seconds from `1` to `3600`, refused outside |
+
+## `static_files` — `<PREFIX>_STATIC_FILES__*`
+
+Read once `StaticFilesModule` is imported, and pinned through its `for_root`
+([Static files](/http/static-files/)).
+
+| Key | Meaning |
+|---|---|
+| `ROOT` | the directory `StaticFilesModule` serves, relative to the working directory. Resolved at boot: unset, missing or not a directory **fails boot**, and so does any value beside a folder embedded in the binary (`Embedded::of::<T>()`) |
+| `PATH` | where the files answer, outside the global prefix and after every route — default `/`. A literal path the router matches as written: an empty, `.` or `..` segment, template syntax (`{` `}`), what the router reads as a parameter (`:` `*` `<`), `%`, `?`, `#` or `\` is refused |
+| `SPA_FALLBACK` | answer a browser's navigation that no file matches with the root's `index.html` — default `false`. A request that does not ask for a page, or whose last segment names a file, still gets the `404` problem document |
+| `MAX_AGE_SECS` | `Cache-Control: public, max-age` on every file but an HTML document, from `1` to a year (`31536000`); `0` or unset revalidates every file (`no-cache`), the default |
+
+## `opentelemetry` — `<PREFIX>_OPENTELEMETRY__*`
 
 | Key | Meaning |
 |---|---|
 | `SERVICE_NAME` | service name; overrides the name passed to `OpenTelemetry::init` |
-| `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export) |
+| `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export): `http://` exports in plaintext, `https://` over TLS alone; another scheme, or a value that does not parse as a URL, fails the boot |
 | `SAMPLE_RATIO` | trace sampling ratio, `0.0`–`1.0` (default `1.0`) |
-| `METRIC_INTERVAL_SECS` | metric export period (default `60`; `0` keeps the default). Traces and logs export immediately — metrics wait for this flush |
+| `METRIC_INTERVAL_SECS` | metric export period, from `1` to `3600` (default `60`; `0` is refused). Traces and logs export immediately — metrics wait for this flush |
 | `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
+| `TLS_CA_CERT` | PEM certificates of the authorities an `https://` collector's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or beside an `http://` endpoint, fails the boot |
+| `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither; beside an `http://` endpoint, they fail the boot |
 
-The console layer reads the [`NESTRS_LOG*` family](#logging--nestrs_log)
+The console layer reads the [`<PREFIX>_LOG*` family](#logging--prefix_log)
 above — there are no OTel-specific log variables.
 
-## `authn` — `NESTRS_AUTHN__*`
+## `authn` — `<PREFIX>_AUTHN__*`
 
 JWT key material and validation for `nest-rs-authn`. A resource server sets only
-the verification side (`SECRET` **or** `PUBLIC_KEY`); the issuer app also sets the
-signing side.
+the verification side (`SECRET`, `PUBLIC_KEY` **or** `JWKS_URI`); the issuer app
+also sets the signing side. The key material is read at boot, so a rotated file
+takes effect at the next restart; a JWK Set is fetched when a token first needs
+it and kept fresh ([JWT](/security/authentication/jwt/#verifying-another-issuers-tokens)).
 
 | Key | Meaning |
 |---|---|
-| `SECRET` | HS256 shared secret (≥ 32 bytes) — signs and verifies |
-| `PRIVATE_KEY` | EdDSA private key (PEM) — issuer only, to sign |
-| `PUBLIC_KEY` | EdDSA public key (PEM) — to verify |
+| `SECRET` | HS256 shared secret (≥ 32 bytes) — signs and verifies. Beside either key it fails the boot |
+| `PRIVATE_KEY` | EdDSA private key (PEM) — issuer only, to sign; `PRIVATE_KEY_FILE` reads it from a path instead. Without `PUBLIC_KEY`, or beside the public key of another pair, fails the boot |
+| `PUBLIC_KEY` | EdDSA public key (PEM) — to verify; `PUBLIC_KEY_FILE` reads it from a path instead |
+| `JWKS_URI` | the JWK Set an external issuer publishes its keys at — verify-only. `https` only; beside `SECRET`, `PRIVATE_KEY` or `PUBLIC_KEY`, fails the boot |
+| `ALGORITHMS` | comma-separated JOSE algorithms a token may be signed with, case-sensitive (`EdDSA,RS256`). Unset: `HS256` with `SECRET`, `EdDSA` with a PEM key, every asymmetric one (`RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `EdDSA`) with `JWKS_URI`. A secret or a PEM key takes exactly one that fits it, a JWK Set never an `HS*` one; an unknown name, `none` included, fails the boot |
+| `TLS_CA_CERT` | PEM certificates of the authorities the `JWKS_URI` endpoint's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or set without `JWKS_URI`, fails the boot |
+| `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a `JWKS_URI` endpoint that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither; without `JWKS_URI`, they fail the boot |
 | `ISSUER` | expected `iss` claim (unset ⇒ no issuer check) |
 | `AUDIENCE` | expected `aud` claim. Set ⇒ the claim is **mandatory** and must name this app. Unset does *not* disable the check: a token carrying an `aud` this app is not named in is refused either way (RFC 7519 §4.1.3) |
 | `ALLOW_ANY_AUDIENCE` | opt out of that clause and accept a token minted for another service (default `false`). Refused beside `AUDIENCE`, and reported at `warn` once per boot |
-| `LEEWAY_SECS` | clock-skew leeway in seconds (default `30`) |
-| `EXPIRES_IN_SECS` | minted-token lifetime in seconds (default `3600`) |
-| `EXPLICIT_TYPING` | require the JWT `typ` header to name the token's type (default `true`) |
+| `LEEWAY_SECS` | clock-skew leeway in seconds, `0` to `300` (default `30`) — RFC 7519 §4.1.4's "no more than a few minutes"; past it an expired token still verifies |
+| `EXPIRES_IN_SECS` | minted-token lifetime in seconds, `1` to `2592000` — thirty days (default `3600`) |
+| `EXPLICIT_TYPING` | require the JWT `typ` header to name the token's type (default `true`); `false` for an issuer stamping a plain `typ: JWT`, or none |
 
-## `oauth_client` — `NESTRS_OAUTH_CLIENT__*`
+## `oauth__client` — `<PREFIX>_OAUTH__CLIENT__*`
 
 The login flow's provider endpoints, read by `OAuthClientConfig` in
 `nest-rs-oauth-client`. Every field is required, so an unconfigured app fails
@@ -169,17 +245,19 @@ boot naming the field:
 | Key | Meaning |
 |---|---|
 | `CLIENT_ID` / `CLIENT_SECRET` | the registered OAuth2 client credentials |
-| `AUTH_URL` | provider authorization endpoint (where the user consents) |
-| `TOKEN_URL` | provider token endpoint (code → tokens) |
-| `REDIRECT_URL` | this app's callback the provider returns to |
-| `USERINFO_URL` | provider endpoint the profile is fetched from |
+| `AUTH_URL` | provider authorization endpoint (where the user consents); `https` only (RFC 6749 §3.1) |
+| `TOKEN_URL` | provider token endpoint (code → tokens); `https` only (RFC 6749 §3.2) |
+| `REDIRECT_URL` | this app's callback the provider returns to; `https`, or `http` on `localhost`, `127.0.0.1` or `[::1]` (RFC 8252 §7.3) |
+| `USERINFO_URL` | provider endpoint the profile is fetched from; `https` only (RFC 6750 §5.3) |
 | `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
+| `TLS_CA_CERT` | PEM certificates of the authorities the provider's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate fails the boot |
+| `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a provider that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
 
-## `oauth_resource` — `NESTRS_OAUTH_RESOURCE__*`
+## `oauth__resource` — `<PREFIX>_OAUTH__RESOURCE__*`
 
 `OAuthResourceModule` is what turns the app into a conformant OAuth 2.1
 resource server (RFC 9728) and what an MCP server needs. Importing it makes
-`NESTRS_AUTHN__AUDIENCE` **mandatory**: the boot fails without it rather than
+`<PREFIX>_AUTHN__AUDIENCE` **mandatory**: the boot fails without it rather than
 leaving the app unable to say which tokens are its own. (A token minted for
 *another named* audience is refused with or without the module — that is
 RFC 7519 §4.1.3. What the module adds is that a token carrying no `aud` at all
@@ -187,32 +265,36 @@ is refused too.)
 
 | Key | Meaning |
 |---|---|
-| `RESOURCE` | this deployment's canonical resource URI — the value tokens must carry as `aud`. **Required** under the module |
-| `AUTHORIZATION_SERVERS` | comma-separated issuer identifiers allowed to mint tokens for it. **At least one required** |
+| `RESOURCE` | this deployment's canonical resource URI — the value tokens must carry as `aud`: `https`, a host, no userinfo, no fragment, plain `http` on loopback in a development or test profile alone. **Required** under the module |
+| `AUTHORIZATION_SERVERS` | comma-separated issuer identifiers allowed to mint tokens for it, each held to `RESOURCE`'s rules. **At least one required** |
 | `SCOPES_SUPPORTED` | comma-separated minimal scope set, advertised in the metadata document and the `WWW-Authenticate` challenge |
 | `BEARER_METHODS_SUPPORTED` | how a token may be presented — defaults to `header`, the only form accepted |
 | `RESOURCE_NAME` | human-readable name for a consent screen |
-| `RESOURCE_DOCUMENTATION` | URL of developer documentation for this resource |
-| `RESOURCE_POLICY_URI` | URL of this resource's privacy policy, advertised in the metadata document |
-| `RESOURCE_TOS_URI` | URL of this resource's terms of service, advertised in the metadata document |
+| `RESOURCE_DOCUMENTATION` | URL of developer documentation for this resource; userinfo fails the boot |
+| `RESOURCE_POLICY_URI` | URL of this resource's privacy policy, advertised in the metadata document; userinfo fails the boot |
+| `RESOURCE_TOS_URI` | URL of this resource's terms of service, advertised in the metadata document; userinfo fails the boot |
 
-## `mcp` — `NESTRS_MCP__*`
+## `mcp` — `<PREFIX>_MCP__*`
 
 | Key | Meaning |
 |---|---|
 | `ALLOWED_HOSTS` | comma-separated `Host` authorities accepted (anti-DNS-rebinding). Defaults to loopback, so a public deployment **must** name itself; an empty list disables the check and is reported at `warn` |
 | `LEGACY_SESSION_MODE` | keep sessions alive for protocol revisions older than `2026-07-28` — default `true` |
 | `JSON_RESPONSE` | answer simple operations with `application/json` instead of an SSE stream — default `false` |
-| `SSE_KEEP_ALIVE_SECS` | SSE keep-alive ping interval (`0` ⇒ none) — default `15` |
-| `SSE_RETRY_SECS` | `retry:` interval advertised on SSE priming events (`0` ⇒ none) — default `3` |
+| `SSE_KEEP_ALIVE_SECS` | SSE keep-alive ping interval, from `1` to `3600` (`0` ⇒ none) — default `15` |
+| `SSE_RETRY_SECS` | `retry:` interval advertised on SSE priming events, a session's streams included, from `1` to `3600` (`0` ⇒ none) — default `3` |
 | `MAX_REQUEST_BODY_BYTES` | cap on a single POST body, enforced while streaming — default 4 MiB |
 | `STATELESS_PROTOCOL_METADATA_REQUIRED` | require per-request protocol metadata on stateless POSTs (SEP-2243) — default `false` |
+| `OPERATION_TIMEOUT_SECS` | how long one operation may run, `subscriptions/listen` aside — default `20`, the request timeout's; whole seconds from `1` to `3600`, or `0` ⇒ none. An overrun answers a JSON-RPC internal error whose `data.reason` is `timeout`. A timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, files one `warn` at boot |
+| `MAX_CONCURRENT_SESSIONS` | live sessions one endpoint holds, at least `1` — default `1024`. Past it an `initialize` is answered `503` with `Retry-After: 5`; a stateless request is never refused for it |
+| `SESSION_IDLE_TIMEOUT_SECS` | how long a session may go without a message before it is closed, whole seconds from `1` to `3600`, never off — default `300` |
 
-## `social` — `NESTRS_SOCIAL__<PROVIDER>__*`
+## `social` — `<PREFIX>_SOCIAL__<PROVIDER>__*`
 
-One sub-namespace per provider (`GITHUB`, `GOOGLE`). Credentials decide the
-provider's fate: complete ⇒ active, absent ⇒ inert with a boot `warn`,
-partial ⇒ the boot fails naming the provider.
+One sub-namespace per provider (`GITHUB`, `GOOGLE`), read only when the app
+imports the provider's module (`GithubSocialModule`, `GoogleSocialModule`).
+Credentials then decide the provider's fate: complete ⇒ active, absent ⇒ inert
+with a boot `warn`, partial ⇒ the boot fails naming the provider.
 
 | Key | Meaning |
 |---|---|
@@ -225,7 +307,7 @@ The endpoint URLs are provider constants, not config — see
 
 ## Other namespaces
 
-These read their own `NESTRS_<NAMESPACE>__*` keys. The rule is uniform: the
+These read their own `<PREFIX>_<NAMESPACE>__*` keys. The rule is uniform: the
 struct's field name uppercased is the key. Two namespaces are not spelled the
 way their section is, so the page is named rather than left to a search:
 
@@ -233,16 +315,56 @@ way their section is, so the page is named rather than left to a search:
 |---|---|
 | `graphql` | [GraphQL configuration](/graphql/configuration/) |
 | `openapi` | [OpenAPI](/openapi/) |
+| `server_timing` | [Server-Timing](/server-timing/#turn-it-on-in-production) |
 | `health` | [Health](/health/) |
 | `throttler` | [Rate limiting](/rate-limiting/) |
 | `ws` | [WebSockets](/websockets/) |
-| `issuer` | the demo feature library — [the Publish workspace](/publish/) |
+| `oauth` | the demo feature library — [the Publish workspace](/publish/) |
+
+## A variable nothing reads
+
+A variable under the prefix that no config reads used to cost the deployment
+its value in silence: a misspelled key, or a name a release renamed, left the
+default in place and nothing said so. The boot now does, once per variable, at
+`warn` on `nest_rs::config`, by name and never by value:
+
+| Message | When | Fields |
+|---|---|---|
+| `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough |
+| `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`<PREFIX>_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `<PREFIX>_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`<PREFIX>_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`<PREFIX>_SEAROM__URL`, `<PREFIX>_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
+
+Everything else stays silent, and that is the design. One `.env` serves several
+binaries, so a namespace this binary does not read, and that is no near miss of
+one it does, is another binary's — and a near miss is held to both halves of the
+variable for that reason. A namespace under six letters has no room for a typo
+that is not also a word (`auth` and `authz` beside `authn`, `es` beside `ws`), so
+only its separators and its case count; and a misspelled namespace still carries
+the key the deployment meant, which the near namespace reads, while another
+binary's variable carries its own — `<PREFIX>_OPENAI__API_KEY` beside a linked
+`openapi` names no key `openapi` reads, and stays silent. The framework's own
+namespaces are held apart from each other by the conformance suite. A key holding
+`__` under a namespace it does read is a sub-namespace another binary links —
+`redis__queue` under `redis` — reported only when it is a near miss of a key
+read here. The framework's process-level names, `<PREFIX>_LOG*`,
+`<PREFIX>_ENV` and `NESTRS_ENV_PREFIX`, are never reported.
+
+The check runs where each config is read, against the keys its `from_env`
+actually asked for — the namespace's misspellings included, at that same read,
+ended by an error or not, so a renamed required variable is named before the
+boot error its absence causes. A key read only behind a branch — `HttpCors` reads its other
+keys only when `CORS_ORIGINS` is set — is therefore reported exactly when the
+deployment did not take the branch, which is when it does nothing. A read made
+before any subscriber listens waits for the first read that has one, and a
+deployment that filters `nest_rs::config` out pays nothing for the scan.
+[Upgrading from 6.x](/upgrading/#what-fails-if-you-get-it-wrong) shows what it
+prints for a boot that kept a renamed variable.
 
 ## The `.env` cascade
 
 Values resolve highest-first: real env > pinned in `module.rs` >
-`.env.<NESTRS_ENV>.local` > `.env.local` > `.env.<NESTRS_ENV>` > `.env`. See
-[the env cascade](/configuration/env-cascade/) for the files and
+`.env.<<PREFIX>_ENV>.local` > `.env.local` > `.env.<<PREFIX>_ENV>` > `.env`, and a
+process that leaves `<PREFIX>_ENV` unset runs as production. See
+[the env cascade](/configuration/env-cascade/#the-active-environment) for the files and
 [the dual-path rule](/configuration/#the-dual-path-rule) for where a pinned
 value sits.
 

@@ -1,0 +1,5 @@
+error: `#[use_guards]` is not taken on a `#[indicators]` method: an indicator runs inside the health endpoint, whose layers are the endpoint's — no layer runs around one probe, and nothing reads a value declared on it
+  --> tests/integration/diagnostics/health/layer_beside_an_indicator.rs:16:5
+   |
+16 |     #[use_guards(AllowAll)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

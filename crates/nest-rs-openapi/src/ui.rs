@@ -1,44 +1,57 @@
-//! Bundled Swagger UI and spec endpoint. Assets are vendored under `assets/`
-//! and embedded; `index.html` references them and the spec by **relative** path
-//! (`api/...`, `api-json`), so they resolve against whatever prefix the page is
-//! served under (OAPI-O6). The docs page mounts at `…/api` (no trailing slash),
-//! whose base directory is `…/`, so a relative `api-json` resolves to
-//! `…/api-json` and `api/swagger-ui.css` to `…/api/swagger-ui.css` — correct
-//! with an empty `global_prefix` (`/api-json`, `/api/…`) **and** under one
-//! (`/v1/api-json`, `/v1/api/…`), where an absolute `/api-json` would 404 and
-//! break "Try it out".
+//! Bundled Swagger UI and spec endpoint. `index.html` references the spec and
+//! assets by **relative** path, so they resolve under any `global_prefix`.
 
 use poem::endpoint::make_sync;
 use poem::{Endpoint, Response, handler};
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
-const SWAGGER_CSS: &[u8] = include_bytes!("../assets/swagger-ui.css");
+const SWAGGER_CSS: &str = concat!(
+    include_str!("../assets/swagger-ui.css"),
+    "\n",
+    include_str!("../assets/index.css"),
+);
 const SWAGGER_BUNDLE_JS: &[u8] = include_bytes!("../assets/swagger-ui-bundle.js");
 const SWAGGER_PRESET_JS: &[u8] = include_bytes!("../assets/swagger-ui-standalone-preset.js");
+const SWAGGER_INITIALIZER_JS: &[u8] = include_bytes!("../assets/swagger-initializer.js");
+
+/// The documentation page loads only its own assets, fetches only its own
+/// origin, and cannot be framed. Swagger UI's bundle applies inline styles, the
+/// one inline source it needs.
+pub(crate) const DOCS_CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; \
+     style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; \
+     connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 #[handler]
-pub fn swagger_index() -> Response {
+pub(crate) fn swagger_index() -> Response {
+    // Kept under a deployment's own policy: the edge's defaults fill only what a
+    // response leaves unset.
     Response::builder()
         .content_type("text/html; charset=utf-8")
+        .header("content-security-policy", DOCS_CONTENT_SECURITY_POLICY)
         .body(INDEX_HTML)
 }
 
 #[handler]
-pub fn swagger_css() -> Response {
-    asset("text/css", SWAGGER_CSS)
+pub(crate) fn swagger_css() -> Response {
+    asset("text/css", SWAGGER_CSS.as_bytes())
 }
 
 #[handler]
-pub fn swagger_bundle() -> Response {
+pub(crate) fn swagger_initializer() -> Response {
+    asset("application/javascript", SWAGGER_INITIALIZER_JS)
+}
+
+#[handler]
+pub(crate) fn swagger_bundle() -> Response {
     asset("application/javascript", SWAGGER_BUNDLE_JS)
 }
 
 #[handler]
-pub fn swagger_preset() -> Response {
+pub(crate) fn swagger_preset() -> Response {
     asset("application/javascript", SWAGGER_PRESET_JS)
 }
 
-pub fn spec_endpoint(spec: String) -> impl Endpoint {
+pub(crate) fn spec_endpoint(spec: String) -> impl Endpoint {
     make_sync(move |_req| {
         Response::builder()
             .content_type("application/json")
@@ -47,8 +60,6 @@ pub fn spec_endpoint(spec: String) -> impl Endpoint {
 }
 
 fn asset(content_type: &'static str, body: &'static [u8]) -> Response {
-    // `body` is `&'static [u8]`, so `.body` wraps it via `Bytes::from_static` —
-    // no per-request copy of the ~1.5 MB bundle.
     Response::builder()
         .content_type(content_type)
         .header("cache-control", "public, max-age=31536000, immutable")
@@ -61,35 +72,51 @@ mod tests {
 
     use super::*;
 
-    // The embedded index must reference the spec + assets **relatively** (no
-    // leading slash), so they resolve under any `global_prefix` (OAPI-O6). An
-    // absolute `/api-json` would 404 under a prefix and break "Try it out". A
-    // rename of the mount paths without the index (or vice versa) turns the UI
-    // into a white page in prod — pin both halves of the contract.
     #[test]
     fn embedded_index_references_the_relative_mount_paths() {
-        // The spec fetch and every asset are relative — never rooted at `/`.
+        let initializer = std::str::from_utf8(SWAGGER_INITIALIZER_JS).expect("utf-8");
         assert!(
-            INDEX_HTML.contains("\"api-json\""),
-            "index.html must fetch the spec relatively (\"api-json\"), not \"/api-json\"",
+            initializer.contains("\"api-json\""),
+            "the initializer must fetch the spec relatively (\"api-json\"), not \"/api-json\"",
         );
         assert!(
             INDEX_HTML.contains("\"api/swagger-ui.css\""),
             "index.html must reference the stylesheet relatively (api/swagger-ui.css)",
         );
-        assert!(
-            !INDEX_HTML.contains("\"/api-json\"") && !INDEX_HTML.contains("\"/api/"),
-            "no absolute (leading-slash) references — they break under a global_prefix",
-        );
+        for page in [INDEX_HTML, initializer] {
+            assert!(
+                !page.contains("\"/api-json\"") && !page.contains("\"/api/"),
+                "no absolute (leading-slash) references — they break under a global_prefix",
+            );
+        }
     }
 
     #[test]
     fn bundled_assets_are_not_empty() {
-        // A vendored asset overwritten with an empty file would 200 a blank
-        // page in prod — fail loud here instead.
         assert!(!SWAGGER_CSS.is_empty());
         assert!(!SWAGGER_BUNDLE_JS.is_empty());
         assert!(!SWAGGER_PRESET_JS.is_empty());
+        assert!(!SWAGGER_INITIALIZER_JS.is_empty());
+    }
+
+    #[test]
+    fn the_page_carries_no_inline_script_its_policy_would_refuse() {
+        assert!(
+            !INDEX_HTML.contains("<script>") && !INDEX_HTML.contains("<style"),
+            "every script and style is a file `script-src 'self'` admits: {INDEX_HTML}",
+        );
+        assert!(INDEX_HTML.contains("\"api/swagger-initializer.js\""));
+        assert!(DOCS_CONTENT_SECURITY_POLICY.contains("script-src 'self';"));
+        assert!(DOCS_CONTENT_SECURITY_POLICY.contains("frame-ancestors 'none'"));
+    }
+
+    #[test]
+    fn the_ui_never_reports_the_document_to_an_online_validator() {
+        let initializer = std::str::from_utf8(SWAGGER_INITIALIZER_JS).expect("utf-8");
+        assert!(
+            initializer.contains("validatorUrl: \"none\""),
+            "Swagger UI's default badge sends the document's URL to a third party: {initializer}",
+        );
     }
 
     #[test]
@@ -114,10 +141,6 @@ mod tests {
 
     #[test]
     fn spec_endpoint_constructs_without_panic() {
-        // The endpoint trait is async; an integration test (with tokio) exercises
-        // the body end-to-end via `TestClient`. Here we only check the
-        // constructor does not panic on a representative spec — the closure
-        // body is the trivial `body(spec.clone())` write.
         let _ = spec_endpoint(r#"{"openapi":"3.1.0"}"#.into());
     }
 }

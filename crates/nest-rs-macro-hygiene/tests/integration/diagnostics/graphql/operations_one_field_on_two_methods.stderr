@@ -1,0 +1,5 @@
+error: `#[operations]` declares `#[query] widget` on `widget` and again on `other_widget`: a schema resolves each field of a type with one method, so the SDL would document one and the dispatch run the other — give one a distinct name
+  --> tests/integration/diagnostics/graphql/operations_one_field_on_two_methods.rs:18:5
+   |
+18 |     #[query]
+   |     ^^^^^^^^

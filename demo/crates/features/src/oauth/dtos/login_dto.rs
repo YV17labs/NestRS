@@ -1,7 +1,6 @@
 use nest_rs::http::input;
 
 #[input]
-#[derive(Debug)]
 pub struct LoginDto {
     #[validate(email)]
     pub email: String,

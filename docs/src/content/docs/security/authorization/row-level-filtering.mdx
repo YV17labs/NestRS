@@ -1,7 +1,6 @@
 ---
 title: Row-level filtering
 description: Every read goes through Repo::scoped, which joins the ambient ability's condition_for into the SQL — no hand-written WHERE clause, no forgotten filter.
-tier: basics
 sidebar:
   order: 3
 ---
@@ -66,7 +65,15 @@ them into one `sea_orm::Condition`:
 - **Denials** ⇒ the union is `NOT`-ed onto the outer `AND`.
 
 The same `Predicate` AST also drives the in-memory check
-(`Ability::can`) — they cannot drift apart.
+(`Ability::can`), which reads the row as the rendered SQL would: `eq` and
+`ne` against `None` are `IS NULL` and `IS NOT NULL`, and any other
+comparison with `NULL` matches under neither the rule nor its `NOT`. What
+the row cannot show, a relation above all, stays SQL's: the response mask
+trusts the read for it on a reply and refuses it on a push
+([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)),
+and `can` grants nothing on it while a denial it cannot decide refuses:
+`Repo::can` asks SQL instead
+([Reading the ambient ability](/security/authorization/#reading-the-ambient-ability)).
 
 ## What `Repo` does
 
@@ -86,15 +93,18 @@ service.
 ## The ambient ability
 
 `Repo::scoped(...)` reads the ability via
-`nest_rs::authz::current_ability()` — a `tokio::task_local!` set by
-the transport's authz guard. Three install depths cooperate:
+`nest_rs::authz::current_ability()` — a value of the request's ambient
+context, installed by the transport's authz layer. Three install depths
+cooperate:
 
 - **HTTP** — the `Authorize` shaper installs `with_ability(ability,
   handler)` after the `AbilityGuard` attached the ability to the
-  request. The handler sees it.
+  request. The handler sees it, and so does a streaming body it returns.
 - **GraphQL** — `GraphqlAbilityBridge::around` installs it for the
-  duration of the operation. Resolvers and dataloaders see it.
-- **WebSockets** — `WsDataContext` installs it per message. The
+  duration of the operation. Resolvers see it, and so do the dataloader
+  batches they trigger.
+- **WebSockets** — the gateway's upgrade guards attach it, and the
+  connection carries it into every message and connection hook. The
   message handler sees it.
 
 Outside any request (worker job, cron tick, shutdown hook),
@@ -131,7 +141,9 @@ the filter. See [Public reads](/security/authorization/public-reads/).
 The sanctioned ability-less reads (pre-authentication credential
 lookup, `CrudService::access`'s existence probe) stay inside `Repo`
 through `Repo::unscoped()` / `unscoped_by_id()` — an explicit, greppable
-opt-out of the row scope, never a raw `find()` around the choke point.
+opt-out of the row scope, never a raw `find()` around the choke point. They
+drop the ability only: a soft-deleted row stays hidden there too, and
+`Repo::with_tombstones` is the one read that keeps it.
 Signature-verified webhook ingest is the same shape: the signature *is*
 the credential, so it authenticates in a `Guard` ahead of the handler —
 verify the HMAC with `subtle::ct_eq`, enforce a replay window on the

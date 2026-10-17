@@ -14,7 +14,7 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = AudioQueue, retries = 3)]
+    #[process(queue = AudioQueue, retries = 3, concurrency = 4)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.svc.transcode(&job.file).await?;
         Ok(())
@@ -33,15 +33,12 @@ mod tests {
 
     #[test]
     fn process_method_is_discovered_through_the_inventory() {
-        let entries: Vec<&ProcessMethod> = nest_rs::core::inventory::iter::<ProcessMethod>()
-            .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioProcessor>())
-            .collect();
-        let transcode = entries
-            .iter()
-            .find(|e| e.name == "AudioProcessor::transcode")
+        let transcode = nest_rs::core::inventory::iter::<ProcessMethod>()
+            .find(|m| m.name() == "AudioProcessor::transcode")
             .expect("AudioProcessor::transcode is discovered");
-        assert_eq!(transcode.queue, AUDIO_QUEUE);
-        assert_eq!(transcode.retries, 3);
+        assert_eq!(transcode.queue(), AUDIO_QUEUE);
+        assert_eq!(transcode.options().retries(), 3);
+        assert_eq!(transcode.options().concurrency().get(), 4);
     }
 
     #[test]

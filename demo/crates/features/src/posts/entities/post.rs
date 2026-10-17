@@ -1,4 +1,4 @@
-use nest_rs::resource::{expose, wire_enum};
+use nest_rs::seaorm::{expose, wire_enum};
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 

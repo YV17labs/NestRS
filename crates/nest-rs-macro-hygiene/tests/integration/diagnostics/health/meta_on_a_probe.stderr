@@ -1,0 +1,5 @@
+error: `#[meta]` is not taken on a `#[indicators]` method: an indicator runs inside the health endpoint, whose layers are the endpoint's — no layer runs around one probe, and nothing reads a value declared on it
+  --> tests/integration/diagnostics/health/meta_on_a_probe.rs:16:5
+   |
+16 |     #[meta(Tag)]
+   |     ^^^^^^^^^^^^

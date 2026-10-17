@@ -1,0 +1,5 @@
+error: `#[use_interceptors]` does not run on GraphQL yet, so beside `#[resolver]` it would be a silent no-op. Remove it, or bind the layer on an HTTP `#[controller]` / `#[routes]`, where it runs
+ --> tests/integration/diagnostics/graphql/interceptors_on_resolver.rs:8:1
+  |
+8 | #[use_interceptors(SomeInterceptor)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

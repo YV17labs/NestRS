@@ -1,0 +1,5 @@
+error: #[sea_orm] `from`: "org_id" is a relation or an `ignore`d field — a relation's key must be a column of the entity
+  --> tests/integration/diagnostics/seaorm/belongs_to_from_an_ignored_field.rs:18:34
+   |
+18 |     #[sea_orm(belongs_to, from = "org_id", to = "Column::Id")]
+   |                                  ^^^^^^^^

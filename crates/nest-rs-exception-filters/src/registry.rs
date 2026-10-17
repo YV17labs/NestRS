@@ -1,9 +1,5 @@
 //! Layer registration — typed specs the builder uses to seed the global
 //! exception-filter chain into the container.
-//!
-//! `ExceptionFilterSpec` is a [`LayerSpec`](nest_rs_core::LayerSpec) alias — the
-//! shared shape and its `resolve` method live in `nest-rs-core`; only the typed
-//! constructor and the erased trait differ per family.
 
 use std::any::{TypeId, type_name};
 use std::sync::Arc;
@@ -22,12 +18,36 @@ pub type ExceptionFilterSpec = LayerSpec<dyn ExceptionFilterErased>;
 
 /// Construct an [`ExceptionFilterSpec`] for the given filter type.
 ///
-/// ```rust,ignore
-/// use nest_rs::exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
+/// ```
+/// use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
+/// # use nest_rs_core::App;
+/// # use nest_rs_core::{Layer, injectable, module};
+/// # use nest_rs_exception_filters::{ExceptionFilter, async_trait};
+/// # #[derive(Debug, thiserror::Error)]
+/// # #[error("domain error")]
+/// # struct DomainError;
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct DomainErrorFilter;
+/// # impl Layer for DomainErrorFilter {}
+/// # #[async_trait]
+/// # impl ExceptionFilter for DomainErrorFilter {
+/// #     type Exception = DomainError;
+/// #     async fn catch(&self, _err: DomainError) -> poem::Response {
+/// #         poem::http::StatusCode::BAD_REQUEST.into()
+/// #     }
+/// # }
+/// # #[module(providers = [DomainErrorFilter])]
+/// # struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
 ///
 /// App::builder()
 ///     .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
 ///     .module::<AppModule>()
+/// #   .build().await?;
+/// # Ok(())
+/// # }
 /// ```
 pub fn exception_filter<F>() -> ExceptionFilterSpec
 where

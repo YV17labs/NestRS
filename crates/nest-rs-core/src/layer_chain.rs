@@ -1,47 +1,20 @@
 //! Layer chain composition — the dedup-by-`TypeId` logic shared by every
-//! execution site of the Layer System (the per-route shaper, the transport
-//! pool folds, the GraphQL / WS in-band chains).
+//! execution site of the Layer System.
 //!
-//! Two kinds of sources feed a chain:
-//!
-//! - **Global** specs from `App::builder().use_*_global(...)`.
-//! - **Per-route** layers a shaper macro emitted from `#[use_guards]` /
-//!   `#[use_pipes]` / etc. on the controller and method.
-//!
-//! [`ResolvedLayer`] tags each entry with its [`LayerSite`]; the chain
-//! builder picks the broadest site for any duplicated [`TypeId`] and runs
-//! entries in **declaration order** within the kind, with [`Layer::priority`]
-//! as the optional intra-kind tiebreaker. Cross-kind ordering is fixed by
-//! the framework (one kind per chain) — there is no "category" reordering.
-//!
-//! The composed chain is a *pool membership* result: every execution site
-//! composes the same three buckets, then executes only the sub-chain that
-//! belongs to it (e.g. global interceptors execute at the transport edge,
-//! controller/method ones at the route). `priority` orders entries *within*
-//! a site; the site itself is chosen by the scope, never by priority.
+//! Each resolved entry is tagged with its [`LayerSite`]; the chain keeps the
+//! broadest site for any duplicated [`TypeId`] and runs the sites from the
+//! broadest in, each in declaration order with
+//! [`Layer::priority`](crate::Layer::priority) as the tiebreaker within it.
 
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
 use crate::container::Container;
-use crate::layer::Layer;
-// Re-exported so downstream call sites (and macro-emitted code) can name the
-// site tag through this module without also importing `layer`.
 pub use crate::layer::LayerSite;
 
 /// A global-layer registration: the `TypeId` a chain dedups on, the type's
-/// name for boot logs and fail-secure diagnostics, and a `resolve` fn that
-/// recovers the concrete `Arc<L>` from the live container at configure time.
-///
-/// This is the single shared shape behind the five Layer-System families'
-/// `*Spec` types: `GuardSpec` / `PipeSpec` (`nest-rs-guards`), `FilterSpec`
-/// (`nest-rs-filters`), `InterceptorSpec` (`nest-rs-interceptors`) and
-/// `ExceptionFilterSpec` (`nest-rs-exception-filters`) are all
-/// `LayerSpec<dyn Trait>` aliases. Each crate keeps its own typed constructor
-/// (`guard::<G>()`, `filter::<F>()`, …) that builds one via [`LayerSpec::new`];
-/// the erased-trait target is the only thing that varies. `type_id` and `name`
-/// are public (the shapers read them when composing the chain); `resolve` is
-/// private, reached through [`LayerSpec::resolve`].
+/// name for diagnostics, and a `resolve` fn that recovers the `Arc<L>` from the
+/// live container.
 pub struct LayerSpec<L: ?Sized> {
     /// `TypeId` of the layer type — the dedup key across scopes.
     pub type_id: TypeId,
@@ -51,9 +24,7 @@ pub struct LayerSpec<L: ?Sized> {
 }
 
 impl<L: ?Sized> LayerSpec<L> {
-    /// Build a spec from its `type_id`, `name` and `resolve` fn — called by
-    /// each family's typed constructor, which supplies the container lookup that
-    /// erases the concrete layer type to `Arc<L>`.
+    /// Build a spec from its `type_id`, `name` and `resolve` fn.
     pub fn new(
         type_id: TypeId,
         name: &'static str,
@@ -73,10 +44,8 @@ impl<L: ?Sized> LayerSpec<L> {
     }
 }
 
-/// The container-registered global registry of one Layer-System family —
-/// `GuardSpecs`, `PipeSpecs`, `FilterSpecs`, `InterceptorSpecs`,
-/// `ExceptionFilterSpecs`. Implementing it is what lets a family reach
-/// [`resolve_global_layers`] instead of open-coding the resolve loop.
+/// The container-registered global registry of one Layer-System family
+/// (`GuardSpecs`, `FilterSpecs`, …), read when a chain is composed.
 pub trait GlobalSpecs: Any + Send + Sync {
     /// The erased layer trait this family's specs resolve to.
     type Layer: ?Sized;
@@ -85,259 +54,292 @@ pub trait GlobalSpecs: Any + Send + Sync {
     fn specs(&self) -> &[LayerSpec<Self::Layer>];
 }
 
-/// Resolve a family's global registry into [`LayerSite::Global`] entries.
-///
-/// **The** implementation: every execution site that folds a global pool — the
-/// route shaper, the transport-edge folds, the in-band GraphQL chain, the
-/// boot-time validation — goes through here, so their dedup inputs cannot
-/// drift. A spec whose provider is not registered is skipped (the fail-secure
-/// boot check in [`check_specs_resolvable`] is what turns that into a boot
-/// failure); an unregistered family yields an empty chain.
-#[doc(hidden)]
-pub fn resolve_global_layers<S: GlobalSpecs>(
-    container: &Container,
-) -> Vec<ResolvedLayer<S::Layer>> {
-    let Some(registry) = container.get::<S>() else {
-        return Vec::new();
-    };
-    registry
-        .specs()
-        .iter()
-        .filter_map(|spec| {
-            spec.resolve(container).map(|layer| ResolvedLayer {
-                type_id: spec.type_id,
-                name: spec.name,
-                source: LayerSite::Global,
-                layer,
-            })
-        })
-        .collect()
-}
+/// `layer_chain` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
+pub(crate) mod __private {
+    use std::any::{Any, TypeId};
+    use std::sync::{Arc, Mutex, PoisonError};
 
-/// Fail-secure boot check shared by every global Layer-System family: name the
-/// specs whose provider is not resolvable from `container`, and build the
-/// boot-failure message listing them. `kind` is the family noun (`"guard"`,
-/// `"filter"`, …) and `consequence` the family-specific tail explaining what a
-/// silent drop would cost. `Ok(())` when every spec resolves. The five builders
-/// each wrap the returned `Result` in their transport's `HttpBootCheck`.
-#[doc(hidden)]
-pub fn check_specs_resolvable<L: ?Sized>(
-    specs: &[LayerSpec<L>],
-    container: &Container,
-    kind: &str,
-    consequence: &str,
-) -> Result<(), String> {
-    let missing: Vec<&str> = specs
-        .iter()
-        .filter(|s| s.resolve(container).is_none())
-        .map(|s| s.name)
-        .collect();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "global {kind}(s) not resolvable from the container: {} — import the \
-             module that provides them; {consequence}",
-            missing.join(", "),
-        ))
-    }
-}
+    use super::GlobalSpecs;
+    use crate::container::Container;
+    use crate::error::UnresolvedLayerError;
+    use crate::layer::{Layer, LayerSite};
 
-/// A layer that survived dedup, paired with its origin site and the name
-/// the shaper logged at mount.
-///
-/// Cross-crate wiring, not public API — hidden so it does not freeze at 1.0
-/// ([`LayerSpec`] is the one deliberate vocabulary type in this module).
-#[doc(hidden)]
-pub struct ResolvedLayer<L: ?Sized> {
-    /// The layer type's identity — the key dedup collapsed duplicates on.
-    pub type_id: TypeId,
-    /// The layer type's name, as logged when the shaper mounts it.
-    pub name: &'static str,
-    /// The site the surviving instance came from (global, host, method).
-    pub source: LayerSite,
-    /// The resolved layer instance to run.
-    pub layer: Arc<L>,
-}
-
-impl<L: ?Sized> Clone for ResolvedLayer<L> {
-    fn clone(&self) -> Self {
-        Self {
-            type_id: self.type_id,
-            name: self.name,
-            source: self.source,
-            layer: Arc::clone(&self.layer),
-        }
-    }
-}
-
-/// Compose a deduplicated chain from global + per-route entries.
-///
-/// Behaviour:
-///
-/// 1. Dedup by `TypeId` — the broadest site wins; a narrower-scope duplicate
-///    is deduped and reported once per process at `debug` (see
-///    [`report_redundant_site`]), not `warn` (fail-secure: the layer still
-///    runs exactly once).
-/// 2. The broadest-site rule is bypassed for any `TypeId` listed in
-///    `force` — those entries always survive even if the same `TypeId`
-///    is global.
-/// 3. Stable sort by [`Layer::priority`] only — declaration order survives
-///    when priorities tie (the common case). No "category" ordering: the
-///    framework runs one kind per chain.
-///
-/// `chain` names the dispatch site this chain belongs to, and it is deliberately
-/// not called `route`: four of the callers have none. HTTP passes a route, WS a
-/// message name, the two transport-edge pools the word `transport`, and the
-/// guard registry a bare label — so a field called `route` carried a message
-/// name on the one structured field an operator greps when a layer did not run
-/// where they expected. Same correction as [`LayerSite::Host`], on the other
-/// half of the same event.
-#[doc(hidden)]
-pub fn compose_chain<L>(
-    global: Vec<ResolvedLayer<L>>,
-    host: Vec<ResolvedLayer<L>>,
-    method: Vec<ResolvedLayer<L>>,
-    force: &[TypeId],
-    chain: &str,
-) -> Vec<ResolvedLayer<L>>
-where
-    L: Layer + ?Sized,
-{
-    let mut entries: Vec<ResolvedLayer<L>> = Vec::new();
-    let mut seen: Vec<(TypeId, LayerSite)> = Vec::new();
-
-    for source in [LayerSite::Global, LayerSite::Host, LayerSite::Method] {
-        let bucket = match source {
-            LayerSite::Global => &global,
-            LayerSite::Host => &host,
-            _ => &method,
+    /// Resolve a family's global registry into [`LayerSite::Global`] entries.
+    ///
+    /// A spec whose provider is not registered is skipped —
+    /// [`check_specs_resolvable`] fails the boot on it; an unregistered family
+    /// yields an empty chain.
+    pub fn resolve_global_layers<S: GlobalSpecs>(
+        container: &Container,
+    ) -> Vec<ResolvedLayer<S::Layer>> {
+        let Some(registry) = container.get::<S>() else {
+            return Vec::new();
         };
-        for entry in bucket {
-            let forced = force.contains(&entry.type_id);
-            if let Some((_, existing)) = seen.iter().find(|(tid, _)| *tid == entry.type_id) {
-                if !forced {
-                    report_redundant_site(entry.type_id, *existing, entry.source, entry.name);
-                    continue;
-                }
-                tracing::info!(
-                    target: crate::target::LAYERS,
-                    // Shortened exactly as the dedup line below shortens it: one
-                    // field name, one rendering, or a grep for
-                    // `layer="AuthnGuard"` finds one of the two lines about that
-                    // layer and misses the other.
-                    layer = short_type_name(entry.name),
-                    site = entry.source.label(),
-                    chain,
-                    "layer forced to re-run despite being declared at a broader site",
-                );
-            }
-            seen.push((entry.type_id, entry.source));
-            entries.push(entry.clone());
+        registry
+            .specs()
+            .iter()
+            .filter_map(|spec| {
+                spec.resolve(container).map(|layer| ResolvedLayer {
+                    type_id: spec.type_id,
+                    name: spec.name,
+                    source: LayerSite::Global,
+                    layer,
+                })
+            })
+            .collect()
+    }
+
+    /// Fail-secure boot check: name the specs of a family's global registry
+    /// whose provider is not resolvable from `container`; an unregistered family
+    /// passes. `kind` is the family noun (`"guard"`, `"filter"`, …) and
+    /// `consequence` the tail saying what a silent drop would cost.
+    pub fn check_specs_resolvable<S: GlobalSpecs>(
+        container: &Container,
+        kind: &str,
+        consequence: &str,
+    ) -> Result<(), String> {
+        let Some(registry) = container.get::<S>() else {
+            return Ok(());
+        };
+        let missing: Vec<&str> = registry
+            .specs()
+            .iter()
+            .filter(|s| s.resolve(container).is_none())
+            .map(|s| s.name)
+            .collect();
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "global {kind}(s) not resolvable from the container: {} — import the \
+                 module that provides them; {consequence}",
+                missing.join(", "),
+            ))
         }
     }
 
-    // Stable sort by priority only. Declaration order survives as the
-    // tiebreaker when priorities are equal (the common case).
-    entries.sort_by_key(|e| e.layer.priority());
+    /// The chains a container's sites composed, held for as long as the
+    /// container lives: a per-site cache keeps only a `Weak` handle to what this
+    /// holds, so no `static` keeps a provider alive past its app.
+    #[derive(Default)]
+    pub struct SiteChains {
+        held: Mutex<Vec<Box<dyn Any + Send + Sync>>>,
+    }
 
-    entries
-}
+    impl SiteChains {
+        /// Hold `chain` until the container that owns this drops.
+        pub fn hold(&self, chain: impl Any + Send + Sync) {
+            self.held
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(Box::new(chain));
+        }
+    }
 
-/// Report a redundant multi-site declaration **once per process**.
-///
-/// *Site*, not *scope*, everywhere it is observable — the field, the message and
-/// this name. [`LayerSite`] spends a paragraph explaining that `scope` is the
-/// wrong word here (it belongs to request-scoped DI resolution) and every
-/// artifact of the type then used it, on the one structured field an operator
-/// greps when a guard did not run where they expected.
-///
-/// `compose_chain` runs per route, so a layer declared at both a broad scope
-/// (e.g. `global`) and a narrower one (e.g. the host struct) would otherwise warn
-/// on every route of that controller — a process-global structural fact spam-
-/// emitted as if it were a per-request event. Dedup by `(layer, scope-pair)`
-/// so it surfaces a single line at boot. Level is `debug`: it is informative
-/// (the host/method declaration was skipped because a broader site
-/// already covers it) yet fail-secure (broadest wins, the layer still runs
-/// exactly once), so it stays out of `warn` — a config lint, not an actionable
-/// security event, kept off `warn` to avoid alert fatigue. `#[force_*]` opts a
-/// duplicate back into re-running (logged at `info`).
-fn report_redundant_site(
-    type_id: TypeId,
-    existing: LayerSite,
-    skipped: LayerSite,
-    name: &'static str,
-) {
-    use std::collections::HashSet;
-    use std::sync::{LazyLock, Mutex};
+    /// A layer that survived dedup, paired with its origin site and its name.
+    pub struct ResolvedLayer<L: ?Sized> {
+        /// The layer type's identity — the key dedup collapsed duplicates on.
+        pub type_id: TypeId,
+        /// The layer type's name, as logged when the shaper mounts it.
+        pub name: &'static str,
+        /// The site the surviving instance came from (global, host, method).
+        pub source: LayerSite,
+        /// The resolved layer instance to run.
+        pub layer: Arc<L>,
+    }
 
-    static SEEN: LazyLock<Mutex<HashSet<(TypeId, LayerSite, LayerSite)>>> =
-        LazyLock::new(|| Mutex::new(HashSet::new()));
+    impl<L: ?Sized> Clone for ResolvedLayer<L> {
+        fn clone(&self) -> Self {
+            Self {
+                type_id: self.type_id,
+                name: self.name,
+                source: self.source,
+                layer: Arc::clone(&self.layer),
+            }
+        }
+    }
 
-    // On a poisoned lock, fall back to emitting — a duplicate diagnostic line
-    // is harmless; a swallowed one is not.
-    let first_time = SEEN
-        .lock()
-        .map(|mut seen| seen.insert((type_id, existing, skipped)))
-        .unwrap_or(true);
-    if first_time {
-        tracing::debug!(
+    /// Compose a deduplicated chain from global + per-route entries.
+    ///
+    /// 1. Dedup by `TypeId` — the broadest site wins.
+    /// 2. A `TypeId` listed in `force` survives even when declared more broadly.
+    /// 3. Each site's entries are sorted stably by [`Layer::priority`], so
+    ///    declaration order breaks ties; the sites then run Global, Host,
+    ///    Method — a priority orders within its site, never across.
+    ///
+    /// `chain` names the dispatch site (a route, a WS message, `transport`), not
+    /// only a route.
+    pub fn compose_chain<L>(
+        global: Vec<ResolvedLayer<L>>,
+        host: Vec<ResolvedLayer<L>>,
+        method: Vec<ResolvedLayer<L>>,
+        force: &[TypeId],
+        chain: &str,
+    ) -> Vec<ResolvedLayer<L>>
+    where
+        L: Layer + ?Sized,
+    {
+        let mut entries: Vec<ResolvedLayer<L>> = Vec::new();
+        let mut seen: Vec<(TypeId, LayerSite)> = Vec::new();
+
+        for source in [LayerSite::Global, LayerSite::Host, LayerSite::Method] {
+            let bucket = match source {
+                LayerSite::Global => &global,
+                LayerSite::Host => &host,
+                _ => &method,
+            };
+            let start = entries.len();
+            for entry in bucket {
+                let forced = force.contains(&entry.type_id);
+                if let Some((_, existing)) = seen.iter().find(|(tid, _)| *tid == entry.type_id) {
+                    if !forced {
+                        report_redundant_site(entry.type_id, *existing, entry.source, entry.name);
+                        continue;
+                    }
+                    tracing::info!(
+                        target: crate::target::LAYERS,
+                        // Shortened as in `report_redundant_site`, so one grep finds both lines.
+                        layer = crate::type_name::shorten(entry.name),
+                        site = entry.source.label(),
+                        chain,
+                        "layer forced to re-run despite being declared at a broader site",
+                    );
+                }
+                seen.push((entry.type_id, entry.source));
+                entries.push(entry.clone());
+            }
+            // Stable, so declaration order breaks a tie.
+            entries[start..].sort_by_key(|e| e.layer.priority());
+        }
+
+        entries
+    }
+
+    /// Report a redundant multi-site declaration once per process, at `debug`:
+    /// `compose_chain` runs per route, and the layer still runs exactly once.
+    fn report_redundant_site(
+        type_id: TypeId,
+        existing: LayerSite,
+        skipped: LayerSite,
+        name: &'static str,
+    ) {
+        use std::collections::HashSet;
+        use std::sync::{LazyLock, Mutex};
+
+        static SEEN: LazyLock<Mutex<HashSet<(TypeId, LayerSite, LayerSite)>>> =
+            LazyLock::new(|| Mutex::new(HashSet::new()));
+
+        // On a poisoned lock, fall back to emitting — a duplicate diagnostic line
+        // is harmless; a swallowed one is not.
+        let first_time = SEEN
+            .lock()
+            .map(|mut seen| seen.insert((type_id, existing, skipped)))
+            .unwrap_or(true);
+        if first_time {
+            tracing::debug!(
+                target: crate::target::LAYERS,
+                layer = crate::type_name::shorten(name),
+                kept = existing.label(),
+                skipped = skipped.label(),
+                hint = "broadest site wins; use `#[force_*]` to re-run",
+                "redundant layer declaration deduped",
+            );
+        }
+    }
+
+    /// Resolve one site's scoped declarations into entries from `source`, so
+    /// dedup against the global chain finds the same key. The first spec no
+    /// imported module provides refuses the site, named as its boot log names
+    /// it: a site never runs without a layer it declares.
+    pub fn resolve_scoped<'s, L: ?Sized + 's>(
+        container: &Container,
+        specs: impl IntoIterator<Item = &'s super::LayerSpec<L>>,
+        source: LayerSite,
+        site: &str,
+    ) -> Result<Vec<ResolvedLayer<L>>, UnresolvedLayerError> {
+        specs
+            .into_iter()
+            .map(|spec| {
+                let layer = spec
+                    .resolve(container)
+                    .ok_or_else(|| UnresolvedLayerError {
+                        layer: spec.name,
+                        site: site.to_owned(),
+                    })?;
+                Ok(ResolvedLayer {
+                    type_id: spec.type_id,
+                    name: spec.name,
+                    source,
+                    layer,
+                })
+            })
+            .collect()
+    }
+
+    /// The one `error` a site files when a layer it declares does not resolve —
+    /// for the operator; the client reads an opaque refusal.
+    pub fn report_unresolved(unresolved: &UnresolvedLayerError) {
+        tracing::error!(
             target: crate::target::LAYERS,
-            layer = short_type_name(name),
-            kept = existing.label(),
-            skipped = skipped.label(),
-            hint = "broadest site wins; use `#[force_*]` to re-run",
-            "redundant layer declaration deduped",
+            layer = unresolved.layer,
+            site = unresolved.site.as_str(),
+            "a layer the site declares is provided by no imported module",
         );
     }
-}
 
-/// Strip module paths from a `type_name`, keeping the leaf of each segment so
-/// generics survive: `a::b::AuthnGuard<c::d::JwtStrategy<e::Claims>>` becomes
-/// `AuthnGuard<JwtStrategy<Claims>>`. Diagnostic-only — the full path adds no
-/// information a reader scanning boot logs can act on.
-fn short_type_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut segment_start = 0;
-    for (i, c) in name.char_indices() {
-        if !(c.is_alphanumeric() || c == '_' || c == ':') {
-            out.push_str(leaf(&name[segment_start..i]));
-            out.push(c);
-            segment_start = i + c.len_utf8();
-        }
+    /// Refuse a site composed at mount whose declared layer does not resolve:
+    /// its `error`, and the refusal filed on `container` for the boot to fail on.
+    pub fn refuse_unresolved(container: &Container, unresolved: UnresolvedLayerError) {
+        report_unresolved(&unresolved);
+        crate::container::__private::refuse_site(container, unresolved.into());
     }
-    out.push_str(leaf(&name[segment_start..]));
-    out
-}
 
-/// The substring after the last `::` of a path segment.
-fn leaf(segment: &str) -> &str {
-    segment.rsplit("::").next().unwrap_or(segment)
-}
+    /// Trace the chain one site composed for a family (`kind`), in the order it
+    /// runs; nothing for an empty one.
+    pub fn log_effective_chain<L: Layer + ?Sized>(
+        site: &str,
+        kind: &str,
+        chain: &[ResolvedLayer<L>],
+    ) {
+        if chain.is_empty() {
+            return;
+        }
+        let entries: Vec<String> = chain
+            .iter()
+            .map(|e| format!("{} ({})", e.name, e.source.label()))
+            .collect();
+        tracing::trace!(
+            target: crate::target::LAYERS,
+            route = site,
+            kind,
+            chain = entries.join(", ").as_str(),
+            "effective layer chain",
+        );
+    }
 
-/// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration —
-/// **silently**. Used to pre-clean the global bucket before it is handed to
-/// [`compose_chain`] at a per-route site: the duplicate was already warned
-/// about once at the site that executes the global sub-chain; re-warning on
-/// every route would be noise.
-#[doc(hidden)]
-pub fn dedup_bucket<L: ?Sized>(bucket: Vec<ResolvedLayer<L>>) -> Vec<ResolvedLayer<L>> {
-    let mut seen: Vec<TypeId> = Vec::new();
-    bucket
-        .into_iter()
-        .filter(|entry| {
-            if seen.contains(&entry.type_id) {
-                return false;
-            }
-            seen.push(entry.type_id);
-            true
-        })
-        .collect()
+    /// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration,
+    /// silently — the site executing the global sub-chain already reported them.
+    pub fn dedup_bucket<L: ?Sized>(bucket: Vec<ResolvedLayer<L>>) -> Vec<ResolvedLayer<L>> {
+        let mut seen: Vec<TypeId> = Vec::new();
+        bucket
+            .into_iter()
+            .filter(|entry| {
+                if seen.contains(&entry.type_id) {
+                    return false;
+                }
+                seen.push(entry.type_id);
+                true
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::__private::{ResolvedLayer, compose_chain, dedup_bucket};
     use super::*;
+    use crate::layer::Layer;
 
     struct Authn;
     impl Layer for Authn {}
@@ -389,6 +391,66 @@ mod tests {
                 std::any::type_name::<Authz>(),
                 std::any::type_name::<Audit>(),
             ],
+        );
+    }
+
+    /// A layer whose priority the test chooses, one type per entry.
+    struct Ranked<const N: u8>(i8);
+    impl<const N: u8> Layer for Ranked<N> {
+        fn priority(&self) -> i8 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_method_priority_never_jumps_the_global_bucket() {
+        let chain = compose_chain::<dyn Layer>(
+            vec![
+                entry(Ranked::<1>(0), LayerSite::Global),
+                entry(Ranked::<2>(5), LayerSite::Global),
+            ],
+            vec![entry(Ranked::<3>(0), LayerSite::Host)],
+            vec![entry(Ranked::<4>(-10), LayerSite::Method)],
+            &[],
+            "GET /orders",
+        );
+        let sites: Vec<LayerSite> = chain.iter().map(|e| e.source).collect();
+        assert_eq!(
+            sites,
+            [
+                LayerSite::Global,
+                LayerSite::Global,
+                LayerSite::Host,
+                LayerSite::Method
+            ],
+            "a priority orders within its site, never ahead of a broader one",
+        );
+    }
+
+    #[test]
+    fn priority_orders_inside_one_bucket() {
+        let chain = compose_chain::<dyn Layer>(
+            vec![],
+            vec![],
+            vec![
+                entry(Ranked::<1>(3), LayerSite::Method),
+                entry(Ranked::<2>(-1), LayerSite::Method),
+                entry(Ranked::<3>(3), LayerSite::Method),
+                entry(Ranked::<4>(0), LayerSite::Method),
+            ],
+            &[],
+            "GET /orders",
+        );
+        let names: Vec<_> = chain.iter().map(|e| e.name).collect();
+        assert_eq!(
+            names,
+            [
+                std::any::type_name::<Ranked<2>>(),
+                std::any::type_name::<Ranked<4>>(),
+                std::any::type_name::<Ranked<1>>(),
+                std::any::type_name::<Ranked<3>>(),
+            ],
+            "lower runs first; declaration order breaks a tie",
         );
     }
 

@@ -1,57 +1,52 @@
 //! The compile-time bound an impl-half decorator emits for every guard declared
 //! at its site.
 //!
-//! Every `Guard::check_*` defaults to `Ok(())` — `check_http` included. Correct
-//! as "this guard does not apply to that transport", and also the reason
-//! `#[use_guards(ThrottlerGuard)]` beside a `#[query]` used to compile, read as a
-//! protection, and throttle nothing.
-//!
-//! A proc macro cannot ask whether a path implements a method — it has no type
-//! information. But it does not need to: Rust can be *asked* to prove it. Each
-//! transport has a marker trait in `nest-rs-guards`, and the decorator emits one
-//! zero-sized assertion per declared guard, which fails at the `#[use_guards]`
-//! line with the marker's `#[diagnostic::on_unimplemented]` note.
-//!
-//! **All four edges assert, HTTP included.** The bound is not a proof that a
-//! method exists — the default guarantees that at every edge — it is a proof
-//! that the author *declared* the guard checks this one. An empty
-//! `impl Guard for X {}` bound on a route satisfies the compiler and passes every
-//! request; the marker is what turns that into an error at the binding site. The
-//! only asymmetry left is the `cfg`: `HttpGuard` carries none, because HTTP is
-//! the substrate the other three edges mount on.
+//! `Guard::check_http` and `Guard::check` admit by default, so a guard bound at
+//! an edge it does not check would compile and pass every unit. Every declared
+//! guard is asserted to implement `GuardFor<V>`, `V` the view of the units the
+//! site dispatches.
 
 use std::collections::HashSet;
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
+
+use crate::attrs::Conditional;
 use syn::Path;
 use syn::spanned::Spanned;
 
-/// Assert every guard in `guards` implements `marker`.
+/// Assert every guard in `guards` implements `bound`.
 ///
-/// `marker` is the tokens of the marker trait's absolute path
-/// (`::nest_rs_guards::GraphqlGuard`). Emits nothing for an empty list, so a site
-/// that declares no guards pays nothing.
+/// `bound` is the tokens of the bound's absolute path
+/// (`::nest_rs_guards::GuardFor<::nest_rs_graphql::GraphqlView>`). Deduped by
+/// rendered path, as [`layer_deps`](crate::layer_deps) keys this list.
 ///
-/// The list arrives concatenated across every operation in the block, so one
-/// guard bound beside five methods appears five times. Deduped here rather than
-/// at each call site — by rendered path, the same key
-/// [`layer_deps`](crate::layer_deps) uses on this very list a line later — so a
-/// reused guard costs one assertion, not one per binding.
+/// A guard bound on a `#[cfg]`-gated method is asserted under its
+/// [`Conditional`] conditions — it may not exist in that build — unless it is
+/// also bound unconditionally.
 pub fn guard_capability_bounds<'a>(
-    guards: impl IntoIterator<Item = &'a Path>,
-    marker: TokenStream,
+    guards: impl IntoIterator<Item = impl Into<Conditional<'a, Path>>>,
+    bound: TokenStream,
 ) -> TokenStream {
+    let guards: Vec<Conditional<'a, Path>> = guards.into_iter().map(Into::into).collect();
+    let unconditional: HashSet<String> = guards
+        .iter()
+        .filter(|entry| entry.cfgs.is_empty())
+        .map(|entry| entry.item.to_token_stream().to_string())
+        .collect();
     let mut seen = HashSet::new();
     let asserts = guards
         .into_iter()
-        .filter(|guard| seen.insert(quote!(#guard).to_string()))
-        .map(|guard| {
-            // Spanned at the guard's own path so the error underlines the name
-            // inside `#[use_guards(...)]` rather than the whole item.
+        .filter(|Conditional { cfgs, item }| {
+            let rendered = item.to_token_stream().to_string();
+            (cfgs.is_empty() || !unconditional.contains(&rendered))
+                && seen.insert(format!("{} {rendered}", quote!(#(#cfgs)*)))
+        })
+        .map(|Conditional { cfgs, item: guard }| {
             quote::quote_spanned! { guard.span() =>
+                #(#cfgs)*
                 const _: () = {
-                    fn __nestrs_assert_guard_capability<T: #marker + ?::core::marker::Sized>() {}
+                    fn __nestrs_assert_guard_capability<T: #bound + ?::core::marker::Sized>() {}
                     let _ = __nestrs_assert_guard_capability::<#guard>;
                 };
             }

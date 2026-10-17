@@ -1,39 +1,34 @@
 //! The cascade's refusals around `<PREFIX>_ENV` — the variable that chooses
 //! which `.env` files to read, and therefore can never usefully live in one.
-//!
-//! The stakes are higher than redundancy: `Environment::init` publishes the
-//! cascade into the process env (set-if-absent), so a committed
-//! `NESTRS_ENV=development` would become process-visible and flip
-//! `Environment::declared()` from `None` to `Some(Development)` — arming every
-//! development-only affordance on any deployment that left the variable unset.
-//! Found by booting a scaffolded app with exactly that file, not by reading.
 
 use nest_rs_config::Environment;
 
-/// Unset on the process, declared in the file: the laundering case. The
-/// cascade defaulted to `development` *by absence*, so the file "matches" the
-/// resolved environment — which is precisely why matching the resolution is
-/// not the tolerance. Abort.
+/// Unset on the process, declared in the file: the file matches the resolution
+/// by absence only, and still aborts.
 #[test]
-#[should_panic(expected = "is `development` in the `.env` cascade")]
-#[allow(clippy::result_large_err)]
+#[should_panic(
+    expected = "is `production` in the `.env` cascade, but the process environment does not carry it"
+)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_environment_written_into_the_cascade_aborts() {
     figment::Jail::expect_with(|jail| {
-        jail.create_file(
-            ".env",
-            &format!("{}=development\n", Environment::var_name()),
-        )?;
-        nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Development);
+        jail.create_file(".env", &format!("{}=production\n", Environment::var_name()))?;
+        nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Production);
         Ok(())
     });
 }
 
-/// Set on the process to one thing, declared in the file as another: the file
-/// is contradicting the deployment, and set-if-absent publishing would keep
-/// the contradiction invisible. Abort, naming both values.
+/// Set on the process to one thing, declared in the file as another: abort,
+/// naming both values.
 #[test]
 #[should_panic(expected = "carries `production`")]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_environment_contradicted_by_the_cascade_aborts() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(Environment::var_name(), "production");
@@ -46,12 +41,12 @@ fn the_environment_contradicted_by_the_cascade_aborts() {
     });
 }
 
-/// Restating a value the process actually carries is redundant, not wrong —
-/// the same tolerance the prefix refusal grants, and the only one this check
-/// can grant safely: with the variable genuinely set, set-if-absent publishing
-/// has nothing to launder.
+/// Restating a value the process actually carries is redundant, not wrong.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_environment_restated_by_the_cascade_is_tolerated() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(Environment::var_name(), "development");
@@ -65,11 +60,6 @@ fn the_environment_restated_by_the_cascade_is_tolerated() {
 }
 
 /// A value the cascade drops leaves nothing behind but the event.
-///
-/// Every refusal in `merge_file` is `warn` + return: the key is simply absent
-/// afterwards, indistinguishable from one nobody wrote. So the operator reading
-/// "why is my secret unset" has these lines and no other trace, which is why a
-/// bare one would be a defect rather than a style nit.
 mod refusals_are_reported {
     use std::io::Write;
 
@@ -77,7 +67,14 @@ mod refusals_are_reported {
     use nest_rs_testing::LogCapture;
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test asserts what the cascade wrote into the process environment"
+    )]
     fn a_malformed_line_is_counted_and_named_with_its_file() {
         figment::Jail::expect_with(|jail| {
             let logs = LogCapture::install();
@@ -90,8 +87,6 @@ mod refusals_are_reported {
 
             let event = logs.expect_one("nest_rs::config", "skipped malformed .env lines");
             assert_eq!(event.level, "warn");
-            // One aggregate event per file, carrying the count — a per-line
-            // event would bury a real cascade under its own noise.
             assert_eq!(event.field("skipped").as_deref(), Some("2"));
             assert!(
                 event.field("path").is_some_and(|p| p.contains(".env")),
@@ -103,13 +98,13 @@ mod refusals_are_reported {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn a_file_that_is_present_but_unreadable_is_reported_rather_than_skipped_silently() {
         figment::Jail::expect_with(|jail| {
             let logs = LogCapture::install();
-            // Present and non-UTF-8: `read_to_string` fails with `InvalidData`,
-            // which is the branch that separates "no such file" (the normal
-            // case, silent) from "a file we could not read".
             let path = std::path::Path::new(".env");
             let mut file = std::fs::File::create(path).expect("create the .env");
             file.write_all(&[b'A', b'=', 0xff, 0xfe, b'\n'])
@@ -131,15 +126,13 @@ mod refusals_are_reported {
     }
 }
 
-/// A non-UTF-8 value in the real environment.
-///
-/// It is the one case where the variable is genuinely *present* and still
-/// answers `None`: the cascade is suppressed as well, so a `.env` carrying a
-/// usable value for the same key is deliberately not consulted. Nothing about
-/// that is visible to the caller — the field simply falls back to its default —
-/// which is what makes the event the only place the mistake exists.
+/// A non-UTF-8 value in the real environment answers `None` and suppresses the
+/// cascade, so the event is the only trace of it.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -148,17 +141,19 @@ fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade(
 
     figment::Jail::expect_with(|jail| {
         let logs = LogCapture::install();
-        // `Jail` restores the process env on drop, which is what makes writing
-        // a deliberately broken value safe here.
         jail.set_env(
             "FIXTURE_BROKEN_VALUE",
             OsStr::from_bytes(&[0xff, 0xfe]).to_string_lossy(),
         );
-        // `set_env` round-trips through `String`, so write the raw bytes
-        // directly — the lossy form above is valid UTF-8 and would not reach
-        // the branch under test.
+        // `set_env` round-trips through `String`, so the raw bytes go directly.
         // SAFETY: single-threaded test, and `Jail` restores the environment.
-        unsafe { std::env::set_var("FIXTURE_BROKEN_VALUE", OsStr::from_bytes(&[0xff, 0xfe])) };
+        #[expect(
+            unsafe_code,
+            reason = "the branch under test needs non-UTF-8 bytes, which only set_var writes; Jail restores the environment"
+        )]
+        unsafe {
+            std::env::set_var("FIXTURE_BROKEN_VALUE", OsStr::from_bytes(&[0xff, 0xfe]))
+        };
 
         assert_eq!(
             nest_rs_config::env_var("FIXTURE_BROKEN_VALUE"),
@@ -174,4 +169,164 @@ fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade(
         assert_eq!(event.field("name").as_deref(), Some("FIXTURE_BROKEN_VALUE"));
         Ok(())
     });
+}
+
+/// What `main`'s first line finds: the kernel published the cascade before the
+/// runtime existed, so a binary calls nothing for it. A child process, since
+/// the cascade is read once per process, from where it runs.
+mod published_before_main {
+    const CHILD_TEST: &str = "dotenv::published_before_main::cascade_child_process";
+
+    #[nest_rs_core::main]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "what `std::env` holds on `main`'s first line is the assertion"
+    )]
+    async fn print_what_main_finds() {
+        for name in ["CASCADE_PROBE", "CASCADE_DEPLOYED"] {
+            println!("{name}={}", std::env::var(name).unwrap_or_default());
+        }
+    }
+
+    #[test]
+    fn cascade_child_process() {
+        if crate::is_child() {
+            print_what_main_finds();
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn main_reads_the_cascade_on_its_first_line_and_the_deployment_still_wins() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "CASCADE_PROBE=1\nCASCADE_DEPLOYED=from_file\n")?;
+
+            let child = crate::child(CHILD_TEST)
+                .current_dir(jail.directory())
+                .env("CASCADE_DEPLOYED", "from_deployment")
+                .env_remove("CASCADE_PROBE")
+                .output()
+                .expect("the child runs");
+
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            assert!(child.status.success(), "{stdout}");
+            assert!(
+                stdout.lines().any(|line| line == "CASCADE_PROBE=1"),
+                "{stdout}"
+            );
+            assert!(
+                stdout
+                    .lines()
+                    .any(|line| line == "CASCADE_DEPLOYED=from_deployment"),
+                "the deployment's value wins over the file's: {stdout}",
+            );
+            Ok(())
+        });
+    }
+
+    /// The cascade loads before any subscriber exists, so what it reports
+    /// goes to stderr rather than to nobody — and never quotes the line.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn what_the_cascade_reports_before_any_subscriber_reaches_stderr() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "CASCADE_PROBE=1\nsk_live_no_equals_sign\n")?;
+
+            let child = crate::child(CHILD_TEST)
+                .current_dir(jail.directory())
+                .env_remove("CASCADE_PROBE")
+                .output()
+                .expect("the child runs");
+
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            let stderr = String::from_utf8_lossy(&child.stderr);
+            assert!(child.status.success(), "{stdout}{stderr}");
+            let said: Vec<&str> = stderr
+                .lines()
+                .filter(|line| line.contains("skipped malformed .env lines"))
+                .collect();
+            assert_eq!(said.len(), 1, "one line, on stderr: {stderr}");
+            assert!(said[0].starts_with("nestrs: "), "{}", said[0]);
+            assert!(said[0].contains("skipped=1"), "{}", said[0]);
+            assert!(said[0].contains(".env"), "the file it read: {}", said[0]);
+            assert!(
+                !stderr.contains("sk_live"),
+                "the line is never quoted: {stderr}"
+            );
+            Ok(())
+        });
+    }
+}
+
+/// A process that declares no environment runs as production from its first
+/// line: the cascade it publishes is production's, never development's.
+mod an_undeclared_process {
+    use nest_rs_config::{ConfigService, Environment, var_name};
+
+    const CHILD_TEST: &str = "dotenv::an_undeclared_process::undeclared_child_process";
+
+    const NAMESPACE: &str = "undeclared_probe";
+
+    #[nest_rs_core::main]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
+    async fn print_what_an_undeclared_process_resolves() {
+        let picked = ConfigService::for_namespace(NAMESPACE)
+            .get("PICK")
+            .expect("a plain read")
+            .unwrap_or_default();
+        println!("ENVIRONMENT={}", Environment::from_env().as_str());
+        println!("PICK={picked}");
+    }
+
+    #[test]
+    fn undeclared_child_process() {
+        if crate::is_child() {
+            print_what_an_undeclared_process_resolves();
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn reads_the_production_files_and_never_the_development_ones() {
+        figment::Jail::expect_with(|jail| {
+            let pick = var_name(NAMESPACE, "PICK");
+            jail.create_file(".env.development", &format!("{pick}=dev\n"))?;
+            jail.create_file(".env.production", &format!("{pick}=prod\n"))?;
+
+            let child = crate::child(CHILD_TEST)
+                .current_dir(jail.directory())
+                .env_remove(Environment::var_name())
+                .env_remove(&pick)
+                .output()
+                .expect("the child runs");
+
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            assert!(child.status.success(), "{stdout}");
+            assert!(
+                stdout.lines().any(|line| line == "ENVIRONMENT=production"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.lines().any(|line| line == "PICK=prod"),
+                "an undeclared process reads .env.production: {stdout}"
+            );
+            Ok(())
+        });
+    }
 }

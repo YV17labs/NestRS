@@ -3,4 +3,4 @@ variant = "fastify"
 runtime = "node"
 port = 3120
 build = "npm ci && npm run build"
-start = "node dist/main.js"
+start = "env PORT=3120 node dist/main"

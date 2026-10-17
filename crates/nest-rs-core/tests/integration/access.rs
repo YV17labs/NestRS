@@ -1,17 +1,24 @@
-//! End-to-end check of the module access graph through the real `#[module]` /
-//! `#[injectable]` macros and the `App` boot path. The link-time registry is
-//! shared across a test binary, so the graphs below use disjoint types.
+//! Covers `src/access.rs` through the real macros and boot path. The link-time
+//! registry is shared across a test binary, so the graphs below use disjoint types.
 
 use std::any::TypeId;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
-use nest_rs_core::{App, ContainerBuilder, Discoverable, injectable, module};
+use nest_rs_core::{
+    AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, MissingDependencyError,
+    ProviderCycleError, ProviderScope, ReachableProviders, Registering, ResolvesProvider,
+    ScopeViolationError, injectable, module,
+};
 
-// A type no module provides — the dependency a scoped provider will fail to
-// resolve. Not `#[injectable]`, so nothing ever registers it.
+use crate::refused_on_both_paths;
+
 struct AbsentDep;
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 #[injectable(scope = request)]
 struct ScopedNeedy {
     #[inject]
@@ -23,9 +30,6 @@ struct ScopedMissingModule;
 
 #[tokio::test]
 async fn a_scoped_providers_missing_dependency_is_a_boot_error_not_a_panic() {
-    // A request-scoped provider builds lazily, so a missing dependency used to
-    // slip through boot and panic at the first `get(...).expect(...)`. The access
-    // graph now catches it up front, naming both the provider and the dependency.
     let err = App::builder()
         .module::<ScopedMissingModule>()
         .build()
@@ -43,7 +47,10 @@ async fn a_scoped_providers_missing_dependency_is_a_boot_error_not_a_panic() {
 #[injectable]
 struct ServiceA;
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 #[injectable]
 struct ServiceB {
     #[inject]
@@ -56,9 +63,8 @@ struct ModuleA;
 #[module(providers = [ServiceB])]
 struct LeakyModuleB;
 
-// `ModuleA` listed first lets the flat container's order-dependent fixpoint
-// silently resolve `ServiceA`; the access check turns that into a deterministic
-// boot error.
+// `ModuleA` listed first lets the flat container's fixpoint resolve `ServiceA`
+// anyway; only the access check refuses it.
 #[module(imports = [ModuleA, LeakyModuleB])]
 struct LeakyRoot;
 
@@ -85,7 +91,10 @@ async fn unimported_cross_module_dependency_is_rejected_at_boot() {
 #[injectable]
 struct FixedServiceA;
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 #[injectable]
 struct FixedServiceB {
     #[inject]
@@ -110,9 +119,102 @@ async fn imported_cross_module_dependency_boots() {
         .expect("declaring the import makes the cross-module dependency legal");
 }
 
-// A lazily-built provider (controller / cron job / processor shape): empty
-// `dependencies`, non-empty `injected`. The graph reads `injected`, so this is
-// still under contract.
+#[injectable]
+struct PinnedClient;
+
+#[module(providers = [PinnedClient])]
+struct ClientModule;
+
+/// The `for_root` shape of a module owning a config (`ConfigSetup<M, C>`): the
+/// dynamic import registers the module it configures.
+struct ClientSetup;
+
+fn client_for_root() -> ClientSetup {
+    ClientSetup
+}
+
+impl DynamicModule for ClientSetup {
+    fn module() -> TypeId {
+        TypeId::of::<ClientModule>()
+    }
+
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<ClientModule>()
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ClientUser {
+    #[inject]
+    client: Arc<PinnedClient>,
+}
+
+#[module(imports = [client_for_root()], providers = [ClientUser])]
+struct ClientUserModule;
+
+#[tokio::test]
+async fn a_provider_injects_what_a_dynamic_import_registers_on_the_async_path() {
+    App::builder()
+        .module::<ClientUserModule>()
+        .build()
+        .await
+        .expect("a dynamic import imports the module it registers");
+}
+
+#[injectable]
+struct Prerequisite;
+
+#[module(providers = [Prerequisite])]
+struct PrerequisiteModule;
+
+/// A `for_root` whose module needs another one wired first, so its `register`
+/// registers that one before its own.
+struct OrderedSetup;
+
+fn ordered_for_root() -> OrderedSetup {
+    OrderedSetup
+}
+
+impl DynamicModule for OrderedSetup {
+    fn module() -> TypeId {
+        TypeId::of::<ClientModule>()
+    }
+
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .import::<PrerequisiteModule>()
+            .import::<ClientModule>()
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct OrderedClientUser {
+    #[inject]
+    client: Arc<PinnedClient>,
+}
+
+#[module(imports = [ordered_for_root()], providers = [OrderedClientUser])]
+struct OrderedClientUserModule;
+
+#[tokio::test]
+async fn a_dynamic_import_is_the_module_it_declares_whatever_it_registers_first() {
+    App::builder()
+        .module::<OrderedClientUserModule>()
+        .build()
+        .await
+        .expect("importing the setup imports the module it is, not the first one it wires");
+}
+
+// A lazily-built provider (controller shape): empty `dependencies`, non-empty
+// `injected`, which is what the graph reads.
 #[injectable]
 struct LazyDep;
 
@@ -156,28 +258,25 @@ async fn lazily_built_provider_injection_is_checked_via_injected_not_dependencie
     assert!(msg.contains("LazyDepModule"), "suggests the import: {msg}");
 }
 
-// --- a singleton may not inject what only exists inside a request ------------
-//
-// It used to fail **silently**, and that is why this is a suite test rather than
-// a unit one: the register phase gates readiness on the singleton map, so such a
-// provider never became ready, was classified unprovided and was dropped — with
-// everything downstream of it — while the boot returned `Ok` and emitted
-// nothing. `Container::get` then answered `None` for a provider written in
-// `providers = [...]`, far from the cause. Only a real boot shows that.
-
 #[injectable(scope = request)]
 #[derive(Default)]
 struct PerRequest;
 
 #[injectable]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct SingletonHoldingRequestScoped {
     #[inject]
     dep: Arc<PerRequest>,
 }
 
 #[injectable]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct DownstreamOfIt {
     #[inject]
     host: Arc<SingletonHoldingRequestScoped>,
@@ -211,7 +310,10 @@ async fn a_singleton_injecting_a_request_scoped_provider_fails_the_boot_by_name(
 struct PerResolution;
 
 #[injectable]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct SingletonHoldingTransient {
     #[inject]
     dep: Arc<PerResolution>,
@@ -220,15 +322,6 @@ struct SingletonHoldingTransient {
 #[module(providers = [PerResolution, SingletonHoldingTransient])]
 struct SingletonTransientViolationModule;
 
-/// The check's **second arm**, which had no test while the error's own sentence
-/// described only the first.
-///
-/// A transient is not "only inside a request" — `Container::get` opens a
-/// throwaway scope and builds one, which `Discoverable`'s table states outright.
-/// What it shares with a request-scoped provider is the fact the check actually
-/// reads: neither is ever placed in the singleton map, so the register-phase
-/// fixpoint never marks the consumer ready and drops it with everything
-/// downstream. Same silent drop, same boot error, and now the same coverage.
 #[tokio::test]
 async fn a_singleton_injecting_a_transient_provider_fails_the_boot_by_name() {
     let err = App::builder()
@@ -245,28 +338,35 @@ async fn a_singleton_injecting_a_transient_provider_fails_the_boot_by_name() {
     assert!(msg.contains("PerResolution"), "names the dependency: {msg}");
 }
 
-// --- and the two directions that are legal stay legal ------------------------
-
 #[injectable]
 #[derive(Default)]
 struct PlainSingleton;
 
 #[injectable(scope = request)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct ScopedOnSingleton {
     #[inject]
     dep: Arc<PlainSingleton>,
 }
 
 #[injectable(scope = request)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct ScopedOnScoped {
     #[inject]
     dep: Arc<ScopedOnSingleton>,
 }
 
 #[injectable(scope = transient)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct TransientOnScoped {
     #[inject]
     dep: Arc<ScopedOnSingleton>,
@@ -280,10 +380,6 @@ struct TransientOnScoped {
 ])]
 struct LegalScopeDirectionsModule;
 
-/// One level deep is about the *singleton*, not about the scope: a
-/// request-scoped provider resolves its own deps through the scope, so it may
-/// hold another request-scoped provider (sharing the request's instance) and a
-/// transient may hold either. Only the reverse is impossible.
 #[tokio::test]
 async fn a_request_scoped_provider_may_hold_singletons_and_its_own_kind() {
     App::builder()
@@ -291,4 +387,541 @@ async fn a_request_scoped_provider_may_hold_singletons_and_its_own_kind() {
         .build()
         .await
         .expect("scoped→singleton, scoped→scoped and transient→scoped are all legal");
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct CycleLeft {
+    #[inject]
+    right: Arc<CycleRight>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct CycleRight {
+    #[inject]
+    left: Arc<CycleLeft>,
+}
+
+#[module(providers = [CycleLeft, CycleRight])]
+struct CycleModule;
+
+#[test]
+fn providers_waiting_on_each_other_fail_the_boot_naming_the_cycle() {
+    let Err(refused) = App::new::<CycleModule>() else {
+        panic!("two providers waiting on each other cannot both be built");
+    };
+    let cycle = refused
+        .downcast_ref::<ProviderCycleError>()
+        .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
+    assert_eq!(cycle.module, "CycleModule");
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(cycle.chain, ["CycleLeft", "CycleRight", "CycleLeft"]);
+}
+
+trait Ledger: Send + Sync {}
+
+#[injectable]
+#[derive(Default)]
+struct BoundLedger;
+
+impl Ledger for BoundLedger {}
+
+#[module(providers = [BoundLedger as dyn Ledger])]
+struct BoundLedgerModule;
+
+#[test]
+fn a_provider_bound_as_dyn_is_reachable_under_its_own_type() {
+    let app = App::new::<BoundLedgerModule>().expect("the module boots");
+    let reachable = app
+        .container()
+        .get::<ReachableProviders>()
+        .expect("the boot seeds the reachable set");
+    assert!(
+        ReachableProviders::reaches(Some(&reachable), TypeId::of::<BoundLedger>()),
+        "a listener, processor, tick or indicator on the host is gated by its own type"
+    );
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct StrayLedgerReader {
+    #[inject]
+    ledger: Arc<BoundLedger>,
+}
+
+#[module(providers = [StrayLedgerReader])]
+struct StrayLedgerReaderModule;
+
+#[module(imports = [BoundLedgerModule, StrayLedgerReaderModule])]
+struct StrayLedgerRoot;
+
+#[test]
+fn a_consumer_of_a_dyn_bound_provider_under_its_own_type_imports_its_module() {
+    let Err(refused) = App::new::<StrayLedgerRoot>() else {
+        panic!("a consumer reaching a provider its module does not import must fail the boot");
+    };
+    let refused = refused
+        .downcast::<AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+    assert_eq!(refused.consumer, "StrayLedgerReader");
+    assert_eq!(refused.owner, "BoundLedgerModule", "{refused}");
+}
+
+#[injectable(scope = request)]
+#[derive(Default)]
+struct PerRequestAudit;
+
+#[injectable]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+struct SingletonMaybeAuditing {
+    #[inject]
+    audit: Option<Arc<PerRequestAudit>>,
+}
+
+#[module(providers = [PerRequestAudit, SingletonMaybeAuditing])]
+struct OptionalScopeViolationModule;
+
+#[test]
+fn a_singleton_holding_a_request_scoped_provider_optionally_fails_the_boot_by_name() {
+    let Err(refused) = App::new::<OptionalScopeViolationModule>() else {
+        panic!("a singleton's optional request-scoped dependency would be `None` forever");
+    };
+    let violation = refused
+        .downcast_ref::<ScopeViolationError>()
+        .unwrap_or_else(|| panic!("not the scope violation: {refused:#}"));
+    assert_eq!(violation.consumer, "SingletonMaybeAuditing");
+    assert_eq!(violation.dependency, "PerRequestAudit");
+}
+
+#[injectable]
+#[derive(Default)]
+struct Mailer;
+
+#[module(providers = [Mailer])]
+struct MailerModule;
+
+#[injectable]
+struct Notifier {
+    #[inject]
+    mailer: Option<Arc<Mailer>>,
+}
+
+#[module(providers = [Notifier])]
+struct NotifierModule;
+
+#[module(imports = [MailerModule, NotifierModule])]
+struct OptionalLeakRoot;
+
+#[test]
+fn an_optional_dependency_another_reached_module_provides_needs_its_import() {
+    let Err(refused) = App::new::<OptionalLeakRoot>() else {
+        panic!("the app reaches `Mailer`, so `Notifier` would hold it or not by import order");
+    };
+    let leak = refused
+        .downcast::<AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+    assert_eq!(leak.consumer, "Notifier");
+    assert_eq!(leak.owner, "MailerModule");
+}
+
+#[module(imports = [NotifierModule])]
+struct NoMailerRoot;
+
+#[test]
+fn an_optional_dependency_no_reached_module_provides_is_absent() {
+    let app = App::new::<NoMailerRoot>()
+        .expect("`MailerModule` is linked but another app's: the capability is absent here");
+    let notifier = app.container().get::<Notifier>().expect("built without it");
+    assert!(notifier.mailer.is_none());
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct DraftView {
+    #[inject]
+    review: Arc<ReviewView>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct ReviewView {
+    #[inject]
+    draft: Arc<DraftView>,
+}
+
+#[module(providers = [DraftView, ReviewView])]
+struct RequestCycleModule;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = transient)]
+struct SlugDraft {
+    #[inject]
+    slug: Arc<SlugCheck>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = transient)]
+struct SlugCheck {
+    #[inject]
+    draft: Option<Arc<SlugDraft>>,
+}
+
+#[module(providers = [SlugDraft, SlugCheck])]
+struct TransientCycleModule;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct Visit {
+    #[inject]
+    tracker: Arc<VisitTracker>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = transient)]
+struct VisitTracker {
+    #[inject]
+    visit: Arc<Visit>,
+}
+
+#[module(providers = [Visit, VisitTracker])]
+struct MixedScopeCycleModule;
+
+#[module(imports = [MixedScopeCycleModule])]
+struct MixedScopeCycleRoot;
+
+/// The cycle booting `M` fails with, on both paths, each the same.
+async fn cycle_of<M: nest_rs_core::Module>() -> ProviderCycleError {
+    let [sync, built] = refused_on_both_paths::<M>().await.map(|refused| {
+        refused
+            .downcast::<ProviderCycleError>()
+            .unwrap_or_else(|refused| panic!("not the cycle refusal: {refused:#}"))
+    });
+    assert_eq!(sync.to_string(), built.to_string());
+    sync
+}
+
+#[tokio::test]
+async fn request_scoped_providers_waiting_on_each_other_fail_the_boot() {
+    let cycle = cycle_of::<RequestCycleModule>().await;
+    assert_eq!(cycle.module, "RequestCycleModule");
+    assert_eq!(cycle.scope, ProviderScope::Request);
+    assert_eq!(cycle.chain, ["DraftView", "ReviewView", "DraftView"]);
+}
+
+#[tokio::test]
+async fn transient_providers_waiting_on_each_other_fail_the_boot_an_optional_edge_included() {
+    let cycle = cycle_of::<TransientCycleModule>().await;
+    assert_eq!(cycle.scope, ProviderScope::Transient);
+    assert_eq!(cycle.chain, ["SlugDraft", "SlugCheck", "SlugDraft"]);
+}
+
+#[tokio::test]
+async fn a_cycle_across_the_request_and_transient_scopes_fails_the_boot() {
+    let cycle = cycle_of::<MixedScopeCycleRoot>().await;
+    assert_eq!(cycle.module, "MixedScopeCycleModule");
+    assert_eq!(cycle.scope, ProviderScope::Request);
+    assert_eq!(cycle.chain, ["Visit", "VisitTracker", "Visit"]);
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct AuthorsService {
+    #[inject]
+    books: Arc<BooksService>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct BooksService {
+    #[inject]
+    authors: Arc<AuthorsService>,
+}
+
+#[module(imports = [BooksModule], providers = [AuthorsService])]
+struct AuthorsModule;
+
+#[module(imports = [AuthorsModule], providers = [BooksService])]
+struct BooksModule;
+
+#[tokio::test]
+async fn singletons_waiting_on_each_other_across_an_import_cycle_fail_the_boot_as_a_provider_cycle()
+{
+    let cycle = cycle_of::<AuthorsModule>().await;
+    assert_eq!(
+        cycle.module, "BooksModule",
+        "registered first, it stalled first"
+    );
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(
+        cycle.chain,
+        ["BooksService", "AuthorsService", "BooksService"]
+    );
+    let cycle = cycle_of::<BooksModule>().await;
+    assert_eq!(cycle.module, "AuthorsModule");
+    assert_eq!(
+        cycle.chain,
+        ["AuthorsService", "BooksService", "AuthorsService"]
+    );
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Editor {
+    #[inject]
+    desk: Option<Arc<ReviewDesk>>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ReviewDesk {
+    #[inject]
+    editor: Arc<Editor>,
+}
+
+#[module(imports = [ReviewDeskModule], providers = [Editor])]
+struct EditorModule;
+
+#[module(imports = [EditorModule], providers = [ReviewDesk])]
+struct ReviewDeskModule;
+
+#[tokio::test]
+async fn a_singleton_cycle_across_modules_through_an_optional_dependency_fails_the_boot_from_either_root()
+ {
+    let cycle = cycle_of::<EditorModule>().await;
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(cycle.chain, ["ReviewDesk", "Editor", "ReviewDesk"]);
+    let cycle = cycle_of::<ReviewDeskModule>().await;
+    assert_eq!(
+        cycle.module, "EditorModule",
+        "built without its optional, then the other"
+    );
+    assert_eq!(cycle.chain, ["Editor", "ReviewDesk", "Editor"]);
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Tagger {
+    #[inject]
+    classifier: Option<Arc<Classifier>>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Classifier {
+    #[inject]
+    tagger: Option<Arc<Tagger>>,
+}
+
+#[module(imports = [ClassifierModule], providers = [Tagger])]
+struct TaggerModule;
+
+#[module(imports = [TaggerModule], providers = [Classifier])]
+struct ClassifierModule;
+
+#[tokio::test]
+async fn singletons_holding_each_other_optionally_across_modules_fail_the_boot_as_a_provider_cycle()
+{
+    let cycle = cycle_of::<TaggerModule>().await;
+    assert_eq!(cycle.module, "ClassifierModule");
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(cycle.chain, ["Classifier", "Tagger", "Classifier"]);
+}
+
+trait Pricing: Send + Sync {}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Catalog {
+    #[inject]
+    pricing: Arc<dyn Pricing>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct PriceList {
+    #[inject]
+    catalog: Arc<Catalog>,
+}
+
+impl Pricing for PriceList {}
+
+#[module(imports = [PriceListModule], providers = [Catalog])]
+struct CatalogModule;
+
+#[module(imports = [CatalogModule], providers = [PriceList as dyn Pricing])]
+struct PriceListModule;
+
+#[tokio::test]
+async fn a_cycle_through_a_dyn_binding_names_the_provider_bound() {
+    let cycle = cycle_of::<CatalogModule>().await;
+    assert_eq!(cycle.module, "PriceListModule");
+    assert_eq!(cycle.chain, ["PriceList", "Catalog", "PriceList"]);
+}
+
+/// An extractor resolving `T` from the request's scope, as an edge's
+/// `Scoped<T>` does.
+struct Resolved<T>(PhantomData<T>);
+
+impl<T: 'static> ResolvesProvider for Resolved<T> {
+    fn provider() -> (TypeId, &'static str) {
+        (TypeId::of::<T>(), std::any::type_name::<T>())
+    }
+}
+
+/// A handler host as an edge's impl half declares it for a method taking
+/// `(Resolved<$resolved>, u32)`: each parameter probed by its type, and nothing
+/// held in the container.
+macro_rules! handler_host {
+    ($host:ident takes $resolved:ty) => {
+        struct $host;
+
+        impl Discoverable for $host {
+            fn injected_per_request() -> Vec<(TypeId, &'static str)> {
+                use nest_rs_core::__private::{
+                    ParamProbe, ParamProbeFallback as _, ParamProbeResolves as _,
+                };
+                [
+                    (&&ParamProbe::<Resolved<$resolved>>::new()).resolved_provider(),
+                    (&&ParamProbe::<u32>::new()).resolved_provider(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+
+            fn register(builder: ContainerBuilder) -> ContainerBuilder {
+                builder
+            }
+        }
+    };
+}
+
+#[injectable(scope = request)]
+struct AuditTrail;
+
+#[module(providers = [AuditTrail])]
+struct AuditTrailModule;
+
+handler_host!(StrayAuditHost takes AuditTrail);
+
+#[module(providers = [StrayAuditHost])]
+struct StrayAuditHostModule;
+
+#[module(imports = [AuditTrailModule, StrayAuditHostModule])]
+struct StrayAuditRoot;
+
+#[tokio::test]
+async fn a_handler_resolving_a_provider_its_module_does_not_import_fails_the_boot() {
+    for refused in refused_on_both_paths::<StrayAuditRoot>().await {
+        let leak = refused
+            .downcast::<AccessGraphError>()
+            .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+        assert_eq!(leak.consumer, "StrayAuditHost");
+        assert_eq!(leak.module, "StrayAuditHostModule");
+        assert_eq!(leak.owner, "AuditTrailModule");
+    }
+}
+
+struct Unprovided;
+
+handler_host!(UnprovidedHost takes Unprovided);
+
+#[module(providers = [UnprovidedHost])]
+struct UnprovidedHostModule;
+
+#[tokio::test]
+async fn a_handler_resolving_a_provider_no_module_offers_fails_the_boot_naming_it() {
+    for refused in refused_on_both_paths::<UnprovidedHostModule>().await {
+        let missing = refused
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+        assert_eq!(missing.consumer, "UnprovidedHost");
+        assert!(
+            missing.dependency.ends_with("::Unprovided"),
+            "{}",
+            missing.dependency
+        );
+    }
+}
+
+handler_host!(AuditHost takes AuditTrail);
+
+#[module(imports = [AuditTrailModule], providers = [AuditHost])]
+struct AuditHostModule;
+
+#[injectable(scope = request)]
+struct LocalTrail;
+
+handler_host!(LocalTrailHost takes LocalTrail);
+
+#[module(providers = [LocalTrail, LocalTrailHost])]
+struct LocalTrailModule;
+
+#[module(imports = [AuditHostModule, LocalTrailModule])]
+struct RequestScopedRoot;
+
+/// A request is the consumer, so resolving a request-scoped provider is the
+/// point of the parameter, never a scope violation.
+#[tokio::test]
+async fn a_handler_resolving_a_request_scoped_provider_it_reaches_boots() {
+    App::builder()
+        .module::<RequestScopedRoot>()
+        .build()
+        .await
+        .expect("a handler reaches request-scoped providers through its parameters");
 }

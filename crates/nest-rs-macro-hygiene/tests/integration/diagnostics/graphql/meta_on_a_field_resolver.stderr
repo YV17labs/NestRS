@@ -1,0 +1,5 @@
+error: a `#[field_resolver]` runs under the root field that produced its parent, and declares no `#[meta]` of its own — declare it on that root field, or on the resolver struct
+  --> tests/integration/diagnostics/graphql/meta_on_a_field_resolver.rs:25:14
+   |
+25 |     async fn shout(&self, parent: &Note) -> String {
+   |              ^^^^^

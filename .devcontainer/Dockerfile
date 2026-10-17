@@ -2,15 +2,17 @@
 
 ARG RUST_VERSION=1.97
 ARG NODE_MAJOR=24
+ARG ACTIONLINT_VERSION=1.7.12
 
 FROM mcr.microsoft.com/devcontainers/base:trixie AS dev
 
 ARG RUST_VERSION
 ARG NODE_MAJOR
+ARG ACTIONLINT_VERSION
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      mold build-essential cmake clang perl pkg-config libssl-dev curl ca-certificates \
+      mold build-essential cmake clang perl pkg-config libssl-dev curl ca-certificates shellcheck \
  && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get update \
@@ -26,7 +28,7 @@ RUN apt-get update \
 
 USER vscode
 
-ENV PATH=/home/vscode/.cargo/bin:${PATH}
+ENV PATH=/home/vscode/.cargo/bin:/home/vscode/.local/bin:${PATH}
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --no-modify-path --profile minimal \
@@ -34,4 +36,15 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
           -c rustfmt -c clippy -c rust-analyzer -c llvm-tools-preview \
  && cargo install --locked cargo-binstall \
  && cargo binstall --no-confirm --locked \
-      just bacon cargo-nextest cargo-llvm-cov cargo-audit cargo-outdated
+      just bacon cargo-nextest cargo-llvm-cov cargo-deny cargo-hack zizmor
+
+# actionlint is a Go binary cargo cannot install: its release is fetched by
+# version and checked against the digests it publishes.
+RUN arch="$(dpkg --print-architecture)" \
+ && actionlint="actionlint_${ACTIONLINT_VERSION}_linux_${arch}.tar.gz" \
+ && mkdir -p /home/vscode/.local/bin /tmp/tools && cd /tmp/tools \
+ && curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${actionlint}" \
+ && curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_checksums.txt" \
+      | grep " ${actionlint}\$" | sha256sum -c - \
+ && tar -xzf "${actionlint}" -C /home/vscode/.local/bin actionlint \
+ && cd / && rm -rf /tmp/tools

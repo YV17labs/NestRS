@@ -1,7 +1,6 @@
 ---
 title: Overriding in tests
-description: Seed pinned config values in e2e tests, isolate the environment in unit tests with figment::Jail, keep both hermetic.
-tier: all-options
+description: Seed pinned config values in e2e tests, unit-test a Config on a map of variables, keep both hermetic.
 sidebar:
   order: 4
 ---
@@ -11,10 +10,10 @@ import { Aside } from '@astrojs/starlight/components';
 Tests bypass the environment in two ways depending on the layer. End-to-end
 tests use `TestApp` and seed pinned config values directly — the seed
 wins over `ConfigModule::for_feature::<C>()`. Unit tests for a `Config`
-impl run inside a `figment::Jail` that scopes `std::env` mutations to
-the test, so neighboring tests stay hermetic.
+impl read a map of variables through `ConfigService::with_vars`, and never
+touch `std::env`.
 
-Both rely on a single guarantee: under `NESTRS_ENV=test`, the
+Both rely on a single guarantee: under `<PREFIX>_ENV=test`, the
 [`.env.local`](/configuration/env-cascade/#test-mode-is-hermetic) file is
 skipped, so a developer's personal secrets cannot leak in.
 
@@ -22,9 +21,14 @@ skipped, so a developer's personal secrets cannot leak in.
 
 `TestApp::builder()` exposes `.provide(value)` — when the value's type
 matches a config registered via `ConfigModule::for_feature::<C>()`, the
-seed wins and the factory never runs.
+seed wins and the factory never runs. The seed still passes what a read
+value does, before any factory reads it: a duration outside its range or a
+field its `validate()` refuses fails the boot with the same `ConfigError`,
+naming the field or the namespace.
 
-```rust title="apps/api/tests/e2e/token.rs"
+```rust title="apps/auth/tests/e2e/token.rs"
+use auth::{AuthModule, ClientPayload, OAuthConfig, RegisteredClient};
+use features::Role;
 use nest_rs::testing::TestApp;
 use uuid::Uuid;
 
@@ -32,12 +36,15 @@ use uuid::Uuid;
 async fn issues_a_token_for_a_registered_client() {
     let app = TestApp::builder()
         .module::<AuthModule>()
-        .provide(IssuerConfig {
+        .provide(OAuthConfig {
             clients: vec![RegisteredClient {
                 client_id: "test-client".into(),
                 client_secret: "secret".into(),
-                scopes: vec!["read".into()],
-                payload: Uuid::nil(),
+                scopes: vec!["posts:read".into()],
+                payload: ClientPayload {
+                    org_id: Uuid::nil(),
+                    roles: vec![Role::User],
+                },
             }],
             default_org_id: Uuid::nil(),
         })
@@ -45,15 +52,17 @@ async fn issues_a_token_for_a_registered_client() {
         .await
         .unwrap();
 
-    let response = app.http().post("/oauth/token")
-        .body(r#"{"client_id":"test-client","client_secret":"secret"}"#)
+    let response = app.http().post("/token")
+        .header("authorization", basic_auth("test-client", "secret"))
+        .content_type("application/x-www-form-urlencoded")
+        .body("grant_type=client_credentials")
         .send()
         .await;
     response.assert_status_is_ok();
 }
 ```
 
-The test never sets a `NESTRS_ISSUER__*` variable, doesn't depend on a
+The test never sets a `<PREFIX>_OAUTH__*` variable, doesn't depend on a
 committed `.env.test`, and produces the same result on any machine.
 
 ## Pinning through `for_root`
@@ -63,7 +72,7 @@ loads from the environment over the config's defaults, `Some(cfg)` makes `cfg`
 the **base** the environment overlays.
 
 <Aside type="caution">
-`for_root` is not a hermetic pin. A `NESTRS_<NS>__<KEY>` set in the ambient
+`for_root` is not a hermetic pin. A `<PREFIX>_<NS>__<KEY>` set in the ambient
 environment still wins, per field — that is [the dual-path
 rule](/configuration/#the-dual-path-rule), and it applies to test runs too. When
 a test must not read the environment at all, seed the value with `.provide()`
@@ -97,7 +106,7 @@ pub struct ApiModule;
 `ConfigModule::provide_feature`, which queues one resolving factory either way
 — the `Option` only decides what the environment overlays. Use this when the
 test module **owns** the binding (it composes the app) and an ambient
-`NESTRS_HTTP__*` overriding it is *welcome*; use `.provide()` when the value
+`<PREFIX>_HTTP__*` overriding it is *welcome*; use `.provide()` when the value
 must hold regardless of the environment.
 
 ## A test-specific source
@@ -108,22 +117,13 @@ isolate config loading from `std::env` entirely, build the
 and seed the loaded `Config`:
 
 ```rust title="crates/features/tests/integration/config.rs"
-use std::collections::HashMap;
 use std::sync::Arc;
-use nest_rs::config::{Config, ConfigService, ConfigSource};
+use nest_rs::config::{Config, ConfigService, MapSource, var_name};
 
-struct Map(HashMap<&'static str, &'static str>);
-
-impl ConfigSource for Map {
-    fn get(&self, var: &str) -> Option<String> {
-        self.0.get(var).map(|s| (*s).to_owned())
-    }
-}
-
-let source = Arc::new(Map(HashMap::from([
-    ("NESTRS_SEAORM__URL", "postgres://test/app"),
-    ("NESTRS_SEAORM__MAX_CONNECTIONS", "5"),
-])));
+let source = Arc::new(MapSource::from_iter([
+    (var_name("seaorm", "URL"), "postgres://test/app"),
+    (var_name("seaorm", "MAX_CONNECTIONS"), "5"),
+]));
 let env = ConfigService::with_source("seaorm", source);
 let cfg = SeaOrmConfig::from_env(&env, SeaOrmConfig::defaults()).unwrap();
 
@@ -135,14 +135,14 @@ let app = TestApp::builder()
 ```
 
 A custom source also decides *where* the values come from, so the test cannot
-pick up a stray `NESTRS_*` from the ambient environment — that is the whole
+pick up a stray `<PREFIX>_*` from the ambient environment — that is the whole
 point of reaching for one.
 
 It is **not** the case that a test leaves `std::env` untouched. No config *read*
 writes there, but `TestApp::builder()` calls `load_project_env`, which publishes
 the nearest project `.env` cascade set-if-absent — the harness needs backend
 URLs before any `ConfigService` exists. The merge is bounded (once per process,
-real env still wins, and `.env.local` is skipped under `NESTRS_ENV=test`), and a
+real env still wins, and `.env.local` is skipped under `<PREFIX>_ENV=test`), and a
 `for_root` pin still outranks every cascade value, but a test asserting on a
 variable a committed `.env` happens to define will read the file. Use
 `with_source` — or `.provide(cfg)` — when the test must not. See
@@ -150,75 +150,85 @@ variable a committed `.env` happens to define will read the file. Use
 
 ## Unit-testing a `Config` impl
 
-When the unit under test is the `from_env` mapping itself, drive it
-through `figment::Jail`. The jail is a `dev-dependency` borrowed from
-the `figment` crate; it scopes every `set_env` / `create_file` call to
-the test closure and restores `std::env` on drop.
+When the unit under test is the `from_env` mapping itself, read it from a
+map of variables. `ConfigService::with_vars` answers for one namespace,
+by key, from the pairs you give it, and reads neither `std::env` nor the
+`.env` cascade. Validation is the struct's own `validate()`, which
+`load()` runs after the mapping.
 
-```rust title="crates/features/src/oauth/config.rs (from the demo)"
+```rust title="crates/features/src/oauth/config.rs (from the demo, abridged)"
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    #[allow(clippy::result_large_err)]
-    fn loads_clients_from_env() {
-        figment::Jail::expect_with(|jail| {
-            jail.set_env(
-                "NESTRS_ISSUER__CLIENTS",
-                r#"[{"client_id":"web","client_secret":"s","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]"#,
-            );
-            let cfg = IssuerConfig::load().expect("loads with clients");
-            assert_eq!(cfg.clients.len(), 1);
-            assert_eq!(cfg.clients[0].client_id, "web");
-            Ok(())
-        });
-    }
+    // …
 
     #[test]
-    #[allow(clippy::result_large_err)]
-    fn fails_validation_when_no_clients() {
-        figment::Jail::expect_with(|_| {
-            let err = IssuerConfig::load().expect_err("empty clients must fail");
-            assert!(matches!(err, ConfigError::Validation(_)));
-            Ok(())
-        });
+    fn empty_clients_fails_validation() {
+        let cfg = OAuthConfig {
+            clients: vec![],
+            default_org_id: Uuid::nil(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.field_errors().contains_key("clients"));
+    }
+
+    // …
+
+    #[test]
+    fn clients_are_read_from_their_variable() {
+        let env = ConfigService::with_vars(
+            "oauth",
+            [(
+                "CLIENTS",
+                r#"[{"client_id":"web","client_secret":"s3cr3t","scopes":["posts:read"],"payload":{"org_id":"00000000-0000-0000-0000-000000000000","roles":["user"]}}]"#,
+            )],
+        );
+        let cfg = OAuthConfig::from_env(&env, OAuthConfig::defaults()).expect("the clients parse");
+        assert_eq!(cfg.clients.len(), 1);
+        assert_eq!(cfg.clients[0].client_id, "web");
+        assert_eq!(cfg.clients[0].scopes, [constants::POSTS_READ]);
+        assert_eq!(cfg.clients[0].payload.roles, [Role::User]);
+        cfg.validate().expect("valid");
     }
 }
 ```
 
-This is the exact pattern `nest-rs-config`'s own tests use — see
-`crates/nest-rs-config/src/config.rs` and `service.rs`. The
-`#[allow(clippy::result_large_err)]` is for `Jail`'s fixed closure
-signature.
+Nothing in it touches the process, so these tests run in parallel under
+any runner.
 
-## Default `NESTRS_ENV` in tests
+## Default `<PREFIX>_ENV` in tests
 
-`TestApp::builder()` sets `NESTRS_ENV=test` if nothing else has set it.
+`TestApp::builder()` sets `<PREFIX>_ENV=test` if nothing else has set it.
 Two consequences:
 
 - The `.env` cascade skips `.env.local` (per-machine secrets stay out of
   the test).
-- Env-aware framework defaults stay off: the GraphQL playground doesn't
-  mount, SDL emission doesn't fire, dev-only middleware unloads.
+- The development conveniences the framework keys on the profile are on,
+  as in development: the OpenAPI documentation serves `/api`, Server-Timing
+  stamps its header, storage adds the dev container's credentials and
+  allows plain HTTP, and Redis defaults to the loopback. What lives only in
+  `.env.development` stays off: the GraphQL playground doesn't mount, and
+  SDL emission doesn't fire.
 
 A test that wants to assert prod behavior overrides this explicitly
-before building the app — `unsafe { std::env::set_var("NESTRS_ENV",
+before building the app — `unsafe { std::env::set_var("<PREFIX>_ENV",
 "production") }`. Set it before `TestApp::builder()` so the cascade
 loads the right files.
 
 ## What not to do
 
-- **Don't mutate `std::env` directly from a `#[tokio::test]`.** Tokio
-  runs tests in parallel; one test's `set_var` races against another's
-  read. `figment::Jail` serializes mutations behind a process-wide
-  mutex, which is why it exists.
+- **Don't mutate `std::env` to feed a config.** `std::env::set_var` is
+  `unsafe` since Rust 2024: in a process another test shares, it races
+  that test's reads. `with_vars` answers from a map, and `.provide()`
+  skips the read altogether.
 - **Don't pin config in a `setup` shared between tests.** Each test
   should declare its inputs explicitly — that's what makes a failure
   reproducible from the test code alone.
-- **Don't ship `.env.test` with secrets.** The file is committed by
-  convention; treat it as documentation of test defaults, not as a
-  vault.
+- **Don't put a deployment's secret in `.env.test`.** The file is
+  committed: treat it as documentation of test defaults, not as a vault.
+  What it holds opens nothing outside a test run — the HS256 key
+  `nestrs g auth` draws into it signs only the tokens your suites send.
 
 ## Going further
 

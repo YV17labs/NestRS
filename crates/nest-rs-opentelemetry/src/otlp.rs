@@ -1,12 +1,23 @@
-//! OTel SDK wiring. Always installs a local tracer + W3C propagator so
-//! `tracing` spans get trace ids and `traceparent` propagates without an
-//! exporter. When an OTLP endpoint is set, attaches batch exporters for
-//! traces/metrics/logs over HTTP/protobuf.
+//! OTel SDK wiring: a local tracer and W3C propagator always, and batch OTLP
+//! exporters for traces, metrics and logs over HTTP/protobuf when an endpoint is
+//! set.
+//!
+//! **The collector is not proved at boot** (`nest_rs_core::prove`): telemetry
+//! must never stop the app it observes, so an unreachable collector costs
+//! exports, never the boot.
 
+use std::time::Duration;
+
+use nest_rs_config::{ClientTls, ConfigError, ConfigService, endpoint_shown, var_name};
 use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::{LogExporter, MetricExporter, Protocol, SpanExporter, WithExportConfig};
+use opentelemetry_otlp::{
+    LogExporter, MetricExporter, OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
+    OTEL_EXPORTER_OTLP_METRICS_TIMEOUT, OTEL_EXPORTER_OTLP_TIMEOUT,
+    OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT, OTEL_EXPORTER_OTLP_TRACES_TIMEOUT, Protocol, SpanExporter,
+    WithExportConfig, WithHttpConfig,
+};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
@@ -28,6 +39,9 @@ pub(crate) struct Exporters {
     pub meter_provider: Option<SdkMeterProvider>,
     /// `Some` only when an OTLP endpoint is set.
     pub logger_provider: Option<SdkLoggerProvider>,
+    /// The export-timeout variables passed over for not holding a whole
+    /// number of milliseconds, said once a subscriber can hear it.
+    pub ignored_timeouts: Vec<&'static str>,
 }
 
 pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelemetryError> {
@@ -41,23 +55,29 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
     let mut tracer_builder = SdkTracerProvider::builder()
         .with_resource(resource.clone())
         .with_sampler(sampler)
-        // The framework decided this unit of work's ids before this crate was
-        // installed, so the SDK adopts them rather than minting a second pair
-        // nothing could join against. See `id_generator`.
+        // The SDK adopts the framework's ids rather than minting a second pair; see
+        // `id_generator`.
         .with_id_generator(crate::id_generator::AdoptFrameworkIds::default());
 
-    let endpoint = config
-        .otlp_endpoint
-        .as_deref()
-        .map(|s| s.trim_end_matches('/'));
+    // Parsed once, whatever set it: a config built in code skipped `from_env`.
+    let mut ignored_timeouts = Vec::new();
+    let endpoint = match config.otlp_endpoint.as_deref() {
+        Some(raw) => {
+            let parsed = crate::config::otlp_endpoint(raw, &otlp_endpoint_setting())?;
+            let clients = exporter_clients(&parsed, &config.tls, &mut ignored_timeouts)?;
+            Some((raw.trim().trim_end_matches('/'), clients))
+        }
+        None => None,
+    };
 
-    if let Some(base) = endpoint {
+    if let Some((base, clients)) = &endpoint {
         let span_exporter = SpanExporter::builder()
             .with_http()
+            .with_http_client(clients.traces.clone())
             .with_endpoint(format!("{}/v1/traces", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
+            .map_err(not_built("traces", base))?;
         tracer_builder = tracer_builder.with_batch_exporter(span_exporter);
     }
 
@@ -65,16 +85,16 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
     let tracer = tracer_provider.tracer(config.service_name.clone());
     global::set_tracer_provider(tracer_provider.clone());
 
-    let (meter_provider, logger_provider) = if let Some(base) = endpoint {
+    let (meter_provider, logger_provider) = if let Some((base, clients)) = endpoint {
         let metric_exporter = MetricExporter::builder()
             .with_http()
+            .with_http_client(clients.metrics)
             .with_endpoint(format!("{}/v1/metrics", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
-        // Explicit, because the SDK's default is 60 s and nothing else says so:
-        // traces and logs land immediately while metrics do not, which reads as
-        // a broken metrics pipeline for a full minute during setup.
+            .map_err(not_built("metrics", base))?;
+        // Explicit: the SDK's 60 s default reads as a broken metrics pipeline for a
+        // full minute during setup.
         let reader = PeriodicReader::builder(metric_exporter)
             .with_interval(config.metric_interval)
             .build();
@@ -86,10 +106,11 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
 
         let log_exporter = LogExporter::builder()
             .with_http()
+            .with_http_client(clients.logs)
             .with_endpoint(format!("{}/v1/logs", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
+            .map_err(not_built("logs", base))?;
         let logger_provider = SdkLoggerProvider::builder()
             .with_resource(resource)
             .with_batch_exporter(log_exporter)
@@ -105,7 +126,149 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
         tracer_provider,
         meter_provider,
         logger_provider,
+        ignored_timeouts,
     })
+}
+
+/// The OTLP endpoint's variable, and the field a config built in code sets.
+fn otlp_endpoint_setting() -> String {
+    format!(
+        "{}, or `OpenTelemetryConfig::otlp_endpoint` in code",
+        var_name(crate::config::NAMESPACE, "OTLP_ENDPOINT")
+    )
+}
+
+/// How long reaching the collector (DNS, TCP and the TLS handshake) may take
+/// before an export gives up.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long one export of a signal may take: its `signal` variable, then
+/// `OTEL_EXPORTER_OTLP_TIMEOUT`, in milliseconds, then the SDK's 10 s.
+///
+/// That is the SDK's own resolution, which bounds its retries, so an attempt is
+/// cut where the SDK stops waiting for it. A value that is not a whole number of
+/// milliseconds is passed over, as the SDK and the OpenTelemetry specification
+/// pass it over, and its variable joins `ignored`.
+fn export_timeout(
+    signal: &'static str,
+    read: impl Fn(&str) -> Option<String>,
+    ignored: &mut Vec<&'static str>,
+) -> Duration {
+    for variable in [signal, OTEL_EXPORTER_OTLP_TIMEOUT] {
+        let Some(raw) = read(variable) else {
+            continue;
+        };
+        match raw.parse::<u64>() {
+            Ok(millis) => return Duration::from_millis(millis),
+            Err(_) if !ignored.contains(&variable) => ignored.push(variable),
+            Err(_) => {}
+        }
+    }
+    OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT
+}
+
+/// The HTTP client each signal's exporter sends through.
+struct ExporterClients {
+    traces: reqwest::blocking::Client,
+    metrics: reqwest::blocking::Client,
+    logs: reqwest::blocking::Client,
+}
+
+/// The exporters' HTTP clients: TLS from `tls`, no redirect followed, the
+/// connection bounded and each export by its signal's [`export_timeout`], and
+/// `https` alone unless the endpoint declares plaintext with `http://` — the
+/// OTLP specification lets the endpoint's scheme decide, and a collector beside
+/// the app is the common case.
+///
+/// Built on a thread of their own, as the SDK builds its own: a blocking client
+/// built on a runtime's thread panics.
+fn exporter_clients(
+    endpoint: &url::Url,
+    tls: &ClientTls,
+    ignored_timeouts: &mut Vec<&'static str>,
+) -> Result<ExporterClients, OpenTelemetryError> {
+    let names = ConfigService::for_namespace(crate::config::NAMESPACE);
+    let plaintext = match endpoint.scheme() {
+        "https" => false,
+        "http" => {
+            tls.refuse_beside_plaintext(&names, &names.var_name("OTLP_ENDPOINT"))?;
+            true
+        }
+        _ => {
+            return Err(ConfigError::parse(
+                otlp_endpoint_setting(),
+                "must be an http:// or https:// URL — OTLP/HTTP is spoken over one of the two",
+            )
+            .into());
+        }
+    };
+    let nest_rs_config::__private::ReqwestTls { roots, identity } =
+        nest_rs_config::__private::reqwest_tls(tls, &names)?;
+    let [traces, metrics, logs] = [
+        OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
+        OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
+        OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
+    ]
+    .map(|signal| export_timeout(signal, nest_rs_config::env_var, ignored_timeouts));
+    // reqwest builds from the process's provider, which rustls picks on its own
+    // only when exactly one is compiled in.
+    nest_rs_config::__private::crypto_provider();
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a panic's payload may quote anything; the sentence says the build panicked"
+    )]
+    let built = std::thread::Builder::new()
+        .name("otel-http-client".into())
+        .spawn(move || {
+            let client = |timeout| {
+                let mut builder = reqwest::blocking::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(timeout)
+                    .https_only(!plaintext)
+                    .tls_certs_only(roots.clone());
+                if let Some(identity) = &identity {
+                    builder = builder.identity(identity.clone());
+                }
+                builder.build()
+            };
+            Ok::<_, reqwest::Error>(ExporterClients {
+                traces: client(traces)?,
+                metrics: client(metrics)?,
+                logs: client(logs)?,
+            })
+        })
+        .map_err(|error| {
+            OpenTelemetryError::Otlp(format!(
+                "no thread to build the OTLP HTTP clients on: {}",
+                nest_rs_core::error_message(&error)
+            ))
+        })?
+        .join()
+        .map_err(|_| {
+            OpenTelemetryError::Otlp("building the OTLP HTTP clients panicked".to_owned())
+        })?;
+    built.map_err(|error| {
+        OpenTelemetryError::Otlp(format!(
+            "the OTLP HTTP clients for {} could not be built: {}",
+            endpoint_shown(endpoint.as_str()),
+            nest_rs_core::error_message(&error.without_url())
+        ))
+    })
+}
+
+/// An exporter the SDK would not build, said without its own error, whose
+/// sentence quotes the endpoint whole.
+fn not_built<'a>(
+    signal: &'static str,
+    base: &'a str,
+) -> impl FnOnce(opentelemetry_otlp::ExporterBuildError) -> OpenTelemetryError + 'a {
+    move |_| {
+        OpenTelemetryError::Otlp(format!(
+            "the OTLP {signal} exporter for {} could not be built",
+            endpoint_shown(base)
+        ))
+    }
 }
 
 fn build_resource(config: &OpenTelemetryConfig) -> Resource {
@@ -123,11 +286,9 @@ fn build_resource(config: &OpenTelemetryConfig) -> Resource {
     if let Some(d) = &config.deployment_environment {
         attrs.push(KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, d.clone()));
     }
-    // Order is load-bearing. `with_schema_url` merges *under* the resource the
-    // builder seeded from its detectors (`SdkProvidedResourceDetector` always
-    // supplies a `service.name` — env override or the `unknown_service:*`
-    // sentinel), so attrs passed there would silently lose. `with_attributes`
-    // merges *over* the current state — the configured values must win.
+    // Order is load-bearing: `with_schema_url` merges *under* the detectors'
+    // resource (which always supplies a `service.name`), `with_attributes` *over*
+    // it, so the configured values win.
     Resource::builder()
         .with_schema_url(Vec::<KeyValue>::new(), SCHEMA_URL)
         .with_attributes(attrs)
@@ -135,21 +296,21 @@ fn build_resource(config: &OpenTelemetryConfig) -> Resource {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the tests shut the providers they built down best-effort"
+)]
 mod tests {
     use opentelemetry::Key;
 
     use super::*;
 
-    /// `build` mutates `opentelemetry::global` (set_tracer_provider /
-    /// set_meter_provider / set_text_map_propagator) — concurrent tests would
-    /// race for the slot. Serialize every `build()` invocation in this file.
+    /// `build` mutates `opentelemetry::global`, so every `build()` in this file is
+    /// serialized.
     static GLOBAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Regression: `SdkProvidedResourceDetector` (seeded by
-    /// `Resource::builder()`) always supplies a `service.name` — the
-    /// `unknown_service:<binary>` sentinel when no `OTEL_SERVICE_NAME` env is
-    /// set. The configured `service.name` must win over it (`build_resource`
-    /// applies the config attrs *after* the detector merge).
+    /// `SdkProvidedResourceDetector` always supplies a `service.name` (the
+    /// `unknown_service:<binary>` sentinel); the configured one must win.
     #[test]
     fn configured_service_name_wins_over_detector_sentinel() {
         let cfg = OpenTelemetryConfig::new("configured-svc");
@@ -188,8 +349,6 @@ mod tests {
 
     #[test]
     fn service_instance_id_falls_back_to_a_v7_uuid_per_call() {
-        // Restarts must get distinct identities in the backend; two calls
-        // produce two ids.
         let cfg = OpenTelemetryConfig::new("svc");
         let a = build_resource(&cfg)
             .get(&Key::new(SERVICE_INSTANCE_ID))
@@ -222,8 +381,6 @@ mod tests {
         let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = OpenTelemetryConfig::new("svc-no-endpoint");
         let exporters = build(&cfg).expect("build succeeds without endpoint");
-        // Tracer is always set up so trace ids + traceparent propagation work
-        // even when no exporter is configured.
         assert!(
             exporters.meter_provider.is_none(),
             "meter provider must stay None until an endpoint is set",
@@ -260,13 +417,8 @@ mod tests {
 
     #[test]
     fn build_with_trailing_slash_endpoint_does_not_double_slash_paths() {
-        // A trailing-slash base ("…:4318/") must produce the same
-        // "/v1/{traces,metrics,logs}" suffixes — not "//v1/…". The function
-        // is `pub(crate)` and the resulting providers expose no public endpoint
-        // accessor, so the assertion is on the success of the build: a
-        // double-slash URL is still a valid http URI, so we can't observe
-        // the difference from outside; the test pins that trailing-slash input
-        // continues to build successfully and remains the documented contract.
+        // A double-slash URL is still a valid URI and the providers expose no
+        // endpoint, so this pins only that a trailing-slash base still builds.
         let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg =
             OpenTelemetryConfig::new("svc-trailing").with_otlp_endpoint("http://localhost:4318/");
@@ -282,11 +434,131 @@ mod tests {
         }
     }
 
+    /// The tracer provider holds its final export to the bound `Drop` hands it
+    /// ([`crate::FLUSH_TIMEOUT`]), so an SDK bump that stops honouring it fails
+    /// here rather than leave an abandoned flush thread exporting forever.
+    #[test]
+    fn a_collector_that_never_answers_holds_the_final_flush_to_the_bound_it_is_handed() {
+        use opentelemetry::trace::Tracer as _;
+
+        // Bound and never accepted: the kernel completes the handshake, so the
+        // export's request goes out and its answer never comes.
+        let collector = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+        let exporter = SpanExporter::builder()
+            .with_http()
+            .with_endpoint(format!(
+                "http://{}/v1/traces",
+                collector.local_addr().expect("its address")
+            ))
+            .with_protocol(Protocol::HttpBinary)
+            .build()
+            .expect("the exporter builds");
+        let provider = SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .build();
+        provider.tracer("pin").in_span("queued", |_| {});
+
+        let bound = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let flushed = provider.shutdown_with_timeout(bound);
+        let took = started.elapsed();
+
+        assert!(
+            flushed.is_err(),
+            "the final export never answered, so the flush cannot have succeeded",
+        );
+        assert!(
+            took >= bound && took < bound + std::time::Duration::from_secs(1),
+            "shutdown gave the export its bound and no more, took {took:?}",
+        );
+    }
+
+    /// OTLP/HTTP is spoken over http or https: any other scheme is refused
+    /// naming the variable, before an exporter is built.
+    #[test]
+    fn an_endpoint_neither_http_nor_https_is_refused_naming_its_variable() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = OpenTelemetryConfig::new("svc-grpc").with_otlp_endpoint("grpc://collector:4317");
+        let Err(refused) = build(&cfg) else {
+            panic!("a gRPC endpoint has no HTTP exporter");
+        };
+        let sentence = refused.to_string();
+        assert!(
+            sentence.contains(&var_name("opentelemetry", "OTLP_ENDPOINT"))
+                && sentence.contains("must be an http:// or https:// URL"),
+            "{sentence}"
+        );
+    }
+
+    #[test]
+    fn build_with_an_https_endpoint_installs_all_three_providers() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = OpenTelemetryConfig::new("svc-https")
+            .with_otlp_endpoint("https://collector.example:4318");
+        let exporters = build(&cfg).expect("build succeeds with an https endpoint");
+        assert!(exporters.meter_provider.is_some());
+        assert!(exporters.logger_provider.is_some());
+        let _ = exporters.tracer_provider.shutdown();
+        if let Some(p) = exporters.meter_provider {
+            let _ = p.shutdown();
+        }
+        if let Some(p) = exporters.logger_provider {
+            let _ = p.shutdown();
+        }
+    }
+
+    /// The SDK's order: the signal's variable, then the general one, in
+    /// milliseconds, then its 10 s; a value that is not a whole number of
+    /// milliseconds is passed over and named once.
+    #[test]
+    fn an_export_timeout_is_resolved_as_the_sdk_resolves_it() {
+        let reading = |set: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                set.iter()
+                    .find(|(variable, _)| *variable == name)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        let resolved = |set: &'static [(&'static str, &'static str)]| {
+            let mut ignored = Vec::new();
+            let timeouts = [
+                OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
+                OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
+                OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
+            ]
+            .map(|signal| export_timeout(signal, reading(set), &mut ignored));
+            (timeouts.map(|t| t.as_millis()), ignored)
+        };
+
+        assert_eq!(resolved(&[]), ([10_000; 3], vec![]));
+        assert_eq!(
+            resolved(&[(OTEL_EXPORTER_OTLP_TIMEOUT, "2000")]),
+            ([2000; 3], vec![])
+        );
+        assert_eq!(
+            resolved(&[
+                (OTEL_EXPORTER_OTLP_TIMEOUT, "2000"),
+                (OTEL_EXPORTER_OTLP_METRICS_TIMEOUT, "300"),
+            ]),
+            ([2000, 300, 2000], vec![])
+        );
+        assert_eq!(
+            resolved(&[
+                (OTEL_EXPORTER_OTLP_TIMEOUT, "2000"),
+                (OTEL_EXPORTER_OTLP_LOGS_TIMEOUT, "5s"),
+            ]),
+            ([2000, 2000, 2000], vec![OTEL_EXPORTER_OTLP_LOGS_TIMEOUT])
+        );
+        assert_eq!(
+            resolved(&[(OTEL_EXPORTER_OTLP_TIMEOUT, "-1")]),
+            ([10_000; 3], vec![OTEL_EXPORTER_OTLP_TIMEOUT])
+        );
+    }
+
     #[test]
     fn build_propagates_sample_ratio_through_resource() {
-        // The sampler itself has no public accessor; what we can pin is that
-        // a non-default ratio still produces a working build (the clamp ran
-        // at config-construction time).
+        // The sampler has no public accessor, so this pins only that a non-default
+        // ratio builds.
         let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = OpenTelemetryConfig::new("svc-sampled").with_trace_sample_ratio(0.5);
         let exporters = build(&cfg).expect("build succeeds with custom sampler");

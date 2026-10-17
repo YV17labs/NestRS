@@ -31,8 +31,8 @@ cargo add nest-rs --features authz
 
 `AbilityFactory` is a tiny trait you implement once. The framework
 calls `define` per request, after the authn guard attached the
-principal. The resulting `Ability` lives in request extensions and as
-a `task_local!` for the data layer.
+principal. The guard attaches the resulting `Ability`, so it is ambient
+for the rest of the request, where the data layer reads it.
 
 A minimal policy is one statement — "members read their org's users":
 
@@ -104,8 +104,10 @@ pub struct UsersController {
 ```
 
 Order matters: `AuthnGuard` attaches the principal; `AuthzGuard` reads
-it and builds the `Ability`. Every handler downstream sees an ambient
-`Ability` it does not have to thread.
+it and builds the `Ability`. The route's `#[authorize]` class gate runs
+right after them, before any interceptor or filter the route declares, so
+nothing the route binds answers a caller the gate refuses. Every handler
+downstream sees an ambient `Ability` it does not have to thread.
 
 ## Three places the framework reads it
 
@@ -148,18 +150,40 @@ async fn search(
 }
 ```
 
-A service method or any code running under the request's task-local
-reads the ability directly:
+A service method or any code the request reaches — a streaming body and
+a dataloader batch included — reads the ability directly:
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::authz::current_ability;
 
 if let Some(ab) = current_ability() {
     if !ab.can::<user::Entity>(Action::Update, &model) {
-        return Err(ServiceError::Forbidden);
+        return Err(ServiceError::forbidden("not permitted"));
     }
 }
 ```
+
+`can` decides on the model alone: synchronous, no query. What the
+model cannot show — a relation (`p.related(…)`) above all — grants
+nothing there, and a denial resting on it refuses.
+So a relation-gated `Update` grant answers `false` on a row you read for
+`Read`. When such a rule decides, ask SQL: `Repo::can` re-checks the
+row's primary key under the action's own condition, one indexed query.
+
+```rust title="crates/features/src/users/service.rs"
+use nest_rs::seaorm::Repo;
+
+if !Repo::<user::Entity>::can(Action::Update, &model).await? {
+    return Err(ServiceError::forbidden("not permitted"));
+}
+```
+
+On an entity declared `soft_delete`, a deleted row answers `false` for
+every action but `Create` and `Delete`, as every `Repo` read leaves it out;
+`Delete` stays `true` where the grant holds, since the hard purge reaches it.
+
+A row a route bound through `Bind<Update, S>` was already authorized for
+`Update` in SQL, and needs neither check.
 
 `current_ability()` returns `None` outside a request (worker job,
 shutdown hook). Worker jobs run **unscoped** by design — system work
@@ -173,6 +197,7 @@ it does not.
 ability.can_class(Action::Read, TypeId::of::<user::Entity>())
 ability.condition_for::<user::Entity>(Action::Read)
 ability.can::<user::Entity>(Action::Update, &model)
+Repo::<user::Entity>::can(Action::Update, &model).await?
 ability.mask::<user::Entity>(Action::Read, &model)
 ability.mask_many::<user::Entity>(Action::Read, models.iter())
 ability.permitted_fields::<user::Entity>(Action::Read, &model)
@@ -181,7 +206,8 @@ ability.permitted_fields::<user::Entity>(Action::Read, &model)
 Each method targets one layer of enforcement — the framework picks
 which one to call where, but the surface is documented because your
 own services may reach for `can` directly when they cannot fit through
-`Repo` or `Bind`.
+`Repo` or `Bind`. `Repo::can` is the one that reads the database: it
+answers what `Ability::can` cannot see on the model.
 
 `Action::Manage` is the wildcard: a grant on `Manage` matches every
 other action. A grant on `Action::Read` does not imply `Update`.
@@ -207,7 +233,7 @@ controller with the transport's authz module, and write a
 - [By-id binding](/security/authorization/by-id-binding/) —
   `Bind<A, S>` and the 404/403 distinction.
 - [Response masking](/security/authorization/response-masking/) —
-  declare `Authorize<A, S>` and masking is automatic; the
+  declare `#[authorize(Action, Entity)]` and masking is automatic; the
   `mask`/`retain_wire_keys`/`WireModelDefaults` pipeline is documented
   as internals (skip on a first pass).
 - [Public reads](/security/authorization/public-reads/) —

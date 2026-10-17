@@ -1,0 +1,5 @@
+error: #[instance]: `Queue` reads `queue`, a word the layout reserves — as a namespace segment it would read as a binding's or a folder's; name the instance for what it holds
+ --> tests/integration/diagnostics/core/instance_named_from_the_reserved_vocabulary.rs:7:12
+  |
+7 | pub struct Queue;
+  |            ^^^^^

@@ -1,0 +1,82 @@
+# Layer contracts sit below the edges, and each edge runs its own chain
+
+`nest-rs-guards` depends on poem, `nest-rs-http`, the three layer crates and,
+behind features, on the GraphQL, WebSocket and MCP edges. The guard contract
+sits above the transports it serves: a third-party guard links the HTTP stack to
+implement a trait, and the in-band edges call back into guards through
+function-pointer slots typed loosely to dodge a cycle — `WsMessageCheck::check`
+returns `Result<(), String>`, "declared here to avoid a nest-rs-ws →
+nest-rs-guards dependency cycle". `use_pipes_global` lives in guards for the
+same reason, and `NoBearerChallenge`, an HTTP response marker, lives there too,
+so the OAuth authorization server depends on guards for that one type.
+
+**The direction is `nest-rs-http` → `nest-rs-guards` → `nest-rs-core`.** A
+contract a layer implements sits below every edge; an edge depends on the
+contracts and runs its own chain. Guards name no HTTP type: `check_http` takes
+the unit's context alone and reads the request — head and body — through the
+HTTP view, which `nest-rs-http` owns; `check` serves every in-band unit; and
+`GuardFor<V>` declares which units a guard checks. Pipes register in
+`nest-rs-pipes`, already below the edges, and each edge reads the pool once, at
+mount. Interceptors and exception filters live in `nest-rs-core`
+(`one-execution-pipeline.md`). Each denial renderer moves to the edge it
+renders for, and `NoBearerChallenge` to `nest_rs_http::challenge`, beside the
+`Bearer` challenge it opts a response out of.
+
+**A check that guards the app runs whatever the app serves.** The global
+guards' resolvability and phase checks run on the kernel's wiring step, so a
+headless app with a missing global guard fails its boot too, where an HTTP
+boot check runs only when HTTP serves.
+
+`check-http-stays-on-guard.md` rests on guards depending on `nest-rs-http`;
+that premise stops holding with this direction while its decision stands — the
+branch that drops the dependency appends there. `macros.md`'s line that guards
+"sit above the transports" changes in the same commit.
+
+**Refused:**
+
+- **A crate per layer family** — five, three of them typed over poem: the
+  order the families run in belongs to none of them, and a family typed over
+  one edge's request cannot serve another edge.
+- **A dispatch crate above the edges** that knows each of them, as guards does
+  through its edge features: every edge's change touches it, and an edge a
+  package adds cannot join.
+- **Function-pointer slots for a crate above to call back in**: a slot holds one
+  implementation, is typed loosely to avoid the cycle, and is checked by
+  nothing at compile time.
+- **A vocabulary crate in 7.0** to hold `check_http`'s request type below
+  guards: a guard reading the request through the context needs none, so the
+  vocabulary stays in `nest-rs-http`, and a lower crate stays additive, later.
+
+**Status (2026-10-10): decided, not landed.**
+`refactor/guard-and-pipe-registration` moves `NoBearerChallenge`, the pipe
+registration and the global-guard check onto the wiring step;
+`feat/guard-contract` gives guards the context-only contract and drops their
+HTTP and poem dependencies; `feat/endpoint-guards-and-class-gate` has each
+in-band edge run its chain and removes the slots. Each appends an entry here
+where it departs.
+
+**2026-10-11 — `refactor/guard-and-pipe-registration` landed its part.**
+`NoBearerChallenge` is `nest_rs_http::challenge::NoBearerChallenge`, and the
+OAuth authorization server no longer depends on guards. Global pipes register
+in `nest-rs-pipes`; `/graphql` and each WebSocket gateway resolve the pool once,
+at mount, composed as every site composes a family, so the two pipe slots
+guards filled for them are gone, and a gateway's mount reads what each connection
+needs from the container itself. The global guards' resolvability and phase
+checks run on the kernel's wiring step, as the pipes' does, so every global
+family is now checked there. No departure from the record. Guards still depend
+on poem and `nest-rs-http`, and on the in-band edges behind features, until the
+two branches named above land.
+
+**2026-10-12 — `feat/guard-contract` landed its part.** `nest-rs-guards`
+depends on `nest-rs-core` alone: `Guard` has `check_http` and `check`, both over
+the unit's context, and `GuardFor<V>` names the view of the units a site
+dispatches, each view in its edge's crate. Every runner left guards with the
+contract, so no edge calls back in: the route shaper and the HTTP guard stage
+are `nest-rs-http`'s, the WS upgrade and per-message table `nest-rs-ws`'s, the
+GraphQL and MCP operation chains their edges', and the `WsMessageCheck` slot is
+gone. One departure: the route's response layers — interceptors, filters and
+exception filters at a route — wrap in `nest-rs-interceptors`, which depends on
+the other two families until they move into `nest-rs-core`, so a crate
+declaring a `#[routes]` reaches `nest-rs-interceptors`; the umbrella's `http`
+feature already brings it. `feat/endpoint-guards-and-class-gate` still owes the
+endpoint units and `McpOperationGuard`'s retirement.

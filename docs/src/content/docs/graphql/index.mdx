@@ -39,9 +39,12 @@ Reach async-graphql's types the same way and the line above stays the only one:
 use nest_rs::graphql::async_graphql::{Context, Result};
 ```
 
-Declare `async-graphql = "7"` yourself only when you write **its derives** by
+Declare `async-graphql = "7.2"` yourself only when you write **its derives** by
 hand (`#[derive(SimpleObject)]` on a type of your own) — a derive you wrote
-expands against your prelude, exactly like `serde`'s.
+expands against your prelude, exactly like `serde`'s. A build without `seaorm`
+declares it too, with `features = ["uuid", "chrono"]`, when a `Uuid` or a chrono
+`DateTime` crosses the schema. Those scalars are async-graphql's own, and
+`seaorm` turns them on for its entities.
 
 ## The minimal resolver
 
@@ -111,7 +114,7 @@ $ curl -sX POST http://localhost:3000/graphql \
 {"data":{"greeting":"Hello, Ada!"}}
 ```
 
-In dev (`NESTRS_GRAPHQL__PLAYGROUND=true`), open
+In dev (`<PREFIX>_GRAPHQL__PLAYGROUND=true`), open
 [`http://localhost:3000/graphql`](http://localhost:3000/graphql) for the
 playground.
 
@@ -175,7 +178,7 @@ container handle to thread, no factory to call.
   in the demo — the `publishPost` mutation and draft/published status.
 - `crates/nest-rs-graphql/` — `#[resolver]`, `#[query]`, `#[mutation]`,
   `#[field_resolver]`, schema composition.
-- `crates/nest-rs-resource/` — `#[expose]` for an entity that becomes a
+- `crates/nest-rs-seaorm/` — `#[expose]` for an entity that becomes a
   GraphQL type *and* an OpenAPI schema from one declaration.
 
 ## Going further

@@ -1,12 +1,8 @@
-//! A mount path is its owner's exclusive namespace. Two controllers on one
-//! prefix — or two self-mounted endpoints on one path — make poem panic deep in
-//! route assembly (`duplicate path: <prefix>/*--poem-rest`). `configure` catches
-//! both first and fails boot naming the two owners, so a wiring mistake reads
-//! like every other nestrs boot error.
+//! A mount path is its owner's exclusive namespace: `configure` fails boot
+//! naming both owners.
 
 use nest_rs_core::{App, Container, ContainerBuilder, Transport, module};
-use nest_rs_http::{HttpEndpointMeta, HttpTransport, controller, routes};
-use poem::Route;
+use nest_rs_http::{HttpConfig, HttpEndpointMeta, Method, controller, routes};
 
 #[controller(path = "/users")]
 struct UsersController;
@@ -19,7 +15,6 @@ impl UsersController {
     }
 }
 
-/// A second controller deliberately claiming the same prefix.
 #[controller(path = "/users")]
 struct ShadowController;
 
@@ -34,23 +29,18 @@ impl ShadowController {
 #[module(providers = [UsersController, ShadowController])]
 struct DuplicatePrefixModule;
 
-/// Two self-mounted endpoints sharing one path — the shape `#[gateway]` emits,
-/// and the shape a *cross-family* clash makes (an `#[mcp]` mount beside a
-/// gateway on the same path). Two `#[mcp]` hosts on one path are **not** this
-/// case: `nest-rs-mcp` aggregates them behind a single `HttpEndpointMeta`, so
-/// they never reach this check. Attached by hand here because the rule belongs
-/// to the transport, not to whichever surface happens to emit the meta.
+/// Attached by hand: two `#[mcp]` hosts on one path aggregate behind one
+/// `HttpEndpointMeta` and never reach this check.
 struct FirstEndpoint;
 struct SecondEndpoint;
 
 impl nest_rs_core::Discoverable for FirstEndpoint {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<FirstEndpoint, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/tools", "mcp", |_c, r: Route| {
-                r.at("/tools", poem::endpoint::make_sync(|_| "first"))
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, routes| {
+                routes.route(Method::POST, "/tools", crate::answering("first"));
             })
-            .owned_by("FirstTools")
-            .exempt(),
+            .owned_by("FirstTools"),
         )
     }
 }
@@ -58,11 +48,10 @@ impl nest_rs_core::Discoverable for FirstEndpoint {
 impl nest_rs_core::Discoverable for SecondEndpoint {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<SecondEndpoint, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/tools", "mcp", |_c, r: Route| {
-                r.at("/tools", poem::endpoint::make_sync(|_| "second"))
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, routes| {
+                routes.route(Method::POST, "/tools", crate::answering("second"));
             })
-            .owned_by("SecondTools")
-            .exempt(),
+            .owned_by("SecondTools"),
         )
     }
 }
@@ -70,15 +59,13 @@ impl nest_rs_core::Discoverable for SecondEndpoint {
 #[module(providers = [FirstEndpoint, SecondEndpoint])]
 struct DuplicateEndpointModule;
 
-/// A self-mount claiming a path a **controller** already owns — the shape
-/// `#[controller(path = "/chat")]` beside `#[gateway(path = "/chat")]` makes.
 struct ChatSocket;
 
 impl nest_rs_core::Discoverable for ChatSocket {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<ChatSocket, HttpEndpointMeta>(
-            HttpEndpointMeta::new("/users", "ws", |_c, r: Route| {
-                r.at("/users", poem::endpoint::make_sync(|_| "socket"))
+            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/users", "ws", |_c, routes| {
+                routes.route(Method::GET, "/users", crate::answering("socket"));
             })
             .owned_by("ChatGateway"),
         )
@@ -89,7 +76,7 @@ impl nest_rs_core::Discoverable for ChatSocket {
 struct ControllerVersusEndpointModule;
 
 async fn configure_error(container: &Container) -> String {
-    let mut transport = HttpTransport::new();
+    let mut transport = crate::built(&HttpConfig::default());
     let err = transport
         .configure(container)
         .await
@@ -118,8 +105,6 @@ async fn two_controllers_on_one_prefix_fail_boot_naming_both() {
 
 #[tokio::test]
 async fn two_self_mounts_on_one_path_fail_boot_instead_of_panicking() {
-    // The regression this pins: a second self-mount on one path used to reach
-    // poem's route assembly and panic there, with no mention of either owner.
     let app = App::builder()
         .module::<DuplicateEndpointModule>()
         .build()
@@ -135,12 +120,6 @@ async fn two_self_mounts_on_one_path_fail_boot_instead_of_panicking() {
 
 #[tokio::test]
 async fn a_controller_and_a_self_mount_on_one_path_fail_boot_instead_of_panicking() {
-    // The regression this pins: the exclusivity rule was enforced per family —
-    // controllers against controllers, self-mounts against self-mounts — in two
-    // maps that never met. A `#[controller(path = "/x")]` beside a
-    // `#[gateway(path = "/x")]` passed both checks, logged both mounts as
-    // successful, and then hit the very poem panic the check exists to prevent:
-    // `panicked at poem/src/route/mod.rs: duplicate path: /x`.
     let app = App::builder()
         .module::<ControllerVersusEndpointModule>()
         .build()
@@ -160,9 +139,6 @@ async fn a_controller_and_a_self_mount_on_one_path_fail_boot_instead_of_panickin
 
 #[tokio::test]
 async fn a_self_mount_collision_names_the_owners_not_just_the_kind() {
-    // `format!("a {} endpoint", label())` made the message a tautology —
-    // "a ws endpoint and a ws endpoint both mount there" — useless with several
-    // gateways in one app, while the controller twin named both owners.
     let app = App::builder()
         .module::<DuplicateEndpointModule>()
         .build()
@@ -176,18 +152,12 @@ async fn a_self_mount_collision_names_the_owners_not_just_the_kind() {
     );
 }
 
-/// Two spellings of one mount are one owner.
-///
-/// `Route::nest` appends a trailing `/` internally, so `/x` and `/x/` collapse
-/// to one key inside poem and route assembly panics on the duplicate. Compared
-/// raw, they are two distinct strings — which walks straight past the boot check
-/// written to keep "neither reaches the opaque poem internal". Normalizing at
-/// `HttpEndpointMeta::new` is what makes the check see them, and it covers every
-/// self-mount at once: a GraphQL path is deployment input
-/// (`NESTRS_GRAPHQL__PATH`), not a literal an author controls.
+// `/x` and `/x/` are one address: canonical before the boot check compares them.
 #[test]
 fn a_mount_path_is_canonical_before_anything_compares_it() {
-    let mount = |path: &'static str| HttpEndpointMeta::new(path, "probe", |_c, r| r);
+    let mount = |path: &'static str| {
+        HttpEndpointMeta::new(&crate::GATED_MOUNT, path, "probe", |_c, _routes| {})
+    };
 
     assert_eq!(
         mount("/x/").path(),
@@ -198,4 +168,107 @@ fn a_mount_path_is_canonical_before_anything_compares_it() {
     assert_eq!(mount("  /x/  ").path(), "/x");
     assert_eq!(mount("/").path(), "/", "the root stays reachable");
     assert_eq!(mount("").path(), "/");
+}
+
+#[controller(path = "/parcels")]
+struct ParcelsController;
+
+#[routes]
+impl ParcelsController {
+    #[get("/{id}")]
+    async fn read(&self) -> &'static str {
+        "read"
+    }
+}
+
+#[controller(path = "/")]
+struct LockersController;
+
+#[routes]
+impl LockersController {
+    #[delete("/parcels/{key}")]
+    async fn release(&self) -> &'static str {
+        "released"
+    }
+}
+
+#[module(providers = [ParcelsController, LockersController])]
+struct OneAddressTwoShapesModule;
+
+#[tokio::test]
+async fn two_shapes_of_one_address_fail_boot_naming_both_handlers() {
+    let app = App::builder()
+        .module::<OneAddressTwoShapesModule>()
+        .build()
+        .await
+        .expect("the module itself builds — the clash is a transport concern");
+
+    let msg = configure_error(app.container()).await;
+    for named in [
+        "ParcelsController::read",
+        "\"/parcels/{id}\"",
+        "LockersController::release",
+        "\"/parcels/{key}\"",
+    ] {
+        assert!(msg.contains(named), "names {named}: {msg}");
+    }
+}
+
+struct TemplatedSocket;
+
+impl nest_rs_core::Discoverable for TemplatedSocket {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<TemplatedSocket, HttpEndpointMeta>(
+            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/rooms/:room", "ws", |_c, _routes| {})
+                .owned_by("RoomsGateway"),
+        )
+    }
+}
+
+#[module(providers = [TemplatedSocket])]
+struct TemplatedSocketModule;
+
+#[tokio::test]
+async fn a_self_mount_path_out_of_the_grammar_fails_boot_instead_of_panicking() {
+    let app = App::builder()
+        .module::<TemplatedSocketModule>()
+        .build()
+        .await
+        .expect("the module itself builds");
+
+    let msg = configure_error(app.container()).await;
+    assert!(
+        msg.contains("RoomsGateway") && msg.contains("one literal address"),
+        "names the owner and why: {msg}",
+    );
+}
+
+struct DocsInThe6xSpelling;
+
+impl nest_rs_core::Discoverable for DocsInThe6xSpelling {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<DocsInThe6xSpelling, HttpEndpointMeta>(
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/docs", "docs", |_c, _routes| {})
+                .also_mounts(["/docs-json/*rest"])
+                .owned_by("DocsHost"),
+        )
+    }
+}
+
+#[module(providers = [DocsInThe6xSpelling])]
+struct DocsInThe6xSpellingModule;
+
+#[tokio::test]
+async fn an_also_mounts_entry_in_the_6x_spelling_fails_boot_naming_its_7_0_spelling() {
+    let app = App::builder()
+        .module::<DocsInThe6xSpellingModule>()
+        .build()
+        .await
+        .expect("the module itself builds");
+
+    let msg = configure_error(app.container()).await;
+    assert!(
+        msg.contains("docs endpoint DocsHost") && msg.contains("write `/docs-json/{*rest}`"),
+        "names the owner and the 7.0 spelling: {msg}",
+    );
 }

@@ -1,43 +1,24 @@
 //! Adds [`AppBuilderInterceptorsExt::use_interceptors_global`] to
-//! [`AppBuilder`](nest_rs_core::AppBuilder).
+//! [`AppBuilder`].
 
-use nest_rs_core::layer_chain::{ResolvedLayer, compose_chain, resolve_global_layers};
-use nest_rs_core::{AppBuilder, Container, check_specs_resolvable};
-use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
-use poem::EndpointExt;
+use nest_rs_core::__private::{
+    ResolvedLayer, check_specs_resolvable, compose_chain, resolve_global_layers,
+};
+use nest_rs_core::{AppBuilder, Container};
+use nest_rs_http::__private::poem_bridge::wrap_poem;
+use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
 
 use crate::interceptor::{Interceptor, InterceptorChain};
 use crate::registry::{InterceptorSpec, InterceptorSpecs};
 
 /// Adds `.use_interceptors_global(...)` to [`AppBuilder`].
 ///
-/// ```rust,ignore
-/// use nest_rs_interceptors::{AppBuilderInterceptorsExt, interceptor};
-///
-/// App::builder()
-///     .use_interceptors_global([interceptor::<ServerTiming>()])
-///     .module::<AppModule>()
-///     .build().await?
-///     .run().await
-/// ```
-///
-/// Declaration order matters: the chain wraps in reverse order of
-/// declaration (first listed = outermost), with
-/// [`Layer::priority`](nest_rs_core::Layer::priority) as an optional
-/// tiebreaker.
-///
-/// This seeds [`InterceptorSpecs`] into the container and attaches the
-/// transport-edge wrap that executes the **global** sub-chain around the
-/// whole routing tree (band
-/// [`POOL_INTERCEPTORS`](nest_rs_http::endpoint_wrap_priority::POOL_INTERCEPTORS)):
-/// a global interceptor observes every response leaving the app — guard
-/// denials, 404s, self-mounted surfaces (`/graphql`, WS upgrades) included.
-/// It therefore runs *before* authentication: no principal, ability or
-/// ambient executor is available to it. For actor-aware work, declare the
-/// interceptor at the controller / method scope instead — those execute
-/// inside the route's guard chain. The per-route composer dedups
-/// controller / method redeclarations against this global scope by `TypeId`
-/// (broadest wins), so any interceptor still executes exactly once.
+/// The example on [`interceptor`](fn@crate::interceptor) registers through it.
+/// The first listed is outermost, [`Layer::priority`](nest_rs_core::Layer::priority)
+/// breaking ties. The chain wraps the whole routing tree at the transport edge
+/// (the global interceptors' band), so it sees denials, 404s and self-mounts,
+/// and runs *before* authentication: for actor-aware work, declare the
+/// interceptor at controller or method scope.
 pub trait AppBuilderInterceptorsExt: Sized {
     /// Register `specs` as the global interceptor chain — the transport-edge
     /// pool that runs before authentication, deduped by type against
@@ -54,36 +35,30 @@ impl AppBuilderInterceptorsExt for AppBuilder {
     {
         let collected: Vec<InterceptorSpec> = specs.into_iter().collect();
         self.provide(InterceptorSpecs(collected))
-            .provide_meta(HttpBootCheck::new(|container| {
-                let Some(specs) = container.get::<InterceptorSpecs>() else {
-                    return Ok(());
-                };
-                check_specs_resolvable(
-                    &specs.0,
+            .provide_wiring("nest_rs::interceptors::global", |container| {
+                // At the wiring step, so an app serving no HTTP refuses it too.
+                check_specs_resolvable::<InterceptorSpecs>(
                     container,
                     "interceptor",
                     "an unresolvable global interceptor would silently drop",
                 )
-            }))
+                .map_err(nest_rs_core::anyhow::Error::msg)
+            })
             .provide_meta(HttpEndpointWrap::with_priority(
                 endpoint_wrap_priority::POOL_INTERCEPTORS,
                 |container, endpoint| {
-                    // `compose_chain` orders outermost-first — exactly the
-                    // order the chain runner executes, over one endpoint.
                     let chain = global_chain(container);
                     if chain.is_empty() {
                         return endpoint;
                     }
-                    InterceptorChain::new(endpoint, chain).boxed()
+                    wrap_poem(endpoint, |inner| InterceptorChain::new(inner, chain))
                 },
             ))
     }
 }
 
 /// Resolve `InterceptorSpecs` into the deduplicated, priority-ordered global
-/// chain. Composed through the same `compose_chain` as every other Layer
-/// System site — this is where an intra-global duplicate is warned about,
-/// once.
+/// chain; an intra-global duplicate is warned about here, once.
 fn global_chain(container: &Container) -> Vec<ResolvedLayer<dyn Interceptor>> {
     let global = resolve_global_layers::<InterceptorSpecs>(container);
     compose_chain::<dyn Interceptor>(global, Vec::new(), Vec::new(), &[], "transport")

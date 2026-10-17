@@ -1,0 +1,166 @@
+---
+title: Semver policy
+description: "What every 7.x release keeps until 8.0 — the code, names and formats you build on — and how a package of your own depends on NestRS."
+---
+
+Every `nest-rs-*` crate ships at one version, and no 7.x release breaks what
+you build on: your code compiles, your configuration boots, and your log
+filters and alerts keep matching. A minor adds, a patch fixes, and a break
+waits for 8.0. This page is that contract — what it covers, what it leaves
+out, and how a package of your own depends on NestRS.
+
+```toml title="Cargo.toml"
+[workspace.dependencies]
+nest-rs = { version = "7.2", features = ["http", "config", "seaorm"] }
+```
+
+`7.2` is the oldest release the workspace accepts, and every later 7.x builds
+it unchanged; `cargo update` takes the newest.
+
+## What 7.x keeps
+
+A break is a change to something a program or an operator matches. Everything
+in the middle column holds until 8.0:
+
+| What you build on | Kept until 8.0 | Not covered |
+|---|---|---|
+| Rust items | every public item of every published crate, reached through no `__private` module, no `__`-prefixed item and no hidden item | the `__private` tier (below), and `nest-rs-cli`'s library, whose binary is the product |
+| Decorators | every key and what it means — refusing a program that used to compile is a break | the wording of a compile error |
+| Configuration | every `<PREFIX>_<NAMESPACE>__<KEY>` variable, its spellings and its default, and every `#[config]` field name | a literal naming every field of a config (below) |
+| Wire and storage | `nest_rs::queue::Envelope` and its `WIRE_FORMAT_VERSION`, the `nest_rs::http::ProblemDetails` body, the `nest_rs::ws::WsEnvelope` frame, every `nestrs:` key, and every header NestRS reads or writes, among them the W3C's `traceparent`, `tracestate`, `traceresponse` and `Server-Timing`, the IETF's `Deprecation`, `Forwarded`, `Link`, `Retry-After` and `WWW-Authenticate`, and `X-Forwarded-For`, `X-Real-IP` and `X-Request-Id` behind a trusted proxy | — |
+| Observability | span targets, unit names, the operation line's field names and its outcome words, and the words a field such as `cause` takes | the prose of a log message |
+| Features and the CLI | the umbrella's feature names, and every `nestrs` command and flag | what `nestrs new` and `nestrs generate` write, which follows the release |
+
+A new refusal is a break too: a program that compiled keeps compiling, and an
+app or a configuration that booted keeps booting. Only its message stays
+outside, on purpose: a refusal that misleads is reworded in a patch, never kept
+for the whole line.
+
+## What a release may change
+
+**A minor adds.** It may add:
+
+- a public item, a decorator key, a variable, a feature or a unit;
+- a variant to a `#[non_exhaustive]` enum, or a field to a `#[non_exhaustive]`
+  struct or to one with a private field;
+- a field to a `#[config]` struct, or to a `Default` struct nested in one;
+- a name to `nest_rs::prelude`;
+- a third-party library's minor;
+- the minimum supported Rust version, named in the changelog.
+
+**A patch fixes.** It corrects behaviour that disagrees with these docs, and
+may change anything in the `__private` tier. It never raises the minimum Rust
+version: a project held to its toolchain takes a patch without reading it.
+
+## Build a config the way it grows
+
+A `#[config]` struct gains fields in a minor, so name the fields you set and
+end on `..Default::default()`:
+
+```rust title="apps/auth/src/module.rs (from the demo, abridged)"
+HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
+```
+
+A literal naming every field stops compiling when a field arrives, and 7.x
+does not cover it. This is the one place the policy departs from Cargo's
+SemVer reference, which counts a new public field as a break: a config is the
+one struct you write as a literal, and freezing it would freeze every module's
+settings for the whole line.
+
+## The `__private` tier
+
+A framework crate whose items its macro expansions or its sibling crates call
+holds them in a hidden module named `__private`. It is not API, and it may
+change in any release. It stays safe only because every `nest-rs-*` crate
+requires its siblings at exactly its own version. Never name it — not
+directly, and not as `nest_rs::<concern>::__private` either.
+
+## Third-party libraries
+
+Some libraries are part of what you write: you derive their traits, write
+their attributes and name their types in your own signatures. In Cargo's
+words, they are NestRS's public dependencies. Their majors are NestRS's — no
+7.x release moves one — and you may name each in your manifest, at a
+requirement compatible with the framework's:
+
+| Library, at the major 7.x holds | Where you write it |
+|---|---|
+| `async-graphql` 7 | a resolver: its derives and `Context` |
+| `rmcp` 3 | an MCP tool: its model types are the MCP schema |
+| `sea-orm` 2, `sea-orm-migration` 2 | an entity, a `Repo` query, a migration |
+| `validator` 0.21 | `#[validate(…)]` on a DTO or a config |
+| `schemars` 1 | `#[derive(JsonSchema)]` |
+| `redis` 1 | your own commands on a `RedisConnection` |
+| `rust-embed` 8 | `#[derive(Embed)]` for static files |
+| `inventory` 0.3 | a package's registrations |
+| `futures-util` 0.3 | an `#[sse]` route's stream |
+| `async-trait` 0.1 | your implementation of a NestRS async trait |
+| `tokio` 1, `tokio-util` 0.7, `tracing` 0.1, `serde` 1, `serde_json` 1, `anyhow` 1, `uuid` 1, `chrono` 0.4, `http` 1, `http-body` 1, `bytes` 1 | everywhere: the ecosystem's foundations |
+| `syn` 3, `proc-macro2` 1 | a decorator crate built on `nest-rs-codegen` |
+| `tokio-rustls` 0.26, `rustls` 0.23 | a test dialing a `nest_rs::testing` double |
+
+For a `0.x` library the minor is the major: `validator` stays on 0.21 for the
+whole line. Every other library NestRS builds on is a private dependency, and
+NestRS wraps it: none of its types appears in a public signature, so its next
+major reaches you as a NestRS minor or patch.
+
+A vulnerability fixed only in one of these libraries' next major ships with
+NestRS's next major. Until then, the page you would reach the affected API from
+says what not to build, as [Dataloaders](/database/dataloaders/) does.
+
+## Writing a package
+
+A package — a driver, a guard, a decorator crate — depends on the umbrella, at
+the minor it builds against, with the default features off:
+
+```toml title="crates/yourpackage/Cargo.toml"
+[dependencies]
+nest-rs = { version = "7.2", default-features = false, features = ["http"] }
+
+[dev-dependencies]
+nest-rs = { version = "7.2", default-features = false, features = ["http", "testing"] }
+```
+
+- **Name the capabilities your code uses.** The umbrella's defaults are `http`
+  and `config`, and Cargo only ever adds features: a package taking them
+  compiles HTTP into every app that links it, a headless worker included.
+- **Depend on no `nest-rs-*` crate but the umbrella.** The others are
+  compilation units, and their `__private` tiers are what moves between
+  releases.
+- **A decorator crate is the one exception.** A `proc-macro` crate depends on
+  `nest-rs-codegen` and uses its root items alone. The code it emits names
+  public paths only: your package, built against 7.2, runs in an app on a later
+  7.x, where `__private` may differ.
+
+### Naming a package
+
+`nest-rs-*` is the framework's: the crates the umbrella re-exports, and no
+other. A package you publish is `nestrs-<subject>` — NestJS's split, where
+official packages are `@nestjs/*` and community ones `nestjs-*` — and every
+name it owns is rooted at its own crate:
+
+| Surface | The framework's | Your package's |
+|---|---|---|
+| crate | `nest-rs-<concern>` | `nestrs-<subject>` |
+| path | `nest_rs::<concern>` | `nestrs_<subject>::…` |
+| span target | `nest_rs::<concern>` | `nestrs_<subject>` or `nestrs_<subject>::<concern>` |
+| unit of work | `<edge>.<unit>` | `nestrs_<subject>.<unit>` |
+| configuration | `<PREFIX>_<CONCERN>__*` | `<PREFIX>_<SUBJECT>__*` |
+| datastore key | `nestrs:<concern>:…` | `nestrs_<subject>:…` |
+| crates.io keyword | `nestrs` | `nestrs` |
+
+The two spellings part at their fifth character, so `nest_rs=off` never
+silences your package's events and `SCAN nestrs:*` never matches its keys. Two
+packages whose names prefix each other — `nestrs_kafka` and
+`nestrs_kafka_streams` — do share a log filter, as `tokio` and `tokio_util`
+do. A namespace two crates both read fails the boot, naming the pair.
+
+No prefix proves who published a crate: crates.io has no namespaces, so check
+a package's publisher before you add it.
+
+## Going further
+
+- [Upgrading from 6.x](/upgrading/) — the last major's breaks, in the order to
+  take them.
+- [Packages](/packages/) — every capability an umbrella feature turns on.
+- [Decorator reference](/decorators/) — every key this page keeps.

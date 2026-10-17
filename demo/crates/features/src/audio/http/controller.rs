@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::future::ready;
 
 use futures_util::StreamExt;
+use nest_rs::core::error_message;
 use nest_rs::http::{Header, PartExt, SseEvent, SseStream, Valid, controller, routes};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 use poem::http::StatusCode;
@@ -36,8 +37,7 @@ impl AudioController {
                        never proxies the payload), then calls `POST /audio/transcode` with the \
                        returned key. The `filename` is validated against the same anti-traversal \
                        allowlist as the transcode request. Requires a bearer JWT and the admin \
-                       capability (`Manage` on the caller's org).",
-        tags("Audio")
+                       capability (`Manage` on the caller's org)."
     )]
     async fn create_upload(
         &self,
@@ -54,8 +54,7 @@ impl AudioController {
         description = "Given the source object `key` (query param `file`, validated like the \
                        transcode request), returns a short-lived presigned GET URL for the \
                        derived object the worker produced, or `404` while it does not exist yet. \
-                       Requires a bearer JWT and the admin capability.",
-        tags("Audio")
+                       Requires a bearer JWT and the admin capability."
     )]
     async fn result(&self, query: Valid<Query<TranscodeDto>>) -> Result<Json<PresignedUrlDto>> {
         let file = query.into_inner().file;
@@ -75,8 +74,7 @@ impl AudioController {
                        response carries the object key plus a presigned GET URL. The part's \
                        filename is validated against the same anti-traversal allowlist as the \
                        presigned path. Requires a bearer JWT and the admin capability.",
-        multipart = DirectUploadDto,
-        tags("Audio")
+        multipart = DirectUploadDto
     )]
     async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
         Ok(Json(
@@ -96,8 +94,7 @@ impl AudioController {
                        yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; \
                        this endpoint is the streamed proxy. Requires a bearer JWT and the admin \
                        capability.",
-        response_content_type = "audio/mpeg",
-        tags("Audio")
+        response_content_type = "audio/mpeg"
     )]
     async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
         let file = query.into_inner().file;
@@ -119,8 +116,7 @@ impl AudioController {
                        event carries the poll attempt as its SSE id, so a browser reconnecting \
                        sends it back as `Last-Event-ID` and is not re-sent the progress ticks it \
                        already displayed; the terminal state is always sent. Requires a bearer \
-                       JWT and the admin capability.",
-        tags("Audio")
+                       JWT and the admin capability."
     )]
     async fn events(
         &self,
@@ -142,8 +138,8 @@ impl AudioController {
                 let id = payload.attempt.to_string();
                 let body = serde_json::to_string(&payload).unwrap_or_else(|e| {
                     tracing::error!(
-                        target: "features::audio",
-                        error = %e,
+                        target: crate::audio::TARGET,
+                        error = %error_message(&e),
                         "failed to serialize transcode event",
                     );
                     r#"{"state":"error"}"#.to_string()
@@ -162,8 +158,7 @@ impl AudioController {
                        Redis (two apps exchanging, no RPC). Requires a bearer JWT, is admin-only \
                        (`Manage` on the caller's org, enforced by `TranscodeGuard`), rate-limited \
                        by `ThrottlerGuard`, and its `file` is validated against a filename \
-                       allowlist that blocks path traversal.",
-        tags("Audio")
+                       allowlist that blocks path traversal."
     )]
     async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<Json<TranscodeDto>> {
         let job = body.into_inner();

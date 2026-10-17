@@ -1,0 +1,5 @@
+error: #[process] `timeout` is at most `"24h"`: an attempt running past a day is a process of its own — split it into jobs that each end within one
+  --> tests/integration/diagnostics/queue/timeout_is_at_most_a_day.rs:20:36
+   |
+20 |     #[process(queue = Q, timeout = "25h")]
+   |                                    ^^^^^

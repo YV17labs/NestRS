@@ -22,7 +22,7 @@ body:
       label: Idea / proposed direction
       description: >-
         Optional. If you have one — bonus points if it fits the macro-first
-        model (see CLAUDE.md): a recurring pattern usually wants a new decorator
+        model: a recurring pattern usually wants a new decorator
         macro, not hand-rolled boilerplate.
   - type: textarea
     id: alternatives

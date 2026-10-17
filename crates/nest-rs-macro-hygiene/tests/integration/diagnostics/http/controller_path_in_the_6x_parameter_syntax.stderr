@@ -1,0 +1,11 @@
+error: #[controller] `path` is not a mount path: `:org` is the 6.x parameter syntax — write `/orgs/{org}`
+ --> tests/integration/diagnostics/http/controller_path_in_the_6x_parameter_syntax.rs:7:21
+  |
+7 | #[controller(path = "/orgs/:org")]
+  |                     ^^^^^^^^^^^^
+
+error: #[controller] `path` is not a mount path: it ends with a catch-all, and a controller's routes follow its path — declare `{*rest}` on a route
+  --> tests/integration/diagnostics/http/controller_path_in_the_6x_parameter_syntax.rs:10:21
+   |
+10 | #[controller(path = "/files/{*rest}")]
+   |                     ^^^^^^^^^^^^^^^^

@@ -1,84 +1,155 @@
 //! What a failing operation tells the model, and what it tells the operator.
 //!
-//! A tool body talks to a **language model**, and a model is not a trusted
-//! reader: whatever an error's `Display` carries — a SQL fragment, a column
-//! name, a row value, a bucket key — is handed to it verbatim and may be
-//! repeated to whoever is chatting. Every host in this repo had therefore grown
-//! the same four lines by hand: log the real error, return an opaque one. Three
-//! copies of a security posture is three chances to forget it, so it lives here
-//! instead.
+//! A tool body talks to a **language model**, which may repeat whatever an
+//! error's `Display` carries; [`Opaque`] logs the real error and answers an opaque one.
 //!
-//! ```ignore
-//! let rows = CrudService::list(&*self.svc).await.opaque()?;
+//! ```
+//! # use std::sync::Arc;
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_mcp::{AllowAllMcpGuard, DEFAULT_PATH, McpError, McpOperationGuard, Opaque, mcp, tools};
+//! # use nest_rs_testing::mcp::{call_tool, result};
+//! #
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct RowsService;
+//! #
+//! # impl RowsService {
+//! #     async fn list(&self) -> Result<Vec<String>, std::io::Error> {
+//! #         Err(std::io::Error::other("relation \"rows\" does not exist"))
+//! #     }
+//! # }
+//! #
+//! # #[mcp]
+//! # struct RowsHost {
+//! #     #[inject]
+//! #     svc: Arc<RowsService>,
+//! # }
+//! #
+//! # #[tools]
+//! # impl RowsHost {
+//! #     #[tool(description = "List the rows.")]
+//! #     #[public]
+//! #     async fn list_rows(&self) -> Result<String, McpError> {
+//! let rows = self.svc.list().await.opaque()?;
+//! #         Ok(rows.join("\n"))
+//! #     }
+//! # }
+//! #
+//! # #[module(providers = [RowsService, RowsHost, AllowAllMcpGuard as dyn McpOperationGuard])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+//! # let body = call_tool(app.http(), DEFAULT_PATH, "list_rows", None).await;
+//!
+//! assert_eq!(result(&body)["error"]["message"], nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! The operator loses nothing: the real error is emitted at `error` level on
-//! `nest_rs::mcp`, inside rmcp's own per-operation span, so a log search still
-//! reaches it from the failing call.
-//!
-//! **A deliberate error is not this.** `McpError::invalid_params(…)` exists to
-//! be *read* by the model so it can retry with corrected input — return it
-//! directly and never route it through here.
+//! A deliberate `McpError::invalid_params(…)`, meant for the model to read and
+//! retry, is returned directly, never through here.
 
-use std::fmt::Display;
-
+use nest_rs_core::__private::Withheld;
+use nest_rs_core::ToProblem;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManagerError;
 
-/// What the model is told when a failure is none of its business. The value is
-/// `nest-rs-core`'s, shared with GraphQL and WS so a client cannot tell from the
-/// wording which transport it hit.
 use nest_rs_core::OPAQUE_CLIENT_MESSAGE as OPAQUE;
 
 /// Turn a failure the model must not read into one it may.
 ///
-/// Implemented for every `Result` whose error is printable, so it covers a
-/// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
-/// any of them having to know MCP exists.
-///
-/// The twin traits on GraphQL and WS are deliberately separate types rather than
-/// one trait generic over the error: the output is what lets `.opaque()?` infer
-/// from the enclosing function's return type. See `nest_rs_core::opaque`.
+/// Implemented for every `Result` whose error converts into a boxed error; the
+/// whole cause chain is logged at `error` on `nest_rs::mcp`.
 pub trait Opaque<T> {
     /// Log the real error for the operator, hand the model an opaque one.
     fn opaque(self) -> Result<T, McpError>;
 }
 
-impl<T, E: Display> Opaque<T> for Result<T, E> {
+impl<T, E> Opaque<T> for Result<T, E>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
+{
     fn opaque(self) -> Result<T, McpError> {
-        self.map_err(|err| {
-            tracing::error!(
-                target: crate::TARGET,
-                error = %err,
-                "mcp operation failed",
-            );
-            McpError::internal_error(OPAQUE, None)
-        })
+        self.map_err(|err| opaque_error(&*nest_rs_core::boxed_error(err)))
     }
 }
 
-/// Render a rejected pipe as the one MCP error a model can act on.
-///
-/// The opposite case to [`Opaque`], and deliberately so: a pipe rejects the
-/// model's *own* input, so the message is exactly what lets it retry with
-/// corrected arguments. The structured `details` — `ValidationPipe`'s field
-/// errors — ride along as the error's data, the same payload the HTTP `400` and
-/// the WS error frame carry.
-///
-/// Emitted by the `#[mcp]` expansion around every `Valid<T>` / `Piped<P, T>`
-/// argument; never written by hand.
+/// Render a rejected pipe as an `invalid_params` the model can act on, its
+/// `details` as the error's data; emitted by `#[tools]`, never written by hand.
 pub fn pipe_error(err: &PipeError) -> McpError {
     McpError::invalid_params(err.message().to_owned(), err.details().cloned())
 }
 
-/// The failure a decorated operation reports when it declares guards and finds
-/// no app to resolve them from.
+/// Render what a [`ToProblem`] error says — a
+/// [`Problem`](nest_rs_core::Problem) among them — as the JSON-RPC error an MCP
+/// operation answers with: a `4xx` as `invalid_request`, a `5xx` as
+/// `internal_error`, the problem's
+/// [`client_message`](nest_rs_core::Problem::client_message) as the message,
+/// and its code —
+/// with its wait as `retryAfterSeconds` — under `data`. An error that says none
+/// answers as [`Opaque`] does, its chain filed at `error`, as is the chain
+/// behind a `5xx` problem.
 ///
-/// Only reachable through a mount built without a container — a hand-assembled
-/// endpoint, or [`McpMount::deny_all`](crate::McpMount). It fails **closed and
-/// named**: an unresolvable chain silently running zero guards is the fail-open
-/// reading of the same fact, and it is the reading that ships a tool surface
-/// nobody gated.
+/// ```
+/// use nest_rs_core::Problem;
+/// use nest_rs_core::problem::code;
+///
+/// let error = nest_rs_mcp::problem_error(&Problem::new(404, code::NOT_FOUND));
+/// assert_eq!(error.message, "not found");
+/// assert_eq!(error.data, Some(serde_json::json!({ "code": "NOT_FOUND" })));
+/// ```
+pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
+    let Some(problem) = error.to_problem() else {
+        return opaque_error(error);
+    };
+    match nest_rs_core::__private::withheld(&problem, error) {
+        Some(Withheld::Failed(said)) => failed(&said),
+        Some(Withheld::Unavailable(said)) => unavailable(&said),
+        None => {}
+    }
+    let mut data = serde_json::Map::new();
+    data.insert("code".to_owned(), problem.code().as_str().into());
+    if let Some(seconds) = problem.retry_after() {
+        data.insert("retryAfterSeconds".to_owned(), seconds.into());
+    }
+    let data = Some(serde_json::Value::Object(data));
+    if problem.is_server_error() {
+        McpError::internal_error(problem.client_message(), data)
+    } else {
+        McpError::invalid_request(problem.client_message(), data)
+    }
+}
+
+/// The opaque answer, with `error`'s whole chain on the operator's line.
+fn opaque_error(error: &(dyn std::error::Error + 'static)) -> McpError {
+    failed(&nest_rs_core::error_message(error));
+    McpError::internal_error(OPAQUE, None)
+}
+
+/// The operator's line for a failure the answer withholds: its whole chain.
+fn failed(said: &str) {
+    tracing::error!(
+        target: crate::TARGET,
+        error = %said,
+        "mcp operation failed",
+    );
+}
+
+/// The operator's line for a `503` the answer withholds the cause of: the
+/// server could not serve it in time, which is no failure of its own.
+fn unavailable(said: &str) {
+    tracing::warn!(
+        target: crate::TARGET,
+        error = %said,
+        "mcp operation unavailable",
+    );
+}
+
+/// The failure a decorated operation reports when it declares guards and finds
+/// no app to resolve them from: closed, never a chain of zero guards.
 pub fn unresolvable_chain(label: &'static str) -> McpError {
     tracing::error!(
         target: crate::TARGET,
@@ -89,8 +160,48 @@ pub fn unresolvable_chain(label: &'static str) -> McpError {
     McpError::internal_error(OPAQUE, None)
 }
 
+/// What an MCP operation answers: a `Result` whose error takes an [`McpError`],
+/// whatever the type is called.
+#[diagnostic::on_unimplemented(
+    message = "an MCP operation returns `Result<_, McpError>`, and `{Self}` is not one",
+    label = "not a `Result` an `McpError` converts into",
+    note = "its guard chain, its access posture and its pipes refuse by returning, and an \
+            operation that cannot fail has nowhere to report a denial"
+)]
+pub trait OperationAnswer {
+    /// The answer carrying `error`.
+    fn refused(error: McpError) -> Self;
+}
+
+impl<T, E: From<McpError>> OperationAnswer for Result<T, E> {
+    fn refused(error: McpError) -> Self {
+        Err(E::from(error))
+    }
+}
+
+/// A refusal from the wrapper's chain, gate or pipes, as the operation's own
+/// answer — see [`OperationAnswer`].
+pub fn refused<R: OperationAnswer>(error: McpError) -> R {
+    R::refused(error)
+}
+
+/// Why a mount's session manager refused: its cap, or rmcp's own manager.
+///
+/// rmcp writes the `Display` into the `500` it answers a refused session with.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SessionsError {
+    /// The mount holds its `max_concurrent_sessions`.
+    #[error("the mount holds its maximum of live sessions")]
+    Full,
+    /// rmcp's local session manager refused.
+    #[error(transparent)]
+    Local(#[from] LocalSessionManagerError),
+}
+
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::Problem;
+
     use super::*;
 
     #[test]
@@ -129,15 +240,11 @@ mod tests {
         );
     }
 
-    /// The other half of the same contract, and the half nobody read.
-    ///
-    /// Withholding the cause is only safe because it is recorded somewhere
-    /// else — and here the client is a language model, which will happily
-    /// repeat whatever it is handed. If this event stopped carrying `error`, a
-    /// failing tool would be a blank refusal with no trace, and the
-    /// nothing-leaks test next door would still pass: it only asserts what is
-    /// *absent* from the reply.
     #[test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test reads the line the call logs, not its result"
+    )]
     fn and_the_operator_gets_the_error_the_model_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
         let leaky: Result<(), String> =
@@ -155,14 +262,117 @@ mod tests {
         );
     }
 
-    /// A decorated operation that declares guards and finds no container to
-    /// resolve them from fails **closed and named**.
-    ///
-    /// The alternative reading of the same fact — an unresolvable chain
-    /// silently running zero guards — ships a tool surface nobody gated, to a
-    /// language model. So the refusal is the behaviour and the event is what
-    /// makes it diagnosable: the model is handed an opaque error, and
-    /// `operation` plus `reason` are the only place the cause exists.
+    #[test]
+    fn a_problem_answers_its_family_its_sentence_and_its_code() {
+        use nest_rs_core::problem::code;
+
+        let refused =
+            problem_error(&Problem::new(409, code::CONFLICT).with_detail("the slug is taken"));
+        assert_eq!(refused.code, rmcp::model::ErrorCode::INVALID_REQUEST);
+        assert_eq!(refused.message, "the slug is taken");
+        assert_eq!(
+            refused.data,
+            Some(serde_json::json!({ "code": "CONFLICT" }))
+        );
+
+        let unavailable = problem_error(
+            &Problem::new(503, code::UNAVAILABLE)
+                .with_detail("store at 10.0.0.1 down")
+                .with_retry_after(7),
+        );
+        assert_eq!(unavailable.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(
+            unavailable.message,
+            nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE
+        );
+        assert_eq!(
+            unavailable.data,
+            Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 7 })),
+        );
+    }
+
+    #[test]
+    fn a_to_problem_error_saying_none_answers_opaquely_and_files_its_chain() {
+        #[derive(Debug)]
+        struct LedgerDown;
+
+        impl std::fmt::Display for LedgerDown {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("the ledger at 10.0.0.1 refused")
+            }
+        }
+
+        impl std::error::Error for LedgerDown {}
+
+        impl ToProblem for LedgerDown {
+            fn to_problem(&self) -> Option<Problem> {
+                None
+            }
+        }
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let error = problem_error(&LedgerDown);
+        assert_eq!(error.message, OPAQUE);
+        assert!(!format!("{error:?}").contains("10.0.0.1"), "{error:?}");
+        let failed = logs.expect_one("nest_rs::mcp", "mcp operation failed");
+        assert!(
+            failed
+                .field("error")
+                .is_some_and(|e| e.contains("10.0.0.1"))
+        );
+    }
+
+    /// A server problem answers the sentence an opaque failure answers, so it
+    /// files the line an opaque failure files; a bare problem or a client one
+    /// withholds nothing and files none.
+    #[test]
+    fn a_server_problem_files_the_chain_its_answer_withholds() {
+        use nest_rs_core::problem::code;
+
+        #[derive(Debug)]
+        struct Outage;
+
+        impl std::fmt::Display for Outage {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("the search index at 10.0.0.1 refused")
+            }
+        }
+
+        impl std::error::Error for Outage {}
+
+        impl ToProblem for Outage {
+            fn to_problem(&self) -> Option<Problem> {
+                Some(Problem::new(503, code::UNAVAILABLE))
+            }
+        }
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let error = problem_error(&Outage);
+        assert_eq!(error.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert!(!format!("{error:?}").contains("10.0.0.1"), "{error:?}");
+        let unavailable = logs.expect_one("nest_rs::mcp", "mcp operation unavailable");
+        assert_eq!(
+            unavailable.level, "warn",
+            "the server could not serve it in time"
+        );
+        assert!(
+            unavailable
+                .field("error")
+                .is_some_and(|e| e.contains("10.0.0.1")),
+            "{unavailable:#?}"
+        );
+
+        let bare = problem_error(&Problem::new(503, code::UNAVAILABLE));
+        assert_eq!(bare.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        let conflict = problem_error(&Problem::new(409, code::CONFLICT));
+        assert_eq!(conflict.message, "conflict");
+        assert_eq!(
+            logs.find("nest_rs::mcp", "mcp operation unavailable").len(),
+            1,
+            "a bare problem or a client one withholds nothing",
+        );
+    }
+
     #[test]
     fn an_operation_with_guards_and_no_container_says_which_operation_and_why() {
         let logs = nest_rs_testing::LogCapture::install();

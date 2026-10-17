@@ -1,7 +1,6 @@
 ---
 title: Unit tests
 description: "Pure logic next to the code it exercises — #[cfg(test)] mod tests inside src/, Rust's standard home."
-tier: basics
 sidebar:
   order: 2
 ---
@@ -15,7 +14,7 @@ private items the integration tree cannot see.
 `#[cfg(test)] mod tests` inside the `src/` file under test —
 [Rust's standard layout](https://doc.rust-lang.org/book/ch11-03-test-organization.html#the-tests-module-and-cfgtest):
 
-```rust title="crates/features/src/posts/service.rs (from the demo)"
+```rust title="crates/features/src/posts/service.rs"
 use nest_rs::core::injectable;
 
 #[injectable]

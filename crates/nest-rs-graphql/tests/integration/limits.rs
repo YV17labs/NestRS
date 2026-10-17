@@ -5,7 +5,6 @@
 use async_graphql::SimpleObject;
 use nest_rs_core::{Module, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
 #[derive(SimpleObject)]
@@ -58,21 +57,16 @@ struct AppComplexityLimited;
 ])]
 struct AppGenerousLimits;
 
-/// Boot the three test apps through the same code path so a future change to
-/// the boot recipe lands in one place instead of three.
 async fn boot<M: Module + 'static>(context: &str) -> TestApp {
     TestApp::builder()
         .module::<M>()
-        .http(HttpTransport::new())
         .build()
         .await
         .unwrap_or_else(|e| panic!("schema boots ({context}): {e:?}"))
 }
 
-/// POST `query` and pull the GraphQL `errors[]` count + the rejection's data
-/// shape. Asserts `data` is `null` on rejection so the test pins behaviour
-/// (rejection happens before resolver execution) instead of the exact
-/// async-graphql error wording — that wording is not a stable contract.
+/// POST `query` and return the body. The tests pin `data: null` rather than
+/// async-graphql's error wording, which is not a stable contract.
 async fn submit(app: &TestApp, query: &str) -> serde_json::Value {
     let resp = app
         .http()
@@ -80,7 +74,6 @@ async fn submit(app: &TestApp, query: &str) -> serde_json::Value {
         .body_json(&serde_json::json!({ "query": query }))
         .send()
         .await;
-    // async-graphql returns validation failures as 200 with `errors[]`.
     resp.assert_status_is_ok();
     resp.json().await.value().deserialize::<serde_json::Value>()
 }

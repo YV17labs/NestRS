@@ -3,13 +3,13 @@
 //! An `#[expose]` entity, a `CrudService`, and a `#[crud]` HTTP controller
 //! behind the app's guards — the `demo/crates/features/src/orgs/` shape.
 //!
-//! **The guards are load-bearing, not hardening.** `Repo` filters every read by
-//! the caller's ambient `Ability`, which only an `AbilityGuard` installs; a
-//! DB-backed controller without one compiles and mounts, then answers 500 on
-//! every route (no ability) with no row ever reaching Postgres. So there is no
-//! unguarded variant to generate — `g resource` bootstraps `g auth` instead.
+//! **The guards are load-bearing**: `Repo` filters every read by the ambient
+//! `Ability`, which only an `AbilityGuard` installs, so an unguarded DB-backed
+//! controller answers 500 on every route. `g resource` bootstraps `g auth`.
 
-pub const MOD: &str = r#"mod entity;
+pub(crate) const MOD: &str = r#"pub const TARGET: &str = "features::{{snake}}";
+
+mod entity;
 mod module;
 mod service;
 
@@ -22,15 +22,14 @@ pub use service::{{service}};
 pub use http::{{http_module}};
 "#;
 
-pub const ENTITY: &str = r#"use nest_rs::resource::expose;
+pub(crate) const ENTITY: &str = r#"use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 // `soft_delete` + `timestamps` match the three columns `nestrs g migration`
-// scaffolds for this table, and the `users/` exemplar. Without them the
-// generated resource hard-deleted against a table carrying an unused
-// `deleted_at` tombstone, and never wrote the audit columns — the exact silent
-// mismatch /database/crud/ warns about. `timestamps` emits the
+// scaffolds for this table, and the `users/` exemplar. `soft_delete` makes
+// DELETE stamp `deleted_at` and hides a stamped row from every read; drop it
+// for a resource that should really erase rows. `timestamps` emits the
 // `ActiveModelBehavior`, so the resource must not also write an empty one.
 #[expose(
     name = "{{entity}}",
@@ -58,7 +57,7 @@ pub struct Model {
 }
 "#;
 
-pub const SERVICE: &str = r#"use nest_rs::core::injectable;
+pub(crate) const SERVICE: &str = r#"use nest_rs::core::injectable;
 use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 
 use super::entity::{{{create_op}}, Entity as {{pascal}}, {{update_op}}};
@@ -70,14 +69,6 @@ pub struct {{service}};
 // Read API + the audited ORM choke point.
 impl CrudService for {{service}} {
     type Entity = {{pascal}};
-
-    // The entity's `soft_delete` flag makes the column addressable; this
-    // override is what makes DELETE tombstone instead of hard-delete, and what
-    // ANDs `deleted_at IS NULL` into every read. Both halves are required —
-    // drop them together for a resource that should really erase rows.
-    fn soft_delete_column() -> Option<super::entity::Column> {
-        Some(super::entity::Column::DeletedAt)
-    }
 }
 
 // Opt-in write capabilities — drop any your resource does not offer (and the
@@ -93,7 +84,7 @@ impl Updatable for {{service}} {
 impl Deletable for {{service}} {}
 "#;
 
-pub const MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const MODULE: &str = r#"use nest_rs::core::module;
 
 use super::service::{{service}};
 
@@ -101,7 +92,7 @@ use super::service::{{service}};
 pub struct {{module}};
 "#;
 
-pub const HTTP_MOD: &str = r#"mod controller;
+pub(crate) const HTTP_MOD: &str = r#"mod controller;
 mod module;
 
 pub use module::{{http_module}};
@@ -109,7 +100,7 @@ pub use module::{{http_module}};
 
 /// Imports `AuthzModule` alongside the port so the ability guard is
 /// reachable — the access graph fails boot otherwise.
-pub const HTTP_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const HTTP_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::controller::{{controller}};
 use crate::authz::AuthzModule;
@@ -125,7 +116,7 @@ pub struct {{http_module}};
 /// The `#[crud]` + guards controller, mirroring
 /// `demo/crates/features/src/orgs/http/controller.rs`. `AuthnGuard` /
 /// `AuthzGuard` come from the workspace's own auth adapter (`nestrs g auth`).
-pub const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
+pub(crate) const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 

@@ -1,9 +1,10 @@
 ---
 title: Why NestRS
-description: The thesis behind the framework, who it is for, and the six structural properties that follow from it.
+description: The thesis, the architecture — a modular monolith, deployed per workload — who NestRS is for, and the six structural properties that follow.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
+import Topology from '../../components/Topology.astro';
 
 ## The thesis
 
@@ -36,6 +37,75 @@ written slightly differently in two different files.
   The lineage explains the shape; the guarantees below are what you
   actually get.
 </Aside>
+
+## A modular monolith, deployed per workload
+
+The tagline's two adjectives are one architecture, and it has a name: **you
+write one modular monolith, and you deploy it as one binary per workload** — or
+as a single binary, from the same modules. Google built
+[Service Weaver](https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html)
+for the same goal and put it in one line: "the development velocity of a
+monolith, with the scalability, security, and fault-tolerance of
+microservices". Its [HotOS paper](https://sigops.org/s/conferences/hotos/2023/papers/ghemawat.pdf)
+names the cause: microservices conflate *how code is written* with *how it is
+deployed*. NestRS is built on that separation.
+
+<Topology />
+
+**Write.** Your domain — entities, services, policy — lives once, in
+`crates/features/`, cut into modules whose boundaries the framework holds: a
+module reaches only what it imports, or the
+[access graph](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot)
+fails the boot. A call from one module to another is a Rust method call, with
+no endpoint and no serialization.
+
+**Run.** A workload is one operational job — serving the API, holding the
+sockets, issuing tokens, draining the queue; the
+[twelve-factor app](https://12factor.net/concurrency) calls it a process type.
+Each app under `apps/` is a thin composition root importing the edges it
+serves, and an edge it does not import is never mounted. A workload scales on
+its own signal, and a crash stays in its own binary. One app importing every
+edge is a plain monolith and a sound place to start: splitting it later edits
+composition roots, never a module. Merging two apps back is the same edit, once
+no two of their edges share a path — the boot refuses a duplicate and names
+both.
+
+**Deploy.** Every binary builds from one workspace into one image, and the
+[Publish chart](/publish/#deploy-it) runs each app from it with its own command.
+Your machine runs the same binaries with `nestrs run dev`.
+
+**Between binaries, the queue and the database.** Where Service Weaver's
+runtime turned a method call into an RPC, NestRS links a module into every
+binary that uses it — `users` is served by the API, the WebSocket server and
+the MCP assistant alike — and binaries coordinate through the data they share.
+That removes the costs Service Weaver's own motivation lists: no endpoint
+between binaries, no API frozen between them, and a cross-binary change is one
+commit the compiler checks whole. What crosses between them — a table, a queue
+payload — is a type in the shared crate, compiled into both sides. An app may
+still call another over HTTP with its own client, but the framework carries
+none of that call, from its authentication to its retries, and never makes it
+look like a method call.
+
+**The line is the database.** Per workload is the shape NestRS proposes, and
+one binary is the same modules in one process. Binaries that share a database
+belong in one workspace: they release together from one commit, so every
+contract between them is a type the compiler checks. Each still connects as
+its own database user, through its own `<PREFIX>_SEAORM__URL`, with only the
+rights it needs: nothing in the framework changes the schema at boot, so only
+the migration job holds the owner's. An app that needs a
+database of its own is simpler as a project of its own — its own workspace,
+repository and release. What it shares with the first goes through a library
+crate both depend on, so the compiler still checks each project against the
+contract, or through the queue. Each project pins its own version of that
+library, and its semver says when the two have drifted; the framework versions
+its own queue envelope
+([wire-format mismatch](/queue/retries-and-failure/#wire-format-mismatch)), and
+[split deployment](/security/authentication/split-deployment/) weighs one
+database against several.
+
+Service Weaver itself
+[stopped development](https://groups.google.com/g/serviceweaver/c/GzVg_WRfdsM)
+in December 2024; the separation it argued for outlives it.
 
 ## Who it is for
 
@@ -169,18 +239,17 @@ a `Cannot resolve` at first request. See
 Capabilities ship as separate crates and integrate via discovery gated on
 module reachability. A binary that imports only the queue adapter does not
 mount HTTP routes or GraphQL resolvers — even when those files live in the
-same shared feature crate. One codebase, multiple deployable shapes.
+same shared feature crate. One codebase, one binary per
+[workload](#a-modular-monolith-deployed-per-workload).
 
 On the [benchmarks page](/benchmarks/), the same service — idiomatic on both
 sides, byte-identical contract — measures at **×2.5** the throughput of
 NestJS on Fastify (its best case), **×4.2** on Express, in **~25× less RAM**,
 cold-starting **~23× faster**.
 
-Six guarantees are worth what checks them. **2,000+ tests** cover the framework
+Six guarantees are worth what checks them. **2,500+ tests** cover the framework
 workspace, and the end-to-end suites run against live Postgres, Redis and S3
-rather than mocks — wiring bugs are the ones unit tests never see. The 120+ pages
-on this site are linted against the framework's own source, so a page that
-contradicts the code fails the build instead of shipping.
+rather than mocks — wiring bugs are the ones unit tests never see.
 
 ## What this is not
 

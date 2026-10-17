@@ -1,7 +1,6 @@
 ---
 title: CRUD
 description: "One #[crud] attribute on a controller or resolver — list, get, create, update, delete are generated, scoped, and masked, all going through the service."
-tier: basics
 sidebar:
   order: 6
 ---
@@ -22,11 +21,10 @@ just wires the endpoints.
 cargo add nest-rs --features seaorm
 ```
 
-`#[expose]` lives in `nest-rs-resource`, and `seaorm` supplies the model it
-decorates, so one feature activates both crates. Neither half stands alone:
-`#[expose]` expands to `nest_rs::seaorm` paths and `#[crud]` expands to
-`nest_rs::resource` ones, so a feature per crate would have to imply the
-other — and Cargo rejects that as a cycle. `#[wire_enum]` rides the same feature for the same reason.
+`#[expose]` and `#[wire_enum]` are SeaORM's own decorators, so they come with
+the model they decorate: `nest_rs::seaorm`, one feature. `#[crud]` belongs to
+the edge it serves — `nest_rs::http::crud`, on by default, or
+`nest_rs::graphql::crud`.
 
 ## A full REST CRUD, 22 lines
 
@@ -62,10 +60,10 @@ mounts:
 | Verb     | Path        | Authz check        | Body                  | Returns                |
 |----------|-------------|--------------------|-----------------------|------------------------|
 | `GET`    | `/orgs`     | `Read` on `Org`    | —                     | `200` `Vec<Org>` + cursor |
-| `GET`    | `/orgs/:id` | `Read` on `Org`    | —                     | `200` `Org` (404/403)  |
+| `GET`    | `/orgs/{id}` | `Read` on `Org`    | —                     | `200` `Org` (404/403)  |
 | `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrg`         | `201` `Org` + `Location` |
-| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrg`         | `200` `Org` (404/403)  |
-| `DELETE` | `/orgs/:id` | `Delete` on `Org`  | —                     | `204` (404/403)        |
+| `PATCH`  | `/orgs/{id}` | `Update` on `Org`  | `UpdateOrg`         | `200` `Org` (404/403)  |
+| `DELETE` | `/orgs/{id}` | `Delete` on `Org`  | —                     | `204` (404/403)        |
 
 Every handler delegates to the same `OrgsService` instance, which goes through
 `Repo` against the ambient executor — so reads are pool, mutations sit inside
@@ -118,18 +116,22 @@ impl OrgsController {}
   generated input types (bare `CreateOrg` / `UpdateOrg`, not `…Dto`). List only
   the operations a resource has with `ops = [list, get]`; omit `ops` for all
   five. A create/update op requires its input type **and** the service's
-  `Creatable`/`Updatable` impl, or the build fails — never a silent no-op.
+  `Creatable`/`Updatable` impl, or the build fails — never a silent no-op. The
+  mirror holds too: an input type for an op `ops` leaves out fails the build
+  rather than being dropped, since the two declarations disagree.
 - `paginate` defaults to `cursor` — every generated list is keyset-paginated
-  (next cursor in `x-next-cursor` on REST, `first`/`after` arguments on
+  (the next page in a `Link: <…>; rel="next"` header on REST, `first`/`after` arguments on
   GraphQL). `paginate = none` opts out into the full collection (backstopped
-  by `CrudService::list`'s hard cap).
+  by `CrudService::list`'s hard cap). It configures `list` and nothing else, so
+  writing it beside an `ops` that leaves `list` out fails the build for the
+  same reason an input type for an excluded op does.
 
 ## Override one handler, keep the rest
 
 `#[crud]` only generates the operations you did **not** write. Hand-write
 the ones that need custom logic — the rest are filled in:
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo)"
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
@@ -146,19 +148,18 @@ pub struct UsersController {
 )]
 impl UsersController {
     #[post("/")]
-    #[api(summary = "Create a user in the caller's org", tags("User"))]
-    async fn create(
-        &self,
-        _authz: Authorize<Create, UserEntity>,
-        auth: Ctx<Claims>,
-        body: Valid<Json<CreateUser>>,
-    ) -> Result<Json<User>> {
-        Ok(Json(
-            self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
-        ))
+    #[authorize(Create, UserEntity)]
+    // … #[api(…)]
+    async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
+        let user = self
+            .svc
+            .create_in_org(body.into_inner(), auth.org_id)
+            .await?;
+        Ok(Json(User::from(&user)))
     }
 
-    #[get("/:id")]
+    #[get("/{id}")]
+    // … #[api(…)]
     async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
@@ -177,7 +178,7 @@ type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
 
 ```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -202,7 +203,10 @@ impl UsersResolver {
     #[query]
     #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<Read, UsersService>(ctx, &id).await?.as_ref().map(User::from))
+        Ok(bind::<Read, UsersService>(ctx, &id)
+            .await?
+            .as_ref()
+            .map(User::from))
     }
 }
 ```
@@ -215,6 +219,28 @@ a visible attribute — a parameter type never stands in for it.
 Same override rule — the GraphQL `create_user` and `user` you wrote take
 over; `users`, `update_user`, `delete_user` are generated.
 
+## When the database refuses
+
+A generated operation answers the class a client branches on, the same on both
+edges: a unique violation is a `409` (`CONFLICT` on GraphQL), a row gone before
+the write a `404` (`NOT_FOUND`), a create the row-level re-check rolled back
+a `403` (`FORBIDDEN`), and a statement Postgres cancelled at its bound
+(`57014`, `<PREFIX>_SEAORM__STATEMENT_TIMEOUT_SECS`) a `503` (`UNAVAILABLE`),
+filed at `warn` — the server could not serve it in time, and another attempt
+may. Anything else is a `500` — `"internal error"` under
+`INTERNAL` on GraphQL — and its error is filed once at `error` on
+`nest_rs::orm`, said by its SQLSTATE and the constraint, table and column the
+server named. The server's own message never reaches the client or the log,
+since it quotes the input it refused.
+
+GraphQL mutations carry one exception today. A statement a mutation runs on the
+request's own transaction — a generated `update_*` or `delete_*`, or a service
+your own mutation calls — leaves that transaction unable to commit once the
+database refuses it, so the whole request answers an HTTP `500`
+(`problem+json`, no GraphQL body) instead of the class. A generated `create_*`
+runs its insert on a savepoint of its own and answers its class, and the REST
+twin answers every class.
+
 ## Bound mutations
 
 A **bound mutation** acts on one existing row the caller already named by
@@ -223,7 +249,7 @@ other operation — a **visible `#[authorize(Action, Entity)]`** — then loads
 the row in the body with `bind_required`, which returns the
 `Authorized<A, E>` proof to hand straight to the service:
 
-```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo)"
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 #[crud(service = svc, entity = PostEntity, output = Post, /* … */)]
 impl PostsResolver {
     #[mutation]
@@ -266,7 +292,7 @@ the container-resolved service, so the body never calls `bind_required` itself.
 It also **synthesises the `id: String!` SDL argument** — so the method must not
 declare an `id` parameter of its own:
 
-```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo)"
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::seaorm::Authorized;
 
 #[mutation]
@@ -288,7 +314,7 @@ impl block rather than the method — drop the parameter, not the attribute.
 
 | Form              | Surface     | Wire shape                                      |
 |-------------------|-------------|-------------------------------------------------|
-| `paginate = cursor` (default) | HTTP + GraphQL | `Vec<T>` body + `x-next-cursor` header (REST); `[T]` + `first`/`after` arguments (GraphQL) |
+| `paginate = cursor` (default) | HTTP + GraphQL | `Vec<T>` body + `Link` `rel="next"` header (REST); `[T]` + `first`/`after` arguments (GraphQL) |
 | `paginate = none`   | HTTP + GraphQL | full ability-scoped collection, hard-capped by `CrudService::list` |
 
 Keyset pagination (`cursor`) is the default — stable under inserts, and the
@@ -343,8 +369,9 @@ pub struct OrgsModule;
 pub struct OrgsHttpModule;
 ```
 
-The HTTP transport + the data context interceptor activate at the app
-root with `HttpModule::for_root(...)`, `SeaOrmModule::for_root(...)` and `SeaOrmDatabaseModule`.
+The HTTP transport + the interceptor running each request's unit of work
+activate at the app root with `HttpModule::for_root(...)`,
+`SeaOrmModule::for_root(...)` and `SeaOrmDatabaseModule`.
 Importing only `OrgsModule` (no HTTP module) gives a worker the same
 `OrgsService` without mounting the endpoints — that is the port + adapter
 split this framework is built around.
@@ -371,18 +398,14 @@ pub struct Model {
 }
 ```
 
-Activate on the service. `CrudService` carries the **read** half plus
-`soft_delete_column`; the write half is opt-in — implement `Creatable`,
-`Updatable`, `Deletable` only for the operations the resource offers (the
-framework cannot infer opt-in per service without specialization):
+The flag is the whole declaration: the service writes nothing for it.
+`CrudService` carries the **read** half; the write half is opt-in — implement
+`Creatable`, `Updatable`, `Deletable` only for the operations the resource
+offers (the framework cannot infer opt-in per service without specialization):
 
 ```rust title="crates/features/src/posts/service.rs"
 impl CrudService for PostsService {
     type Entity = Posts;
-
-    fn soft_delete_column() -> Option<entity::Column> {
-        Some(entity::Column::DeletedAt)
-    }
 }
 
 impl Creatable for PostsService { type Create = CreatePost; }
@@ -392,9 +415,11 @@ impl Deletable for PostsService {}
 
 | Concern | Behaviour |
 |---------|-----------|
-| `list` / `page` / `access` | AND `deleted_at IS NULL` with the ability scope |
-| `delete` (via `CrudService`) | `UPDATE … SET deleted_at = now()` — idempotent |
-| Hard purge | `Repo::delete` directly (admin escape hatch) |
+| Every `Repo` read and update — `list`, `page`, `access`, `Bind`, relation batches, a custom `Repo::scoped` query, `Repo::unscoped` | ANDs `deleted_at IS NULL` after the ability scope: a deleted row reads as absent |
+| `delete` (via `Deletable`) | `UPDATE … SET deleted_at = now()` — idempotent |
+| Reading a deleted row | `Repo::<E>::with_tombstones(action)` — the one way (admin, retention) |
+| Restoring a deleted row | Not offered in 7.0: `Repo::update` hides a tombstone too; `Repo::restore` is planned for 7.x |
+| Hard purge | `Repo::delete` directly, which reaches a tombstone |
 | `timestamps` flag | Emits `ActiveModelBehavior::before_save` — **remove** any manual empty `impl ActiveModelBehavior` on the entity |
 
 Migration snippet (Postgres):
@@ -406,29 +431,14 @@ ALTER TABLE post
   ADD COLUMN deleted_at TIMESTAMPTZ NULL;
 ```
 
-Custom queries that use `Repo::scoped` must AND
-[`live_condition::<E>()`](https://docs.rs/nest-rs-seaorm/latest/nest_rs_seaorm/fn.live_condition.html)
-when `E: SoftDeletable` (e.g. login-by-email paths).
+A value that must be unique — an email, a name — is unique among the **live**
+rows: give it a partial index (`CREATE UNIQUE INDEX … WHERE deleted_at IS
+NULL`). With a full one, a deleted user's email reads as free everywhere and
+still refuses the next signup with a `409`.
 
-An entity that does not declare `soft_delete_column` hard-deletes — the right
-shape for join tables and lookups (`orgs/` in Publish stays hard delete). Drop
-**both** halves together when you mean it: the entity flag makes the column
-addressable, the service override is what tombstones.
-
-Keeping only one half is **a boot failure**, not a caveat. `#[expose(...,
-soft_delete)]` on an entity whose service never overrides the column would
-answer `DELETE` with the same `204` a tombstone answers, having destroyed the
-row — so `SeaOrmDatabaseModule` refuses to start and names both sides:
-
-```text frame="terminal"
-Error: soft delete is declared on the entity but not on the service:
-  - `post` is `#[expose(..., soft_delete)]` but `features::posts::PostService`
-    does not override `CrudService::soft_delete_column`: DELETE would erase the
-    row for good and reads would never filter `deleted_at`.
-```
-
-`nestrs g resource` scaffolds both halves plus the three columns, matching the
-migration it tells you to generate next.
+An entity without the flag hard-deletes — the right shape for join tables and
+lookups. `nestrs g resource` scaffolds the flag plus the three columns,
+matching the migration it tells you to generate next.
 
 ## Reference
 
@@ -438,8 +448,8 @@ migration it tells you to generate next.
 - `crates/nest-rs-http-macros/src/crud.rs` — the REST expansion.
 - `crates/nest-rs-graphql-macros/src/crud.rs` — the GraphQL expansion.
 - `crates/nest-rs-seaorm/` — `CrudService`, `Access`, `Repo`.
-- `crates/nest-rs-resource/` — `#[expose]` for the entity, pagination
-  envelopes.
+- `crates/nest-rs-seaorm-macros/` — `#[expose]`, the entity's wire DTO and
+  inputs.
 
 ## Going further
 

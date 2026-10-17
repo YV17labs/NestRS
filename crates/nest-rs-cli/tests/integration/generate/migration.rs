@@ -35,13 +35,12 @@ fn generate_migration_registers_in_both_lib_and_migrator() {
     );
     let stem = generated[0].trim_end_matches(".rs").to_string();
 
-    // Registered in BOTH lib.rs and migrator.rs — the whole point.
     let lib = fs::read_to_string(mig.join("lib.rs")).unwrap();
     assert!(lib.contains(&format!("mod {stem};")), "lib.rs: {lib}");
 
     let migrator = fs::read_to_string(mig.join("migrator.rs")).unwrap();
-    // The new stem appears twice (the `use super::` import and the `Box::new`
-    // vec entry) regardless of how rustfmt wrapped the file.
+    // The `use super::` import and the `Box::new` entry, however rustfmt wrapped
+    // the file.
     assert!(
         migrator.matches(&stem).count() >= 2,
         "migrator must import and box the new migration: {migrator}"
@@ -50,7 +49,6 @@ fn generate_migration_registers_in_both_lib_and_migrator() {
         migrator.contains(&format!("Box::new({stem}::Migration)")),
         "migrator vec: {migrator}"
     );
-    // The pre-existing migration survives the regeneration.
     assert!(
         migrator.contains("Box::new(m20260101_000000_init::Migration)"),
         "migrator kept init: {migrator}"

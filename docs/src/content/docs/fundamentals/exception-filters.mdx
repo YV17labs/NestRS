@@ -1,7 +1,6 @@
 ---
 title: Error handling
 description: "Catch typed errors, then map every other error to a response — typed catches via ExceptionFilter, unconditional mapping via Filter, defaults via ResponseError."
-tier: basics
 sidebar:
   order: 9
 ---
@@ -70,10 +69,10 @@ types with their HTTP mapping already wired:
 
 | Error | Source | Maps to |
 |-------|--------|---------|
-| `ServiceError::Db(DbErr)` | `nest_rs::seaorm` | `500` (body: `"database error"`) |
+| `DbErr`, through `?` into `ServiceError` | `nest_rs::seaorm` | `409` for a unique violation, `404` for a row a write found gone, else `500` (body: `"internal error"`) |
 | `ServiceError::Validation(ValidationErrors)` | `nest_rs::seaorm` | `422` |
 | `AuthError::*` | `nest_rs::authn` | `401` + `WWW-Authenticate: Bearer` |
-| `AuthError::Unavailable` | `nest_rs::authn` | `500`, logged at `error` — an outage is not a credential signal |
+| `AuthError::Unavailable` | `nest_rs::authn` | `503`, a `Retry-After` when the failing party gave one, logged at `error` — an outage is not a credential signal |
 | `CredentialError` | `nest_rs::authn` | `401` (opaque `"invalid credentials"`) |
 | `TokenError::*` | `nest_rs::authn` | RFC 6749 wire codes (`400` / `401` / `500`) |
 
@@ -89,7 +88,7 @@ use nest_rs::seaorm::ServiceError;
 impl UsersService {
     pub async fn create(&self, input: CreateUser) -> Result<User, ServiceError> {
         input.validate()?;                              // → ServiceError::Validation
-        let row = active_for_new_user(input).insert(&Repo::<Users>::conn()?).await?;  // → ServiceError::Db
+        let row = active_for_new_user(input).insert(&Repo::<Users>::conn()?).await?;  // → ServiceError::Conflict on a taken email
         Ok(User::from(&row))
     }
 }
@@ -116,6 +115,19 @@ opaque variant. In that case the type lives in `<feature>/error.rs`
 and its `ResponseError` impl sits next to it (the features crate
 already links poem because it ships HTTP controllers). Most features
 never need this — they compose the framework's types.
+
+`ResponseError` is HTTP's seam. An error that also crosses GraphQL,
+WebSockets or MCP implements `nest_rs::core::ToProblem` once: the `Problem`
+it says — a status, a `Code`, a detail — is what those edges answer, each in
+its own form (see [GraphQL errors](/graphql/errors/)). A resolver or a
+gateway handler returning the error is read by its type; an MCP tool
+converts it with `nest_rs::mcp::problem_error`. HTTP reads `ResponseError`,
+not `ToProblem`: a route answers a `Problem` only when the error is one or
+carries one in its chain. What no seam answers — no `ResponseError`, no
+`ToProblem` where the edge reads it, no framework type in its chain — is
+answered opaquely on every edge, and its whole chain is filed once at
+`error`, as is the chain behind a `5xx` problem: a failed handler is never
+logged nowhere.
 
 ## Route-bound filters via `#[use_filters(...)]`
 
@@ -258,16 +270,15 @@ layer kind: a global declaration and a per-scope redeclaration collapse
 to one execution.
 
 Both are composed the same way, so the dedup covers every pair of scopes
-— including controller + method with no global in play. `compose_chain`
+— including controller + method with no global in play. One composition
 resolves global + controller + method by `TypeId` and the survivors go
 into a single chain endpoint per route (`ExceptionFiltersEndpoint` for
 the typed catches, `FilterChain` for the untyped ones). The per-scope
 wraps do not nest; there is one wrap holding a deduped list.
 
-A global `Filter` additionally attaches a transport-edge
-`HttpEndpointWrap`, which is what lets it map errors from paths no route
-matched. A global `ExceptionFilter` has no such wrap — see the scope note
-above.
+A global `Filter` additionally wraps the transport edge, which is what
+lets it map errors from paths no route matched. A global
+`ExceptionFilter` has no such wrap — see the scope note above.
 
 The same defense-in-depth rationale as
 [guards](/fundamentals/guards/#declare-on-the-provider)

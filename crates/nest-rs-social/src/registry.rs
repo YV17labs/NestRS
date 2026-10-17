@@ -2,35 +2,19 @@
 //! `nest-rs-health`'s `HealthIndicator`.
 //!
 //! Each provider `provider.rs` submits one [`SocialProviderEntry`] to a
-//! link-time `inventory` registry. [`SocialRegistry`] drains it at bootstrap
-//! and asks each entry to build itself ([`resolve_provider`] is the standard
-//! implementation), then validates the result — a duplicate key or a key that
-//! disagrees with the provider's own [`SocialProvider::key`] **fails boot**.
-//!
-//! # Who owns an entry, and what decides its fate
-//!
-//! Discovery is module-gated as everywhere else:
-//! [`SocialModule`](crate::SocialModule) owns every entry, so no
-//! `SocialModule` in the app's imports means no entry is ever considered.
-//! There is no per-provider module — a social provider is not a DI provider
-//! (it is never `#[inject]`ed by type, only reached through
-//! [`SocialRegistry`] as `Arc<dyn SocialProvider>`), so there is nothing for
-//! a module of its own to own.
-//!
-//! Inside that gate the decision is **configuration**, on the ordinary
-//! dual-path `#[config]` rule: a provider that cannot be built is not built.
-//!
-//! | Config for the provider's namespace | Outcome |
-//! |---|---|
-//! | Complete — provided in DI, or `NESTRS_SOCIAL__<KEY>__*` | active |
-//! | Absent entirely | **inert**, one boot `warn` |
-//! | Partial, or invalid | **boot fails**, naming the provider |
+//! link-time `inventory` registry. [`SocialRegistry`] drains it at the boot's
+//! wiring step, before the first lifecycle hook, keeps each entry whose module
+//! the app imports, and asks it to build itself ([`resolve_provider`] is the
+//! standard implementation), then validates the result — a duplicate key or a
+//! key that disagrees with the provider's own [`SocialProvider::key`] **fails
+//! boot**.
 
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use nest_rs_config::{Config, ConfigService};
-use nest_rs_core::{Container, injectable, inventory};
+use nest_rs_config::{Config, ConfigError, ConfigService};
+use nest_rs_core::{Composition, Container, injectable, inventory};
 
 use crate::provider::SocialProvider;
 
@@ -41,39 +25,32 @@ pub type BuiltProvider = Option<Arc<dyn SocialProvider>>;
 /// A provider's deployment config, extended with the one question the registry
 /// asks before deciding between *inert* and *misconfigured*.
 pub trait SocialProviderConfig: Config {
-    /// `true` only when the deployment set **none** of this provider's
-    /// credentials. A *partially* set config must report `false` so it fails
-    /// `validate` and aborts boot — a half-configured login provider is a
-    /// deployment mistake, never a silent opt-out.
+    /// `true` only when the deployment set **none** of this provider's credentials;
+    /// a partial config reports `false`, so it fails `validate` and aborts boot.
     fn is_unconfigured(&self) -> bool;
 }
 
-/// One provider submitted to the link-time registry by a provider `provider.rs`.
+/// One provider submitted to the link-time registry by a provider `provider.rs`,
+/// opened by the provider's module.
 pub struct SocialProviderEntry {
     /// The route/config key this provider is registered under.
     pub key: &'static str,
     /// `type_name::<Provider>()` — used only in the duplicate-key diagnostic.
     pub provider_type_name: fn() -> &'static str,
     /// The provider config's [`Namespaced::NAMESPACE`](nest_rs_config::Namespaced)
-    /// — write `GithubSocialConfig::NAMESPACE`, never a hand-typed copy. The
-    /// "not configured" boot warning renders the env prefix from it
-    /// (via `nest_rs_config::var_name`), so the namespace is spelled once, in the `#[config]`
-    /// attribute, and a rename cannot leave a stale hint behind.
+    /// — write `GithubSocialConfig::NAMESPACE`, never a hand-typed copy.
     pub config_namespace: &'static str,
-    /// Build the provider from whatever configuration the deployment supplied.
-    /// [`resolve_provider`] is the standard implementation — a provider with an
-    /// unusual construction story may write its own.
+    /// Build the provider from the deployment's configuration; [`resolve_provider`]
+    /// is the standard implementation.
     pub build: fn(&Container) -> anyhow::Result<BuiltProvider>,
+    /// `TypeId` of the provider's module (`GithubSocialModule`): the entry is
+    /// discovered only in an app that imports it.
+    pub module: fn() -> TypeId,
 }
 
-/// The standard [`SocialProviderEntry::build`]: a provider already in the
-/// container wins, then a config in the container — one a `ConfigModule` factory
-/// resolved for that namespace, or a test's seed — then the provider's own
-/// environment. The entry names `C`, so discovery is what loads the credentials;
-/// nothing upstream has to know which config type this provider uses.
-///
-/// `make` turns a validated config into the concrete provider — for the shared
-/// OAuth2 flow that is one `OAuthClient::new` call.
+/// The standard [`SocialProviderEntry::build`]: a provider in the container wins,
+/// then a config in the container, then the provider's own environment. `make`
+/// turns a validated config into the concrete provider.
 pub fn resolve_provider<P, C>(
     container: &Container,
     make: fn(C) -> anyhow::Result<P>,
@@ -91,14 +68,8 @@ where
         // an empty one fails rather than taking the inert path.
         Some(pinned) => (*pinned).clone(),
         None => {
-            // Not `C::load()`: this leg must distinguish "unconfigured" (inert,
-            // the line below) from "invalid", so it validates *after* that
-            // check rather than inside the load.
-            // `read`, not `from_env`: it is the seam that records which
-            // variables this provider claimed, so a second provider reading one
-            // of them fails the boot instead of shadowing it. Still not
-            // `C::load()` — that validates inside the load, and this leg must
-            // reach the `is_unconfigured` check first.
+            // `read`, not `C::load()`: it validates after the `is_unconfigured`
+            // check, and records the variables claimed so a second reader fails boot.
             let config = nest_rs_config::read::<C>(
                 &ConfigService::for_namespace(C::NAMESPACE),
                 C::defaults(),
@@ -109,19 +80,19 @@ where
             config
         }
     };
-    config.validate()?;
+    // `validator`'s own `Display` lists each rule's parameters, the rejected
+    // value among them.
+    config
+        .validate()
+        .map_err(|errors| ConfigError::validation(C::NAMESPACE, errors))?;
     Ok(Some(Arc::new(make(config)?)))
 }
 
 ::nest_rs_core::inventory::collect!(SocialProviderEntry);
 
-/// The resolved set of active social providers, keyed by
-/// [`SocialProvider::key`]. A plain provider (holds no business logic), it is
-/// injected wherever a login flow dispatches on a provider key.
-///
-/// Populated once at `OnApplicationBootstrap` by
-/// [`SocialModule`](crate::SocialModule); [`get`](Self::get) is a map lookup
-/// thereafter.
+/// The resolved set of active social providers, keyed by [`SocialProvider::key`],
+/// filled by [`SocialModule`](crate::SocialModule)'s wiring step before the
+/// first lifecycle hook runs.
 #[injectable]
 #[derive(Default)]
 pub struct SocialRegistry {
@@ -129,15 +100,26 @@ pub struct SocialRegistry {
 }
 
 impl SocialRegistry {
-    /// Drain the registry, build each configured provider, validate, and store
-    /// the resolved map. Returns `Err` — which aborts boot — on a provider that
-    /// is partially configured, on a duplicate key, or on a
-    /// registry-key/provider-key mismatch (fail-secure: a silently shadowed
-    /// login provider is a security surprise).
+    /// Drain the registry, build each configured provider whose module the app
+    /// imports and store the map; fails boot on a partial config, a duplicate
+    /// key, or a registry/provider key mismatch.
     pub(crate) fn install(&self, container: &Container) -> anyhow::Result<()> {
         let mut resolved: Vec<(&'static str, &'static str, Arc<dyn SocialProvider>)> = Vec::new();
+        let composition = container.get::<Composition>();
 
         for entry in inventory::iter::<SocialProviderEntry>() {
+            // Fails closed: without the app's composition, no module is imported.
+            if !composition
+                .as_deref()
+                .is_some_and(|composition| composition.reaches((entry.module)()))
+            {
+                tracing::debug!(
+                    target: crate::TARGET,
+                    provider = entry.key,
+                    "linked social provider's module is not imported; skipped",
+                );
+                continue;
+            }
             let built = (entry.build)(container).map_err(|err| {
                 anyhow::anyhow!(
                     "social provider `{}` is linked but misconfigured: {err}",
@@ -151,10 +133,7 @@ impl SocialRegistry {
                 None => tracing::warn!(
                     target: crate::TARGET,
                     provider = entry.key,
-                    // `var_name` with `*` as the key: the glob the operator
-                    // needs is the same join every real variable uses, so the
-                    // hint follows a custom prefix instead of naming
-                    // variables the app would never read.
+                    // Through `var_name`, so the glob follows a custom prefix.
                     env_namespace = nest_rs_config::var_name(entry.config_namespace, "*"),
                     "linked social provider has no credentials configured; inert",
                 ),
@@ -171,8 +150,11 @@ impl SocialRegistry {
             "registered social providers",
         );
 
-        // OnceLock: a second install (re-boot in one process) is a no-op, not
-        // a panic — matches `HealthService::install_container`.
+        // A second install — a registry two apps share — keeps the first map.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a second install keeps the first registry, as documented above"
+        )]
         let _ = self.resolved.set(map);
         Ok(())
     }
@@ -183,7 +165,8 @@ impl SocialRegistry {
         self.resolved.get()?.get(key).cloned()
     }
 
-    /// The registered provider keys, sorted. Empty before bootstrap.
+    /// The registered provider keys, sorted. Empty only on a container no boot
+    /// wired (built by hand).
     pub fn keys(&self) -> Vec<&'static str> {
         self.resolved.get().map(sorted_keys).unwrap_or_default()
     }
@@ -197,9 +180,8 @@ fn sorted_keys(map: &HashMap<&'static str, Arc<dyn SocialProvider>>) -> Vec<&'st
     keys
 }
 
-/// Validate the resolved, reachable entries into the final map. Pure over its
-/// input (no container, no inventory), so the fail-boot rules are unit-tested
-/// directly. Fails on a registry-key/provider-key mismatch or a duplicate key.
+/// Validate the resolved entries into the final map, failing on a
+/// registry-key/provider-key mismatch or a duplicate key.
 fn build_registry(
     resolved: Vec<(&'static str, &'static str, Arc<dyn SocialProvider>)>,
 ) -> anyhow::Result<HashMap<&'static str, Arc<dyn SocialProvider>>> {
@@ -289,7 +271,6 @@ mod tests {
 
     #[test]
     fn build_registry_rejects_a_key_mismatch() {
-        // Registry entry says "github" but the provider reports "gitlab".
         let Err(err) = build_registry(vec![("github", "MislabeledProvider", stub("gitlab"))])
         else {
             panic!("entry key disagreeing with provider key must fail boot");
@@ -301,8 +282,6 @@ mod tests {
             "names the provider's reported key: {msg}"
         );
     }
-
-    // --- `resolve_provider`: the DI → config → env resolution order ---------
 
     /// A stand-in provider config with a namespace no deployment sets, so the
     /// env leg of `resolve_provider` reads nothing in any environment.
@@ -321,8 +300,8 @@ mod tests {
     impl Config for StubConfig {
         fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
             Ok(Self {
-                client_id: env.get("CLIENT_ID").unwrap_or(base.client_id),
-                client_secret: env.get("CLIENT_SECRET").unwrap_or(base.client_secret),
+                client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
+                client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
             })
         }
     }
@@ -333,7 +312,6 @@ mod tests {
         }
     }
 
-    /// A concrete provider type `resolve_provider` can register and resolve.
     struct BuiltStub {
         key: &'static str,
     }
@@ -361,9 +339,6 @@ mod tests {
 
     #[test]
     fn an_unconfigured_provider_is_inert_rather_than_a_boot_failure() {
-        // Nothing in the container and nothing in the environment for this
-        // namespace: the provider opts out silently-but-loudly (the caller
-        // logs the warn), it does NOT abort boot.
         let container = Container::builder().build();
         let built = resolve(&container).expect("an unconfigured provider must not fail boot");
         assert!(built.is_none(), "no credentials ⇒ no provider");
@@ -371,9 +346,6 @@ mod tests {
 
     #[test]
     fn a_partially_configured_provider_fails_boot() {
-        // The dangerous middle state: someone set the id but not the secret.
-        // Treating that as "inert" would silently drop a login the deployment
-        // clearly intended to have.
         let container = Container::builder()
             .provide(StubConfig {
                 client_id: "id".into(),
@@ -384,6 +356,33 @@ mod tests {
             panic!("a half-configured provider must abort boot");
         };
         assert!(err.to_string().contains("client_secret"), "{err}");
+    }
+
+    /// A pinned config's refusal names the field and its rule, never the
+    /// value `validator` lists among the rule's parameters.
+    #[test]
+    fn a_pinned_config_failing_validation_is_refused_without_its_value() {
+        let container = Container::builder()
+            .provide(StubConfig {
+                client_id: "s3cr3t-id".into(),
+                client_secret: String::new(),
+            })
+            .build();
+        let Err(err) = resolve(&container) else {
+            panic!("a half-configured provider must abort boot");
+        };
+        assert!(
+            matches!(
+                err.downcast_ref::<ConfigError>(),
+                Some(ConfigError::Validation { namespace, .. }) if *namespace == <StubConfig as nest_rs_config::Namespaced>::NAMESPACE
+            ),
+            "{err:#}"
+        );
+        // `install` formats the error itself into the boot's sentence.
+        let sentence = err.to_string();
+        assert!(sentence.contains("client_secret: length"), "{sentence}");
+        assert!(!sentence.contains("value"), "{sentence}");
+        assert!(!sentence.contains("s3cr3t"), "{sentence}");
     }
 
     #[test]
@@ -404,11 +403,6 @@ mod tests {
 
     #[test]
     fn a_di_registered_provider_wins_over_config() {
-        // The provider instance was supplied to the container directly (a
-        // provider with an unusual construction story). `resolve_provider` must
-        // return *that* instance rather than constructing a second one from the
-        // config — otherwise the supplied provider and the registry's copy
-        // could diverge.
         let container = Container::builder()
             .provide(BuiltStub { key: "pinned" })
             .provide(StubConfig {

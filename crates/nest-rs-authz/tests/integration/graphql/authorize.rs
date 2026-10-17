@@ -1,22 +1,15 @@
-//! The resolver gate end-to-end through the **in-band** path: the
-//! `GraphqlAbilityBridge` (registered as the `dyn GraphqlOperationGuard`)
-//! runs the guard chain per operation and builds the actor's `Ability`, the
-//! `GraphqlContextSeed` forwards it into the GraphQL context, and the declared
-//! `#[authorize(Read, …)]` posture admits or rejects the query by the caller's
-//! role. `/graphql` is
-//! `EdgePosture::Exempt` — no guard runs at the HTTP edge; this bridge is
-//! the only execution site.
-
-use std::sync::Arc;
+//! The resolver gate end-to-end through the in-band path: `GraphqlAbilityBridge`
+//! builds the ability per operation and `#[authorize(Read, …)]` admits or rejects
+//! by role. `/graphql` is an `InBand` mount, so the bridge is the only
+//! execution site.
 
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
 use nest_rs_testing::TestApp;
 
 use super::query;
@@ -28,14 +21,14 @@ mod widget {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
     #[sea_orm(table_name = "widgets")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub name: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -55,9 +48,7 @@ impl Guard for PassGuard {}
 /// header and builds the matching `Ability` onto the request. An admin gets a
 /// Read grant on widgets; anyone else gets nothing.
 ///
-/// A request with **no** `x-role` header is the anonymous caller, and takes the
-/// factory's visitor branch (`build_visitor`) — which here grants the same Read
-/// a `define_visitor` written for a `#[public]` query would.
+/// No `x-role` header is the anonymous caller, taking the visitor branch.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -66,11 +57,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let role = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let role = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .map(str::to_owned);
         let mut b = AbilityBuilder::new();
         let ability = match role.as_deref() {
@@ -85,17 +75,16 @@ impl Guard for AbilityInjector {
             }
             Some(_) => b.build(),
         };
-        req.extensions_mut()
-            .insert(Arc::new(ability.expect("valid test ability")));
+        cx.attach(ability.expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
-impl HttpGuard for PassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 
-impl nest_rs_resource::WireModelDefaults for widget::Entity {}
+impl nest_rs_authz::WireModelDefaults for widget::Entity {}
 
 #[resolver]
 struct WidgetResolver;
@@ -147,12 +136,7 @@ async fn admin_passes_the_resolver_gate() {
     assert_eq!(json["data"]["widgetName"], "ada", "{json}");
 }
 
-/// The `#[authorize]`/`#[public]` split is the whole review contract of
-/// `define_visitor`: a grant written there opens the `#[public]` operations and
-/// **nothing else**. `/graphql` admits the anonymous caller at the edge (one
-/// endpoint, posture declared per operation), so the gate is what has to hold
-/// the line — otherwise a visitor grant added for a public feed silently opens
-/// every guarded operation on the same entity.
+/// A `define_visitor` grant opens the `#[public]` operations and nothing else.
 #[tokio::test]
 async fn a_visitor_grant_does_not_satisfy_a_guarded_operation() {
     let app = boot().await;
@@ -177,11 +161,8 @@ async fn a_visitor_grant_still_reaches_a_public_operation() {
     assert_eq!(json["data"]["widgetMotd"], "hello", "{json}");
 }
 
-/// The refusal reaches the caller *and* the operator. The second half is what
-/// an incident queries, and it was asserted nowhere: `warn_denied` is the one
-/// emitter all four transports reach, so a field dropped here goes dark
-/// everywhere at once. Single-thread runtime on purpose — `LogCapture` is
-/// thread-local.
+/// The refusal reaches the caller and the operator. Single-thread runtime:
+/// `LogCapture` is thread-local.
 #[tokio::test]
 async fn non_admin_is_forbidden_by_the_resolver_gate() {
     let logs = nest_rs_testing::LogCapture::install();

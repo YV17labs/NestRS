@@ -1,8 +1,9 @@
 //! [`authorize`] — the class-level access gate, the MCP analog of
 //! [`crate::graphql::authorize`].
 
-use nest_rs_guards::{Denial, denial_to_mcp_error};
+use nest_rs_guards::Denial;
 use nest_rs_mcp::McpError;
+use nest_rs_mcp::denial_to_mcp_error;
 
 use crate::gate::{Refusal, reason, transport};
 use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};
@@ -10,17 +11,11 @@ use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};
 /// Class-level gate: require action `A` on subject `S`, against the **ambient**
 /// ability the endpoint's operation guard installed.
 ///
-/// The decision itself is [`gate`], shared with GraphQL so `#[authorize]` cannot
-/// come to mean two things; this function is the MCP half — where the ability
-/// comes from, and what a refusal looks like on the wire.
-///
 /// A missing ability is a wiring failure (no bridge registered) and fails
 /// **closed** rather than reading as unrestricted.
 pub fn authorize<A: ActionMarker, S: Subject>() -> Result<(), McpError> {
     let Some(ability) = current_ability() else {
-        // Not a client error: the operation guard did not install an ability, so
-        // the gate has nothing to decide against. Say so to the operator, stay
-        // opaque to the model.
+        // A wiring failure: said to the operator, opaque to the model.
         tracing::error!(
             target: crate::TARGET,
             transport = transport::MCP,

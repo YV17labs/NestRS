@@ -3,37 +3,28 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 use sea_orm::EntityTrait;
 use sea_orm::sea_query::{Condition, Expr};
 
 use crate::action::Action;
-use crate::predicate::Predicate;
+use crate::predicate::{Predicate, Truth, nothing_invented};
 
-/// One place for the fail-closed masking warn, so every branch — HTTP, GraphQL,
-/// and the ambient [`Ability::mask`] — emits the identical queryable event
-/// (`target: "nest_rs::authz"`, same keys) instead of hand-copying it. A
-/// fail-closed branch that forgets to log is then the visible omission. Lives
-/// here (always compiled) rather than in `wire_mask` (gated behind the
-/// `http`/`graphql` transports) so the ambient `Ability::mask` can reach it in
-/// a feature-less build.
+/// The one fail-closed masking warn, for every edge and the ambient
+/// [`Ability::mask`]; here, always compiled, so a feature-less build reaches it.
 pub(crate) fn warn_mask_failure(
     entity: &'static str,
     action: Action,
     reason: &'static str,
     detail: &'static str,
-    // The edge's own two, folded in rather than filed as a second line: an edge
-    // that needs extra context on this event needs it *on* this event, and a
-    // sibling line about the same occurrence is the duplicate "one event, said
-    // once" forbids. `tracing` drops a `None`, so an edge with nothing to add
-    // passes nothing and the field is simply absent.
+    // The edge's own context, on this one event; `tracing` drops a `None`.
     transport: Option<&'static str>,
     event: Option<&str>,
-    err: Option<&dyn std::fmt::Display>,
+    // Rendered by `error_message`, which never quotes the value serde refused.
+    err: Option<&(dyn std::error::Error + 'static)>,
 ) {
-    // Two arms rather than one, because `tracing` fixes an event's fields at
-    // the macro: an absent `error` has to be a different event, and the whole
-    // point of this function is that it is the *only* place either is worded.
+    // Two arms: `tracing` fixes an event's fields at the macro.
     match err {
         Some(err) => tracing::warn!(
             target: crate::TARGET,
@@ -43,7 +34,7 @@ pub(crate) fn warn_mask_failure(
             detail,
             transport,
             event,
-            error = %err,
+            error = %nest_rs_core::error_message(err),
             "response masking failed",
         ),
         None => tracing::warn!(
@@ -59,80 +50,66 @@ pub(crate) fn warn_mask_failure(
     }
 }
 
+/// The `(entity, action)` pairs whose pushed rows an undecidable rule already
+/// refused, so a stream refusing every item files one line, not one per item.
+static UNDECIDED_ON_PUSH: LazyLock<Mutex<HashSet<(TypeId, Action)>>> =
+    LazyLock::new(Mutex::default);
+
+/// The first time an undecidable rule refuses a pushed row of `E` for `action`
+/// in this process, say so: the subscriber sees nothing, and nothing else would.
+fn warn_undecidable_on_push<E: EntityTrait>(action: Action) {
+    let first = UNDECIDED_ON_PUSH
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert((TypeId::of::<E>(), action));
+    if first {
+        tracing::warn!(
+            target: crate::TARGET,
+            entity = std::any::type_name::<E>(),
+            action = ?action,
+            reason = "undecidable_on_push",
+            "an ability rule cannot be decided on a pushed value",
+        );
+    }
+}
+
+/// Where the rows under a check came from, which decides what a rule the
+/// in-memory check cannot decide means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Provenance {
+    /// A decorated reply: the unit read these rows through `Repo` under this
+    /// ability, for this action, whose SQL applied every rule. Visibility
+    /// trusts SQL; fields come from decided grants only.
+    Loaded,
+    /// A model the caller holds and checks itself ([`Ability::can`]), read for
+    /// this action or another, so no read is known to have applied this
+    /// action's rules: an undecidable grant grants nothing, an undecidable
+    /// denial denies, and no warn is filed — the caller hears `false`.
+    Held,
+    /// A subscription item or a `masked_reply` value, which no read filtered:
+    /// an undecidable grant grants nothing, an undecidable denial denies.
+    Pushed,
+}
+
 /// Why a mask fell closed, as a value an incident query groups on.
-///
-/// **`reason` is one value space across this crate**, and it was two: the gate's
-/// exits reported machine tokens (`no_class_grant`, `insufficient_scope`) while
-/// the masking exits reported whole sentences, so a query that grouped denials
-/// by `reason` returned tokens from one half and prose from the other, and
-/// `no_ambient_ability` — which [`gate::reason`](crate::gate::reason)'s own doc
-/// says "every fail-closed exit reports … the masking paths alike" — matched no
-/// mask at all. The sentence is still there; it moved to `detail`, where the
-/// throttler and the inert-host report already put theirs.
 pub(crate) mod mask_reason {
     /// Nothing installed an ability, so nothing decided what may be shown.
     ///
-    /// **Declared here and aliased by [`gate::reason`](crate::gate::reason)**,
-    /// not the other way round, and the direction is a compilation fact rather
-    /// than a preference: `gate` is gated behind the in-band transports while
-    /// this module is always compiled — for the same reason
-    /// [`warn_mask_failure`](super::warn_mask_failure) is, which its own doc
-    /// states. Aliasing the gated one made a feature-less build fail to find
-    /// `crate::gate`, and only the scaffold e2e — which compiles a real
-    /// generated workspace — could see it.
-    pub const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
+    /// Declared here and aliased by [`gate::reason`](crate::gate::reason):
+    /// `gate` is feature-gated, this module is not.
+    pub(crate) const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
     /// The value could not be turned into, or read back from, JSON.
-    pub const NOT_SERIALIZABLE: &str = "not_serializable";
+    pub(crate) const NOT_SERIALIZABLE: &str = "not_serializable";
     /// The wire value and the entity model could not be reconciled, so the
     /// mask had no model to apply.
-    ///
-    /// Gated exactly like the `wire_mask` module that reaches it: a constant
-    /// nothing reads *in this build* is not the defect a constant nothing reads
-    /// at all is, but saying so with a `cfg` keeps dead-code detection working
-    /// for the ones that really would be.
     #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-    pub const IRRECONCILABLE: &str = "irreconcilable_wire_value";
+    pub(crate) const IRRECONCILABLE: &str = "irreconcilable_wire_value";
     /// The response carried no content type, so it could not be classified as
     /// maskable at all. HTTP's alone — it is the one edge with a content type
     /// to be missing.
     #[cfg(feature = "http")]
-    pub const UNCLASSIFIED_BODY: &str = "unclassified_body";
-    // `field_not_granted` is deliberately **not** here: it is a *gate*'s verdict
-    // about a grant, not a mask's failure to run, and
-    // `gate::reason::FIELD_NOT_GRANTED` already owns it. A second constant for
-    // one value is the drift this module exists to remove.
-}
-
-/// A rule whose relational predicate was malformed — [`PredicateBuilder::related`]
-/// rejected it (a composite key, or a relation not pointing at the declared
-/// related entity) and produced the [`Predicate::Deny`] sentinel. Raised by
-/// [`AbilityBuilder::build`] so the misconfiguration fails **loudly** at ability
-/// construction rather than silently.
-///
-/// Left unchecked this is a security defect on the denial side: a malformed
-/// `cannot(...)` lowers its condition to `1 = 0`, and the query pre-filter
-/// combines a denial as `grant AND NOT(deny)` — so `NOT(1 = 0)` is *true* and
-/// the restriction evaporates (fail-*open*). On the grant side the same
-/// sentinel is fail-closed (deny-all) but still hides a developer error, so
-/// both are surfaced.
-///
-/// [`PredicateBuilder::related`]: crate::predicate::PredicateBuilder::related
-/// [`Predicate::Deny`]: crate::predicate::Predicate::Deny
-/// [`AbilityBuilder::build`]: crate::AbilityBuilder::build
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "malformed authorization rule: the {kind} for `{action:?}` on `{subject}` uses an invalid \
-     relation predicate — the relation is composite-keyed or does not point at the related \
-     entity. Fix the `related(...)` call in your `AbilityFactory`."
-)]
-pub struct MalformedRuleError {
-    /// The action the faulty rule was declared for.
-    pub action: Action,
-    /// Type name of the subject entity the faulty rule scopes.
-    pub subject: &'static str,
-    /// `"grant"` (a `can`) or `"denial"` (a `cannot`) — a denial is the
-    /// fail-open case, a grant merely the silent one.
-    pub kind: &'static str,
+    pub(crate) const UNCLASSIFIED_BODY: &str = "unclassified_body";
+    // `field_not_granted` is a gate verdict, owned by `gate::reason::FIELD_NOT_GRANTED`.
 }
 
 /// Which fields of a subject may be read back in the response.
@@ -143,6 +120,26 @@ pub enum FieldSet {
     All,
     /// Only these columns (named as they serialize) are permitted.
     Only(HashSet<&'static str>),
+}
+
+impl FieldSet {
+    /// Keep every field either set permits.
+    fn widen(&mut self, other: &FieldSet) {
+        match (&mut *self, other) {
+            (FieldSet::All, _) => {}
+            (_, FieldSet::All) => *self = FieldSet::All,
+            (FieldSet::Only(mine), FieldSet::Only(theirs)) => mine.extend(theirs.iter().copied()),
+        }
+    }
+
+    /// Keep only the fields both sets permit.
+    fn narrow(&mut self, other: &FieldSet) {
+        match (&mut *self, other) {
+            (_, FieldSet::All) => {}
+            (FieldSet::All, FieldSet::Only(theirs)) => *self = FieldSet::Only(theirs.clone()),
+            (FieldSet::Only(mine), FieldSet::Only(theirs)) => mine.retain(|f| theirs.contains(f)),
+        }
+    }
 }
 
 /// One grant or denial. The condition is precomputed at build time (the actor's
@@ -191,21 +188,10 @@ impl Ability {
     /// The scopes that would have granted `action` on `subject`, had this
     /// actor's credential carried them.
     ///
-    /// **Read this only after [`can_class`](Self::can_class) already said no.**
-    /// A withheld rule and a granted one can coexist — a narrow token may still
-    /// reach the subject by another rule — and in that case the operation is
-    /// allowed and there is nothing to ask for. Reading it as "the caller is
-    /// missing these scopes" without checking the gate first would report a
-    /// denial that never happened.
-    ///
-    /// Empty means the refusal was not about scope: the caller may not perform
-    /// this operation at all, and no wider token changes that.
+    /// Read it only after [`can_class`](Self::can_class) said no: a withheld rule
+    /// and a granted one can coexist. Empty means the refusal was not about scope.
     pub fn missing_scopes(&self, action: Action, subject: TypeId) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        // Widened over the same keys as `rules_for`: a `Manage` rule is the
-        // action wildcard, so a scope withheld there is equally the answer to
-        // "why can't I read this?". Encoding that widening twice is how the
-        // refusal comes to name the wrong scopes.
         for scope in keys_for(action, subject)
             .filter_map(|key| self.withheld.get(&key))
             .flatten()
@@ -225,20 +211,9 @@ impl Ability {
     /// [`AbilityFactory::define_visitor`](crate::AbilityFactory::define_visitor)
     /// — i.e. the caller is **anonymous**.
     ///
-    /// A grant is a grant on either branch, so the three enforcement layers
-    /// ignore this. It answers the *other* question, the one a transport whose
-    /// edge admits anonymous callers has to ask before running a gate: is there
-    /// a principal at all? On HTTP that is the route's own posture (a
-    /// non-`#[public]` route never reaches the visitor branch); on GraphQL,
-    /// where the single `/graphql` endpoint is `#[public]` and posture is
-    /// declared per operation, `graphql::authorize`
-    /// reads this so a `define_visitor` grant cannot satisfy an
-    /// `#[authorize(...)]` operation.
-    ///
-    /// Read it from a **guard** or from the gate a posture attribute emits, the
-    /// same rule [`can_class`](Self::can_class) follows — a check buried in a
-    /// service or a parameter type is an authorization decision outside the
-    /// three greppable sites.
+    /// The enforcement layers ignore it; a transport admitting anonymous callers
+    /// reads it so a `define_visitor` grant cannot satisfy an `#[authorize]`
+    /// operation. Read it from a guard or a posture attribute's gate only.
     pub fn is_visitor(&self) -> bool {
         self.visitor
     }
@@ -281,25 +256,42 @@ impl Ability {
     }
 
     /// Layer ③ — instance check: at least one grant matches this model and no
-    /// denial does (a denial overrides).
+    /// denial does (a denial overrides), decided on the model alone, with no
+    /// query.
+    ///
+    /// The model cannot show a relation, nor compare two value types only the
+    /// database compares: a grant resting on one grants nothing here, and a
+    /// denial resting on one denies. Where such a rule decides, ask SQL with
+    /// `nest_rs::seaorm::Repo::can`, one indexed query under the action's own
+    /// condition.
     pub fn can<E: EntityTrait>(&self, action: Action, model: &E::Model) -> bool {
-        self.evaluate::<E>(action, model).allowed
+        self.evaluate::<E>(action, model, Provenance::Held, &nothing_invented)
+            .allowed
     }
 
     /// The single rule scan behind [`can`](Self::can),
     /// [`permitted_fields`](Self::permitted_fields) and
-    /// [`mask_many`](Self::mask_many) — both answers come from the same
-    /// predicates, so computing them together is one pass instead of two per
-    /// row (the masked-list path used to evaluate every predicate twice).
+    /// [`mask_many`](Self::mask_many): one pass yields both answers.
     ///
-    /// `pub(crate)` for the same reason: a caller needing *both* answers about
-    /// one row asks once here rather than calling `can` and then
-    /// `permitted_fields`.
-    pub(crate) fn evaluate<E: EntityTrait>(&self, action: Action, model: &E::Model) -> Verdict {
+    /// A rule the row decides counts as SQL counts it, `UNKNOWN` included.
+    /// `invented` names the columns the row was given rather than read, and
+    /// `provenance` says what a rule left undecided means.
+    pub(crate) fn evaluate<E: EntityTrait>(
+        &self,
+        action: Action,
+        model: &E::Model,
+        provenance: Provenance,
+        invented: &dyn Fn(E::Column) -> bool,
+    ) -> Verdict {
         let mut granted = false;
         let mut denied = false;
-        let mut unrestricted = false;
-        let mut fields: HashSet<&'static str> = HashSet::new();
+        // The union of the decided grants' field sets: denials decide
+        // visibility, never which columns a visible row exposes.
+        let mut fields = FieldSet::Only(HashSet::new());
+        // The intersection of the undecided grants' field sets, `None` while
+        // there is none.
+        let mut undecided_grants: Option<FieldSet> = None;
+        let mut undecided_denial = false;
         for rule in self.rules_for(action, TypeId::of::<E>()) {
             let Some(predicate) = predicate_of::<E>(rule) else {
                 // Unreachable type mismatch (see `predicate_of`) — fail
@@ -307,40 +299,62 @@ impl Ability {
                 denied |= rule.inverted;
                 continue;
             };
-            if !predicate.matches(model) {
-                continue;
-            }
-            if rule.inverted {
-                // A denial overrides every grant, whatever their order.
-                denied = true;
-                continue;
-            }
-            granted = true;
-            match &rule.fields {
-                FieldSet::All => unrestricted = true,
-                FieldSet::Only(cols) => {
-                    if !unrestricted {
-                        fields.extend(cols.iter().copied());
+            match (predicate.decide(model, invented), rule.inverted) {
+                // `NOT UNKNOWN` is `UNKNOWN`, so SQL's filter drops a row its
+                // denial cannot compare as surely as one it matches.
+                (Truth::True | Truth::Unknown, true) => denied = true,
+                // Only `Loaded` reads the undecided grants' fields, and `can`
+                // (`Held`) reads no field at all: neither builds a set it drops.
+                (Truth::True, false) => {
+                    granted = true;
+                    if provenance != Provenance::Held {
+                        fields.widen(&rule.fields);
                     }
                 }
+                (Truth::Undecidable, true) => undecided_denial = true,
+                (Truth::Undecidable, false) => {
+                    let shared = undecided_grants.get_or_insert(FieldSet::All);
+                    if provenance == Provenance::Loaded {
+                        shared.narrow(&rule.fields);
+                    }
+                }
+                (Truth::False, _) | (Truth::Unknown, false) => {}
             }
         }
-        Verdict {
-            allowed: granted && !denied,
-            // Field grants are read from the matching grants alone — denials
-            // decide visibility, never which columns a visible row exposes.
-            fields: if unrestricted {
-                FieldSet::All
-            } else {
-                FieldSet::Only(fields)
+        match provenance {
+            // The row passed `(OR grants) AND NOT (OR denials)` in SQL, so when
+            // no decided grant matched, an undecided one did, and no denial did.
+            // Its fields are the narrowest set every undecided grant permits.
+            Provenance::Loaded => match undecided_grants {
+                Some(shared) if !granted => Verdict {
+                    allowed: !denied,
+                    fields: shared,
+                },
+                _ => Verdict {
+                    allowed: granted && !denied,
+                    fields,
+                },
             },
+            Provenance::Held | Provenance::Pushed => {
+                // Refused by a rule the row cannot decide, and by nothing else:
+                // a decided grant met an undecided denial, or no grant was
+                // decided and an undecided one would have matched.
+                if provenance == Provenance::Pushed
+                    && !denied
+                    && ((granted && undecided_denial) || (!granted && undecided_grants.is_some()))
+                {
+                    warn_undecidable_on_push::<E>(action);
+                }
+                Verdict {
+                    allowed: granted && !denied && !undecided_denial,
+                    fields,
+                }
+            }
         }
     }
 
     /// Layer ③ — serialize a model and strip the fields this ability does not
-    /// permit for `action`. Returns the masked JSON object. Combined with the
-    /// query pre-filter this is defence in depth: the filter keeps the wrong
-    /// rows out of the result, the mask keeps the wrong fields out of the body.
+    /// permit for `action`.
     pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
     where
         E: EntityTrait,
@@ -349,10 +363,7 @@ impl Ability {
         self.mask_with::<E>(action, model, self.permitted_fields::<E>(action, model))
     }
 
-    /// [`mask`](Self::mask) with the field verdict already known — the seam
-    /// [`mask_many`](Self::mask_many) and the per-item subscription path use so
-    /// a row's rules are evaluated once for "may I see it?" and "which
-    /// columns?" together.
+    /// [`mask`](Self::mask) with the field verdict already known.
     pub(crate) fn mask_with<E>(
         &self,
         action: Action,
@@ -365,12 +376,7 @@ impl Ability {
     {
         let mut json = match serde_json::to_value(model) {
             Ok(json) => json,
-            // Practically unreachable for a SeaORM model, but fail *safe* (an
-            // empty body, never the unmasked model) and — unlike the previous
-            // silent `unwrap_or` — leave a queryable trace, matching the
-            // wire-mask paths. A hard fail-closed (500 / GraphQL error) would
-            // need `mask`'s signature to become `Result`, rippling through
-            // `mask_many` and both transports; logged `Null` is the surgical fix.
+            // Fail closed: an empty body, never the unmasked model.
             Err(err) => {
                 warn_mask_failure(
                     std::any::type_name::<E>(),
@@ -392,9 +398,13 @@ impl Ability {
         json
     }
 
-    /// Layer ③ over a collection: drop the instances the actor may not see
-    /// ([`can`](Ability::can)) and mask the fields of those it may
-    /// ([`mask`](Ability::mask)).
+    /// Layer ③ over a collection: drop the instances the actor may not see and
+    /// mask the fields of those it may ([`mask`](Ability::mask)).
+    ///
+    /// The rows are a reply to a read through `Repo` under this ability for
+    /// this action, whose SQL decided what the rows cannot show: a relation
+    /// counts toward a row's visibility as that read counted it, and widens no
+    /// field set a decided grant narrows.
     pub fn mask_many<'m, E>(
         &self,
         action: Action,
@@ -407,7 +417,8 @@ impl Ability {
         models
             .into_iter()
             .filter_map(|model| {
-                let verdict = self.evaluate::<E>(action, model);
+                let verdict =
+                    self.evaluate::<E>(action, model, Provenance::Loaded, &nothing_invented);
                 verdict
                     .allowed
                     .then(|| self.mask_with::<E>(action, model, verdict.fields))
@@ -417,18 +428,17 @@ impl Ability {
 
     /// Layer ③ — the union of permitted fields across the grants that match this
     /// model. An unrestricted matching grant permits every field.
+    ///
+    /// A grant the row alone cannot decide widens nothing; when only such grants
+    /// admit the row, it keeps the fields every one of them permits.
     pub fn permitted_fields<E: EntityTrait>(&self, action: Action, model: &E::Model) -> FieldSet {
-        self.evaluate::<E>(action, model).fields
+        self.evaluate::<E>(action, model, Provenance::Loaded, &nothing_invented)
+            .fields
     }
 }
 
 /// The rule-map keys an operation reads: the action itself, plus
 /// [`Action::Manage`] (the action wildcard) unless that *is* the action.
-///
-/// The single encoding of the wildcard's semantics — both the grant side
-/// ([`Ability::rules_for`]) and the refusal side ([`Ability::missing_scopes`])
-/// iterate it, so a change to the action lattice cannot widen one and not the
-/// other.
 fn keys_for(action: Action, subject: TypeId) -> impl Iterator<Item = (Action, TypeId)> {
     let wildcard = (action != Action::Manage).then_some((Action::Manage, subject));
     std::iter::once((action, subject)).chain(wildcard)
@@ -441,11 +451,8 @@ pub(crate) struct Verdict {
     pub(crate) fields: FieldSet,
 }
 
-/// Recover a rule's typed predicate. The downcast cannot fail in practice —
-/// the rule was stored under `TypeId::of::<E>()`, so its predicate is a
-/// `Predicate<E>` — but this is a per-request authz path, so a mismatch fails
-/// **closed** at the call sites (deny / no grant) instead of panicking,
-/// mirroring `Predicate::to_condition`'s defense-in-depth posture.
+/// Recover a rule's typed predicate. A mismatch cannot happen (rules are keyed
+/// by `TypeId::of::<E>()`), and fails closed at the call sites, never panics.
 fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
     let predicate = rule.predicate.downcast_ref::<Predicate<E>>();
     if predicate.is_none() {
@@ -461,19 +468,20 @@ fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::predicate::PredicateBuilder;
 
     mod widget {
         use sea_orm::entity::prelude::*;
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
         #[sea_orm(table_name = "widgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -483,25 +491,282 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
         #[sea_orm(table_name = "gadgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
 
-    /// A rule keyed under one subject carrying another subject's predicate.
-    ///
-    /// `AbilityBuilder` cannot produce this — it stores the predicate under the
-    /// same `TypeId` it built it for — which is exactly why the branch needs a
-    /// test: nothing else will ever exercise it, and what it decides is whether
-    /// a mismatch **denies** or reads as an unrestricted grant. The second
-    /// would turn a framework bug into a silent authorization bypass, so the
-    /// answer is `None` (no grant) and a line loud enough to find.
+    mod org {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[sea_orm(table_name = "orgs")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    mod post {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[sea_orm(table_name = "posts")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub org_id: i32,
+            pub title: String,
+            /// The post this one replies to; `None` for a thread's root.
+            pub parent_id: Option<i32>,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {
+            #[sea_orm(
+                belongs_to = "super::org::Entity",
+                from = "Column::OrgId",
+                to = "super::org::Column::Id"
+            )]
+            Org,
+        }
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    fn a_post() -> post::Model {
+        post::Model {
+            id: 1,
+            org_id: 7,
+            title: "hello".into(),
+            parent_id: None,
+        }
+    }
+
+    fn in_org(id: i32) -> impl FnOnce(PredicateBuilder<post::Entity>) -> Predicate<post::Entity> {
+        move |p| p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, id))
+    }
+
+    /// The columns a narrowed set keeps, sorted; `None` for every column.
+    fn only(fields: FieldSet) -> Option<Vec<&'static str>> {
+        match fields {
+            FieldSet::All => None,
+            FieldSet::Only(cols) => {
+                let mut cols: Vec<_> = cols.into_iter().collect();
+                cols.sort_unstable();
+                Some(cols)
+            }
+        }
+    }
+
+    #[test]
+    fn a_relational_grant_widens_no_field_set_a_decided_grant_narrows() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .fields([post::Column::Title]);
+        b.can(Action::Read, post::Entity).when(in_org(7));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["title"]),
+        );
+    }
+
+    #[test]
+    fn undecided_grants_alone_give_the_fields_they_all_share() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .when(in_org(7))
+            .fields([post::Column::Id, post::Column::Title]);
+        b.can(Action::Read, post::Entity)
+            .when(in_org(8))
+            .fields([post::Column::Title, post::Column::OrgId]);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["title"]),
+            "either grant may be the one SQL matched, so only their common field is certain",
+        );
+    }
+
+    #[test]
+    fn a_relational_grant_alone_admits_a_loaded_row_whole() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity).when(in_org(7));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            ability
+                .mask_many::<post::Entity>(Action::Read, [a_post()].iter())
+                .len(),
+            1,
+        );
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            None,
+        );
+    }
+
+    #[test]
+    fn a_relational_denial_refuses_no_row_its_read_admitted() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity);
+        b.cannot(Action::Read, post::Entity).when(in_org(9));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            ability
+                .mask_many::<post::Entity>(Action::Read, [a_post(), a_post()].iter())
+                .len(),
+            2,
+        );
+    }
+
+    /// The model was read for some action, perhaps not this one, so no read is
+    /// known to have applied this action's denial: one the row cannot decide
+    /// denies.
+    #[test]
+    fn the_instance_check_counts_a_relational_denial_as_denying() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        b.cannot(Action::Update, post::Entity).when(in_org(9));
+        let ability = b.build().unwrap();
+
+        assert!(
+            !ability.can::<post::Entity>(Action::Update, &a_post()),
+            "the post may belong to org 9 for all the row shows",
+        );
+        assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
+    }
+
+    /// A row read for `Read` says nothing of `Update`'s relation, so the instance
+    /// check grants nothing on it, nor on its negation.
+    #[test]
+    fn the_instance_check_grants_nothing_on_a_relation_it_cannot_see() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity);
+        b.can(Action::Update, post::Entity).when(in_org(7));
+        b.can(Action::Delete, post::Entity).when(|p| {
+            p.not(p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, 9)))
+        });
+        let ability = b.build().unwrap();
+        let read_for_read = a_post();
+
+        assert!(ability.can::<post::Entity>(Action::Read, &read_for_read));
+        assert!(
+            !ability.can::<post::Entity>(Action::Update, &read_for_read),
+            "the post may belong to any org for all the row shows",
+        );
+        assert!(!ability.can::<post::Entity>(Action::Delete, &read_for_read));
+    }
+
+    /// A relation beside a column the row shows settles nothing that column
+    /// decides.
+    #[test]
+    fn the_instance_check_decides_what_the_row_shows_around_a_relation() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity).when(|p| {
+            p.any([
+                p.eq(post::Column::OrgId, 7),
+                p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, 8)),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert!(ability.can::<post::Entity>(Action::Update, &a_post()));
+        assert!(!ability.can::<post::Entity>(
+            Action::Update,
+            &post::Model {
+                org_id: 9,
+                ..a_post()
+            },
+        ));
+    }
+
+    /// An `i32` column against an `i64` bound is the database's to compare: a
+    /// reply trusts the read that compared it, the instance check grants
+    /// nothing on it.
+    #[test]
+    fn a_grant_across_two_value_types_is_trusted_only_to_a_read() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7_i64));
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can::<post::Entity>(Action::Read, &a_post()));
+        assert_eq!(
+            ability
+                .mask_many::<post::Entity>(Action::Read, [a_post()].iter())
+                .len(),
+            1,
+        );
+    }
+
+    /// SQL renders `eq(parent_id, None)` as `IS NULL`, so it admitted a root
+    /// post through the narrow grant; deciding it `UNKNOWN` would leave the
+    /// relational grant's wider field set as the only one in sight.
+    #[test]
+    fn a_null_bound_grant_keeps_its_field_set_against_a_relational_one() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::ParentId, None::<i32>))
+            .fields([post::Column::Id, post::Column::Title]);
+        b.can(Action::Read, post::Entity).when(in_org(8));
+        let ability = b.build().unwrap();
+
+        assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["id", "title"]),
+        );
+    }
+
+    /// A push refused because no grant matched it says nothing about a rule
+    /// the row could not decide, and spends no warn.
+    #[test]
+    fn a_push_no_grant_admits_files_no_undecidable_warn() {
+        const UNDECIDABLE: &str = "an ability rule cannot be decided on a pushed value";
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.cannot(Action::Read, post::Entity).when(in_org(9));
+        let ability = b.build().unwrap();
+        let push = |org_id| {
+            let row = post::Model { org_id, ..a_post() };
+            ability
+                .evaluate::<post::Entity>(Action::Read, &row, Provenance::Pushed, &nothing_invented)
+                .allowed
+        };
+
+        assert!(!push(8));
+        logs.expect_none(crate::TARGET, UNDECIDABLE);
+
+        assert!(
+            !push(7),
+            "org 7's grant meets a denial the row cannot decide"
+        );
+        let event = logs.expect_one(crate::TARGET, UNDECIDABLE);
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("undecidable_on_push")
+        );
+    }
+
+    /// A rule keyed under one subject carrying another's — `AbilityBuilder` cannot build it.
     fn mismatched_rule() -> Rule {
         Rule {
             inverted: false,
@@ -537,8 +802,6 @@ mod tests {
 
     #[test]
     fn a_predicate_of_the_keyed_subject_is_recovered_in_silence() {
-        // The other direction: every rule in every ability goes through this,
-        // so a check reading the wrong thing would deny the whole app.
         let logs = nest_rs_testing::LogCapture::install();
         let rule = Rule {
             inverted: false,
@@ -551,6 +814,36 @@ mod tests {
         logs.expect_none(
             "nest_rs::authz",
             "ability rule predicate does not match its keyed subject — failing closed",
+        );
+    }
+
+    #[test]
+    fn a_mask_failure_names_what_kind_of_value_it_found_never_the_value() {
+        #[derive(Debug, serde::Deserialize)]
+        #[expect(
+            dead_code,
+            reason = "the fields exist for serde to read; the test asserts the error, never a value"
+        )]
+        struct Wire {
+            age: u64,
+        }
+        let logs = nest_rs_testing::LogCapture::install();
+        let refused =
+            serde_json::from_value::<Wire>(serde_json::json!({ "age": "ada@example.com" }))
+                .expect_err("a string is no age");
+        warn_mask_failure(
+            "Widget",
+            Action::Read,
+            mask_reason::IRRECONCILABLE,
+            "wire value could not be reconciled with the entity model",
+            None,
+            None,
+            Some(&refused),
+        );
+        let event = logs.expect_one(crate::TARGET, "response masking failed");
+        assert_eq!(
+            event.field("error").as_deref(),
+            Some("invalid type: a string, expected u64")
         );
     }
 }

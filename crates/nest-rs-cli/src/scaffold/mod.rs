@@ -5,8 +5,8 @@ mod render;
 mod transaction;
 mod wiring;
 
-pub use render::Renderer;
-pub use transaction::{Scaffold, rustfmt};
-pub use wiring::{
+pub(crate) use render::Renderer;
+pub(crate) use transaction::{Scaffold, rustfmt};
+pub(crate) use wiring::{
     Transform, ensure_decl, ensure_expose_graphql, ensure_lines, ensure_module_imports,
 };

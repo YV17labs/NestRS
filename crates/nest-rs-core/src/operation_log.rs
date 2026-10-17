@@ -1,186 +1,484 @@
 //! One line per unit of work, and the vocabulary every edge files it with.
 //!
-//! The ids on a log line relate lines to each other; they do not say what the
-//! work *was*. A line rendered by
-//! [`TextFormat`](crate::logging::TextFormat) carries no span state at all — by
-//! design, since a span's attributes are not part of a log record — so the
-//! identity of a unit of work has to arrive as **event** attributes, on a line
-//! the edge emits once per unit. HTTP has always had one; the other edges did
-//! not, and their work was anonymous on the console as a result.
+//! A unit's canonical name is `<edge>.<unit>` for a framework edge's,
+//! `lifecycle.<unit>` for the kernel's and `<crate>.<unit>` for any other
+//! crate's, declared once as a [`Unit`] through [`unit!`](crate::unit) by the
+//! crate it belongs to, and read by [`operation_span!`](crate::operation_span)
+//! and [`operation_line!`](crate::operation_line).
 //!
-//! What each edge writes is its own — a route, an event name, a job id, a tool
-//! name — but the target, the duration formula and the outcome words are shared,
-//! so an operator queries the family one way and a new edge cannot invent a
-//! fourth word for "it failed".
-//!
-//! **Field names on a line are flat, never dotted**, and that is not a style
-//! choice: `tracing`'s macro grammar is locally ambiguous on a dotted name when
-//! the target is a path expression rather than a literal, and [`TARGET`] is a
-//! path — so `ws.event = %event` is a compile error on the line while the
-//! identical field compiles on the span beside it. The span keeps the dotted,
-//! conventions-shaped names for the export; the line uses the edge's short
-//! ones.
-//!
-//! The canonical name of one unit of work is `<edge>.<unit>`, and this module
-//! declares the **grammar** rather than the names.
-//!
-//! **One constant, three slots, so nothing can drift.** Each name is written
-//! once — by the crate that owns the edge, as `<crate>::unit::<UNIT>` — and read
-//! three times: by the [`operation_span!`](crate::operation_span) that opens the
-//! unit, by that line's `name:` (the event's metadata identity), and by its
-//! `message` (what a console shows). Two of those used to be two different
-//! vocabularies: the spans said `http.request` and `mcp.operation` while the
-//! lines said `request served` and `operation served`, and two names for one
-//! thing is what an operator has to learn twice and a query gets wrong once.
-//! `nest-rs-ws` had already hit the wall and written the workaround —
-//! "`lifecycle` rather than the span's name because `tracing` offers no way to
-//! read one back". A shared constant is that way.
-//!
-//! **The names live with their edges, and the kernel holds none.** A unit name
-//! is per-edge vocabulary exactly as a span target is, so it obeys the rule
-//! [`target`](crate::target) states: the crate that owns the concern is the
-//! crate that names it, and a table here would have meant the kernel carrying
-//! names for six concerns it does not know exist. Each edge declares its own as
-//! `<crate>::unit::<UNIT>`, and the three-slot invariant holds inside it — the
-//! kernel could neither link such a path nor notice the day one is added, so the
-//! `units` join in `nest-rs-conformance` holds the grammar over all of them and
-//! derives its population from the source rather than from a list here.
-//!
-//! **The shape is `<edge>.<unit>`, and it is the norm rather than ours.**
-//! Lowercase, dot-separated, namespace first: the form OpenTelemetry gives an
-//! event name, whose whole job is to identify a *class* of event at low
-//! cardinality while the human wording stays in the body. Four of this
-//! framework's six edges already spelled their span that way before any of this
-//! — `http.request`, `ws.message`, `mcp.operation`, `graphql.subscription` —
-//! so the work here was to retire two strings of prose (`"scheduled job"`,
-//! `"process job"`), not to invent a scheme.
-//!
-//! **Depending on it is not depending on OpenTelemetry.** The alignment is free:
-//! the constants are `&'static str`, an app that exports nothing pays nothing,
-//! and a bridge that does export reads `name:` as `event.name` without the
-//! framework naming an exporter. Neither W3C Trace Context — scoped, in its own
-//! words, to "enable trace correlation" — nor anything else in reach names this
-//! concept.
-//!
-//! **The namespace is the closed edge vocabulary** (`architecture.md`), which is
-//! what stops a new transport from inventing a seventh word: `grpc.call` fails
-//! the join until `grpc` is opened as an edge deliberately. All seven are in
-//! use: `events` was the last to be unused, and a name nothing emits under is
-//! the same defect as a span field nothing fills — which is why the listener,
-//! not the `emit`, became its unit. A listener is developer code that logs,
-//! writes and can panic; an `emit` is a line inside whatever unit the emitter
-//! was already serving.
+//! Field names on a line are flat, never dotted: `tracing`'s grammar is
+//! ambiguous on a dotted name beside a path target such as [`TARGET`], so
+//! `ws.event = %event` does not compile on the line.
 
 use std::time::Instant;
 
-/// The target every operation line is emitted on, whichever edge files it.
+/// The target every operation line is emitted on, whichever edge files it;
+/// `nest_rs::operation=off` silences every edge's line at once.
 ///
-/// **One target is the family's toggle.**
-/// `<PREFIX>_LOG=info,nest_rs::operation=off` silences every edge's line at
-/// once, which is why no edge grows a `#[config]` field — and the `for_root`
-/// seam that one would oblige — to hold a boolean the filter already answers.
-/// `NESTRS_HTTP__ACCESS_LOG` predates the family and stays: it is an app's
-/// pinned config rather than a deployment's filter, and it names one edge's
-/// line rather than the family's.
-///
-/// **It names the line, not a subsystem.** Every other framework target —
-/// `nest_rs::http`, `nest_rs::orm`, `nest_rs::schedule` — is rooted at the code
-/// that emits it; this one is the only one naming a *category of line* that
-/// crosses all of them, so a subsystem-shaped word here reads as a subsystem and
-/// hides what the target is. What distinguishes the line is that there is
-/// exactly one per unit of work and it carries an [`OK`]/[`ERROR`]/[`PANIC`] and
-/// a [`DURATION_MS`] — an operation, which is the word the operation span and
-/// this module already use, and the word the MCP edge's line took when
-/// `operation served` was retired for it. Through 5.1 it was
-/// `nest_rs::access`: HTTP's word for its own line, left behind when the concept
-/// generalised to six edges. A clock tick has no caller, so nothing accesses
-/// anything.
-///
-/// **The string may not prefix another target**, and that is mechanical rather
-/// than aesthetic: `EnvFilter` matches a directive's target with `starts_with`
-/// on the raw string, not on `::` segments. `nest_rs::access` prefixed
-/// `nest_rs::access_graph`, so the toggle documented above *also* silenced the
-/// boot `warn` naming resolvers unreachable from the GraphQL schema — an
-/// operator lost a startup diagnostic with nothing to show it had gone. Neither
-/// name survives: that warn belongs to `nest_rs::graphql`, filed by the crate
-/// that owns the resolver registry rather than by the kernel. The
-/// `filters` join in `nest-rs-conformance` derives every target both workspaces
-/// emit and fails on the next such pair.
+/// It may not prefix another target: `EnvFilter` matches with `starts_with` on
+/// the raw string (`.claude/decisions/operation-target.md`).
 pub const TARGET: &str = "nest_rs::operation";
 
-/// OpenTelemetry's `SpanKind`, which is the vocabulary
-/// [`operation_span!`](crate::operation_span) records as `otel.kind`.
-///
-/// Constants rather than strings because the vocabulary is closed by the
-/// specification: a typo can only ever be a value no backend groups on, and
-/// nothing at the call site would say so. The kind decides how a tracing
-/// backend reads the span, so a wrong one is a wrong service map rather than a
-/// cosmetic slip.
-///
-/// **Only the kinds this framework emits are declared.** The specification also
-/// defines `client` and `producer`; nothing here opens a span for an outbound
-/// call or for handing work to a queue, and a constant nothing fills is the
-/// same defect as a span field nothing records. Whichever edge needs one adds
-/// it in the line it needs it.
-pub mod kind {
+/// OpenTelemetry's `SpanKind`, which [`operation_span!`](crate::operation_span)
+/// records as `otel.kind`; only the kinds this framework emits are declared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
     /// Work this process accepted from somewhere else — an HTTP request, a WS
     /// message, an MCP operation, a GraphQL subscription.
-    pub const SERVER: &str = "server";
+    Server,
     /// Work taken off a queue and run here.
-    pub const CONSUMER: &str = "consumer";
-    /// Work with no caller and no wire — a scheduled tick.
-    pub const INTERNAL: &str = "internal";
+    Consumer,
+    /// Work with no caller and no wire — a scheduled tick, an in-process event.
+    Internal,
+}
+
+impl Kind {
+    /// The word `otel.kind` is read as.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::Consumer => "consumer",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+/// A framework edge: the closed vocabulary a framework [`Unit`] is declared
+/// under, the folder an edge adapter lives in, and the first segment of its
+/// unit's name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Edge {
+    /// An HTTP route, self-mount or fallback.
+    Http,
+    /// A GraphQL root field or subscription.
+    Graphql,
+    /// A WebSocket gateway's socket and its messages.
+    Ws,
+    /// A queue job attempt.
+    Queue,
+    /// A scheduled tick.
+    Schedule,
+    /// An MCP operation.
+    Mcp,
+    /// An in-process event listener.
+    Events,
+}
+
+impl Edge {
+    /// Every framework edge, in the vocabulary's order.
+    pub const ALL: &'static [Edge] = &[
+        Self::Http,
+        Self::Graphql,
+        Self::Ws,
+        Self::Queue,
+        Self::Schedule,
+        Self::Mcp,
+        Self::Events,
+    ];
+
+    /// The word a unit name, a span target and a config namespace spell this
+    /// edge with (`"http"`, `"graphql"`, …).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Graphql => "graphql",
+            Self::Ws => "ws",
+            Self::Queue => "queue",
+            Self::Schedule => "schedule",
+            Self::Mcp => "mcp",
+            Self::Events => "events",
+        }
+    }
+}
+
+/// One unit of work: its canonical name, the target its span is emitted on, its
+/// [`Kind`] and, for a framework edge's, its [`Edge`].
+///
+/// Declared only through [`unit!`](crate::unit); the accessors are `const` so
+/// the reading macros can put them in `tracing`'s static callsite metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Unit {
+    name: &'static str,
+    target: &'static str,
+    kind: Kind,
+    edge: Option<Edge>,
+}
+
+impl Unit {
+    /// The canonical `<edge>.<unit>`, `lifecycle.<unit>` or `<crate>.<unit>`
+    /// name: the span's name, the line's `name:` and its `message`.
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// The span target: `nest_rs::<edge>` for an edge's unit,
+    /// `nest_rs::lifecycle` for the kernel's, the declaring crate's own for any
+    /// other.
+    pub const fn target(&self) -> &'static str {
+        self.target
+    }
+
+    /// OpenTelemetry's span kind for this unit.
+    pub const fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// The framework edge that dispatches this unit, read off its name when
+    /// [`unit!`](crate::unit) declared it; `None` for a unit no edge
+    /// dispatches.
+    pub const fn edge(&self) -> Option<Edge> {
+        self.edge
+    }
+}
+
+/// The crate that declares the kernel's units.
+const KERNEL: &str = "nest-rs-core";
+
+/// The first segment of every kernel unit, and the tail of its target.
+const KERNEL_WORD: &str = "lifecycle";
+
+/// `operation_log` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
+pub(crate) mod __private {
+    use super::{
+        Edge, KERNEL, KERNEL_WORD, Kind, Unit, eq_bytes, is_crate_root, is_edge_root, is_lib_name,
+    };
+
+    /// Evaluated in a `const` by [`unit!`](crate::unit), which passes the
+    /// declaring crate as `owner`: a framework edge's unit, a kernel unit, or
+    /// any other crate's under its own name.
+    #[expect(
+        clippy::panic,
+        reason = "only ever evaluated in a const, where a panic is the compile error naming the refused fact"
+    )]
+    pub const fn declare_unit(
+        owner: &str,
+        target: &'static str,
+        kind: Kind,
+        name: &'static str,
+    ) -> Unit {
+        let bytes = name.as_bytes();
+        let mut i = 0;
+        let mut dots = 0;
+        let mut dot = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'a'..=b'z' | b'_' => {}
+                // A crate name carries digits (`nestrs-s3`); a unit word does not.
+                b'0'..=b'9' if dots == 0 => {}
+                b'.' => {
+                    dots += 1;
+                    dot = i;
+                }
+                _ => panic!(
+                    "a unit name is lowercase ASCII words, `<edge|crate>.<unit>`, with digits \
+                     only in the crate's segment"
+                ),
+            }
+            i += 1;
+        }
+        if dots != 1 || dot == 0 || dot == bytes.len() - 1 {
+            panic!("a unit name is `<edge|crate>.<unit>`: one dot, a word on each side");
+        }
+        if !bytes[0].is_ascii_lowercase() {
+            panic!(
+                "a unit name is lowercase ASCII words, `<edge|crate>.<unit>`, with digits only in \
+                 the crate's segment"
+            );
+        }
+
+        if is_edge_root(KERNEL_WORD, "", name) {
+            if !is_lib_name(owner, KERNEL, KERNEL.len()) {
+                panic!("the `lifecycle` units are the kernel's, declared by `nest-rs-core`");
+            }
+            if !is_edge_root(target, "nest_rs::", name) {
+                panic!("a kernel unit is emitted on `nest_rs::lifecycle`");
+            }
+            return Unit {
+                name,
+                target,
+                kind,
+                edge: None,
+            };
+        }
+
+        let mut known = None;
+        let mut e = 0;
+        while e < Edge::ALL.len() {
+            let word = Edge::ALL[e].as_str();
+            if word.len() == dot && eq_bytes(word.as_bytes(), 0, bytes, 0, dot) {
+                known = Some(Edge::ALL[e]);
+            }
+            e += 1;
+        }
+        let framework = is_framework_crate(owner);
+        if known.is_some() {
+            if !framework {
+                panic!(
+                    "the edge vocabulary is the framework's: name the unit after your crate, \
+                     `<crate>.<unit>`"
+                );
+            }
+            if !is_edge_root(target, "nest_rs::", name) {
+                panic!("a unit is emitted on its edge's target, `nest_rs::<edge>`");
+            }
+            if !is_edge_root(owner, "nest-rs-", name) {
+                panic!("a unit is declared by the crate that owns its edge, `nest-rs-<edge>`");
+            }
+            return Unit {
+                name,
+                target,
+                kind,
+                edge: known,
+            };
+        }
+
+        let named_after_owner = is_lib_name(owner, name, dot);
+        if framework {
+            if named_after_owner {
+                panic!(
+                    "the `nest-rs-` prefix is the framework's: a package is named \
+                     `nestrs-<subject>` and declares `<its crate>.<unit>`"
+                );
+            }
+            panic!(
+                "a unit's edge is one of the closed edge vocabulary in \
+                 `nest_rs_core::Edge::ALL`"
+            );
+        }
+        if !named_after_owner {
+            panic!("a unit is declared by the crate it is named after, `<crate>.<unit>`");
+        }
+        if !is_crate_root(target, name, dot) {
+            panic!(
+                "a package's unit is emitted on its crate's own target, `<crate>` or \
+                 `<crate>::<concern>`"
+            );
+        }
+        Unit {
+            name,
+            target,
+            kind,
+            edge: None,
+        }
+    }
+
+    /// Whether `krate`, the crate a reading macro expands in, declared `unit`.
+    pub const fn unit_opened_by(unit: &Unit, krate: &str) -> bool {
+        if unit.edge.is_some() {
+            return is_edge_root(krate, "nest-rs-", unit.name);
+        }
+        if is_edge_root(KERNEL_WORD, "", unit.name) {
+            return is_lib_name(krate, KERNEL, KERNEL.len());
+        }
+        let mut dot = 0;
+        while unit.name.as_bytes()[dot] != b'.' {
+            dot += 1;
+        }
+        is_lib_name(krate, unit.name, dot)
+    }
+
+    /// Whether `owner`, read as a library name (`-` as `_`), is the
+    /// framework's: `nest_rs` itself or `nest_rs_<subject>`.
+    const fn is_framework_crate(owner: &str) -> bool {
+        let (owner, framework) = (owner.as_bytes(), b"nest_rs");
+        if owner.len() < framework.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < owner.len() {
+            let byte = if owner[i] == b'-' { b'_' } else { owner[i] };
+            if i == framework.len() {
+                return byte == b'_';
+            }
+            if byte != framework[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+}
+
+/// `whole == prefix + <the edge of name>`; `name` must hold a dot.
+const fn is_edge_root(whole: &str, prefix: &str, name: &str) -> bool {
+    let (whole, prefix, name) = (whole.as_bytes(), prefix.as_bytes(), name.as_bytes());
+    let mut edge = 0;
+    while name[edge] != b'.' {
+        edge += 1;
+    }
+    whole.len() == prefix.len() + edge
+        && eq_bytes(whole, 0, prefix, 0, prefix.len())
+        && eq_bytes(whole, prefix.len(), name, 0, edge)
+}
+
+/// Whether `krate`, read as a library name (`-` as `_`), is `lib[..len]` read
+/// the same way.
+const fn is_lib_name(krate: &str, lib: &str, len: usize) -> bool {
+    let (krate, lib) = (krate.as_bytes(), lib.as_bytes());
+    if krate.len() != len || len > lib.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < krate.len() {
+        let byte = if krate[i] == b'-' { b'_' } else { krate[i] };
+        let want = if lib[i] == b'-' { b'_' } else { lib[i] };
+        if byte != want {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Whether `target` is the crate `name[..dot]` names, or a path under it —
+/// `nestrs_kafka` or `nestrs_kafka::consumer`, never `nestrs_kafka_streams`.
+const fn is_crate_root(target: &str, name: &str, dot: usize) -> bool {
+    let (target, name) = (target.as_bytes(), name.as_bytes());
+    if target.len() < dot || !eq_bytes(target, 0, name, 0, dot) {
+        return false;
+    }
+    target.len() == dot
+        || (target.len() > dot + 2 && target[dot] == b':' && target[dot + 1] == b':')
+}
+
+/// `a[at_a..at_a + len] == b[at_b..at_b + len]`; the caller checks both lengths.
+const fn eq_bytes(a: &[u8], at_a: usize, b: &[u8], at_b: usize, len: usize) -> bool {
+    let mut i = 0;
+    while i < len {
+        if a[at_a + i] != b[at_b + i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// The unit of work completed as asked.
 pub const OK: &str = "ok";
 /// It returned an error, or was refused. The edge's own fields say which.
 pub const ERROR: &str = "error";
-/// Developer code unwound. Distinct from [`ERROR`] because the two are read
-/// differently under incident: one is a handled path, the other is not.
+/// Developer code unwound.
 pub const PANIC: &str = "panic";
-
-/// The field name every edge files [`duration_ms`] under.
+/// It was stopped before it settled — by its caller, at the shutdown signal, or
+/// when the shutdown window closed — and what it had not yet done stays undone.
 ///
-/// A field name is a literal token in `tracing`'s macro grammar, so an edge
-/// spells it rather than referencing this; what reads the constant is the
-/// console formatter, which owes this one field a fixed width. It is here
-/// because the vocabulary of the line is here.
+/// No handler's return says it: an edge files it from a guard dropped with the
+/// unit's future.
+pub const CANCELLED: &str = "cancelled";
+
+/// Record on a unit's span how the unit ended, where OpenTelemetry reads it.
+///
+/// Anything but [`OK`] becomes the span's `error.type` and an `Error` status.
+/// [`operation_line!`](crate::operation_line) calls it; an edge calls it directly
+/// only where it ends a unit without filing a line.
+pub fn record_outcome(span: &tracing::Span, outcome: &str) {
+    if outcome != OK {
+        record_error(span, outcome);
+    }
+}
+
+/// Record on a unit's span that it ended in an error of class `error_type`.
+///
+/// For a class finer than the outcome word: an HTTP `5xx` records its status
+/// code, as OpenTelemetry's HTTP conventions ask.
+pub fn record_error(span: &tracing::Span, error_type: &str) {
+    span.record(ERROR_TYPE, error_type);
+    span.record(STATUS_CODE, STATUS_ERROR);
+}
+
+const ERROR_TYPE: &str = "error.type";
+
+const STATUS_CODE: &str = "otel.status_code";
+
+/// `tracing-opentelemetry` reads it case-insensitively; the conventions spell it `Error`.
+const STATUS_ERROR: &str = "error";
+
+/// The field name every operation line files [`duration_ms`] under.
 pub const DURATION_MS: &str = "duration_ms";
 
-/// Digits after the decimal point when [`DURATION_MS`] is rendered for a human.
-///
-/// Equal to [`duration_ms`]'s own resolution, which is what makes padding
-/// honest: the formula already rounds to the microsecond, so the digits a fixed
-/// width adds are zeros the value really has, never precision it never
-/// measured.
+/// Digits after the decimal point when [`DURATION_MS`] is rendered for a human;
+/// equal to [`duration_ms`]'s resolution.
 pub const DURATION_DECIMALS: usize = 3;
 
 /// Elapsed milliseconds at microsecond resolution.
-///
-/// Rendered in milliseconds because that is the unit an operator compares
-/// against a timeout, and measured to the microsecond because a sub-millisecond
-/// unit of work is the common case and `0` tells them nothing.
 pub fn duration_ms(start: Instant) -> f64 {
     (start.elapsed().as_secs_f64() * 1e6).round() / 1e3
+}
+
+/// Declare one [`Unit`] of this crate —
+/// `pub const REQUEST: Unit = nest_rs_core::unit!("http.request", target:
+/// crate::target::HTTP, kind: Server);`, compiled in `nest_rs_http::unit`'s
+/// example.
+///
+/// The declaring crate (`CARGO_PKG_NAME`, `-` read as `_`) decides the tier:
+///
+/// - **a framework edge**, `nest-rs-<edge>`, declares `<edge>.<unit>` on
+///   `nest_rs::<edge>`, with `<edge>` in [`Edge::ALL`];
+/// - **the kernel**, `nest-rs-core`, declares `lifecycle.<unit>` on
+///   `nest_rs::lifecycle`;
+/// - **any other crate** declares `<its library name>.<unit>` on its own
+///   target, the library name or a path under it: `nestrs-kafka` declares
+///   `nestrs_kafka.message` on `nestrs_kafka` or `nestrs_kafka::consumer`.
+///
+/// Refused at compile time, each with its own sentence: a name off the grammar
+/// (lowercase words, one dot, digits only in the crate's segment), a target
+/// outside the tier's, an edge word or `lifecycle` from a crate that does not
+/// own it, a unit named after another crate, and a package taking the
+/// framework's `nest-rs-` prefix, in either spelling, or its `nest-rs` name.
+#[macro_export]
+macro_rules! unit {
+    ($name:literal, target: $target:expr, kind: $kind:ident $(,)?) => {{
+        const __UNIT: $crate::operation_log::Unit = $crate::__private::declare_unit(
+            ::core::env!("CARGO_PKG_NAME"),
+            $target,
+            $crate::operation_log::Kind::$kind,
+            $name,
+        );
+        __UNIT
+    }};
+}
+
+/// File the operation line of `$unit` — the one line per unit of work — and
+/// record its outcome on the unit's span — compiled in `nest_rs_http::unit`'s
+/// example.
+///
+/// `outcome` is one of [`OK`], [`ERROR`], [`PANIC`], [`CANCELLED`], or an
+/// `Option` of one; the fields after `started` are the declaring crate's own.
+/// A unit another crate declared is refused at compile time. Whichever crate
+/// declared it, the line is filed on [`TARGET`].
+///
+/// Call it inside the unit's correlation (`RequestContinuation::enter`) and
+/// outside its span, so the line carries the unit's ids and is nobody's child.
+#[macro_export]
+macro_rules! operation_line {
+    ($unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr $(, $($field:tt)*)?) => {{
+        const _: () = ::core::assert!(
+            $crate::__private::unit_opened_by(&$unit, ::core::env!("CARGO_PKG_NAME")),
+            "a unit's line is filed only by the crate that declares the unit",
+        );
+        let __outcome: ::core::option::Option<&'static str> = ::core::convert::Into::into($outcome);
+        if let ::core::option::Option::Some(__outcome) = __outcome {
+            $crate::operation_log::record_outcome($span, __outcome);
+        }
+        $crate::tracing::info!(
+            name: $unit.name(),
+            target: $crate::operation_log::TARGET,
+            message = $unit.name(),
+            outcome = __outcome,
+            { $crate::operation_log::DURATION_MS } = $crate::operation_log::duration_ms($started),
+            $($($field)*)?
+        );
+    }};
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The kinds this framework emits, which is the one vocabulary still
-    /// declared here — see `kind` for why the specification's other two are not.
-    ///
-    /// Test-local, and deliberately: the `units` join derives its population
-    /// from the source rather than from a list, so nothing outside this file
-    /// would ever read a published array.
-    const KINDS: [&str; 3] = [kind::SERVER, kind::CONSUMER, kind::INTERNAL];
-
     #[test]
     fn the_duration_keeps_microseconds_rather_than_rounding_to_zero() {
-        // The shape that matters: a fast unit of work reports a fraction, not
-        // the `0` an integer-millisecond formula would give it.
         let start = Instant::now();
         let elapsed = duration_ms(start);
         assert!(elapsed >= 0.0, "{elapsed}");
@@ -192,25 +490,248 @@ mod tests {
         );
     }
 
-    /// The words are the specification's, so what is left to check is that they
-    /// are distinct and spelled the way `otel.kind` is read.
     #[test]
-    fn the_span_kinds_are_distinct_and_spelled_as_otel_reads_them() {
-        let distinct: std::collections::BTreeSet<&str> = KINDS.into_iter().collect();
-        assert_eq!(distinct.len(), KINDS.len(), "a kind is declared twice");
-        for k in KINDS {
+    fn the_span_kinds_are_spelled_as_otel_reads_them() {
+        assert_eq!(Kind::Server.as_str(), "server");
+        assert_eq!(Kind::Consumer.as_str(), "consumer");
+        assert_eq!(Kind::Internal.as_str(), "internal");
+    }
+
+    #[test]
+    fn the_outcome_words_are_distinct() {
+        let words = [OK, ERROR, PANIC, CANCELLED];
+        let distinct: std::collections::BTreeSet<&str> = words.into_iter().collect();
+        assert_eq!(distinct.len(), words.len());
+    }
+
+    /// Run at run time so each refusal is asserted on its own; the compile-time
+    /// refusal is `nest-rs-macro-hygiene`'s trybuild suite.
+    fn declare(owner: &str, target: &'static str, name: &'static str) -> Result<Unit, String> {
+        std::panic::catch_unwind(|| __private::declare_unit(owner, target, Kind::Server, name))
+            .map_err(|payload| crate::panic_message(payload.as_ref()))
+    }
+
+    #[test]
+    fn every_edge_declares_a_unit_from_its_own_crate_on_its_own_target() {
+        for edge in Edge::ALL.iter().map(|edge| edge.as_str()) {
+            let owner = format!("nest-rs-{edge}");
+            let target: &'static str = format!("nest_rs::{edge}").leak();
+            let name: &'static str = format!("{edge}.some_unit").leak();
+            let unit = declare(&owner, target, name).expect("a well-formed unit");
+            assert_eq!(
+                (unit.name(), unit.target(), unit.kind()),
+                (name, target, Kind::Server)
+            );
+            assert!(__private::unit_opened_by(&unit, &owner));
+            assert!(!__private::unit_opened_by(&unit, "nest-rs-redis"));
+            assert!(!__private::unit_opened_by(&unit, &format!("{owner}-tests")));
+        }
+    }
+
+    #[test]
+    fn every_edge_spells_the_vocabulary_in_order() {
+        let spelled: Vec<&str> = Edge::ALL.iter().map(|edge| edge.as_str()).collect();
+        assert_eq!(
+            spelled,
+            [
+                "http", "graphql", "ws", "queue", "schedule", "mcp", "events"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_declared_unit_knows_its_edge() {
+        for &edge in Edge::ALL {
+            let owner = format!("nest-rs-{}", edge.as_str());
+            let target: &'static str = format!("nest_rs::{}", edge.as_str()).leak();
+            let name: &'static str = format!("{}.some_unit", edge.as_str()).leak();
+            let unit = declare(&owner, target, name).expect("a well-formed unit");
+            assert_eq!(unit.edge(), Some(edge), "{name}");
+        }
+    }
+
+    #[test]
+    fn any_other_crate_declares_a_unit_under_its_own_name_on_its_own_target() {
+        for (owner, target, name) in [
+            ("nestrs-kafka", "nestrs_kafka", "nestrs_kafka.message"),
+            (
+                "nestrs-kafka",
+                "nestrs_kafka::consumer",
+                "nestrs_kafka.message",
+            ),
+            ("nestrs-s3", "nestrs_s3", "nestrs_s3.upload"),
+            ("features", "features::sync", "features.sync"),
+        ] {
+            let unit = declare(owner, target, name).expect(name);
+            assert_eq!((unit.name(), unit.target()), (name, target));
+            assert_eq!(unit.edge(), None, "no edge dispatches {name}");
+        }
+    }
+
+    #[test]
+    fn the_kernel_declares_the_lifecycle_units_on_its_own_target() {
+        let unit = declare("nest-rs-core", crate::target::LIFECYCLE, "lifecycle.hook")
+            .expect("the kernel's unit");
+        assert_eq!(unit.target(), crate::target::LIFECYCLE);
+        assert_eq!(unit.edge(), None, "no edge dispatches a lifecycle hook");
+        assert!(__private::unit_opened_by(&unit, "nest-rs-core"));
+        assert!(!__private::unit_opened_by(&unit, "nest-rs-http"));
+        assert!(!__private::unit_opened_by(&unit, "lifecycle"));
+    }
+
+    #[test]
+    fn a_package_unit_is_opened_by_its_crate_alone() {
+        let unit = declare("nestrs-kafka", "nestrs_kafka", "nestrs_kafka.message").expect("a unit");
+        assert!(__private::unit_opened_by(&unit, "nestrs-kafka"));
+        assert!(__private::unit_opened_by(&unit, "nestrs_kafka"));
+        assert!(!__private::unit_opened_by(&unit, "nestrs-kafka-macros"));
+        assert!(!__private::unit_opened_by(&unit, "nestrs-kafk"));
+        assert!(!__private::unit_opened_by(&unit, "nest-rs-queue"));
+    }
+
+    /// A crate named after an edge word is still not that edge's crate.
+    #[test]
+    fn an_edge_unit_is_not_opened_by_a_crate_named_after_its_edge() {
+        let unit = declare("nest-rs-http", "nest_rs::http", "http.request").expect("a unit");
+        assert!(!__private::unit_opened_by(&unit, "http"));
+    }
+
+    #[test]
+    fn a_package_unit_off_its_crate_is_refused_naming_the_fact() {
+        for (owner, target, name, fact) in [
+            (
+                "nestrs-kafka",
+                "nestrs_kafka",
+                "kafka.message",
+                "declared by the crate it is named after",
+            ),
+            (
+                "queue-tools",
+                "queue_tools",
+                "queue.job",
+                "the edge vocabulary is the framework's",
+            ),
+            (
+                "nest-rs-grpc",
+                "nest_rs_grpc",
+                "nest_rs_grpc.call",
+                "the `nest-rs-` prefix is the framework's",
+            ),
+            (
+                "nestrs-kafka",
+                "nest_rs::kafka",
+                "nestrs_kafka.message",
+                "its crate's own target",
+            ),
+            (
+                "nestrs-kafka",
+                "nestrs_kafka_streams",
+                "nestrs_kafka.message",
+                "its crate's own target",
+            ),
+            (
+                "nestrs-kafka",
+                "nestrs_kafka",
+                "lifecycle.hook",
+                "the `lifecycle` units are the kernel's",
+            ),
+            (
+                "nest-rs-http",
+                "nest_rs::lifecycle",
+                "lifecycle.hook",
+                "the `lifecycle` units are the kernel's",
+            ),
+            (
+                "nest-rs-core",
+                "nest_rs::core",
+                "lifecycle.hook",
+                "`nest_rs::lifecycle`",
+            ),
+            (
+                "nest_rs_grpc",
+                "nest_rs_grpc",
+                "nest_rs_grpc.call",
+                "the `nest-rs-` prefix is the framework's",
+            ),
+            (
+                "nest-rs",
+                "nest_rs::http",
+                "nest_rs.request",
+                "the `nest-rs-` prefix is the framework's",
+            ),
+            ("nestrs-s3", "nestrs_s3", "nestrs_s3.upload2", "lowercase"),
+            ("nestrs-3d", "nestrs_3d", "3d.render", "lowercase"),
+        ] {
+            let refused = declare(owner, target, name).expect_err(name);
             assert!(
-                k.chars().all(|c| c.is_ascii_lowercase()),
-                "{k} must be lowercase, as `otel.kind` is read",
+                refused.contains(fact),
+                "{name} from {owner} on {target}: {refused}"
             );
         }
     }
 
     #[test]
-    fn the_outcome_words_are_distinct() {
-        // A new edge picking a fourth word is what this vocabulary exists to
-        // prevent; that they differ from each other is the cheap half of it.
-        assert_ne!(OK, ERROR);
-        assert_ne!(ERROR, PANIC);
+    fn a_unit_off_the_grammar_is_refused_naming_the_fact() {
+        for (owner, target, name, fact) in [
+            ("nest-rs-queue", "nest_rs::queue", "Queue.job", "lowercase"),
+            ("nest-rs-queue", "nest_rs::queue", "queue job", "lowercase"),
+            ("nest-rs-queue", "nest_rs::queue", "queue", "one dot"),
+            (
+                "nest-rs-queue",
+                "nest_rs::queue",
+                "queue.job.attempt",
+                "one dot",
+            ),
+            ("nest-rs-queue", "nest_rs::queue", ".job", "one dot"),
+            ("nest-rs-queue", "nest_rs::queue", "queue.", "one dot"),
+            (
+                "nest-rs-grpc",
+                "nest_rs::grpc",
+                "grpc.call",
+                "closed edge vocabulary",
+            ),
+            (
+                "nest-rs-queue",
+                "nest_rs::queu",
+                "queue.job",
+                "`nest_rs::<edge>`",
+            ),
+            (
+                "nest-rs-queue",
+                "nest_rs::queues",
+                "queue.job",
+                "`nest_rs::<edge>`",
+            ),
+            (
+                "nest-rs-queue",
+                "nest_rs::http",
+                "queue.job",
+                "`nest_rs::<edge>`",
+            ),
+            (
+                "nest-rs-redis",
+                "nest_rs::queue",
+                "queue.job",
+                "`nest-rs-<edge>`",
+            ),
+            (
+                "nest-rs-queue-macros",
+                "nest_rs::queue",
+                "queue.job",
+                "`nest-rs-<edge>`",
+            ),
+            (
+                "nest-rs-http",
+                "nest_rs::ws",
+                "ws.message",
+                "`nest-rs-<edge>`",
+            ),
+        ] {
+            let refused = declare(owner, target, name).expect_err(name);
+            assert!(
+                refused.contains(fact),
+                "{name} from {owner} on {target}: {refused}"
+            );
+        }
     }
 }

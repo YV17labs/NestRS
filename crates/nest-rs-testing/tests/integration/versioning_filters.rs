@@ -1,8 +1,5 @@
-//! URI versioning (`#[controller(version = "1")]`) and exception filters
-//! (`#[use_filters]`), end-to-end through the HTTP harness. Also pins the
-//! cross-scope TypeId dedup contract: a filter declared at any combination of
-//! global / controller / method scopes is composed through `compose_chain` by
-//! the per-route pool and executes exactly once.
+//! URI versioning (`#[controller(version = "1")]`) and filters
+//! (`#[use_filters]`), including the cross-scope `TypeId` dedup.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -104,13 +101,6 @@ async fn controller_level_filter_maps_errors_without_a_per_route_filter() {
     resp.assert_text("filtered").await;
 }
 
-// --- TypeId dedup across scopes ---------------------------------------------
-//
-// The filter under test ([`CountingFilter`]) returns a fixed body and bumps
-// a process-global counter every call. Tests share that counter, so a
-// `tokio::sync::Mutex` serializes them — `cargo nextest` parallelizes by
-// default.
-
 static FILTER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static GATE: Mutex<()> = Mutex::const_new(());
 
@@ -188,9 +178,6 @@ async fn same_filter_global_and_controller_runs_once() {
     let _gate = GATE.lock().await;
     reset_filter_counter();
 
-    // Global seeding + a redeclaration on the controller. The per-route pool
-    // composes global + controller and dedups by TypeId — broadest (global)
-    // wins, so the filter runs once.
     let app = TestApp::builder()
         .module::<DedupFilterModule>()
         .use_filters_global([filter::<CountingFilter>()])
@@ -212,8 +199,6 @@ async fn same_filter_global_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_filter_counter();
 
-    // Same shape: the method-scope wrap is skipped at mount time when
-    // the TypeId is already in `FilterSpecs`.
     let app = TestApp::builder()
         .module::<DedupFilterModule>()
         .use_filters_global([filter::<CountingFilter>()])
@@ -235,9 +220,6 @@ async fn same_filter_controller_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_filter_counter();
 
-    // Controller and method both declare the filter. The per-route pool
-    // composes them through `compose_chain` and dedups by `TypeId` (broadest
-    // scope wins) — one filter wrap on the error path, one execution.
     let app = TestApp::for_module::<DedupFilterModule>()
         .await
         .expect("boots");
@@ -256,8 +238,6 @@ async fn same_filter_at_all_three_scopes_runs_once() {
     let _gate = GATE.lock().await;
     reset_filter_counter();
 
-    // Global + controller + method — the broadest (global) wins and maps the
-    // error at the transport edge; both narrower redeclarations are dropped.
     let app = TestApp::builder()
         .module::<DedupFilterModule>()
         .use_filters_global([filter::<CountingFilter>()])

@@ -1,0 +1,5 @@
+error: #[api] `error` takes a list of `status = Type`, the status a 4xx or 5xx, e.g. `error(503 = ProbeReport)`; the success payload is `response = T`
+  --> tests/integration/diagnostics/http/api_error_not_an_error_status.rs:13:17
+   |
+13 |     #[api(error(200 = String))]
+   |                 ^^^

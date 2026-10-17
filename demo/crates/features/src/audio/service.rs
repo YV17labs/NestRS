@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
-use nest_rs::core::injectable;
+use nest_rs::core::{error_message, injectable};
 use nest_rs::queue::{JobProducer, JobProducerExt};
 use nest_rs::storage::Storage;
 use uuid::Uuid;
@@ -35,15 +35,15 @@ impl AudioService {
     pub async fn presign_upload(&self, filename: &str) -> Result<PresignedUrlDto, AudioError> {
         let key = format!("{}-{filename}", Uuid::now_v7());
         let url = self.storage.presign_put(&key, PRESIGN_TTL).await?;
-        tracing::debug!(target: "features::audio", key, "minted presigned upload URL");
+        tracing::debug!(target: crate::audio::TARGET, key, "minted presigned upload URL");
         Ok(PresignedUrlDto { key, url })
     }
 
     pub async fn enqueue_transcode(&self, file: String) -> Result<(), AudioError> {
         self.queue
-            .push_to::<AudioQueue>(TranscodeCommand { file: file.clone() })
+            .push(AudioQueue, TranscodeCommand { file: file.clone() }, None)
             .await?;
-        tracing::debug!(target: "features::audio", file, "enqueued transcode job");
+        tracing::debug!(target: crate::audio::TARGET, file, "enqueued transcode job");
         Ok(())
     }
 
@@ -57,16 +57,19 @@ impl AudioService {
     }
 
     pub async fn transcode(&self, file: &str) -> Result<String, AudioError> {
-        let source = self.storage.get_bytes(file).await?;
         let derived = Self::derived_key(file);
+        let source = self
+            .storage
+            .get_stream(file)
+            .await?
+            .map(|chunk| chunk.map_err(std::io::Error::other));
         self.storage
-            .put_bytes(&derived, source.to_vec(), AUDIO_CONTENT_TYPE)
+            .put_stream(&derived, AUDIO_CONTENT_TYPE, source)
             .await?;
         tracing::debug!(
-            target: "features::audio",
+            target: crate::audio::TARGET,
             file,
             derived_key = derived,
-            byte_size = source.len(),
             "transcoded",
         );
         Ok(derived)
@@ -82,7 +85,7 @@ impl AudioService {
             .put_stream(&key, AUDIO_CONTENT_TYPE, part)
             .await?;
         let url = self.storage.presign_get(&key, PRESIGN_TTL).await?;
-        tracing::debug!(target: "features::audio", key, "stored direct multipart upload");
+        tracing::debug!(target: crate::audio::TARGET, key, "stored direct multipart upload");
         Ok(PresignedUrlDto { key, url })
     }
 
@@ -139,9 +142,9 @@ impl AudioService {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            target: "features::audio",
+                            target: crate::audio::TARGET,
                             file = %file,
-                            error = %e,
+                            error = %error_message(&e),
                             "transcode status poll failed",
                         );
                         Some((event(TranscodeState::Error), u32::MAX))

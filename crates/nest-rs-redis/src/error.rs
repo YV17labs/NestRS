@@ -1,49 +1,285 @@
-//! Typed errors for the Redis substrate.
-//!
-//! Framework crates surface `thiserror` enums, not `anyhow`. Opening the shared
-//! connection is a Redis-specific step, so it carries its own error here; the
-//! producer surface (the `JobProducer` impl on
-//! [`RedisQueueProducer`](crate::RedisQueueProducer)) instead speaks the
-//! backend-agnostic
-//! [`QueueError`](::nest_rs_queue::QueueError), wrapping a Redis push failure as
-//! its opaque `Backend` source.
+//! Typed errors for the Redis connection, and for binding a port over it. A
+//! binding speaks its port's error once bound, a Redis failure as its source.
 
 use thiserror::Error;
 
 /// A failure opening the shared [`RedisConnection`](crate::RedisConnection)
-/// from the configured URL.
+/// from its configuration, or binding a port over it.
 ///
-/// Concern-prefixed (`RedisError`, not a generic `ConnectionError`) to match
-/// the house pattern — `ConfigError`, `StorageError`, `QueueError` — and avoid
-/// a name collision when an app imports several infra errors at once.
+/// Every variant names the endpoint as the address the client dials — never the
+/// URL, which may embed a password, and every one of these strings reaches logs
+/// and stderr. A variable a sentence names is the failing instance's, held
+/// rendered in the variant — `<PREFIX>_REDIS__URL` for the default instance,
+/// `<PREFIX>_REDIS__CACHE__URL` for `Cache` — never a value. Such a field is
+/// the variable's key, lowercased and its unit dropped, then `_var`
+/// (`CONNECT_TIMEOUT_SECS` is `connect_timeout_var`), or `_vars` for a group of
+/// keys sharing a prefix (`tls_vars`).
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RedisError {
-    /// The Redis connection could not be established.
-    #[error("failed to connect to Redis")]
-    Connect(#[from] redis::RedisError),
+    /// The URL could not configure a connection — malformed, or a scheme the
+    /// client does not speak. Refused at once, never retried.
+    #[error("invalid Redis URL {endpoint}: check {url_var}")]
+    InvalidUrl {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// Why the client rejected it.
+        #[source]
+        source: redis::RedisError,
+    },
 
-    /// The connect budget elapsed with the backend still unreachable. Carries
-    /// the redacted endpoint and the knob to widen, because this is the boot
-    /// error an operator reads at 3am — an unreachable queue used to be
-    /// indistinguishable from a hung process.
+    /// A URL asking for RESP3 (`protocol=resp3`): every binding reads Redis's
+    /// RESP2 replies.
     #[error(
-        "could not reach Redis at {endpoint} within {}s ({attempts} attempt(s)): \
-         check {url_var}, or widen the budget with {timeout_var}",
-        budget.as_secs(),
-        url_var = ::nest_rs_config::var_name("redis", "URL"),
-        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+        "the Redis URL for {endpoint} asks for RESP3 (`protocol=resp3`), which nestrs does not \
+         speak to Redis: remove it from {url_var}"
     )]
-    Unreachable {
-        /// The configured endpoint with any userinfo stripped — the URL may
-        /// embed a password and this string reaches logs and stderr.
+    UnsupportedProtocol {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
+    },
+
+    /// The connect budget is outside the range its variable is held to — a
+    /// [`RedisConfig`](crate::RedisConfig) built in code and handed to
+    /// [`RedisConnection::connect`](crate::RedisConnection::connect) without a
+    /// config read. Refused before anything is dialled, in the words the variable
+    /// is refused in.
+    #[error(transparent)]
+    Budget(nest_rs_config::ConfigError),
+
+    /// A queue lease the connect budget leaves no renewal room in: a renewal
+    /// sent a third in may wait out the whole budget. Feature `queue`.
+    #[cfg(feature = "queue")]
+    #[error(
+        "the Redis queue lease ({lease:?}) must be more than one and a half times the Redis \
+         budget ({budget:?}): a renewal is sent a third into the lease and may wait out the \
+         whole budget, so a shorter lease lapses while Redis still answers — raise {lease_var} \
+         or lower {connect_timeout_var}"
+    )]
+    BudgetPastLease {
+        /// The connect budget.
+        budget: std::time::Duration,
+        /// The queue binding's lease.
+        lease: std::time::Duration,
+        /// The lease's variable, under the instance the queue binds.
+        lease_var: String,
+        /// The connect budget's variable.
+        connect_timeout_var: String,
+    },
+
+    /// A `rediss://` URL carrying `#insecure`, which asks the client to accept
+    /// whatever certificate it is shown — refused; a private authority is
+    /// trusted by configuring it.
+    #[error(
+        "the Redis URL for {endpoint} asks to skip certificate verification (`#insecure`), which is \
+         refused: remove it from the URL — {url_var}, or `RedisConfig::url` pinned in code — and \
+         trust the authority that signed Redis's certificate with {tls_ca_cert_var}"
+    )]
+    UnverifiedTls {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// The trusted authorities' variable, both spellings.
+        tls_ca_cert_var: String,
+    },
+
+    /// TLS material configured beside a URL whose scheme does not encrypt —
+    /// `redis://`, `redis-sentinel://`, `redis-cluster://` — where it would go
+    /// unused: refused rather than ignored.
+    #[error(
+        "TLS material is configured for Redis at {endpoint}, but the URL's scheme does not \
+         encrypt, so the material would go unused and the connection unencrypted: point {url_var} \
+         at ports serving TLS with `rediss://`, `rediss-sentinel://` or `rediss-cluster://`, or \
+         remove the material — {tls_vars}, their _FILE forms, or `RedisConfig::tls` pinned in \
+         code"
+    )]
+    PlaintextUrl {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// The material's three variables, listed.
+        tls_vars: String,
+    },
+
+    /// The TLS settings could not carry a connection: material no handshake
+    /// could use, a certificate the client does not accept, a handshake Redis
+    /// refused, or a peer answering in something other than TLS. Fails at once
+    /// with what to change.
+    #[error("TLS with Redis at {endpoint} was refused: {reason}")]
+    TlsRefused {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// What to change, naming the setting. When a handshake is what
+        /// refused, rustls's reason travels in `source`.
+        reason: String,
+        /// The client's error, when the refusal came from a connection attempt
+        /// or from building the client rather than from checking the material.
+        #[source]
+        source: Option<redis::RedisError>,
+    },
+
+    /// Redis answered, and refused in a way every attempt would repeat —
+    /// credentials, an ACL denying the proof, a protocol it does not speak. Fails
+    /// at once, with Redis's answer as the source.
+    #[error("Redis at {endpoint} refused the connection: check {url_var}")]
+    Refused {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// What Redis answered.
+        #[source]
+        source: redis::RedisError,
+    },
+
+    /// Redis refused to select the database the URL names, for a reason every
+    /// attempt would repeat: an index past the server's `databases` — a Cluster
+    /// node's `cluster-databases` — or an ACL user without `+select`. It fails at
+    /// once naming the index, with Redis's answer as the source.
+    #[error(
+        "Redis at {endpoint} refused to select database {database}, the index {url_var} ends \
+         in — its answer follows: the index must be below the server's `databases`, a \
+         Cluster node's `cluster-databases` (one unless set), and an ACL user needs `+select`"
+    )]
+    DatabaseRefused {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The database index the URL names.
+        database: i64,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// What Redis answered.
+        #[source]
+        source: redis::RedisError,
+    },
+
+    /// The URL declares a topology other than the one the server it reached
+    /// serves, as the server's `HELLO` says — a URL of one server at a Cluster
+    /// node or a sentinel, a Cluster URL at a server of its own, a Sentinel URL
+    /// at a data node. Fails at once.
+    #[error(
+        "the Redis URL declares the {declared} topology, but {endpoint} serves the {serves} one: \
+         name a server of its own with rediss://, a Sentinel deployment's sentinels with \
+         rediss-sentinel://, and a Cluster's nodes with rediss-cluster:// in {url_var}"
+    )]
+    TopologyMismatch {
+        /// The address the client dialled, never the URL.
+        endpoint: String,
+        /// The topology the URL's scheme declares.
+        declared: crate::RedisTopology,
+        /// The topology the server serves.
+        serves: crate::RedisTopology,
+        /// The URL's variable, both spellings.
+        url_var: String,
+    },
+
+    /// No sentinel the URL names answered within the connect budget.
+    #[error(
+        "no Valkey Sentinel of {sentinels} answered within {budget:?} ({attempts} attempt(s)): \
+         check {url_var}, or widen the budget with {connect_timeout_var}"
+    )]
+    SentinelUnreachable {
+        /// The sentinels the URL names, never the URL.
+        sentinels: String,
+        /// The budget that elapsed.
+        budget: std::time::Duration,
+        /// How many times every sentinel was asked.
+        attempts: u32,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// The connect budget's variable.
+        connect_timeout_var: String,
+        /// The last sentinel's failure, when one failed outright.
+        #[source]
+        source: Option<redis::RedisError>,
+    },
+
+    /// The sentinels answered, and none knew a primary by the name the URL gives
+    /// it — the name `sentinel monitor` gave the primary.
+    #[error(
+        "the Valkey Sentinels {sentinels} know no primary named `{service_name}` within \
+         {budget:?} ({attempts} attempt(s)): set `sentinelServiceName` in {url_var} to the name \
+         they monitor it under"
+    )]
+    PrimaryUnknown {
+        /// The sentinels that answered, never the URL.
+        sentinels: String,
+        /// The name the URL gives the primary.
+        service_name: String,
+        /// The budget that elapsed.
+        budget: std::time::Duration,
+        /// How many times every sentinel was asked.
+        attempts: u32,
+        /// The URL's variable, both spellings.
+        url_var: String,
+    },
+
+    /// The connect budget elapsed with Redis answering every attempt, last with
+    /// an answer that may clear — a dataset still loading, a script past its
+    /// threshold, a failover in progress, a code this client does not know.
+    #[error(
+        "Redis at {endpoint} answered but was not ready within {budget:?} ({attempts} \
+         attempt(s)) — its last answer follows; widen the budget with {connect_timeout_var} if it \
+         clears on its own"
+    )]
+    Unready {
+        /// The address the client dials, never the URL.
         endpoint: String,
         /// The budget that elapsed.
         budget: std::time::Duration,
         /// How many connect attempts were made inside it.
         attempts: u32,
+        /// The connect budget's variable.
+        connect_timeout_var: String,
+        /// Redis's last answer.
+        #[source]
+        source: redis::RedisError,
+    },
+
+    /// The connect budget elapsed with the backend still unreachable.
+    #[error(
+        "could not reach Redis at {endpoint} within {budget:?} ({attempts} attempt(s)): \
+         check {url_var}, or widen the budget with {connect_timeout_var}"
+    )]
+    Unreachable {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The budget that elapsed.
+        budget: std::time::Duration,
+        /// How many connect attempts were made inside it.
+        attempts: u32,
+        /// The URL's variable, both spellings.
+        url_var: String,
+        /// The connect budget's variable.
+        connect_timeout_var: String,
         /// The last transport failure, when the budget ran out after an
         /// outright error rather than mid-attempt.
+        #[source]
+        source: Option<redis::RedisError>,
+    },
+}
+
+/// Why one round of asking the sentinels found no primary to keep — each may
+/// clear, so the next round follows within the budget.
+#[derive(Debug, Error)]
+pub(crate) enum SentinelMiss {
+    /// No sentinel answered.
+    #[error("no sentinel answered")]
+    Unreachable(#[source] Option<redis::RedisError>),
+    /// The sentinels that answered know no primary by the URL's name.
+    #[error("the sentinels that answered know no primary by the URL's name")]
+    Unknown,
+    /// The address the sentinels named did not answer as a primary — a
+    /// failover under way, or a primary not reachable from here.
+    #[error("the primary the sentinels name at {endpoint} did not answer as one")]
+    Primary {
+        endpoint: String,
         #[source]
         source: Option<redis::RedisError>,
     },

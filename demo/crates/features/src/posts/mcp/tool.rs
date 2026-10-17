@@ -4,13 +4,13 @@ use nest_rs::authz::Action;
 use nest_rs::mcp::model::{
     GetPromptResult, ListResourcesResult, PaginatedRequestParams, PromptMessage,
     ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, Role, ServerCapabilities, ServerInfo,
+    ResourceContents, Role,
 };
 use nest_rs::mcp::rmcp;
 use nest_rs::mcp::service::{RequestContext, RoleServer};
 use nest_rs::mcp::{
-    CallToolResult, ContentBlock, McpError, Opaque, ServerHandler, mcp, prompt, prompt_handler,
-    prompt_router, tool, tool_handler, tool_router,
+    CallToolResult, ContentBlock, McpError, Opaque, ServerCapabilities, ServerConfig,
+    ServerHandler, mcp, prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router,
 };
 use nest_rs::seaorm::{Access, CrudService};
 use uuid::Uuid;
@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::posts::PostsService;
 
 const POST_URI_PREFIX: &str = "post://";
+const UNKNOWN_RESOURCE: &str = "unknown resource";
 
 #[mcp(
     path = "/mcp/posts",
@@ -78,8 +79,8 @@ impl PostsTool {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for PostsTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -113,9 +114,7 @@ impl ServerHandler for PostsTool {
             .uri
             .strip_prefix(POST_URI_PREFIX)
             .and_then(|raw| Uuid::parse_str(raw).ok())
-            .ok_or_else(|| {
-                McpError::resource_not_found(format!("unknown resource `{}`", request.uri), None)
-            })?;
+            .ok_or_else(|| McpError::resource_not_found(UNKNOWN_RESOURCE, None))?;
 
         let post = match CrudService::access(&*self.svc, Action::Read, id)
             .await
@@ -123,10 +122,7 @@ impl ServerHandler for PostsTool {
         {
             Access::Found(post) => post,
             Access::Denied | Access::Missing => {
-                return Err(McpError::resource_not_found(
-                    format!("unknown resource `{}`", request.uri),
-                    None,
-                ));
+                return Err(McpError::resource_not_found(UNKNOWN_RESOURCE, None));
             }
         };
 

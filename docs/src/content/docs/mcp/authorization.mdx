@@ -13,8 +13,8 @@ endpoint's `dyn McpOperationGuard` (mirroring `AuthzModule`,
 `AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
 re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
 the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
-in the same order, from the same `run_ability_chain`, nothing re-implemented per
-transport.
+in the same order, through the same authenticate-then-authorize step, nothing
+re-implemented per transport.
 
 ```rust title="apps/api/src/module.rs"
 #[module(
@@ -31,9 +31,10 @@ pub struct AssistantModule;
 ```
 
 With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
-endpoint's guard, so the closed default is replaced, not silenced (a registered
-bridge also replaces the global-pool fallback: it runs the same guards itself,
-so nothing runs twice). Tools then
+endpoint's guard, so the closed default is replaced, not silenced. It joins the
+app's global guard pool rather than replacing it: every guard listed in
+`use_guards_global(...)` still runs at the request, and one the bridge runs
+itself runs once. Tools then
 read the ambient ability the same way HTTP handlers do: through a service that
 goes through `Repo`, which applies the ability's row-level filter automatically.
 A tool that lists users gets only the users the caller is allowed to see — same
@@ -55,7 +56,7 @@ access line names the session and would say nothing about the work.
 
 ```text frame="terminal"
 INFO nest_rs::operation: mcp.operation operation="call_tool" outcome="ok" duration_ms=25.252 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=50514602c8481e19
-INFO nest_rs::operation: http.request method=POST path="/mcp" status=200 bytes=211 duration_ms=25.927 client_ip=0.0.0.0 forwarded=false trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=b3162e5d41cfe17e
+INFO nest_rs::operation: http.request method=POST path="/mcp" status=200 bytes=211 duration_ms=25.927 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=b3162e5d41cfe17e
 ```
 
 The tool call and the request that carried it share a `trace_id` and hold
@@ -98,8 +99,10 @@ declared at two scopes still checks the operation once:
     async fn transcode_status(&self, /* … */) -> Result<String, McpError> { /* … */ }
 ```
 
-One `Guard` impl serves both transports: `check_http` reads the ability off the
-request, `check_mcp` reads the ambient one the bridge installed.
+One `Guard` impl serves both transports: `check_http` reads the ability
+`AuthzGuard` attached earlier in the route's stage, `check` the one the
+bridge attached to the `/mcp` request — both through `cx.ambient::<Ability>()`,
+and the guard declares `GuardFor<HttpView>` and `GuardFor<McpView>`.
 
 Masking round-trips the value through the entity model, so it needs the full
 `#[expose]` shape to reconcile against — and MCP has no selection set to excuse
@@ -120,8 +123,8 @@ imports = [/* … */, OAuthResourceModule::for_root(None)]
 ```
 
 ```bash
-NESTRS_OAUTH_RESOURCE__RESOURCE=https://mcp.example.com
-NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
+NESTRS_OAUTH__RESOURCE__RESOURCE=https://mcp.example.com
+NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
 NESTRS_AUTHN__AUDIENCE=https://mcp.example.com
 ```
 
@@ -134,7 +137,7 @@ www-authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/
 
 That is the first hop of the client's flow — rmcp implements the rest of it, so
 an MCP client reaches your authorization server without being configured with
-its address. `NESTRS_AUTHN__AUDIENCE` becomes mandatory under this module: see
+its address. `<PREFIX>_AUTHN__AUDIENCE` becomes mandatory under this module: see
 [split deployment](/security/authentication/split-deployment/)
 for why a resource server that skips it can be handed someone else's token.
 

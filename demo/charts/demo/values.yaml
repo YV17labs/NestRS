@@ -39,10 +39,10 @@ config:
   # Mirrors `features::authz::constants` — the scopes the demo's rules gate on.
   # A scope a rule requires but this list omits is a dead end the framework
   # reports at warn on boot.
-  OAUTH_RESOURCE__SCOPES_SUPPORTED: posts:read,posts:write,audio:transcode
+  OAUTH__RESOURCE__SCOPES_SUPPORTED: posts:read,posts:write,audio:transcode
   OPENAPI__DESCRIPTION: Demo API built with nestrs
+  STORAGE__URL: s3://nestrs
   STORAGE__REGION: us-east-1
-  STORAGE__BUCKET: nestrs
   STORAGE__FORCE_PATH_STYLE: "true"
   # `<PREFIX>_LOG` — the framework's own EnvFilter directive (it falls back to
   # the ecosystem's unprefixed RUST_LOG). `nest_rs::operation=off` silences
@@ -57,10 +57,12 @@ config:
 #
 # Required (here or in `existingSecret`):
 #   SEAORM__URL              postgres://user:pass@host:5432/db
-#   REDIS__URL               redis://host:6379
+#   REDIS__URL               rediss://host:6379
 #   AUTHN__PRIVATE_KEY       PEM, Ed25519 — generate your own, never the repo's
 #   AUTHN__PUBLIC_KEY        PEM, its matching half
-# Optional: STORAGE__ACCESS_KEY, STORAGE__SECRET_KEY, ISSUER__CLIENTS,
+#   STORAGE__ACCESS_KEY      the object store's access key id
+#   STORAGE__SECRET_KEY      and its secret
+# Optional: OAUTH__CLIENTS,
 #   SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*
 secrets: {}
 
@@ -198,9 +200,8 @@ apps:
     host: ""
     ingress: true
     # WebSocket. Sockets live up to NESTRS_WS__MAX_CONNECTION_SECS (4h by
-    # default), so a rollout drops them and clients reconnect — CPU is a poor
+    # default), so a rollout closes them and clients reconnect — CPU is a poor
     # signal for a connection-bound edge, hence no autoscaling here by default.
-    terminationGracePeriodSeconds: 60
 
   worker:
     bin: worker
@@ -208,24 +209,25 @@ apps:
     port: 3005
     host: ""
     ingress: false
-    # Must exceed NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS (30s by default),
-    # or SIGKILL lands mid-drain and every in-flight job is re-run.
-    terminationGracePeriodSeconds: 45
     # Two facts about this worker, both from the framework's own source:
     #
-    # 1. It runs `concurrency(1)` per `#[process]` method — throughput comes
-    #    from replicas, never from a bigger pod. Both demo jobs are pure I/O
-    #    (S3 round-trip, one INSERT), so a pod draining a huge backlog sits
-    #    near 0% CPU and a CPU-driven HPA never fires. Turn `autoscaling` on
-    #    only if your own processor is genuinely CPU-bound.
-    # 2. apalis re-enqueues orphaned jobs on every worker start, with a cutoff
-    #    that matches all registered consumers — a scale-up therefore re-runs
-    #    its peers' in-flight jobs. `#[process]` handlers must be idempotent,
-    #    and scaling stays deliberately unhurried.
+    # 1. A `#[process]` method runs as many jobs at once as its `concurrency`
+    #    declares, in each replica — four transcodes, one notification write —
+    #    and throughput past that comes from replicas. Both demo jobs are pure
+    #    I/O (an S3 round-trip, one INSERT), so a pod draining a huge backlog
+    #    sits near 0% CPU and a CPU-driven HPA never fires. Turn `autoscaling`
+    #    on only if your own processor is genuinely CPU-bound.
+    # 2. A scale-up never moves a peer's jobs: a job changes hands only once
+    #    the lease of the worker holding it lapsed. The queue is still
+    #    at-least-once, so a handler stays idempotent.
     autoscaling:
       enabled: false
     # Queue depth, the signal that actually reflects a backlog. Needs KEDA in
     # the cluster. `minReplicaCount: 1` on purpose — see `keda.redis` below.
+    # A trigger's `streamLength` is the backlog one replica is sized for, so it
+    # moves with the method's `concurrency`: a replica runs four transcodes at
+    # once, and 20 on the stream is the same five per running transcode that 5
+    # was when it ran one.
     keda:
       enabled: false
       minReplicaCount: 1
@@ -233,31 +235,48 @@ apps:
       pollingInterval: 20
       cooldownPeriod: 300
       triggers:
-        - type: redis
+        - type: redis-streams
           metadata:
-            listName: audio:active
-            listLength: "5"
-        - type: redis
+            stream: "nestrs:queue:{audio}:jobs"
+            streamLength: "20"
+        - type: redis-streams
           metadata:
-            listName: notifications:active
-            listLength: "20"
+            stream: "nestrs:queue:{notifications}:jobs"
+            streamLength: "20"
 
 # --- KEDA ---------------------------------------------------------------------
 # KEDA connects to Redis itself, from the operator — not through the app's env.
-# Its scaler wants `host:port`, not the `redis://` URL the framework reads.
+# Its scaler wants `host:port`, not the `rediss://` URL the framework reads, and
+# speaks TLS when `enableTLS` says so, as Valkey does here.
 #
-# Why minReplicaCount defaults to 1 rather than 0: with no worker running,
-# nothing promotes `<queue>:scheduled` into `<queue>:active` and nothing
-# recovers `<queue>:inflight` from a pod that died mid-job. Neither is reachable
-# from today's demo — the producer pushes straight to `:active` and retries are
-# in-process — but scale-to-zero makes both permanent the day a delayed push
-# appears. Set it to 0 knowingly.
+# Why minReplicaCount defaults to 1 rather than 0: a job held back — a retry
+# waiting for its backoff, a delayed push — waits on
+# `nestrs:queue:{<queue>}:due`, which the trigger does not read, and only a
+# running worker files it on the stream the trigger reads. With no worker
+# running, a retry therefore waits for the next push to wake the deployment.
+# Every demo job retries. Set it to 0 knowingly.
 keda:
   redis:
+    # The topology the app's URL declares — standalone, sentinel or cluster —
+    # which picks KEDA's scaler: redis-streams, redis-sentinel-streams or
+    # redis-cluster-streams.
+    topology: standalone
+    # standalone: the server's host:port.
     address: ""
-    # Name of an env var on the worker pod holding the Redis password, if any.
+    # sentinel and cluster: every host the URL names, comma-separated host:port.
+    addresses: ""
+    # sentinel: the URL's sentinelServiceName.
+    sentinelMaster: ""
+    # Names of env vars on the worker pod holding the credentials of KEDA's
+    # user — the rule the queue's docs prescribe — and, under Sentinel, of its
+    # user on the sentinels, if any.
+    usernameFromEnv: ""
     passwordFromEnv: ""
-    enableTLS: false
+    sentinelUsernameFromEnv: ""
+    sentinelPasswordFromEnv: ""
+    enableTLS: true
+    # The database of the URL's path. KEDA's cluster scaler reads database 0
+    # alone, so on a Cluster it stays 0.
     databaseIndex: 0
 
 # --- helm test ----------------------------------------------------------------

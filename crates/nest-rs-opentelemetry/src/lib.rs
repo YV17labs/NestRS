@@ -1,44 +1,54 @@
 //! OpenTelemetry for nestrs.
 //!
 //! [`OpenTelemetry::init`] sets up `tracing` (console fmt always; OTLP exporter when the
-//! `otlp` feature is on and `NESTRS_OPENTELEMETRY__OTLP_ENDPOINT` is set). The returned
+//! `otlp` feature is on and `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` is set). The returned
 //! guard flushes on drop, so it must outlive `main`.
 //!
-//! [`OpenTelemetryModule`] provides the OTel meter. Everything else this crate
-//! adds — the remote parent link and the sampler's verdict — is seeded onto the
-//! framework's span constructor at `init`, so it reaches **every** edge rather
-//! than the one transport an interceptor could hang from.
-//!
-//! The span, the W3C trace context and the access log belong to the transports
-//! and to `nest-rs-core`: they must exist whether or not this crate does.
+//! [`OpenTelemetryModule`] provides [`Metrics`], where an app records its
+//! measurements through instruments named by the OpenTelemetry Metrics API —
+//! [`Counter`], [`UpDownCounter`], [`Histogram`], [`Gauge`] — with no
+//! `opentelemetry` type in its signatures. The remote parent link and
+//! the sampler's verdict are seeded onto the framework's span constructor at
+//! `init`, so they reach **every** edge.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — The exporter's own diagnostics.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::opentelemetry";
 
+#[cfg(feature = "otlp")]
+mod attribute;
 mod config;
 mod error;
 #[cfg(feature = "otlp")]
 mod id_generator;
 mod init;
 #[cfg(feature = "otlp")]
+mod instruments;
+#[cfg(feature = "otlp")]
 mod linker;
 #[cfg(feature = "otlp")]
-mod meter;
+mod metrics;
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
 
+#[cfg(feature = "otlp")]
+pub use attribute::{Attribute, AttributeValue};
 pub use config::{DEFAULT_METRIC_INTERVAL, LogFormat, OpenTelemetryConfig};
 pub use error::OpenTelemetryError;
-pub use init::OpenTelemetry;
+pub use init::{FLUSH_TIMEOUT, OpenTelemetry};
 #[cfg(feature = "otlp")]
-pub use meter::OpenTelemetryMeter;
+pub use instruments::{Counter, Gauge, Histogram, UpDownCounter};
+#[cfg(feature = "otlp")]
+pub use metrics::{Describe, Metrics};
 pub use module::OpenTelemetryModule;
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::init::init_for_tests;
+}

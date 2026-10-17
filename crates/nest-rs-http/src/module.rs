@@ -1,21 +1,20 @@
-//! Activation seam for HTTP. Import [`HttpModule::for_root(...)`] in an
-//! `AppModule.imports` and the framework attaches the
-//! [`HttpTransport`](crate::HttpTransport) at boot. Every option lives on
-//! [`HttpConfig`] (host + port + optional TLS), populated either by the
-//! `NESTRS_HTTP__*` env scheme or by the pinned struct.
+//! Activation seam for HTTP: [`HttpModule::for_root`] attaches the [`HttpTransport`] at boot.
+
+use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, TransportContribution};
+use nest_rs_core::__private::TransportContribution;
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering};
 
 use crate::config::HttpConfig;
 use crate::transport::HttpTransport;
 
 /// The HTTP activation seam. Import [`HttpModule::for_root`] in an app module's
-/// `imports` to attach the [`HttpTransport`](crate::HttpTransport) at boot.
+/// `imports` to attach the [`HttpTransport`] at boot.
 pub struct HttpModule;
 
 impl HttpModule {
-    /// `None` ⇒ load from `NESTRS_HTTP__*`; `Some(cfg)` pins in code.
+    /// `None` ⇒ load from `<PREFIX>_HTTP__*`; `Some(cfg)` pins in code.
     pub fn for_root(config: impl Into<Option<HttpConfig>>) -> HttpSetup {
         HttpSetup {
             pinned: config.into(),
@@ -23,24 +22,25 @@ impl HttpModule {
     }
 }
 
-/// The configured import produced by [`HttpModule::for_root`]. Registers the
-/// [`HttpConfig`] (pinned or env-loaded) and contributes the HTTP transport.
+/// The configured import produced by [`HttpModule::for_root`].
 pub struct HttpSetup {
     pinned: Option<HttpConfig>,
 }
 
 impl DynamicModule for HttpSetup {
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn module() -> TypeId {
+        TypeId::of::<HttpModule>()
+    }
+
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature(self.pinned.clone(), builder)
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "HttpTransport",
             build: |c| {
-                let cfg = c
-                    .get::<HttpConfig>()
-                    .expect("HttpConfig is resolved by ConfigModule::provide_feature");
+                let cfg = ConfigModule::resolved::<HttpConfig>(c)?;
                 Ok(Box::new(HttpTransport::from_config(&cfg)?))
             },
         })

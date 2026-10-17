@@ -1,261 +1,885 @@
-//! The port's half of consuming — what a job attempt *is*, written once for
-//! every adapter.
-//!
-//! [`discover`] drains the `#[process]` inventory the way every backend must:
-//! module-gated, with the inert-host `warn`, refusing two processors on one
-//! queue. [`attempt`] runs one attempt the way every backend must: it opens the
-//! envelope, continues or mints the trace, opens the `queue.job` span and the
-//! ambient scope, catches a panic, classifies the outcome and files the three
-//! events and the `nest_rs::operation` line. What it returns is an [`Attempt`],
-//! and an adapter's consumer is a fetch loop that calls it and translates that
-//! into its backend's vocabulary — apalis `Abort`/`Failed`, a NATS consumer's
-//! `ack`/`nak`/`term`. Nothing in here names a backend; nothing in an adapter
-//! restates what is here.
+//! What a job attempt *is*, written once for every backend and run by the
+//! port's [`QueueWorker`](crate::QueueWorker): discovery of the `#[process]`
+//! inventory, and [`attempt`], from the envelope to the `nest_rs::operation`
+//! line.
 
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use nest_rs_core::{
-    Container, ReachableProviders, RequestScope, panic_message, with_request_scope,
+    Container, Correlation, ReachableProviders, RequestScope, panic_message, with_request_scope,
 };
+use nest_rs_database::UnitOfWork;
+use serde_json::Value;
 use tracing::Instrument;
 
-use crate::inventory::JobError;
-use crate::inventory::{ProcessMethod, check_duplicate_queue_claims};
-use crate::{TARGET, envelope, unit};
+use crate::capability::unsupported;
+use crate::checkpoint::CheckpointCell;
+use crate::envelope::{self, Opened, Unusable};
+use crate::inventory::{HandlerContext, JobHandler};
+use crate::{
+    Attempt, CheckpointStore, Envelope, JobError, JobId, ProcessMethod, QueueBackend, QueueName,
+    TARGET, Throttle, backoff, unit,
+};
 
-/// The `#[process]` methods this app serves: every entry whose provider is
-/// reachable from the running app's root, with a boot `warn` for each that is
-/// linked but unreachable, and a boot error when two claim one queue.
+/// A job span's `messaging.operation.name` and `messaging.operation.type`, per
+/// OpenTelemetry's messaging conventions.
+const PROCESS: &str = "process";
+
+/// How long a job sealed by a newer release waits before it is delivered again,
+/// when a consumer of this release hands it back —
+/// [`Disposition::Defer`](crate::Disposition::Defer).
+pub const NEWER_RELEASE_WAIT: Duration = Duration::from_secs(60);
+
+/// How long a job sealed by a newer release may go unread before a consumer of
+/// this release dead-letters it: a day, counted from the first time it was
+/// handed back unread
+/// ([`Delivery::with_deferred_for`](crate::Delivery::with_deferred_for)) — or
+/// from its push, on a backend that keeps no such record.
+pub const NEWER_RELEASE_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How many deliveries of one record may end without an answer before the
+/// port dead-letters the job without running it.
 ///
-/// Called once by an adapter's `Transport::configure`; what it returns is what
-/// that adapter subscribes to.
-pub fn discover(container: &Container) -> anyhow::Result<Vec<&'static ProcessMethod>> {
-    // Filtered by ReachableProviders so a method on a provider not in the app's
-    // module tree compiles in but does not subscribe to its queue.
+/// The retry budget counts attempts that answered; this counts the deliveries
+/// that never did — a worker killed, frozen, or cut from the backend past its
+/// lease.
+pub const STALL_LIMIT: u32 = 3;
+
+/// The boot's refusal of each declaration on `method` that `backend` does not
+/// honour — every one, so a method declaring two is refused once for each.
+pub(crate) fn unsupported_by<'a>(
+    method: &'a ProcessMethod,
+    backend: &'a QueueBackend,
+) -> impl Iterator<Item = String> + 'a {
+    crate::inventory::required_capabilities(method)
+        .iter()
+        .filter(|capability| !backend.capabilities().contains(*capability))
+        .map(|capability| unsupported(capability, backend.name(), Some(method.name())))
+}
+
+/// The `#[process]` methods this app serves on `backend`: every entry whose
+/// provider is reachable from the running app's root, with a boot `warn` for
+/// each that is linked but unreachable.
+///
+/// The boot fails — naming every offender at once — when a reachable method
+/// drains a queue whose name breaks the rule, declares something `backend`
+/// cannot honour, or claims a queue another method already drains. Checked after
+/// module-gating, so a method another app owns cannot fail this app's boot.
+pub fn discover(
+    container: &Container,
+    backend: &QueueBackend,
+) -> anyhow::Result<Vec<&'static ProcessMethod>> {
+    let checked = check(reachable(container), backend)?;
+    Ok(checked.into_iter().map(|(method, _)| method).collect())
+}
+
+/// The `#[process]` methods whose provider is reachable from the running app's
+/// root, with a boot `warn` for each that is linked but unreachable.
+pub(crate) fn reachable(container: &Container) -> Vec<&'static ProcessMethod> {
     let reachable = container.get::<ReachableProviders>();
     let mut methods: Vec<&'static ProcessMethod> = Vec::new();
     for entry in nest_rs_core::inventory::iter::<ProcessMethod>() {
-        if !ReachableProviders::reaches(reachable.as_deref(), (entry.provider_type_id)()) {
+        if !ReachableProviders::reaches(reachable.as_deref(), entry.provider_type_id()) {
             ::nest_rs_core::report_inert_host!(
                 target: TARGET,
                 what: "#[process] method",
-                origin: entry.origin,
-                processor = entry.name,
-                queue = entry.queue,
+                origin: entry.origin(),
+                host: entry.provider_type_id(),
+                container: container,
+                processor = entry.name(),
+                queue = entry.queue(),
             );
             continue;
         }
         methods.push(entry);
     }
-    // Aggregating a queue is like aggregating a mount: the one failure mode it
-    // adds is two contributions claiming one addressable name, and that is a
-    // boot error naming both. Checked after module-gating, so a processor
-    // another app owns cannot fail this app's boot.
+    methods
+}
+
+/// `methods`, once each is one `backend` can serve, with the queue each drains:
+/// the boot fails, naming every offender at once, on a queue name outside the
+/// rule, a throttle window under a millisecond, a declaration `backend` cannot
+/// honour, or two methods on one queue. Each method kept is announced.
+pub(crate) fn check(
+    methods: Vec<&'static ProcessMethod>,
+    backend: &QueueBackend,
+) -> anyhow::Result<Vec<(&'static ProcessMethod, QueueName)>> {
+    let mut refusals = Vec::new();
+    let mut checked = Vec::with_capacity(methods.len());
+    for method in &methods {
+        // An entry built by hand, not by the decorator, reaches the boot unchecked.
+        match QueueName::new(method.queue()) {
+            Ok(queue) => checked.push((*method, queue)),
+            Err(refused) => refusals.push(format!(
+                "`{}` drains a queue whose name is refused: {refused}",
+                method.name()
+            )),
+        }
+        // A window under a millisecond is zero to a store counting in
+        // milliseconds, and a zero window limits nothing.
+        if let Some(throttle) = method.options().throttle()
+            && throttle.window() < Throttle::MIN_WINDOW
+        {
+            refusals.push(format!(
+                "`{}` declares a throttle window under a millisecond, which would limit nothing: \
+                 a window is at least {:?}",
+                method.name(),
+                Throttle::MIN_WINDOW,
+            ));
+        }
+        refusals.extend(unsupported_by(method, backend));
+    }
+    if !refusals.is_empty() {
+        anyhow::bail!("{}", refusals.join("\n"));
+    }
+
     check_duplicate_queue_claims(&methods).map_err(anyhow::Error::msg)?;
-    for m in &methods {
+    for method in &methods {
+        let options = method.options();
+        let throttle = options.throttle();
         tracing::info!(
             target: TARGET,
-            processor = m.name,
-            queue = m.queue,
-            retries = m.retries,
+            processor = method.name(),
+            queue = method.queue(),
+            retries = options.retries(),
+            concurrency = options.concurrency().get(),
+            throttle_limit = throttle.map(|throttle| throttle.limit().get()),
+            throttle_window_ms = throttle.map(|throttle| millis(throttle.window())),
+            checkpoint = options.checkpoint().then_some(true),
             "registered queue processor",
         );
     }
-    Ok(methods)
+    Ok(checked)
 }
 
-/// How one attempt ended, in the port's vocabulary. The adapter translates it
-/// into its backend's — and nothing else about the outcome is its to decide.
+/// Two `#[process]` methods may not drain one queue.
+fn check_duplicate_queue_claims(methods: &[&ProcessMethod]) -> Result<(), String> {
+    let mut claimants: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
+    for method in methods {
+        claimants
+            .entry(method.queue())
+            .or_default()
+            .push(method.name());
+    }
+
+    let clashes: Vec<String> = claimants
+        .into_iter()
+        .filter(|(_, names)| names.len() > 1)
+        .map(|(queue, names)| format!("queue {queue:?} ({})", names.join(" and ")))
+        .collect();
+
+    if clashes.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "duplicate queue claim: {} — a queue is drained by one `#[process]` method, so a second \
+         one would take an unpredictable share of its jobs. Give the other method its own queue, \
+         or fold the two bodies into one and raise its `concurrency`.",
+        clashes.join(", "),
+    ))
+}
+
+/// How one attempt ended, in the port's vocabulary; the adapter translates it
+/// into its backend's.
 #[derive(Debug)]
-pub enum Attempt {
-    /// The handler returned `Ok`.
+pub enum AttemptOutcome {
+    /// The handler returned `Ok`, and its unit of work settled. The job is done:
+    /// acknowledge it.
     Ok,
-    /// The handler failed in a way a re-run could fix (the user method's
-    /// `Err`): the backend re-attempts within the method's retry budget.
-    Retry(JobError),
-    /// The handler failed deterministically — an undeserializable payload, a
-    /// pipe rejection, a missing provider, a panic — so re-running would burn
-    /// the budget on a payload that cannot succeed: the backend dead-letters
-    /// it at once.
+    /// The handler failed in a way another attempt could clear, and the
+    /// method's retry budget holds another attempt. Run the job again once
+    /// `after` has passed.
+    ///
+    /// `after` is `min(5 min, 1 s · 2^(n − 1))` for failed attempt `n`, scaled by
+    /// a jitter between 0.8 and 1.2 derived from the job's id and `n`.
+    ///
+    /// The [`Delivery`] already counts the next attempt. A backend declaring
+    /// [`DelayedPush`](crate::Capability::DelayedPush) re-files
+    /// [`Delivery::retry_envelope`] to become available once `after` has passed,
+    /// then acknowledges this delivery. One without it waits `after` itself —
+    /// giving up the wait, never the job, when the worker shuts down — and calls
+    /// [`attempt`] again with the same delivery.
+    Retry {
+        /// How long the job waits before its next attempt.
+        after: Duration,
+    },
+    /// The job is done failing — deterministically (an undeserializable
+    /// payload, a pipe rejection, a missing provider, a panic, an envelope of
+    /// an older version), or retryably on its last attempt: dead-letter it.
+    ///
+    /// The record an adapter keeps of the failure is
+    /// [`error_message`](fn@nest_rs_core::error_message)'s rendering, never the
+    /// error's own `Display` (it may spell a decode failure in serde's words) or
+    /// its `source` alone (it drops what a `.context(…)` wrapped).
     DeadLetter(JobError),
+    /// The job was sealed by a newer release than this consumer's, which cannot
+    /// read it: nothing ran and no attempt is spent. Hand the stored record
+    /// back **as it was stored** — [`Delivery::retry_envelope`] answers it
+    /// unchanged — to be delivered again once `after` has passed, and
+    /// acknowledge this delivery; a backend that counted an attempt start for
+    /// it takes the start back, as for any delivery handed back without an
+    /// answer, and one that keeps how long a job has waited unread records the
+    /// first such hand-back ([`Delivery::with_deferred_for`]). `after` is
+    /// [`NEWER_RELEASE_WAIT`], for [`NEWER_RELEASE_PATIENCE`] at the most.
+    Defer {
+        /// How long the job waits before it is delivered again.
+        after: Duration,
+    },
 }
 
-/// Run one attempt of `method` over the wire `payload` — the whole of what an
-/// attempt is, from the envelope to the line that reports it.
+/// One job as its backend delivered it — what every attempt at it reads.
 ///
-/// `job_id` and `attempt` are the backend's identifiers for the task and its
-/// attempt number; they ride the span and the operation line so retries of one
-/// task are one `job_id` and distinct `attempt`s. The id is taken **by value**
-/// because the line owns it for the length of the attempt: borrowing it made
-/// every adapter allocate the string and this function allocate it again.
+/// Built once per delivery by the adapter and handed to each [`attempt`] a retry
+/// budget runs inside it.
+#[non_exhaustive]
+pub struct Delivery {
+    backend: &'static QueueBackend,
+    queue: QueueName,
+    id: JobId,
+    attempt: u32,
+    /// How many earlier deliveries of this record ended without an answer.
+    stalls: u32,
+    /// How long the backend has handed the job back unread, when it keeps that
+    /// — see [`Delivery::with_deferred_for`].
+    deferred_for: Option<Duration>,
+    unique_key: Option<String>,
+    backend_id: Option<String>,
+    message: Value,
+    checkpoints: Option<Arc<CheckpointCell>>,
+    /// The trace the first attempt minted when the stored value carried none:
+    /// every later attempt at this delivery runs inside it.
+    minted: Option<Correlation>,
+    /// Whether the lines said once per delivery — a legacy payload, an
+    /// unusable key — have been filed.
+    announced: bool,
+}
+
+impl Delivery {
+    /// The job `backend` fetched from `queue`, as it stored it: the sealed
+    /// envelope, or any value a foreign producer wrote.
+    ///
+    /// The job's [`JobId`], the attempt it is at and its unique key are read out
+    /// of the envelope here. A value naming no usable id — one no push of this
+    /// release wrote — runs under an id minted for this delivery, as attempt 1.
+    pub fn new(backend: &'static QueueBackend, queue: QueueName, message: Value) -> Self {
+        let identity = envelope::identify(&message);
+        Self {
+            backend,
+            queue,
+            id: identity.id.unwrap_or_else(JobId::mint),
+            attempt: identity.attempt.unwrap_or(1),
+            stalls: 0,
+            deferred_for: None,
+            unique_key: identity.unique_key,
+            backend_id: None,
+            message,
+            checkpoints: None,
+            minted: None,
+            announced: false,
+        }
+    }
+
+    /// The backend's own id for the stored record — reported beside the job's
+    /// [`JobId`] as `backend_id`, never in its place.
+    pub fn with_backend_id(mut self, backend_id: impl Into<String>) -> Self {
+        self.backend_id = Some(backend_id.into());
+        self
+    }
+
+    /// How many times the backend handed this record over, this delivery
+    /// included: every earlier one ended without an answer, and past
+    /// [`STALL_LIMIT`] of them the job is dead-lettered without running.
+    pub(crate) fn with_delivery_count(mut self, count: u32) -> Self {
+        self.stalls = count.saturating_sub(1);
+        self
+    }
+
+    /// How long the backend has handed this job back unread for a newer release
+    /// — since the first of an unbroken run of [`AttemptOutcome::Defer`]
+    /// answers, zero when there is none — for a backend that can keep it per
+    /// job; without it, the port counts from the job's push, delay included.
+    ///
+    /// A backend keeps the instant of the first hand-back answering `Defer`,
+    /// clears it once a delivery reads the job or the job settles, and passes how
+    /// long ago that was.
+    pub fn with_deferred_for(mut self, waited: Duration) -> Self {
+        self.deferred_for = Some(waited);
+        self
+    }
+
+    /// Keep this job's checkpoint in `store` — for a method whose options
+    /// declare a checkpoint. The store is the job's: keyed by [`id`](Self::id).
+    pub fn with_checkpoint(mut self, store: Arc<dyn CheckpointStore>) -> Self {
+        self.checkpoints = Some(Arc::new(CheckpointCell::new(store, self.queue.clone())));
+        self
+    }
+
+    /// The queue the job was fetched from.
+    pub fn queue(&self) -> &QueueName {
+        &self.queue
+    }
+
+    /// The job's id — the one its push returned, the same across its attempts.
+    pub fn id(&self) -> &JobId {
+        &self.id
+    }
+
+    /// The attempt the next call to [`attempt`] runs, from 1: the envelope's —
+    /// or the backend's count of attempts started, when that is later — then
+    /// one more after each [`AttemptOutcome::Retry`].
+    pub fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    /// The unique key the job was pushed under, which the backend releases when
+    /// the job reaches its terminal outcome.
+    pub fn unique_key(&self) -> Option<&str> {
+        self.unique_key.as_deref()
+    }
+
+    /// The record to re-file for the attempt an [`AttemptOutcome::Retry`]
+    /// announced: the stored envelope, stamped with the job's id and the next
+    /// attempt's number, carrying the trace every attempt at the job shares.
+    ///
+    /// For a job a newer release sealed — [`AttemptOutcome::Defer`] — it is the
+    /// stored record unchanged, which this consumer cannot re-seal.
+    pub fn retry_envelope(&self) -> Envelope {
+        envelope::retry(
+            &self.message,
+            &self.id,
+            self.attempt,
+            self.minted.as_ref(),
+            self.announced,
+        )
+    }
+}
+
+/// Run the attempt `delivery` is at (1 for the first) of `method` — the whole of
+/// what an attempt is, from the envelope to the line that reports it.
+///
+/// A retryable failure is [`AttemptOutcome::Retry`] while the attempt is within
+/// `retries` re-runs of the first — and the delivery counts the next one — and
+/// [`AttemptOutcome::DeadLetter`] on the last, so an adapter never counts. A
+/// delivery past [`STALL_LIMIT`] is dead-lettered without running.
+///
+/// A job sealed by a newer release runs nothing and answers
+/// [`AttemptOutcome::Defer`], until it has waited unread past
+/// [`NEWER_RELEASE_PATIENCE`] — or at once when it names no id this release
+/// reads — when it is dead-lettered.
+///
+/// An attempt its driver drops still files its `queue.job` line, with
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
+///
+/// The attempt is one unit of work, run through `unit_of_work` — the binding the
+/// worker resolved once — or bare without one.
 pub async fn attempt(
     method: &'static ProcessMethod,
-    payload: serde_json::Value,
-    job_id: String,
-    attempt: usize,
+    delivery: &mut Delivery,
     container: Container,
-) -> Attempt {
-    // The producer sealed its W3C trace context into the payload, because a
-    // queue is the one hop the framework crosses that is a *process* boundary
-    // rather than a task one. Continuing it here is what makes one trace span
-    // the whole chain: the HTTP request that enqueued, and this worker minutes
-    // later in another binary, are one trace and the job is a child of the
-    // enqueue. A bare payload — the raw hatch, an older producer, a foreign
-    // system — starts a trace instead; see `envelope`.
-    let (job, inherited) = envelope::open(payload);
-    let continued_trace = inherited.is_some();
-    let correlation = inherited.unwrap_or_else(nest_rs_core::Correlation::mint);
-    // One span per job attempt; `attempt` distinguishes retries of the same
-    // job_id. `.instrument` (not an entered guard held across `.await`) keeps
-    // the span current for the whole poll. Through `operation_span!` so a job
-    // declares the same canonical fields every edge does — `actor_id`
-    // included, which is what lets a job's events be attributed at all.
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
+) -> AttemptOutcome {
+    let newer = envelope::newer_version(&delivery.message);
+    if let Some(version) = newer
+        && let Some(waited) = waited_unread(delivery)
+        && waited < NEWER_RELEASE_PATIENCE
+    {
+        return defer_newer(delivery, version, waited).await;
+    }
+    let attempt = delivery.attempt;
+    let retries = method.options().retries();
+    let last = attempt > retries;
+    // The last attempt takes the stored value; one another may follow reads it.
+    let message = if last {
+        Cow::Owned(std::mem::take(&mut delivery.message))
+    } else {
+        Cow::Borrowed(&delivery.message)
+    };
+    let (payload, inherited, minted_trace, unversioned, unusable) = match newer {
+        // Past its patience: nothing is opened, and the job's own trace is
+        // what its dead letter is filed in.
+        Some(_) => (
+            Ok(Cow::Owned(Value::Null)),
+            envelope::newer_trace(&message),
+            false,
+            false,
+            Unusable::default(),
+        ),
+        None => match envelope::open(message, delivery.queue.as_str()) {
+            Ok(Opened::Sealed {
+                payload,
+                correlation,
+                minted,
+                unusable,
+            }) => (Ok(payload), correlation, minted, false, unusable),
+            Ok(Opened::Unversioned(value)) => (Ok(value), None, false, true, Unusable::default()),
+            Err(refused) => (Err(refused), None, false, false, Unusable::default()),
+        },
+    };
+    let input = match (newer, payload) {
+        (Some(version), _) => Input::Unread {
+            version,
+            waited: waited_unread(delivery),
+        },
+        _ if delivery.stalls >= STALL_LIMIT => Input::Stalled {
+            deliveries: delivery.stalls.saturating_add(1),
+        },
+        (None, Ok(payload)) => Input::Payload(payload),
+        (None, Err(refused)) => Input::Refused(refused),
+    };
+    // One trace per job: the producer's, continued, or one minted at the first
+    // attempt — which a re-filed record carries marked as minted, never as the producer's.
+    let continued_trace = !minted_trace
+        && inherited
+            .as_ref()
+            .is_some_and(Correlation::parent_is_remote);
+    let correlation = match (inherited, &delivery.minted) {
+        (Some(continued), _) if continued.parent_is_remote() => continued,
+        (_, Some(first)) => first.child(),
+        (minted, None) => {
+            let first = minted.unwrap_or_else(|| Correlation::minted(None));
+            delivery.minted = Some(first.clone());
+            first
+        }
+    };
+    let first_opening = !delivery.announced;
+    delivery.announced = true;
+    let queue = delivery.queue.as_str();
+    // `.instrument`, never an entered guard held across `.await`.
     let span = nest_rs_core::operation_span!(
-        target: TARGET,
-        // A job is delivered *to* this process — the kind a messaging view
-        // classifies on.
-        kind: nest_rs_core::operation_log::kind::CONSUMER,
         unit::JOB,
         &correlation,
-        queue = method.queue,
-        processor = method.name,
-        job_id = %job_id,
+        otel.name = %format_args!("{PROCESS} {queue}"),
+        messaging.system = delivery.backend.name(),
+        messaging.operation.name = PROCESS,
+        messaging.operation.type = PROCESS,
+        messaging.destination.name = queue,
+        messaging.message.id = %delivery.id,
+        backend_id = delivery.backend_id.as_deref(),
+        processor = method.name(),
         attempt,
-        // Whether this job is traceable back to what enqueued it, or starts a
-        // trace of its own. An operator chasing a lost request needs to tell
-        // the two apart.
         continued_trace,
     );
-    // What the job's own line reports it *was*. The span carries the same facts
-    // for the export; a log line renders no span state, so the line that names
-    // the work has to carry them as event attributes of its own.
     let identity = JobIdentity {
-        queue: method.queue,
-        processor: method.name,
-        job_id,
+        queue: delivery.queue.clone(),
+        processor: method.name(),
+        job_id: delivery.id.clone(),
+        backend_id: delivery.backend_id.clone(),
         attempt,
     };
-    async move {
-        tracing::debug!(target: TARGET, attempt = identity.attempt, "job started");
-        // The ambient context too, not just the span: a `#[process]` body that
-        // enqueues a follow-up job must seal *this* id, not mint a third one and
-        // break the chain.
-        let scope = Arc::new(RequestScope::new(container.clone()));
-        with_request_scope(
-            Some(scope),
-            correlation,
-            run(method.handler, job, container, identity),
-        )
-        .await
+    let checkpoints = delivery.checkpoints.clone();
+    let timeout = method.options().timeout();
+    let context = HandlerContext {
+        container: container.clone(),
+        checkpoints: checkpoints.clone(),
+        unit_of_work,
+        attempt: Attempt::new(delivery.id.clone(), attempt, delivery.queue.clone()),
+        deadline: tokio::time::Instant::now() + timeout,
+        timeout,
+    };
+    let retry_after = backoff::retry_after(&delivery.id, attempt);
+    // The ambient context too: a job the body pushes seals *this* trace, and
+    // every line below reads its trace ids off it, not off the span.
+    let scope = Arc::new(RequestScope::new(container));
+    let outcome = with_request_scope(Some(scope), correlation, async move {
+        tracing::debug!(target: TARGET, attempt, "job started");
+        // Said once per delivery: a retry is not a second legacy job.
+        if first_opening {
+            if unversioned {
+                tracing::warn!(
+                    target: TARGET,
+                    queue = %identity.queue,
+                    job_id = %identity.job_id,
+                    hint = "producer predates the wire envelope; drain the queue to clear legacy jobs",
+                    "processed an unversioned job payload",
+                );
+            }
+            if unusable.any() {
+                // The keys are listed in a field of their own: a field called
+                // `actor_id` would read as the actor the line names.
+                tracing::warn!(
+                    target: TARGET,
+                    queue = %identity.queue,
+                    job_id = %identity.job_id,
+                    unusable = %unusable.keys(),
+                    hint = %unusable.hint(),
+                    "job envelope carries keys this consumer cannot use",
+                );
+            }
+        }
+        run(method.handler(), input, context, identity, last, retry_after).await
+    })
+    .instrument(span)
+    .await;
+    if matches!(outcome, AttemptOutcome::Retry { .. }) {
+        delivery.attempt = attempt.saturating_add(1);
     }
+    outcome
+}
+
+/// How long a job a newer release sealed has waited unread: the backend's
+/// record when it keeps one, its push's age otherwise — and `None` when it
+/// names no id this release reads, since nothing then follows it from one
+/// delivery to the next and no wait can be counted.
+fn waited_unread(delivery: &Delivery) -> Option<Duration> {
+    let id = envelope::identify(&delivery.message).id?;
+    Some(delivery.deferred_for.unwrap_or_else(|| id.age()))
+}
+
+/// The remedy every line about a job a newer release sealed names.
+const NEWER_RELEASE_REMEDY: &str = "a newer release sealed this job and only its consumers can \
+     run it: finish rolling them forward, or, rolling back, keep one running until the queue \
+     holds none of its jobs — a job still unread a day after it was first handed back is \
+     dead-lettered, naming both versions, and kept with the dead letters for a consumer of that \
+     release";
+
+/// Hand back a job a newer release sealed, saying so once per delivery at `warn`.
+async fn defer_newer(delivery: &mut Delivery, version: u64, waited: Duration) -> AttemptOutcome {
+    if !delivery.announced {
+        delivery.announced = true;
+        let correlation =
+            envelope::newer_trace(&delivery.message).unwrap_or_else(|| Correlation::minted(None));
+        let (queue, job_id) = (&delivery.queue, &delivery.id);
+        with_request_scope(None, correlation, async {
+            tracing::warn!(
+                target: TARGET,
+                queue = %queue,
+                job_id = %job_id,
+                version,
+                supported = crate::WIRE_FORMAT_VERSION,
+                retry_after_ms = millis(NEWER_RELEASE_WAIT),
+                waited_ms = millis(waited),
+                patience_ms = millis(NEWER_RELEASE_PATIENCE),
+                hint = NEWER_RELEASE_REMEDY,
+                "job sealed by a newer release handed back unread",
+            );
+        })
+        .await;
+    }
+    AttemptOutcome::Defer {
+        after: NEWER_RELEASE_WAIT,
+    }
+}
+
+pub(crate) fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Dead-letter a delivery the worker cannot run — a record its backend could
+/// not hand over, or one that is not JSON — as a unit of work of its own, and
+/// hand back the error the job is dead-lettered with.
+pub async fn refuse(
+    backend: &'static QueueBackend,
+    queue: &QueueName,
+    backend_id: Option<&str>,
+    error: JobError,
+) -> JobError {
+    let started = Instant::now();
+    let correlation = Correlation::minted(None);
+    let span = nest_rs_core::operation_span!(
+        unit::JOB,
+        &correlation,
+        otel.name = %format_args!("{PROCESS} {queue}"),
+        messaging.system = backend.name(),
+        messaging.operation.name = PROCESS,
+        messaging.operation.type = PROCESS,
+        messaging.destination.name = queue.as_str(),
+        backend_id,
+        attempt = 1u32,
+    );
+    let line_span = span.clone();
+    with_request_scope(None, correlation, async move {
+        tracing::error!(
+            target: TARGET,
+            queue = queue.as_str(),
+            backend_id,
+            error = %nest_rs_core::error_message(&error),
+            "job dead-lettered: undeliverable",
+        );
+        nest_rs_core::operation_line!(
+            unit::JOB,
+            span: &line_span,
+            outcome: nest_rs_core::operation_log::ERROR,
+            started: started,
+            queue = queue.as_str(),
+            backend_id,
+            attempt = 1u32,
+        );
+        error
+    })
     .instrument(span)
     .await
 }
 
-/// What one job attempt is, for the line that reports it ran.
-///
-/// Held as a value rather than read back off the span: `tracing` gives no way to
-/// read a span's fields, and a log line renders none of them anyway.
-struct JobIdentity {
-    queue: &'static str,
-    processor: &'static str,
-    job_id: String,
-    attempt: usize,
+/// What an attempt runs on.
+enum Input<'a> {
+    /// The payload the envelope carried, for the handler.
+    Payload(Cow<'a, Value>),
+    /// Nothing: the envelope was refused, and this is why.
+    Refused(JobError),
+    /// Nothing: the record was handed over `deliveries` times, and every
+    /// delivery before this one ended without an answer — past [`STALL_LIMIT`].
+    Stalled {
+        /// How many times the record was handed over, this delivery included.
+        deliveries: u32,
+    },
+    /// Nothing: a newer release sealed the job, and it has waited unread past
+    /// [`NEWER_RELEASE_PATIENCE`] — or names no id, so no wait can be counted.
+    Unread {
+        /// The wire-format version that sealed it.
+        version: u64,
+        /// How long it waited unread, when that can be counted.
+        waited: Option<Duration>,
+    },
 }
 
-/// Run one job handler and turn its outcome into the event it logs plus the
-/// [`Attempt`] the adapter translates. Lifted out of [`attempt`] so every
-/// terminal state is reachable from a test — the panic branch in particular,
-/// which is the one that used to reach no event at all.
+/// Why an attempt ran nothing.
+enum Unrun {
+    /// The record's deliveries past [`STALL_LIMIT`] ended without an answer.
+    Stalled { deliveries: u32 },
+    /// A newer release sealed the job and it was not read in time.
+    Unread {
+        version: u64,
+        waited: Option<Duration>,
+    },
+}
+
+/// What one job attempt is, for the line that reports it ran: `tracing` cannot
+/// read a span's fields back, and a log line renders none of them.
+struct JobIdentity {
+    queue: QueueName,
+    processor: &'static str,
+    job_id: JobId,
+    backend_id: Option<String>,
+    attempt: u32,
+}
+
+/// An attempt's `queue.job` line, filed exactly once: with the outcome the
+/// attempt settled on, or — dropped before it settled — with
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
+struct JobLine {
+    identity: JobIdentity,
+    started: Instant,
+    span: tracing::Span,
+    filed: bool,
+}
+
+impl JobLine {
+    /// Opened first thing inside the attempt, so the span current here is the
+    /// attempt's own.
+    fn open(identity: JobIdentity) -> Self {
+        Self {
+            identity,
+            started: Instant::now(),
+            span: tracing::Span::current(),
+            filed: false,
+        }
+    }
+
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+        self.filed = true;
+    }
+
+    fn emit(&self, outcome: &'static str) {
+        let identity = &self.identity;
+        nest_rs_core::operation_line!(
+            unit::JOB,
+            span: &self.span,
+            outcome: outcome,
+            started: self.started,
+            queue = %identity.queue,
+            processor = identity.processor,
+            job_id = %identity.job_id,
+            backend_id = identity.backend_id.as_deref(),
+            attempt = identity.attempt,
+        );
+    }
+}
+
+impl Drop for JobLine {
+    fn drop(&mut self) {
+        if self.filed {
+            return;
+        }
+        // The handler's panics are caught before here: this unwind is the port's own.
+        let outcome = if std::thread::panicking() {
+            nest_rs_core::operation_log::PANIC
+        } else {
+            nest_rs_core::operation_log::CANCELLED
+        };
+        self.emit(outcome);
+    }
+}
+
+/// Run one job handler — or refuse the envelope it would have run on — and turn
+/// the outcome into the event it logs plus the [`AttemptOutcome`] the adapter
+/// translates.
 ///
-/// Three terminal states, one event each:
-///
-/// | outcome | event | [`Attempt`] |
+/// | outcome | event | [`AttemptOutcome`] |
 /// | --- | --- | --- |
 /// | `Ok(())` | *(the operation line alone)* | `Ok` |
 /// | non-retryable `Err` | `job dead-lettered: non-retryable failure` (`error`) | `DeadLetter` |
-/// | retryable `Err` | `job failed; will retry within the budget` (`warn`) | `Retry` |
+/// | retryable `Err`, budget left | `job failed; will retry within the budget` (`warn`) | `Retry` |
+/// | retryable `Err`, last attempt | `job dead-lettered: retry budget spent` (`error`) | `DeadLetter` |
 /// | **panic** | `job dead-lettered: handler panicked` (`error`) | `DeadLetter` |
+/// | deliveries past [`STALL_LIMIT`] ended without an answer | `job dead-lettered: its deliveries ended without an answer past the stall limit` (`error`) | `DeadLetter` |
+/// | a newer release's, unread past the patience | `job dead-lettered: a newer release sealed it, and none of its consumers ran it in time` (`error`) | `DeadLetter` |
 ///
-/// The panic is caught **here** rather than left to a backend's panic layer.
-/// Such a layer contains it correctly — the job fails, the worker survives, the
-/// next job on the queue runs — but it unwinds past this function, so the
-/// per-job span (`queue`, `processor`, `job_id`, `attempt`) and every event
-/// below were skipped. The only trace of a panicking job was the default Rust
-/// panic hook on stderr: no target, no fields, no span. At the docs' own
-/// production filter (`nest_rs::queue=warn`) it vanished entirely, while a
-/// deserialization failure on the same worker reported properly. The outcome is
-/// unchanged; only the silence is gone.
+/// The panic is caught **here**: a backend's panic layer would unwind past the
+/// per-job span and every event below.
 async fn run(
-    handler: crate::JobHandler,
-    job: serde_json::Value,
-    container: Container,
+    handler: JobHandler,
+    input: Input<'_>,
+    context: HandlerContext,
     identity: JobIdentity,
-) -> Attempt {
-    let started = std::time::Instant::now();
-    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(handler(
-        job, container,
-    )))
-    .await;
-    // Every terminal state, one detail event and one line. The detail says
-    // *why* and stays on `nest_rs::queue`; the line says the job ran, and is the
-    // family's — so `nest_rs::operation` answers "what did this worker do" the
-    // same way it answers it for a request. Neither restates the other's fields.
+    last: bool,
+    retry_after: Duration,
+) -> AttemptOutcome {
+    let attempt = identity.attempt;
+    let line = JobLine::open(identity);
+    // `Err` when nothing ran, saying why.
+    let outcome = match input {
+        // No edge deadline bounds developer code here: a handler that never
+        // answers would hold its permit for as long as the process lives. The
+        // handler cuts its body at the deadline itself; past a unit's settle
+        // net beyond it, a commit never answered and may have landed.
+        Input::Payload(payload) => Ok({
+            let (deadline, timeout) = (context.deadline, context.timeout);
+            let net = context
+                .unit_of_work
+                .as_ref()
+                .map(|unit_of_work| unit_of_work.settle_net());
+            match tokio::time::timeout_at(
+                net.map_or(deadline, |net| deadline + net),
+                nest_rs_core::panic::contain(handler(payload, context)),
+            )
+            .await
+            {
+                Ok(caught) => caught,
+                Err(_) if net.is_some() => Ok(Err(JobError::unhonoured(
+                    nest_rs_database::Unhonoured::IN_DOUBT,
+                ))),
+                Err(_) => Ok(Err(JobError::retry(nest_rs_core::JobTimedOut::new(
+                    timeout,
+                )))),
+            }
+        }),
+        Input::Refused(refused) => Ok(Ok(Err(refused))),
+        Input::Stalled { deliveries } => Err(Unrun::Stalled { deliveries }),
+        Input::Unread { version, waited } => Err(Unrun::Unread { version, waited }),
+    };
     let (settled, result) = match outcome {
-        Ok(Ok(())) => (nest_rs_core::operation_log::OK, Attempt::Ok),
-        // A NON-retryable failure (deterministic: bad wire version,
-        // undeserializable payload, missing provider, pipe rejection)
-        // dead-letters at once. A retryable failure (the user method's `Err`)
-        // is re-attempted within the budget.
-        Ok(Err(je)) if !je.retryable => {
-            // `errors` carries the rejection's per-field detail when it had any —
-            // same member name as the HTTP body and the WebSocket error frame, so
-            // one query shape finds a validation failure on any transport. Absent
-            // detail emits no field rather than an empty one.
+        Err(Unrun::Unread { version, waited }) => {
+            let supported = crate::WIRE_FORMAT_VERSION;
             tracing::error!(
                 target: TARGET,
-                error = %je,
-                errors = je.details.as_ref().map(tracing::field::display),
+                version,
+                supported,
+                waited_ms = waited.map(millis),
+                patience_ms = millis(NEWER_RELEASE_PATIENCE),
+                hint = NEWER_RELEASE_REMEDY,
+                "job dead-lettered: a newer release sealed it, and none of its consumers ran it \
+                 in time",
+            );
+            let why = match waited {
+                Some(_) => "waited unread past the day this release gives a newer one's job",
+                None => "names no id this release reads, so no wait for it can be counted",
+            };
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(JobError::abort(format!(
+                    "job sealed by wire-format version {version}, which this consumer (version \
+                     {supported}) cannot read, {why}; its record is kept with the dead letters \
+                     for a consumer of that release"
+                ))),
+            )
+        }
+        Err(Unrun::Stalled { deliveries }) => {
+            let unanswered = deliveries.saturating_sub(1);
+            tracing::error!(
+                target: TARGET,
+                deliveries,
+                stall_limit = STALL_LIMIT,
+                "job dead-lettered: its deliveries ended without an answer past the stall limit",
+            );
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(JobError::abort(format!(
+                    "{unanswered} deliveries of the job ended without an answer — the process \
+                     running each was stopped, froze or lost the queue backend past its lease — \
+                     so it is dead-lettered without running"
+                ))),
+            )
+        }
+        Ok(Ok(Ok(()))) => (nest_rs_core::operation_log::OK, AttemptOutcome::Ok),
+        Ok(Ok(Err(error))) if error.is_in_doubt() => {
+            tracing::error!(
+                target: TARGET,
+                outcome = "in_doubt",
+                error = %nest_rs_core::error_message(&error),
+                "job dead-lettered: its commit did not answer in time, and what it wrote may \
+                 have landed",
+            );
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(error),
+            )
+        }
+        Ok(Ok(Err(error))) if !error.retryable => {
+            // `errors` is the member name HTTP and the WebSocket error frame use;
+            // `error` is the whole chain, since a wrapper names no cause.
+            tracing::error!(
+                target: TARGET,
+                error = %nest_rs_core::error_message(&error),
+                errors = error.details.as_ref().map(tracing::field::display),
                 "job dead-lettered: non-retryable failure",
             );
-            (nest_rs_core::operation_log::ERROR, Attempt::DeadLetter(je))
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(error),
+            )
         }
-        Ok(Err(je)) => {
-            tracing::warn!(
-                target: TARGET,
-                error = %je,
-                "job failed; will retry within the budget",
-            );
-            (nest_rs_core::operation_log::ERROR, Attempt::Retry(je))
-        }
-        Err(payload) => {
-            let detail = panic_message(payload.as_ref()).to_owned();
+        Ok(Ok(Err(error))) if last => {
             tracing::error!(
                 target: TARGET,
-                panic = %detail,
+                error = %nest_rs_core::error_message(&error),
+                attempts = attempt,
+                "job dead-lettered: retry budget spent",
+            );
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(error),
+            )
+        }
+        Ok(Ok(Err(error))) => {
+            tracing::warn!(
+                target: TARGET,
+                error = %nest_rs_core::error_message(&error),
+                retry_after_ms = millis(retry_after),
+                "job failed; will retry within the budget",
+            );
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::Retry { after: retry_after },
+            )
+        }
+        Ok(Err(panic)) => {
+            nest_rs_core::contained_panic!(
+                target: TARGET,
+                panic.as_ref(),
                 "job dead-lettered: handler panicked",
             );
-            // A panic is deterministic as far as the queue can tell — the same
-            // payload panics again — so it dead-letters rather than burning the
-            // retry budget.
             (
                 nest_rs_core::operation_log::PANIC,
-                Attempt::DeadLetter(JobError::abort(detail)),
+                AttemptOutcome::DeadLetter(JobError::abort(panic_message(panic.as_ref()))),
             )
         }
     };
 
-    tracing::info!(
-        name: unit::JOB,
-        target: nest_rs_core::operation_log::TARGET,
-        message = unit::JOB,
-        queue = identity.queue,
-        processor = identity.processor,
-        job_id = identity.job_id,
-        attempt = identity.attempt,
-        outcome = settled,
-        duration_ms = nest_rs_core::operation_log::duration_ms(started),
-    );
+    line.file(settled);
     result
 }
 
@@ -267,44 +891,60 @@ mod tests {
 
     use super::*;
 
-    /// The identity a test job reports it was. The assertions are about the
-    /// outcome and the line that carries it, so one fixture serves them all.
-    fn identity() -> JobIdentity {
+    fn identity(attempt: u32) -> JobIdentity {
         JobIdentity {
-            queue: "audio",
+            queue: QueueName::new("audio").expect("a valid name"),
             processor: "AudioProcessor",
-            job_id: "01a0".to_owned(),
-            attempt: 1,
+            job_id: JobId::mint(),
+            backend_id: None,
+            attempt,
         }
     }
 
-    fn container() -> Container {
-        Container::builder().build()
+    fn context() -> HandlerContext {
+        HandlerContext {
+            container: Container::builder().build(),
+            checkpoints: None,
+            unit_of_work: None,
+            attempt: Attempt::new(
+                JobId::mint(),
+                1,
+                QueueName::new("audio").expect("a valid name"),
+            ),
+            deadline: tokio::time::Instant::now() + nest_rs_core::JOB_TIMEOUT,
+            timeout: nest_rs_core::JOB_TIMEOUT,
+        }
     }
 
-    type Handler = std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
+    type Handler<'a> = std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send + 'a>>;
 
-    /// The finding: a backend's panic layer dead-letters a panicking job
-    /// correctly, and `nest_rs::queue` said **nothing** about it. The comparison
-    /// case proves it was a gap rather than a choice — a deserialization failure
-    /// on the same worker reports through `job dead-lettered: non-retryable
-    /// failure`. The panic branch now emits the same shape.
+    async fn run_payload(handler: JobHandler, last: bool) -> AttemptOutcome {
+        run(
+            handler,
+            Input::Payload(Cow::Owned(serde_json::json!({}))),
+            context(),
+            identity(1),
+            last,
+            Duration::from_secs(1),
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn a_panicking_handler_is_dead_lettered_with_an_event() {
-        fn boom(_job: serde_json::Value, _c: Container) -> Handler {
+        fn boom(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { panic!("deliberate panic for panic-2") })
         }
 
         let logs = LogCapture::install();
-        // The default hook would print the panic to stderr and drown the test
-        // output; the event under test is the structured one.
+        // The default hook would print the panic and drown the test output.
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let result = run(boom, serde_json::json!({}), container(), identity()).await;
+        let result = run_payload(boom, false).await;
         std::panic::set_hook(previous);
 
         assert!(
-            matches!(result, Attempt::DeadLetter(_)),
+            matches!(result, AttemptOutcome::DeadLetter(_)),
             "a panic is deterministic — it dead-letters instead of burning the retry budget",
         );
 
@@ -314,12 +954,11 @@ mod tests {
             "at the docs' own production filter (`nest_rs::queue=warn`) it has to show",
         );
         assert_eq!(
-            event.field("panic").as_deref(),
+            event.field(nest_rs_core::panic::FIELD).as_deref(),
             Some("deliberate panic for panic-2"),
             "the panic message rides on the shared `panic` field: {event:#?}",
         );
-        // The duration is on the family's line, not restated on the detail.
-        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB);
+        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB.name());
         assert_eq!(
             ran.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::PANIC),
@@ -328,14 +967,9 @@ mod tests {
         assert!(ran.field("duration_ms").is_some());
     }
 
-    /// A dead-lettered job is read from a log, days later, by someone who cannot
-    /// re-run it. `error=validation failed` alone does not say which field of
-    /// which payload was wrong — and the rejection knew. The detail rides the
-    /// event as `errors`, the member name HTTP and the WebSocket error frame use
-    /// for the same failure.
     #[tokio::test]
     async fn a_dead_lettered_pipe_rejection_logs_its_field_errors() {
-        fn rejected(_job: serde_json::Value, _c: Container) -> Handler {
+        fn rejected(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async {
                 Err(
                     JobError::abort("validation failed").with_details(Some(serde_json::json!({
@@ -346,13 +980,9 @@ mod tests {
         }
 
         let logs = LogCapture::install();
-        let result = run(rejected, serde_json::json!({}), container(), identity()).await;
-        // The classification, not merely the failure. A non-retryable error that
-        // stopped dead-lettering would spend the whole retry budget re-running a
-        // payload that cannot succeed, and every assertion below would still
-        // pass — the one silent way this path can break.
+        let result = run_payload(rejected, false).await;
         assert!(
-            matches!(result, Attempt::DeadLetter(_)),
+            matches!(result, AttemptOutcome::DeadLetter(_)),
             "a non-retryable failure dead-letters so the budget is never spent on it",
         );
 
@@ -362,59 +992,51 @@ mod tests {
             .unwrap_or_else(|| panic!("the dead-letter event carries `errors`: {event:#?}"));
         assert!(
             errors.contains("slug"),
-            "and it names the offending field: {errors}",
+            "and it names the offending field: {errors}"
         );
     }
 
-    /// A failure with nothing structured to say must not invent an `errors`
-    /// field — an empty one reads as "checked, nothing found".
     #[tokio::test]
     async fn a_dead_letter_without_detail_logs_no_errors_field() {
-        fn bare(_job: serde_json::Value, _c: Container) -> Handler {
+        fn bare(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::abort("missing field `id`")) })
         }
 
         let logs = LogCapture::install();
         assert!(matches!(
-            run(bare, serde_json::json!({}), container(), identity()).await,
-            Attempt::DeadLetter(_)
+            run_payload(bare, false).await,
+            AttemptOutcome::DeadLetter(_)
         ));
         let event = logs.expect_one(TARGET, "job dead-lettered: non-retryable failure");
         assert!(
             event.field("errors").is_none(),
-            "no detail ⇒ no field: {event:#?}",
+            "no detail ⇒ no field: {event:#?}"
         );
     }
 
-    /// The three non-panic outcomes, so the panic branch is pinned against
-    /// siblings that already worked rather than in isolation.
     #[tokio::test]
     async fn every_other_outcome_keeps_its_own_event() {
-        fn ok(_job: serde_json::Value, _c: Container) -> Handler {
+        fn ok(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Ok(()) })
         }
-        fn fatal(_job: serde_json::Value, _c: Container) -> Handler {
+        fn fatal(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::abort("missing field `id`")) })
         }
-        fn transient(_job: serde_json::Value, _c: Container) -> Handler {
+        fn transient(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::retry("upstream timed out")) })
         }
 
         let logs = LogCapture::install();
+        assert!(matches!(run_payload(ok, false).await, AttemptOutcome::Ok));
         assert!(matches!(
-            run(ok, serde_json::json!({}), container(), identity()).await,
-            Attempt::Ok
+            run_payload(fatal, false).await,
+            AttemptOutcome::DeadLetter(_)
         ));
         assert!(matches!(
-            run(fatal, serde_json::json!({}), container(), identity()).await,
-            Attempt::DeadLetter(_)
-        ));
-        assert!(matches!(
-            run(transient, serde_json::json!({}), container(), identity()).await,
-            Attempt::Retry(_)
+            run_payload(transient, false).await,
+            AttemptOutcome::Retry { .. }
         ));
 
-        // Success is said once, and it is the family's line that says it.
         assert!(
             logs.find(TARGET, "job ok").is_empty(),
             "a successful job reports through `nest_rs::operation`, not twice",
@@ -431,24 +1053,17 @@ mod tests {
         );
     }
 
-    /// The retryable half of the same classification, and the one with no
-    /// visible outcome at all: the backend re-attempts the job, so a transient
-    /// failure that eventually succeeds leaves the queue looking healthy.
-    ///
-    /// Which is exactly when it matters — a job succeeding on attempt four
-    /// every time is a system about to fall over, and this `warn` is the only
-    /// signal before it does.
     #[tokio::test]
-    async fn a_retryable_failure_is_reported_before_the_budget_re_attempts_it() {
-        fn flaky(_job: serde_json::Value, _c: Container) -> Handler {
+    async fn a_retryable_failure_with_budget_left_is_reported_before_it_runs_again() {
+        fn flaky(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::retry("the upstream API timed out")) })
         }
 
         let logs = LogCapture::install();
-        let result = run(flaky, serde_json::json!({}), container(), identity()).await;
+        let result = run_payload(flaky, false).await;
         assert!(
-            matches!(result, Attempt::Retry(_)),
-            "a retryable failure is a `Retry` — that is what keeps the budget alive",
+            matches!(result, AttemptOutcome::Retry { .. }),
+            "a retryable failure with budget left is a `Retry`",
         );
 
         let event = logs.expect_one(TARGET, "job failed; will retry within the budget");
@@ -460,12 +1075,83 @@ mod tests {
             "the event carries the cause the retry will hit again, got {:?}",
             event.fields,
         );
-        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB);
+        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB.name());
         assert_eq!(
             ran.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::ERROR),
         );
         assert_eq!(ran.field("queue").as_deref(), Some("audio"));
         assert!(ran.field("duration_ms").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_failure_event_carries_every_cause_beneath_the_error() {
+        fn wrapped(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+            Box::pin(async {
+                Err(JobError::retry(crate::QueueError::backend(
+                    std::io::Error::other("Job not found"),
+                )))
+            })
+        }
+
+        let logs = LogCapture::install();
+        let outcome = run_payload(wrapped, false).await;
+        assert!(matches!(outcome, AttemptOutcome::Retry { .. }));
+
+        let event = logs.expect_one(TARGET, "job failed; will retry within the budget");
+        assert_eq!(
+            event.field("error").as_deref(),
+            Some("the queue backend failed: Job not found"),
+            "the wrapper alone names nothing an operator acts on: {:?}",
+            event.fields,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retryable_failure_on_the_last_attempt_dead_letters_and_says_the_budget_is_spent() {
+        fn flaky(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+            Box::pin(async { Err(JobError::retry("the upstream API timed out")) })
+        }
+
+        let logs = LogCapture::install();
+        let result = run(
+            flaky,
+            Input::Payload(Cow::Owned(serde_json::json!({}))),
+            context(),
+            identity(4),
+            true,
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(result, AttemptOutcome::DeadLetter(_)));
+
+        let spent = logs.expect_one(TARGET, "job dead-lettered: retry budget spent");
+        assert_eq!(spent.level, "error");
+        assert_eq!(spent.field("attempts").as_deref(), Some("4"));
+        assert!(
+            logs.find(TARGET, "job failed; will retry within the budget")
+                .is_empty(),
+            "no retry is promised on the attempt that has none left",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_envelope_never_reaches_the_handler() {
+        fn unreachable_handler(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+            Box::pin(async { panic!("the handler must not run on a refused envelope") })
+        }
+
+        let logs = LogCapture::install();
+        let result = run(
+            unreachable_handler,
+            Input::Refused(JobError::abort("unsupported job wire-format version 99")),
+            context(),
+            identity(1),
+            false,
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(result, AttemptOutcome::DeadLetter(_)));
+        logs.expect_one(TARGET, "job dead-lettered: non-retryable failure");
     }
 }

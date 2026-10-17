@@ -1,31 +1,60 @@
-//! [`GraphqlConfig`] — loaded from `NESTRS_GRAPHQL__*`. Every field defaults
-//! production-safe (playground off, SDL emit off, depth/complexity limits on,
-//! introspection disabled); an `.env.development` opts the tooling in and an
-//! app's `module.rs` can pin tighter limits so `app.rs` carries no config
-//! literal.
+//! [`GraphqlConfig`] — loaded from `<PREFIX>_GRAPHQL__*`, every field
+//! defaulting production-safe.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
-/// Four hours — the same default ceiling `NESTRS_WS__MAX_CONNECTION_SECS`
-/// carries, because it is the same control on the same kind of socket.
+/// Four hours, as `<PREFIX>_WS__MAX_CONNECTION_SECS` defaults.
 const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 
-/// A hundred entity references per `_entities` call — a page of parents on the
-/// router's side, which is what a query plan turns into one such call.
+/// The subscription socket ceiling's range and the variable that sets it.
+const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
+    "MAX_CONNECTION_SECS",
+    "GraphqlConfig::max_connection",
+    nest_rs_http::MAX_CONNECTION_FLOOR,
+    nest_rs_http::MAX_CONNECTION_CEILING,
+);
+
+/// 64 KiB, as `<PREFIX>_WS__MAX_MESSAGE_BYTES` defaults: a `subscribe` carries
+/// one document and its variables.
+const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
+/// Three seconds, the graphql-ws reference server's `connectionInitWaitTimeout`.
+const DEFAULT_CONNECTION_INIT_TIMEOUT_SECS: u64 = 3;
+
+/// The wait for `connection_init`'s range and the variable that sets it.
+const CONNECTION_INIT_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "CONNECTION_INIT_TIMEOUT_SECS",
+    "GraphqlConfig::connection_init_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a client on a slow link cannot finish its first message below it",
+    }),
+    Bound {
+        count: 60,
+        why: "an idle socket held longer is the exhaustion this bound exists for",
+    },
+);
+
+/// A hundred operations at once on one socket.
+const DEFAULT_MAX_SOCKET_OPERATIONS: usize = 100;
+
+/// A hundred entity references per `_entities` call — a page of parents.
 const DEFAULT_MAX_REPRESENTATIONS: usize = 100;
 
-/// GraphQL endpoint options, settable via `NESTRS_GRAPHQL__*` or pinned through
+/// GraphQL endpoint options, settable via `<PREFIX>_GRAPHQL__*` or pinned through
 /// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root). Every field
 /// defaults production-safe.
 #[config(namespace = "graphql")]
 #[derive(Clone, Debug)]
 pub struct GraphqlConfig {
-    /// Endpoint path. Default `/graphql`.
+    /// Endpoint path. Default `/graphql`. One literal path: a template's `{`
+    /// `}`, or a `:`, `*` or `<` the router reads as a parameter, fails the
+    /// boot.
     pub path: String,
     /// Default `false` (production-safe).
     pub playground: bool,
@@ -34,25 +63,17 @@ pub struct GraphqlConfig {
     /// (Re)write `schema_path` from the live schema once at boot. Default
     /// `false`. A write failure is logged, never fatal.
     pub emit_sdl: bool,
-    /// Maximum nesting depth of an incoming query AST. Defaults to `Some(15)`
-    /// (production-safe); set `None` to disable the check. A sensible value is
-    /// in the 10-20 range:
-    /// caps recursive bombs (`{ a { a { a { … } } } }`) without rejecting
-    /// legitimate nested queries. Cheap to enforce (one AST walk).
+    /// Maximum nesting depth of an incoming query AST. Defaults to `Some(15)`;
+    /// `None` disables the check.
     ///
     /// `Some(0)` is rejected at boot: async-graphql checks `depth > limit`
-    /// strictly and every field has depth ≥ 1, so `0` would brick every
-    /// query. Use `None` to disable.
+    /// strictly and every field has depth ≥ 1, so `0` would refuse every query.
     #[validate(range(min = 1))]
     pub max_depth: Option<usize>,
-    /// Maximum complexity score of an incoming query AST. Defaults to
-    /// `Some(2000)` (production-safe); set `None` to disable the check. Score =
-    /// 1 per field + per-field overrides emitted
-    /// by `#[expose]` on list relations (multiplier on the unbounded fanout).
-    /// A sensible production value sits in the 1000-5000 range and should be
-    /// tuned from observed legitimate queries.
-    ///
-    /// `Some(0)` is rejected at boot for the same reason as `max_depth`.
+    /// Maximum complexity score of an incoming query AST: 1 per field, plus
+    /// the multiplier `#[expose]` sets on list relations. Defaults to
+    /// `Some(2000)`; `None` disables the check. `Some(0)` is rejected at boot,
+    /// as for `max_depth`.
     #[validate(range(min = 1))]
     pub max_complexity: Option<usize>,
     /// Disable GraphQL introspection. Default `true` (production-safe).
@@ -61,87 +82,63 @@ pub struct GraphqlConfig {
     /// Default `10`.
     #[validate(range(min = 1))]
     pub max_batch_size: usize,
-    /// Maximum lifetime of one graphql-ws subscription socket. When it elapses
-    /// the server closes the socket, so the peer must re-upgrade — re-running
-    /// the operation guard and re-checking token `exp`.
+    /// Maximum lifetime of one graphql-ws subscription socket; it then closes
+    /// with `1001 Going Away`, so the peer must re-upgrade. A **security**
+    /// control: a subscription captures its principal once at the upgrade.
     ///
-    /// A **security** control, not a resource knob, and the same one
-    /// [`WsConfig::max_connection`] is: a subscription captures its principal
-    /// once at the upgrade and replays it for every item it pushes. Without a
-    /// ceiling the socket keeps those privileges after expiry, logout or
-    /// revocation, for as long as the peer holds it open.
-    ///
-    /// Read from `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` (whole seconds; `0` ⇒
-    /// unlimited); defaults to 4 hours.
-    ///
-    /// [`WsConfig::max_connection`]: https://docs.rs/nest-rs-ws
+    /// Read from `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`, whole seconds from 1 to
+    /// 86400 or `0` for unlimited; defaults to 4 hours.
     pub max_connection: Option<Duration>,
+    /// The graphql-ws socket's per-message and per-frame byte cap, held at the
+    /// protocol layer so a larger frame is refused before it is buffered, and
+    /// the socket closed.
+    ///
+    /// Read from `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES`; defaults to 64 KiB, as
+    /// `<PREFIX>_WS__MAX_MESSAGE_BYTES` does.
+    #[validate(range(min = 1, message = "must be at least 1 byte"))]
+    pub max_message_bytes: usize,
+    /// How long an upgraded graphql-ws socket may wait for `connection_init`
+    /// before it is closed `4408 Connection initialisation timeout`.
+    ///
+    /// Read from `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS`, whole seconds
+    /// from 1 to 60, never off; defaults to 3 seconds.
+    pub connection_init_timeout: Duration,
+    /// Operations one graphql-ws socket may run at once; a `subscribe` past it
+    /// is answered with an `error` message for its id, and the socket stays.
+    ///
+    /// Read from `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS`; defaults to 100.
+    /// **`None` and `Some(0)` both mean unlimited**, as for
+    /// `max_representations`.
+    pub max_socket_operations: Option<usize>,
     /// Serve this schema as an Apollo **subgraph**: the federation directives
-    /// are declared, and the emitted SDL is the subgraph form (`@key` present,
-    /// `_service` / `_entities` stripped, as the spec requires of an exported
-    /// subgraph schema).
+    /// are declared, and the emitted SDL is the subgraph form.
     ///
-    /// **What it does not do is switch the federation surface on**, and the
-    /// distinction is the whole reason the boot enforces it. async-graphql
-    /// serves `_service` and `_entities` as soon as any `#[entity]` resolver has
-    /// registered its keys, whatever this flag says — so an entity plus
-    /// `federation = false` would publish the schema's own SDL while claiming
-    /// not to be a subgraph, and the flag would be a comment. Declaring an
-    /// entity while this is `false` therefore **fails the boot**, naming the
-    /// resolver: an entity resolver *is* the subgraph, and being one is a
-    /// deployment decision.
+    /// async-graphql serves `_service` and `_entities` as soon as any `#[entity]`
+    /// resolver registers its keys, whatever this flag says, so an entity while
+    /// this is `false` **fails the boot**.
     ///
-    /// Default `false`, and it stays an explicit opt-in for a reason a
-    /// deployment cannot undo: **`_service` cannot be switched off**.
-    /// `disable_introspection` does not cover it — its field sits outside that
-    /// gate — so a federated schema publishes its own SDL to anyone who can
-    /// reach the endpoint. A subgraph belongs behind a router, on a network the
-    /// router is on, and not on the internet.
+    /// Default `false`: **`_service` cannot be switched off** —
+    /// `disable_introspection` does not cover it — so a subgraph publishes its
+    /// SDL to anyone who can reach it, and belongs behind a router.
     ///
-    /// Turning it on without an `#[entity]` anywhere is legal and nearly empty:
-    /// `_service` answers, `_entities` does not exist, because the keys a router
-    /// matches on come from the entity resolvers' own arguments.
-    ///
-    /// Read from `NESTRS_GRAPHQL__FEDERATION`.
+    /// Read from `<PREFIX>_GRAPHQL__FEDERATION`.
     pub federation: bool,
-    /// Maximum number of entity references one `_entities` call may carry.
+    /// Maximum number of entity references one `_entities` call may carry —
+    /// a count neither `max_depth`, `max_complexity` nor `max_batch_size` sees,
+    /// though each reference is a full resolution run concurrently. Over the
+    /// ceiling is a GraphQL error naming it, never a truncation.
     ///
-    /// The **third** limit on an incoming document and the only one that sees
-    /// this number: `max_depth` and `max_complexity` score the document's shape,
-    /// `max_batch_size` counts *operations* — and a single `_entities` operation
-    /// of depth 2 and trivial complexity carries a list whose length the caller
-    /// picks. Each element is a full resolution: the entity body, its posture
-    /// gate and mask, and whatever reads it makes, launched concurrently by
-    /// async-graphql's `try_join_all`. A hundred thousand references passed
-    /// every existing check.
-    ///
-    /// Over the ceiling is a GraphQL error naming it, never a silent truncation
-    /// — a router that quietly received fewer entities than it asked for would
-    /// render a page with holes and no way to tell why.
-    ///
-    /// Read from `NESTRS_GRAPHQL__MAX_REPRESENTATIONS` (`0` ⇒ unlimited);
-    /// defaults to 100. Raise it for a router whose parent pages are larger than
-    /// that; it costs nothing when no `_entities` reaches the schema.
-    ///
-    /// **`Some(0)` is unlimited here, where its neighbours refuse it.** This
-    /// field carries a sentinel and `max_depth` / `max_complexity` do not — for
-    /// them `0` could only mean "reject every query", so the validator refuses it
-    /// rather than let it read as *off*. `None` and `Some(0)` therefore mean the
-    /// same thing on this one, pinned in code exactly as through the variable.
+    /// Read from `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS`; defaults to 100.
+    /// **`None` and `Some(0)` both mean unlimited here**, where `max_depth` and
+    /// `max_complexity` refuse `0`.
     pub max_representations: Option<usize>,
-    /// Promote the default unreachable-resolver `warn` into a boot failure.
+    /// Promote the default `warn` on a linked `#[resolver]` no module lists in
+    /// `providers` — filtered out of the schema — into a boot failure.
     ///
-    /// A `#[resolver]` composes into the schema from a link-time registry, so
-    /// listing it in a module's `providers = [...]` is what brings its injected
-    /// dependencies under the access contract — and one that is listed nowhere
-    /// is filtered out of the schema instead of failing the boot. The default
-    /// names it at `warn`; this makes it fatal, for apps where a forgotten
-    /// `providers` entry should not reach a deployment.
+    /// Default `false`: several binaries over one feature library legitimately
+    /// link resolvers a given app does not serve.
     ///
-    /// Default `false`, because a workspace shipping several binaries over one
-    /// feature library legitimately links resolvers a given app does not serve.
-    ///
-    /// Read from `NESTRS_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP`.
+    /// Read from `<PREFIX>_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP`.
     pub strict_resolver_membership: bool,
 }
 
@@ -157,6 +154,9 @@ impl Default for GraphqlConfig {
             disable_introspection: true,
             max_batch_size: 10,
             max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
+            max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            connection_init_timeout: Duration::from_secs(DEFAULT_CONNECTION_INIT_TIMEOUT_SECS),
+            max_socket_operations: Some(DEFAULT_MAX_SOCKET_OPERATIONS),
             federation: false,
             max_representations: Some(DEFAULT_MAX_REPRESENTATIONS),
             strict_resolver_membership: false,
@@ -168,10 +168,10 @@ impl Config for GraphqlConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let d = base;
         Ok(Self {
-            path: env.get("PATH").unwrap_or(d.path),
+            path: env.get("PATH")?.unwrap_or(d.path),
             playground: env.flag("PLAYGROUND", d.playground)?,
             schema_path: env
-                .get("SCHEMA_PATH")
+                .get("SCHEMA_PATH")?
                 .map(PathBuf::from)
                 .unwrap_or(d.schema_path),
             emit_sdl: env.flag("EMIT_SDL", d.emit_sdl)?,
@@ -179,7 +179,16 @@ impl Config for GraphqlConfig {
             max_complexity: env.parse("MAX_COMPLEXITY")?.or(d.max_complexity),
             disable_introspection: env.flag("DISABLE_INTROSPECTION", d.disable_introspection)?,
             max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
-            max_connection: env.seconds("MAX_CONNECTION_SECS", d.max_connection)?,
+            max_connection: MAX_CONNECTION
+                .read_optional(env, d.max_connection)?
+                .map(|read| read.value),
+            max_message_bytes: env
+                .parse("MAX_MESSAGE_BYTES")?
+                .unwrap_or(d.max_message_bytes),
+            connection_init_timeout: CONNECTION_INIT_TIMEOUT
+                .read(env, d.connection_init_timeout)?
+                .value,
+            max_socket_operations: env.count("MAX_SOCKET_OPERATIONS", d.max_socket_operations)?,
             federation: env.flag("FEDERATION", d.federation)?,
             max_representations: env.count("MAX_REPRESENTATIONS", d.max_representations)?,
             strict_resolver_membership: env
@@ -233,8 +242,6 @@ mod tests {
 
     #[test]
     fn default_path_constant_pins_the_mount_point() {
-        // App code reads this path string indirectly through the module — a
-        // rename here breaks every reverse proxy.
         assert_eq!(DEFAULT_PATH, "/graphql");
     }
 
@@ -256,9 +263,6 @@ mod tests {
 
     #[test]
     fn validate_rejects_zero_limits_so_some_zero_does_not_brick_the_endpoint() {
-        // async-graphql's depth/complexity check is strict `>`, and every
-        // non-empty selection has depth ≥ 1, so `Some(0)` would reject every
-        // query at boot — a footgun the validator must catch.
         let zero_depth = GraphqlConfig {
             max_depth: Some(0),
             ..GraphqlConfig::default()
@@ -272,7 +276,6 @@ mod tests {
             ..GraphqlConfig::default()
         };
         assert!(zero_complexity.validate().is_err());
-        // Sanity: Some(1) is meaningfully tight but legal; defaults are fine.
         let tight = GraphqlConfig {
             max_depth: Some(1),
             max_complexity: Some(1),
@@ -302,5 +305,133 @@ mod tests {
         assert!(cfg.emit_sdl);
         assert_eq!(cfg.max_depth, Some(15));
         assert_eq!(cfg.max_complexity, Some(2000));
+    }
+
+    #[test]
+    fn the_socket_is_bounded_in_size_handshake_and_concurrency_by_default() {
+        let d = GraphqlConfig::default();
+        assert_eq!(d.max_message_bytes, 64 * 1024, "as a gateway's socket");
+        assert_eq!(
+            d.connection_init_timeout,
+            Duration::from_secs(3),
+            "graphql-ws's reference wait"
+        );
+        assert_eq!(d.max_socket_operations, Some(100));
+        assert!(d.validate().is_ok());
+    }
+
+    #[test]
+    fn each_socket_bound_is_overlaid_by_its_own_variable() {
+        let cfg = GraphqlConfig::from_env(
+            &ConfigService::with_vars(
+                "graphql",
+                [
+                    ("MAX_MESSAGE_BYTES", "2048"),
+                    ("CONNECTION_INIT_TIMEOUT_SECS", "10"),
+                    ("MAX_SOCKET_OPERATIONS", "5"),
+                ],
+            ),
+            GraphqlConfig::default(),
+        )
+        .expect("every bound inside its range");
+        assert_eq!(cfg.max_message_bytes, 2048);
+        assert_eq!(cfg.connection_init_timeout, Duration::from_secs(10));
+        assert_eq!(cfg.max_socket_operations, Some(5));
+
+        let unlimited = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", [("MAX_SOCKET_OPERATIONS", "0")]),
+            GraphqlConfig::default(),
+        )
+        .expect("`0` is the unlimited sentinel");
+        assert_eq!(unlimited.max_socket_operations, None);
+
+        let pinned = GraphqlConfig {
+            connection_init_timeout: Duration::from_secs(30),
+            max_socket_operations: Some(7),
+            ..GraphqlConfig::default()
+        };
+        let kept = GraphqlConfig::from_env(&ConfigService::with_vars("graphql", []), pinned)
+            .expect("a pin inside the range");
+        assert_eq!(kept.connection_init_timeout, Duration::from_secs(30));
+        assert_eq!(kept.max_socket_operations, Some(7));
+    }
+
+    #[test]
+    fn a_message_cap_of_zero_bytes_is_refused() {
+        let zero = GraphqlConfig {
+            max_message_bytes: 0,
+            ..GraphqlConfig::default()
+        };
+        assert!(
+            zero.validate().is_err(),
+            "a zero cap would refuse every frame"
+        );
+    }
+
+    #[test]
+    fn the_wait_for_connection_init_is_held_to_a_second_and_a_minute_never_off() {
+        let var = nest_rs_config::var_name("graphql", "CONNECTION_INIT_TIMEOUT_SECS");
+        for (raw, said) in [
+            ("0", "must be at least 1 second"),
+            ("61", "must be at most 60 seconds"),
+        ] {
+            let refused = GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", [("CONNECTION_INIT_TIMEOUT_SECS", raw)]),
+                GraphqlConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains(said),
+                "{refused}"
+            );
+            assert!(!refused.contains("turn it off"), "{refused}");
+        }
+        for pinned in [Duration::ZERO, Duration::from_secs(120)] {
+            let refused = GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", []),
+                GraphqlConfig {
+                    connection_init_timeout: pinned,
+                    ..GraphqlConfig::default()
+                },
+            )
+            .expect_err("a pin outside the range")
+            .to_string();
+            assert!(
+                refused.contains("GraphqlConfig::connection_init_timeout"),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_subscription_ceiling_outside_its_range_is_refused_from_either_side() {
+        let var = nest_rs_config::var_name("graphql", "MAX_CONNECTION_SECS");
+        let from_env = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", [("MAX_CONNECTION_SECS", "86401")]),
+            GraphqlConfig::default(),
+        )
+        .expect_err("past a day")
+        .to_string();
+        assert!(
+            from_env.contains(&var) && from_env.contains("must be at most 86400 seconds"),
+            "{from_env}"
+        );
+        let pinned = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", []),
+            GraphqlConfig {
+                max_connection: Some(Duration::ZERO),
+                ..GraphqlConfig::default()
+            },
+        )
+        .expect_err("a pinned zero")
+        .to_string();
+        assert!(pinned.contains("`None` turns it off"), "{pinned}");
+        let off = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", [("MAX_CONNECTION_SECS", "0")]),
+            GraphqlConfig::default(),
+        )
+        .expect("`0` is off");
+        assert_eq!(off.max_connection, None);
     }
 }

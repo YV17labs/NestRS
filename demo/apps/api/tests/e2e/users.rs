@@ -432,13 +432,8 @@ async fn crud_cursor_pagination_walks_the_collection_in_order() {
     }
 
     let mut seen: Vec<String> = Vec::new();
-    let mut after: Option<String> = None;
-    let mut first_page = true;
-    loop {
-        let path = match &after {
-            Some(cursor) => format!("/orgs?first=2&after={cursor}"),
-            None => "/orgs?first=2".to_string(),
-        };
+    let mut next = Some("/orgs?first=2".to_owned());
+    while let Some(path) = next.take() {
         let resp = app
             .http()
             .get(&path)
@@ -446,9 +441,22 @@ async fn crud_cursor_pagination_walks_the_collection_in_order() {
             .send()
             .await;
         resp.assert_status_is_ok();
-        if first_page {
-            resp.assert_header_exist("x-next-cursor");
-            first_page = false;
+        next = resp
+            .0
+            .headers()
+            .get(header::LINK)
+            .and_then(|value| value.to_str().ok())
+            .map(|link| {
+                link.strip_prefix('<')
+                    .and_then(|rest| rest.split_once(">; rel=\"next\""))
+                    .map(|(target, _)| target.to_owned())
+                    .unwrap_or_else(|| panic!("a next link: {link}"))
+            });
+        if let Some(target) = &next {
+            assert!(
+                target.starts_with("/orgs?first=2&after="),
+                "the link keeps the page size and carries the cursor: {target}",
+            );
         }
         let body = resp.json().await;
         let page: Vec<String> = body
@@ -462,14 +470,7 @@ async fn crud_cursor_pagination_walks_the_collection_in_order() {
             "the page respects first=2: got {}",
             page.len()
         );
-        if page.is_empty() {
-            break;
-        }
-        after = page.last().cloned();
         seen.extend(page);
-        if seen.len() >= created.len() {
-            break;
-        }
     }
 
     assert_eq!(seen.len(), 5, "all five orgs are paged through: {seen:?}");

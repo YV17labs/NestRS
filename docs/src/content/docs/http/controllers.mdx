@@ -1,7 +1,6 @@
 ---
 title: Controllers & routes
 description: "Controllers as plain structs, routes from #[routes], path/query/JSON extractors, typed returns — the minimum to ship an HTTP handler."
-tier: basics
 sidebar:
   order: 3
 ---
@@ -92,7 +91,7 @@ event rather than against the attribute.
 ```rust title="crates/features/src/hello/http/controller.rs"
 use nest_rs::http::poem::web::Path;
 
-#[get("/:name")]
+#[get("/{name}")]
 async fn greet(&self, Path(name): Path<String>) -> String {
     format!("Hello, {name}!")
 }
@@ -113,6 +112,43 @@ the way out: bind the whole extractor and destructure in the body.
 $ curl http://localhost:3000/Ada
 Hello, Ada!
 ```
+
+## Route templates
+
+A route's path is written in OpenAPI's path templating, the spelling the
+[OpenAPI document](/openapi/) already prints: what you write in the attribute is
+what the document, the span's `http.route` and the
+[rate limiter's](/rate-limiting/) bucket all read back, `/users/{id}` everywhere.
+
+| Template | Matches | Binds |
+|---|---|---|
+| `/users/{id}` | `/users/42` | `id` = `42` |
+| `/@{handle}` | `/@ada` — a parameter may follow literal text in its segment | `handle` = `ada` |
+| `/files/{*path}` | `/files/a/b.txt` — the rest of the path, never empty | `path` = `a/b.txt` |
+| `/{{raw}}` | `/{raw}` — a doubled brace is a literal one | nothing |
+
+A parameter reads up to the next `/`, so it ends its segment; a catch-all takes
+the rest of the path, so it comes last. A controller's own `path` may hold
+parameters too (`/orgs/{org}/members`); it ends before its routes, so it holds
+no catch-all.
+
+**Everything else is refused at compile time, at the literal**, with the
+spelling to write instead:
+
+```text frame="terminal"
+error: #[get] `/users/:id`: `:id` is the 6.x parameter syntax — write `/users/{id}`
+error: #[get] `/files/*rest`: `*rest` is the 6.x catch-all syntax — write `/files/{*rest}`
+error: #[get] `/{id:\d+}`: a route parameter carries no pattern — parse it with its type (`Path<u64>`) or a pipe
+error: #[get] `/{id}.json`: `{id}` ends its segment — a parameter reads up to the next `/`
+error: #[get] `/{*rest}/meta`: `{*rest}` comes last — a catch-all takes the rest of the path
+```
+
+A parameter carries no pattern because its type already is one: `Path<u64>`
+answers `400` for `/users/abc` before the handler runs, and a
+[pipe](/fundamentals/pipes/) says why in a sentence of its own. Two spellings of
+one address — `/{id}` on one handler and `/{key}` on another — are one route
+with two names for its parameter, refused at compile time inside a controller
+and at boot across two, naming both handlers.
 
 ## Reading query parameters
 
@@ -177,7 +213,13 @@ async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<Gree
   next to `#[input]` is a conflicting impl (`E0119`), not an addition. Need a
   custom `Deserialize` shape (e.g. untagged enums)? Skip `#[input]` and derive
   all four by hand.
-- **`Json<T>`** parses the request body into `T`. Malformed JSON is `400`.
+- **`Json<T>`** parses the request body into `T`. A body that does not decode
+  is `400`, and its `detail` says where and what kind — `parse error: invalid
+  type: a string, expected u64 at line 1 column 12` — never the value refused,
+  nor a key the client sent: serde's own sentence quotes both, and a body field
+  is where a password or a card number travels. `Form<T>`, `Query<T>`,
+  `Path<T>` and `Header<T>` refuse the same way, and so does a handler's own
+  decode returned as a `400` (`poem::error::BadRequest(e)`).
 - **`Valid<E>`** runs [validator](https://docs.rs/validator) on the
   extracted value. A failure returns `400` with the structured error list
   — no manual checks in the handler. `Valid` is the ergonomic form of the
@@ -194,7 +236,7 @@ $ curl -sX POST http://localhost:3000/ \
     -d '{"name":""}'
 {"type":"https://www.rfc-editor.org/rfc/rfc9110#status.400","title":"Bad Request",
  "status":400,"detail":"validation failed",
- "errors":{"name":[{"code":"length","message":null,"params":{"min":1}}]}}
+ "errors":{"name":[{"code":"length","message":null}]}}
 ```
 
 ## Returning typed JSON

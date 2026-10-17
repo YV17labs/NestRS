@@ -2,7 +2,7 @@
 
 Model Context Protocol server support for NestRS — wraps the rmcp SDK behind the DI container and exposes a poem endpoint.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features mcp

@@ -1,7 +1,6 @@
 ---
 title: Query limits
 description: Bound query depth and complexity at the schema level — two ceilings that catch the recursive bomb, the wide sweep, and volumetric fanout before a resolver runs.
-tier: all-options
 sidebar:
   order: 8
 ---
@@ -21,14 +20,16 @@ auth even runs:
 
 nestrs wraps async-graphql's two validation visitors that cover the
 three vectors. Both are on by default; tune the ceilings to your
-traffic.
+traffic. A subscription socket has bounds of its own — its message size,
+its wait for `connection_init` and the operations it runs at once — on
+[Subscriptions](/graphql/subscriptions/#configuration).
 
 ## The two ceilings
 
 | Limit | Catches | Config field | Env var |
 |---|---|---|---|
-| Depth | Recursive | `max_depth` | `NESTRS_GRAPHQL__MAX_DEPTH` |
-| Complexity | Wide + fanout (with per-field annotations) | `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` |
+| Depth | Recursive | `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` |
+| Complexity | Wide + fanout (with per-field annotations) | `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` |
 
 Both are on by default (`max_depth = 15`, `max_complexity = 2000`).
 Keep both — depth alone misses wide queries, complexity alone misses
@@ -252,7 +253,7 @@ for the full reference.
   config fields and their env parsing.
 - `crates/nest-rs-graphql/src/resolver.rs` — `build_schema` applies
   the limits to the `SchemaBuilder` before `.finish()`.
-- `crates/nest-rs-resource-macros/src/relations.rs` — the
+- `crates/nest-rs-seaorm-macros/src/relations.rs` — the
   `DEFAULT_HAS_MANY_COMPLEXITY` constant and the
   `#[expose(complexity = …)]` parsing.
 

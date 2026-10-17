@@ -1,7 +1,6 @@
 ---
 title: OAuth2
 description: Authorization-code flow with PKCE — OAuthClient builds the redirect, validates the callback, and the JWT carries the CSRF state stateless.
-tier: all-options
 sidebar:
   order: 4
 ---
@@ -36,7 +35,7 @@ as its shared flow.
 ## Wire it in
 
 `OAuthClientModule::for_root(None)` registers an `OAuthClient` as global
-infrastructure, configured via `NESTRS_OAUTH_CLIENT__*` env vars. Pin the
+infrastructure, configured via `<PREFIX>_OAUTH__CLIENT__*` env vars. Pin the
 config in code by passing an `OAuthClientConfig`.
 
 ```rust title="apps/auth/src/module.rs"
@@ -71,15 +70,8 @@ impl OAuthController {
         let auth = self.client.authorize(&self.jwt, "github")?;
         Ok(Response::builder()
             .status(StatusCode::FOUND)
+            .header(header::SET_COOKIE, auth.set_cookie())
             .header(header::LOCATION, auth.url)
-            .header(
-                header::SET_COOKIE,
-                format!(
-                    "nestrs_oauth_tx={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
-                    auth.transaction,
-                    OAuthClient::TRANSACTION_TTL_SECS,
-                ),
-            )
             .finish())
     }
 
@@ -89,12 +81,11 @@ impl OAuthController {
     // would fail on the missing principal instead.
     #[get("/callback")]
     #[use_guards(OAuthGuard)]
-    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
-        Ok(Json(self.issuer.issue(
-            Some(caller.user_id),
-            caller.org_id,
-            caller.roles.clone(),
-        )?))
+    #[api(response = AccessTokenResponse)]
+    async fn callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
+        Ok(self
+            .issuer
+            .issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?)
     }
 }
 ```
@@ -107,9 +98,15 @@ tells `AuthnGuard` to admit a rejected credential as anonymous, which turns a
 forged-callback `401` into a failure on the missing principal — invisible to any
 alert, WAF rule or rate limit keyed on `401`.
 
+`/callback` returns `AccessTokenResponse` bare. The type renders its own JSON
+with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749 §5.1 requires
+on a token, so the browser that followed the redirect keeps no copy of it in a
+back-forward cache; `#[api(response = AccessTokenResponse)]` names the body for
+the OpenAPI document, which reads it off a `Json<T>` return otherwise.
+
 ## Configuration
 
-`OAuthClientConfig` lives in `nest-rs-oauth-client` and reads the `oauth_client`
+`OAuthClientConfig` lives in `nest-rs-oauth-client` and reads the `oauth__client`
 namespace — the OAuth *client* role has its own crate, so it has its own
 namespace rather than borrowing the one belonging to the crate that answers
 *who the caller is*.
@@ -120,18 +117,36 @@ follow the dual-path rule.
 
 | Field | Env var | Validation |
 |-------|---------|------------|
-| `client_id` | `NESTRS_OAUTH_CLIENT__CLIENT_ID` | length ≥ 1 |
-| `client_secret` | `NESTRS_OAUTH_CLIENT__CLIENT_SECRET` | length ≥ 1 |
-| `auth_url` | `NESTRS_OAUTH_CLIENT__AUTH_URL` | length ≥ 1 + parses as URL |
-| `token_url` | `NESTRS_OAUTH_CLIENT__TOKEN_URL` | length ≥ 1 + parses as URL |
-| `redirect_url` | `NESTRS_OAUTH_CLIENT__REDIRECT_URL` | absolute URL |
-| `userinfo_url` | `NESTRS_OAUTH_CLIENT__USERINFO_URL` | length ≥ 1 |
-| `scopes` | `NESTRS_OAUTH_CLIENT__SCOPES` | comma-separated list |
+| `client_id` | `<PREFIX>_OAUTH__CLIENT__CLIENT_ID` | length ≥ 1 |
+| `client_secret` | `<PREFIX>_OAUTH__CLIENT__CLIENT_SECRET` | length ≥ 1 |
+| `auth_url` | `<PREFIX>_OAUTH__CLIENT__AUTH_URL` | an `https` URL |
+| `token_url` | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL` | an `https` URL |
+| `redirect_url` | `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL` | an `https` URL, or `http` on a loopback address |
+| `userinfo_url` | `<PREFIX>_OAUTH__CLIENT__USERINFO_URL` | an `https` URL |
+| `scopes` | `<PREFIX>_OAUTH__CLIENT__SCOPES` | comma-separated list |
+| `tls` | `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` | PEM, each with its `_FILE` spelling |
 
-`OAuthClient::new` runs `validate()` first, then constructs the
-underlying `BasicClient`. The HTTP backend refuses redirects during
-the token exchange — following them is an SSRF risk per the `oauth2`
-crate's own guidance.
+`OAuthClient::new` runs `validate()` first, then holds every URL to TLS,
+then builds the client. The provider's three endpoints are `https`: the
+authorization endpoint is where the user signs in (RFC 6749 §3.1), the
+token endpoint receives the client secret and the code (§3.2), and the
+userinfo endpoint a bearer token (RFC 6750 §5.3). The redirect may also be
+`http` on `localhost`, `127.0.0.1` or `[::1]` — the loopback exception of
+RFC 8252 §7.3, which keeps a local `http://localhost:3000/callback`
+working. Anything else fails the boot naming the variable and the RFC,
+never the URL, which may carry credentials.
+
+The provider's certificate is verified against the system's authorities,
+or against the ones `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names, which
+replace them — an identity provider on a private network signed by your
+own authority is trusted that way. A provider requiring a client
+certificate gets `TLS_CERT` and `TLS_KEY`. No setting turns verification
+off. The HTTP backend refuses redirects — following them during the token
+exchange is an SSRF risk per the `oauth2` crate's own guidance, and on a
+read it could send the bearer token anywhere — and `fetch` refuses a URL
+that is not `https` before anything is sent. Beneath both checks the
+backend itself speaks `https` alone, so no URL a provider builds at run
+time reaches the network in plaintext.
 
 ## The redirect leg
 
@@ -152,8 +167,9 @@ transaction being replayed across providers.
 
 The transaction is a JSON Web Token signed by your app's
 `JwtService`, carrying the random CSRF `state`, the PKCE verifier,
-and `exp`. The browser stores it as a cookie; the callback leg
-verifies the signature before trusting any of it.
+and `exp`. The browser stores it as a cookie the framework names and
+writes — `auth.set_cookie()` is the whole `Set-Cookie` value — and the
+callback leg verifies the signature before trusting any of it.
 
 The framework generates a fresh PKCE pair per flow
 (`PkceCodeChallenge::new_random_sha256`) and a fresh CSRF token
@@ -162,15 +178,25 @@ The framework generates a fresh PKCE pair per flow
 ## The callback leg
 
 The provider redirects to `redirect_url` with `state` and `code`
-query parameters. `exchange` verifies the cookie's signature,
-compares its CSRF state to the query string, and only then trades
-the code for a `TokenSet`:
+query parameters. `OAuthClient::transaction_from` reads the transaction
+back from the request's `Cookie` fields — every one of them, since HTTP/2
+may split the cookies over several — by its exact name. `exchange` then
+verifies the cookie's signature, compares its CSRF state to the query
+string, and only then trades the code for a `TokenSet`:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
+let transaction_cookie = OAuthClient::transaction_from(
+    req.headers()
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|field| field.to_str().ok()),
+)
+.ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
+
 let tokens = self.client.exchange(
     &self.jwt,
     "github",              // the same provider the transaction was minted for
-    &transaction_cookie,
+    transaction_cookie,
     state_from_query,
     code_from_query,
 ).await?;
@@ -206,6 +232,63 @@ in your DB, creating one if absent, issuing your app's JWT) is the
 `Strategy`'s job — `OAuthClient` deliberately never sees your
 principal type.
 
+## Every provider call has a bound
+
+A provider that stops answering does not hold your callback. Every call
+the client makes — the code exchange, `userinfo`, and any `fetch` —
+carries three bounds, constants on the client:
+
+| Constant | Value | Covers |
+|---|---|---|
+| `OAuthClient::CONNECT_TIMEOUT` | 3 s | reaching the provider: the name lookup, the TCP and TLS handshakes |
+| `OAuthClient::CALL_TIMEOUT` | 5 s | the whole call, from connecting to the last byte of the answer |
+| `OAuthClient::ANSWER_MAX_BYTES` | 64 KiB | the most of an answer read |
+
+An identity provider answers each of these in well under a second, so a
+call past its bound is a provider that is not answering. That is the
+provider's outage, not the caller's failed sign-in, so it fails as
+`AuthError::Unavailable` — a `503` (RFC 9110 §15.6.4), logged at `error`
+— and its sentence names the endpoint and the bound that ended it:
+
+```text
+authentication unavailable: the OAuth provider's token endpoint
+(https://github.com/login/oauth/access_token) did not answer within 5s
+```
+
+A token response or a userinfo document is a few KiB, an id_token
+included, so an answer past 64 KiB is refused the same way — on its
+`Content-Length`, or as soon as the streamed body passes the cap — and
+is never buffered whole:
+
+```text
+authentication unavailable: the OAuth provider's userinfo endpoint
+(https://api.github.com/user) answered more than 65536 bytes, the most
+an OAuth answer is read to
+```
+
+A provider that answers it cannot answer now — a `5xx`, or `429` — is
+unavailable the same way, on the exchange as on a read, and its own
+`Retry-After` reaches the caller when it gave one in seconds; an HTTP-date
+is not converted against this server's clock. A provider that answers and
+refuses — a §5.2 error on the exchange, any other status on a read — is
+the caller's failure, `AuthError::Failed`, a `401`.
+
+A refused connection, like every failure the client reports, names the
+endpoint the same way. The endpoint appears as its scheme, host, port and
+path only (`nest_rs::config::endpoint_shown`): a query string or
+credentials in the URL never reach the sentence, and neither does
+anything the call carried — the client secret, the code, the PKCE
+verifier, the access token.
+
+The bounds sit under the two nets above them. A callback makes at most
+three calls through the client (GitHub: the exchange, `/user`,
+`/user/emails`), so a login spends at most 15 s on its provider — inside
+the guard's own bound on a strategy,
+[`AUTHENTICATE_TIMEOUT`](/security/authentication/#advanced-write-your-own-strategy)
+(18 s), and the HTTP edge's request timeout (20 s by default). A
+provider that stops answering is reported by the client, naming the
+endpoint, before either of those speaks for it.
+
 ## `AuthorizationRedirect` — the redirect leg's return value
 
 ```rust title="nest_rs::oauth::client::AuthorizationRedirect"
@@ -216,13 +299,20 @@ pub struct AuthorizationRedirect {
 ```
 
 - `url` — set `Location: <url>` and return `302`.
-- `transaction` — set as an `HttpOnly`, `Secure`, `SameSite=Lax`
-  cookie scoped to the callback path.
+- `transaction` — set as a cookie through `set_cookie()`:
+  `__Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax`.
 
-The transaction inherits the `JwtService`'s expiry, so a flow that
-takes longer than your `expires_in` to complete fails the verify
-step. Keep the JWT TTL aligned with how long a user typically takes
-to consent.
+The cookie's name is `OAuthClient::TRANSACTION_COOKIE`, the framework's
+rather than yours. Its `__Host-` prefix makes a browser refuse it unless
+it is `Secure`, on `Path=/` and without a `Domain`, so a sibling subdomain
+can neither plant nor overwrite it. `HttpOnly` keeps it from every
+script. `SameSite=Lax` lets it ride the provider's redirect back, a
+top-level cross-site navigation that `Strict` would strip.
+
+The transaction lives `OAuthClient::TRANSACTION_TTL_SECS` — ten minutes,
+the signed token's `exp` and the cookie's `Max-Age` alike — whatever your
+`JwtService`'s `expires_in`. A user who takes longer to consent starts
+the flow again.
 
 ## Token endpoint errors
 
@@ -236,10 +326,14 @@ A token-issuing controller that fronts the OAuth flow (or its
 | `InvalidScope` | `invalid_scope` | 400 |
 | `InvalidClient` | `invalid_client` | 401 |
 | `Sign(inner)` | `server_error` | 500 |
+| `Server(inner)` | `server_error` | 503 |
 
 The `Sign` variant collapses any internal signing failure to the
 opaque RFC code on the wire; the inner `anyhow::Error` stays attached
-for `tracing`. A rename of these strings breaks every conforming
+for `tracing`. `Server` is a dependency the grant needed — the identity
+store — that did not answer: no failure of the client's nor of this
+server's code, so a `503` (RFC 9110 §15.6.4) the client may retry, and
+the same opaque code. A rename of these strings breaks every conforming
 client — they are wire contracts, not display strings.
 
 <Aside type="caution">

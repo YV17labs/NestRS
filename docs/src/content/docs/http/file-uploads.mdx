@@ -1,31 +1,60 @@
 ---
 title: File uploads
 description: Accept a multipart/form-data upload with poem's Multipart extractor and stream the part into object storage.
-tier: all-options
 sidebar:
   order: 10
 ---
 
 Take a file part straight from a `multipart/form-data` request with
-poem's `Multipart` extractor. `#[routes]` passes it through like any other
-handler argument, so a direct upload is the single-round-trip alternative
-to the [presigned flow](/storage/): the client posts the bytes, the server
-stores them.
+poem's `Multipart` extractor and hand it to storage as it arrives. A direct
+upload is the single-round-trip alternative to the
+[presigned flow](/storage/): the client posts the bytes, the server stores
+them. The demo reads the form in an extractor of its own, so the handler is
+one delegation:
 
-```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {2}
+```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {3, 6}
 #[post("/uploads/direct")]
-async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> {
-    while let Some(part) = form.next_field().await.map_err(bad_request)? {
-        if part.name() != Some("file") {
-            continue;
+// … #[meta(…)], #[api(…, multipart = DirectUploadDto, …)]
+async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
+    Ok(Json(
+        self.svc
+            .store_upload(&upload.filename, upload.part.into_byte_stream())
+            .await?,
+    ))
+}
+```
+
+`UploadedAudio` walks the form to its `file` part and validates the filename
+before anything is stored — a `FromRequest`, so `#[routes]` passes it through
+like any other handler argument:
+
+```rust title="crates/features/src/audio/http/uploaded_audio.rs (from the demo, abridged)"
+pub struct UploadedAudio {
+    pub filename: String,
+    pub part: Field,
+}
+
+impl<'a> FromRequest<'a> for UploadedAudio {
+    async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
+        let mut form = Multipart::from_request(req, body).await?;
+        while let Some(part) = form
+            .next_field()
+            .await
+            .map_err(|e| Error::from_string(e.to_string(), StatusCode::BAD_REQUEST))?
+        {
+            if part.name() != Some("file") {
+                continue;
+            }
+            let filename = part.file_name().map(str::to_owned).unwrap_or_default();
+            UploadRequestDto {
+                filename: filename.clone(),
+            }
+            .validate()
+            .map_err(|e| Error::from_string(e.to_string(), StatusCode::UNPROCESSABLE_ENTITY))?;
+            return Ok(Self { filename, part });
         }
-        let filename = part.file_name().map(str::to_owned).unwrap_or_default();
-        UploadRequestDto { filename: filename.clone() }.validate().map_err(unprocessable)?;
-        let ticket = self.svc.store_upload(&filename, part.into_byte_stream())
-            .await.map_err(internal)?;
-        return Ok(Json(ticket));
+        // … no `file` part: 400
     }
-    Err(Error::from_string("multipart body has no `file` part", StatusCode::BAD_REQUEST))
 }
 ```
 
@@ -41,15 +70,15 @@ handler sees any of it. That is right for a form value and wrong for a file.
 shape [`Storage::put_stream`](/storage/) consumes:
 
 ```rust title="crates/features/src/audio/service.rs (from the demo, abridged)"
-use nest_rs::http::PartExt;
-
 pub async fn store_upload(
     &self,
     filename: &str,
     part: impl Stream<Item = std::io::Result<Bytes>> + Send,
 ) -> Result<PresignedUrlDto, AudioError> {
     let key = format!("{}-{filename}", Uuid::now_v7());
-    self.storage.put_stream(&key, AUDIO_CONTENT_TYPE, part).await?;
+    self.storage
+        .put_stream(&key, AUDIO_CONTENT_TYPE, part)
+        .await?;
     // …
 }
 ```
@@ -100,11 +129,13 @@ states the parts.
 
 ## Limits
 
-- The [`max_body_bytes` cap](/http/configuration/) gates **every** body,
-  `Multipart` included. A direct upload larger than the cap answers `413 Payload Too Large` before a
-byte reaches your handler, and the default cap is **2 MiB** — so a 3 MiB
-upload fails out of the box. Raising the ceiling is
-`NESTRS_HTTP__MAX_BODY_BYTES`, not a compensating control in your code.
+- The [`max_body_bytes` cap](/http/configuration/#request-body-size-limit)
+  gates **every** body, `Multipart` included. An upload declaring a length past
+  the cap — a browser's form does — is answered `413 Payload Too Large` unread;
+  one that declares none is cut at the cap as it is read, and answered `413`
+  too. The default cap is **2 MiB** — so a 3 MiB upload fails out of the box.
+  Raising the ceiling is `<PREFIX>_HTTP__MAX_BODY_BYTES`, not a compensating
+  control in your code.
   The admin gate and rate limit the demo binds are defence in depth, not the
   size bound.
 - Streaming bounds **memory**, not the request: the part is still read through
@@ -112,6 +143,14 @@ upload fails out of the box. Raising the ceiling is
   what lets a large file through; streaming is what keeps the process from
   holding it. For very large media the presigned PUT still wins — it avoids
   proxying the bytes through the server at all.
+- A long upload runs against the [request timeout](/http/configuration/#request-timeout),
+  `20` seconds by default and counted from the request's arrival, its body's
+  reading included: an upload slower than that is answered `503` part-way. A
+  transport taking large files over slow links turns the budget off
+  (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0`) or raises it — there is no budget per
+  route yet. `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS` (`10` seconds) never cuts an
+  upload that keeps sending: it counts the gap between two of its packets, and
+  is the one bound left on a body once the budget is off.
 
 ## Going further
 

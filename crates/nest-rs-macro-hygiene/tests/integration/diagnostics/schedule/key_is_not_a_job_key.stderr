@@ -1,0 +1,17 @@
+error: #[every] `key`: "billing:Tasks:tick" is not a job key: it takes one or more levels joined by `::`, each non-empty and free of `:`, whitespace and control characters — `:` separates the levels of the key a backend claims under, and whitespace would reach a log field
+  --> tests/integration/diagnostics/schedule/key_is_not_a_job_key.rs:14:44
+   |
+14 |     #[every("30s", replicas = "one", key = "billing:Tasks:tick")]
+   |                                            ^^^^^^^^^^^^^^^^^^^^
+
+error: #[every] `key`: "billing::" is not a job key: it takes one or more levels joined by `::`, each non-empty and free of `:`, whitespace and control characters — `:` separates the levels of the key a backend claims under, and whitespace would reach a log field
+  --> tests/integration/diagnostics/schedule/key_is_not_a_job_key.rs:19:44
+   |
+19 |     #[every("30s", replicas = "one", key = "billing::")]
+   |                                            ^^^^^^^^^^^
+
+error: #[cron] `key`: "billing::close day" is not a job key: it takes one or more levels joined by `::`, each non-empty and free of `:`, whitespace and control characters — `:` separates the levels of the key a backend claims under, and whitespace would reach a log field
+  --> tests/integration/diagnostics/schedule/key_is_not_a_job_key.rs:24:51
+   |
+24 |     #[cron("0 0 * * * *", replicas = "one", key = "billing::close day")]
+   |                                                   ^^^^^^^^^^^^^^^^^^^^

@@ -1,7 +1,6 @@
 ---
 title: Public reads
 description: A resource anyone may read is declared in AbilityFactory::define_visitor — the anonymous branch of the same policy, granting nothing until you write it.
-tier: all-options
 sidebar:
   order: 7
 ---
@@ -11,7 +10,7 @@ that caller live in the same `AbilityFactory` as everything else, in a
 second branch: `define_visitor`. It receives no actor because there is
 none, and it grants nothing until you write a rule into it.
 
-```rust title="crates/features/src/authz/ability.rs (from the demo)"
+```rust title="crates/features/src/authz/ability.rs"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 impl AbilityFactory for AuthzAbility {
@@ -34,7 +33,7 @@ on the route, and the field set the response mask keeps.
 
 The route declares two things, and it needs both.
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs"
 #[get("/")]
 #[public]
 async fn list(&self, _authz: Authorize<Read, post::Entity>) -> Result<Json<Vec<Post>>> {
@@ -47,7 +46,7 @@ async fn list(&self, _authz: Authorize<Read, post::Entity>) -> Result<Json<Vec<P
 crosses the wire, so the service returns `Result<Vec<Post>, ServiceError>` and
 the handler stays a delegation.
 
-```rust title="crates/features/src/posts/service.rs (from the demo)"
+```rust title="crates/features/src/posts/service.rs"
 pub async fn feed(&self) -> Result<Vec<Post>, ServiceError> {
     Ok(self.list().await?.iter().map(Post::from).collect())
 }
@@ -58,7 +57,8 @@ with no credential, and it tells `AuthzGuard` to build the ability from
 `define_visitor` instead of `define`.
 
 `Authorize<Read, post::Entity>` is the enforcement plumbing that
-posture needs: it installs the ambient ability the data layer reads and
+posture needs: it runs the class gate against the visitor's grant, right
+after the guards, installs the ambient ability the data layer reads and
 arms the response mask. This is the one route shape where you write the
 extractor by hand — `#[authorize(...)]` and `#[public]` declare opposite
 postures, so the decorator form is a compile error here.
@@ -122,23 +122,24 @@ existed: an anonymous caller on a `#[public]` route gets an ability with
 no rules, and the class gate answers `403`.
 
 **One correction covers HTTP, GraphQL and WebSockets.** The GraphQL
-bridge and the WS upgrade both run `AbilityGuard::check_http`, so the
+bridge and the WS upgrade both run `AbilityGuard::check_http` on their
+request, so the
 visitor branch reaches a `#[public]` query and a guest socket the same
 way. On WebSockets the visitor ability is captured at the upgrade and
 frozen for the connection, like any other.
 
 **On GraphQL the operation's posture, not the endpoint, holds the
-line.** `/graphql` is one `#[public]`-marked endpoint, so the anonymous
-caller always reaches the resolvers carrying the visitor ability. An
+line.** `/graphql` is one in-band endpoint (`Posture::InBand`), so a caller
+with no credential always reaches the resolvers carrying the visitor
+ability, and one whose bearer does not verify is refused at the request. An
 operation declared `#[authorize(...)]` refuses it for want of a
 principal (`UNAUTHENTICATED`) before consulting a single grant — which
 is what keeps the sentence above true on that transport: a visitor grant
 opens the `#[public]` operations on that entity and no others.
 
-**MCP refuses anonymous callers by design.** The `/mcp` endpoint carries
-no `Public` marker, so an unauthenticated tool call is denied before the
-factory is consulted. `define_visitor` does not open it, and adding the
-marker there is not the supported path.
+**MCP refuses anonymous callers by design.** `/mcp` carries no
+`Posture::InBand` (its requests read `Gated`), so an unauthenticated tool
+call is denied before the factory is consulted. `define_visitor` does not open it.
 
 **A malformed visitor rule denies the request.** A rule whose relation
 predicate cannot be lowered fails ability construction, and the guard

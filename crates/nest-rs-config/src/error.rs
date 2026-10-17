@@ -1,7 +1,9 @@
 //! Configuration failures.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
+use nest_rs_core::DecodeError;
 use thiserror::Error;
 use validator::{ValidationErrors, ValidationErrorsKind};
 
@@ -9,48 +11,59 @@ use validator::{ValidationErrors, ValidationErrorsKind};
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ConfigError {
-    /// Names the offending variable so the misconfig is obvious at boot.
+    /// A value refused, naming the offending variable.
+    ///
+    /// Built only through [`ConfigError::parse`], which strips any value a
+    /// decoder quoted in the message.
     #[error("invalid value for {var}: {message}")]
+    #[non_exhaustive]
     Parse {
         /// The offending `<PREFIX>_<DOMAIN>__<KEY>` variable name.
         var: String,
         /// Why the value was rejected.
         message: String,
     },
+    /// A structured value that did not decode as its type.
+    ///
+    /// Carries [`DecodeError`], never serde's own sentence, which quotes the
+    /// value it refused.
+    #[error("invalid value for {var}: {source}")]
+    Decode {
+        /// The variable that supplied the value — `<KEY>` or `<KEY>_FILE`.
+        var: String,
+        /// Where and why it did not decode, without the value.
+        #[source]
+        source: DecodeError,
+    },
+    /// A duration's variable — its key ends in `_SECS` or `_MS` — asked of a
+    /// [`ConfigService`](crate::ConfigService) reader, which holds a value to no
+    /// range — a defect in the config's `from_env`.
+    #[error(
+        "{var} is a duration, and a duration is read through `DurationBounds`, which holds it \
+         to a floor and a ceiling and names its unit — never through a `ConfigService` reader"
+    )]
+    UnboundedDuration {
+        /// The variable the reader was asked for.
+        var: String,
+    },
     /// A loaded config failed `validator::Validate`.
     ///
-    /// Renders the **namespace** and one line per offending field. The
-    /// namespace is what disambiguates which config failed when several are
-    /// loaded, and rendering `validator`'s own `Debug` payload instead put a
-    /// raw `[{"min": Number(1), "value": String("")}]` — the submitted value
-    /// included — into an operator-facing line.
+    /// Renders the **namespace** and one line per offending field, never
+    /// `validator`'s `Debug` payload, which holds the submitted value.
     #[error(
         "configuration validation failed for '{namespace}'\n{}",
         render(errors)
     )]
     Validation {
-        /// The `#[config(namespace = "…")]` of the config that failed.
-        namespace: &'static str,
-        /// The field-level failures. Deliberately **not** `#[source]`: the
-        /// rendered message already lists them, and a `Display` chain would
-        /// print `validator`'s raw payload underneath the curated list.
+        /// The namespace the config was read under: its `#[config(namespace = "…")]`,
+        /// with a named instance's name inserted after the vendor.
+        namespace: Cow<'static, str>,
+        /// The field-level failures. Not `#[source]`: a `Display` chain would
+        /// print `validator`'s raw payload, submitted value included.
         errors: ValidationErrors,
     },
-    /// Two config types read one environment variable.
-    ///
-    /// `<PREFIX>_<DOMAIN>__<KEY>` is a flat, process-global name space, and
-    /// several types sharing a `<DOMAIN>` is deliberate — `nest-rs-authn`'s JWT,
-    /// OAuth and oauth-resource configs are all `authn`, because a domain is
-    /// the operator's word for a subsystem rather than one struct's identity.
-    /// What may not be shared is a **variable**: two types reading one name means
-    /// a deployment setting it configures whichever happens to read it, both
-    /// silently, and what the operator sees is "the value I set did nothing".
-    ///
-    /// Raised at boot, from the resolved name rather than from the key: a key is
-    /// a literal in a position nothing can enumerate — read through a `const`,
-    /// through an inherent sub-struct's `from_env`, or built at the call site —
-    /// so the only place the full name is knowable is where it is actually
-    /// asked for.
+    /// Two config types read one environment variable, raised at boot from the
+    /// resolved name.
     #[error(
         "`{var}` is read by two configuration types — `{owner}` and `{claimant}`. \
          A `<PREFIX>_<DOMAIN>__<KEY>` variable belongs to one type: setting it would \
@@ -65,37 +78,165 @@ pub enum ConfigError {
         /// The type that claimed it second.
         claimant: &'static str,
     },
+    /// Two configuration types declare one namespace, raised at the read of
+    /// either type, whichever comes first.
+    #[error(
+        "the namespace `{namespace}` is declared by {} configuration types — {}. A namespace \
+         belongs to one type, so that a variable under it names the type that reads it: give \
+         each its own `#[config(namespace = \"…\")]`, read off its own path.",
+        declarations.len(),
+        declarations.iter().map(|d| format!("`{d}`")).collect::<Vec<_>>().join(" and "),
+    )]
+    SharedNamespace {
+        /// The namespace both declare.
+        namespace: &'static str,
+        /// Every type declaring it, sorted.
+        declarations: Vec<&'static str>,
+    },
+    /// A named instance whose namespace another declaration holds: a linked
+    /// `#[config]` declaring it, or another marker reading the instance's name.
+    #[error(
+        "the instance `{instance}` reads the namespace `{namespace}`, which {} also claim{}: \
+         an instance's namespace is its config's with the instance's name inserted after the \
+         vendor, and a namespace belongs to one declaration, so that a variable under it names \
+         what it configures. Rename the instance.",
+        claims.iter().map(|c| format!("`{c}`")).collect::<Vec<_>>().join(" and "),
+        if claims.len() == 1 { "s" } else { "" },
+    )]
+    SharedInstance {
+        /// The marker of the instance being read, by its module path and ident.
+        instance: &'static str,
+        /// The namespace that instance reads.
+        namespace: String,
+        /// Every other declaration holding it, sorted: a `#[config]` type, or a
+        /// marker reading the same name.
+        claims: Vec<&'static str>,
+    },
+    /// A `<KEY>_FILE` variable names a file that could not be read.
+    ///
+    /// The variable's value is never carried: it may be key material pasted
+    /// where a path belongs.
+    #[error("could not read the file named by {var}")]
+    File {
+        /// The `<PREFIX>_<DOMAIN>__<KEY>_FILE` variable naming the file.
+        var: String,
+        /// Why reading it failed.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl ConfigError {
     /// Build a [`Parse`](Self::Parse) error naming the variable and the reason.
+    ///
+    /// A parser's source excerpt (`1 | token = "…"`) is dropped from `message`,
+    /// and a serde-quoted value removed, as [`DecodeError::redact`] does.
     pub fn parse(var: impl Into<String>, message: impl Into<String>) -> Self {
         Self::Parse {
             var: var.into(),
-            message: message.into(),
+            message: redacted(&message.into()),
         }
     }
 
     /// Build a [`Validation`](Self::Validation) error for `namespace`.
-    pub fn validation(namespace: &'static str, errors: ValidationErrors) -> Self {
-        Self::Validation { namespace, errors }
+    pub fn validation(namespace: impl Into<Cow<'static, str>>, errors: ValidationErrors) -> Self {
+        Self::Validation {
+            namespace: namespace.into(),
+            errors,
+        }
+    }
+
+    /// Build a [`Parse`](Self::Parse) error for `key` of `namespace`, a value no
+    /// tier set and no default fills: "must be set, inline or through
+    /// `<KEY>_FILE`", then `why` there is no default to fall back on.
+    ///
+    /// ```
+    /// use nest_rs_config::{ConfigError, var_name};
+    ///
+    /// let refused = ConfigError::unset("seaorm", "URL", "a deployment names its database");
+    /// assert_eq!(
+    ///     refused.to_string(),
+    ///     format!(
+    ///         "invalid value for {}: must be set, inline or through {} — a deployment names its \
+    ///          database",
+    ///         var_name("seaorm", "URL"),
+    ///         var_name("seaorm", "URL_FILE"),
+    ///     ),
+    /// );
+    /// ```
+    pub fn unset(namespace: &str, key: &str, why: impl std::fmt::Display) -> Self {
+        Self::parse(
+            crate::var_name(namespace, key),
+            format!(
+                "must be set, inline or through {} — {why}",
+                crate::var_name(namespace, &crate::service::file_key(key))
+            ),
+        )
     }
 }
 
-/// One `  - field: rule (bound = n)` line per failure, deepest field path
-/// flattened into a dotted name.
+/// A config read from the container before any factory resolved it, as
+/// [`ConfigModule::resolved`](crate::ConfigModule::resolved) refuses it: a
+/// `register` files it with `ContainerBuilder::refuse`, a factory returns it.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "`{type_name}`{of_instance} was read before any factory resolved it: the module owning it is \
+     not imported, or is imported in a `register` alone, or the factory reading it does not name \
+     it among its inputs",
+    of_instance = of_instance(instance),
+)]
+pub struct ConfigNotResolvedError {
+    /// The config type that was read.
+    pub type_name: &'static str,
+    /// The instance it was read for, as its namespace names it — empty for the
+    /// default one ([`ConfigModule::resolved_for`](crate::ConfigModule::resolved_for)).
+    pub instance: &'static str,
+}
+
+/// The words naming a named instance after its config's type; none for the
+/// default one.
+fn of_instance(instance: &str) -> String {
+    if instance.is_empty() {
+        String::new()
+    } else {
+        format!(" of the instance `{instance}`")
+    }
+}
+
+/// `message` without the values a decoder quoted in it.
+fn redacted(message: &str) -> String {
+    let kept: Vec<&str> = message
+        .lines()
+        .filter(|line| !is_source_excerpt(line))
+        .collect();
+    DecodeError::redact(&kept.join("\n"), None).into_owned()
+}
+
+/// A line of a source excerpt — `1 | key = "…"`, or the gutter `  |  ^^^`
+/// under it — which repeats the parsed text verbatim.
+fn is_source_excerpt(line: &str) -> bool {
+    line.trim_start()
+        .trim_start_matches(|c: char| c.is_ascii_digit())
+        .trim_start()
+        .starts_with('|')
+}
+
+/// One `  - field: rule` line per failure, deepest field path flattened into a
+/// dotted name.
 ///
-/// The rule's parameters are kept — a bound is what makes the message
-/// actionable — **except** `value`, which is the rejected input itself:
-/// echoing a too-short password or a malformed token into a boot error puts it
-/// in every log, shell history and CI transcript that captures the line. Same
-/// posture as `nest_rs_pipes`' wire rendering.
+/// A rule's parameters are never said: `value` is the rejected input,
+/// `must_match`'s `other` another field's, and a bound can read another field.
 fn render(errors: &ValidationErrors) -> String {
     let mut out = String::new();
     render_into(&mut out, errors, "");
     out.trim_end().to_owned()
 }
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "fmt::Write for String never fails"
+)]
 fn render_into(out: &mut String, errors: &ValidationErrors, prefix: &str) {
     for (field, kind) in errors.errors() {
         let path = if prefix.is_empty() {
@@ -106,17 +247,7 @@ fn render_into(out: &mut String, errors: &ValidationErrors, prefix: &str) {
         match kind {
             ValidationErrorsKind::Field(list) => {
                 for error in list {
-                    let params: Vec<String> = error
-                        .params
-                        .iter()
-                        .filter(|(name, _)| name.as_ref() != "value")
-                        .map(|(name, value)| format!("{name} = {value}"))
-                        .collect();
-                    let _ = write!(out, "  - {path}: {}", error.code);
-                    if !params.is_empty() {
-                        let _ = write!(out, " ({})", params.join(", "));
-                    }
-                    out.push('\n');
+                    let _ = writeln!(out, "  - {path}: {}", error.code);
                 }
             }
             ValidationErrorsKind::Struct(nested) => render_into(out, nested, &path),
@@ -151,9 +282,6 @@ mod tests {
         ConfigError::validation(namespace, errors).to_string()
     }
 
-    // A11 / G11: the message dropped the namespace — the part that says *which*
-    // config failed when several are loaded — and leaked `validator`'s raw
-    // debug payload, including the rejected value, into an operator-facing line.
     #[test]
     fn a_validation_failure_names_its_namespace_and_lists_the_fields() {
         let text = rendered(
@@ -172,8 +300,109 @@ mod tests {
         assert!(text.contains("\n  - page_size: range"), "{text}");
     }
 
+    const SECRET: &str = "sk_live_51HsecretTOKEN";
+
+    #[derive(Validate)]
+    struct Signing {
+        signing_key: String,
+        #[validate(must_match(other = "signing_key"))]
+        signing_key_confirm: String,
+        ceiling: u64,
+        #[validate(range(max = self.ceiling))]
+        burst: u64,
+    }
+
+    /// A rule's parameters can hold input: `must_match`'s `other` is another
+    /// field's value, and a bound is an expression that can read one.
     #[test]
-    fn the_bounds_survive_but_the_submitted_value_never_does() {
+    fn a_validation_failure_says_its_rules_and_none_of_their_parameters() {
+        let text = rendered(
+            "signing",
+            &Signing {
+                signing_key: SECRET.into(),
+                signing_key_confirm: "mistyped".into(),
+                ceiling: 4_242_424_242,
+                burst: 9_999_999_999,
+            },
+        );
+        assert!(!text.contains("sk_live"), "{text}");
+        assert!(!text.contains("4242424242"), "{text}");
+        assert!(
+            text.contains("\n  - signing_key_confirm: must_match"),
+            "{text}"
+        );
+        assert!(text.contains("\n  - burst: range"), "{text}");
+    }
+
+    /// A JSON decoder's sentence handed to the sink whole, as a reader judging
+    /// a value of its own would hand it, quotes nothing it refused.
+    #[test]
+    fn a_json_decode_failure_reaches_the_boot_error_without_its_value() {
+        let error = serde_json::from_str::<u16>(&format!("\"{SECRET}\""))
+            .expect_err("a string is not a port");
+        assert!(
+            error.to_string().contains(SECRET),
+            "the probe quotes: {error}"
+        );
+
+        let var = crate::var_name("fixture", "PORT");
+        let text = ConfigError::parse(var.clone(), error.to_string()).to_string();
+        assert!(!text.contains(SECRET), "{text}");
+        assert!(
+            text.starts_with(&format!("invalid value for {var}: invalid type: ")),
+            "the failure is still said: {text}"
+        );
+    }
+
+    /// TOML quotes twice: the excerpt it opens with repeats the line it read,
+    /// and serde's sentence after it quotes the value. Neither reaches the boot
+    /// error — a type error or a syntax error alike.
+    #[test]
+    fn a_toml_decode_failure_reaches_the_boot_error_without_its_value() {
+        use figment::providers::{Format, Toml};
+        use std::collections::BTreeMap;
+
+        for (document, what) in [
+            (format!("port = \"{SECRET}\""), "invalid type"),
+            (format!("token = {SECRET} trailing"), "TOML parse error"),
+        ] {
+            let error = Toml::from_str::<BTreeMap<String, u16>>(&document)
+                .expect_err("the document does not decode");
+            assert!(
+                error.to_string().contains(SECRET),
+                "the probe quotes: {error}"
+            );
+
+            let text =
+                ConfigError::parse(crate::var_name("fixture", "SETTINGS"), error.to_string())
+                    .to_string();
+            assert!(!text.contains(SECRET), "{text}");
+            assert!(text.contains(what), "the failure is still said: {text}");
+        }
+    }
+
+    #[test]
+    fn an_unset_value_names_both_spellings_and_why_there_is_no_default() {
+        let text = ConfigError::unset("fixture", "TOKEN", "it has no default").to_string();
+        assert_eq!(
+            text,
+            format!(
+                "invalid value for {}: must be set, inline or through {} — it has no default",
+                crate::var_name("fixture", "TOKEN"),
+                crate::var_name("fixture", "TOKEN_FILE"),
+            )
+        );
+    }
+
+    /// A refusal that quotes nothing is said word for word.
+    #[test]
+    fn a_reason_with_nothing_quoted_is_kept_whole() {
+        let text = ConfigError::parse("V", "must be at least 1 second — why").to_string();
+        assert_eq!(text, "invalid value for V: must be at least 1 second — why");
+    }
+
+    #[test]
+    fn the_submitted_value_and_the_bounds_are_never_said() {
         let text = rendered(
             "issuer",
             &Issuer {
@@ -182,17 +411,12 @@ mod tests {
             },
         );
 
-        // The bound is what makes the message actionable.
-        assert!(
-            text.contains("min = 1") && text.contains("max = 500"),
-            "{text}"
-        );
-        // The rejected input is not: a too-short password or a malformed token
-        // would otherwise land in every log and CI transcript that captures it.
+        assert!(text.contains("\n  - page_size: range"), "{text}");
         assert!(
             !text.contains("900"),
             "the submitted value must not be echoed: {text}",
         );
+        assert!(!text.contains("500"), "no bound: {text}");
         assert!(!text.contains("Number("), "no raw debug payload: {text}");
     }
 }

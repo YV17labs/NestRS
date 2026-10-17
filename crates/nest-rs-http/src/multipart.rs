@@ -1,15 +1,8 @@
-//! A multipart part, read as it arrives.
+//! A multipart part, read as it arrives rather than buffered by poem's
+//! `Field::bytes()`.
 //!
-//! poem's `Field::bytes()` is the buffered form: the whole part lands in memory
-//! before the handler sees any of it, which is fine for a form value and wrong
-//! for a file. [`PartExt::into_byte_stream`] is the other half — the same part
-//! as a byte stream, so an upload can be piped straight into an object store
-//! and never exist whole anywhere.
-//!
-//! It changes nothing about the ceiling: the part is read through the request
-//! body, which the transport edge already caps at
-//! [`HttpConfig.max_body_bytes`](crate::HttpConfig). Streaming bounds *memory*,
-//! not the request.
+//! The request body stays capped at [`HttpConfig.max_body_bytes`](crate::HttpConfig):
+//! streaming bounds memory, not the request.
 
 use std::io::Result as IoResult;
 use std::pin::Pin;
@@ -35,12 +28,36 @@ impl Stream for PartStream {
 
 /// Read a multipart part without buffering it.
 pub trait PartExt {
-    /// The part's bytes as they arrive.
+    /// The part's bytes as they arrive, for a sink that consumes a stream — an
+    /// object store's streamed upload — rather than a buffered part.
     ///
-    /// ```rust,ignore
-    /// # use nest_rs::http::PartExt;
-    /// let key = format!("{}-{}", Uuid::now_v7(), part.file_name().unwrap_or("upload"));
-    /// storage.put_stream(&key, "audio/mpeg", part.into_byte_stream()).await?;
+    /// ```
+    /// # use nest_rs_http::{Opaque, PartExt};
+    /// # use nest_rs_http::poem::test::{TestClient, TestForm};
+    /// # use nest_rs_http::poem::web::Multipart;
+    /// # use nest_rs_http::poem::{Result, handler};
+    /// use futures_util::TryStreamExt;
+    /// # #[handler]
+    /// # async fn upload(mut form: Multipart) -> Result<String> {
+    /// # let Some(part) = form.next_field().await? else { return Ok(String::new()) };
+    ///
+    /// let mut stream = part.into_byte_stream();
+    /// let mut received = 0;
+    /// while let Some(chunk) = stream.try_next().await.opaque()? {
+    ///     received += chunk.len();
+    /// }
+    /// # Ok(received.to_string())
+    /// # }
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// # let audio = vec![7u8; 512 * 1024];
+    /// # let form = TestForm::new().bytes("file", audio.clone());
+    /// # let reply = TestClient::new(upload).post("/").multipart(form).send().await;
+    /// # let received = reply.0.into_body().into_string().await?;
+    ///
+    /// assert_eq!(received, audio.len().to_string());
+    /// # Ok(())
+    /// # }
     /// ```
     fn into_byte_stream(self) -> PartStream;
 }
@@ -60,8 +77,6 @@ mod tests {
 
     use super::*;
 
-    /// Reads the `file` part as a stream and reports what it saw, so the test
-    /// can assert both the bytes and that they arrived in pieces.
     #[handler]
     async fn upload(mut form: Multipart) -> Result<String> {
         let mut chunks = 0usize;
@@ -82,8 +97,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_part_streams_its_bytes_without_being_buffered_whole() {
-        // Big enough that poem hands it over in several reads — the property
-        // that makes this worth having.
+        // Big enough that poem hands it over in several reads.
         let payload = vec![b'a'; 512 * 1024];
         let form = poem::test::TestForm::new().bytes("file", payload.clone());
         let resp = TestClient::new(upload)

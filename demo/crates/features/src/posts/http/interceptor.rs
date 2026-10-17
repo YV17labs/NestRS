@@ -15,7 +15,7 @@ impl Interceptor for PostAuditInterceptor {
         let resp = next.run(req).await?;
 
         tracing::info!(
-            target: "features::posts",
+            target: crate::posts::TARGET,
             status = resp.status().as_u16(),
             "post request audited",
         );

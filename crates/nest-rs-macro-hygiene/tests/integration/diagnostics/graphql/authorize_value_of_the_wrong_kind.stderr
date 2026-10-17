@@ -1,0 +1,17 @@
+error: #[authorize] `bind` takes the path of the service that loads the subject, e.g. `bind = FilesService`
+  --> tests/integration/diagnostics/graphql/authorize_value_of_the_wrong_kind.rs:19:32
+   |
+19 |     #[authorize(Update, bind = "ArtworksService")]
+   |                                ^^^^^^^^^^^^^^^^^
+
+error: #[authorize] `id_arg` takes the id argument's name as a snake_case identifier, e.g. `id_arg = file_id`
+  --> tests/integration/diagnostics/graphql/authorize_value_of_the_wrong_kind.rs:31:58
+   |
+31 |     #[authorize(Update, bind = ArtworksService, id_arg = "file_id")]
+   |                                                          ^^^^^^^^^
+
+error: expected `#[authorize(Action, Entity)]` — e.g. `#[authorize(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = ArtworksService)]`
+  --> tests/integration/diagnostics/graphql/authorize_value_of_the_wrong_kind.rs:43:23
+   |
+43 |     #[authorize(Read, "users")]
+   |                       ^^^^^^^

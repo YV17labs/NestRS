@@ -6,19 +6,28 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "S3-compatible object storage for NestRS: a thin, injectable Storage client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) built on the `object_store` crate. The AWS-S3 driver ships wired and runs against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style; the GCS, Azure, fs and memory drivers sit behind the same client."
+description = "Object storage for NestRS: an injectable Storage client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) over the `object_store` crate, whose backend the store's URL picks — s3:// for AWS S3 and servers speaking its API, memory:/// for development and tests — proved at boot."
 keywords = ["framework", "nestrs", "storage", "s3", "object-store"]
 categories = ["web-programming", "filesystem"]
 
 [dependencies]
 nest-rs-core.workspace = true
 # `StorageModule` owns its `#[config]` `StorageConfig` (namespace `storage`),
-# loaded from `NESTRS_STORAGE__*`; `validator` backs its `#[validate]` rules.
-nest-rs-config.workspace = true
-validator.workspace = true
+# loaded from `<PREFIX>_STORAGE__*`; `tls` is `ClientTls`, what the endpoint's
+# certificate must chain to.
+nest-rs-config = { workspace = true, features = ["tls"] }
 # The object-store abstraction. `aws` brings the `AmazonS3` driver, which
-# implements both `ObjectStore` and the `Signer` trait used for presigning.
+# implements both `ObjectStore` and the `Signer` trait used for presigning;
+# `memory` and `prefix` need no feature.
 object_store.workspace = true
+# `<PREFIX>_STORAGE__URL` is parsed here into its backend, bucket and prefix:
+# object_store's own parser would build an S3 client from the URL alone.
+url.workspace = true
+# The boot's proof reads each answer's status through an `HttpService` of its
+# own, an `#[async_trait]` trait of object_store's.
+async-trait.workspace = true
+# A `register` files its refusal as the container's `anyhow::Error`.
+anyhow.workspace = true
 # `signed_url` takes a `reqwest::Method`, which is a re-export of `http::Method`
 # (http 1.x). Depending on `http` directly keeps us decoupled from whichever
 # reqwest minor object_store pins internally.
@@ -38,21 +47,31 @@ thiserror.workspace = true
 tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+# `test-util` stops the clock once a silent store has taken the connection, so
+# the budget is waited out without the suite waiting it.
+tokio = { workspace = true, features = ["test-util"] }
 # The integration test signs a PUT, uploads raw bytes over HTTP, then reads
 # them back — it needs an independent HTTP client.
 reqwest.workspace = true
 # Whether an interrupted multipart upload's parts were discarded is not
 # observable through the store (`ListMultipartUploads` is not on
-# `object_store`'s surface), so the e2e suite asserts on the event the client
+# `object_store`'s surface), so the test suite asserts on the event the client
 # emits — which means collecting events with a `Layer` of its own.
 tracing-subscriber.workspace = true
 # `LogCapture`, for the unit half of the same problem: what the abort-on-drop
 # guard says when it is dropped with no runtime to abort on.
-nest-rs-testing = { path = "../nest-rs-testing" }
-# `object_store::MultipartUpload` is an `#[async_trait]` trait, so a test double
-# for it has to be written under the same attribute.
-async-trait.workspace = true
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# The suite's proxy names the store it dials over TLS, to stop an answer where
+# its body starts.
+rustls.workspace = true
+# The nets a call can run under: the authentication guard's around a strategy
+# injecting `Storage`, and the HTTP edge's default request timeout, which the
+# default operation budget sits below.
+nest-rs-authn = { path = "../nest-rs-authn" }
+nest-rs-http = { path = "../nest-rs-http" }
+# `figment::Jail` declares a profile for the one config branch that reads the
+# process environment rather than a `ConfigService`: `Config::defaults`.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

@@ -6,14 +6,29 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "ORM-agnostic data-layer seam for NestRS: the ambient request/job Executor task-local plus the object-safe Executor trait an ORM module implements. SeaORM is the first-party implementation (nest-rs-seaorm), and the trait is public so other stores can be written against it."
+description = "ORM-agnostic data-layer port for NestRS: the unit of work every edge runs through (`UnitOfWork`, `run_unit`), and the ambient Executor its body reads, carried by the kernel's ambient context. SeaORM is the first-party implementation (nest-rs-seaorm), and the traits are public so other stores can be written against them."
 keywords = ["framework", "nestrs", "database", "orm", "transaction"]
 categories = ["database"]
 
 
 [dependencies]
-# The ambient executor + scope are carried in `tokio::task_local!`s.
+# The ambient executor and its scope are one value of the kernel's ambient
+# context, which carries them across every continuation by their own rule.
+nest-rs-core.workspace = true
+thiserror.workspace = true
+# `UnitSpec::deadline` is tokio's `Instant`, the clock every edge's deadline is
+# read on.
 tokio.workspace = true
+# `JobRef::id`: a queue's job id is a UUID.
+uuid.workspace = true
+# `run_unit` settles once its body is gone: `then` drops the body's future
+# before the settle's is built.
+futures-util.workspace = true
+
+[dev-dependencies]
+# `test-util` pauses time, so a deadline and a settle that outlives it are read
+# off one clock.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

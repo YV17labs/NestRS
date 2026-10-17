@@ -30,6 +30,10 @@ deep on each.
 - **[Dynamic module](/fundamentals/modules/)** — a module produced by a
   call like `OpenApiModule::for_root(opts)`; the same `#[module]` shape
   but parameterised at the import site.
+- **[Instance](/fundamentals/providers/#instances--one-resource-opened-twice)**
+  — one of several copies of a resource an app opens, told apart by a marker
+  type declared with `#[instance]`; the default one, `Unnamed`, needs no
+  marker, and a named one's variables carry its name after the vendor.
 
 ## Request layers
 
@@ -57,16 +61,16 @@ deep on each.
   `#[use_exception_filters(...)]`. Only fires when the error matches
   `Self::Exception`.
 - **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
-  macro emits when that type appears in a handler signature; runs
-  response masking after a 2xx. Innermost per-route layer, just outside
+  macro emits when a route declares `#[authorize(A, S)]` or takes that type
+  as a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside
   the handler. [Layer order](/fundamentals/guards/#where-guards-run-in-the-chain).
-- **RouteShaper** — the per-route orchestrator inside `nest-rs-guards`;
-  runs guards and body pipes on the way in. The response-side families
+- **RouteShaper** — the per-route orchestrator inside `nest-rs-http`;
+  runs guards, the `#[authorize]` class gate and body pipes on the way in. The response-side families
   wrap the endpoint outside it, not within. Documented on
   [Guards](/fundamentals/guards/).
-- **[Reflector](/http/extractors/)** — the request-time reader that
-  pulls back the values a handler attached with `#[meta(EXPR)]`; how a
-  guard inspects per-route metadata.
+- **Reflector** — the reader that pulls back the values a handler or its
+  host declared with `#[meta(EXPR)]`, and its posture; a guard reaches it
+  through `cx.reflector()` on every edge.
 
 ## Data
 
@@ -78,13 +82,15 @@ deep on each.
   (`list`/`page`/`access`/`create`/`update`/`delete`); controllers,
   resolvers, and gateways delegate, never touch `Repo` directly.
 - **[Executor](/database/repo-and-executor/)** — the SeaORM connection
-  installed per request in a `task_local!` (pool on safe routes, a
+  installed per request in the ambient context (pool on safe routes, a
   transaction on mutations); `Repo` reads it back through
   `Repo::<E>::conn()`.
-- **[Ambient context](/database/repo-and-executor/)** — the pair of
-  request-scoped `task_local!`s the framework installs (executor +
-  ability) so singletons can read per-request state without an
-  argument on every method.
+- **[Ambient context](/fundamentals/extending/#worked-example--a-value-every-unit-carries)** —
+  the values a unit of work carries for the code it calls (the executor,
+  the ability, a package's own), so singletons read per-request state
+  without an argument on every method; each value's `AmbientValue::carry`
+  says how far it travels — into a streaming body, a DataLoader batch, a
+  spawned task, after-commit work, a socket's next messages.
 - **[Bind (extractor)](/security/authorization/by-id-binding/)** —
   parses the id from the URL, calls `Service::access(id)` through the
   ambient ability, returns the loaded + authorized entity (404
@@ -155,8 +161,9 @@ deep on each.
 - **[Self-mount](/websockets/)** — an edge that mounts onto
   `HttpTransport` instead of being its own transport, inheriting its
   port, CORS, and TLS: the WS `#[gateway]`, `/graphql`, MCP, and
-  OpenAPI all self-mount, each declaring an `EdgePosture` (`Guarded`
-  or `Exempt`) that decides how the global guard chain reaches it.
+  OpenAPI all self-mount, each declaring a `Handler` whose posture
+  (`Gated`, `InBand`, `Public`) decides how the global guard chain reaches
+  it.
 - **[Controller (HTTP)](/http/controllers/)** — a struct marked with
   `#[controller(path = "...")]` that owns route methods declared in a
   `#[routes] impl` block.
@@ -169,9 +176,9 @@ deep on each.
 - **[Gateway (WS)](/websockets/messages/)** — a struct marked with
   `#[gateway(path = "/ws")]` whose `#[subscribe_message]` methods
   handle WS events; self-mounts on `HttpTransport`.
-- **[Processor (queue)](/queue/wiring/)** — a struct marked with
-  `#[processor]` whose `#[process(queue, ...)]` methods consume jobs;
-  activated by importing `RedisWorkerModule`.
+- **[Processor (queue)](/queue/)** — a provider whose `#[processor]` impl
+  block holds `#[process(queue = …)]` methods that consume jobs; run by
+  the port's `QueueWorker` transport, attached by importing `QueueModule`.
 - **[Scheduler](/schedule/)** — the transport that drains
   `#[scheduled]` orchestrators; each method tagged with exactly one of
   `#[every]` / `#[cron]` / `#[after]`.
@@ -185,6 +192,12 @@ deep on each.
 
 ## Other
 
+- **[Modular monolith, deployed per workload](/why/#a-modular-monolith-deployed-per-workload)** —
+  the architecture NestRS builds: the domain written once, as modules in
+  `crates/features`, and deployed as one binary per workload, or as one
+  binary from the same modules. As proposed, the binaries share the code and
+  the database, hand work over through the queue, and the framework generates
+  no RPC between them.
 - **[Workload](/publish/)** — one deployable binary with one
   operational job (the HTTP API, the WS server, the token issuer, the
   queue worker). One product splits into several workloads that share
@@ -192,7 +205,8 @@ deep on each.
 - **[Workspace](/cli/)** — the shape `nestrs new` scaffolds: a monorepo
   hosting one binary per app under `apps/<name>/`, over a shared
   `crates/features`. One app is the starting point; a second workload is
-  another `nestrs new` inside it, never a second repository.
+  another `nestrs new` inside it. An app that needs a database of its own is a
+  workspace of its own, in its own repository.
 - **[Marker guard](/security/authorization/per-transport-bridges/)** —
   a unit guard with no logic that exists so the access graph can
   prove a transport's authz seam is wired; omitting the authz module

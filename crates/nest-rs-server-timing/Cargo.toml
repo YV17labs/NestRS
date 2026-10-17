@@ -13,12 +13,17 @@ categories = ["web-programming::http-server"]
 
 [dependencies]
 nest-rs-core.workspace = true
+# `ServerTimingModule` owns its `#[config]` `ServerTimingConfig` (namespace
+# `server_timing`), loaded from `<PREFIX>_SERVER_TIMING__*`.
+nest-rs-config.workspace = true
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Per-request entry accumulator lock — poison-free locking.
 parking_lot.workspace = true
+# One boot event when the header is turned on outside a development profile.
+tracing.workspace = true
 
 # The composition witness boots an app and reads the header back off a route.
 # `nest-rs-guards` is there because `#[routes]` expands into the per-route layer
@@ -29,6 +34,9 @@ parking_lot.workspace = true
 nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 tokio.workspace = true
+# `figment::Jail` declares `<PREFIX>_ENV`, which the default reads off the
+# process environment rather than a `ConfigService`.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

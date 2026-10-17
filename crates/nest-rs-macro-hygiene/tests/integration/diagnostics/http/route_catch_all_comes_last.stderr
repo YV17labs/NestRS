@@ -1,0 +1,5 @@
+error: #[get] `/{*path}/meta`: `{*path}` comes last — a catch-all takes the rest of the path
+  --> tests/integration/diagnostics/http/route_catch_all_comes_last.rs:10:11
+   |
+10 |     #[get("/{*path}/meta")]
+   |           ^^^^^^^^^^^^^^^

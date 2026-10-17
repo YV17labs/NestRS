@@ -133,8 +133,8 @@ The whole conversation is legible from the console — the `101` that opened the
 socket, the connection, then a line per message, all under the upgrade's trace:
 
 ```text frame="terminal"
-INFO nest_rs::operation: http.request method=GET path="/ws" status=101 bytes=0 duration_ms=1.265 client_ip=127.0.0.1 forwarded=false trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
-INFO nest_rs::operation: ws.connect conn_id=0 duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::operation: http.request method=GET path="/ws" status=101 bytes=0 duration_ms=1.265 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::operation: ws.connect conn_id=0 outcome="ok" duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
 INFO nest_rs::operation: ws.message event=message conn_id=0 outcome="ok" duration_ms=0.045 trace_id=01a015e0074575729557467b3d9e2317 span_id=3398a131c2baa84a
 INFO nest_rs::operation: ws.message event=nope conn_id=0 outcome="error" duration_ms=0.011 trace_id=01a015e0074575729557467b3d9e2317 span_id=2a3f10371aa5cbc8
 ```
@@ -143,6 +143,53 @@ Same `trace_id` throughout, a fresh `span_id` per message — because a connecti
 inherits identity, never resources: it takes the upgrade's trace and actor, and
 opens its own request scope per message. Your own handler's events carry the
 message's ids without naming them; see [Logs](/opentelemetry/logs/).
+
+## What bounds a socket
+
+`WsModule::for_root(WsConfig { .. })` pins these, and `<PREFIX>_WS__*` overlays
+each field:
+
+| Variable | Default | What it bounds |
+|---|---|---|
+| `<PREFIX>_WS__MAX_CONNECTION_SECS` | `14400` (4 h) | a socket's lifetime, so a credential checked at the upgrade expires with it; whole seconds from `1` to `86400`, `0` ⇒ unlimited |
+| `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | one inbound frame, refused before it is buffered |
+| `<PREFIX>_WS__MESSAGE_TIMEOUT_SECS` | `20` | one message — its guards, pipes and handler — counted once its envelope is decoded; whole seconds from `1` to `3600`, `0` ⇒ none |
+
+A socket answers one message at a time, so a handler that never returns would
+hold its socket until the connection's lifetime ran out. Past the message
+timeout its work is dropped and rolled back, the client gets an error frame on
+the message's event, and the socket goes on serving the next one:
+
+```json
+{"event":"report","data":{"error":"the message was not answered in time","errors":{"code":"UNAVAILABLE","reason":"timeout"}}}
+```
+
+The `ws.message` line files `error`, and one `warn` on `nest_rs::ws` names the
+event and the timeout with `reason="timeout"`. The default is the HTTP request
+timeout's, inside the 20-second shutdown window; a timeout past
+`<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, is said once per gateway at
+boot, since a message admitted just before a stop could then be cut
+unanswered. A handler that legitimately runs longer raises the timeout and the
+window together.
+
+## When the server closes a socket
+
+The server closes a socket with the RFC 6455 code for the cause, and a reason,
+so a client can tell a deliberate close from the `1006` a network fault leaves:
+
+| Cause | Code | What the client does |
+|---|---|---|
+| The shutdown signal, after the message it is answering | `1001 Going Away` | reconnects, to a replica still serving |
+| `<PREFIX>_WS__MAX_CONNECTION_SECS` elapsed | `1001 Going Away` | re-upgrades, and is authenticated again |
+| The client stopped reading and its outbox filled | `1008 Policy Violation` | drains faster, or is shed again |
+| The client took nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) | none can reach it — it reads `1006` | reconnects |
+| A read failed, a message past the cap included | `1011 Internal Error` | reconnects |
+| `#[on_connect]` panicked | `1011 Internal Error` | reconnects |
+
+A handler that panics does not close the socket: its `ws.message` line files
+`panic`, the client gets an error frame saying `internal error`, and the panic's
+text goes to `nest_rs::ws` at `error`. A message still running when the shutdown
+window closes is dropped with its socket, and files `cancelled`.
 
 ## Version the socket
 
@@ -157,7 +204,7 @@ A gateway owns its mount, so the version is part of that ownership: `version =
 message tables, while two gateways sharing a path *and* a version still fail boot
 naming both.
 
-Only the URI form selects a gateway. `NESTRS_HTTP__VERSIONING=header` rewrites
+Only the URI form selects a gateway. `<PREFIX>_HTTP__VERSIONING=header` rewrites
 controller paths in front of routing and never learns a self-mount's prefixes, so
 a versioned gateway stays at `/v1/ws` under every strategy — which is just as
 well, since a browser cannot set headers on a `WebSocket` handshake.

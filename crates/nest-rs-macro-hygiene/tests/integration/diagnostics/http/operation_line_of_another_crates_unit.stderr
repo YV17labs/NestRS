@@ -1,0 +1,12 @@
+error[E0080]: evaluation panicked: a unit's line is filed only by the crate that declares the unit
+ --> tests/integration/diagnostics/http/operation_line_of_another_crates_unit.rs:2:5
+  |
+2 | /     nest_rs::core::operation_line!(
+3 | |         nest_rs::http::unit::REQUEST,
+4 | |         span: &tracing::Span::none(),
+5 | |         outcome: nest_rs::core::operation_log::OK,
+6 | |         started: std::time::Instant::now(),
+7 | |     );
+  | |_____^ evaluation of `main::_` failed here
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `nest_rs::core::operation_line` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,24 +1,16 @@
-//! `#[indicators]` — orchestrator on a provider's `impl` block. Walks the
-//! methods, finds those tagged with `#[liveness]` / `#[readiness]` /
-//! `#[startup]`, strips the attribute, and submits one `HealthIndicator` per
-//! method to the link-time inventory. The methods stay on the impl block
-//! unchanged so they remain regular `async fn` callable from anywhere.
-//!
-//! Discoverable is NOT emitted here — the provider's own `#[injectable]` owns
-//! it. Inventory is exactly the seam `#[hooks]`, `#[scheduled]`, and
-//! `#[processor]` use, for the same reason.
+//! `#[indicators]`: strips each probe attribute and submits one
+//! `HealthIndicator` per method; `Discoverable` stays with `#[injectable]`.
 
-use nest_rs_codegen::{DecoratorPair, impl_self_ident};
+use nest_rs_codegen::layers::{LayerScope, take_layers};
+use nest_rs_codegen::pair;
+use nest_rs_codegen::{
+    HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit, shared_receiver,
+};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::spanned::Spanned;
-use syn::{ImplItem, ReturnType};
-
-/// The indicator host keeps its own `#[injectable]`; this names the shape
-/// `#[indicators]` wants rather than reporting syn's `expected impl`.
-const INDICATORS_PAIR: DecoratorPair =
-    DecoratorPair::on_provider("#[indicators]", "#[liveness] / #[readiness] / #[startup]");
+use syn::ImplItem;
+use syn::ext::IdentExt;
 
 const PROBE_ATTRS: [(&str, &str); 3] = [
     ("liveness", "Liveness"),
@@ -27,21 +19,38 @@ const PROBE_ATTRS: [(&str, &str); 3] = [
 ];
 
 pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
+    let written = TokenStream2::from(input.clone());
+    let expansion = expand(args, input).into();
+    pair::INDICATORS
+        .keep_item_on_refusal(
+            written,
+            expansion,
+            &PROBE_ATTRS.map(|(name, _)| name),
+            |_| TokenStream2::new(),
+        )
+        .into()
+}
+
+fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
-    if let Err(err) = INDICATORS_PAIR.reject_args(&args, "the provider's scope is declared by") {
+    if let Err(err) = pair::INDICATORS.reject_args(&args, "the provider's scope is declared by") {
         return err.to_compile_error().into();
     }
 
-    let mut item = match INDICATORS_PAIR.parse_operations(input.into()) {
+    let mut item = match pair::INDICATORS.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
+    if let Err(err) = refuse_layers(&mut item) {
+        return err.to_compile_error().into();
+    }
     let self_ty = item.self_ty.clone();
-    let host_check = INDICATORS_PAIR.provider_host_check(&self_ty);
-    let provider_name = match impl_self_ident(&self_ty, "#[indicators]") {
-        Ok(ident) => ident.to_string(),
+    let host_check = pair::INDICATORS.provider_host_check(&self_ty);
+    let provider = match impl_self_ident(&self_ty, "#[indicators]") {
+        Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
     };
+    let provider_name = provider.unraw().to_string();
 
     let mut submissions: Vec<TokenStream2> = Vec::new();
 
@@ -50,67 +59,51 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let probe = method.attrs.iter().enumerate().find_map(|(idx, attr)| {
-            PROBE_ATTRS
-                .iter()
-                .find(|(name, _)| attr.path().is_ident(name))
-                .map(|(_, variant)| (idx, *variant))
-        });
-        let Some((idx, kind_variant)) = probe else {
+        // `take_flag_attr`: an argument such as `#[readiness(timeout = "5s")]`
+        // is a compile error, never dropped.
+        let accepted: Vec<&str> = PROBE_ATTRS.iter().map(|(name, _)| *name).collect();
+        let index =
+            match nest_rs_codegen::one_role_per_method("probe", &method.attrs, &accepted, "") {
+                Ok(Some(index)) => index,
+                Ok(None) => continue,
+                Err(err) => return err.to_compile_error().into(),
+            };
+        let Some((name, kind_variant)) = PROBE_ATTRS
+            .into_iter()
+            .find(|(name, _)| method.attrs[index].path().is_ident(name))
+        else {
             continue;
         };
-        let attr = method.attrs.remove(idx);
-
-        // A second probe attribute on the same method is a per-method
-        // mutual-exclusion violation — surface it at compile.
-        if let Some(extra) = method.attrs.iter().find(|attr| {
-            PROBE_ATTRS
-                .iter()
-                .any(|(name, _)| attr.path().is_ident(name))
-        }) {
-            let declared = [
-                nest_rs_codegen::key_as_written(attr.path()),
-                nest_rs_codegen::key_as_written(extra.path()),
-            ];
-            let accepted: Vec<&str> = PROBE_ATTRS.iter().map(|(name, _)| *name).collect();
-            return syn::Error::new(
-                extra.span(),
-                nest_rs_codegen::one_role_per_method("probe", &declared, &accepted),
-            )
-            .to_compile_error()
-            .into();
+        if let Err(err) = nest_rs_codegen::take_flag_attr(&mut method.attrs, name) {
+            return err.to_compile_error().into();
         }
 
-        if method.sig.asyncness.is_none() {
-            return syn::Error::new_spanned(
-                &method.sig,
-                nest_rs_codegen::must_be_async("#[indicators]"),
-            )
-            .to_compile_error()
-            .into();
+        if let Err(err) = shared_receiver(method, "#[indicators]", &provider, HostBorrow::Arc) {
+            return err.to_compile_error().into();
+        }
+        if let Err(err) = nest_rs_codegen::concrete_signature(method, "#[indicators]") {
+            return err.to_compile_error().into();
         }
 
         let method_ident = method.sig.ident.clone();
-        let method_name = method_ident.to_string();
-        let kind_ident = syn::Ident::new(kind_variant, attr.span());
+        let method_name = method_ident.unraw().to_string();
+        let kind_ident = syn::Ident::new(kind_variant, method_ident.span());
+        let cfgs = cfg_attrs(&method.attrs);
 
-        // Adapt the method's return to `anyhow::Result<()>`. A bare method is
-        // infallible (always `up`); a returning one must yield
-        // `Result<(), E: Into<anyhow::Error>>`.
-        let invoke = match &method.sig.output {
-            ReturnType::Default => quote! {
-                <#self_ty>::#method_ident(&__provider).await;
+        let call = await_if_async(&method.sig, quote!(<#self_ty>::#method_ident(&__provider)));
+        let invoke = if returns_unit(&method.sig.output) {
+            quote! {
+                #call;
                 ::std::result::Result::Ok(())
-            },
-            ReturnType::Type(..) => quote! {
-                ::std::result::Result::map_err(
-                    <#self_ty>::#method_ident(&__provider).await,
-                    ::std::convert::Into::into,
-                )
-            },
+            }
+        } else {
+            quote! {
+                ::std::result::Result::map_err(#call, ::std::convert::Into::into)
+            }
         };
 
         submissions.push(quote! {
+            #(#cfgs)*
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_health::HealthIndicator {
                     origin: ::core::module_path!(),
@@ -118,17 +111,14 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
                     kind: ::nest_rs_health::ProbeKind::#kind_ident,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     run: |__container| ::std::boxed::Box::pin(async move {
-                        // Not an `expect`: this runs inside a probe request, so a
-                        // panic would take the response down where an `Err` is
-                        // reported as `down` with the reason on the crate's `warn`.
-                        // The sentence is the kernel's — see `unresolved_host`.
+                        // Not an `expect`: a panic would take the probe response down.
                         let __provider = match ::nest_rs_core::Container::get::<#self_ty>(
                             __container,
                         ) {
                             ::std::option::Option::Some(__host) => __host,
                             ::std::option::Option::None => {
                                 return ::std::result::Result::Err(
-                                    ::nest_rs_health::unresolved_host(#provider_name),
+                                    ::nest_rs_health::__private::unresolved_host(#provider_name),
                                 );
                             }
                         };
@@ -146,4 +136,16 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
         #(#submissions)*
     };
     out.into()
+}
+
+/// Refuse every layer attribute and `#[meta]` on the block and its methods:
+/// the layer table takes none on this pair.
+fn refuse_layers(item: &mut syn::ItemImpl) -> syn::Result<()> {
+    take_layers(&pair::INDICATORS, LayerScope::Host, &mut item.attrs)?;
+    for entry in &mut item.items {
+        if let ImplItem::Fn(method) = entry {
+            take_layers(&pair::INDICATORS, LayerScope::Method, &mut method.attrs)?;
+        }
+    }
+    Ok(())
 }

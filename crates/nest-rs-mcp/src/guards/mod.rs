@@ -1,10 +1,11 @@
 //! Ready-made [`McpOperationGuard`](super::guard::McpOperationGuard)
-//! implementations for the two default postures — the explicit allow-all and
-//! the fail-closed deny-all fallback. The trait itself stays at the parent
-//! (`guard.rs`); these are its concrete variants.
+//! implementations: the explicit allow-all, the fail-closed deny-all, and the
+//! global guard pool's in-band runner.
 
 mod allow;
 mod deny;
+mod pool;
 
 pub use allow::AllowAllMcpGuard;
 pub(crate) use deny::deny_all;
+pub(crate) use pool::GlobalPoolMcpGuard;

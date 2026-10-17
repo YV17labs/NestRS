@@ -9,7 +9,8 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 **multi-tenant publishing platform**: publications (orgs), authors (users),
 posts, live comments, background jobs, and an MCP assistant for drafting.
 Several binaries, one workspace, shared `crates/features/`, no chatty RPC
-between deployables.
+between deployables — [a modular monolith, deployed per workload](/why/#a-modular-monolith-deployed-per-workload),
+at full size.
 
 **Three names run through every page of these docs, and this is the whole
 map.** `hello` is the one-route binary `nestrs new` writes, `blog` is what the
@@ -57,7 +58,7 @@ deploys it.
 ```bash
 helm install demo demo/charts/demo \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="redis://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379"
 ```
 
 Every app is declared in one map, and `kind` says what it becomes in the
@@ -77,12 +78,13 @@ identifier discovery serves, the MCP `Host` allowlist — and each of those is
 some app's public origin, so the chart derives them from `apps.<name>.host`.
 
 Scaling the queue worker is the one decision the chart does not make for you.
-The worker runs one job at a time per `#[process]` method, and Publish's
-processors are I/O — an S3 round-trip, one INSERT — so a pod draining thousands
-of jobs sits near 0% CPU and a CPU-driven autoscaler never fires. Queue depth is
-the signal that moves with the work, and [KEDA](https://keda.sh) is what reads
-it: the chart ships the triggers for both queues, disabled until you turn them
-on. The chart's
+Each `#[process]` method runs at most its declared `concurrency` per pod — one
+unless it says otherwise — and Publish's processors are I/O, an S3 round-trip or
+one INSERT, so a pod draining thousands of jobs sits near 0% CPU and a
+CPU-driven autoscaler never fires. Queue depth is the signal that moves with the
+work, and [KEDA](https://keda.sh) is what reads it: the chart ships a trigger on
+each queue's `nestrs:queue:{<queue>}:jobs` stream, disabled until you turn it on.
+The chart's
 [README](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo#scaling-the-queue-worker)
 carries the trade-offs, including why replicas stop at one rather than zero.
 

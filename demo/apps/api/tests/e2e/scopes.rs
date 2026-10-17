@@ -7,13 +7,13 @@ use uuid::Uuid;
 
 use crate::*;
 
-fn narrow_bearer(org_id: &str, sub: Uuid, scopes: &[&str]) -> String {
+fn narrow_bearer(org_id: &str, sub: impl Into<Option<Uuid>>, scopes: &[&str]) -> String {
     format!(
         "Bearer {}",
         token_with_scopes(
             Uuid::parse_str(org_id).expect("valid org uuid"),
             vec![features::Role::Admin],
-            Some(sub),
+            sub.into(),
             scopes.iter().map(|s| (*s).to_owned()).collect(),
         )
     )
@@ -100,4 +100,50 @@ async fn a_delegation_with_no_post_scope_reads_nothing() {
             .status(),
         StatusCode::FORBIDDEN,
     );
+}
+
+#[tokio::test]
+async fn a_machine_token_delegated_reading_is_refused_a_write_by_an_insufficient_scope_challenge() {
+    let (_db, app) = boot().await;
+    let (org, author) = org_with_author(&app, "ScopeHooli").await;
+    let writer = narrow_bearer(
+        &org,
+        author,
+        &[constants::POSTS_READ, constants::POSTS_WRITE],
+    );
+    let post = create_post(&app, &writer, "Launch", "Big news").await;
+
+    let reader = narrow_bearer(&org, None, &[constants::POSTS_READ]);
+
+    app.http()
+        .get(format!("/posts/{post}"))
+        .header(header::AUTHORIZATION, &reader)
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    let refused = app
+        .http()
+        .delete(format!("/posts/{post}"))
+        .header(header::AUTHORIZATION, &reader)
+        .send()
+        .await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let challenge = refused
+        .0
+        .headers()
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        challenge.contains(r#"error="insufficient_scope""#),
+        "{challenge}"
+    );
+
+    app.http()
+        .get(format!("/posts/{post}"))
+        .header(header::AUTHORIZATION, &reader)
+        .send()
+        .await
+        .assert_status_is_ok();
 }

@@ -2,16 +2,11 @@
 //! ships, and the SeaORM migration skeleton `g migration` writes into them.
 //!
 //! [`MIGRATION`] is a create-table starting point with the house columns
-//! (`created_at`/`updated_at`/`deleted_at`); edit it for an alter instead. The
-//! generator also registers it in `lib.rs` and regenerates `migrator.rs`, so
-//! the migration actually runs — the registration you forget is the one that
-//! silently never applies.
-//!
-//! The two crates are scaffolded by `nestrs new`, because `db.just` — shipped
-//! in the same breath — names them in every recipe: `nestrs run db up` on a
-//! fresh workspace has to apply zero migrations, not fail on a missing package.
+//! (`created_at`/`updated_at`/`deleted_at`); the generator also registers it in
+//! `lib.rs` and regenerates `migrator.rs`. `nestrs new` scaffolds both crates
+//! because `db.just` names them in every recipe.
 
-pub const CRATE_CARGO: &str = r#"[package]
+pub(crate) const CRATE_CARGO: &str = r#"[package]
 name = "migrations"
 version.workspace = true
 edition.workspace = true
@@ -23,33 +18,22 @@ anyhow.workspace = true
 nest-rs.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
-tokio.workspace = true
-tracing-subscriber.workspace = true
 "#;
 
-// `lib.rs` and `migrator.rs` are not consts: both are *derived* from the
-// migration module list (`render_lib` / `render_migrator` in the generator), so
-// a fresh crate and one with eight migrations come out of the same code path.
+// `lib.rs` and `migrator.rs` are derived from the migration module list
+// (`render_lib` / `render_migrator` in the generator).
 
-/// The binary behind every `nestrs run db <verb>`. `connect_from_env` is the
-/// single connector for tools outside the DI container: it resolves
-/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use, so a tool
-/// and its app can never disagree about which database they mean.
-pub const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
+/// The binary behind every `nestrs run db <verb>`. `connect_from_env` resolves
+/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use.
+pub(crate) const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;
+use nest_rs::core::logging::{LogSettings, install_console};
 use sea_orm_migration::MigratorTrait;
-use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
-    // `EnvPrefix::var` rather than a literal: this binary then reads the same
-    // log variable the apps do, including under a project's own prefix.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env(nest_rs::core::EnvPrefix::var("LOG"))
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // The apps' log settings, read and refused as they are, and their console.
+    install_console(&LogSettings::from_env()?);
 
     let conn = nest_rs::seaorm::connect_from_env().await?;
     match std::env::args().nth(1).as_deref() {
@@ -71,7 +55,7 @@ async fn main() -> Result<()> {
 }
 "#;
 
-pub const SEED_CARGO: &str = r#"[package]
+pub(crate) const SEED_CARGO: &str = r#"[package]
 name = "seed"
 version.workspace = true
 edition.workspace = true
@@ -82,12 +66,10 @@ publish = false
 anyhow.workspace = true
 nest-rs.workspace = true
 sea-orm.workspace = true
-tokio.workspace = true
 "#;
 
-/// `nestrs run db seed`. Empty, but connected: the wiring a fixture needs is
-/// already here, so adding one is a body edit rather than a new crate.
-pub const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
+/// `nestrs run db seed`. Empty, but connected.
+pub(crate) const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
 //!
 //! `nestrs run db reset` runs `fresh` and then this, and you will run it again
 //! on a database that already has rows — so every insert here must be
@@ -95,7 +77,7 @@ pub const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db
 
 use anyhow::Result;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let conn = nest_rs::seaorm::connect_from_env().await?;
     conn.ping().await?;
@@ -111,7 +93,7 @@ async fn main() -> Result<()> {
 /// reaches the DDL verbatim.
 ///
 /// [`Names`]: crate::naming::Names
-pub const MIGRATION: &str = r#"use sea_orm_migration::prelude::*;
+pub(crate) const MIGRATION: &str = r#"use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;

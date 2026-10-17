@@ -1,18 +1,21 @@
 //! OAuth2 Authorization Code client (PKCE). Provider endpoints come from [`OAuthClientConfig`];
 //! profile mapping stays in the app's [`Strategy`](nest_rs_authn::Strategy).
-//!
-//! CSRF `state` and the PKCE verifier ride in a short-lived JWT cookie so the
-//! round-trip needs no server-side session storage.
 
-use oauth2::basic::BasicClient;
+use std::fmt;
+use std::sync::PoisonError;
+use std::time::Duration;
+
+use aws_lc_rs::constant_time::verify_slices_are_equal;
+use nest_rs_config::{ClientTls, ConfigError, ConfigService, Namespaced};
+use oauth2::basic::{BasicClient, BasicErrorResponse};
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpClientError,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope, TokenResponse,
+    TokenUrl,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
-use validator::Validate;
+use validator::{Validate, ValidationErrors};
 
 use crate::config::OAuthClientConfig;
 use nest_rs_authn::AuthError;
@@ -23,44 +26,45 @@ pub struct AuthorizationRedirect {
     /// The provider authorization URL to redirect the user agent to.
     pub url: String,
     /// Signed, short-lived token binding the CSRF state to the PKCE verifier.
-    /// Set as a cookie on the redirect; pass back to [`exchange`](OAuthClient::exchange).
+    /// Set as a cookie on the redirect through [`set_cookie`](Self::set_cookie);
+    /// read back with [`OAuthClient::transaction_from`] and passed to
+    /// [`exchange`](OAuthClient::exchange).
     pub transaction: String,
 }
 
+impl AuthorizationRedirect {
+    /// The `Set-Cookie` value carrying [`transaction`](Self::transaction) on the
+    /// redirect: `__Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure;
+    /// SameSite=Lax`.
+    ///
+    /// `SameSite=Lax`, not `Strict`: the callback is a top-level cross-site
+    /// navigation from the provider, which `Strict` would strip (RFC 6265bis
+    /// §5.6.7.1). `Max-Age` is the signed token's own lifetime,
+    /// [`OAuthClient::TRANSACTION_TTL_SECS`].
+    pub fn set_cookie(&self) -> String {
+        format!(
+            "{}={}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Lax",
+            OAuthClient::TRANSACTION_COOKIE,
+            self.transaction,
+            OAuthClient::TRANSACTION_TTL_SECS,
+        )
+    }
+}
+
 /// Outcome of the Authorization-Code exchange.
-///
-/// `#[non_exhaustive]`: downstream provider crates (`nest-rs-social` and
-/// third-party providers) match on these fields, so adding one later — a new
-/// standard token field — must not break them. Construct via the field
-/// initializers inside this crate only; consumers read.
-///
-/// The base flow populates `access_token` (and `refresh_token` when the
-/// provider returns one). `id_token` stays `None` for the standard resource
-/// path: an OIDC provider that reads identity from the id_token overrides
-/// `SocialProvider::exchange` (e.g. Apple, which has no userinfo endpoint) and
-/// fills it there — the base client does not parse OIDC extra fields.
 #[non_exhaustive]
 pub struct TokenSet {
     /// The bearer access token used to call the provider's APIs (e.g. userinfo).
     pub access_token: String,
-    /// The OIDC id_token, when the provider reads identity from it. `None` on
-    /// the standard resource path — an OIDC provider fills it by overriding
+    /// The OIDC id_token; `None` unless an OIDC provider fills it by overriding
     /// `SocialProvider::exchange`.
     pub id_token: Option<String>,
     /// The refresh token, when the provider issued one; `None` otherwise.
     pub refresh_token: Option<String>,
 }
 
-/// Token-kind discriminant. Any other `typ` fails to deserialize, so a token
-/// minted for a different purpose by the same [`JwtService`] (an access token,
-/// say) can never be replayed as a transaction.
-/// The transaction cookie's handshake purpose (RFC 8725 §3.11, explicit typing).
-///
-/// `JwtService` turns this into a media type in the namespace it reserves for
-/// non-access tokens, so a resource server verifying `at+jwt` refuses the
-/// cookie and `verify_handshake` refuses an access token replayed as a
-/// transaction. The in-payload [`TransactionKind`] discriminator states the
-/// same fact where a reader sees it; the header is what a *verifier* acts on.
+/// The transaction cookie's handshake purpose (RFC 8725 §3.11): a resource server
+/// verifying `at+jwt` refuses the cookie, and an access token is refused as one.
 const TRANSACTION_PURPOSE: &str = "oauth-tx";
 
 #[derive(Serialize, Deserialize)]
@@ -70,13 +74,8 @@ enum TransactionKind {
 }
 
 /// Carried as a [`JwtService`]-signed cookie so the client cannot forge it.
-///
-/// `provider` binds the transaction to the flow that minted it. Apps store the
-/// cookie under a single name for every provider (the reference app does), so
-/// without that binding a transaction obtained from provider A would verify on
-/// provider B's callback — a code/login-confusion class that only PKCE would
-/// still stand in the way of, and PKCE is not mandatory for confidential
-/// clients at several real providers.
+/// `provider` binds it to the flow that minted it: one cookie name serves
+/// every provider, and PKCE alone would not stop a cross-provider replay.
 #[derive(Serialize, Deserialize)]
 struct Transaction {
     typ: TransactionKind,
@@ -86,47 +85,324 @@ struct Transaction {
     exp: u64,
 }
 
-/// Low-cardinality `reason` codes for the three ways a callback is refused —
-/// what an incident query groups on. Constants rather than call-site literals so
-/// the set is greppable and a typo cannot silently create a fourth.
+/// Low-cardinality `reason` codes for the three ways a callback is refused.
 const REASON_INVALID_TRANSACTION: &str = "invalid_transaction";
 const REASON_PROVIDER_MISMATCH: &str = "provider_mismatch";
 const REASON_CSRF_STATE_MISMATCH: &str = "csrf_state_mismatch";
 
-/// The one message every callback refusal is filed under, so an operator greps
-/// once and reads `reason` to tell the three apart.
+/// The one message every callback refusal is filed under; `reason` tells them apart.
 const CALLBACK_REJECTED: &str = "OAuth callback rejected";
 
+/// RFC 6749 §3.2's name for where the code is traded for a token.
+const TOKEN_ENDPOINT: &str = "token endpoint";
+/// OpenID Connect Core §5.3's name for where the caller's profile is read.
+const USERINFO_ENDPOINT: &str = "userinfo endpoint";
+/// Any other endpoint a provider reads through [`OAuthClient::fetch`] — GitHub's
+/// verified emails, say — which no standard names.
+const PROVIDER_ENDPOINT: &str = "endpoint";
+
+/// A provider endpoint as a failed call's sentence names it, through
+/// [`endpoint_shown`](nest_rs_config::endpoint_shown): a query or userinfo part
+/// may carry an API key, and the sentence is logged.
+struct Endpoint<'a> {
+    role: &'static str,
+    url: &'a str,
+    /// The variable naming `url`, which a refused handshake's remedy names;
+    /// `None` for a URL a provider's code built, or a client no variable sets.
+    setting: Option<Setting<'a>>,
+}
+
+/// A variable among those an [`OAuthClient`]'s config was read under.
+struct Setting<'a> {
+    variables: &'a ConfigService,
+    key: &'static str,
+}
+
+impl fmt::Display for Endpoint<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the OAuth provider's {} ({})",
+            self.role,
+            nest_rs_config::endpoint_shown(self.url)
+        )
+    }
+}
+
+/// A call to `endpoint` that got no answer, as [`AuthError::Unavailable`] (RFC 9110
+/// §15.6.4); reqwest's chain goes in without the URL, which it quotes whole.
+fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
+    let detail = if error.is_timeout() && error.is_connect() {
+        format!(
+            "{endpoint} could not be connected to within {:?}",
+            OAuthClient::CONNECT_TIMEOUT
+        )
+    } else if error.is_timeout() {
+        format!(
+            "{endpoint} did not answer within {:?}",
+            OAuthClient::CALL_TIMEOUT
+        )
+    } else if let Some(setting) = endpoint
+        .setting
+        .as_ref()
+        .filter(|_| ClientTls::negotiation_failed(&error))
+    {
+        format!(
+            "{endpoint} could not be called: {} ({})",
+            ClientTls::remedy(setting.variables, "the OAuth provider", setting.key, &error),
+            nest_rs_core::error_message(&error.without_url())
+        )
+    } else {
+        format!(
+            "{endpoint} could not be called: {}",
+            nest_rs_core::error_message(&error.without_url())
+        )
+    };
+    AuthError::Unavailable {
+        detail,
+        retry_after: None,
+    }
+}
+
+/// A 5xx or `429` (RFC 6585 §4) answer as [`AuthError::Unavailable`], carrying a
+/// delay-seconds `Retry-After`; an HTTP-date one would trust the provider's clock.
+fn provider_unavailable(
+    endpoint: &Endpoint<'_>,
+    status: u16,
+    retry_after: Option<&[u8]>,
+) -> Option<AuthError> {
+    (status == 429 || (500..600).contains(&status)).then(|| AuthError::Unavailable {
+        detail: format!("{endpoint} answered {status}"),
+        retry_after: retry_after
+            .and_then(|value| std::str::from_utf8(value).ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(Duration::from_secs),
+    })
+}
+
+/// An answer past [`OAuthClient::ANSWER_MAX_BYTES`], said without a byte of it.
+fn oversized(endpoint: &Endpoint<'_>) -> AuthError {
+    AuthError::Unavailable {
+        detail: format!(
+            "{endpoint} answered more than {} bytes, the most an OAuth answer is read to",
+            OAuthClient::ANSWER_MAX_BYTES
+        ),
+        retry_after: None,
+    }
+}
+
+fn exchange_failed(
+    endpoint: &Endpoint<'_>,
+    answered: Option<Answered>,
+    error: RequestTokenError<HttpClientError<reqwest::Error>, BasicErrorResponse>,
+) -> AuthError {
+    if let Some(answered) = answered {
+        if answered.oversized {
+            return oversized(endpoint);
+        }
+        if let Some(unavailable) =
+            provider_unavailable(endpoint, answered.status, answered.retry_after.as_deref())
+        {
+            return unavailable;
+        }
+    }
+    match error {
+        RequestTokenError::Request(HttpClientError::Reqwest(error)) => {
+            call_failed(endpoint, *error)
+        }
+        other => AuthError::Failed(format!("{endpoint}: {other}")),
+    }
+}
+
+/// The status and the `Retry-After` of the token endpoint's answer, read off the
+/// response before `oauth2` turns it into an error that keeps neither, and
+/// whether its body ran past [`OAuthClient::ANSWER_MAX_BYTES`].
+struct Answered {
+    status: u16,
+    retry_after: Option<Vec<u8>>,
+    oversized: bool,
+}
+
+/// What [`HttpClientError::Other`] carries when the body ran past the cap;
+/// [`Answered::oversized`] is what the exchange reads.
+const OVERSIZED: &str = "the answer ran past OAuthClient::ANSWER_MAX_BYTES";
+
+/// Why [`read_capped`] returned no body.
+enum Capped {
+    /// The answer runs past [`OAuthClient::ANSWER_MAX_BYTES`].
+    Oversized,
+    /// The body could not be read.
+    Call(reqwest::Error),
+}
+
+/// The body of `response`, refused past [`OAuthClient::ANSWER_MAX_BYTES`] on its
+/// `Content-Length` and while streaming — never read past the cap: reqwest
+/// bounds no body.
+async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, Capped> {
+    let cap = OAuthClient::ANSWER_MAX_BYTES;
+    let declared = response.content_length();
+    if declared.is_some_and(|declared| declared > cap as u64) {
+        return Err(Capped::Oversized);
+    }
+    let mut body = Vec::with_capacity(declared.map_or(0, |declared| declared as usize));
+    while let Some(chunk) = response.chunk().await.map_err(Capped::Call)? {
+        if body.len() + chunk.len() > cap {
+            return Err(Capped::Oversized);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// The client's HTTP backend, keeping the last answer's [`Answered`] — what the
+/// exchange hands `oauth2` in place of the backend itself.
+struct Observed<'a> {
+    http: &'a reqwest::Client,
+    answered: std::sync::Mutex<Option<Answered>>,
+}
+
+impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
+    type Error = HttpClientError<reqwest::Error>;
+    type Future = std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<oauth2::HttpResponse, Self::Error>> + Send + 'c,
+        >,
+    >;
+
+    fn call(&'c self, request: oauth2::HttpRequest) -> Self::Future {
+        Box::pin(async move {
+            let request = reqwest::Request::try_from(request).map_err(Box::new)?;
+            let response = self.http.execute(request).await.map_err(Box::new)?;
+            let status = response.status().as_u16();
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .map(|value| value.as_bytes().to_vec());
+            let mut answer = oauth2::http::Response::builder()
+                .status(response.status())
+                .version(response.version());
+            for (name, value) in response.headers() {
+                answer = answer.header(name, value);
+            }
+            let body = read_capped(response).await;
+            *self.answered.lock().unwrap_or_else(PoisonError::into_inner) = Some(Answered {
+                status,
+                retry_after,
+                oversized: matches!(body, Err(Capped::Oversized)),
+            });
+            match body {
+                Ok(body) => answer.body(body).map_err(HttpClientError::Http),
+                Err(Capped::Oversized) => Err(HttpClientError::Other(OVERSIZED.to_owned())),
+                Err(Capped::Call(error)) => Err(HttpClientError::Reqwest(Box::new(error))),
+            }
+        })
+    }
+}
+
+/// `validator`'s own `Display` lists each rule's parameters, the rejected value
+/// among them; [`ConfigError::validation`] says the field and the rule alone.
+fn invalid(errors: ValidationErrors) -> AuthError {
+    AuthError::Failed(ConfigError::validation(OAuthClientConfig::NAMESPACE, errors).to_string())
+}
+
+/// Every call carries a code, a client secret or a bearer token (RFC 6749 §3.1,
+/// §3.2; RFC 6750 §5.3), so the backend dials `https` alone, whatever URL a
+/// provider builds at run time.
+fn backend() -> reqwest::ClientBuilder {
+    reqwest::ClientBuilder::new()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        // Some provider APIs (GitHub) reject a request without a user-agent.
+        .user_agent("nestrs")
+        .connect_timeout(OAuthClient::CONNECT_TIMEOUT)
+        .timeout(OAuthClient::CALL_TIMEOUT)
+}
+
+/// The backend trusting what `tls` names — the system's authorities unless it
+/// names others — and presenting its certificate when it holds one.
+fn verified(tls: &ClientTls) -> Result<reqwest::Client, AuthError> {
+    let names = ConfigService::for_namespace(OAuthClientConfig::NAMESPACE);
+    let material = nest_rs_config::__private::reqwest_tls(tls, &names)
+        .map_err(|refused| AuthError::Failed(refused.to_string()))?;
+    let mut builder = backend().tls_certs_only(material.roots);
+    if let Some(identity) = material.identity {
+        builder = builder.identity(identity);
+    }
+    builder.build().map_err(|error| {
+        AuthError::Failed(format!(
+            "the OAuth client could not be built: {}",
+            nest_rs_core::error_message(&error)
+        ))
+    })
+}
+
 /// A transient Authorization-Code (PKCE) client built per flow from an
-/// [`OAuthClientConfig`]. Its HTTP backend refuses redirects (anti-SSRF) and carries
-/// a fixed user-agent; see [`new`](Self::new).
+/// [`OAuthClientConfig`]; its backend refuses redirects (anti-SSRF) and bounds every call.
 pub struct OAuthClient {
     config: OAuthClientConfig,
-    http: oauth2::reqwest::Client,
+    http: reqwest::Client,
+    /// The variables `config` was read under, which a refused handshake's
+    /// remedy names: `<PREFIX>_OAUTH__CLIENT__*` when
+    /// [`OAuthClientModule`](crate::OAuthClientModule) built the client, `None`
+    /// for a config its caller composed — a social provider's, whose URLs are
+    /// constants and whose TLS no variable sets.
+    variables: Option<ConfigService>,
 }
 
 impl OAuthClient {
-    /// The HTTP backend refuses redirects — following them during a token
-    /// exchange is an SSRF risk (per the `oauth2` crate's own guidance).
+    /// How long reaching a provider (DNS, TCP and TLS handshakes) may take before a
+    /// call gives up, naming the endpoint.
+    pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+    /// How long one call to a provider may take in all before it fails, naming the
+    /// endpoint and this bound.
+    ///
+    /// A login makes up to three calls (GitHub), 15 s, which must stay under
+    /// [`AUTHENTICATE_TIMEOUT`](nest_rs_authn::AUTHENTICATE_TIMEOUT) (18 s) and the
+    /// HTTP edge's request timeout, or a silent provider is reported by neither name.
+    pub const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// The most a provider's answer is read to: RFC 6749 §5.1 token responses
+    /// and OpenID Connect userinfo documents are a few KiB, an id_token
+    /// included. A longer answer fails the call, naming the endpoint and this
+    /// bound.
+    pub const ANSWER_MAX_BYTES: usize = 64 * 1024;
+
+    /// Builds a client from a validated `config`; its backend follows no redirect
+    /// (an SSRF risk in a token exchange, per `oauth2`), bounds every call and
+    /// trusts what `config.tls` names. A provider endpoint that is not `https`,
+    /// a redirect that is neither `https` nor loopback `http`, and TLS material
+    /// no handshake could use are refused, naming the setting. A handshake a
+    /// provider later refuses is said with rustls's reason alone: `config` may
+    /// be a sign-in provider's, read under none of this crate's variables.
     pub fn new(config: OAuthClientConfig) -> Result<Self, AuthError> {
-        config
-            .validate()
-            .map_err(|err| AuthError::Failed(format!("invalid OAuth2 config: {err}")))?;
-        let http = oauth2::reqwest::ClientBuilder::new()
-            .redirect(oauth2::reqwest::redirect::Policy::none())
-            // A client-wide UA so every outbound request carries it uniformly —
-            // some provider APIs (GitHub) reject requests without one, and the
-            // token exchange uses this same client.
-            .user_agent("nestrs")
-            .build()
-            .map_err(|e| AuthError::Failed(e.to_string()))?;
-        Ok(Self { config, http })
+        config.validate().map_err(invalid)?;
+        config.refuse_plaintext()?;
+        let http = verified(&config.tls)?;
+        Ok(Self {
+            config,
+            http,
+            variables: None,
+        })
     }
 
-    /// Build the underlying `oauth2` client from a config. Free function (vs.
-    /// `&self`) so unit tests can exercise the URL-parse error paths
-    /// directly — `Self::new` short-circuits on `validate()` (length ≥ 1)
-    /// before the URLs are syntactically checked here.
+    /// [`new`](Self::new) over a config read under `<PREFIX>_OAUTH__CLIENT__*`,
+    /// whose variables a refused handshake's remedy then names.
+    pub(crate) fn from_variables(config: OAuthClientConfig) -> Result<Self, AuthError> {
+        Ok(Self {
+            variables: Some(ConfigService::for_namespace(OAuthClientConfig::NAMESPACE)),
+            ..Self::new(config)?
+        })
+    }
+
+    /// The variable `key` among this client's, when its config was read under any.
+    fn setting(&self, key: &'static str) -> Option<Setting<'_>> {
+        self.variables
+            .as_ref()
+            .map(|variables| Setting { variables, key })
+    }
+
+    /// Builds the `oauth2` client; URL syntax is checked here, not by `validate()`.
     pub(crate) fn basic_client(
         config: &OAuthClientConfig,
     ) -> Result<
@@ -139,34 +415,57 @@ impl OAuthClient {
         >,
         AuthError,
     > {
-        let parse = |s: &str| AuthError::Failed(format!("invalid OAuth URL: {s}"));
+        // `url::ParseError` says why in a fixed sentence; the URL itself may
+        // carry userinfo, and the sentence is logged.
+        let parse = |field: &'static str| {
+            move |error: oauth2::url::ParseError| {
+                AuthError::Failed(format!(
+                    "OAuthClientConfig::{field} does not parse as a URL: {error}"
+                ))
+            }
+        };
         Ok(BasicClient::new(ClientId::new(config.client_id.clone()))
             .set_client_secret(ClientSecret::new(config.client_secret.clone()))
-            .set_auth_uri(
-                AuthUrl::new(config.auth_url.clone()).map_err(|_| parse(&config.auth_url))?,
-            )
-            .set_token_uri(
-                TokenUrl::new(config.token_url.clone()).map_err(|_| parse(&config.token_url))?,
-            )
+            .set_auth_uri(AuthUrl::new(config.auth_url.clone()).map_err(parse("auth_url"))?)
+            .set_token_uri(TokenUrl::new(config.token_url.clone()).map_err(parse("token_url"))?)
             .set_redirect_uri(
-                RedirectUrl::new(config.redirect_url.clone())
-                    .map_err(|_| parse(&config.redirect_url))?,
+                RedirectUrl::new(config.redirect_url.clone()).map_err(parse("redirect_url"))?,
             ))
     }
 
-    /// Lifetime of the signed transaction token and the cookie carrying it.
-    /// Short by design: an OAuth handshake completes in seconds, so the
-    /// CSRF/PKCE binding must not inherit the full access-token TTL. The
-    /// cookie's `Max-Age` and this token `exp` are driven from the same value
-    /// so they cannot drift.
+    /// Lifetime of the signed transaction token and of its cookie's `Max-Age`.
     pub const TRANSACTION_TTL_SECS: u64 = 600;
 
-    /// Begin the flow: produce the provider redirect URL and the signed
-    /// transaction token to set as a cookie. The transaction lives for
-    /// [`Self::TRANSACTION_TTL_SECS`], not the full `JwtService` TTL.
+    /// The transaction cookie's name. The `__Host-` prefix (RFC 6265bis
+    /// §4.1.3.2) makes a browser refuse it unless it is `Secure`, `Path=/` and
+    /// has no `Domain`, so a sibling subdomain cannot plant or overwrite it.
+    pub const TRANSACTION_COOKIE: &'static str = "__Host-oauth_tx";
+
+    /// The transaction a callback carries, read from its `Cookie` field values —
+    /// HTTP/2 may split one cookie-string over several fields (RFC 9113
+    /// §8.2.3). `None` when absent or empty.
     ///
-    /// `provider` is the key this transaction is bound to; [`exchange`](Self::exchange)
-    /// refuses one minted for a different provider.
+    /// ```
+    /// use nest_rs_oauth_client::OAuthClient;
+    ///
+    /// let fields = ["theme=dark", "__Host-oauth_tx=eyJ0eXAi; lang=en"];
+    /// assert_eq!(OAuthClient::transaction_from(fields), Some("eyJ0eXAi"));
+    /// ```
+    pub fn transaction_from<'a>(
+        cookie_fields: impl IntoIterator<Item = &'a str>,
+    ) -> Option<&'a str> {
+        cookie_fields
+            .into_iter()
+            .flat_map(|field| field.split(';'))
+            .find_map(|pair| {
+                let (name, value) = pair.trim().split_once('=')?;
+                (name == Self::TRANSACTION_COOKIE).then_some(value)
+            })
+            .filter(|value| !value.is_empty())
+    }
+
+    /// Begin the flow: the provider redirect URL and the signed transaction token to
+    /// set as a cookie, bound to `provider`.
     pub fn authorize(
         &self,
         jwt: &JwtService,
@@ -195,10 +494,8 @@ impl OAuthClient {
         })
     }
 
-    /// Complete the flow: check the signed `transaction` belongs to `provider`,
-    /// validate the provider's `state` against it, then trade `code` for a
-    /// [`TokenSet`]. Both checks run before the exchange — never the other way
-    /// around.
+    /// Complete the flow: check `transaction` belongs to `provider` and matches
+    /// `state`, both before trading `code` for a [`TokenSet`].
     pub async fn exchange(
         &self,
         jwt: &JwtService,
@@ -207,15 +504,8 @@ impl OAuthClient {
         state: &str,
         code: &str,
     ) -> Result<TokenSet, AuthError> {
-        // A transaction cookie that does not verify is a forged or replayed
-        // handshake, and it is this crate's third way to refuse a callback — so
-        // it files the same `warn` its two siblings below do. Nothing else
-        // would: `JwtService` keeps its typed decode reason at `debug` because
-        // on the *strategy* path `AuthnGuard` emits the single `warn`, and this
-        // path has no guard above it — the error `?`s out through
-        // `AuthError::render`, which logs only `Failed`/`Unavailable`. So a
-        // forged cookie left no `warn` anywhere. The `debug` stays where it is;
-        // one event per refusal, said at the site that knows what was refused.
+        // The only `warn` for a forged cookie: no guard sits above this path, and
+        // `JwtService` logs its decode reason at `debug`.
         let tx: Transaction = jwt
             .verify_handshake(TRANSACTION_PURPOSE, transaction)
             .inspect_err(|error| {
@@ -238,9 +528,9 @@ impl OAuthClient {
             );
             return Err(AuthError::Failed("OAuth provider mismatch".into()));
         }
-        // Constant-time compare (mirrors the client-credentials check); a length
-        // mismatch reads as "not equal" via `subtle`'s slice `ct_eq`.
-        if !bool::from(tx.csrf.as_bytes().ct_eq(state.as_bytes())) {
+        // Constant-time over the contents; a length mismatch, which is not secret, is
+        // unequal at once.
+        if verify_slices_are_equal(tx.csrf.as_bytes(), state.as_bytes()).is_err() {
             tracing::warn!(
                 target: crate::TARGET,
                 reason = REASON_CSRF_STATE_MISMATCH,
@@ -249,12 +539,30 @@ impl OAuthClient {
             );
             return Err(AuthError::Failed("OAuth state mismatch".into()));
         }
-        let token = Self::basic_client(&self.config)?
+        let endpoint = Endpoint {
+            role: TOKEN_ENDPOINT,
+            url: &self.config.token_url,
+            setting: self.setting("TOKEN_URL"),
+        };
+        // `oauth2` drops the answer's status, without which a provider's `503`
+        // would read as the caller's failure.
+        let observed = Observed {
+            http: &self.http,
+            answered: std::sync::Mutex::new(None),
+        };
+        let exchanged = Self::basic_client(&self.config)?
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(PkceCodeVerifier::new(tx.pkce))
-            .request_async(&self.http)
-            .await
-            .map_err(|e| AuthError::Failed(e.to_string()))?;
+            .request_async(&observed)
+            .await;
+        let token = exchanged.map_err(|error| {
+            let answered = observed
+                .answered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            exchange_failed(&endpoint, answered, error)
+        })?;
         Ok(TokenSet {
             access_token: token.access_token().secret().clone(),
             id_token: None,
@@ -262,41 +570,86 @@ impl OAuthClient {
         })
     }
 
-    /// Authenticated `GET` against an arbitrary provider endpoint, deserialized
-    /// into `T`. The generalization of [`userinfo`](Self::userinfo): a provider
-    /// whose profile needs a second call (GitHub's verified-emails endpoint)
-    /// reuses this so it inherits the redirect-refusing, anti-SSRF HTTP client
-    /// built in [`new`](Self::new) instead of standing up its own reqwest.
+    /// Authenticated `GET` against any provider endpoint (GitHub's verified emails,
+    /// say), deserialized into `T`, through this client's redirect-refusing backend.
+    /// A `url` that is not `https` is refused before anything is sent: the call
+    /// carries the bearer token.
     pub async fn fetch<T: DeserializeOwned>(
         &self,
         url: &str,
         access_token: &str,
     ) -> Result<T, AuthError> {
-        let body = self
+        let endpoint = Endpoint {
+            role: PROVIDER_ENDPOINT,
+            url,
+            setting: None,
+        };
+        if !reqwest::Url::parse(url.trim()).is_ok_and(|url| url.scheme() == "https") {
+            return Err(AuthError::Failed(format!(
+                "{endpoint} is not an https URL, and RFC 6750 §5.3 sends a bearer token over TLS \
+                 alone"
+            )));
+        }
+        self.read(&endpoint, access_token).await
+    }
+
+    /// Fetch the caller's profile from the configured `userinfo_url`, deserialized into `T`.
+    pub async fn userinfo<T: DeserializeOwned>(&self, access_token: &str) -> Result<T, AuthError> {
+        let endpoint = Endpoint {
+            role: USERINFO_ENDPOINT,
+            url: &self.config.userinfo_url,
+            setting: self.setting("USERINFO_URL"),
+        };
+        self.read(&endpoint, access_token).await
+    }
+
+    /// Anything but a `2xx` fails, a `3xx` included: no redirect is followed.
+    async fn read<T: DeserializeOwned>(
+        &self,
+        endpoint: &Endpoint<'_>,
+        access_token: &str,
+    ) -> Result<T, AuthError> {
+        let response = self
             .http
-            .get(url)
+            .get(endpoint.url)
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|e| AuthError::Failed(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| AuthError::Failed(e.to_string()))?
-            .text()
+            .map_err(|error| call_failed(endpoint, error))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(provider_unavailable(
+                endpoint,
+                status.as_u16(),
+                response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .map(|value| value.as_bytes()),
+            )
+            .unwrap_or_else(|| AuthError::Failed(format!("{endpoint} answered {status}"))));
+        }
+        let body = read_capped(response)
             .await
-            .map_err(|e| AuthError::Failed(e.to_string()))?;
-        serde_json::from_str(&body).map_err(|e| AuthError::Failed(e.to_string()))
-    }
-
-    /// Fetch the caller's profile from the configured `userinfo_url`,
-    /// deserialized into the app's provider-specific shape; mapping it to the
-    /// app's principal is the Passport strategy's job.
-    pub async fn userinfo<T: DeserializeOwned>(&self, access_token: &str) -> Result<T, AuthError> {
-        self.fetch(&self.config.userinfo_url, access_token).await
+            .map_err(|refused| match refused {
+                Capped::Oversized => oversized(endpoint),
+                Capped::Call(error) => call_failed(endpoint, error),
+            })?;
+        // Said without the value serde would quote: a provider's body carries
+        // the profile, and may carry a token.
+        serde_json::from_slice(&body).map_err(|error| {
+            AuthError::Failed(format!(
+                "{endpoint} answered a body that does not parse: {}",
+                nest_rs_core::DecodeError::new(&error),
+            ))
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use nest_rs_authn::JwtOptions;
 
@@ -309,6 +662,17 @@ mod tests {
             redirect_url: "https://app.example/callback".into(),
             userinfo_url: "https://provider.example/userinfo".into(),
             scopes: vec!["read".into()],
+            tls: ClientTls::default(),
+        }
+    }
+
+    /// A client over `config` whatever it holds, built past `new`'s refusals to
+    /// reach what runs after them.
+    fn unchecked(config: OAuthClientConfig) -> OAuthClient {
+        OAuthClient {
+            config,
+            http: backend().build().expect("the backend builds"),
+            variables: None,
         }
     }
 
@@ -316,32 +680,87 @@ mod tests {
         JwtService::new(JwtOptions::new("oauth-client-tests-padded-to-32b")).expect("HMAC service")
     }
 
+    fn signed_transaction(jwt: &JwtService, provider: &str, csrf: &str) -> String {
+        jwt.sign_handshake(
+            TRANSACTION_PURPOSE,
+            &Transaction {
+                typ: TransactionKind::OauthTx,
+                provider: provider.into(),
+                csrf: csrf.into(),
+                pkce: "verifier".into(),
+                exp: jwt.expiry(),
+            },
+        )
+        .expect("sign")
+    }
+
     #[test]
     fn new_rejects_invalid_config_at_validate_stage() {
-        // `OAuthClientConfig::default()` has empty URL fields → `validate()`
-        // (length ≥ 1) trips before any URL is parsed, so `new` surfaces a
-        // `Failed`. `OAuthClient` is not `Debug`, so we test via `is_err`.
+        // `OAuthClient` is not `Debug`, hence `is_err`.
         assert!(OAuthClient::new(OAuthClientConfig::default()).is_err());
     }
 
     #[test]
     fn new_accepts_a_valid_config() {
-        // Happy `new` path — the URL-parse tests below stand on this baseline.
         assert!(OAuthClient::new(valid_config()).is_ok());
         OAuthClient::basic_client(&valid_config()).expect("basic_client builds");
     }
 
+    /// The URL may carry userinfo, and the sentence is logged: it names the
+    /// field and the parser's fixed reason, never the value.
     #[test]
-    fn basic_client_rejects_malformed_auth_url() {
+    fn basic_client_refuses_a_malformed_url_naming_its_field_and_not_its_value() {
         let mut config = valid_config();
+        config.auth_url = "https://u:s3cr3t@idp:99999/x".into();
+        let Err(AuthError::Failed(msg)) = OAuthClient::basic_client(&config) else {
+            panic!("expected Failed");
+        };
+        assert_eq!(
+            msg, "OAuthClientConfig::auth_url does not parse as a URL: invalid port number",
+            "{msg}"
+        );
+
         config.auth_url = "not a url".into();
         let Err(AuthError::Failed(msg)) = OAuthClient::basic_client(&config) else {
             panic!("expected Failed");
         };
         assert!(
-            msg.contains("not a url"),
-            "error names the offending value: {msg}"
+            msg.contains("relative URL without a base") && !msg.contains("not a url"),
+            "{msg}"
         );
+    }
+
+    /// A rule failing on a value `validator` would list among its parameters.
+    fn always_refused(_: &str) -> Result<(), validator::ValidationError> {
+        Err(validator::ValidationError::new("refused"))
+    }
+
+    #[derive(Validate)]
+    struct Probe {
+        #[validate(custom(function = "always_refused"))]
+        client_secret: String,
+    }
+
+    /// `validator`'s `Display` prints a failed rule's parameters, the rejected
+    /// value among them; the refusal says the field and the rule alone.
+    #[test]
+    fn a_validation_failure_says_the_field_and_the_rule_and_never_the_value() {
+        let errors = Probe {
+            client_secret: "s3cr3t".into(),
+        }
+        .validate()
+        .expect_err("the rule refuses every value");
+        assert!(
+            errors.to_string().contains("s3cr3t"),
+            "the probe quotes: {errors}"
+        );
+
+        let AuthError::Failed(sentence) = invalid(errors) else {
+            panic!("a refused config is a failed authentication setup");
+        };
+        assert!(sentence.contains("client_secret: refused"), "{sentence}");
+        assert!(!sentence.contains("s3cr3t"), "{sentence}");
+        assert!(!sentence.contains("value"), "{sentence}");
     }
 
     #[test]
@@ -356,8 +775,6 @@ mod tests {
 
     #[test]
     fn basic_client_rejects_malformed_redirect_url() {
-        // A redirect URL must be absolute — a bare path trips `RedirectUrl::new`
-        // after auth_url and token_url have parsed successfully.
         let mut config = valid_config();
         config.redirect_url = "/relative/path".into();
         assert!(matches!(
@@ -368,71 +785,23 @@ mod tests {
 
     #[test]
     fn authorize_surfaces_basic_client_error() {
-        // `validate()` accepts non-empty strings; the URL-syntax check runs
-        // inside `basic_client` when `authorize` rebuilds the client. This
-        // exercises the `?` propagation path in `authorize`.
         let mut config = valid_config();
         config.auth_url = "not a url".into();
-        let client = OAuthClient::new(config).expect("new accepts non-empty fields");
+        assert!(
+            matches!(OAuthClient::new(config.clone()), Err(AuthError::Failed(_))),
+            "new refuses it first"
+        );
         assert!(matches!(
-            client.authorize(&jwt(), "acme"),
-            Err(AuthError::Failed(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn exchange_surfaces_url_parse_error_after_csrf_passes() {
-        // Forge a transaction whose csrf matches the state we will pass in,
-        // so the early `state mismatch` branch is skipped and `exchange`
-        // reaches `basic_client(&self.config)?` — which fails on the
-        // malformed `token_url` before any network call. Covers the
-        // `?` propagation past the CSRF check.
-        let jwt = jwt();
-        let mut config = valid_config();
-        config.token_url = "::::".into();
-        let client = OAuthClient::new(config).expect("new accepts non-empty fields");
-
-        let transaction = jwt
-            .sign_handshake(
-                TRANSACTION_PURPOSE,
-                &Transaction {
-                    typ: TransactionKind::OauthTx,
-                    provider: "acme".into(),
-                    csrf: "agreed-state".into(),
-                    pkce: "verifier".into(),
-                    exp: jwt.expiry(),
-                },
-            )
-            .expect("sign");
-
-        assert!(matches!(
-            client
-                .exchange(&jwt, "acme", &transaction, "agreed-state", "the-code")
-                .await,
+            unchecked(config).authorize(&jwt(), "acme"),
             Err(AuthError::Failed(_))
         ));
     }
 
     #[tokio::test]
     async fn exchange_rejects_a_transaction_minted_for_another_provider() {
-        // Apps carry the transaction in one cookie for every provider, so this
-        // binding — not PKCE — is what keeps provider A's handshake from being
-        // completed on provider B's callback. Checked before the CSRF compare,
-        // so a matching state does not help the attacker.
         let jwt = jwt();
         let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
-        let transaction = jwt
-            .sign_handshake(
-                TRANSACTION_PURPOSE,
-                &Transaction {
-                    typ: TransactionKind::OauthTx,
-                    provider: "provider-a".into(),
-                    csrf: "agreed-state".into(),
-                    pkce: "verifier".into(),
-                    exp: jwt.expiry(),
-                },
-            )
-            .expect("sign");
+        let transaction = signed_transaction(&jwt, "provider-a", "agreed-state");
 
         let Err(err) = client
             .exchange(&jwt, "provider-b", &transaction, "agreed-state", "code")
@@ -443,35 +812,191 @@ mod tests {
         assert!(err.to_string().contains("provider mismatch"), "{err}");
     }
 
+    /// The token endpoint does not parse, so a state that passes fails there instead.
     #[tokio::test]
-    async fn exchange_rejects_a_state_that_does_not_match() {
-        // A `state` differing from the signed transaction's csrf — here also of
-        // a different length — is rejected by the constant-time compare before
-        // any code exchange, so no network call is reached.
+    async fn the_state_matches_only_byte_for_byte_whatever_its_length() {
         let jwt = jwt();
-        let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
-        let transaction = jwt
-            .sign_handshake(
-                TRANSACTION_PURPOSE,
-                &Transaction {
-                    typ: TransactionKind::OauthTx,
-                    provider: "acme".into(),
-                    csrf: "the-signed-state".into(),
-                    pkce: "verifier".into(),
-                    exp: jwt.expiry(),
-                },
-            )
-            .expect("sign");
+        let mut config = valid_config();
+        config.token_url = "::::".into();
+        let client = unchecked(config);
+        let transaction = signed_transaction(&jwt, "acme", "the-signed-state");
 
-        // `TokenSet` is intentionally not `Debug` (it carries tokens), so match
-        // rather than `expect_err`.
-        let Err(err) = client
-            .exchange(&jwt, "acme", &transaction, "forged", "the-code")
+        for (presented, matches) in [
+            ("the-signed-state", true),
+            ("the-signed-statE", false),
+            ("the-signed-stat", false),
+            ("the-signed-states", false),
+            ("", false),
+        ] {
+            let Err(err) = client
+                .exchange(&jwt, "acme", &transaction, presented, "the-code")
+                .await
+            else {
+                panic!("nothing reaches a token endpoint that does not parse");
+            };
+            assert!(matches!(err, AuthError::Failed(_)), "{presented:?}: {err}");
+            assert_eq!(
+                !err.to_string().contains("state mismatch"),
+                matches,
+                "{presented:?}: {err}"
+            );
+        }
+    }
+
+    /// `fetch` refuses a plaintext URL before `read`; the backend refuses it
+    /// too, for every path that reaches `read` past the validators.
+    #[tokio::test]
+    async fn the_backend_dials_no_plaintext_url_whatever_path_reaches_it() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&accepted);
+        tokio::spawn(async move {
+            while let Ok(_dropped) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let url = format!("http://{addr}/user/emails");
+
+        let Err(AuthError::Unavailable { detail, .. }) = OAuthClient::new(valid_config())
+            .expect("new accepts a valid config")
+            .read::<serde_json::Value>(
+                &Endpoint {
+                    role: PROVIDER_ENDPOINT,
+                    url: &url,
+                    setting: None,
+                },
+                "never-sent",
+            )
             .await
         else {
-            panic!("a mismatched state is rejected");
+            panic!("a plaintext URL is no call the backend makes");
         };
-        assert!(matches!(err, AuthError::Failed(_)));
-        assert!(err.to_string().contains("state mismatch"));
+
+        tokio::task::yield_now().await;
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "nothing was dialled: {detail}"
+        );
+        assert!(
+            detail.starts_with(&format!(
+                "the OAuth provider's endpoint (http://{addr}/user/emails) could not be called: "
+            )),
+            "{detail}"
+        );
+    }
+
+    fn redirect() -> AuthorizationRedirect {
+        AuthorizationRedirect {
+            url: "https://provider.example/authorize".into(),
+            transaction: "tok".into(),
+        }
+    }
+
+    #[test]
+    fn the_transaction_cookie_is_host_prefixed_secure_and_lives_as_long_as_its_token() {
+        let cookie = redirect().set_cookie();
+        assert!(
+            cookie.starts_with(&format!("{}=tok;", OAuthClient::TRANSACTION_COOKIE)),
+            "{cookie}"
+        );
+        let attributes: Vec<&str> = cookie.split(';').skip(1).map(str::trim).collect();
+        for expected in [
+            "Path=/",
+            "HttpOnly",
+            "Secure",
+            "SameSite=Lax",
+            &format!("Max-Age={}", OAuthClient::TRANSACTION_TTL_SECS),
+        ] {
+            assert!(attributes.contains(&expected), "{expected}: {cookie}");
+        }
+        assert!(
+            !cookie.to_ascii_lowercase().contains("domain"),
+            "a __Host- cookie carries no Domain: {cookie}"
+        );
+        assert_eq!(OAuthClient::TRANSACTION_COOKIE, "__Host-oauth_tx");
+        assert_eq!(OAuthClient::TRANSACTION_TTL_SECS, 600);
+    }
+
+    #[test]
+    fn the_transaction_is_read_from_any_cookie_field_by_its_exact_name() {
+        assert_eq!(
+            OAuthClient::transaction_from(["a=1; __Host-oauth_tx=tok; b=2"]),
+            Some("tok")
+        );
+        assert_eq!(
+            OAuthClient::transaction_from(["a=1", "__Host-oauth_tx=tok"]),
+            Some("tok"),
+            "HTTP/2 splits one cookie-string over several fields"
+        );
+        assert_eq!(
+            OAuthClient::transaction_from(["__Host-oauth_tx=first", "__Host-oauth_tx=second"]),
+            Some("first")
+        );
+        for refused in [
+            ["__Host-oauth_tx_evil=x"],
+            ["oauth_tx=tok"],
+            ["__Host-oauth_tx="],
+            ["x__Host-oauth_tx=tok"],
+            [""],
+        ] {
+            assert_eq!(OAuthClient::transaction_from(refused), None, "{refused:?}");
+        }
+        assert_eq!(OAuthClient::transaction_from([]), None);
+    }
+
+    /// A name lookup that never answers.
+    struct NeverResolves;
+
+    impl reqwest::dns::Resolve for NeverResolves {
+        fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// A provider nobody can reach fails at `CONNECT_TIMEOUT`, naming that bound. A
+    /// resolver stalls it: no local listener can leave a handshake hanging.
+    #[tokio::test(start_paused = true)]
+    async fn a_provider_that_cannot_be_reached_fails_at_the_connect_timeout() {
+        let client = OAuthClient {
+            config: OAuthClientConfig {
+                userinfo_url: "https://provider.example/userinfo?key=never-quoted".into(),
+                ..valid_config()
+            },
+            http: backend()
+                .dns_resolver(std::sync::Arc::new(NeverResolves))
+                .build()
+                .expect("the backend builds"),
+            variables: None,
+        };
+
+        // Twice the bound and no longer: a backend that stopped bounding its
+        // connections would otherwise wait on this resolver for good.
+        let sent = tokio::time::Instant::now();
+        let Err(AuthError::Unavailable {
+            detail: sentence,
+            retry_after: None,
+        }) = tokio::time::timeout(
+            OAuthClient::CONNECT_TIMEOUT * 2,
+            client.userinfo::<serde_json::Value>("never-quoted"),
+        )
+        .await
+        .expect("no answer within twice CONNECT_TIMEOUT")
+        else {
+            panic!("a provider nobody can reach is unavailable, and returns no profile");
+        };
+
+        assert_eq!(sent.elapsed(), OAuthClient::CONNECT_TIMEOUT);
+        assert_eq!(
+            sentence,
+            format!(
+                "the OAuth provider's userinfo endpoint (https://provider.example/userinfo) \
+                 could not be connected to within {:?}",
+                OAuthClient::CONNECT_TIMEOUT
+            ),
+        );
     }
 }

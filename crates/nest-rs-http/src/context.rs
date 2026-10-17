@@ -1,10 +1,11 @@
-//! Request-scoped context: the typed value a guard or interceptor attaches to
-//! a request for the handler to read back (e.g. the authenticated principal
-//! attached by an auth guard).
+//! Request-scoped context: the typed value a guard attaches to the request's
+//! unit for the handler to read back (e.g. the authenticated principal an
+//! authentication guard attaches).
 
 use std::any::TypeId;
 use std::ops::Deref;
 
+use nest_rs_core::AmbientValue;
 use poem::http::StatusCode;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
 
@@ -14,20 +15,8 @@ use crate::problem::ProblemDetails;
 /// credential, rejected it, and admitted the request anyway because the route
 /// is `#[public]`.
 ///
-/// The absorption is deliberate — a public route serves an anonymous caller
-/// even when a stale token rides along — but it leaves the request with no
-/// principal. A handler that goes on to read one ([`Ctx<Claims>`](Ctx)) then
-/// failed with an opaque `500`, turning a forged-credential denial into
-/// something indistinguishable from a server bug: no alert, no WAF rule and no
-/// rate limit keyed on `401` ever fired.
-///
-/// Carrying the rejection lets the denial be **deferred** rather than lost.
-/// `principal` is the type the guard would have attached, so only a
-/// `Ctx<that type>` answers the deferred `401` — any other missing context is
-/// still the wiring bug its `500` and `error` log exist to surface.
-///
-/// Lives here rather than in the kernel: the producer (`nest-rs-authn`) already
-/// depends on this crate, and every reader is HTTP-mounted.
+/// A [`Ctx`] of the `principal` type then answers the deferred `401` instead of
+/// a `500`; any other missing context stays a wiring bug.
 #[derive(Clone, Debug)]
 pub struct RejectedCredential {
     /// The principal type the rejected credential would have produced.
@@ -37,27 +26,19 @@ pub struct RejectedCredential {
     /// The RFC 6750 §3.1 error code this rejection reports on the
     /// `WWW-Authenticate` challenge, or `None` when §3 says to report none —
     /// which is the case for a request that carried no credentials at all.
-    ///
-    /// Only the authentication layer knows *why* a credential failed, and the
-    /// layer that writes the challenge runs much later, on the response. This
-    /// field is how the first tells the second, the same way `RequiredScopes`
-    /// carries a scope verdict to the edge.
     pub bearer_error: Option<&'static str>,
 }
 
-/// Extracts a request-scoped value of type `T` an upstream guard or
-/// interceptor attached.
+/// Extracts a value of type `T` a guard attached to the request with
+/// `UnitContext::attach` — ambient for the rest of the request once the guards
+/// passed.
 ///
-/// Rejects with `500` if absent — a missing context means the guard that
-/// should have set it never ran on this route (a wiring bug, not a client
-/// error). `T` is cloned out of the request; store an `Arc<_>` for a large
-/// value.
+/// Rejects with `500` if absent — the guard that should have attached it never
+/// ran on this route. `T` is cloned out of the ambient context; attach a value
+/// that is cheap to clone.
 ///
-/// One exception: when the missing value is missing *because* an
-/// authentication guard rejected a presented credential on a `#[public]`
-/// route, the deferred `401` is answered instead. Absorbing the rejection is
-/// right up to the point a handler needs the principal — past it, a `500`
-/// would hide a forged credential behind a server-error shape.
+/// One exception: when an authentication guard rejected a presented credential
+/// on a `#[public]` route, the deferred `401` ([`RejectedCredential`]) answers.
 pub struct Ctx<T>(pub T);
 
 impl<T> Ctx<T> {
@@ -74,17 +55,11 @@ impl<T> Deref for Ctx<T> {
     }
 }
 
-impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
+impl<'a, T: AmbientValue + Clone> FromRequest<'a> for Ctx<T> {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        if let Some(value) = req.extensions().get::<T>() {
-            return Ok(Ctx(value.clone()));
+        if let Some(value) = nest_rs_core::ambient::<T>() {
+            return Ok(Ctx(T::clone(&value)));
         }
-        // The principal is absent because a credential was presented and
-        // rejected on a `#[public]` route. That is a client error, and the
-        // guard already logged it at `warn` — answer the deferred 401 so
-        // alerting, WAF rules and 401-keyed rate limits all see it. Matched on
-        // the principal type: a different missing context is still a wiring
-        // bug, and must not be masked as an authentication failure.
         if let Some(rejected) = req
             .extensions()
             .get::<RejectedCredential>()
@@ -95,11 +70,6 @@ impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
                 context_type = std::any::type_name::<T>(),
                 "public route needs the principal a rejected credential never produced — answering the deferred 401",
             );
-            // The guard recorded *why* the credential failed; without it the
-            // caller reads a `401` carrying no `WWW-Authenticate` at all and
-            // cannot tell "refresh and retry" from "start discovery" — the very
-            // distinction `bearer_error` exists to carry, and which the guarded
-            // path already renders. A `#[public]` route must not answer worse.
             let mut response = poem::IntoResponse::into_response(
                 ProblemDetails::unauthorized().with_detail(rejected.client_message.clone()),
             );
@@ -108,13 +78,11 @@ impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
             }
             return Err(poem::Error::from_response(response));
         }
-        // Otherwise a missing context is a wiring bug, not a client error. The
-        // Rust type name belongs in the logs, not the response body — reply
-        // with a bare 500 and record the detail (queryable) at `error`.
+        // The type name belongs in the log, never the response body.
         tracing::error!(
             target: crate::target::HTTP,
             context_type = std::any::type_name::<T>(),
-            "missing request context — the guard or interceptor that sets it did not run on this route",
+            "missing request context — the guard that attaches it did not run on this route",
         );
         Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
@@ -127,6 +95,8 @@ mod tests {
     #[derive(Clone)]
     struct Principal(&'static str);
 
+    impl AmbientValue for Principal {}
+
     async fn extract(req: Request) -> Result<Ctx<Principal>> {
         let (req, mut body) = req.split();
         Ctx::<Principal>::from_request(&req, &mut body).await
@@ -134,9 +104,20 @@ mod tests {
 
     #[tokio::test]
     async fn an_attached_principal_extracts() {
+        let extracted = nest_rs_core::with_ambient(
+            std::sync::Arc::new(Principal("ada")),
+            extract(Request::default()),
+        )
+        .await;
+        assert_eq!(extracted.expect("attached").0.0, "ada");
+    }
+
+    #[tokio::test]
+    async fn a_value_in_the_requests_extensions_is_not_an_attachment() {
         let mut req = Request::default();
-        req.extensions_mut().insert(Principal("ada"));
-        assert_eq!(extract(req).await.expect("attached").0.0, "ada");
+        req.extensions_mut().insert(Principal("mallory"));
+        let err = extract(req).await.err().expect("nothing was attached");
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
@@ -148,13 +129,9 @@ mod tests {
             .expect("no guard ran");
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-        // The response body is deliberately bare — a Rust type name is not
-        // something to hand a client — which makes this line the only record of
-        // *which* context was missing. An app attaching several is otherwise
-        // told only that one of them did not arrive.
         let event = logs.expect_one(
             "nest_rs::http",
-            "missing request context — the guard or interceptor that sets it did not run on this route",
+            "missing request context — the guard that attaches it did not run on this route",
         );
         assert_eq!(event.level, "error");
         assert!(
@@ -166,10 +143,6 @@ mod tests {
         );
     }
 
-    // G5: `#[public]` on an OAuth callback made `AuthnGuard` absorb the
-    // forged-`state` denial, so the handler's `Ctx<Caller>` answered 500 —
-    // indistinguishable from a server bug, and invisible to any alert or
-    // rate limit keyed on 401.
     #[tokio::test]
     async fn a_rejected_credential_turns_the_missing_principal_into_the_deferred_401() {
         let mut req = Request::default();
@@ -181,11 +154,7 @@ mod tests {
         let err = extract(req).await.err().expect("credential was rejected");
         assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
         let response = err.into_response();
-        // RFC 6750 §3: a `401` from a Bearer-protected resource carries the
-        // challenge, and §3.1's code is what lets a client tell "refresh and
-        // retry" from "start discovery". The guarded path renders it; this one
-        // recorded the code and shipped without it, so a `#[public]` route
-        // answered strictly worse than its guarded neighbour.
+        // RFC 6750 §3: a Bearer `401` carries the challenge with §3.1's code.
         assert_eq!(
             response
                 .headers()
@@ -199,10 +168,8 @@ mod tests {
         assert_eq!(json["detail"], "authentication failed");
     }
 
-    /// RFC 6750 §3 says a request carrying *no* credentials gets no `error`
-    /// code — the challenge is an invitation, not a report — while RFC 9110
-    /// §11.6.1 still requires the `401` to carry one. So the bare `Bearer` the
-    /// problem envelope already writes stands, and nothing invents a code.
+    /// RFC 6750 §3: a request carrying no credentials gets no `error` code; RFC
+    /// 9110 §11.6.1 still requires the bare challenge.
     #[tokio::test]
     async fn a_rejection_with_no_code_defers_a_401_whose_challenge_names_none() {
         let mut req = Request::default();
@@ -224,14 +191,12 @@ mod tests {
         assert!(!challenge.contains("error="));
     }
 
-    // The deferral is scoped to the principal the guard would have attached.
-    // `Ctx<T>` is the generic reader for anything a guard attaches, so an
-    // untyped marker made a genuine wiring bug — a domain guard that never ran
-    // — answer 401 and swallow the `error` log written to surface it.
     #[tokio::test]
     async fn a_rejected_credential_does_not_mask_an_unrelated_missing_context() {
         #[derive(Clone)]
         struct SomethingElse;
+
+        impl AmbientValue for SomethingElse {}
 
         let mut req = Request::default();
         req.extensions_mut().insert(RejectedCredential {

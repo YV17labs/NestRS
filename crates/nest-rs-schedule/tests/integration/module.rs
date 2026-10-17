@@ -1,9 +1,5 @@
-//! End-to-end: a real `#[injectable]` + `#[scheduled]` provider sees its
-//! method fire inside a real `App::run`, with the framework auto-attaching
-//! the scheduler because the app imports `ScheduleModule`.
-//!
-//! Pinned to a multi-threaded runtime so the cancellation race against
-//! `App::run`'s SIGINT handler does not starve the scheduled tick.
+//! A `#[scheduled]` provider's method fires inside a real `App::run` once the
+//! app imports `ScheduleModule`, and the decorator's grammar compiles.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,10 +10,10 @@ use tokio::time::{Duration, sleep};
 
 static HITS: AtomicUsize = AtomicUsize::new(0);
 
-pub struct Counter(pub AtomicUsize);
+pub(crate) struct Counter(pub AtomicUsize);
 
 #[injectable]
-pub struct Tasks {
+pub(crate) struct Tasks {
     #[inject]
     counter: Arc<Counter>,
 }
@@ -32,17 +28,13 @@ impl Tasks {
     }
 }
 
-// `#[module]` submits the ModuleDescriptor that puts `Tasks` in
-// `ReachableProviders` — the scheduler's filter would skip the entry
-// otherwise. Counter comes in as a seed (global infrastructure), so the
-// access graph accepts the `#[inject]`.
 #[module(providers = [Tasks])]
 struct TasksModule;
 
 #[module(imports = [TasksModule, ScheduleModule])]
 struct AppRoot;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
     let counter = Arc::new(Counter(AtomicUsize::new(0)));
     let app = App::builder()
@@ -52,9 +44,6 @@ async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
         .await
         .expect("AppRoot builds with ScheduleModule");
 
-    // Drive App::run in the background; signal SIGINT after the tick has had
-    // time to fire so the framework's shutdown path drains cleanly — mirrors a
-    // real `main`'s lifecycle without any test-only seam in `App::run`.
     let handle = tokio::spawn(app.run());
 
     sleep(Duration::from_millis(250)).await;
@@ -62,6 +51,10 @@ async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
     {
         // SAFETY: raising a signal at the OS level is safe; the framework's
         // signal handler runs in a dedicated task.
+        #[expect(
+            unsafe_code,
+            reason = "only a real SIGINT drives the real shutdown path"
+        )]
         unsafe {
             libc::raise(libc::SIGINT);
         }
@@ -76,30 +69,20 @@ async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
         hits >= 2,
         "the scheduled method fired at least twice in 250ms (got {hits})",
     );
-    // HITS lets a parallel test detect cross-contamination; it's incremented
-    // by the same closure, so it must match Tasks' own counter.
     assert_eq!(HITS.load(Ordering::SeqCst), hits);
 }
 
-/// The shared `transactional` key read through a `macro_rules!` fragment, at
-/// **both** positions the trigger grammar allows.
-///
-/// A `$settle:expr` substitution arrives as an invisible-delimiter
-/// `Expr::Group`, and syn unwraps it only when the parse fork it is read in is
-/// empty — so `#[cron(EXPR, transactional = $settle, tz = "UTC")]` was refused
-/// while the same key one position later compiled, with a message telling the
-/// developer to write the value they had written. Compiling this is the
-/// assertion.
-/// The cron expression the fragment case uses, named so the attribute fits on
-/// one line — rustfmt does not reach inside a `macro_rules!` body and reindents
-/// a wrapped attribute a little further on every run.
+/// Named so the attribute fits on one line: rustfmt reindents a wrapped
+/// attribute inside a `macro_rules!` body further on every run.
 const CRON_EXPRESSION: &str = nest_rs_schedule::CronExpression::EVERY_MINUTE;
 
+// `transactional` through a `$settle:expr` fragment, at both positions the
+// trigger grammar allows: the substitution arrives as an `Expr::Group`.
 macro_rules! declare_scheduled_settlement {
     ($settle:expr) => {
         #[injectable]
         #[derive(Default)]
-        pub struct FragmentTasks;
+        pub(crate) struct FragmentTasks;
 
         #[scheduled]
         impl FragmentTasks {
@@ -122,11 +105,81 @@ declare_scheduled_settlement!(false);
 fn a_transactional_fragment_is_read_the_same_wherever_the_key_sits() {
     let entries = nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
         .filter(|m| (m.provider_type_id)() == std::any::TypeId::of::<FragmentTasks>())
-        .filter(|m| m.transaction == nest_rs_schedule::nest_rs_worker::JobTransaction::Pool)
+        .filter(|m| m.transaction == nest_rs_schedule::nest_rs_database::TransactionPolicy::Pool)
         .count();
     assert_eq!(
         entries, 2,
         "both fragment-declared triggers registered, and both read the fragment \
-         as the `false` it was — not as the `PerAttempt` default",
+         as the `false` it was — not as the `PerUnit` default",
     );
+}
+
+#[injectable]
+#[derive(Default)]
+struct ShapedTasks;
+
+#[scheduled]
+impl ShapedTasks {
+    #[expect(
+        clippy::needless_arbitrary_self_type,
+        reason = "the spelled-out receiver is the shape under test"
+    )]
+    #[every("30s")]
+    async fn typed_receiver(self: &Self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[cfg(any())]
+    #[every("30s")]
+    async fn compiled_out(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[every("30s")]
+    async fn r#type(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[every("30s")]
+    async fn arc_receiver(self: &std::sync::Arc<Self>) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+#[expect(
+    non_camel_case_types,
+    reason = "a raw-identifier type is the shape under test"
+)]
+struct r#yield;
+
+#[scheduled]
+impl r#yield {
+    #[every("30s")]
+    async fn sweep(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Compiling is the first half: a trigger compiled out must take its entry with
+/// it, or the entry's `run` names a method that does not exist.
+#[test]
+fn a_compiled_out_trigger_submits_nothing_and_a_typed_receiver_is_scheduled() {
+    let mut methods: Vec<&str> =
+        nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
+            .filter(|m| (m.provider_type_id)() == std::any::TypeId::of::<ShapedTasks>())
+            .map(|m| m.method)
+            .collect();
+    methods.sort_unstable();
+    assert_eq!(
+        methods,
+        ["arc_receiver", "type", "typed_receiver"],
+        "a raw identifier is labelled by its name"
+    );
+    let raw_hosts: Vec<&str> = nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
+        .filter(|m| (m.provider_type_id)() == std::any::TypeId::of::<r#yield>())
+        .map(|m| m.provider)
+        .collect();
+    assert_eq!(raw_hosts, ["yield"], "a raw host is labelled by its name");
 }

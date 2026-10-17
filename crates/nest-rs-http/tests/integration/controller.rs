@@ -1,18 +1,5 @@
-//! What `#[routes]` records and what its generated wrapper binds — the two
-//! halves of `src/controller.rs`.
-//!
-//! **Parameter-name hygiene (HTTP-M1).** The wrapper binds locals of its own
-//! (`req`, `body`, `res`, the controller `Arc`, plus three more from the
-//! response shapers) around the extractors it emits for the developer's
-//! parameters. When those shared one namespace, a parameter
-//! spelled `body` — which is what `Json(body): Json<T>`, the idiom
-//! `/http/extractors/` teaches, normalizes to — masked the `RequestBody` every
-//! *later* extractor reads, and the mismatched-type error landed on the
-//! `#[routes]` attribute naming neither the parameter nor the collision.
-//!
-//! Compiling this module is most of the assertion; the requests below add the
-//! other half, that each handler still receives the value it declared rather
-//! than one of the wrapper's locals under the same name.
+//! What `#[routes]` records and what its generated wrapper binds; the handlers
+//! reuse the wrapper's local names, so compiling them is half the assertion.
 
 use nest_rs_core::module;
 use nest_rs_http::{ClientIp, controller, routes};
@@ -45,33 +32,28 @@ impl Default for HygieneController {
 
 #[routes]
 impl HygieneController {
-    /// `body` — the wrapper's `RequestBody` local, and the name the documented
-    /// `Json(body)` destructure normalizes to. `ClientIp` extracts *after* it,
-    /// so a masked binding fails to compile.
+    /// `body` is the wrapper's `RequestBody` local, which `ClientIp` reads after it.
     #[post("/body")]
     async fn body_named_body(&self, Json(body): Json<Probe>, ip: ClientIp) -> String {
         format!("{} {}", body.name, ip.ip)
     }
 
-    /// `req` — the wrapper's `Request` local. The `Query` extractor after it
-    /// reads the request, so a masked binding fails to compile.
-    #[get("/req/:req")]
+    /// `req` is the wrapper's `Request` local, which `Query` reads after it.
+    #[get("/req/{req}")]
     async fn param_named_req(&self, Path(req): Path<String>, filter: Query<Filter>) -> String {
         format!("{req} {}", filter.0.limit)
     }
 
-    /// `__ctrl` — the local holding `&Arc<Self>`. A shadowed one would forward
-    /// the controller where the handler declared a `Path`, so the marker read
-    /// below is what proves the call still targets the real instance.
-    #[get("/ctrl/:value")]
+    /// `__ctrl` is the wrapper's `&Arc<Self>` local; `marker` proves the real
+    /// instance is called.
+    #[get("/ctrl/{value}")]
     async fn param_named_ctrl(&self, Path(__ctrl): Path<String>) -> String {
         format!("{} {__ctrl}", self.marker)
     }
 
-    /// The same collision under a response shaper, which re-forwards every
-    /// parameter through a second code path (`apply_response_shapers`) — and
-    /// binds three locals of its own, named here too.
-    #[post("/shaped/:tag")]
+    /// A response shaper re-forwards every parameter and binds `__out`,
+    /// `__response` and `res` of its own.
+    #[post("/shaped/{tag}")]
     #[http_code(201)]
     #[response_header("x-hygiene", "ok")]
     async fn shaped(
@@ -100,8 +82,7 @@ async fn a_parameter_named_body_reaches_the_handler_and_leaves_later_extractors_
         .send()
         .await;
     resp.assert_status_is_ok();
-    // `0.0.0.0` is `ClientIp::unknown()` — the test client has no peer socket.
-    // What matters is that the extractor ran at all.
+    // `0.0.0.0` is `ClientIp::unknown()`: the test client has no peer socket.
     resp.assert_text("probe 0.0.0.0").await;
 }
 
@@ -136,4 +117,208 @@ async fn the_collision_stays_closed_under_a_response_shaper() {
     resp.assert_status(poem::http::StatusCode::CREATED);
     resp.assert_header("x-hygiene", "ok");
     resp.assert_text("shaped tagged 0.0.0.0").await;
+}
+
+/// Method syntax on the route's `Arc<Controller>` finds this impl before it
+/// derefs to the handler of the same name.
+#[expect(
+    dead_code,
+    reason = "never called: the expansion calls the method by its path"
+)]
+trait NamedLikeATrait {
+    fn named_like_a_trait(&self) -> String;
+}
+
+impl<T> NamedLikeATrait for std::sync::Arc<T> {
+    fn named_like_a_trait(&self) -> String {
+        "the trait on Arc".into()
+    }
+}
+
+#[controller(path = "/shadowed")]
+#[derive(Default)]
+struct ShadowedController;
+
+#[routes]
+impl ShadowedController {
+    #[get("/")]
+    fn named_like_a_trait(&self) -> String {
+        "the handler".into()
+    }
+}
+
+#[module(providers = [ShadowedController])]
+struct ShadowedModule;
+
+#[tokio::test]
+async fn a_route_calls_its_handler_and_not_a_trait_method_of_the_same_name_on_arc() {
+    let client = crate::boot::<ShadowedModule>().await;
+    let resp = client.get("/shadowed").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_text("the handler").await;
+}
+
+#[controller(path = "/addresses", version = ["1", "2"])]
+struct AddressController;
+
+#[routes]
+impl AddressController {
+    #[get("/versioned")]
+    #[version("1")]
+    async fn versioned_one(&self) -> String {
+        "one".into()
+    }
+
+    #[get("/versioned")]
+    #[version("2")]
+    async fn versioned_two(&self) -> String {
+        "two".into()
+    }
+
+    #[get("/parcels/{id}")]
+    async fn read_parcel(&self, Path(id): Path<String>) -> String {
+        format!("read {id}")
+    }
+
+    #[delete("parcels/{id}/")]
+    async fn drop_parcel(&self, Path(id): Path<String>) -> String {
+        format!("dropped {id}")
+    }
+
+    #[get("/slashed/")]
+    async fn slashed(&self) -> String {
+        "slashed".into()
+    }
+}
+
+#[module(providers = [AddressController])]
+struct AddressModule;
+
+#[tokio::test]
+async fn one_route_in_two_versions_serves_each_version_with_its_own_handler() {
+    let client = crate::boot::<AddressModule>().await;
+    for (path, body) in [
+        ("/v1/addresses/versioned", "one"),
+        ("/v2/addresses/versioned", "two"),
+    ] {
+        let resp = client.get(path).send().await;
+        resp.assert_status_is_ok();
+        resp.assert_text(body).await;
+    }
+}
+
+#[tokio::test]
+async fn two_spellings_of_one_address_mount_one_node_serving_both_verbs() {
+    let client = crate::boot::<AddressModule>().await;
+    let read = client.get("/v1/addresses/parcels/7").send().await;
+    read.assert_status_is_ok();
+    read.assert_text("read 7").await;
+    let dropped = client.delete("/v1/addresses/parcels/7").send().await;
+    dropped.assert_status_is_ok();
+    dropped.assert_text("dropped 7").await;
+}
+
+#[tokio::test]
+async fn a_route_declared_with_a_trailing_slash_is_served_at_the_address_without_it() {
+    let client = crate::boot::<AddressModule>().await;
+    let resp = client.get("/v2/addresses/slashed").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_text("slashed").await;
+}
+
+#[controller(path = "/orgs/{org}")]
+struct MembersController;
+
+#[routes]
+impl MembersController {
+    #[get("/members/{id}")]
+    async fn member(&self, ids: Path<(String, String)>) -> String {
+        let Path((org, id)) = ids;
+        format!("{org}/{id}")
+    }
+}
+
+#[module(providers = [MembersController])]
+struct MembersModule;
+
+#[tokio::test]
+async fn a_parameter_in_the_controller_path_binds_before_the_route_s_own() {
+    let bare = crate::boot::<MembersModule>().await;
+    let prefixed = crate::boot_on::<MembersModule>(nest_rs_http::HttpConfig {
+        global_prefix: Some("/api".into()),
+        ..Default::default()
+    })
+    .await;
+    for (client, path) in [
+        (&bare, "/orgs/acme/members/7"),
+        (&prefixed, "/api/orgs/acme/members/7"),
+    ] {
+        let resp = client.get(path).send().await;
+        resp.assert_status_is_ok();
+        resp.assert_text("acme/7").await;
+    }
+}
+
+// A router that reads a path differently from `RoutePath::identity` fails here:
+// one address is refused as two shapes of it, two addresses each answer.
+#[tokio::test]
+async fn a_route_identity_is_the_address_the_table_serves() {
+    use nest_rs_codegen::RoutePath;
+    use nest_rs_http::Method;
+
+    /// A template and a request it serves.
+    type Probe = (&'static str, &'static str);
+    // Two probes, and whether the macro calls them one address.
+    let pairs: &[(Probe, Probe, bool)] = &[
+        (("/t", "/t"), ("t", "/t"), true),
+        (("/u", "/u"), ("/u/", "/u"), true),
+        (("/a//b", "/a/b"), ("/a/b", "/a/b"), true),
+        (("/q/{id}", "/q/7"), ("/q/{other}", "/q/8"), true),
+        (("/@{handle}", "/@bob"), ("/@{name}", "/@ada"), true),
+        (("/f/{*rest}", "/f/x/y"), ("/f/{*tail}", "/f/z"), true),
+        (("/Users", "/Users"), ("/users", "/users"), false),
+        (("/q/{id}", "/q/7"), ("/q/{id}/x", "/q/7/x"), false),
+        (("/m/{id}", "/m/7"), ("/m/@{id}", "/m/@7"), false),
+        (("/b/{{x}}", "/b/{x}"), ("/b/{x}", "/b/y"), false),
+        (("/c/{*rest}", "/c/x/y"), ("/c/{id}", "/c/x"), false),
+    ];
+
+    for &((a, probe_a), (b, probe_b), same) in pairs {
+        let parsed = |path: &str| RoutePath::parse(path).unwrap_or_else(|why| panic!("{why}"));
+        assert_eq!(
+            parsed(a).identity() == parsed(b).identity(),
+            same,
+            "the macro's reading of `{a}` and `{b}`",
+        );
+
+        let mounted = crate::routes::table_under(None, move |routes| {
+            routes.route(Method::GET, a, crate::answering("a")).route(
+                Method::GET,
+                b,
+                crate::answering("b"),
+            );
+        })
+        .await;
+        let table_says_one = match mounted {
+            Err(_) => true,
+            Ok(client) => {
+                let mut answers = Vec::new();
+                for probe in [probe_a, probe_b] {
+                    // The edge trims a trailing slash before routing.
+                    let trimmed = match probe.trim_end_matches('/') {
+                        "" => "/",
+                        trimmed => trimmed,
+                    };
+                    let resp = client.get(trimmed).send().await;
+                    resp.assert_status_is_ok();
+                    answers.push(resp.0.into_body().into_string().await.unwrap_or_default());
+                }
+                answers[0] == answers[1]
+            }
+        };
+        assert_eq!(
+            table_says_one, same,
+            "the table's reading of `{a}` and `{b}`"
+        );
+    }
 }

@@ -10,6 +10,11 @@ description = "Configuration loading for NestRS apps — namespaced env mapping 
 keywords = ["framework", "nestrs", "config", "configuration", "env"]
 categories = ["config"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 thiserror.workspace = true
@@ -25,21 +30,57 @@ anyhow.workspace = true
 # Structured `warn` when the `.env` cascade hits an unreadable file or malformed
 # lines — config silently vanishing is a debugging tarpit.
 tracing.workspace = true
+# `ConfigService::json`: a structured value — a list of records, a map — is
+# written as JSON, decoded here once for every config, and refused through
+# `nest_rs_core::DecodeError`, which never quotes the value.
+serde.workspace = true
+serde_json.workspace = true
 # Re-exported `#[config]` decorator. A `*-macros` crate emits absolute-path
 # tokens, so it never depends back on this surface crate.
 nest-rs-config-macros.workspace = true
+# `system_authorities`: the authorities the system trusts, as every TLS client
+# the framework opens trusts them by default — read once, PEM.
+rustls-native-certs.workspace = true
+base64.workspace = true
+# `endpoint_shown`: a URL a sentence names is parsed by the WHATWG parser every
+# HTTP client of the framework dials through (reqwest's), so what is shown is
+# the address dialled, its userinfo, query and fragment left out.
+url.workspace = true
+# `tls` feature: `ClientTls` judges the material a TLS client presents with
+# rustls's own parsers and checks, the ones the libraries it is handed to run.
+rustls = { workspace = true, optional = true }
+# `reqwest` feature: `ClientTls` converted once for every reqwest client the
+# framework opens (the JWK Set, OAuth, OTLP), behind `__private`.
+reqwest = { workspace = true, optional = true }
+
+[features]
+# The shared client-TLS vocabulary (`ClientTls`, `TlsIdentity`, and the
+# process's rustls provider behind `__private`), enabled by every crate that
+# opens a TLS client.
+tls = ["dep:rustls"]
+# `ClientTls` as a reqwest client takes it, for the crates dialling through one.
+reqwest = ["tls", "dep:reqwest"]
+
+[target.'cfg(unix)'.dependencies]
+# `O_NONBLOCK` for `read_material`: opening a FIFO a `_FILE` variable names
+# would otherwise block the boot, and checking the path first races a swap.
+libc.workspace = true
 
 [dev-dependencies]
 # `LogCapture`: the cascade's refusals are `warn`s and nothing else — a skipped
 # line or an unreadable file leaves the value absent, so the event is the only
 # evidence the loader ever saw it. Dev-only, so the cycle back to this crate
 # never reaches a consumer build.
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # `figment::Jail` isolates the process env + cwd for the loader/cascade tests.
-figment = { workspace = true, features = ["test"] }
-# trybuild pins the `#[config]` macro's compile diagnostics as a contract (CORE-I10).
-trybuild.workspace = true
+figment = { workspace = true, features = ["test", "toml"] }
+# A test's scratch files live in a directory removed when it drops, on every
+# exit a test takes, a failing assertion included.
+tempfile.workspace = true
 # The custom-prefix suite boots a real app (`ConfigModule::for_feature` is an
 # async factory), which is what proves the declared prefix reaches the field —
 # compiling only proves the name was built.
 tokio.workspace = true
+
+[lints]
+workspace = true

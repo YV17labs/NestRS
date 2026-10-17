@@ -1,22 +1,53 @@
 //! Resolver-side accessor for request-scoped providers — the GraphQL mirror of
-//! [`nest_rs_http::Scoped<T>`]. A framework-level `GraphqlContextSeed`
-//! (`context.rs`) forwards the per-request `RequestScope` into the async-graphql
-//! context; [`Scoped<T>`] reads it back to resolve an
-//! `#[injectable(scope = request)]` provider (or, falling through, a singleton —
-//! prefer plain `#[inject]` for those).
+//! [`nest_rs_http::Scoped<T>`]. [`Scoped<T>`] resolves an
+//! `#[injectable(scope = request)]` provider (a singleton falls through; prefer
+//! plain `#[inject]` for those).
 //!
-//! ```ignore
+//! ```
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_graphql::async_graphql::{self, Context};
+//! # use nest_rs_graphql::{GraphqlModule, Scoped, operations, resolver};
+//! #
+//! # #[injectable(scope = request)]
+//! # #[derive(Default)]
+//! # struct PerRequestCache;
+//! #
+//! # impl PerRequestCache {
+//! #     fn value(&self) -> &'static str {
+//! #         "cached"
+//! #     }
+//! # }
+//! #
+//! # #[resolver]
+//! # struct WhoResolver;
+//! #
+//! # #[operations]
+//! # impl WhoResolver {
 //! #[query]
+//! #[public]
 //! async fn who(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
 //!     let per_req = Scoped::<PerRequestCache>::from_context(ctx)?;
 //!     Ok(per_req.value().to_string())
 //! }
+//! # }
+//! #
+//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [PerRequestCache, WhoResolver])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+//! # let resp = app.http().post("/graphql")
+//! #     .body_json(&serde_json::json!({ "query": "{ who }" })).send().await;
+//!
+//! resp.assert_json(serde_json::json!({ "data": { "who": "cached" } })).await;
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! **Caveat.** This works inside resolver bodies, which run on the request's
-//! task. A `#[dataloader]` batch closure runs off-task (a spawned future), so a
-//! request-scoped provider is **not** reachable there — batches re-establish
-//! ambient state through their own [`crate::GraphqlBatchContext`] seam.
+//! **Caveat.** A `#[dataloader]` batch runs off-task and is shared by every
+//! field of the request, so a request-scoped provider is **not** reachable
+//! there; a batch reads the ambient values its request carries into it.
 
 use std::any::type_name;
 use std::ops::Deref;
@@ -26,9 +57,7 @@ use async_graphql::{Context, Error};
 use nest_rs_core::RequestScope;
 
 /// Resolves a provider of type `T` from the current operation's
-/// [`RequestScope`]. `from_context` errors if the scope is absent (the schema
-/// is not being served over the HTTP transport) or if no provider is registered
-/// for `T`.
+/// [`RequestScope`].
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {
@@ -46,9 +75,17 @@ impl<T> Deref for Scoped<T> {
 }
 
 impl<T: Send + Sync + 'static> Scoped<T> {
-    /// Resolve `T` from the operation's request scope, forwarded into the
-    /// async-graphql context by the framework `GraphqlContextSeed`.
+    /// Resolve `T` from the operation's request scope.
+    ///
+    /// # Errors
+    ///
+    /// When the scope is absent (the schema is not served over the HTTP
+    /// transport) or no provider is registered for `T`.
     pub fn from_context(ctx: &Context<'_>) -> async_graphql::Result<Self> {
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "the one error is an absent scope, which the refusal names with its remedy"
+        )]
         let scope = ctx.data::<Arc<RequestScope>>().map_err(|_| {
             Error::new(
                 "request scope not installed — serve the schema over the HTTP transport \

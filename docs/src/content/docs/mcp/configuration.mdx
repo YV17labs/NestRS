@@ -1,19 +1,22 @@
 ---
 title: MCP configuration
-description: McpConfig and its NESTRS_MCP__* keys, plus how a failing operation answers a language model without leaking.
+description: McpConfig and its `<PREFIX>_MCP__*` keys, plus how a failing operation answers a language model without leaking.
 sidebar:
   order: 5
 ---
 
 `McpConfig` carries the streamable-HTTP options, dual-path like every
-`nest-rs-*` config: `NESTRS_MCP__*` env vars over an optional pinned base.
+`nest-rs-*` config: `<PREFIX>_MCP__*` env vars over an optional pinned base.
 Importing `McpModule` is what resolves it; without the import every mount runs
 on the defaults.
 
 ```rust title="apps/api/src/module.rs"
 #[module(imports = [
     HttpModule::for_root(None),
-    McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+    McpModule::for_root(McpConfig {
+        allowed_hosts: vec!["mcp.example.com".into()],
+        ..Default::default()
+    }),
 ])]
 pub struct AssistantModule;
 ```
@@ -24,18 +27,81 @@ out when you need both:
 
 ```rust title="apps/api/src/module.rs"
 McpModule::for_root(McpOptions {
-    config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+    config: Some(McpConfig {
+        allowed_hosts: vec!["mcp.example.com".into()],
+        ..Default::default()
+    }),
     server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
 }),
 ```
 
 | Variable | Default | What it controls |
 |---|---|---|
-| `NESTRS_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
-| `NESTRS_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
-| `NESTRS_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
-| `NESTRS_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
-| `NESTRS_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
+| `<PREFIX>_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
+| `<PREFIX>_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
+| `<PREFIX>_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
+| `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS` | `15` | Keep-alive interval on an event stream; `0` ⇒ none |
+| `<PREFIX>_MCP__SSE_RETRY_SECS` | `3` | `retry:` advertised on an event stream's priming event, a session's streams included; `0` ⇒ none |
+| `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
+| `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
+| `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS` | `20` | How long one operation may run; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` | `1024` | Live sessions one endpoint holds; at least `1` |
+| `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` | `300` | How long a session may stay idle before it is closed; whole seconds from `1` to `3600`, never off |
+
+## The operation timeout
+
+The HTTP request timeout bounds a response's head, and most MCP operations
+answer theirs at once: a session's request, and a stateless one from a client
+older than `2026-07-28`, get an event stream that carries the result whenever
+the operation ends. So every operation but `subscriptions/listen`, which has
+no end of its own, runs under `operation_timeout` too. Past it the operation
+is dropped and its unit of work rolled back, and the client is answered a
+JSON-RPC internal error:
+
+```json
+{"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"the operation was not answered in time","data":{"code":"UNAVAILABLE","reason":"timeout"}}}
+```
+
+The `mcp.operation` line files `error`, and one `warn` on `nest_rs::mcp`
+names the method, the operation and the timeout with `reason="timeout"`. The
+default is the HTTP request timeout's, inside the 20-second shutdown window;
+a timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, is said once
+per endpoint at boot. A tool that legitimately runs longer raises the timeout
+and the window together.
+
+## Sessions
+
+A client older than `2026-07-28` opens a session with `initialize` and names
+it on every later request with `Mcp-Session-Id`. The session outlives the
+connection that opened it, holding a worker task and its channels, so the
+transport's connection cap never counts it. Each endpoint counts its own:
+past `max_concurrent_sessions`, an `initialize` is answered `503` with
+`Retry-After: 5` and a problem document whose `code` is `UNAVAILABLE`, and
+one `warn` on `nest_rs::mcp` — `mcp session refused: the mount holds its
+maximum` — names `max_concurrent_sessions`. The calls of a session already
+open are served as before.
+
+```http
+HTTP/1.1 503 Service Unavailable
+content-type: application/problem+json
+retry-after: 5
+
+{"type":"about:blank","title":"Service Unavailable","status":503,"code":"UNAVAILABLE"}
+```
+
+A place comes back when a session closes: its client sends `DELETE` with its
+id, or it goes `session_idle_timeout` without a message. An idle session's
+next request is answered `404`, and its client opens a new one. A
+`2026-07-28` request is served statelessly and opens no session, so the cap
+never refuses it; with `<PREFIX>_MCP__LEGACY_SESSION_MODE=false`, no session
+opens at all. A session restored from a `SessionStore` takes a place like
+one opened here.
+
+An idle session costs about 110 KiB, so the default cap holds about 110 MiB
+at most. Two `initialize`s racing for the last place are both admitted by the
+check that answers `503`; the session manager then refuses the second, which
+rmcp answers `500`. The wait for the `initialize` itself is 60 seconds, set
+in code so an rmcp release cannot move it.
 
 ## The host allowlist
 
@@ -54,11 +120,15 @@ attack works. A refused `Host` is logged with the offending value; the
 effective allowlist is logged at `debug` when the endpoint mounts
 (`target: nest_rs::mcp`).
 
-The browser `Origin` half is **not** an MCP setting. It is the HTTP transport's
-CORS policy, `NESTRS_HTTP__CORS_ORIGINS`, and `/mcp` inherits it: the CORS layer
-wraps the whole route tree, and a disallowed `Origin` gets `403` on every
-method, not just the preflight. One knob, and it covers `/graphql` and `/ws`
-too.
+The browser `Origin` half is **not** an MCP setting. The MCP transport says a
+server validates `Origin` on every incoming connection, and `/mcp` does, CORS
+on or off. With no CORS policy, a browser request from the server's own origin
+is served; any other gets `403`, with a `warn` on `nest_rs::mcp` naming the
+origin sent and the one the server took for its own. Once
+`<PREFIX>_HTTP__CORS_ORIGINS` is set, only the origins it lists are served —
+the server's own included, when it serves the page — and the CORS layer's
+`403` files no `warn`. One knob, and it covers the WebSocket and GraphQL
+sockets too — see [CORS](/http/configuration/#cors).
 
 ## Error handling
 
@@ -75,13 +145,20 @@ Six constructors cover the common cases:
 | `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
 | `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
 
-A typical adapter for a domain error:
+A domain error implementing `ToProblem` answers through `problem_error`: the
+problem's sentence, `invalid_request` for a `4xx` and `internal_error` for a
+`5xx`, its code under `data.code` — or, when the error says none, the opaque
+answer `Opaque` gives, its chain filed at `error`:
 
 ```rust title="crates/features/src/weather/mcp/tool.rs"
-fn internal<E: std::fmt::Display>(e: E) -> McpError {
-    McpError::internal_error(e.to_string(), None)
-}
+use nest_rs::mcp::{McpError, problem_error};
+
+let report = self.svc.forecast(&city).await.map_err(|error| problem_error(&error))?;
 ```
+
+Never `McpError::internal_error(e.to_string(), …)` over an error you did not
+build: the model reads whatever its `Display` says — a driver's SQL, an
+upstream URL — and may repeat it.
 
 The `data` field accepts any JSON value — attach structured diagnostics there
 when the model would benefit from them (e.g. the validator's per-field errors).

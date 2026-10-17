@@ -1,14 +1,11 @@
 [workspace]
 resolver = "2"
-# Framework only — the `nest-rs-*` capability crates. The product (the Publish
-# apps + `features`/`migrations`/`seed`) lives in its own consumer workspace at
-# `demo/`, which references these crates by relative path. See `demo/Cargo.toml`.
 members = [
     "crates/*",
 ]
 
 [workspace.package]
-version = "6.1.0"
+version = "7.0.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.97"
@@ -16,270 +13,215 @@ repository = "https://github.com/YV17labs/NestRS"
 homepage = "https://nestrs.dev"
 
 [workspace.dependencies]
-# Every requirement here is `major.minor` — the floor we build against, patch
-# left to the publisher. Move the minor when `cargo update` does;
-# `versions_are_major_minor` (nest-rs-cli) fails the suite on any other form.
-#
-# Pinned majors: poem, sea-orm, async-graphql, rmcp, inventory, validator and
-# schemars ARE the public surface — their types appear in the signatures the
-# macros emit. A major bump of one breaks downstream code, so it ships in a
-# nestrs major, reviewed, never in a passing `cargo update`.
-#
-# Async runtime
-tokio = { version = "1.53", features = ["full"] }
-# `io` supplies `ReaderStream`, which turns a multipart part's `AsyncRead`
-# into the byte stream an object-store upload consumes.
-tokio-util = { version = "0.7", features = ["rt", "io"] }
+# `public`: a public dependency, whose types reach the public API, so its major
+# (a 0.x's minor) moves only with a nestrs major; every other library is private
+# and wrapped (.claude/decisions/public-dependencies.md).
+tokio = { version = "1.53", features = ["full"] }  # public
+tokio-util = { version = "0.7", features = ["rt", "io"] }  # public
 
-# Tracing / logging
-tracing = "0.1"
+tracing = "0.1"  # public
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+log = "0.4"
 
-# OTLP over HTTP/protobuf on reqwest, so the workspace's rustls toolchain is
-# reused (no tonic/openssl). The batch processors export from a dedicated
-# non-Tokio thread, which is why the default blocking reqwest client is right.
-opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = "0.32"
-opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
-opentelemetry-appender-tracing = "0.32"
-tracing-opentelemetry = "0.33"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+opentelemetry-otlp = "0.33"
+opentelemetry-semantic-conventions = { version = "0.33", features = ["semconv_experimental"] }
+opentelemetry-appender-tracing = "0.33"
+tracing-opentelemetry = "0.34"
 
-# Errors
 thiserror = "2.0"
-anyhow = "1.0"
+anyhow = "1.0"  # public
 
-# `rust_crypto` picks the pure-Rust backend (no aws-lc-rs C dependency),
-# matching the workspace's rustls posture; jsonwebtoken makes it explicit.
-jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
-oauth2 = "5.0"
-# `Authorization: Basic` decoding for the OAuth2 client credentials.
+jsonwebtoken = { version = "11.1", features = ["aws_lc_rs"] }
+# Past the 12-month bar (5.0.0, 2025-01-21): no release by 2027-01-31 and the
+# exchange is written on reqwest instead.
+oauth2 = { version = "5.0", default-features = false }
 base64 = "0.23"
 
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }  # public
+serde_json = "1.0"  # public
 
-# Config
-figment = { version = "0.10", features = ["toml", "env"] }
+# Past the 12-month bar (0.10.19, 2024-05-17), and test-only (`Jail`): no
+# release by 2027-01-31 and the suites stop mutating the process environment.
+figment = "0.10"
 
-# `anyhow` gives `poem::Error: From<anyhow::Error>` (→ 500), so a handler can
-# `?` a service's `anyhow::Result` with no hand-written error→response mapping.
-# `rustls` terminates TLS with no OpenSSL system dep (single static binary).
-poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
-# Validating a TLS pair before it is published to the listener. poem parses the
-# same bytes but its parser is private, and it builds with `with_cert_resolver`,
-# which never checks that the certificate and the key correspond — so a
-# mismatched or empty pair reaches the acceptor and every handshake fails. This
-# is the same rustls poem resolves to (through `tokio-rustls`), and only
-# `pki_types` (PEM) plus `sign` (`keys_match`) are used.
-rustls = "0.23"
+# Past the 12-month bar (3.1.12, 2025-07-28): 4.0 (poem-web/poem#1200) at its
+# release, or none by 2027-01-31 and `.claude/decisions/http-server.md` applies.
+poem = { version = "3.1", features = ["tower-compat", "anyhow", "compression", "multipart", "sse"] }
+rustls = "0.23"  # public in nest-rs-testing alone
+rustls-native-certs = "0.8"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys"] }
 
-# Chosen over `aws-sdk-s3`: reqwest/rustls-based, no `aws-runtime` (which fails
-# to build on the pinned toolchain). `aws` brings AmazonS3 + its presign Signer.
 object_store = { version = "0.14", features = ["aws"] }
-# `signed_url` takes a `reqwest::Method` (a re-export of `http::Method`) — a
-# direct dep keeps nest-rs-storage off whichever reqwest minor object_store pins.
-http = "1.5"
+http = "1.5"  # public
 
-# The access log counts the response bytes actually sent. Counting means wrapping
-# the body, and the wrapper has to be an `http_body::Body` that **forwards
-# `size_hint`**: hyper picks the framing from `size_hint().exact()`, so a wrapper
-# that drops it turns every response into `Transfer-Encoding: chunked`. poem's
-# only public stream constructor (`Body::from_bytes_stream`) does drop it, which
-# is why the count goes through the trait rather than through poem's own seam —
-# `Body` converts to and from `http_body_util`'s `BoxBody` in public impls.
-#
-# Neither crate is new to the build: poem and object_store both compile them
-# already. These two lines name what `nest-rs-http`'s own source now writes.
-http-body = "1.1"
+http-body = "1.1"  # public
 http-body-util = "0.1"
+hyper = { version = "1.12", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+h2 = "0.4"
 
-bytes = "1.12"
-futures-util = "0.3"
+bytes = "1.12"  # public
+futures-util = "0.3"  # public
+pin-project-lite = "0.2"
 
-# The WebSocket client `nest-rs-testing`'s `ws` driver drives a real upgrade
-# with — the one request-carrying edge whose protocol *is* the socket, so no
-# in-process engine can stand in for it. Not a new crate in the build: poem's
-# own `websocket` feature already compiles this exact version, which is why the
-# requirement tracks poem's rather than floating ahead of it.
 tokio-tungstenite = "0.30"
 
-async-trait = "0.1"
+async-trait = "0.1"  # public
 
-# No lock poisoning, so the framework's hot-path locks need no `.unwrap()` —
-# one lock primitive shared by every crate.
+# Past the 12-month bar (0.12.5, 2025-10-03): std's non-poisoning locks
+# (rust-lang/rust#134645) at their stabilisation, or no release by 2027-04-03 and
+# `std::sync` takes its place under one poisoning policy.
 parking_lot = "0.12"
 
-# Constant-time comparison for the client-credentials grant: a hand-rolled `==`
-# leaks length through its early return.
-subtle = "2.6"
-
-# GraphQL. `dataloader` gives us async-graphql's batching loader, surfaced via
-# the `#[dataloader]` decorator to kill field-resolver N+1s.
-#
-# EXACT pin, not a caret range: `nest-rs-graphql/src/resolver.rs` reads
-# async-graphql's public-but-internal registry API — it spells out the whole
-# `MetaType::Object { .. }` literal and relies on `remove_unused_types`
-# behaviour. A minor bump can silently add/rename a field or change that
-# behaviour, so the version is frozen and guarded in three layers (compile-time
-# canary + exhaustive literal + SDL snapshot test, all in that file/crate). On
-# bump, follow the procedure in the `nest-rs-graphql` crate `//!` doc: bump this
-# pin, fix the canary, run the SDL snapshot test, review the SDL diff.
-async-graphql = { version = "=7.2.1", features = ["dataloader"] }
+# Public. `=`: nest-rs-graphql reads async-graphql's registry internals.
+# `custom-error-conversion` removes the blanket `From<T: Display>` into its
+# error: a `?` in a resolver body would otherwise ship a foreign error's
+# sentence before the wrapper could answer it opaquely.
+async-graphql = { version = "=7.2.1", default-features = false, features = ["custom-error-conversion", "dataloader", "playground"] }
 async-graphql-poem = "=7.2.1"
-# Link-time registry: each `#[resolver]` submits its query/mutation objects so
-# the schema composes itself at boot with no central list.
-inventory = "0.3"
+inventory = "0.3"  # public
 
 argon2 = "0.6"
-validator = { version = "0.21", features = ["derive"] }
-# `serde` so UUID-keyed entity rows serialize for the authz response masker.
-uuid = { version = "1.26", features = ["v4", "v7", "serde"] }
+getrandom = "0.4"
+validator = { version = "0.21", features = ["derive"] }  # public
+uuid = { version = "1.27", features = ["v4", "v7", "serde"] }  # public
+url = "2.5"
 
-# EXACT pin (`=`), not a caret range: sea-orm types saturate the ORM public
-# surface (`Repo` bounds, `Executor`'s `ConnectionTrait`, `ServiceError::Db`),
-# so even a minor is a reviewed change. On bump, move both pins together and
-# re-run the seaorm/storage e2e suites.
-sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
-sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+# Public. `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed
+# bump, both pins together.
+sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid"] }
+sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio"] }
+# Named for its feature alone: sea-orm's `runtime-tokio-rustls` selects sqlx's
+# ring backend, which deny.toml bans.
+sqlx = { version = "0.9", default-features = false, features = ["tls-rustls-aws-lc-rs"] }
 
-# HTTP client (rustls so we avoid an OpenSSL system dep)
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
-# Dev-only. Pins the macros' compile-time diagnostics (the boot-time ones are
-# pinned by integration tests), so the framework's #1 differentiator cannot
-# regress silently.
 trybuild = "1.0"
 
-# Dev-only. Builds a real gzip request body, so the transport's body cap is
-# proved against the composition that defeated it — poem's `Compression`
-# decompresses the body and leaves `Content-Length` describing the compressed
-# bytes. A hand-set header would test the symptom; this tests the wire.
 flate2 = "1.1"
 
-# schemars must match rmcp's re-exported version, or the derive resolves to a
-# different trait than `rmcp::handler::server::wrapper::Parameters` expects.
-rmcp = { version = "3.3", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
-schemars = { version = "1.2", features = ["uuid1", "chrono04"] }
+rmcp = { version = "3.5", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }  # public
+schemars = { version = "1.2", features = ["uuid1", "chrono04"] }  # public
 
-# `#[cron("...")]` parsing. croner accepts 5/6/7 fields (seconds optional);
-# chrono-tz resolves the IANA name of the optional per-job timezone.
-croner = "4.0"
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
-chrono-tz = "0.10"
+croner = { version = "4.0", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }  # public
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-fat"] }
+# The one zone database: `#[cron(tz)]` is checked against it and the scheduler
+# reads it, never the host's zoneinfo, so the two cannot disagree.
+jiff-tzdb = "0.1"
 
-# Held at the 0.7 stable line: apalis 1.0 is still churning through release
-# candidates and does not clear the "no pre-release in a foundation dep" bar.
-# Re-checked 2026-09-12, unchanged since 2026-08-03: newest stable
-# `apalis-redis` 0.7.4 (2025-11-18), newest of any kind 1.0.0-rc.8 (2026-05-07)
-# — apalis itself reached rc.9, so upstream is alive and its *stable* line is
-# not. That dates the freshness bar: ~2026-11 is when a still-RC 1.0
-# turns this pin into a flag to raise, not a note to keep.
-# The 0.7 build carries a future-incompat warning (never-type fallback); the
-# crate now lives at github.com/apalis-dev/apalis-redis, split out of
-# geofmureithi/apalis, and no issue there tracks it yet.
-apalis = "0.7"
-apalis-redis = "0.7"
-# Same 0.32 line apalis-redis pins, so the two share one connection type — a
-# semver divergence would break the `#[from]` conversion at compile time
-# (wanted). This is why redis 1.x waits on apalis-redis 1.0.
-redis = { version = "0.32", default-features = false, features = [
+# Public. `=`: nest-rs-redis opens each Cluster node through
+# `ClusterClient::get_async_generic_connection`, which is `#[doc(hidden)]`.
+# `cluster-async` brings crc16 0.4 (2018), the slot checksum, finished and
+# without an advisory; it leaves with `redis`.
+redis = { version = "=1.7", default-features = false, features = [
     "aio",
+    "cluster-async",
     "connection-manager",
     "script",
     "tokio-comp",
+    "tokio-rustls-comp",
+    # Never read, the framework hands each client its roots; without it, `redis`
+    # reloads the system's store on every connection.
+    "tls-rustls-webpki-roots",
 ] }
 
-# CLI (nest-rs-cli)
 clap = { version = "4.6", features = ["derive", "env"] }
 toml_edit = "0.25"
 
-# Proc-macro dependencies
-syn = { version = "3.0", features = ["full"] }
+syn = { version = "3.0", features = ["full"] }  # public
 quote = "1.0"
-proc-macro2 = "1.0"
-# Resolves the name the call site reaches the framework by, so an expansion can
-# root itself at `::nest_rs::<concern>` in an app and at `::nest_rs_<concern>`
-# inside the framework's own crates. See `nest-rs-codegen`'s `reroot`.
+proc-macro2 = "1.0"  # public
 proc-macro-crate = "3.5"
+# sea-orm-macros derives an entity's `Column` variants with heck, so `#[expose]`
+# names them with it too. 0.5.0 (2024-03) crosses the freshness bar: finished,
+# without an advisory, and it moves when sea-orm-macros moves.
+heck = "0.5"
 
-# Dev-only (test targets)
 tempfile = "3.27"
-tower = "0.5"
+tokio-rustls = "0.26"  # public in nest-rs-testing alone
 libc = "0.2"
 
-# Internal crates. Kebab-case everywhere (the crates.io form); Cargo's default
-# hyphen→underscore mapping gives the `nest_rs_*` import paths the macros emit.
-nest-rs-core = { version = "6.1.0", path = "crates/nest-rs-core" }
-nest-rs-authn = { version = "6.1.0", path = "crates/nest-rs-authn" }
-nest-rs-throttler = { version = "6.1.0", path = "crates/nest-rs-throttler" }
-nest-rs-config = { version = "6.1.0", path = "crates/nest-rs-config" }
-nest-rs-config-macros = { version = "6.1.0", path = "crates/nest-rs-config-macros" }
-nest-rs-events = { version = "6.1.0", path = "crates/nest-rs-events" }
-nest-rs-events-macros = { version = "6.1.0", path = "crates/nest-rs-events-macros" }
-nest-rs-authz = { version = "6.1.0", path = "crates/nest-rs-authz" }
-nest-rs-codegen = { version = "6.1.0", path = "crates/nest-rs-codegen" }
-nest-rs-core-macros = { version = "6.1.0", path = "crates/nest-rs-core-macros" }
-nest-rs-graphql = { version = "6.1.0", path = "crates/nest-rs-graphql" }
-nest-rs-graphql-macros = { version = "6.1.0", path = "crates/nest-rs-graphql-macros" }
-nest-rs-guards = { version = "6.1.0", path = "crates/nest-rs-guards" }
-nest-rs-health = { version = "6.1.0", path = "crates/nest-rs-health" }
-nest-rs-health-macros = { version = "6.1.0", path = "crates/nest-rs-health-macros" }
-nest-rs-http = { version = "6.1.0", path = "crates/nest-rs-http" }
-nest-rs-http-macros = { version = "6.1.0", path = "crates/nest-rs-http-macros" }
-nest-rs-mcp = { version = "6.1.0", path = "crates/nest-rs-mcp" }
-nest-rs-mcp-macros = { version = "6.1.0", path = "crates/nest-rs-mcp-macros" }
-nest-rs-interceptors = { version = "6.1.0", path = "crates/nest-rs-interceptors" }
-nest-rs-filters = { version = "6.1.0", path = "crates/nest-rs-filters" }
-nest-rs-exception-filters = { version = "6.1.0", path = "crates/nest-rs-exception-filters" }
-nest-rs-openapi = { version = "6.1.0", path = "crates/nest-rs-openapi" }
-nest-rs-database = { version = "6.1.0", path = "crates/nest-rs-database" }
-nest-rs-seaorm = { version = "6.1.0", path = "crates/nest-rs-seaorm" }
-nest-rs-pipes = { version = "6.1.0", path = "crates/nest-rs-pipes" }
-nest-rs-queue = { version = "6.1.0", path = "crates/nest-rs-queue" }
-nest-rs-queue-macros = { version = "6.1.0", path = "crates/nest-rs-queue-macros" }
-nest-rs-redis = { version = "6.1.0", path = "crates/nest-rs-redis" }
-nest-rs-resource = { version = "6.1.0", path = "crates/nest-rs-resource" }
-nest-rs-resource-macros = { version = "6.1.0", path = "crates/nest-rs-resource-macros" }
-nest-rs-schedule = { version = "6.1.0", path = "crates/nest-rs-schedule" }
-nest-rs-schedule-macros = { version = "6.1.0", path = "crates/nest-rs-schedule-macros" }
-nest-rs-server-timing = { version = "6.1.0", path = "crates/nest-rs-server-timing" }
-nest-rs-oauth-client = { version = "6.1.0", path = "crates/nest-rs-oauth-client" }
-nest-rs-oauth-server = { version = "6.1.0", path = "crates/nest-rs-oauth-server" }
-nest-rs-oauth-resource = { version = "6.1.0", path = "crates/nest-rs-oauth-resource" }
-nest-rs-social = { version = "6.1.0", path = "crates/nest-rs-social" }
-nest-rs-opentelemetry = { version = "6.1.0", path = "crates/nest-rs-opentelemetry" }
-nest-rs-testing = { version = "6.1.0", path = "crates/nest-rs-testing" }
-nest-rs-storage = { version = "6.1.0", path = "crates/nest-rs-storage" }
-nest-rs-worker = { version = "6.1.0", path = "crates/nest-rs-worker" }
-nest-rs-ws = { version = "6.1.0", path = "crates/nest-rs-ws" }
-nest-rs-ws-macros = { version = "6.1.0", path = "crates/nest-rs-ws-macros" }
+# The embedded source of `nest-rs-static-files`: a folder compiled into the
+# binary. `debug-embed` embeds in a debug build too, so what a test serves is
+# what a release serves, and the mode reading the folder at runtime never runs.
+rust-embed = { version = "8.13", features = ["debug-embed"] }  # public
 
-# Every crate opts in with `[lints] workspace = true`, so `unsafe` is a compile
-# error in libs AND test targets. Three crates keep a source-level attribute
-# instead, each for one documented `unsafe` a workspace lint can't express:
-#   • nest-rs-config   — `load_cascade`, the sole production env-write bootstrapper.
-#   • nest-rs-testing  — `load_project_env` (`NESTRS_ENV=test` set-if-absent).
-#   • nest-rs-schedule — `#![forbid]` on the lib only: its integration test needs
-#                        `libc::raise(SIGINT)` to drive the real shutdown path,
-#                        which a `[lints]` forbid would cover and can't override.
+# `=`: macro expansions and sibling crates call `__private`, which semver does
+# not cover.
+nest-rs-core = { version = "=7.0.0", path = "crates/nest-rs-core" }
+nest-rs-authn = { version = "=7.0.0", path = "crates/nest-rs-authn" }
+nest-rs-throttler = { version = "=7.0.0", path = "crates/nest-rs-throttler" }
+nest-rs-config = { version = "=7.0.0", path = "crates/nest-rs-config" }
+nest-rs-config-macros = { version = "=7.0.0", path = "crates/nest-rs-config-macros" }
+nest-rs-events = { version = "=7.0.0", path = "crates/nest-rs-events" }
+nest-rs-events-macros = { version = "=7.0.0", path = "crates/nest-rs-events-macros" }
+nest-rs-authz = { version = "=7.0.0", path = "crates/nest-rs-authz" }
+nest-rs-codegen = { version = "=7.0.0", path = "crates/nest-rs-codegen" }
+nest-rs-core-macros = { version = "=7.0.0", path = "crates/nest-rs-core-macros" }
+nest-rs-graphql = { version = "=7.0.0", path = "crates/nest-rs-graphql" }
+nest-rs-graphql-macros = { version = "=7.0.0", path = "crates/nest-rs-graphql-macros" }
+nest-rs-guards = { version = "=7.0.0", path = "crates/nest-rs-guards" }
+nest-rs-health = { version = "=7.0.0", path = "crates/nest-rs-health" }
+nest-rs-health-macros = { version = "=7.0.0", path = "crates/nest-rs-health-macros" }
+nest-rs-http = { version = "=7.0.0", path = "crates/nest-rs-http" }
+nest-rs-http-macros = { version = "=7.0.0", path = "crates/nest-rs-http-macros" }
+nest-rs-mcp = { version = "=7.0.0", path = "crates/nest-rs-mcp" }
+nest-rs-mcp-macros = { version = "=7.0.0", path = "crates/nest-rs-mcp-macros" }
+nest-rs-interceptors = { version = "=7.0.0", path = "crates/nest-rs-interceptors" }
+nest-rs-filters = { version = "=7.0.0", path = "crates/nest-rs-filters" }
+nest-rs-exception-filters = { version = "=7.0.0", path = "crates/nest-rs-exception-filters" }
+nest-rs-openapi = { version = "=7.0.0", path = "crates/nest-rs-openapi" }
+nest-rs-database = { version = "=7.0.0", path = "crates/nest-rs-database" }
+nest-rs-seaorm = { version = "=7.0.0", path = "crates/nest-rs-seaorm" }
+nest-rs-seaorm-macros = { version = "=7.0.0", path = "crates/nest-rs-seaorm-macros" }
+nest-rs-pipes = { version = "=7.0.0", path = "crates/nest-rs-pipes" }
+nest-rs-queue = { version = "=7.0.0", path = "crates/nest-rs-queue" }
+nest-rs-queue-macros = { version = "=7.0.0", path = "crates/nest-rs-queue-macros" }
+nest-rs-redis = { version = "=7.0.0", path = "crates/nest-rs-redis" }
+nest-rs-schedule = { version = "=7.0.0", path = "crates/nest-rs-schedule" }
+nest-rs-schedule-macros = { version = "=7.0.0", path = "crates/nest-rs-schedule-macros" }
+nest-rs-server-timing = { version = "=7.0.0", path = "crates/nest-rs-server-timing" }
+nest-rs-oauth-client = { version = "=7.0.0", path = "crates/nest-rs-oauth-client" }
+nest-rs-oauth-server = { version = "=7.0.0", path = "crates/nest-rs-oauth-server" }
+nest-rs-oauth-resource = { version = "=7.0.0", path = "crates/nest-rs-oauth-resource" }
+nest-rs-social = { version = "=7.0.0", path = "crates/nest-rs-social" }
+nest-rs-opentelemetry = { version = "=7.0.0", path = "crates/nest-rs-opentelemetry" }
+nest-rs-testing = { version = "=7.0.0", path = "crates/nest-rs-testing" }
+nest-rs-storage = { version = "=7.0.0", path = "crates/nest-rs-storage" }
+nest-rs-static-files = { version = "=7.0.0", path = "crates/nest-rs-static-files" }
+nest-rs-ws = { version = "=7.0.0", path = "crates/nest-rs-ws" }
+nest-rs-ws-macros = { version = "=7.0.0", path = "crates/nest-rs-ws-macros" }
+
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
+unreachable_pub = "warn"
 
-# Config literals always close with `..Default::default()` so an import site
-# stays forward-compatible as the options struct gains fields.
 [workspace.lints.clippy]
 needless_update = "allow"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+expect_used = "deny"
+let_underscore_must_use = "deny"
+map_err_ignore = "deny"
+panic = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+self_named_module_files = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+wildcard_imports = "deny"
 
-# Release: smallest, fastest binary. Compile time is not a concern here.
 [profile.release]
-opt-level = 3       # max performance (the release default; explicit for clarity)
-lto = "fat"         # whole-program optimisation: best cross-crate dead-code elimination
-codegen-units = 1   # a single unit gives the optimiser the most to work with
-strip = true        # drop symbols from the final binary (~18 MB -> ~15 MB)
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
 
-# opt-level = 0 and incremental are already the defaults; the win is dropping
-# full debuginfo while keeping file:line in backtraces.
 [profile.dev]
 debug = "line-tables-only"

@@ -1,152 +1,125 @@
-//! What one GraphQL operation *is*, for the layers that run around it.
-//!
-//! A `#[query]` body is handed async-graphql's `Context`, which carries the
-//! selected field and every scope of request data. The two **federation** root
-//! fields are handed nothing of the sort: `_service` and `_entities` are
-//! resolved by async-graphql's own `QueryRoot`, *above* the merged root this
-//! crate builds, and the only place a framework can stand in front of them is an
-//! [`Extension`](async_graphql::extensions::Extension) — which async-graphql
-//! hands an [`ExtensionContext`], never a `Context`, with no public constructor
-//! to bridge the two.
-//!
-//! [`GraphqlOperationContext`] is that bridge, and it is why `check_graphql`
-//! takes it rather than a bare `Context`: **one declaration, both sites**. What
-//! a guard reads on either is the same — the request-scoped data a
-//! [`GraphqlContextSeed`](crate::GraphqlContextSeed) forwarded, the container,
-//! the field's name. What only the field site can offer — the selection set, the
-//! arguments, `look_ahead` — is behind [`context`](GraphqlOperationContext::context),
-//! which answers `None` on a federation field rather than pretending.
+//! What runs around one GraphQL field a resolver declares: its guard chain,
+//! composed once per site, and — for a root field — its own unit of work.
 
-use std::any::Any;
-
-use async_graphql::extensions::ExtensionContext;
-use async_graphql::{Context, Result};
+use async_graphql::parser::types::OperationType;
+use async_graphql::{Context, Error as GraphqlError};
+use nest_rs_core::__private::{Pending, new_unit_context};
+use nest_rs_core::{Container, Handler};
+use nest_rs_guards::__private::{
+    GlobalBucket, SiteChainCell, SiteChainSources, failure_chain, run_stage,
+};
 use tracing::Instrument;
 
-/// One GraphQL operation, as a [`Guard`](https://docs.rs/nest-rs-guards) sees
-/// it — the GraphQL analog of the [`McpOperationContext`] a `check_mcp` takes
-/// and the `(client, event, data)` a `check_ws_message` takes.
-///
-/// [`McpOperationContext`]: https://docs.rs/nest-rs-mcp
-pub struct GraphqlOperationContext<'a> {
-    site: Site<'a>,
+use crate::error::denial_to_graphql_error;
+use crate::view::{FieldRole, GraphqlView};
+
+/// Which GraphQL site is running the chain — what decides whether it folds the
+/// app-wide pool, and the role its fields play.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GraphqlSite {
+    /// A `#[query]` / `#[mutation]` / `#[subscription]`: the app-wide pool runs
+    /// here, each pooled guard's `check`, which the `/graphql` request's
+    /// `check_http` never stands in for.
+    Operation,
+    /// A `#[field_resolver]`: its resolver's and method's guards run, the pool
+    /// does not — the root field of the same request already ran it, and
+    /// folding it again would run it once per parent.
+    Field,
+    /// An `#[entity]`, reached only through `_entities`, whose federation gate
+    /// runs the pool once per field; folding it here would run it once per
+    /// representation.
+    Entity,
 }
 
-/// The two places async-graphql lets a check run, and everything that differs
-/// between them.
-enum Site<'a> {
-    /// A resolver field — `#[query]`, `#[mutation]`, `#[entity]`,
-    /// `#[field_resolver]`. Emitted inline by `#[operations]`.
-    Field(&'a Context<'a>),
-    /// A federation root field, from the schema extension. It belongs to no
-    /// resolver — the router calls it on the schema itself — so the name is a
-    /// literal rather than something read off a selected field.
-    Federation {
-        ctx: &'a ExtensionContext<'a>,
-        field: &'static str,
-    },
-}
-
-impl<'a> GraphqlOperationContext<'a> {
-    /// The operation a resolver field is about to run.
-    pub fn field(ctx: &'a Context<'a>) -> Self {
-        Self {
-            site: Site::Field(ctx),
-        }
-    }
-
-    /// The operation a federation root field is about to run.
+impl GraphqlSite {
+    /// Whether this site composes the pool, read off the container so the memo
+    /// cell's key still covers the whole composition.
     ///
-    /// Framework-emitted: the two names are async-graphql's, not an app's.
-    #[doc(hidden)]
-    pub fn federation(ctx: &'a ExtensionContext<'a>, field: &'static str) -> Self {
-        Self {
-            site: Site::Federation { ctx, field },
+    /// An entity skips it only where the federation gate runs it: a global
+    /// pool can be absent, and skipping then would leave nothing to skip.
+    fn bucket(self) -> fn(&Container) -> GlobalBucket {
+        match self {
+            Self::Operation => |_| GlobalBucket::Fold,
+            Self::Field => |_| GlobalBucket::Skip,
+            Self::Entity => |container| {
+                if crate::federation::gate_runs(container) {
+                    GlobalBucket::Skip
+                } else {
+                    GlobalBucket::Fold
+                }
+            },
         }
     }
 
-    /// The field being resolved, as the client wrote it in the document.
-    pub fn name(&self) -> &str {
-        match &self.site {
-            Site::Field(ctx) => ctx.item.node.name.node.as_str(),
-            Site::Federation { field, .. } => field,
-        }
-    }
-
-    /// The full async-graphql context, when this operation has one.
-    ///
-    /// `None` on a federation root field — see the module docs. A guard reaching
-    /// for arguments or a selection set there is asking a question the site
-    /// cannot answer, and gets to decide what that means rather than being
-    /// handed a fabricated context.
-    pub fn context(&self) -> Option<&'a Context<'a>> {
-        match &self.site {
-            Site::Field(ctx) => Some(ctx),
-            Site::Federation { .. } => None,
-        }
-    }
-
-    /// Request- or schema-scoped data, or `None`.
-    pub fn data_opt<D: Any + Send + Sync>(&self) -> Option<&'a D> {
-        match &self.site {
-            Site::Field(ctx) => ctx.data_opt::<D>(),
-            Site::Federation { ctx, .. } => ctx.data_opt::<D>(),
-        }
-    }
-
-    /// Request- or schema-scoped data, or an error naming the missing type.
-    pub fn data<D: Any + Send + Sync>(&self) -> Result<&'a D> {
-        match &self.site {
-            Site::Field(ctx) => ctx.data::<D>(),
-            Site::Federation { ctx, .. } => ctx.data::<D>(),
-        }
-    }
-
-    /// Request- or schema-scoped data. Panics when absent — for data the
-    /// framework guarantees, like the [`Container`](nest_rs_core::Container).
-    pub fn data_unchecked<D: Any + Send + Sync>(&self) -> &'a D {
-        match &self.site {
-            Site::Field(ctx) => ctx.data_unchecked::<D>(),
-            Site::Federation { ctx, .. } => ctx.data_unchecked::<D>(),
+    /// The role this site's fields play.
+    fn role(self) -> FieldRole {
+        match self {
+            Self::Operation => FieldRole::RootField,
+            Self::Field => FieldRole::Nested,
+            Self::Entity => FieldRole::Entity,
         }
     }
 }
 
-/// Run one dispatched GraphQL field as its own unit of work.
+/// Run a resolver site's guard chain — called by `#[operations]` at the start
+/// of every resolver method, `handler` the site's declaration. Dedups the
+/// resolver's and the method's guards against the global chain, then runs each
+/// guard's `check` on the field: what they attached comes back, for the method
+/// to run under.
 ///
-/// Framework-emitted: `#[operations]` wraps every `#[query]`, `#[mutation]`,
-/// `#[entity]` and `#[field_resolver]` body in this, so a resolver author writes
-/// nothing. It is one seam rather than four because the four differ only in the
-/// `role` they pass — bolting the line onto whichever role asked for it is the
-/// defect the family rule names.
+/// `sources` is consulted only when the chain is composed. A `&dyn Fn` rather
+/// than an `impl Fn`, so this body codegens once rather than per resolver.
+/// GraphQL pipes run at the transport's request entry, not here.
+pub async fn run_layered_graphql_chain(
+    ctx: &Context<'_>,
+    container: &Container,
+    cell: &SiteChainCell,
+    route_label: &str,
+    sources: &(dyn Fn() -> SiteChainSources + Sync),
+    site: GraphqlSite,
+    handler: &'static Handler,
+) -> Result<Pending, GraphqlError> {
+    let chain = cell
+        .chain(container, route_label, sources, site.bucket())
+        .map_err(denial_to_graphql_error)?;
+    // The executing operation's kind: async-graphql pins it on the query
+    // environment it hands each field (`=7.2.1`, the workspace's pin).
+    let operation: OperationType = ctx.query_env.operation.node.ty;
+    let mut view = GraphqlView::new(handler.address(), operation, site.role());
+    let mut cx = new_unit_context(handler, &mut view, None, None);
+    run_stage(&chain, &mut cx).await.map_err(|(guard, denial)| {
+        // Structural floor mirroring the HTTP edge's: every denial visible at
+        // warn+ regardless of what the individual guard logged.
+        tracing::warn!(
+            target: nest_rs_core::target::LAYERS,
+            guard,
+            route = route_label,
+            status = denial.http_status(),
+            error = failure_chain(&denial),
+            "guard denied the operation",
+        );
+        denial_to_graphql_error(denial)
+    })
+}
+
+/// The field `ctx` resolves, as the client wrote it in the document (`listUsers`,
+/// never an alias).
+pub fn field_name<'a>(ctx: &'a Context<'_>) -> &'a str {
+    ctx.item.node.name.node.as_str()
+}
+
+/// Run one dispatched root field as its own unit of work; `#[operations]` wraps
+/// every `#[query]`, `#[mutation]` and `#[entity]` body in this. A
+/// `#[field_resolver]` call is no unit: it runs once per row its parent returns,
+/// so a line per call would file one per row.
 ///
-/// # Why this exists at all
+/// `operation` is the field name **as the client wrote it** (`listUsers`, not
+/// `list_users`), so the line joins against a capture of the request.
 ///
-/// A GraphQL document arrives as one `POST /graphql`, so until this ran, every
-/// query and mutation in a deployment was the same line — `POST /graphql 200` —
-/// and which field was slow, which one failed, and which one the caller was
-/// refused at were all unanswerable from the console. The HTTP request is the
-/// *transport's* unit; the field is this edge's, and this crate is the only
-/// place that boundary is visible. MCP is the same shape and already did it:
-/// an HTTP self-mount that dispatches in band files its own operation line
-/// **in addition to** the request's.
-///
-/// A subscription is deliberately not here — see [`crate::unit`].
-///
-/// # What it carries, and what it does not
-///
-/// `role` and `operation`, flat, plus the family's `outcome` and `duration_ms`.
-/// `operation` is the field name **as the client wrote it in the document**,
-/// read through [`GraphqlOperationContext::name`] rather than from the Rust
-/// method's ident: async-graphql renames `list_users` to `listUsers` on the
-/// wire, and a line naming the ident cannot be joined against a capture of the
-/// request that produced it.
-///
-/// No `outcome = panic`: a resolver that unwinds never reaches this line, and
-/// async-graphql owns the catch. Reporting one would be a claim this seam
-/// cannot make.
-#[doc(hidden)]
-pub async fn run_operation<T, F>(
+/// The line files `ok` or `error` on return, `cancelled` when dropped first, and
+/// `panic` when it unwinds — caught only to be named, then resumed. A sibling
+/// torn down by that unwind files `cancelled`: one panic is one `panic` line.
+pub async fn run_field<T, F>(
     role: &'static str,
     operation: &str,
     succeeded: impl FnOnce(&T) -> bool,
@@ -155,73 +128,105 @@ pub async fn run_operation<T, F>(
 where
     F: std::future::Future<Output = T>,
 {
-    // A child of the request that carried the document: same trace, a fresh
-    // span, the request's as its parent — the shape `mcp.operation` and
-    // `ws.message` already have. Minted outright only where nothing carried it,
-    // which off a request task is the honest answer rather than a missing id.
-    let correlation = match nest_rs_core::current_correlation() {
+    let correlation = match nest_rs_core::__private::current_correlation() {
         Some(request) => request.child(),
-        None => nest_rs_core::Correlation::mint(),
+        None => nest_rs_core::Correlation::minted(None),
     };
     let span = nest_rs_core::operation_span!(
-        target: crate::TARGET,
-        kind: nest_rs_core::operation_log::kind::SERVER,
-        crate::unit::OPERATION,
+        crate::unit::FIELD,
         &correlation,
-        // Dotted and conventions-shaped on the span, flat on the line — the
-        // split `nest_rs_core::operation_log` states.
-        //
-        // **Two deviations from OpenTelemetry's GraphQL server conventions, and
-        // they are stated rather than silent.** That semconv defines
-        // `graphql.operation.name`, `graphql.operation.type` (an enum of
-        // `query` / `mutation` / `subscription`) and `graphql.document`.
-        //
-        // `graphql.operation.role` is not `graphql.operation.type` renamed: it
-        // carries a **superset** — `entity` and `field_resolver` besides the
-        // three — because this framework dispatches at the *field*, and a
-        // federation `#[entity]` is a unit of work the specification has no word
-        // for. Recording that superset under the conventions' key would answer
-        // an enum with a value outside it, which is worse for a backend than a
-        // key it does not know.
-        //
-        // `graphql.field.name` is the field, not the operation: the conventions'
-        // `operation.name` is the *document's* name, which is the caller's
-        // label for a batch of fields and is often absent. What names this unit
-        // is the field it resolves, and there is no conventions key for it.
-        //
-        // `graphql.document` is deliberately absent: it is the caller's query
-        // text, which carries their literals.
+        // Not OTel's `graphql.operation.type`: `role` adds `entity` to its enum.
+        // `graphql.document` is omitted: it carries the caller's literals.
         graphql.operation.role = role,
         graphql.field.name = operation,
     );
-    let started = std::time::Instant::now();
-    // The request's own scope, under this unit's correlation: a field resolves
-    // against the request that asked for it — its providers, its executor, its
-    // ability — while its events and its line name the field rather than the
-    // whole document.
+    let line = FieldLine {
+        role,
+        operation,
+        correlation: correlation.clone(),
+        span: span.clone(),
+        started: std::time::Instant::now(),
+        filed: false,
+    };
     nest_rs_core::with_request_scope(
         nest_rs_core::current_request_scope(),
         correlation,
         async move {
-            let out = fut.await;
-            // Filed inside the scope, so it carries this unit's ids without
-            // being handed them — the shape `nest_rs_schedule`'s tick uses.
-            tracing::info!(
-                name: crate::unit::OPERATION,
-                target: nest_rs_core::operation_log::TARGET,
-                message = crate::unit::OPERATION,
-                role = role,
-                operation = operation,
-                outcome = if succeeded(&out) {
-                    nest_rs_core::operation_log::OK
-                } else {
-                    nest_rs_core::operation_log::ERROR
-                },
-                duration_ms = nest_rs_core::operation_log::duration_ms(started),
-            );
-            out
+            match nest_rs_core::panic::contain(fut).await {
+                Ok(out) => {
+                    line.file(if succeeded(&out) {
+                        nest_rs_core::operation_log::OK
+                    } else {
+                        nest_rs_core::operation_log::ERROR
+                    });
+                    out
+                }
+                Err(unwound) => {
+                    line.file(nest_rs_core::operation_log::PANIC);
+                    std::panic::resume_unwind(unwound)
+                }
+            }
         },
     )
     .instrument(span)
     .await
 }
+
+/// One root field's `graphql.field` line, filed exactly once, by `Drop` as
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) when dropped first.
+///
+/// The correlation is held: a `Drop` runs while the future is torn down, not
+/// reliably inside the scope that future installed.
+struct FieldLine<'a> {
+    role: &'static str,
+    operation: &'a str,
+    correlation: nest_rs_core::Correlation,
+    span: tracing::Span,
+    started: std::time::Instant,
+    filed: bool,
+}
+
+impl FieldLine<'_> {
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+    }
+
+    fn emit(&mut self, outcome: &'static str) {
+        self.filed = true;
+        nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
+            nest_rs_core::operation_line!(
+                crate::unit::FIELD,
+                span: &self.span,
+                outcome: outcome,
+                started: self.started,
+                role = self.role,
+                operation = self.operation,
+            );
+        });
+    }
+}
+
+impl Drop for FieldLine<'_> {
+    fn drop(&mut self) {
+        if !self.filed {
+            self.emit(nest_rs_core::operation_log::CANCELLED);
+        }
+    }
+}
+
+/// A `#[subscription]`'s answer, accepted only when it is a value — a stream.
+/// async-graphql's subscription derive reads a fallible return by its spelling,
+/// so a `Result` under another name is refused here.
+#[diagnostic::on_unimplemented(
+    message = "a `#[subscription]` answers a stream, and this one returns a `Result` spelled \
+               another way",
+    label = "a `Result` under another name",
+    note = "write it `Result<impl Stream<Item = T>, E>`: async-graphql reads a fallible return by \
+            its spelling — `Result` or `FieldResult` — and takes any other for the stream itself"
+)]
+pub trait IsStreamReturn {}
+
+impl IsStreamReturn for nest_rs_core::__private::ValueAnswer {}
+
+/// Accept a `#[subscription]`'s answer — see [`IsStreamReturn`].
+pub fn answers_a_stream<K: IsStreamReturn>(_: K) {}

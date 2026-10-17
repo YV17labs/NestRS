@@ -14,20 +14,16 @@
 //! Dispatch is via `poem::Error::downcast::<Exception>()` — anything carryable
 //! as a `Box<dyn std::error::Error + Send + Sync + 'static>` is catchable.
 //!
-//! Unlike `Filter` (`nest_rs_filters::Filter`), there is no `ExceptionFilterExt`
-//! `.except_filter(_)` shim because an exception filter is **typed** — its
-//! `Self::Exception` cannot be erased through a poem endpoint wrapper without
-//! losing the downcast. Wiring runs through `ScopedExceptionFilterSpec` + the
-//! shared dispatcher in `nest-rs-guards`, which holds the typed list and
-//! attempts each downcast in order.
+//! There is no `.except_filter(_)` shim: a typed `Self::Exception` cannot be
+//! erased through a poem endpoint wrapper, so the dispatcher in `nest-rs-guards`
+//! holds the typed list and attempts each downcast in order.
 //!
 //! ## Defining an exception filter
 //!
-//! ```rust,ignore
+//! ```
 //! use nest_rs_core::{Layer, injectable};
-//! use nest_rs_exception_filters::ExceptionFilter;
+//! use nest_rs_exception_filters::{ExceptionFilter, async_trait};
 //! use poem::{Response, http::StatusCode};
-//! use async_trait::async_trait;
 //!
 //! #[derive(Debug, thiserror::Error)]
 //! #[error("domain error")]
@@ -46,20 +42,16 @@
 //!         Response::builder().status(StatusCode::BAD_REQUEST).body("domain error")
 //!     }
 //! }
+//! # fn main() {}
 //! ```
 //!
 //! ## Registering globally
 //!
-//! ```rust,ignore
-//! use nest_rs::prelude::App;
-//! use nest_rs::exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
-//!
-//! App::builder()
-//!     .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
-//!     .module::<AppModule>()
-//!     .build().await?.run().await
-//! ```
+//! Register with `App::builder().use_exception_filters_global([...])`
+//! ([`AppBuilderExceptionFiltersExt`]); the example on
+//! [`exception_filter`](fn@exception_filter) runs it.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod builder;
 mod erased;
@@ -70,10 +62,5 @@ pub use builder::AppBuilderExceptionFiltersExt;
 pub use erased::ExceptionFilterErased;
 pub use exception_filter::ExceptionFilter;
 pub use registry::{ExceptionFilterSpec, ExceptionFilterSpecs, exception_filter};
-// Re-exported so a crate writing an `ExceptionFilter` impl needs no direct
-// `async-trait` dependency of its own. `nest-rs-http`, `nest-rs-queue` and
-// `nest-rs-ws` already do this; the layer crates did not, so the one import a
-// reader needed most was the one no page could name — and the miss cascades
-// (without the attribute, every trait method reports a lifetime mismatch, so
-// the real cause is buried under four unrelated errors).
+// Re-exported so an `ExceptionFilter` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;

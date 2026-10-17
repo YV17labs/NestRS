@@ -29,17 +29,16 @@ same folder so the tutorial can extend it in place.
 The `posts` module ships under the workspace's `features` crate. Its
 dependencies ride versions pinned in the workspace root, so both manifests
 need an entry. Add the pins first — note the `nest-rs` line **gains** features
-rather than being replaced: `nestrs new` already put `http`, `seaorm` and
-`testing` there, and dropping either of the first two breaks the app you just
-scaffolded. `authn` rides along because a resource also gets the auth adapter
-its guards need.
+rather than being replaced: `nestrs new` already put `http` and `seaorm` there,
+and dropping either breaks the app you just scaffolded. `authn` rides along
+because a resource also gets the auth adapter its guards need.
 
 ```toml title="Cargo.toml" {2}
 [workspace.dependencies]
-nest-rs = { version = "6.1", features = ["http", "seaorm", "testing", "authz", "authn"] }
-sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
+nest-rs = { version = "7.0", features = ["http", "seaorm", "authz", "authn"] }
+sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
 serde = { version = "1.0", features = ["derive"] }
-uuid = { version = "1.26", features = ["v7", "serde"] }
+uuid = { version = "1.27", features = ["v7", "serde"] }
 ```
 
 `sea-orm` is already there — the `migrations` crate the workspace ships uses
@@ -74,13 +73,14 @@ the domain small so you can focus on the entity → service → controller
 chain.
 
 The crate this page builds on top of is
-[**`nest-rs-resource`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-resource) —
-it provides the `#[expose]` macro and the `WireModelDefaults` trait the
-masking layer reads when a feature later adds authorization. SeaORM
-itself is the source of truth for entities, columns, and migrations.
+[**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
+it provides the `#[expose]` macro, which also implements the
+`WireModelDefaults` trait the masking layer reads when a feature later adds
+authorization. SeaORM itself is the source of truth for entities, columns,
+and migrations.
 
 ```rust title="crates/features/src/posts/entity.rs"
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -112,7 +112,7 @@ The decorator translates one declaration into every wire surface:
 |-----------|-----------|-------------------|
 | `Post` | The wire DTO — every `#[expose]`d column, no SeaORM internals and nothing left unexposed | HTTP responses, OpenAPI schema |
 | `CreatePost` | A struct holding fields marked `input(create)` | `POST /posts` body |
-| `UpdatePost` | A struct holding fields marked `input(update)` | `PATCH /posts/:id` body |
+| `UpdatePost` | A struct holding fields marked `input(update)` | `PATCH /posts/{id}` body |
 
 `service = super::service::PostsService` tells the macro which service
 owns the entity. The path is required as soon as the entity declares an
@@ -139,9 +139,9 @@ load-bearing.
 
 <Aside type="caution">
 An unexposed column whose type isn't trivial to default (a `Decimal`, a
-custom enum) needs a hand-written `impl WireModelDefaults` so the
-masker can still walk the row. The error message points at the missing
-impl when boot fails.
+custom enum) takes `#[wire_default]` so the masker can still rebuild the
+row. Without it, a masked response carrying that row fails closed with a
+500.
 </Aside>
 
 ## The mod entry
@@ -149,7 +149,7 @@ impl when boot fails.
 The feature root re-exports what other modules import. Keep it small —
 this is the public surface.
 
-```rust title="crates/features/src/posts/mod.rs (from the demo)"
+```rust title="crates/features/src/posts/mod.rs"
 mod entity;
 mod module;
 
@@ -160,7 +160,7 @@ pub use module::PostsModule;
 `PostsService` doesn't exist yet; that's the next page. For now, keep
 `module.rs` and `service.rs` stubbed so the crate compiles.
 
-```rust title="crates/features/src/posts/module.rs (from the demo)"
+```rust title="crates/features/src/posts/module.rs"
 use nest_rs::core::module;
 
 #[module]

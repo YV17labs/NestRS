@@ -8,17 +8,17 @@
 use std::sync::Arc;
 
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
-use nest_rs_authz::{AbilityBuilder, Action, MaskReplyError, Read, masked_reply, with_ability};
+use nest_rs_authz::{
+    AbilityBuilder, Action, MaskReplyError, Read, WireModelDefaults, masked_reply, with_ability,
+};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
 use nest_rs_graphql::async_graphql::{
     Error as GqlError, Executor, Request as GqlRequest, Result as GqlResult, SimpleObject,
 };
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -34,7 +34,7 @@ mod widget {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
     #[sea_orm(table_name = "widgets")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub name: String,
@@ -42,7 +42,7 @@ mod widget {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -55,6 +55,10 @@ impl WireModelDefaults for widget::Entity {
 
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "name"])
+    }
+
+    fn is_placeholdered(column: widget::Column) -> bool {
+        matches!(column, widget::Column::Secret)
     }
 }
 
@@ -96,11 +100,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let role = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let role = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .unwrap_or_default()
             .to_string();
         let mut b = AbilityBuilder::new();
@@ -119,15 +122,14 @@ impl Guard for AbilityInjector {
             }
             _ => {}
         }
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
-impl HttpGuard for PassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 
 #[resolver]
 struct MaskResolver {
@@ -161,6 +163,18 @@ impl MaskResolver {
         ])
     }
 
+    /// The posture on a bare return: the gate's denial and the mask's failure
+    /// reach the client through the wrapper's `Result`, so the developer's
+    /// method need not be fallible to carry either.
+    #[query]
+    #[authorize(Read, widget::Entity)]
+    async fn bare_widget(&self) -> WidgetDto {
+        WidgetDto {
+            id: 1,
+            name: Some("ada".into()),
+        }
+    }
+
     #[query]
     #[authorize(Read, widget::Entity)]
     async fn strict_widget(&self) -> GqlResult<StrictWidgetDto> {
@@ -191,9 +205,7 @@ impl MaskResolver {
         Ok("hello".into())
     }
 
-    /// The stream both subscribers read. The resolver writes no masking call
-    /// and no per-subscriber filter — the posture attribute is the whole
-    /// mechanism, exactly as on the queries above.
+    /// The stream both subscribers read; the resolver writes no masking call.
     #[subscription]
     #[authorize(Read, widget::Entity)]
     async fn widget_feed(&self) -> Result<impl Stream<Item = WidgetDto>, GqlError> {
@@ -277,11 +289,8 @@ async fn every_row_of_a_vec_is_masked() {
     }
 }
 
-// ── A field grant against a non-null schema field ───────────────────────────
-//
-// `#[expose]` types a non-nullable column as a non-null GraphQL field, which
-// the mask cannot null. The selection set decides instead: asking for the
-// stripped field is refused, asking for the granted ones is served.
+// `#[expose]` types a non-nullable column as a non-null GraphQL field, which the
+// mask cannot null: the selection set decides.
 
 #[tokio::test]
 async fn selecting_a_field_the_grant_strips_is_refused() {
@@ -296,9 +305,7 @@ async fn selecting_a_field_the_grant_strips_is_refused() {
         json["errors"][0]["extensions"]["code"], "FORBIDDEN",
         "a field outside the grant is a denial, not a masking failure: {json}",
     );
-    // D3: a **list**, not a comma-joined string — the natural reading of
-    // "names in the `fields` extension", and the only shape that survives more
-    // than one refused field without every client re-splitting it.
+    // A list, not a comma-joined string.
     assert_eq!(
         json["errors"][0]["extensions"]["fields"],
         serde_json::json!(["name"]),
@@ -348,6 +355,26 @@ async fn a_caller_with_no_grant_reads_no_strict_row() {
 }
 
 #[tokio::test]
+async fn a_bare_return_operation_is_gated_and_masked() {
+    let app = boot().await;
+    let admin = query(&app, "admin", "{ bareWidget { id name } }").await;
+    assert_eq!(admin["data"]["bareWidget"]["name"], "ada", "{admin}");
+    let viewer = query(&app, "viewer", "{ bareWidget { id name } }").await;
+    assert_eq!(viewer["data"]["bareWidget"]["id"], 1, "{viewer}");
+    assert_eq!(
+        viewer["data"]["bareWidget"]["name"],
+        serde_json::Value::Null,
+        "the mask strips a bare return as it does a fallible one: {viewer}",
+    );
+    let nobody = query(&app, "", "{ bareWidget { id name } }").await;
+    assert!(
+        !nobody["errors"].as_array().unwrap_or(&vec![]).is_empty()
+            && !nobody.to_string().contains("ada"),
+        "the class gate refuses a bare return as it does a fallible one: {nobody}",
+    );
+}
+
+#[tokio::test]
 async fn zero_grant_caller_is_gated_before_masking() {
     let app = boot().await;
     let json = query(&app, "", "{ widget { id name } }").await;
@@ -357,16 +384,10 @@ async fn zero_grant_caller_is_gated_before_masking() {
     );
 }
 
-// ── Posture per item: the gate runs once, the mask runs on every push ───────
-//
-// A query answers once, so its posture is spent once. A subscription's is not:
-// the guard decided at subscribe, and items keep arriving afterwards. These two
-// tests are the guarantee that the decision keeps applying — one stream, two
-// subscribers, two different item sequences.
+// A subscription's posture keeps applying per item: one stream, two
+// subscribers, two item sequences.
 
-/// The ability a `role` carries, the same three the `x-role` guard builds — one
-/// table, so the socket path and the POST path cannot come to mean different
-/// things by the same word.
+/// The ability a `role` carries — the same three the `x-role` guard builds.
 fn ability_for(role: &str) -> Arc<nest_rs_authz::Ability> {
     let mut builder = AbilityBuilder::new();
     match role {
@@ -386,10 +407,8 @@ fn ability_for(role: &str) -> Arc<nest_rs_authz::Ability> {
 
 /// One subscribe as `role`.
 ///
-/// The ability rides on the request rather than an `x-role` header because a
-/// socket has no per-operation request: this is the same value the bridge
-/// installs, in the same slot `nest_rs_authz::graphql::ability` reads it from
-/// (the context data), reached directly so one test can be two callers at once.
+/// The ability rides in the context data, where the bridge installs it, so one
+/// test can be two callers at once.
 fn subscribe(app: &TestApp, role: &str) -> GqlRequest {
     let _ = app;
     GqlRequest::new("subscription { widgetFeed { id name } }").data(ability_for(role))
@@ -410,13 +429,12 @@ fn ids(items: &[serde_json::Value]) -> Vec<i64> {
 /// auditor may not read never reaches them — it is **absent**, not delivered
 /// with its fields nulled.
 ///
-/// Three items are emitted (`1`, `2`, `1`) and each subscriber takes the number
-/// it is entitled to. That is what makes the assertion sharp: the auditor's two
-/// items are the two `1`s, so `2` was skipped rather than merely arriving last.
+/// Items `1`, `2`, `1` are emitted, so the auditor's two are both `1`s: `2` was
+/// skipped, not late.
 #[tokio::test]
 async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
     let app = boot().await;
-    let schema = nest_rs_graphql::compose_schema(
+    let schema = nest_rs_graphql::__private::compose_schema(
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
     );
@@ -436,13 +454,12 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
         .take(2)
         .collect::<Vec<_>>();
     let emit = async {
-        // A stream registers its receiver on first poll, so nothing may be
-        // published until both have been polled — otherwise the send lands in a
-        // channel nobody is listening on and the test hangs for the wrong
-        // reason.
-        while feed.tx.receiver_count() < 2 {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
+        // A stream registers its receiver on first poll: publish only once both
+        // are polled, or the send lands nowhere and the test hangs.
+        nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+            feed.tx.receiver_count() >= 2
+        })
+        .await;
         for (id, name) in [(1, "ada"), (2, "grace"), (1, "ada")] {
             feed.tx
                 .send(WidgetDto {
@@ -472,13 +489,234 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
     );
 }
 
+/// A post as the feed pushes it and the queries return it: the wire carries no
+/// `deleted`, and no `archived_at`.
+#[derive(Clone, Debug, SimpleObject, Serialize, Deserialize)]
+struct PostDto {
+    id: i32,
+    org_id: i32,
+    title: String,
+}
+
+impl PostDto {
+    fn new(id: i32, org_id: i32) -> Self {
+        Self {
+            id,
+            org_id,
+            title: format!("post {id}"),
+        }
+    }
+}
+
+#[injectable]
+struct PostFeed {
+    tx: broadcast::Sender<PostDto>,
+}
+
+impl Default for PostFeed {
+    fn default() -> Self {
+        Self {
+            tx: broadcast::channel(8).0,
+        }
+    }
+}
+
+#[resolver]
+struct PostFeedResolver {
+    #[inject]
+    feed: Arc<PostFeed>,
+}
+
+#[operations]
+impl PostFeedResolver {
+    /// The rows a `Repo` read under the caller's ability returns: posts of
+    /// orgs 7 and 8.
+    #[query]
+    #[authorize(Read, crate::post::Entity)]
+    async fn posts(&self) -> GqlResult<Vec<PostDto>> {
+        Ok(vec![PostDto::new(1, 7), PostDto::new(2, 8)])
+    }
+
+    #[subscription]
+    #[authorize(Read, crate::post::Entity)]
+    async fn post_feed(&self) -> Result<impl Stream<Item = PostDto>, GqlError> {
+        let rx = self.feed.tx.subscribe();
+        Ok(stream::unfold(rx, |mut rx| async move {
+            match rx.recv().await {
+                Ok(post) => Some((post, rx)),
+                Err(_) => None,
+            }
+        }))
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [
+        PassGuard,
+        AbilityInjector,
+        TestOpGuard as dyn GraphqlOperationGuard,
+        PostFeed,
+        PostFeedResolver,
+    ],
+)]
+struct PostFeedGraphqlModule;
+
+async fn boot_posts() -> TestApp {
+    TestApp::builder()
+        .module::<PostFeedGraphqlModule>()
+        .build()
+        .await
+        .expect("the post schema boots")
+}
+
+/// The first `postFeed` item a subscriber under `ability` receives, once the
+/// feed pushed `posts` (`(id, org_id)` each).
+async fn first_post_pushed(ability: AbilityBuilder, posts: &[(i32, i32)]) -> serde_json::Value {
+    let app = boot_posts().await;
+    let schema = nest_rs_graphql::__private::compose_schema(
+        app.container().clone(),
+        &nest_rs_graphql::GraphqlConfig::default(),
+    );
+    let feed = app
+        .container()
+        .get::<PostFeed>()
+        .expect("the feed is a provider of the booted app");
+    let ability = Arc::new(ability.build().expect("valid test ability"));
+    let received = schema
+        .execute_stream(
+            GqlRequest::new("subscription { postFeed { id orgId title } }").data(ability),
+            None,
+        )
+        .map(payload)
+        .take(1)
+        .collect::<Vec<_>>();
+    let emit = async {
+        nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+            feed.tx.receiver_count() >= 1
+        })
+        .await;
+        for &(id, org_id) in posts {
+            feed.tx
+                .send(PostDto::new(id, org_id))
+                .expect("the subscriber is live");
+        }
+    };
+    let (received, ()) = tokio::join!(received, emit);
+    received[0]["postFeed"].clone()
+}
+
+/// `query` run under `ability`, its data and errors as JSON.
+async fn posts_read(ability: AbilityBuilder, query: &str) -> serde_json::Value {
+    let app = boot_posts().await;
+    let schema = nest_rs_graphql::__private::compose_schema(
+        app.container().clone(),
+        &nest_rs_graphql::GraphqlConfig::default(),
+    );
+    let ability = Arc::new(ability.build().expect("valid test ability"));
+    let response = schema.execute(GqlRequest::new(query).data(ability)).await;
+    serde_json::to_value(response).expect("a GraphQL response is JSON")
+}
+
+/// No SQL read a pushed item, so a relation grant decides nothing about it: the
+/// subscriber's one item is the post its decided grant names, never a post of
+/// another org the relation would have refused.
+#[tokio::test]
+async fn an_item_a_relation_alone_grants_never_reaches_the_subscriber() {
+    use crate::post;
+
+    let mut member = AbilityBuilder::new();
+    member
+        .can(Action::Read, post::Entity)
+        .when(|p| post::in_org(&p, 7));
+    member
+        .can(Action::Read, post::Entity)
+        .when(|p| p.eq(post::Column::Id, 99));
+
+    let first = first_post_pushed(member, &[(1, 8), (2, 7), (99, 8)]).await;
+
+    assert_eq!(
+        first["id"], 99,
+        "posts 1 and 2 rest on the relation alone: {first}"
+    );
+}
+
+/// `PostDto` leaves `archived_at` out, so an item never says whether it is
+/// archived: the grant reading it decides nothing, where the `None` serde gave
+/// the rebuilt row admitted every item.
+#[tokio::test]
+async fn an_item_whose_type_leaves_the_rules_column_out_is_not_judged_on_it() {
+    use crate::post;
+
+    let mut reader = AbilityBuilder::new();
+    reader
+        .can(Action::Read, post::Entity)
+        .when(|p| p.is_null(post::Column::ArchivedAt));
+    reader
+        .can(Action::Read, post::Entity)
+        .when(|p| p.eq(post::Column::Id, 99));
+
+    let first = first_post_pushed(reader, &[(1, 7), (99, 7)]).await;
+
+    assert_eq!(
+        first["id"], 99,
+        "post 1 rests on a column it never carried: {first}"
+    );
+}
+
+/// The read behind a query already left out what a relational denial names,
+/// so the mask keeps every row it was handed.
+#[tokio::test]
+async fn a_relational_denial_keeps_every_row_a_query_read() {
+    use crate::post;
+
+    let mut member = AbilityBuilder::new();
+    member.can(Action::Read, post::Entity);
+    member
+        .cannot(Action::Read, post::Entity)
+        .when(|p| post::in_org(&p, 9));
+
+    let json = posts_read(member, "{ posts { id orgId title } }").await;
+
+    assert_eq!(
+        json["data"]["posts"].as_array().map(Vec::len),
+        Some(2),
+        "{json}"
+    );
+}
+
+/// A field grant strips `title`, which `PostDto` requires, so the mask reports
+/// what it took instead of handing the value back; the rows it reports on are
+/// still every row the read admitted.
+#[tokio::test]
+async fn a_field_masked_query_keeps_every_row_a_relational_denial_left() {
+    use crate::post;
+
+    let mut member = AbilityBuilder::new();
+    member
+        .can(Action::Read, post::Entity)
+        .fields([post::Column::Id, post::Column::OrgId]);
+    member
+        .cannot(Action::Read, post::Entity)
+        .when(|p| post::in_org(&p, 9));
+
+    let json = posts_read(member, "{ posts { id orgId } }").await;
+
+    assert!(json.get("errors").is_none(), "{json}");
+    assert_eq!(
+        json["data"]["posts"].as_array().map(Vec::len),
+        Some(2),
+        "{json}"
+    );
+}
+
 /// The gate itself, at subscribe: a caller with no `Read` rule is refused before
 /// any item exists — the same refusal a query gets, so the stream carries an
 /// error and ends rather than opening.
 #[tokio::test]
 async fn a_caller_with_no_grant_is_refused_at_subscribe() {
     let app = boot().await;
-    let schema = nest_rs_graphql::compose_schema(
+    let schema = nest_rs_graphql::__private::compose_schema(
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
     );
@@ -506,13 +744,8 @@ async fn public_posture_skips_gate_and_mask() {
     assert_eq!(json["data"]["motd"], "hello");
 }
 
-// ── SEC-F1: `masked_reply` — the manual opt-in helper WS gateways must call ──
-
 #[tokio::test]
 async fn masked_reply_fails_closed_without_an_ambient_ability() {
-    // With no ambient ability installed (the transport's authz bridge missing
-    // or a handler that forgot to run inside it) the helper must error, never
-    // pass the unmasked wire value through.
     let wire = serde_json::json!({ "id": 1, "name": "ada" });
     let result = masked_reply::<widget::Entity>(Action::Read, wire);
     assert!(
@@ -523,9 +756,7 @@ async fn masked_reply_fails_closed_without_an_ambient_ability() {
 
 #[tokio::test]
 async fn masked_reply_strips_unpermitted_fields_and_unexposed_columns() {
-    // A viewer may read only the `id` field: `name` is masked to null and the
-    // server-only `secret` column is strained out — the same semantics the HTTP
-    // shaper and GraphQL wrapper apply automatically.
+    // A viewer reads only `id`: `name` masks to null, `secret` is strained out.
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, widget::Entity)
         .fields([widget::Column::Id]);
@@ -575,11 +806,8 @@ async fn masked_reply_masks_every_row_of_an_array() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// `#[entity]` carries the same posture — and it is the role where that matters
-// most, because the client never names the operation. Everything above reaches
-// the resolver through a field the document spells; everything below reaches it
-// through a **reference** a federation router sends.
+// `#[entity]` carries the same posture, reached through a reference a
+// federation router sends rather than a field the document spells.
 
 #[resolver]
 struct EntityMaskResolver;

@@ -1,42 +1,93 @@
-//! `#[queue(name = "…", job = Payload)]` — the tiny derive-style attribute that
-//! stamps a unit struct with an `impl QueueName`, giving a queue a compile-time
-//! identity (its wire name + its job type). Emits absolute `::nest_rs_queue::*`
-//! paths so the macros crate never depends on its surface crate.
+//! `#[queue(name = "…", job = Payload)]` — the attribute that gives a unit
+//! struct a queue's compile-time identity: its wire name and its payload type.
+//! Emits absolute `::nest_rs_queue::*` paths so the macros crate never depends
+//! on its surface crate.
 
+use nest_rs_codegen::{
+    Grammar, invalid_queue_name, is_valid_queue_name, missing_argument, takes_value,
+};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Ident, ItemStruct, LitStr, Token, Type, parse_macro_input};
+use syn::{Item, LitStr, Type, parse_macro_input};
+
+/// Every key `#[queue]` takes, in the order its unknown-key refusal lists them.
+const QUEUE: Grammar = Grammar::new("queue", &["name", "job"]);
 
 pub(crate) fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as QueueArgs);
-    let item = parse_macro_input!(input as ItemStruct);
+    let item = match parse_macro_input!(input as Item) {
+        Item::Struct(item) if item.fields.is_empty() => item,
+        Item::Struct(item) => {
+            return syn::Error::new(
+                item.fields.span(),
+                not_a_unit_struct("a struct with fields"),
+            )
+            .to_compile_error()
+            .into();
+        }
+        other => {
+            // Name the shape written, rather than syn's `expected struct`.
+            let shape = match &other {
+                Item::Enum(_) => "an enum",
+                Item::Union(_) => "a union",
+                Item::Impl(_) => "an impl block",
+                Item::Type(_) => "a type alias",
+                Item::Trait(_) => "a trait",
+                Item::Fn(_) => "a function",
+                _ => "not a struct",
+            };
+            return syn::Error::new_spanned(&other, not_a_unit_struct(shape))
+                .to_compile_error()
+                .into();
+        }
+    };
 
-    if !item.fields.is_empty() {
+    // A unit struct *can* carry a const parameter, and `Q<1>` and `Q<2>` would
+    // then share one wire name.
+    if let Some(parameter) = item.generics.params.first() {
         return syn::Error::new(
-            item.fields.span(),
-            "#[queue] applies to a unit struct — the queue identity carries no \
-             data (e.g. `#[queue(name = \"audio\", job = TranscodeCommand)] \
-             pub struct AudioQueue;`)",
+            parameter.span(),
+            "a `#[queue]` marker takes no generic parameter: its identity is its type, so \
+             every instantiation would share one wire name and one `#[process]` claim",
         )
         .to_compile_error()
         .into();
     }
 
     let ident = &item.ident;
-    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let QueueArgs { name, job } = args;
 
-    let out = quote! {
+    quote! {
         #item
 
-        impl #impl_generics ::nest_rs_queue::QueueName for #ident #ty_generics #where_clause {
+        impl ::nest_rs_queue::Queue for #ident {
             const NAME: &'static str = #name;
             type Job = #job;
         }
-    };
-    out.into()
+
+        impl ::nest_rs_queue::Destination for #ident {
+            type Job = #job;
+
+            fn queue_name(
+                &self,
+            ) -> ::std::result::Result<::nest_rs_queue::QueueName, ::nest_rs_queue::QueueError> {
+                ::nest_rs_queue::QueueName::new(<Self as ::nest_rs_queue::Queue>::NAME)
+            }
+        }
+    }
+    .into()
+}
+
+/// The refusal of `#[queue]` on anything but a unit struct, naming what it was
+/// written on.
+fn not_a_unit_struct(shape: &str) -> String {
+    format!(
+        "#[queue] applies to a unit struct, and this is {shape} — a queue's identity is a type \
+         carrying no data, the marker a push and a `#[process]` both name (e.g. \
+         `#[queue(name = \"audio\", job = TranscodeCommand)] pub struct AudioQueue;`)"
+    )
 }
 
 struct QueueArgs {
@@ -49,61 +100,36 @@ impl Parse for QueueArgs {
         let mut name: Option<LitStr> = None;
         let mut job: Option<Type> = None;
 
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            // The key is judged before the `=`, so a bare `#[queue(name)]`
-            // names the key rather than dying on syn's `` expected `=` `` — and
-            // a bare *unknown* key still reads as unknown rather than as
-            // missing a value.
-            let spelled = key.to_string();
-            if !matches!(spelled.as_str(), "name" | "job") {
-                return Err(syn::Error::new(
-                    key.span(),
-                    nest_rs_codegen::unknown_argument("queue", &spelled, &["name", "job"]),
-                ));
-            }
-            if !input.peek(Token![=]) {
-                return Err(syn::Error::new(
-                    key.span(),
-                    nest_rs_codegen::needs_a_value("queue", &spelled),
-                ));
-            }
-            input.parse::<Token![=]>()?;
-            match key.to_string().as_str() {
-                "name" => {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        name.is_some(),
-                        &key,
-                        "queue",
-                        &key.to_string(),
-                    )?;
-                    name = Some(input.parse()?);
-                }
-                "job" => {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        job.is_some(),
-                        &key,
-                        "queue",
-                        &key.to_string(),
-                    )?;
-                    job = Some(input.parse()?);
-                }
-                other => {
+        QUEUE.parse(input, |arg| {
+            if arg.key() == "job" {
+                job = Some(arg.value()?.parse::<Type>().map_err(|stopped| {
+                    syn::Error::new(
+                        stopped.span(),
+                        takes_value(
+                            "queue",
+                            Some("job"),
+                            "the type this queue's jobs carry, e.g. `job = TranscodeCommand`",
+                        ),
+                    )
+                })?);
+            } else {
+                let literal = arg.str_lit("emails")?;
+                // The rule `QueueName` states, refused at the literal.
+                if !is_valid_queue_name(&literal.value()) {
                     return Err(syn::Error::new(
-                        key.span(),
-                        nest_rs_codegen::unknown_argument("queue", other, &["name", "job"]),
+                        literal.span(),
+                        invalid_queue_name("queue", arg.key(), &literal.value()),
                     ));
                 }
+                name = Some(literal);
             }
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
-            }
-        }
+            Ok(())
+        })?;
 
         let name = name.ok_or_else(|| {
             syn::Error::new(
                 input.span(),
-                nest_rs_codegen::missing_argument("queue", "name", "\"emails\""),
+                missing_argument("queue", "name", "\"emails\""),
             )
         })?;
         let job = job.ok_or_else(|| {
@@ -111,7 +137,7 @@ impl Parse for QueueArgs {
                 input.span(),
                 format!(
                     "{} (the type this queue's jobs carry)",
-                    nest_rs_codegen::missing_argument("queue", "job", "<PayloadType>"),
+                    missing_argument("queue", "job", "<PayloadType>"),
                 ),
             )
         })?;

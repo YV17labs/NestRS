@@ -1,3 +1,8 @@
+use std::error::Error;
+
+use nest_rs_core::__private::{Withheld, find_in_chain};
+use nest_rs_core::{DecodeError, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem};
+use nest_rs_pipes::PipeError;
 use serde::{Deserialize, Serialize};
 
 use crate::opaque::Opaque;
@@ -6,8 +11,7 @@ use crate::opaque::Opaque;
 /// rides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsEnvelope {
-    /// The message's event name — how the dispatcher routes to a handler and
-    /// how a reply is labelled on the wire.
+    /// The message's event name, routing it and labelling its reply.
     pub event: String,
     /// The handler payload. Defaults to `null` when the frame omits `data`, so
     /// an argument-less event decodes without an explicit field.
@@ -17,12 +21,7 @@ pub struct WsEnvelope {
 
 impl WsEnvelope {
     /// Serialize `data` into the `{ event, data }` wire frame for a given event
-    /// name.
-    ///
-    /// Writes the payload straight into the frame: going through an owned
-    /// `WsEnvelope` first would allocate the event `String` and a whole
-    /// intermediate `Value` per frame — and for a broadcast, whose payload is
-    /// *already* a `Value`, that intermediate was a full deep clone.
+    /// name, without an intermediate `Value`.
     pub fn encode<T: Serialize + ?Sized>(
         event: &str,
         data: &T,
@@ -37,14 +36,7 @@ impl WsEnvelope {
 }
 
 /// What an error frame carries: the human-readable message, plus the structured
-/// per-field detail when the failure had any.
-///
-/// A `Valid<T>` rejection attaches field-level errors to its `PipeError`, and the
-/// socket used to drop them: a client got `"validation failed"` and no way to
-/// know *which* field was wrong, while the same rejection over HTTP rendered an
-/// RFC 9457 `errors` member. The frame now carries both members under the same
-/// name HTTP uses, so one payload shape describes a rejection on either
-/// transport.
+/// per-field detail when the failure had any, under HTTP's RFC 9457 `errors` name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsError {
     /// The human-readable message — the frame's `data.error`.
@@ -71,6 +63,37 @@ impl WsError {
             errors: Some(details),
         }
     }
+
+    /// The frame a [`Problem`] answers: its
+    /// [`client_message`](Problem::client_message), and its code — with its
+    /// wait as `retryAfterSeconds` when it has one — under `errors`.
+    ///
+    /// ```
+    /// use nest_rs_core::Problem;
+    /// use nest_rs_core::problem::code;
+    /// use nest_rs_ws::WsError;
+    ///
+    /// let frame = WsError::from_problem(&Problem::new(409, code::CONFLICT));
+    /// assert_eq!(frame.error, "conflict");
+    /// assert_eq!(frame.errors, Some(serde_json::json!({ "code": "CONFLICT" })));
+    /// ```
+    pub fn from_problem(problem: &Problem) -> Self {
+        let mut errors = serde_json::Map::new();
+        errors.insert("code".to_owned(), problem.code().as_str().into());
+        if let Some(seconds) = problem.retry_after() {
+            errors.insert("retryAfterSeconds".to_owned(), seconds.into());
+        }
+        Self::with_details(problem.client_message(), serde_json::Value::Object(errors))
+    }
+
+    /// The frame a [`PipeError`] answers: its message, and its field-level
+    /// detail under `errors` when it has some.
+    fn from_pipe(rejection: &PipeError) -> Self {
+        Self {
+            error: rejection.message().to_owned(),
+            errors: rejection.details().cloned(),
+        }
+    }
 }
 
 impl std::fmt::Display for WsError {
@@ -78,6 +101,10 @@ impl std::fmt::Display for WsError {
         f.write_str(&self.error)
     }
 }
+
+/// A handler may return it as its `Err`; [`WsReply::from_handler_error`] sends
+/// it whole, details included.
+impl std::error::Error for WsError {}
 
 impl<T: Into<String>> From<T> for WsError {
     fn from(message: T) -> Self {
@@ -96,16 +123,8 @@ pub enum WsReply {
 }
 
 impl WsReply {
-    /// Serializes a handler's return; a failure degrades to [`WsReply::Error`].
-    ///
-    /// Through [`Opaque`](crate::Opaque), like every other failure on this edge,
-    /// and for both of its reasons at once. It said nothing at all — the one
-    /// silent site in this file, next door to [`pipe_error`](Self::pipe_error),
-    /// whose own doc records learning the same lesson — and what it handed the
-    /// socket was `serde_json::Error`'s `Display`, which names the handler's
-    /// types and can carry the value that would not serialize. A reply that
-    /// cannot be built is the *server's* failure, so the operator gets the cause
-    /// and the client gets the constant.
+    /// Serializes a handler's return; a failure degrades to an [`Opaque`]
+    /// [`WsReply::Error`], since serde's `Display` can carry the value.
     pub fn reply<T: Serialize>(value: &T) -> WsReply {
         match serde_json::to_value(value).opaque() {
             Ok(data) => WsReply::Reply(data),
@@ -118,15 +137,8 @@ impl WsReply {
         WsReply::Error(WsError::new(message))
     }
 
-    /// The error frame a rejected [`PipeError`](nest_rs_pipes::PipeError) puts on
-    /// the wire, carrying its per-field detail. The single site both the payload
-    /// pipe and the global data pipe route through, so a client sees the same
-    /// shape whichever one rejected.
-    ///
-    /// Warns on `nest_rs::ws`, like every other refused dispatch. It used to be
-    /// silent, which was exactly backwards: a *client* sending an invalid
-    /// payload is the case an operator wants in the log, and the server's own
-    /// deliberate `Err` was the only one that appeared.
+    /// The error frame a rejected [`PipeError`] puts on
+    /// the wire, carrying its per-field detail, with a `warn` on `nest_rs::ws`.
     pub fn pipe_error(event: &str, what: &str, error: nest_rs_pipes::PipeError) -> WsReply {
         let message = format!("invalid {what} for `{event}`: {}", error.message());
         tracing::warn!(
@@ -142,12 +154,11 @@ impl WsReply {
         }
     }
 
-    /// The error frame a payload that does not deserialize puts on the wire.
-    ///
-    /// Its own constructor rather than a bare [`error`](Self::error) so the
-    /// `warn` cannot be forgotten at the one call site that produces it —
-    /// malformed input from a client is a denied dispatch like any other.
-    pub fn payload_error(event: &str, error: &impl std::fmt::Display) -> WsReply {
+    /// The error frame a payload that does not deserialize puts on the wire,
+    /// with a `warn`. Both say where it failed and what kind of value was found
+    /// ([`DecodeError`]), never the value.
+    pub fn payload_error(event: &str, error: &serde_json::Error) -> WsReply {
+        let error = nest_rs_core::DecodeError::new(error);
         tracing::warn!(
             target: crate::TARGET,
             event,
@@ -170,61 +181,196 @@ impl WsReply {
         WsReply::Error(WsError::new(format!("unknown event `{event}`")))
     }
 
-    /// The error frame a handler's `Err` produces, with the `warn` that makes
-    /// it greppable. One implementation for both routes into it — the
-    /// `#[subscribe_message]` expansion's syntactic `Result` arm and the
-    /// type-directed [`ReplyValue`] fallback — so the two can never disagree
-    /// on what a failed handler puts on the wire.
-    pub fn from_handler_error(event: &str, error: &impl std::fmt::Display) -> WsReply {
-        tracing::warn!(
-            target: crate::TARGET,
-            event,
-            error = %error,
-            "subscribe_message handler returned Err",
-        );
-        WsReply::Error(WsError::new(error.to_string()))
+    /// The error frame a handler's `Err` produces, read off the vocabulary its
+    /// chain carries: a [`WsError`] is sent whole, a [`Problem`] in its frame
+    /// ([`WsError::from_problem`]), a [`PipeError`] with its detail, a decode
+    /// failure without its value — each with a `warn` carrying the whole chain.
+    /// Anything else answers [`OPAQUE_CLIENT_MESSAGE`], its chain filed once at
+    /// `error`, as is the chain behind a `5xx` problem.
+    pub fn from_handler_error<E>(event: &str, error: E) -> WsReply
+    where
+        E: Into<Box<dyn Error + Send + Sync>> + 'static,
+    {
+        chain_reply(event, &*nest_rs_core::boxed_error(error))
     }
 }
 
-/// Turns a handler's return value into a [`WsReply`] **by type**, closing the
-/// gap the macro's syntactic detection leaves.
-///
-/// `#[subscribe_message]` reads the return type's last path segment to decide
-/// whether a handler can fail. That works for `Result<T, E>` and for
-/// `anyhow::Result<T>`, and silently does not for an alias —
-/// `pub type ServiceResult<T> = Result<T, MyError>` reads as an ordinary value,
-/// so the `Err` variant was serialized straight into the reply `data`: the
-/// whole error struct, every field, under a frame shaped like a success (no
-/// `error` key), with no `warn` server-side because nothing knew a failure had
-/// happened. It compiled without a warning, and only in codebases with typed
-/// `Serialize` errors — the ones whose errors carry the most detail.
-///
-/// Resolution here is on the type, so an alias is transparent: the inherent
-/// method below applies to any `Result<T, E>` however it is spelled, and wins
-/// over the blanket trait method (inherent methods are probed first).
-pub struct ReplyValue<'a, T>(pub &'a T);
+/// The frame a handler's error carries in its chain, else the opaque one.
+fn chain_reply(event: &str, error: &(dyn Error + 'static)) -> WsReply {
+    let frame = if let Some(frame) = find_in_chain::<WsError>(error) {
+        frame.clone()
+    } else if let Some(problem) = find_in_chain::<Problem>(error) {
+        return problem_reply(event, error, problem);
+    } else if let Some(rejection) = find_in_chain::<PipeError>(error) {
+        WsError::from_pipe(rejection)
+    } else if let Some(report) = DecodeError::in_chain(error) {
+        WsError::new(report.to_string())
+    } else {
+        return opaque_reply(event, &nest_rs_core::error_message(error));
+    };
+    answered(event, error);
+    WsReply::Error(frame)
+}
 
-impl<T: Serialize, E: std::fmt::Display> ReplyValue<'_, Result<T, E>> {
-    /// A `Result` however it was spelled: `Ok` replies, `Err` becomes the same
-    /// error frame the literal form produces.
-    pub fn into_reply(self, event: &str) -> WsReply {
+/// `problem`'s frame as the answer to `error`: a refusal answered — or a `503`,
+/// the server unable to serve it in time — filed at `warn`, unless the `5xx`
+/// answer withholds the chain behind a failure, which is then filed as an
+/// opaque failure's is.
+fn problem_reply(event: &str, error: &(dyn Error + 'static), problem: &Problem) -> WsReply {
+    match nest_rs_core::__private::withheld(problem, error) {
+        Some(Withheld::Failed(said)) => failed(event, &said),
+        Some(Withheld::Unavailable(_)) | None => answered(event, error),
+    }
+    WsReply::Error(WsError::from_problem(problem))
+}
+
+/// The line a handler's error answered with a frame files: its whole chain.
+fn answered(event: &str, error: &(dyn Error + 'static)) {
+    tracing::warn!(
+        target: crate::TARGET,
+        event,
+        error = %nest_rs_core::error_message(error),
+        "subscribe_message handler returned Err",
+    );
+}
+
+/// The operator's line for a failure the frame withholds: its whole chain.
+fn failed(event: &str, said: &str) {
+    tracing::error!(
+        target: crate::TARGET,
+        event,
+        error = %said,
+        "websocket message failed",
+    );
+}
+
+/// The opaque frame, with what the error said on the operator's line at `error`.
+fn opaque_reply(event: &str, said: &str) -> WsReply {
+    failed(event, said);
+    WsReply::Error(WsError::new(OPAQUE_CLIENT_MESSAGE))
+}
+
+/// Turns a handler's return value into a [`WsReply`] **by type**, so a `Result`
+/// behind an alias (`type ServiceResult<T> = Result<T, MyError>`) still fails
+/// rather than serializing its `Err` into a success frame.
+///
+/// The inherent method applies to any `Result<T, E>` and wins over the blanket
+/// trait method; it carries no bound on `E`, since a failed bound would drop an
+/// `Err` onto the blanket method and serialize it whole.
+///
+/// The expansion splits twice, so `Result<Result<T, E1>, E2>` fails on either
+/// `Err`; a `Result` any deeper, or inside an `Option`, a `Vec` or a struct, is
+/// data.
+pub struct ReplyValue<T>(pub T);
+
+/// A handler's return value, split into what replies and what failed.
+pub enum ReplyOutcome<T, E> {
+    /// The value a success replies with — split again, or serialized.
+    Value(T),
+    /// The error an `Err` carried, already in the [`ErrorReport`] that turns it
+    /// into a frame, so an `Infallible` one adds no unreachable call to the expansion.
+    Failed(ErrorReport<E>),
+}
+
+impl<T, E> ReplyValue<Result<T, E>> {
+    /// A `Result` however it was spelled: `Ok` is the value, `Err` is handed back.
+    pub fn into_outcome(self) -> ReplyOutcome<T, E> {
         match self.0 {
-            Ok(value) => WsReply::reply(value),
-            Err(err) => WsReply::from_handler_error(event, err),
+            Ok(value) => ReplyOutcome::Value(value),
+            Err(err) => ReplyOutcome::Failed(ErrorReport(err)),
         }
     }
 }
 
-/// The ordinary case: any serializable value replies as-is. Kept a trait so the
-/// `Result` impl above can be inherent, and therefore more specific.
+/// The ordinary case: any other value is the value. A trait, so the inherent
+/// `Result` impl above is probed first.
 pub trait ReplyValueFallback {
-    /// Serialize the value into a reply on the request's event name.
-    fn into_reply(self, event: &str) -> WsReply;
+    /// The value itself.
+    type Value;
+
+    /// The value, with nothing that can have failed.
+    fn into_outcome(self) -> ReplyOutcome<Self::Value, std::convert::Infallible>;
 }
 
-impl<T: Serialize> ReplyValueFallback for ReplyValue<'_, T> {
-    fn into_reply(self, _event: &str) -> WsReply {
-        WsReply::reply(self.0)
+impl<T> ReplyValueFallback for ReplyValue<T> {
+    type Value = T;
+
+    fn into_outcome(self) -> ReplyOutcome<T, std::convert::Infallible> {
+        ReplyOutcome::Value(self.0)
+    }
+}
+
+/// A handler's error, turned into the frame a client reads and the line an
+/// operator reads — **by type**, resolved where the expansion names it, in three
+/// tiers, each taken only when the one above does not apply:
+///
+/// 1. A [`ToProblem`] error takes the inherent method: the problem it says, in
+///    its frame ([`WsError::from_problem`]); `None` answers opaquely, its chain
+///    filed at `error`, as is the chain behind a `5xx` problem.
+/// 2. Any other error taking a box — `Send` or not — takes
+///    [`ErrorReportChain`]: the vocabulary its chain carries
+///    ([`WsReply::from_handler_error`]), else the opaque frame.
+/// 3. Any other `Display` type takes [`ErrorReportFallback`]: it has no causes
+///    to read vocabulary from, so it answers opaquely, its sentence on the
+///    operator's line said without a decode failure's value.
+///
+/// A type that is none of them does not compile.
+pub struct ErrorReport<E>(pub E);
+
+impl<E: ToProblem> ErrorReport<E> {
+    /// The problem's frame, or the opaque one.
+    pub fn into_frame(self, event: &str) -> WsReply {
+        match self.0.to_problem() {
+            Some(problem) => problem_reply(event, &self.0, &problem),
+            None => opaque_reply(event, &nest_rs_core::error_message(&self.0)),
+        }
+    }
+}
+
+/// The error that is not a [`ToProblem`] case of [`ErrorReport`] — the second
+/// tier.
+pub trait ErrorReportChain {
+    /// The frame its chain's vocabulary answers, else the opaque one.
+    fn into_frame(self, event: &str) -> WsReply;
+}
+
+impl<E> ErrorReportChain for ErrorReport<E>
+where
+    E: Into<Box<dyn Error>> + 'static,
+{
+    fn into_frame(self, event: &str) -> WsReply {
+        chain_reply(event, &*boxed(self.0))
+    }
+}
+
+/// `error` boxed with every link kept as the type it is: an `anyhow::Error` is
+/// unwrapped as [`nest_rs_core::boxed_error`] unwraps it, since anyhow's own
+/// box hides the error it holds from a chain walk.
+fn boxed<E: Into<Box<dyn Error>> + 'static>(error: E) -> Box<dyn Error> {
+    let mut slot = Some(error);
+    if let Some(anyhow) = (&mut slot as &mut dyn std::any::Any)
+        .downcast_mut::<Option<nest_rs_core::anyhow::Error>>()
+        .and_then(Option::take)
+    {
+        return anyhow.reallocate_into_boxed_dyn_error_without_backtrace();
+    }
+    // Unreachable fallback: `slot` is emptied only by the `take` that returned above.
+    slot.map_or_else(|| Box::from(OPAQUE_CLIENT_MESSAGE), Into::into)
+}
+
+/// The `Display`-only case of [`ErrorReport`] — the third tier, implemented on a
+/// borrow so that method resolution reaches it only after the two above.
+pub trait ErrorReportFallback {
+    /// The opaque frame, with the error's sentence on the operator's line.
+    fn into_frame(self, event: &str) -> WsReply;
+}
+
+/// A `Display`-only error has no chain to read a decode failure off, so its
+/// sentence is read by serde's wording alone.
+impl<E: std::fmt::Display> ErrorReportFallback for &ErrorReport<E> {
+    fn into_frame(self, event: &str) -> WsReply {
+        let said = DecodeError::redact(&self.0.to_string(), None).into_owned();
+        opaque_reply(event, &said)
     }
 }
 
@@ -281,9 +427,6 @@ mod tests {
         }
     }
 
-    // The finding: a `Valid<T>` rejection attached per-field errors to its
-    // `PipeError` and the socket formatted only `message()`, so a client learned
-    // that validation failed but not which field.
     #[test]
     fn pipe_error_carries_the_field_level_detail() {
         let details = serde_json::json!({ "text": [{ "code": "length" }] });
@@ -314,14 +457,98 @@ mod tests {
         );
     }
 
-    /// A reply that cannot be serialized is the server failing, and it used to
-    /// fail *silently* while handing the socket serde's own `Display`.
-    ///
-    /// Both halves are asserted here because either one alone passes for the
-    /// wrong reason: a constant on the wire proves nothing if the cause went
-    /// nowhere, and an event proves nothing if the frame still carries the
-    /// types. The map keys are the shape `serde_json` refuses — a non-string
-    /// key — so nothing here depends on a hand-written failing `Serialize`.
+    #[derive(Debug)]
+    struct Outage;
+
+    impl std::fmt::Display for Outage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the search index at 10.0.0.1 refused")
+        }
+    }
+
+    impl Error for Outage {}
+
+    impl ToProblem for Outage {
+        fn to_problem(&self) -> Option<Problem> {
+            Some(Problem::new(503, nest_rs_core::problem::code::UNAVAILABLE).with_retry_after(30))
+        }
+    }
+
+    /// A server problem answers the sentence an opaque failure answers, so it
+    /// files the line an opaque failure files, at `error`, by either tier; a
+    /// bare problem or a client one is a refusal answered, at `warn`.
+    #[test]
+    fn a_server_problem_files_the_chain_its_frame_withholds() {
+        use nest_rs_core::problem::code;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let failed = || logs.find(crate::TARGET, "websocket message failed");
+        let answered = || logs.find(crate::TARGET, "subscribe_message handler returned Err");
+
+        let WsReply::Error(frame) = ErrorReport(Outage).into_frame("search") else {
+            panic!("an error answers an error frame");
+        };
+        assert_eq!(frame.error, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert_eq!(
+            frame.errors,
+            Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 30 })),
+        );
+        let unavailable = answered();
+        assert_eq!(unavailable.len(), 1, "{unavailable:#?}");
+        assert_eq!(
+            unavailable[0].level, "warn",
+            "a 503 is the server unable to serve it in time"
+        );
+        assert!(
+            unavailable[0]
+                .field("error")
+                .is_some_and(|e| e.contains("10.0.0.1")),
+            "{unavailable:#?}"
+        );
+        assert!(failed().is_empty(), "{:#?}", failed());
+
+        let carried = nest_rs_core::anyhow::Error::from(Problem::new(500, code::INTERNAL))
+            .context("charging the card");
+        let WsReply::Error(frame) = WsReply::from_handler_error("charge", carried) else {
+            panic!("an error answers an error frame");
+        };
+        assert_eq!(frame.error, OPAQUE_CLIENT_MESSAGE);
+        let lines = failed();
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        assert_eq!(lines[0].level, "error");
+        assert!(
+            lines[0]
+                .field("error")
+                .is_some_and(|e| e.contains("charging the card")),
+            "{lines:#?}"
+        );
+
+        for (problem, said) in [
+            (
+                Problem::new(503, code::UNAVAILABLE),
+                nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
+            ),
+            (Problem::new(409, code::CONFLICT), "conflict"),
+        ] {
+            let WsReply::Error(frame) = WsReply::from_handler_error("charge", problem) else {
+                panic!("an error answers an error frame");
+            };
+            assert_eq!(frame.error, said);
+        }
+        assert_eq!(
+            failed().len(),
+            1,
+            "a bare problem or a client one withholds nothing"
+        );
+        let refused = answered();
+        assert_eq!(refused.len(), 3, "{refused:#?}");
+        assert!(
+            refused.iter().all(|line| line.level == "warn"),
+            "{refused:#?}"
+        );
+    }
+
+    /// A non-string map key is the shape `serde_json` refuses.
     #[test]
     fn a_reply_that_cannot_be_serialized_tells_the_operator_and_not_the_client() {
         let logs = nest_rs_testing::LogCapture::install();

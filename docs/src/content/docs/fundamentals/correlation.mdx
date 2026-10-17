@@ -1,7 +1,6 @@
 ---
 title: Correlation
 description: "Every unit of work runs under a W3C trace the framework starts for you — read it anywhere, and follow one request across a stream, a socket and a queue."
-tier: all-options
 sidebar:
   order: 11
 ---
@@ -19,7 +18,7 @@ impl PostService {
         let post = self.repo.publish(id).await?;
         // No id is named here, and none should be: the line carries `trace_id`,
         // `span_id` and `actor_id` already.
-        tracing::info!(target: "features::posts", %id, "post published");
+        tracing::info!(target: crate::posts::TARGET, %id, "post published");
         Ok(post)
     }
 }
@@ -65,7 +64,7 @@ Whoever **accepts** the work decides, and there are two answers: continue one
 that arrived with the work, or start one.
 
 An inbound `traceparent` is continued **only from a peer in
-`NESTRS_HTTP__TRUSTED_PROXIES`** — the same list `X-Forwarded-For` is weighed
+`<PREFIX>_HTTP__TRUSTED_PROXIES`** — the same list `X-Forwarded-For` is weighed
 against. From anyone else the trace is *restarted*, which is what the
 specification defines a front gate to do. Without that gate a public client could
 file its requests into a trace of its choosing and set the `sampled` flag on
@@ -112,16 +111,18 @@ matters at every edge, and the one that surprises people is the first:
 | Where | What you get |
 |---|---|
 | inside an `#[sse]` stream, or any streaming body | the request that opened it, for as long as it streams |
+| a DataLoader batch | the request whose field triggered it, on a task of its own |
+| a task handed to `TaskContext::carry` | the unit that spawned it, however long it runs |
 | a WebSocket message | its own span, the connection's trace, the actor from the upgrade |
 | a `#[on_connect]` / `#[on_disconnect]` hook | a unit of work too — `ws.connect`, `ws.disconnect`, under the upgrade's trace |
 | a GraphQL subscription | the trace of the upgrade that opened the socket |
 | an MCP operation | the trace of the HTTP request it arrived on |
 | a queue job, in another process | the producer's trace, as a **child** of the enqueue |
 | a scheduled tick | a fresh trace of its own — nothing upstream to continue |
-| an `#[on_event]` listener | the span of whatever emitted the event — dispatch is inline, not a unit of work of its own |
+| an `#[on_event]` listener | its own span, `events.dispatch`, a **child** of whatever emitted the event — same trace, same actor |
 
 A queue crosses a *process*, so the context travels in the job envelope rather
-than in a task-local. A payload that carries none — a legacy producer, a foreign
+than in the ambient context a unit carries in process. A payload that carries none — a legacy producer, a foreign
 system — starts a trace instead of being refused.
 
 ## Calling another service

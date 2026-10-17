@@ -1,4 +1,4 @@
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +19,6 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
     pub id: Uuid,
-    #[sea_orm(unique)]
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
     #[expose]

@@ -1,0 +1,1299 @@
+//! The transport's accept loop: a place under the connection cap taken before
+//! each `accept()`, accept failures backed off, TLS on tokio-rustls, and each
+//! connection served by hyper on a task of its own, a panic contained there and
+//! each of its phases held to a deadline ([`Phases`]).
+//!
+//! Each request hyper reads is handed to the assembled [`BoxEndpoint`] as a
+//! nestrs [`Request`]; poem's `Server` exposed no hook for the cap, the accept
+//! errors or hyper's timer, so the loop is ours
+//! (`.claude/decisions/http-server.md`).
+
+use std::convert::Infallible;
+use std::future::Future;
+use std::io;
+use std::net::SocketAddr;
+use std::pin::pin;
+use std::sync::Arc;
+use std::task::Poll;
+use std::time::Duration;
+
+use http::Version;
+use http::uri::Scheme;
+use http_body_util::BodyExt;
+use http_body_util::combinators::BoxBody;
+use hyper::body::Incoming;
+use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper_util::server::conn::auto;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::task::JoinSet;
+use tokio::time::Instant;
+use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::{AbortOnDropHandle, TaskTracker};
+
+use crate::body::Body;
+use crate::drain::Drain;
+use crate::endpoint::{BoxEndpoint, Endpoint};
+use crate::error::HttpError;
+use crate::phase::{PhasedBody, PhasedIo, Phases};
+use crate::request::{Request, RequestFacts};
+use crate::tls::ListenerTls;
+use crate::window::{self, Window};
+
+/// What one HTTP/2 connection runs at once (RFC 9113 §5.1.2), hyper's own default.
+const MAX_CONCURRENT_STREAMS: u32 = 200;
+
+/// Reset streams a client may leave unanswered before the connection is
+/// refused: the bound on rapid reset (CVE-2023-44487).
+const MAX_PENDING_ACCEPT_RESET_STREAMS: usize = 20;
+
+/// The decoded size of an HTTP/2 header list.
+const MAX_HEADER_LIST_SIZE: u32 = 16 * 1024;
+
+/// An HTTP/1 connection's read buffer, the sibling of the header-list cap: a
+/// head that outgrows it is answered `431` (RFC 6585 §5) by hyper, where its
+/// default buffer would let each slow head pin about 400 KiB.
+const MAX_HTTP1_BUFFER: usize = 64 * 1024;
+
+/// How often an idle HTTP/2 connection is pinged, and how long the ping waits.
+const HTTP2_KEEP_ALIVE: Duration = Duration::from_secs(20);
+
+/// How long a connection whose phase ran out has to close once asked: hyper
+/// closes an idle HTTP/1 connection at once, an HTTP/2 peer needs a moment to
+/// read `GOAWAY`, and a head half read is waited on — then it is dropped.
+const PHASE_GRACE: Duration = Duration::from_secs(1);
+
+/// What each connection's phases and writes are held to: the four
+/// [`HttpConfig`](crate::HttpConfig) deadlines, the body's held by the edge.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Deadlines {
+    /// The first head from accept, and on HTTP/1 a later head from its first byte.
+    pub(crate) header_read: Duration,
+    /// A request body waiting for its next frame once something reads it.
+    pub(crate) body_read: Duration,
+    /// A kept-alive connection waiting for its next request.
+    pub(crate) idle: Duration,
+    /// A write waiting on a peer that takes nothing.
+    pub(crate) send: Duration,
+}
+
+impl Default for Deadlines {
+    fn default() -> Self {
+        Self {
+            header_read: crate::config::DEFAULT_HEADER_READ_TIMEOUT,
+            body_read: crate::config::DEFAULT_BODY_READ_TIMEOUT,
+            idle: crate::config::DEFAULT_IDLE_TIMEOUT,
+            send: crate::config::DEFAULT_SEND_TIMEOUT,
+        }
+    }
+}
+
+/// The accept loop over one bound listener.
+pub(crate) struct Server {
+    listener: Listener,
+    local: SocketAddr,
+    tls: Option<ListenerTls>,
+    endpoint: BoxEndpoint,
+    drain: Arc<Drain>,
+    admission: Admission,
+    deadlines: Deadlines,
+}
+
+impl Server {
+    /// Serve `endpoint` on `listener`, at most `max_concurrent_connections` at once.
+    pub(crate) fn new(
+        listener: TcpListener,
+        endpoint: BoxEndpoint,
+        drain: Arc<Drain>,
+        max_concurrent_connections: usize,
+        deadlines: Deadlines,
+        tls: Option<ListenerTls>,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            local: listener.local_addr()?,
+            listener: Listener(listener),
+            tls,
+            endpoint,
+            drain,
+            admission: Admission::new(max_concurrent_connections),
+            deadlines,
+        })
+    }
+
+    /// Accept until `signal` resolves; then stop accepting, ask every
+    /// connection to finish what it is answering, wait for them until the
+    /// drain's bound, and cut what is left, its HTTP/2 streams given until the
+    /// settle past the bound to unwind.
+    pub(crate) async fn run(mut self, signal: impl Future<Output = ()>) {
+        let mut signal = pin!(signal);
+        let (acceptor, _renewal) = match self.tls.take() {
+            Some(tls) => (
+                Some(tls.acceptor),
+                tls.renewal
+                    .map(|renewal| AbortOnDropHandle::new(tokio::spawn(renewal.run()))),
+            ),
+            None => (None, None),
+        };
+        let streams = TaskTracker::new();
+        let builder = Arc::new(builder(self.deadlines.send, streams.clone()));
+        let shutdown = CancellationToken::new();
+        let mut connections = JoinSet::new();
+        let mut backoff = AcceptBackoff::default();
+        loop {
+            let (place, waited) = match self.admission.free() {
+                Some(place) => (place, None),
+                None => tokio::select! {
+                    biased;
+                    () = &mut signal => break,
+                    place = self.admission.freed() => match place {
+                        Some(place) => (place, None),
+                        None => break,
+                    },
+                    accepted = backoff.accept(|| self.listener.next()) => {
+                        // Held unserved until a place frees, as the backlog holds the rest.
+                        self.admission.held_back();
+                        tokio::select! {
+                            () = &mut signal => break,
+                            place = self.admission.freed() => match place {
+                                Some(place) => (place, Some(accepted)),
+                                None => break,
+                            },
+                        }
+                    }
+                },
+            };
+            let (stream, peer) = match waited {
+                Some(accepted) => accepted,
+                None => tokio::select! {
+                    () = &mut signal => break,
+                    accepted = accept_holding_a_place(
+                        &mut backoff,
+                        &mut self.admission,
+                        || self.listener.next(),
+                    ) => accepted,
+                },
+            };
+            let accepted = Instant::now();
+            let connection = Connection {
+                peer,
+                local: self.local,
+                accepted,
+                deadlines: self.deadlines,
+                endpoint: self.endpoint.clone(),
+                builder: Arc::clone(&builder),
+                shutdown: shutdown.clone(),
+            };
+            let socket = self.drain.socket(stream, place, self.deadlines.send);
+            connections.spawn(contained(connection.serve(socket, acceptor.clone())));
+            while connections.try_join_next().is_some() {}
+        }
+        drop(self.listener);
+        shutdown.cancel();
+        streams.close();
+        let cut_at = match self.drain.bound() {
+            Some(bound) => tokio::time::timeout_at(bound, join_all(&mut connections, &streams))
+                .await
+                .is_err()
+                .then_some(bound),
+            None => {
+                join_all(&mut connections, &streams).await;
+                None
+            }
+        };
+        if let Some(bound) = cut_at {
+            // Each socket drops past the bound, so the drain counts it as cut; an
+            // HTTP/2 connection dropped resets its streams, which wakes their tasks.
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
+            // The settle the transport's detached work shares, from the bound.
+            let settled = bound + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
+            if tokio::time::timeout_at(settled, streams.wait())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    target: crate::target::HTTP,
+                    streams = streams.len(),
+                    "HTTP/2 stream tasks still ran after their connections were cut; they are left to end on their own",
+                );
+            }
+        }
+    }
+}
+
+/// The bound listener, every connection it yields written without Nagle's delay.
+struct Listener(TcpListener);
+
+impl Listener {
+    /// The next connection, its socket set `TCP_NODELAY`, or served with
+    /// Nagle's algorithm on and said so.
+    async fn next(&self) -> io::Result<(TcpStream, SocketAddr)> {
+        let (stream, peer) = self.0.accept().await?;
+        if let Err(error) = stream.set_nodelay(true) {
+            tracing::warn!(
+                target: crate::target::HTTP,
+                error = %nest_rs_core::error_message(&error),
+                "TCP_NODELAY could not be set; the connection is served with Nagle's algorithm on",
+            );
+        }
+        Ok((stream, peer))
+    }
+}
+
+/// The next connection, a place under the cap in hand: once the listener has
+/// none waiting, nothing waits on the cap any more.
+async fn accept_holding_a_place<T, A>(
+    backoff: &mut AcceptBackoff,
+    admission: &mut Admission,
+    accept: impl FnMut() -> A,
+) -> T
+where
+    A: Future<Output = io::Result<T>>,
+{
+    backoff
+        .accept_noting(accept, || admission.nothing_waits())
+        .await
+}
+
+/// Every connection's task, then every HTTP/2 stream's, ended.
+async fn join_all(connections: &mut JoinSet<()>, streams: &TaskTracker) {
+    while connections.join_next().await.is_some() {}
+    streams.wait().await;
+}
+
+/// The settings every connection is served with: hyper's timer, the HTTP/2
+/// limits, the HTTP/1 buffer and its one write per flush, and each HTTP/2
+/// stream held to `send_timeout`. hyper's head deadline is off: [`Phases`]
+/// holds the head, the idle spell and the version sniff before both.
+fn builder(send_timeout: Duration, streams: TaskTracker) -> auto::Builder<Contained> {
+    let mut builder = auto::Builder::new(Contained {
+        send_timeout,
+        streams,
+    });
+    builder
+        .http1()
+        .timer(TokioTimer::new())
+        .header_read_timeout(None)
+        .keep_alive(true)
+        .max_buf_size(MAX_HTTP1_BUFFER)
+        // The socket takes vectored writes, so hyper would `writev(2)` the head
+        // and each body chunk apart: dearer for a small response than the copy.
+        .writev(false);
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .max_concurrent_streams(MAX_CONCURRENT_STREAMS)
+        .max_pending_accept_reset_streams(MAX_PENDING_ACCEPT_RESET_STREAMS)
+        .max_header_list_size(MAX_HEADER_LIST_SIZE)
+        .keep_alive_interval(HTTP2_KEEP_ALIVE)
+        .keep_alive_timeout(HTTP2_KEEP_ALIVE);
+    builder
+}
+
+/// One accepted socket's way through TLS and HTTP.
+struct Connection {
+    peer: SocketAddr,
+    local: SocketAddr,
+    accepted: Instant,
+    deadlines: Deadlines,
+    endpoint: BoxEndpoint,
+    builder: Arc<auto::Builder<Contained>>,
+    shutdown: CancellationToken,
+}
+
+impl Connection {
+    async fn serve<Io>(self, socket: Io, tls: Option<TlsAcceptor>)
+    where
+        Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
+        let phases = Phases::new(
+            self.accepted,
+            self.deadlines.header_read,
+            self.deadlines.idle,
+        );
+        let Some(acceptor) = tls else {
+            return self.http(socket, Scheme::HTTP, phases).await;
+        };
+        let handshake = tokio::select! {
+            () = self.shutdown.cancelled() => return,
+            handshake = tokio::time::timeout_at(phases.first_head_due(), acceptor.accept(socket)) => {
+                handshake
+            }
+        };
+        match handshake {
+            Ok(Ok(stream)) => self.http(stream, Scheme::HTTPS, phases).await,
+            Ok(Err(error)) => tracing::debug!(
+                target: crate::target::HTTP,
+                error = %nest_rs_core::error_message(&error),
+                "tls handshake failed; the connection is dropped",
+            ),
+            Err(_) => tracing::debug!(
+                target: crate::target::HTTP,
+                header_read_timeout_ms = millis(self.deadlines.header_read),
+                "tls handshake unfinished at the head deadline; the connection is dropped",
+            ),
+        }
+    }
+
+    /// HTTP/1 or HTTP/2, told apart by the first bytes, until the peer goes,
+    /// shutdown asks the connection to finish what it is answering, or one of
+    /// its phases outlives its deadline.
+    async fn http<Io>(self, io: Io, scheme: Scheme, phases: Arc<Phases>)
+    where
+        Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
+        let Self {
+            peer,
+            local,
+            deadlines,
+            endpoint,
+            builder,
+            shutdown,
+            ..
+        } = self;
+        let requests = Arc::clone(&phases);
+        let service = hyper::service::service_fn(move |request: http::Request<Incoming>| {
+            // Taken here, so a handler dropped before it answers ends it too.
+            let in_flight = requests.request();
+            let http2 = request.version() == Version::HTTP_2;
+            let endpoint = endpoint.clone();
+            let request = arrived(request, peer, local, scheme.clone());
+            async move {
+                let response = endpoint
+                    .call(request)
+                    .await
+                    .unwrap_or_else(HttpError::into_response);
+                // Read on the stream's own task, where hyper polls this future.
+                let window = if http2 { Window::current() } else { None };
+                Ok::<_, Infallible>(
+                    response
+                        .into_http()
+                        .map(|body| PhasedBody::new(body, in_flight, window)),
+                )
+            }
+        });
+        let io = TokioIo::new(PhasedIo::new(io, Arc::clone(&phases)));
+        let mut connection = pin!(builder.serve_connection_with_upgrades(io, service));
+        let ended = tokio::select! {
+            ended = connection.as_mut() => ended,
+            () = shutdown.cancelled() => {
+                connection.as_mut().graceful_shutdown();
+                connection.await
+            }
+            phase = phases.expired() => {
+                tracing::debug!(
+                    target: crate::target::HTTP,
+                    phase = phase.name(),
+                    "a connection outlived its phase deadline; it is closed",
+                );
+                connection.as_mut().graceful_shutdown();
+                match tokio::time::timeout(PHASE_GRACE, connection.as_mut()).await {
+                    Ok(ended) => ended,
+                    Err(_) => return,
+                }
+            }
+        };
+        match ended {
+            Ok(()) => {}
+            Err(error) if send_stalled(&*error) => tracing::warn!(
+                target: crate::target::HTTP,
+                send_timeout_ms = millis(deadlines.send),
+                error = %nest_rs_core::error_message(&*error),
+                "the peer took nothing within the send deadline; it is cut off",
+            ),
+            Err(error) => tracing::debug!(
+                target: crate::target::HTTP,
+                error = %nest_rs_core::error_message(&*error),
+                "connection ended on an error",
+            ),
+        }
+    }
+}
+
+/// The request hyper read, as the endpoint takes it: hyper's `OnUpgrade` stays
+/// in its extensions, where a leaf takes the socket, and its body is boxed once,
+/// as `Sync` as hyper's own.
+fn arrived(
+    request: http::Request<Incoming>,
+    peer: SocketAddr,
+    local: SocketAddr,
+    scheme: Scheme,
+) -> Request {
+    let (head, body) = request.into_parts();
+    let facts = RequestFacts {
+        peer: Some(peer),
+        local: Some(local),
+        scheme,
+        original_uri: head.uri.clone(),
+        route: None,
+        arrival: Some(Instant::now()),
+    };
+    let body = Body::from_boxed(BoxBody::new(body.map_err(io::Error::other)));
+    Request::from_raw(head, body, facts)
+}
+
+/// Whether `error` ended a connection on a write the peer took nothing of.
+fn send_stalled(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |error| error.source()).any(|error| {
+        error
+            .downcast_ref::<io::Error>()
+            .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut)
+    })
+}
+
+/// `duration` in whole milliseconds, for a log field.
+pub(crate) fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// A connection's `future`, with a panic filed and kept from the task that
+/// polls it: the connection is dropped, and its failure never reaches the loop
+/// or the runtime.
+async fn contained(future: impl Future<Output = ()>) {
+    if let Err(payload) = nest_rs_core::panic::contain(future).await {
+        nest_rs_core::contained_panic!(
+            target: crate::target::HTTP,
+            payload.as_ref(),
+            "a connection task panicked",
+        );
+    }
+}
+
+/// hyper's executor for the tasks it spawns — an HTTP/2 connection's streams —
+/// each contained on its own: a panic resets its stream, as does a frame the
+/// peer's window has not taken within the send deadline, and the connection
+/// keeps serving the others. Each is tracked, so the loop waits for it at the
+/// way down: a stream whose connection is cut is reset and ends with it.
+#[derive(Clone)]
+struct Contained {
+    send_timeout: Duration,
+    streams: TaskTracker,
+}
+
+impl<F> hyper::rt::Executor<F> for Contained
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn execute(&self, future: F) {
+        let send_timeout = self.send_timeout;
+        self.streams.spawn(async move {
+            let ended = nest_rs_core::panic::contain(window::within(future, send_timeout)).await;
+            match ended {
+                Ok(Some(_)) => {}
+                Ok(None) => tracing::warn!(
+                    target: crate::target::HTTP,
+                    send_timeout_ms = millis(send_timeout),
+                    "the peer took nothing within the send deadline; it is cut off",
+                ),
+                Err(payload) => nest_rs_core::contained_panic!(
+                    target: crate::target::HTTP,
+                    payload.as_ref(),
+                    "an HTTP/2 stream task panicked",
+                ),
+            }
+        });
+    }
+}
+
+/// Each connection's place under the cap, taken before `accept()`, so past
+/// it one connection is accepted and held unserved and the rest wait in the
+/// kernel's listen backlog (Go's `netutil.LimitListener`), never accepted to
+/// be reset.
+struct Admission {
+    places: Arc<Semaphore>,
+    max_concurrent_connections: usize,
+    /// A connection waited on the full cap, and the backlog has not been found
+    /// empty since.
+    reached: bool,
+}
+
+impl Admission {
+    fn new(max_concurrent_connections: usize) -> Self {
+        Self {
+            places: Arc::new(Semaphore::new(max_concurrent_connections)),
+            max_concurrent_connections,
+            reached: false,
+        }
+    }
+
+    /// A free place, if the cap is not full.
+    fn free(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.places).try_acquire_owned().ok()
+    }
+
+    /// The next place to free. `None` only if the places were closed, which
+    /// nothing does.
+    async fn freed(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.places).acquire_owned().await.ok()
+    }
+
+    /// A connection was accepted with the cap full, and waits for a place:
+    /// said once, until nothing waits.
+    fn held_back(&mut self) {
+        if !std::mem::replace(&mut self.reached, true) {
+            tracing::warn!(
+                target: crate::target::HTTP,
+                max_concurrent_connections = self.max_concurrent_connections,
+                variable = crate::HttpConfig::connection_cap_variable(),
+                "connection cap reached; new connections wait in the listen backlog",
+            );
+        }
+    }
+
+    /// With a place in hand, the backlog was found empty: whatever waited on
+    /// the cap has been accepted, said once. Under steady load a connection
+    /// always waits, so a busy spell files one pair, not one per connection.
+    fn nothing_waits(&mut self) {
+        if std::mem::take(&mut self.reached) {
+            tracing::info!(
+                target: crate::target::HTTP,
+                max_concurrent_connections = self.max_concurrent_connections,
+                "connection cap no longer reached; accepting again",
+            );
+        }
+    }
+}
+
+/// How the loop answers an `accept()` that failed: a connection the peer gave
+/// up on is skipped at once; anything else — out of file descriptors, of
+/// buffers — waits 5 ms, doubling to 1 s, until an accept succeeds (Go's
+/// `net/http`), so a full descriptor table is not spun on.
+#[derive(Default)]
+struct AcceptBackoff {
+    /// The current delay; `None` outside an episode of failures.
+    delay: Option<Duration>,
+}
+
+impl AcceptBackoff {
+    const FIRST: Duration = Duration::from_millis(5);
+    const MOST: Duration = Duration::from_secs(1);
+
+    /// The next connection `accept` yields, each failure before it waited out.
+    /// Dropped at the signal mid-wait: the listener's accept and the sleep are
+    /// both cancel-safe.
+    async fn accept<T, A>(&mut self, accept: impl FnMut() -> A) -> T
+    where
+        A: Future<Output = io::Result<T>>,
+    {
+        self.accept_noting(accept, || {}).await
+    }
+
+    /// [`accept`](Self::accept), calling `empty` each time the listener itself
+    /// has no connection waiting — never while a failure is waited out.
+    async fn accept_noting<T, A>(
+        &mut self,
+        mut accept: impl FnMut() -> A,
+        mut empty: impl FnMut(),
+    ) -> T
+    where
+        A: Future<Output = io::Result<T>>,
+    {
+        loop {
+            let mut attempt = pin!(accept());
+            let attempted = match futures_util::poll!(attempt.as_mut()) {
+                Poll::Ready(attempted) => attempted,
+                Poll::Pending => {
+                    empty();
+                    attempt.await
+                }
+            };
+            match attempted {
+                Ok(accepted) => {
+                    self.succeeded();
+                    return accepted;
+                }
+                Err(error) => {
+                    if let Some(delay) = self.failed(&error) {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// How long to wait before accepting again, if at all; one `warn` opens an
+    /// episode.
+    fn failed(&mut self, error: &io::Error) -> Option<Duration> {
+        if matches!(
+            error.kind(),
+            io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::Interrupted
+        ) {
+            tracing::debug!(
+                target: crate::target::HTTP,
+                error = %nest_rs_core::error_message(error),
+                "a connection was gone before it was accepted; accepting the next",
+            );
+            return None;
+        }
+        let delay = match self.delay {
+            Some(delay) => (delay * 2).min(Self::MOST),
+            None => {
+                tracing::warn!(
+                    target: crate::target::HTTP,
+                    error = %nest_rs_core::error_message(error),
+                    retry_ms = millis(Self::FIRST),
+                    "accept failed; backing off",
+                );
+                Self::FIRST
+            }
+        };
+        self.delay = Some(delay);
+        Some(delay)
+    }
+
+    /// An accept succeeded: the episode is over.
+    fn succeeded(&mut self) {
+        self.delay = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::Pin;
+    use std::sync::Mutex;
+    use std::task::Context;
+
+    use bytes::Bytes;
+    use http::HeaderValue;
+    use nest_rs_testing::LogCapture;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadBuf};
+
+    use super::*;
+    use crate::endpoint_fn;
+    use crate::phase::PIECE;
+    use crate::response::Response;
+
+    /// `EMFILE` on Linux and macOS alike.
+    const EMFILE: i32 = 24;
+
+    /// One write a [`Recorded`] socket was handed.
+    #[derive(Debug, PartialEq)]
+    enum Written {
+        Plain(Bytes),
+        Vectored(Vec<Bytes>),
+    }
+
+    /// A socket that offers vectored writes, as a TCP stream does, and keeps
+    /// every write it is handed.
+    struct Recorded {
+        inner: DuplexStream,
+        writes: Arc<Mutex<Vec<Written>>>,
+    }
+
+    impl Recorded {
+        fn record(&self, written: Written) {
+            self.writes.lock().expect("unpoisoned").push(written);
+        }
+    }
+
+    impl AsyncRead for Recorded {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for Recorded {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.record(Written::Plain(Bytes::copy_from_slice(buf)));
+            Pin::new(&mut self.inner).poll_write(cx, buf)
+        }
+
+        fn poll_write_vectored(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            bufs: &[io::IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            self.record(Written::Vectored(
+                bufs.iter().map(|buf| Bytes::copy_from_slice(buf)).collect(),
+            ));
+            Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    /// One HTTP/1.1 request answered by `endpoint` over a [`Recorded`] socket
+    /// under the connection's whole stack: what the peer read, and every write.
+    async fn answered_by(endpoint: impl Endpoint) -> (Bytes, Vec<Written>) {
+        let deadlines = Deadlines::default();
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let socket = Arc::new(Drain::default()).socket(
+            Recorded {
+                inner: server,
+                writes: Arc::clone(&writes),
+            },
+            Arc::new(Semaphore::new(1))
+                .try_acquire_owned()
+                .expect("a free place"),
+            deadlines.send,
+        );
+        let connection = Connection {
+            peer: SocketAddr::from(([127, 0, 0, 1], 50_000)),
+            local: SocketAddr::from(([127, 0, 0, 1], 3_000)),
+            accepted: Instant::now(),
+            deadlines,
+            endpoint: BoxEndpoint::new(endpoint),
+            builder: Arc::new(builder(deadlines.send, TaskTracker::new())),
+            shutdown: CancellationToken::new(),
+        };
+        let served = tokio::spawn(connection.serve(socket, None));
+        client
+            .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+            .await
+            .expect("the request is sent");
+        let mut response = Vec::new();
+        client
+            .read_to_end(&mut response)
+            .await
+            .expect("the response is read to its close");
+        served.await.expect("the connection ends");
+        let writes = std::mem::take(&mut *writes.lock().expect("unpoisoned"));
+        (Bytes::from(response), writes)
+    }
+
+    /// The bench's JSON route: a body serialized into a buffer of its own.
+    #[tokio::test]
+    async fn an_http1_response_leaves_in_one_write_on_a_socket_that_offers_vectored_ones() {
+        const BODY: &[u8] = br#"{"message":"Hello World"}"#;
+        let endpoint = endpoint_fn(|_| async {
+            Ok(Response::builder()
+                .content_type(HeaderValue::from_static("application/json"))
+                .body(BODY.to_vec()))
+        });
+        let (response, writes) = answered_by(endpoint).await;
+        assert!(response.ends_with(BODY), "{response:?}");
+        assert_eq!(
+            writes,
+            [Written::Plain(response)],
+            "the head and the body leave in one write, as one buffer",
+        );
+    }
+
+    /// An event stream's shape: chunks of unknown total length.
+    #[tokio::test]
+    async fn a_streamed_http1_response_writes_each_chunk_with_its_framing_as_one_buffer() {
+        let endpoint = endpoint_fn(|_| async {
+            let events = ["data: one\n\n", "data: two\n\n"]
+                .map(|event| Ok::<_, io::Error>(Bytes::from_static(event.as_bytes())));
+            Ok(Response::builder().body(Body::from_stream(futures_util::stream::iter(events))))
+        });
+        let (response, writes) = answered_by(endpoint).await;
+        assert!(
+            response.ends_with(b"\r\ndata: two\n\n\r\n0\r\n\r\n"),
+            "{response:?}"
+        );
+        let written: Vec<u8> = writes
+            .iter()
+            .flat_map(|written| match written {
+                Written::Plain(bytes) => bytes.iter().copied(),
+                Written::Vectored(_) => panic!("a chunk is split from its size line: {writes:?}"),
+            })
+            .collect();
+        assert_eq!(written, response, "every byte the peer read was recorded");
+    }
+
+    /// After a 4 MiB body handed over as one frame, a kept-alive connection
+    /// holds its write buffer's bound — its 64 KiB cap and one piece — not the
+    /// body: each byte is copied once into a buffer the connection keeps.
+    #[tokio::test]
+    async fn a_kept_alive_http1_connection_holds_its_write_buffers_bound_after_a_large_body() {
+        const SIZE: usize = 4 * 1024 * 1024;
+        let body = Bytes::from(vec![b'x'; SIZE]);
+        let endpoint = endpoint_fn(move |_| {
+            let body = body.clone();
+            async move { Ok(Response::builder().body(body)) }
+        });
+        let deadlines = Deadlines::default();
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let socket = Arc::new(Drain::default()).socket(
+            server,
+            Arc::new(Semaphore::new(1))
+                .try_acquire_owned()
+                .expect("a free place"),
+            deadlines.send,
+        );
+        let connection = Connection {
+            peer: SocketAddr::from(([127, 0, 0, 1], 50_000)),
+            local: SocketAddr::from(([127, 0, 0, 1], 3_000)),
+            accepted: Instant::now(),
+            deadlines,
+            endpoint: BoxEndpoint::new(endpoint),
+            builder: Arc::new(builder(deadlines.send, TaskTracker::new())),
+            shutdown: CancellationToken::new(),
+        };
+        let held = crate::testing::Held::count();
+        let served = tokio::spawn(connection.serve(socket, None));
+        client
+            .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n")
+            .await
+            .expect("the request is sent");
+        let mut chunk = [0_u8; 16 * 1024];
+        let mut head = Vec::with_capacity(256);
+        while !head.ends_with(b"\r\n\r\n") {
+            let byte = client.read_u8().await.expect("the head arrives");
+            head.push(byte);
+        }
+        let mut left = SIZE;
+        while left > 0 {
+            let read = client.read(&mut chunk).await.expect("the body arrives");
+            assert!(read > 0, "the body ended {left} bytes short");
+            left -= read;
+        }
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        let kept = held.bytes();
+        drop(held);
+        assert!(
+            kept < 512 * 1024,
+            "the idle connection holds {kept} bytes after a {SIZE}-byte body",
+        );
+        drop(client);
+        served.await.expect("the connection ends");
+    }
+
+    /// A static file's shape: a body handed over as one frame, which hyper
+    /// copies whole into a write buffer whose capacity the connection keeps.
+    #[tokio::test]
+    async fn a_large_http1_body_reaches_the_write_buffer_a_piece_at_a_time() {
+        let body = Bytes::from(vec![b'x'; 4 * 1024 * 1024]);
+        let endpoint = {
+            let body = body.clone();
+            endpoint_fn(move |_| {
+                let body = body.clone();
+                async move { Ok(Response::builder().body(body)) }
+            })
+        };
+        let (response, writes) = answered_by(endpoint).await;
+        assert!(response.ends_with(&body), "the body arrives whole");
+        let largest = writes
+            .iter()
+            .map(|written| match written {
+                Written::Plain(bytes) => bytes.len(),
+                Written::Vectored(slices) => slices.iter().map(Bytes::len).sum(),
+            })
+            .max();
+        assert!(
+            largest <= Some(MAX_HTTP1_BUFFER + PIECE),
+            "hyper buffers at most its cap and one piece, here {largest:?}",
+        );
+    }
+
+    #[test]
+    fn running_out_of_descriptors_backs_off_doubling_to_a_second_with_one_warn() {
+        let logs = LogCapture::install();
+        let mut backoff = AcceptBackoff::default();
+        let emfile = io::Error::from_raw_os_error(EMFILE);
+        let delays: Vec<u128> = (0..10)
+            .map(|_| backoff.failed(&emfile).expect("backs off").as_millis())
+            .collect();
+        assert_eq!(delays, [5, 10, 20, 40, 80, 160, 320, 640, 1000, 1000]);
+        let warned = logs.expect_one(crate::target::HTTP, "accept failed; backing off");
+        assert_eq!(warned.level, "warn");
+        assert_eq!(warned.field("retry_ms").as_deref(), Some("5"));
+        assert!(warned.field("error").is_some(), "{:?}", warned.fields);
+
+        backoff.succeeded();
+        assert_eq!(
+            backoff.failed(&emfile),
+            Some(AcceptBackoff::FIRST),
+            "an accept that succeeded ends the episode",
+        );
+        assert_eq!(
+            logs.find(crate::target::HTTP, "accept failed; backing off")
+                .len(),
+            2,
+            "and the next episode opens with its own warn",
+        );
+    }
+
+    /// An accept failing with each of `errors` in turn, then succeeding.
+    fn failing<const N: usize>(
+        errors: [io::Error; N],
+    ) -> impl FnMut() -> std::future::Ready<io::Result<()>> {
+        let mut errors = errors.into_iter();
+        move || std::future::ready(errors.next().map_or(Ok(()), Err))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_accept_is_waited_out_before_the_next_one() {
+        let logs = LogCapture::install();
+        let mut backoff = AcceptBackoff::default();
+        let start = tokio::time::Instant::now();
+        backoff
+            .accept(failing([EMFILE; 3].map(io::Error::from_raw_os_error)))
+            .await;
+        assert_eq!(start.elapsed(), Duration::from_millis(5 + 10 + 20));
+        logs.expect_one(crate::target::HTTP, "accept failed; backing off");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_the_peer_gave_up_on_is_skipped_at_once() {
+        let logs = LogCapture::install();
+        let mut backoff = AcceptBackoff::default();
+        let gone = || {
+            [
+                io::ErrorKind::ConnectionAborted,
+                io::ErrorKind::ConnectionReset,
+                io::ErrorKind::Interrupted,
+            ]
+            .map(io::Error::from)
+        };
+        let start = tokio::time::Instant::now();
+        backoff.accept(failing(gone())).await;
+        assert_eq!(start.elapsed(), Duration::ZERO, "retried with no wait");
+        logs.expect_none(crate::target::HTTP, "accept failed; backing off");
+
+        let [aborted, reset, interrupted] = gone();
+        backoff
+            .accept(failing([
+                aborted,
+                reset,
+                interrupted,
+                io::Error::from_raw_os_error(EMFILE),
+            ]))
+            .await;
+        assert_eq!(
+            start.elapsed(),
+            AcceptBackoff::FIRST,
+            "and none of them opened an episode",
+        );
+    }
+
+    /// What runs outside the edge, where only a framework defect can panic once
+    /// the edge contains every handler: `/panic` unwinds, any other path answers.
+    fn unwinding() -> impl Endpoint {
+        endpoint_fn(|req: Request| async move {
+            assert!(req.uri().path() != "/panic", "the endpoint panicked");
+            Ok(Response::builder().body("pong"))
+        })
+    }
+
+    /// `endpoint` under the whole accept loop on a loopback port, until the
+    /// token is cancelled.
+    async fn serving(endpoint: impl Endpoint) -> (SocketAddr, CancellationToken) {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("a loopback port");
+        let server = Server::new(
+            listener,
+            BoxEndpoint::new(endpoint),
+            Arc::new(Drain::default()),
+            8,
+            Deadlines::default(),
+            None,
+        )
+        .expect("the listener has an address");
+        let local = server.local;
+        let cancel = CancellationToken::new();
+        tokio::spawn(server.run(cancel.clone().cancelled_owned()));
+        (local, cancel)
+    }
+
+    /// One `GET path` on a fresh connection, read to the server's close or reset.
+    async fn asked(local: SocketAddr, path: &str) -> Vec<u8> {
+        let mut stream = tokio::net::TcpStream::connect(local)
+            .await
+            .expect("connects");
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .expect("the request is sent");
+        let mut answer = Vec::new();
+        match tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut answer)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) if error.kind() == io::ErrorKind::ConnectionReset => {}
+            Ok(Err(error)) => panic!("the socket failed rather than ending: {error}"),
+            Err(_) => panic!("the server never closed the connection"),
+        }
+        answer
+    }
+
+    /// A panic in a connection's task drops that connection, is filed once,
+    /// and leaves the loop accepting.
+    #[tokio::test]
+    async fn a_connection_task_that_panics_is_contained_and_the_server_keeps_serving() {
+        let logs = LogCapture::install();
+        let (local, cancel) = serving(unwinding()).await;
+
+        assert_eq!(asked(local, "/panic").await, b"", "nothing was answered");
+        let line = logs.expect_one(crate::target::HTTP, "a connection task panicked");
+        assert_eq!(line.level, "error");
+        assert_eq!(
+            line.field(nest_rs_core::panic::FIELD).as_deref(),
+            Some("the endpoint panicked"),
+        );
+
+        let after = asked(local, "/ping").await;
+        assert!(after.starts_with(b"HTTP/1.1 200"), "{after:?}");
+        cancel.cancel();
+    }
+
+    /// A panic in one HTTP/2 stream's task resets that stream alone, is filed
+    /// once, and the connection keeps serving its other streams.
+    #[tokio::test]
+    async fn an_http2_stream_task_that_panics_is_reset_and_its_connection_keeps_serving() {
+        let logs = LogCapture::install();
+        let (local, cancel) = serving(unwinding()).await;
+        let socket = tokio::net::TcpStream::connect(local)
+            .await
+            .expect("connects");
+        let (client, connection) = h2::client::handshake(socket)
+            .await
+            .expect("the HTTP/2 preface is accepted");
+        let connection = tokio::spawn(connection);
+        let get = |path: &str| {
+            http::Request::get(format!("http://{local}{path}"))
+                .body(())
+                .expect("a request")
+        };
+
+        let mut ready = client.clone().ready().await.expect("a stream can open");
+        let (panicked, _) = ready.send_request(get("/panic"), true).expect("sent");
+        let reset = tokio::time::timeout(Duration::from_secs(5), panicked)
+            .await
+            .expect("the stream ends")
+            .expect_err("a stream whose task panicked is not answered");
+        assert_eq!(reset.reason(), Some(h2::Reason::CANCEL), "{reset}");
+        let line = logs.expect_one(crate::target::HTTP, "an HTTP/2 stream task panicked");
+        assert_eq!(line.level, "error");
+        assert_eq!(
+            line.field(nest_rs_core::panic::FIELD).as_deref(),
+            Some("the endpoint panicked"),
+        );
+
+        let mut ready = client
+            .ready()
+            .await
+            .expect("the connection opens another stream");
+        let (after, _) = ready.send_request(get("/ping"), true).expect("sent");
+        let response = tokio::time::timeout(Duration::from_secs(5), after)
+            .await
+            .expect("the stream ends")
+            .expect("answered on the same connection");
+        assert_eq!(response.status(), 200);
+        assert!(!connection.is_finished(), "the connection keeps serving");
+        logs.expect_none(crate::target::HTTP, "a connection task panicked");
+        cancel.cancel();
+    }
+
+    /// Set when the future holding it is dropped, after its drop has blocked its
+    /// thread for `blocking`: a handler whose cleanup takes time.
+    struct SetOnDrop {
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+        blocking: Duration,
+    }
+
+    impl Drop for SetOnDrop {
+        fn drop(&mut self) {
+            std::thread::sleep(self.blocking);
+            self.dropped
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// The accept loop serving one HTTP/2 stream whose handler never answers
+    /// and takes `blocking` to drop, its shutdown window `window`: whether the
+    /// handler had been dropped by the time the loop returned.
+    async fn an_http2_stream_cut_after(window: Duration, blocking: Duration) -> bool {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let endpoint = endpoint_fn({
+            let (started, dropped) = (Arc::clone(&started), Arc::clone(&dropped));
+            move |_| {
+                let (started, dropped) = (Arc::clone(&started), Arc::clone(&dropped));
+                async move {
+                    let _held = SetOnDrop { dropped, blocking };
+                    started.notify_one();
+                    std::future::pending::<()>().await;
+                    Ok(Response::default())
+                }
+            }
+        });
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("a loopback port");
+        let drain = Arc::new(Drain::default());
+        let server = Server::new(
+            listener,
+            BoxEndpoint::new(endpoint),
+            Arc::clone(&drain),
+            8,
+            Deadlines::default(),
+            None,
+        )
+        .expect("the listener has an address");
+        let local = server.local;
+        let cancel = CancellationToken::new();
+        let signal = {
+            let (cancel, drain) = (cancel.clone(), Arc::clone(&drain));
+            async move {
+                cancel.cancelled().await;
+                drain.begin(window);
+            }
+        };
+        // Read as the loop returns, before anything else runs: what follows it
+        // in `serve` (the shutdown hooks) must not meet the handler still alive.
+        let running = tokio::spawn({
+            let dropped = Arc::clone(&dropped);
+            async move {
+                server.run(signal).await;
+                dropped.load(std::sync::atomic::Ordering::SeqCst)
+            }
+        });
+        let socket = tokio::net::TcpStream::connect(local)
+            .await
+            .expect("connects");
+        let (client, connection) = h2::client::handshake(socket)
+            .await
+            .expect("the HTTP/2 preface is accepted");
+        tokio::spawn(connection);
+        let request = http::Request::get(format!("http://{local}/"))
+            .body(())
+            .expect("a request");
+        let _answer = client
+            .ready()
+            .await
+            .expect("a stream can open")
+            .send_request(request, true)
+            .expect("sent");
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("the handler runs");
+
+        cancel.cancel();
+        running.await.expect("the loop returns")
+    }
+
+    /// An HTTP/2 stream still running when the shutdown window closes is cut
+    /// with its connection, and the loop waits for its task: its handler is
+    /// dropped before the loop returns, never left to end on a worker of its
+    /// own after it. On several workers, so the stream's task and the loop
+    /// run at once; real time, which only the current-thread runtime pauses.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_http2_stream_outliving_the_window_is_cut_at_its_close() {
+        assert!(
+            an_http2_stream_cut_after(Duration::from_millis(200), Duration::from_millis(150)).await,
+            "the stream's handler was dropped by the time the loop returned",
+        );
+    }
+
+    /// The wait for a cut stream's task is bounded: one whose handler takes
+    /// longer than the settle to drop is left to end on its own, and said so.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cut_stream_that_will_not_end_is_waited_for_no_longer_than_the_settle() {
+        let logs = LogCapture::install_global();
+        let dropped = an_http2_stream_cut_after(
+            Duration::from_millis(100),
+            nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT + Duration::from_secs(1),
+        )
+        .await;
+        assert!(
+            !dropped,
+            "the loop returned before the handler's drop ended"
+        );
+        let line = logs.expect_one(
+            crate::target::HTTP,
+            "HTTP/2 stream tasks still ran after their connections were cut; they are left to end on their own",
+        );
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("streams").as_deref(), Some("1"));
+    }
+
+    /// Every connection the loop's listener yields is written without Nagle's
+    /// delay: the setting is part of the accept, not a step beside it.
+    #[tokio::test]
+    async fn an_accepted_socket_is_written_without_nagles_delay() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("a loopback port");
+        let local = listener.local_addr().expect("an address");
+        let listener = Listener(listener);
+        let _client = tokio::net::TcpStream::connect(local)
+            .await
+            .expect("connects");
+        let (accepted, _) = listener.next().await.expect("accepted");
+        assert!(accepted.nodelay().expect("readable"));
+    }
+
+    /// The listener found empty with a place in hand ends the cap's episode;
+    /// an accept that failed and is backed off says nothing of the backlog.
+    #[tokio::test(start_paused = true)]
+    async fn nothing_waits_on_the_cap_is_said_only_once_the_listener_waits() {
+        const LEFT: &str = "connection cap no longer reached; accepting again";
+        let logs = LogCapture::install();
+        let mut admission = Admission::new(1);
+        admission.held_back();
+        let mut backoff = AcceptBackoff::default();
+        let mut attempts = 0;
+        let accept = || {
+            attempts += 1;
+            let attempt = attempts;
+            async move {
+                if attempt == 1 {
+                    return Err(io::Error::from_raw_os_error(EMFILE));
+                }
+                std::future::pending::<io::Result<()>>().await
+            }
+        };
+        let mut accepting = pin!(accept_holding_a_place(&mut backoff, &mut admission, accept));
+
+        let backing_off = tokio::time::timeout(AcceptBackoff::FIRST / 2, accepting.as_mut()).await;
+        assert!(backing_off.is_err(), "still backing off");
+        logs.expect_none(crate::target::HTTP, LEFT);
+
+        let waiting = tokio::time::timeout(AcceptBackoff::FIRST, accepting.as_mut()).await;
+        assert!(waiting.is_err(), "the listener has nothing");
+        logs.expect_one(crate::target::HTTP, LEFT);
+    }
+
+    #[test]
+    fn the_cap_is_said_once_when_a_connection_waits_and_once_when_none_does() {
+        const REACHED: &str = "connection cap reached; new connections wait in the listen backlog";
+        const LEFT: &str = "connection cap no longer reached; accepting again";
+        let logs = LogCapture::install();
+        let mut admission = Admission::new(1);
+        admission.nothing_waits();
+        logs.expect_none(crate::target::HTTP, LEFT);
+
+        admission.held_back();
+        admission.held_back();
+        logs.expect_one(crate::target::HTTP, REACHED);
+        admission.nothing_waits();
+        admission.nothing_waits();
+        logs.expect_one(crate::target::HTTP, LEFT);
+        admission.held_back();
+        assert_eq!(
+            logs.find(crate::target::HTTP, REACHED).len(),
+            2,
+            "the next busy spell opens with its own warn",
+        );
+    }
+}

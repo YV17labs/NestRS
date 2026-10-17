@@ -1,12 +1,13 @@
 //! Per-operation guard the MCP endpoint runs before each streamable-HTTP request.
 
+use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 
-use nest_rs_core::Container;
-use poem::{Request, Result};
+use nest_rs_guards::Denial;
+use nest_rs_http::{Request, Result};
 
+use crate::McpError;
 use crate::context::{Captured, OperationOutcome};
 
 /// A boxed, `Send` future — the return type of an async guard method in a
@@ -16,41 +17,24 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Authenticates an MCP HTTP request before the streamable handler runs. Bind
 /// with `providers = [MyBridge as dyn McpOperationGuard]`.
 ///
-/// With none registered the endpoint falls back to [`FallbackMcpGuard`] (the
-/// global guard pool, seeded by `use_guards_global`), and with no pool either
-/// to deny-all — `/mcp` is `EdgePosture::Exempt` at the HTTP edge, so this
-/// in-band seam is the *only* place guards run on MCP operations. A registered
-/// guard **replaces** the fallback: it owns the chain (the canonical bridge
-/// runs the same `AuthnGuard` + `AuthzGuard` itself, so nothing runs twice).
-/// **What this guard gates is the HTTP request**, which is all it is handed. An
-/// operation's own `#[use_guards]` chain runs `Guard::check_mcp` against the
-/// operation, and the two never stand in for each other: a guard this endpoint
-/// authenticated is not thereby excused its operation check, and reporting one
-/// as the other is how a `check_mcp` written to refuse a tool call came to be
-/// skipped for it.
+/// A registered guard adds to the global guard pool, which always runs at the
+/// request. It gates the HTTP request, and never stands in for an operation's
+/// own `Guard::check` chain.
 pub trait McpOperationGuard: Send + Sync + 'static {
-    /// Gate the operation: inspect/mutate `req` and return `Err` to reject it
-    /// before the handler runs.
+    /// Gate the operation: check `req` — keeping what the checks attach on it,
+    /// as `nest_rs_http`'s request guard stage does — and return `Err` to
+    /// reject it before the handler runs.
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>>;
 
     /// Snapshot what [`around`](Self::around) will need, from the post-`before`
     /// request. `None` (the default) means this guard installs nothing and
     /// `around` is never called for it.
-    ///
-    /// The capture/`around` split is the same one
-    /// [`McpToolContext`](crate::McpToolContext) uses, for the same reason: by
-    /// the time an operation dispatches, rmcp has moved it onto its own task
-    /// and the poem request is gone. Capturing exactly what the guard needs is
-    /// what keeps that crossing off the per-request hot path.
     fn capture(&self, _req: &Request) -> Option<Captured> {
         None
     }
 
     /// Wrap one operation's dispatch to install ambient state for its duration
-    /// (the caller's `Ability`) — the MCP twin of `GraphqlOperationGuard`'s
-    /// `around`, so the *guard* installs the ability on both transports.
-    ///
-    /// Runs **inside** rmcp's spawned dispatch, on whatever
+    /// (the caller's `Ability`), inside rmcp's spawned dispatch, on whatever
     /// [`capture`](Self::capture) returned. Default = pass-through.
     fn around<'a>(
         &'a self,
@@ -59,22 +43,67 @@ pub trait McpOperationGuard: Send + Sync + 'static {
     ) -> BoxFuture<'a, OperationOutcome> {
         inner
     }
+
+    /// The guards [`before`](Self::before) runs itself, by type. The global pool
+    /// leaves each of them to this guard, so a guard listed in both runs once.
+    fn covers(&self) -> &[TypeId] {
+        &[]
+    }
 }
 
-/// Factory slot for the fallback [`McpOperationGuard`]. `nest-rs-guards`'
-/// `use_guards_global` provides one (a fn pointer — the container does not
-/// exist yet at builder time) that folds the global guard pool in-band;
-/// [`resolve_operation_guard`](crate::resolve_operation_guard) invokes it at
-/// mount when no `dyn McpOperationGuard` is registered. It is what lets a
-/// global `ThrottlerGuard` — or the app's global authn/authz pair — reach
-/// `/mcp` under its `EdgePosture::Exempt` edge.
+/// Render a guard's [`Denial`] as the JSON-RPC error one MCP operation answers
+/// with.
 ///
-/// The fallback only ever *widens* what the app explicitly opted into: with no
-/// global pool the endpoint stays deny-all, and unlike `/graphql` the MCP mount
-/// carries no [`Public`](nest_rs_http::Public) marker, so a pooled `AuthnGuard`
-/// still refuses an unauthenticated tool call.
-///
-/// **Internal ABI** — a seeded fn-pointer wired by the framework crates
-/// (lockstep with `nest-rs-mcp`); not a user-constructed type.
-#[doc(hidden)]
-pub struct FallbackMcpGuard(pub fn(&Container) -> Arc<dyn McpOperationGuard>);
+/// MCP has no status line: the code picks the closest JSON-RPC family and the
+/// `data` carries the machine-readable `code` and `reason`, plus
+/// `requiredScopes` when the denial names them. An internal denial is opaque
+/// ([`Opaque`](crate::Opaque)): the reader is a language model.
+pub fn denial_to_mcp_error(denial: Denial) -> McpError {
+    use nest_rs_guards::__private::{client_message, structured_reason};
+
+    if matches!(denial, Denial::Internal(_)) {
+        return McpError::internal_error(nest_rs_core::OPAQUE_CLIENT_MESSAGE, None);
+    }
+    let data = Some(serde_json::Value::Object(structured_reason(&denial)));
+    // Not the caller's request: something the server depends on did not
+    // answer, which JSON-RPC files under its internal error, with the reason
+    // and the wait a client acts on.
+    if matches!(denial, Denial::Unavailable { .. }) {
+        return McpError::internal_error(client_message(&denial).to_owned(), data);
+    }
+    McpError::invalid_request(client_message(&denial).to_owned(), data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What an unavailable dependency's refusal said of it stays on the server.
+    #[test]
+    fn an_unavailable_denial_tells_the_client_its_condition_and_its_wait_only() {
+        let error = denial_to_mcp_error(Denial::unavailable(Some(7), "store at 10.0.0.1 down"));
+        let json = serde_json::to_value(&error).expect("serializes");
+        assert!(!json.to_string().contains("10.0.0.1"), "{json}");
+        assert_eq!(json["message"], nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert_eq!(json["data"]["reason"], "unavailable");
+        assert_eq!(json["data"]["code"], "UNAVAILABLE");
+        assert_eq!(json["data"]["retryAfterSeconds"], 7);
+    }
+
+    #[test]
+    fn an_internal_denial_answers_the_opaque_message() {
+        let error = denial_to_mcp_error(Denial::internal("redis at 10.0.3.7 refused"));
+        assert_eq!(error.message, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+    }
+
+    #[test]
+    fn a_denial_names_its_class_by_the_code_a_problem_carries() {
+        let error = denial_to_mcp_error(Denial::insufficient_scope(["posts:write"], "narrow"));
+        let json = serde_json::to_value(&error).expect("serializes");
+        assert_eq!(json["data"]["code"], "INSUFFICIENT_SCOPE");
+        assert_eq!(
+            json["data"]["requiredScopes"],
+            serde_json::json!(["posts:write"])
+        );
+    }
+}

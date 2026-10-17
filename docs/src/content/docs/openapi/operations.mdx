@@ -1,0 +1,165 @@
+---
+title: OpenAPI operations
+description: What a handler declares beyond its signature — the payload it builds, bodies that are not JSON, its own error bodies, its tags and its deprecation.
+---
+
+The signature carries most of an operation: path, method, parameters, request
+body, success status and payload. This page covers the rest, each piece written
+once on the handler and read by the document, the route and the generated
+client alike.
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[get("/archive")]
+#[authorize(Read, PostEntity)]
+#[api(
+    summary = "Every post at once",
+    response = Vec<Post>,
+    deprecated = "2026-10-08",
+)]
+async fn archive(&self) -> Result<Response> { /* ... */ }
+```
+
+## The payload a handler builds itself
+
+`response = Type` is for a handler that builds its own `Response` and so states
+no payload in its return type — or that returns its `Json<T>` inside a `Result`
+spelled another way. The payload is read off the spelling `Json<T>` /
+`Result<Json<T>, E>`, since a macro resolves no name: `use poem::Result as
+PoemResult` hides it from the document, never from the route. The paginated
+`#[crud]` list is the framework's own case: it returns a `Response` so it can
+carry its `Link` header, and declares `#[api(response = Vec<Post>)]`.
+
+## Bodies that are not JSON
+
+`multipart = Type` and `response_content_type = "…"` describe a body `Json<T>`
+cannot — an upload form, a streamed download.
+
+```rust title="crates/features/src/audio/http/controller.rs"
+#[post("/uploads/direct")]
+#[api(
+    summary = "Upload an audio file directly as multipart/form-data",
+    multipart = DirectUploadDto,
+)]
+async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> { /* ... */ }
+
+#[get("/download")]
+#[api(
+    summary = "Stream a transcoded object back through the server",
+    response_content_type = "audio/mpeg",
+)]
+async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> { /* ... */ }
+```
+
+The form's parts are a type like any other payload — a `String` field carrying
+`#[schemars(extend("format" = "binary"))]` is the file part Swagger UI renders a
+file picker for. A handler that takes poem's `Multipart` directly and declares
+nothing still documents `multipart/form-data` with a free-form object: the media
+type it accepts is knowledge a client needs, even when no type states the parts.
+
+`response_content_type` replaces `application/json` on the success response and,
+with no `response = Type` beside it, types the body the way OpenAPI spells a
+stream — `string` with `format: binary`, or plain `string` for a `text/*` media
+type. **An [`#[sse]`](/http/streaming/) route needs no annotation**: it answers
+`text/event-stream` and nothing else, so the document reads the media type off
+the decorator — and declaring `response_content_type` there is a compile error.
+
+## Header parameters
+
+A handler that reads headers binds them as a DTO — `Header<T>`, the header-map
+twin of `Query<T>` — and each property becomes an `in: header` parameter, an
+`Option<_>` field being an optional one:
+
+```rust title="crates/features/src/notify/http/controller.rs"
+#[derive(Deserialize, JsonSchema)]
+pub struct StreamResumeDto {
+    #[serde(rename = "Last-Event-ID")]
+    pub last_event_id: Option<u32>,
+}
+
+#[sse("/events")]
+async fn events(&self, resume: Header<StreamResumeDto>) -> SseStream { /* ... */ }
+```
+
+A missing required header, or a value that does not parse into its field's type,
+is rejected with the same RFC 9457 `400` every other edge rejection carries —
+naming the header and never quoting its value, because that is where credentials
+travel. A required header also makes the operation advertise its `400`.
+
+## Error bodies of your own
+
+Every error status the framework answers is a problem document, and the
+document lists the ones an operation can produce. A handler that answers a
+status with a body of its own declares it with `error(status = Type)`, 4xx or
+5xx alone. The health probes are the framework's own case: a failing probe
+answers `503` with the same report an orchestrator reads on success.
+
+```rust title="nest_rs::health (the probes' routes)"
+#[get("/ready")]
+#[public]
+#[api(
+    summary = "Readiness probe: whether the process can take traffic",
+    response = ProbeReport,
+    error(503 = ProbeReport),
+)]
+async fn ready(&self) -> Response { /* ... */ }
+```
+
+The body is documented as `application/json`, beside the problem document when
+the framework can answer that status too, so a generated client types both.
+
+## Ability-shaped responses
+
+A route declaring `#[authorize(..)]` masks its response per caller, so the
+fields a given client receives are a **subset** of the published schema. The
+document publishes the full shape anyway and says so in the response
+description: a schema a caller may see less of is far more useful to a
+generated client than no schema at all.
+
+## Tags
+
+A tag groups operations in Swagger UI's sidebar and names the class or file a
+generator emits them into. Every route of a controller defaults to its
+**token** — `PostsController` is `posts`, the stem its `operationId`s carry — so
+a `#[crud]` controller and the routes written beside it share one group.
+`tags(...)` replaces it on an operation:
+
+```rust title="crates/features/src/oauth/http/controller.rs"
+#[post("/login")]
+#[api(summary = "Sign in with email and password", tags("Auth"))]
+async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<TokenDto>> { /* ... */ }
+```
+
+## Deprecate a route
+
+`deprecated = "YYYY-MM-DD"` deprecates a route for its clients, from the date it
+took effect:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[get("/archive")]
+#[api(
+    description = "Use `GET /posts?first=100`.",
+    deprecated = "2026-10-08",
+)]
+async fn archive(&self) -> Result<Response> { /* ... */ }
+```
+
+The operation is `deprecated: true` in the document — a generated client marks
+the call `@deprecated` — and every answer of the route, a guard's refusal
+included, carries the RFC 9745 header a client can watch for:
+
+```http
+HTTP/1.1 200 OK
+deprecation: @1791417600
+```
+
+The value is a date because the header is one: a version (`"7.1"`) is a
+compile error. Rust's own `#[deprecated]` on a handler or a controller is
+refused too — it deprecates the method for Rust callers, and the framework is
+the only one — and the refusal names `deprecated = "…"`. A handler's `Err` is
+rendered past the route and carries no header.
+
+## Going further
+
+- [OpenAPI](/openapi/) — what the document derives, and its limits.
+- [Typed TypeScript clients](/openapi/clients/) — what a frontend generates from it.
+- [Versioning](/http/versioning/) — serve the replacement beside the deprecated route.

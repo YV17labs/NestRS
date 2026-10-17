@@ -9,7 +9,7 @@ names its binary. Adding one is an entry in `apps`, not a template.
 ```bash
 helm install demo demo/charts/demo \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="redis://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379"
 ```
 
 `helm template` renders offline against Kubernetes 1.20 unless told otherwise,
@@ -53,15 +53,16 @@ half the pair behind. Anything in `config` still wins.
 **Queue depth is the right signal, and KEDA is how you read it.** Two facts
 from the framework's own source decide this:
 
-1. The worker runs `concurrency(1)` per `#[process]` method — throughput comes
-   from replicas, never from a bigger pod — and the demo's processors are pure
-   I/O (an S3 round-trip, one INSERT). A pod draining a backlog of thousands
-   sits near 0% CPU, so a CPU-driven HPA never fires. `autoscaling` is there for
-   a processor that is genuinely CPU-bound; on these jobs it is inert.
+1. A `#[process]` method runs as many jobs at once as its `concurrency`
+   declares, in each replica — four transcodes, one notification write — and
+   throughput past that comes from replicas. Both jobs are pure I/O (an S3
+   round-trip, one INSERT), so a pod draining a backlog of thousands sits near
+   0% CPU and a CPU-driven HPA never fires. `autoscaling` is there for a
+   processor that is genuinely CPU-bound; on these jobs it is inert.
 2. Kubernetes has no native queue-depth trigger. HPA reads CPU, memory, or an
    external metric that something else must publish — and `HPAScaleToZero` was
    alpha from 1.16 to 1.36. [KEDA](https://keda.sh) is the one moving part that
-   turns a list length into replicas.
+   turns a stream's length into replicas.
 
 ```yaml
 keda:
@@ -73,33 +74,83 @@ apps:
       enabled: true
 ```
 
-The triggers ship pre-wired to the demo's two queues. The key names are apalis's
-own layout — `<queue>:active` is the pending list, and `<queue>` is the name the
-`#[queue]` declaration gives it.
+Under Sentinel or on a Cluster, `keda.redis.topology` picks KEDA's scaler for
+it — `redis-sentinel-streams` or `redis-cluster-streams` — reading every host
+from `keda.redis.addresses`, and under Sentinel the service from
+`keda.redis.sentinelMaster`:
+
+```yaml
+keda:
+  redis:
+    topology: cluster
+    addresses: node-a:6379,node-b:6379,node-c:6379
+```
+
+KEDA's cluster scaler reads database 0 alone, so the chart refuses a Cluster
+with another `databaseIndex`. KEDA's user takes the rule the queue's docs
+prescribe; its credentials ride in the worker pod's env, named by
+`keda.redis.usernameFromEnv` and `passwordFromEnv` — and, for its user on the
+sentinels, `sentinelUsernameFromEnv` and `sentinelPasswordFromEnv`.
+
+The triggers ship pre-wired to the demo's two queues, as `redis-streams`
+triggers on `streamLength`. Each names the stream a worker reads,
+`nestrs:queue:{<queue>}:jobs`, where `<queue>` is the name the `#[queue]`
+declaration gives it. Its `streamLength` is the backlog one replica is sized
+for, so it moves with the method's `concurrency`: the audio trigger asks for a
+replica per 20 on the stream because each one runs four transcodes at once.
+
+The stream holds a job until it ends, so the trigger counts jobs **waiting and
+running**: a replica busy with long transcodes does not read as idle. KEDA can
+still scale a replica down mid-job when the backlog shrinks. The pod then
+drains: running jobs get the shutdown window, and what still runs when it closes
+is handed back to the queue and runs again, from the start, on another replica.
+Nothing is lost, but the work is done twice. Bound it with a scale-down
+stabilization window at least as long as a job — `keda.behavior`, rendered as
+the ScaledObject's `advanced.horizontalPodAutoscalerConfig.behavior`:
+
+```yaml
+apps:
+  worker:
+    keda:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 600
+```
+
+— and keep `terminationGracePeriodSeconds` at least 9.5s above
+`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, for the shutdown hooks and the
+telemetry and console flushes that follow the drain, raising both toward a job's
+length when jobs are long (see [Graceful shutdown](#graceful-shutdown)).
 
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
 its own, and two of them would scale the same Deployment against each other.
+
+Scaling the worker does not multiply its schedule. The one job it runs on a
+clock, the hourly notifications purge, is declared `replicas = "one"`: each
+occurrence is claimed in the Redis the queues already use and fires on one
+replica, whatever `maxReplicaCount` allows.
 
 ### Why `minReplicaCount` is 1
 
 Scale-to-zero is one value away and deliberately not the default:
 
-- a worker start re-enqueues orphaned jobs across **all** registered consumers,
-  not just its own previous incarnation, so every scale-up re-runs its peers'
-  in-flight jobs. `#[process]` handlers must be idempotent — the framework says
-  so already — and scaling stays unhurried on purpose;
-- at zero replicas nothing promotes `<queue>:scheduled` into `<queue>:active`
-  and nothing recovers `<queue>:inflight` from a pod that died mid-job. Neither
-  is reachable from today's demo, where the producer pushes straight to
-  `:active` and retries are in-process, but both become permanent the day a
-  delayed push appears.
+- a job held back — a retry waiting for its backoff, a delayed push — waits on
+  `nestrs:queue:{<queue>}:due`, which the trigger does not read, and only a
+  running worker files it on the stream the trigger reads. Every demo job
+  retries, so at zero replicas a retry waits for the next push to wake the
+  deployment.
 
-Set it to 0 knowing that.
+A scale-up is safe either way: a worker never takes a job a peer holds until
+that peer's lease lapsed. The queue is still at least once, so the handlers stay
+idempotent. Set it to 0 knowing that.
 
 ## Graceful shutdown
 
 The framework installs a SIGTERM handler and drains its transports, so
-`terminationGracePeriodSeconds` is the window it gets. Two are not the default:
-the worker's is 45s, above the 30s
-`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` it drains within, and `live`'s is
-60s because a rollout drops WebSocket connections and clients reconnect.
+`terminationGracePeriodSeconds` is the window it gets. The default 30s holds
+every app's way down at the framework's defaults — 20s for the HTTP window or the
+worker's drain, half a second after it, five for the shutdown hooks, three
+for the telemetry flush and one for the console — `live`'s included: its
+sockets close with `1001 Going Away` at the signal, and their clients reconnect
+to a replica still serving. Raise an app's grace period with any window you
+raise, keeping 9.5s above it.

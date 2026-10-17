@@ -1,12 +1,17 @@
-//! Attribute-referenced layers (`#[use_guards/filters/interceptors]`) must
-//! satisfy the access contract: binding a layer whose module isn't imported
-//! fails the boot with `AccessGraphError`, never silently resolves or panics
-//! at mount.
+//! Attribute-referenced layers (`#[use_guards/filters/interceptors]`) and
+//! every edge host's dependencies, optional ones included, satisfy the access
+//! contract: one whose module isn't imported fails the boot.
+
+use std::sync::Arc;
 
 use nest_rs_core::{AccessGraphError, App, Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_graphql::{async_graphql, operations, resolver};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{async_trait, controller, routes};
-use poem::Request;
+// The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
+use nest_rs_mcp::rmcp;
+use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
+use nest_rs_ws::{WsModule, gateway, messages};
 
 #[injectable]
 #[derive(Default)]
@@ -16,12 +21,15 @@ impl Layer for AuthzGuard {}
 
 #[async_trait]
 impl Guard for AuthzGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
     }
 }
 
-impl HttpGuard for AuthzGuard {}
+impl GuardFor<nest_rs_http::HttpView> for AuthzGuard {}
 
 #[module(providers = [AuthzGuard])]
 struct GuardModule;
@@ -126,15 +134,11 @@ struct EagerConsumer {
     _dep: std::sync::Arc<UnprovidedDep>,
 }
 
-// `EagerConsumer` injects `UnprovidedDep`, which no module provides.
 #[module(providers = [EagerConsumer])]
 struct EagerMissingModule;
 
 #[test]
 fn an_eager_provider_with_a_missing_dependency_is_a_named_boot_error_not_a_panic() {
-    // The register phase used to panic on this before the access-graph check
-    // could run; it now defers to the graph, so the failure is the same named
-    // boot error as every other wiring mistake.
     match App::new::<EagerMissingModule>() {
         Ok(_) => panic!("an unprovided eager dependency must fail the boot"),
         Err(err) => {
@@ -153,8 +157,6 @@ fn an_eager_provider_with_a_missing_dependency_is_a_named_boot_error_not_a_panic
 
 #[test]
 fn two_modules_providing_the_same_concrete_type_fail_the_boot() {
-    // A concrete type registered by two modules used to silently last-write-wins;
-    // it now fails the boot, uniform with every other wiring error.
     match App::new::<DuplicateRoot>() {
         Ok(_) => panic!("a duplicate concrete provider must fail the boot"),
         Err(err) => {
@@ -167,5 +169,129 @@ fn two_modules_providing_the_same_concrete_type_fail_the_boot() {
                 dup.type_name
             );
         }
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct Directory;
+
+#[module(providers = [Directory])]
+struct DirectoryModule;
+
+#[controller(path = "/maybe-directory")]
+struct MaybeDirectoryController {
+    #[inject]
+    _directory: Option<Arc<Directory>>,
+}
+
+#[routes]
+impl MaybeDirectoryController {
+    #[get("/")]
+    async fn maybe_directory(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[gateway(path = "/maybe-directory")]
+struct MaybeDirectoryGateway {
+    #[inject]
+    _directory: Option<Arc<Directory>>,
+}
+
+#[messages]
+impl MaybeDirectoryGateway {
+    #[subscribe_message("ping")]
+    #[public]
+    async fn ping(&self) -> &'static str {
+        "pong"
+    }
+}
+
+#[resolver]
+struct MaybeDirectoryResolver {
+    #[inject]
+    _directory: Option<Arc<Directory>>,
+}
+
+#[operations]
+impl MaybeDirectoryResolver {
+    #[query]
+    #[public]
+    async fn maybe_directory(&self) -> async_graphql::Result<String> {
+        Ok("ok".into())
+    }
+}
+
+#[mcp]
+#[derive(Clone)]
+struct MaybeDirectoryTools {
+    #[inject]
+    _directory: Option<Arc<Directory>>,
+}
+
+#[tool_router(allow_empty)]
+impl MaybeDirectoryTools {}
+
+#[tool_handler]
+impl ServerHandler for MaybeDirectoryTools {}
+
+#[module(providers = [MaybeDirectoryController])]
+struct MaybeDirectoryHttpModule;
+
+#[module(imports = [WsModule], providers = [MaybeDirectoryGateway])]
+struct MaybeDirectoryWsModule;
+
+#[module(providers = [MaybeDirectoryResolver])]
+struct MaybeDirectoryGraphqlModule;
+
+#[module(providers = [MaybeDirectoryTools])]
+struct MaybeDirectoryMcpModule;
+
+#[module(imports = [DirectoryModule, MaybeDirectoryHttpModule])]
+struct MaybeDirectoryHttpRoot;
+
+#[module(imports = [DirectoryModule, MaybeDirectoryWsModule])]
+struct MaybeDirectoryWsRoot;
+
+#[module(imports = [DirectoryModule, MaybeDirectoryGraphqlModule])]
+struct MaybeDirectoryGraphqlRoot;
+
+#[module(imports = [DirectoryModule, MaybeDirectoryMcpModule])]
+struct MaybeDirectoryMcpRoot;
+
+/// The access violation booting `M` fails with, on the path that drains the
+/// factories a `WsModule` import queues.
+async fn built_boot_error<M: nest_rs_core::Module>(scenario: &str) -> AccessGraphError {
+    match App::builder().module::<M>().build().await {
+        Ok(_) => panic!("{scenario}: expected the boot to fail with an access violation"),
+        Err(err) => err
+            .downcast::<AccessGraphError>()
+            .unwrap_or_else(|err| panic!("{scenario}: not the access violation: {err:#}")),
+    }
+}
+
+#[tokio::test]
+async fn an_edge_hosts_optional_dependency_another_reached_module_provides_needs_its_import() {
+    for (host, error) in [
+        (
+            "MaybeDirectoryController",
+            built_boot_error::<MaybeDirectoryHttpRoot>("a controller's optional dependency").await,
+        ),
+        (
+            "MaybeDirectoryGateway",
+            built_boot_error::<MaybeDirectoryWsRoot>("a gateway's optional dependency").await,
+        ),
+        (
+            "MaybeDirectoryResolver",
+            built_boot_error::<MaybeDirectoryGraphqlRoot>("a resolver's optional dependency").await,
+        ),
+        (
+            "MaybeDirectoryTools",
+            built_boot_error::<MaybeDirectoryMcpRoot>("an MCP host's optional dependency").await,
+        ),
+    ] {
+        assert_eq!(error.consumer, host);
+        assert_eq!(error.owner, "DirectoryModule", "{host}");
     }
 }

@@ -7,13 +7,12 @@ publish = false
 [dependencies]
 nest-rs.workspace = true
 features.workspace = true
-# `RedisModule::for_root` opens the Redis connection; `RedisQueueModule` binds the producer the audio port injects.
-tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-nest-rs.workspace = true
-# Enables `features::testing` (dev keypair, org id, token minting) for e2e.
+tokio.workspace = true
+nest-rs = { workspace = true, features = ["testing"] }
+# Enables `features::testing` (dev keypair, org id, tokens, Redis databases) for e2e.
 features = { workspace = true, features = ["test-support"] }
 migrations = { workspace = true }
 sea-orm.workspace = true

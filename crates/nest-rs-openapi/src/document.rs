@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Discovery};
+use nest_rs_http::__private::global_guards_active;
 use nest_rs_http::{
-    ApiVersioning, GlobalGuardsActive, HttpConfig, HttpControllerMeta, HttpRouteMeta,
-    MEDIA_TYPE_PARAM, declared_versions, join_path,
+    ApiVersioning, HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
+    declared_versions, join_path,
 };
 use poem::http::{StatusCode, header};
 use schemars::SchemaGenerator;
@@ -15,86 +16,46 @@ use serde_json::{Map, Value, json};
 
 use crate::config::OpenApiConfig;
 
-/// The `operationId` collisions already reported during one boot.
-///
-/// A collision is a property of the *route table*, so it is one defect however
-/// many documents are built from it — and a deployment under a non-URI strategy
-/// builds one document per declared version beside the default. Sharing this
-/// across them is what keeps `warn` at *one event, said once* instead of three
-/// identical lines with nothing to tell them apart.
+/// The `operationId` collisions already reported during one boot, shared by
+/// every document built from one route table.
 #[derive(Default)]
-pub struct Reported {
+pub(crate) struct Reported {
     ids: std::collections::HashSet<String>,
 }
 
 /// Build the OpenAPI document for everything mounted on the HTTP transport.
 ///
-/// Called once at the transport's `configure` step (container fully assembled),
-/// so it sees every controller. A single [`SchemaGenerator`] runs across all
-/// routes so every `Json<T>` payload contributes to a shared
-/// `components/schemas`.
-///
-/// `claims` names the API version this document describes, and only bites under
-/// a non-URI versioning strategy: `None` — what `/api-json` passes — claims the
-/// deployment's default version when it names one, and every declared version
-/// otherwise; `Some(v)` is the per-version document `/api-json/v{v}`. Under the
-/// URI strategy the version is part of every path, so one document already
-/// names every address a client calls and `claims` is ignored.
-///
-/// `reported` is the boot-scoped ledger that keeps each diagnostic to one event
-/// however many documents that boot builds.
-pub fn build_document(
+/// `claims` is the version described under a non-URI strategy: `None` claims the
+/// default version, or every declared one; ignored under the URI strategy.
+pub(crate) fn build_document(
     container: &Container,
     config: &OpenApiConfig,
     claims: Option<&str>,
     reported: &mut Reported,
 ) -> Value {
     let discovery = Discovery::new(container);
-    // OpenAPI 3.1 schema objects *are* JSON Schema 2020-12. The 3.0
-    // `openapi3()` transforms (nullable/single-type rewrites) would corrupt the
-    // output. Only `$ref`s are relocated to `#/components/schemas/...`.
+    // OpenAPI 3.1 schemas are JSON Schema 2020-12: `openapi3()`'s rewrites would corrupt them.
     let mut settings = SchemaSettings::draft2020_12();
     settings.definitions_path = "/components/schemas".into();
     let mut generator = settings.into_generator();
 
-    // A global guard pool (`use_guards_global`) covers every non-public route
-    // even when no controller declares `#[use_guards]`, so the security scheme
-    // and auth error responses must reflect it — mirroring how the transport
-    // decides a route is implicitly guarded.
-    let global_guards = container.get::<GlobalGuardsActive>().is_some();
+    let global_guards = global_guards_active(container);
     let selection = VersionSelection::resolve(container, claims);
 
     let controllers = discovery.meta::<HttpControllerMeta>();
-    // One entry per address a controller answers at: a `version = ["1", "2"]`
-    // controller is two, and an unversioned one is still one. The document
-    // describes addresses, so this is the unit it iterates.
     let mut entries: Vec<(&Arc<HttpControllerMeta>, Option<&'static str>)> = controllers
         .iter()
         .flat_map(|d| d.meta.mounted_versions().map(move |v| (&d.meta, v)))
         .collect();
     if selection.is_some() {
-        // Sorted, so which operation a contested path keeps is decided by the
-        // versions rather than by link order: `None` sorts below `Some`, and
-        // the last write wins, so the highest version is the one described.
-        //
-        // "Highest" is a *natural* order, not a string one. `sort_by_key` over
-        // `Option<&str>` compared lexicographically, which puts `"10"` below
-        // `"9"` — so a v9/v10 pair described v9 while three places (this
-        // comment, the docs page and the CHANGELOG) said otherwise.
-        //
-        // Only here. Ordering a JSON object changes nothing a client reads, but
-        // it rewrites every line of a committed document — so under the URI
-        // strategy, where no two controllers can contest a path, the order
-        // stays the one discovery hands over.
+        // The last write wins a contested path, so the highest version is described.
+        // Not under the URI strategy: reordering would rewrite a committed document.
         entries.sort_by(|(a_meta, a), (b_meta, b)| {
             compare_versions(*a, *b).then_with(|| a_meta.path.cmp(b_meta.path))
         });
     }
 
     let mut described: HashMap<(String, &'static str), Option<&'static str>> = HashMap::new();
-    // Every `operationId` this document has published, and the operation that
-    // published it — the ledger the uniqueness OpenAPI requires is checked
-    // against.
     let mut operation_ids: HashMap<String, (String, &'static str)> = HashMap::new();
     let mut paths: Map<String, Value> = Map::new();
     for (meta, version) in &entries {
@@ -104,36 +65,37 @@ pub fn build_document(
         {
             continue;
         }
-        // Under a non-URI strategy the mounted prefix (`/v1/posts`) is not an
-        // address any client may call — the transport 404s it — so the document
-        // keys on the controller's own path and moves the version into a
-        // parameter below.
+        // Under a non-URI strategy the mounted `/v1/posts` answers `404`.
         let prefix = match &selection {
             Some(_) => meta.path.to_owned(),
             None => meta.effective_prefix(version),
         };
         for route in &meta.routes {
-            // A `#[version]`-narrowed route is not served under every version
-            // its controller declares, and a document naming an address that
-            // answers `404` is the defect this whole module exists to avoid.
             if !HttpControllerMeta::serves(route, version) {
                 continue;
             }
             let full = join_path(&prefix, route.path);
-            // A path OpenAPI has no template for. Reported rather than
-            // published: the poem spelling reached `paths` verbatim, so a
-            // generated client called `/blobs/*rest` as a literal URL. `warn`
-            // rather than a boot failure, for the same reason a duplicate id is
-            // — the route works, it is the *document* that cannot describe it.
-            let Some(key) = openapi_path(&full) else {
+            let full = match RouteTemplate::parse(&full) {
+                Ok(template) => template,
+                Err(refused) => {
+                    tracing::warn!(
+                        target: crate::TARGET,
+                        controller = meta.controller,
+                        handler = route.handler,
+                        error = %nest_rs_core::error_message(&refused),
+                        "route omitted from the document: its path is not a route template",
+                    );
+                    continue;
+                }
+            };
+            let Some(key) = openapi_path(&full).map(str::to_owned) else {
                 tracing::warn!(
                     target: crate::TARGET,
                     controller = meta.controller,
                     handler = route.handler,
                     path = %full,
-                    "route omitted from the document: an OpenAPI path template is one whole \
-                     segment, so a catch-all, an unnamed pattern, or a literal sharing a segment \
-                     with a parameter cannot be described",
+                    "route omitted from the document: an OpenAPI path template names one \
+                     segment's value, so a catch-all or a literal brace cannot be described",
                 );
                 continue;
             };
@@ -150,27 +112,11 @@ pub fn build_document(
                 global_guards,
                 version_parameter,
             );
-            // OpenAPI 3.1 §4.8.10.1 makes the id unique across the whole
-            // document, so a generator can name a client method after it. The
-            // controller and the version settle every collision the framework's
-            // own shapes produce, so what reaches this branch is a naming clash
-            // between two controllers whose names reduce to one token — rare,
-            // and invisible everywhere else in the boot.
-            //
-            // Compared against the *address*, not merely counted: two
-            // controllers mounted on one path overwrite each other's operation
-            // here, so one id reaches the document and there is no collision to
-            // report — that is a duplicate mount, and it is the transport's to
-            // name.
-            //
-            // A warning, never a boot failure: what degrades is a generated
-            // client, and an app is not stopped over its documentation.
+            // OpenAPI 3.1 §4.8.10.1: an id is unique across the document. One id on one
+            // address is a duplicate mount, the transport's to name.
             let address = (key.clone(), route.verb.as_str());
             if let Some(previous) = operation_ids.insert(id.clone(), address.clone())
                 && previous != address
-                // One defect, one event. The same clash reappears in every
-                // document built from this route table, and three identical
-                // lines with no field to tell them apart read as three problems.
                 && reported.ids.insert(id.clone())
             {
                 tracing::warn!(
@@ -184,10 +130,7 @@ pub fn build_document(
                     "two operations share one operationId",
                 );
             }
-            // OpenAPI keys one operation per (path, method), so two versions of
-            // one client-facing path cannot both be described here. The claim is
-            // recorded as it is made (the `insert` below runs for its return
-            // value) and the loser is named rather than dropped in silence.
+            // OpenAPI keys one operation per (path, method): name the version dropped.
             if selection.is_some()
                 && let Some(previous) =
                     described.insert((key.clone(), route.verb.as_str()), version)
@@ -213,30 +156,17 @@ pub fn build_document(
     }
 
     let mut schemas = generator.take_definitions(true);
-    // The RFC 9457 error body every failure renders (see `nest_rs_http::problem`).
-    // Hand-written rather than derived so the doc has no build-time dependency on
-    // the concrete struct's schemars derive.
     schemas.insert("ProblemDetails".into(), problem_details_schema());
 
-    let mut info = json!({ "title": config.title, "version": config.version });
-    if let (Some(description), Value::Object(info)) = (config.description.as_deref(), &mut info) {
-        info.insert("description".into(), json!(description));
-    }
+    let info = info_object(config);
 
-    // The transport mounts everything under `HttpConfig.global_prefix`, but the
-    // documented paths are relative to a controller's own prefix — so under a
-    // global prefix every path in the document is wrong. Declare the prefix as
-    // an OpenAPI `server` base URL: clients (and Swagger UI "Try it out")
-    // prepend it to each path, keeping the paths themselves prefix-free (OAPI-O5).
+    // Paths stay prefix-free; `global_prefix` becomes the `server` base URL clients prepend.
     let mut document = json!({
         "openapi": "3.1.2",
         "info": info,
         "paths": Value::Object(paths),
         "components": {
             "schemas": Value::Object(schemas),
-            // A guarded operation carries `security: [{ bearerAuth: [] }]`; a
-            // `#[public]` one carries none — so a generated client can tell the
-            // two apart (the gap this closes).
             "securitySchemes": {
                 "bearerAuth": {
                     "type": "http",
@@ -247,17 +177,106 @@ pub fn build_document(
         },
     });
 
-    if let Some(base) = global_prefix_base(container)
-        && let Value::Object(obj) = &mut document
-    {
+    // Stated even at the origin root, OpenAPI's default: a generator reads its
+    // base URL off `servers` and has none to read otherwise.
+    if let Value::Object(obj) = &mut document {
+        let base = global_prefix_base(container).unwrap_or_else(|| "/".to_owned());
         obj.insert("servers".into(), json!([{ "url": base }]));
     }
 
+    retain_reachable_schemas(&mut document);
     document
 }
 
-/// The transport's `global_prefix`, normalized to a `server` base URL
-/// (`/api`) — leading slash, no trailing slash — or `None` when unset.
+/// Drop every component schema no operation reaches. A `Query<T>` or
+/// `Header<T>` payload is expanded into parameters, so its own definition is
+/// referenced by nothing, and a generator would emit a type no call uses.
+fn retain_reachable_schemas(document: &mut Value) {
+    let mut pending = Vec::new();
+    collect_schema_refs(&document["paths"], &mut pending);
+    let Some(schemas) = document
+        .pointer_mut("/components/schemas")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let mut reachable = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        if reachable.insert(name.clone())
+            && let Some(schema) = schemas.get(&name)
+        {
+            collect_schema_refs(schema, &mut pending);
+        }
+    }
+    schemas.retain(|name, _| reachable.contains(name));
+}
+
+/// The component names every `$ref` under `value` points at.
+fn collect_schema_refs(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(name) = map
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|r| r.strip_prefix("#/components/schemas/"))
+            {
+                // RFC 6901 §4: `~1` before `~0`.
+                out.push(name.replace("~1", "/").replace("~0", "~"));
+            }
+            for child in map.values() {
+                collect_schema_refs(child, out);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_schema_refs(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// OpenAPI's Info Object, every field the config sets.
+fn info_object(config: &OpenApiConfig) -> Value {
+    let mut info = Map::new();
+    info.insert("title".into(), json!(config.title));
+    if let Some(summary) = &config.summary {
+        info.insert("summary".into(), json!(summary));
+    }
+    if let Some(description) = &config.description {
+        info.insert("description".into(), json!(description));
+    }
+    if let Some(terms) = &config.terms_of_service {
+        info.insert("termsOfService".into(), json!(terms));
+    }
+    if let Some(contact) = &config.contact {
+        let mut object = Map::new();
+        for (key, value) in [
+            ("name", &contact.name),
+            ("url", &contact.url),
+            ("email", &contact.email),
+        ] {
+            if let Some(value) = value {
+                object.insert(key.into(), json!(value));
+            }
+        }
+        info.insert("contact".into(), Value::Object(object));
+    }
+    if let Some(license) = &config.license {
+        let mut object = Map::new();
+        object.insert("name".into(), json!(license.name));
+        if let Some(identifier) = &license.identifier {
+            object.insert("identifier".into(), json!(identifier));
+        }
+        if let Some(url) = &license.url {
+            object.insert("url".into(), json!(url));
+        }
+        info.insert("license".into(), Value::Object(object));
+    }
+    info.insert("version".into(), json!(config.version));
+    Value::Object(info)
+}
+
 fn global_prefix_base(container: &Container) -> Option<String> {
     let prefix = container.get::<HttpConfig>()?.global_prefix.clone()?;
     let trimmed = prefix.trim().trim_matches('/');
@@ -268,10 +287,6 @@ fn global_prefix_base(container: &Container) -> Option<String> {
     }
 }
 
-/// The versions this deployment publishes a document of its own for —
-/// `/api-json/v{n}` beside the default `/api-json`. Empty under the URI
-/// strategy, where the version is part of every path and one document already
-/// names every address a client calls.
 pub(crate) fn versioned_documents(container: &Container) -> Vec<String> {
     match selects_per_request(container) {
         true => declared_versions(container),
@@ -279,8 +294,6 @@ pub(crate) fn versioned_documents(container: &Container) -> Vec<String> {
     }
 }
 
-/// Whether the deployment resolves the version **per request** (`header` /
-/// `media_type`) rather than from the path.
 pub(crate) fn selects_per_request(container: &Container) -> bool {
     container
         .get::<HttpConfig>()
@@ -288,31 +301,16 @@ pub(crate) fn selects_per_request(container: &Container) -> bool {
 }
 
 /// How a document tells a caller to ask for an API version when the version is
-/// not in the path (`NESTRS_HTTP__VERSIONING=header` / `media_type`).
-///
-/// Under those strategies the address a client calls is the unversioned one —
-/// the URI form is a `404` — so the document keys on `#[controller(path = …)]`
-/// and every operation that declares a version carries it as a header
-/// parameter instead.
+/// not in the path: as a header parameter on the unversioned address.
 struct VersionSelection {
-    /// [`ApiVersioning::Header`] or [`ApiVersioning::MediaType`]; the URI
-    /// strategy produces no selection at all.
     strategy: ApiVersioning,
-    /// The header a caller sets: the deployment's version header, or `Accept`
-    /// for the media-type strategy.
     header: String,
-    /// The deployment names no default version, so a caller that states none
-    /// reaches no versioned route at all — stating one is not optional.
     required: bool,
-    /// The one version this document describes, or `None` to describe every
-    /// version the app declares.
+    /// The one version this document describes, or `None` for every one.
     claims: Option<String>,
 }
 
 impl VersionSelection {
-    /// `None` under the URI strategy: the version is part of the path there, so
-    /// the document composed from the mounted route table is already the one a
-    /// client calls.
     fn resolve(container: &Container, claims: Option<&str>) -> Option<Self> {
         let config = container.get::<HttpConfig>()?;
         if config.versioning == ApiVersioning::Uri {
@@ -331,9 +329,6 @@ impl VersionSelection {
         })
     }
 
-    /// Whether this document describes the operations of `version`. An
-    /// unversioned controller belongs to every document: it carries no version
-    /// parameter, so nothing here tells a client to state one for it.
     fn describes(&self, version: Option<&str>) -> bool {
         match (version, &self.claims) {
             (Some(version), Some(claims)) => version == claims,
@@ -341,13 +336,6 @@ impl VersionSelection {
         }
     }
 
-    /// The version parameter one operation carries — the header a caller sets
-    /// to reach `version`, `required` unless the deployment names a default.
-    ///
-    /// The `enum` holds what this document accepts for that operation: one
-    /// value, because a document describes one version of a given path, and an
-    /// enumerated string reaches a generated client as a typed choice rather
-    /// than as free text.
     fn parameter(&self, version: &str, route: &HttpRouteMeta) -> Value {
         let (description, accepted) = match self.strategy {
             ApiVersioning::MediaType => (
@@ -375,33 +363,11 @@ impl VersionSelection {
     }
 }
 
-/// A version as a log field — an unversioned controller has none, and the empty
-/// string in a structured field says nothing to whoever reads it.
 fn version_label(version: Option<&str>) -> &str {
     version.unwrap_or("unversioned")
 }
 
-/// The `operationId` an operation is published under: the controller that
-/// serves it, its handler, and the version it is served under when it has one —
-/// `posts_list`, `posts_list_v1`.
-///
-/// OpenAPI 3.1 §4.8.10.1 requires the id to be unique across the whole document
-/// and a handler name alone never was: `#[crud]` names every resource's
-/// operations `list`/`get`/`create`, so two resources in one document is already
-/// a collision, and versioning adds two more shapes — one controller mounted
-/// under two versions, and the two-controller layout. A generator meeting an id
-/// twice either refuses the document or renames the loser, so the operations
-/// reach a generated client as one method.
-///
-/// The controller settles what a document holds at one version; the version
-/// settles what it holds across them. Qualifying by the controller is the
-/// ecosystem's answer — `@nestjs/swagger` publishes `PostsController_findAll` —
-/// spelled snake_case here because the id is what a generated client names a
-/// method after, and `posts_list` reads as one.
-///
-/// Composed first and mapped once, by [`identifier_token`]: this is where the id
-/// is assembled, so it is where the one rule about what an id may contain
-/// belongs — no half of it arrives already safe.
+/// The `operationId` an operation is published under: `posts_list`, `posts_list_v1`.
 fn operation_id(token: &str, handler: &str, version: Option<&str>) -> String {
     let qualified = format!("{token}_{handler}");
     let id = match version {
@@ -412,51 +378,20 @@ fn operation_id(token: &str, handler: &str, version: Option<&str>) -> String {
 }
 
 /// An `operationId` as a generated client can carry it: every character an
-/// identifier cannot hold becomes `_`.
-///
-/// **Run over the whole composed id, not over one half of it.** The characters
-/// the composition itself contributes — the `_` joins and the `v` — are ones the
-/// map keeps, so one pass over the join is the same string as three passes over
-/// the parts, and a reader has one rule to hold rather than a per-half table.
-/// Half a sanitised id is worse than none: the version half was mapped and the
-/// other two were not, so `#[version("2024-08-11")]` published
-/// `list_v2024_08_11` while `async fn r#type` published `probe_r#type`.
-///
-/// **No half is safe by construction, the controller token included.** A version
-/// is an opaque string (`"2"`, but also `"2024-08-11"`). A handler is the
-/// method's ident *as written*, so a raw one (`r#type`, `r#move`) arrives
-/// carrying its `r#`. And the token is `snake_case` over the controller's ident,
-/// which lowercases and inserts `_` but neither adds nor removes anything else —
-/// so `struct r#Type` reaches here as `r#_type`. Rust's own identifier grammar
-/// is what leaves the gap: `#` is legal in a name and illegal in an
-/// `operationId`.
-///
-/// The map is deliberately lossy — `1.2` and `1-2` land on one token, as do
-/// `r#type` and `r_type` — because the alternative is an id a client generator
-/// has to mangle on its own terms. Two operations that collide here share one
-/// id, which the document's own uniqueness check reports by name.
+/// identifier cannot hold becomes `_`. Run over the whole id: every part, raw
+/// idents (`r#type`) included, can carry one.
 fn identifier_token(id: &str) -> String {
     id.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
 }
 
-/// What to do about two operations claiming one `operationId`, which says what
-/// is actually left to report: an id is `<controller>_<handler>` mapped onto
-/// what an identifier can carry, so the two operations either declared one
-/// handler name under controller names that reduce to one token, or two names
-/// the map itself collapsed. Both remedies are a rename, and the sentence names
-/// the two places one can happen because the ledger cannot tell which it caught.
-/// A constant rather than a built sentence — unlike the contested-path remedy,
-/// nothing here is named by a deployment's environment.
 const DUPLICATE_ID_REMEDY: &str = "rename one of the two controllers, or one of the two \
      handlers: an operationId is <controller>_<handler> mapped onto what an identifier can \
      carry, so names that differ only by the `Controller` suffix, by casing (`Posts`, \
      `PostsController`) or by a character that map replaces (`r#type`, `r_type`) publish one \
      id — which OpenAPI requires to be unique across the document";
 
-/// What to do about two versions on one documented path. Built rather than
-/// spelled: the deployment's own prefix renames the variable.
 fn contested_path_remedy() -> String {
     format!(
         "read the per-version document at /api-json/v{{n}}, or name the version /api-json \
@@ -465,36 +400,34 @@ fn contested_path_remedy() -> String {
     )
 }
 
-/// The RFC 9457 `application/problem+json` schema referenced by every error
-/// response. `errors` is the extension member field-level validation rides on.
+/// The RFC 9457 `application/problem+json` schema referenced by every error response.
+///
+/// `type` and `instance` are URI references (§3.1.1, §3.1.5): a relative one
+/// such as the request path is valid, and `format: uri` would make a validating
+/// client refuse it.
 fn problem_details_schema() -> Value {
     json!({
         "type": "object",
+        "description": "An RFC 9457 problem details object.",
         "properties": {
-            "type": { "type": "string", "format": "uri" },
+            "type": { "type": "string", "format": "uri-reference" },
             "title": { "type": "string" },
-            "status": { "type": "integer" },
+            "status": { "type": "integer", "minimum": 100, "maximum": 599 },
             "detail": { "type": "string" },
-            "instance": { "type": "string", "format": "uri" },
+            "instance": { "type": "string", "format": "uri-reference" },
             "errors": { "type": "object", "additionalProperties": true },
         },
         "required": ["type", "title", "status"],
     })
 }
 
-/// Whether a route demands a bearer token in the document: it declares a
-/// controller/method guard, or a global guard pool covers it — and it is not
-/// `#[public]`.
 fn route_is_guarded(route: &HttpRouteMeta, global_guards: bool) -> bool {
     (route.scoped_guarded || global_guards) && !route.public
 }
 
-/// Compose one operation object. `operation_id` is composed by the caller, as
-/// `full_path` is: both are what the *document* calls this operation, which the
-/// route alone does not decide — see [`operation_id`].
 fn operation_object(
     route: &HttpRouteMeta,
-    full_path: &str,
+    full_path: &RouteTemplate,
     operation_id: &str,
     generator: &mut SchemaGenerator,
     global_guards: bool,
@@ -509,6 +442,9 @@ fn operation_object(
     if let Some(description) = route.description {
         op.insert("description".into(), json!(description));
     }
+    if route.deprecation.is_some() {
+        op.insert("deprecated".into(), json!(true));
+    }
 
     let mut parameters = typed_path_parameters(full_path, route.path_params, generator);
     parameters.extend(expand_object_params(route.query_params, "query", generator));
@@ -518,16 +454,7 @@ fn operation_object(
         generator,
     ));
     parameters.extend(version_parameter);
-    // A parameter the caller must send is a `400` the operation can actually
-    // produce, on the same reading that ties `400` to a request body. One rule
-    // over every emitted parameter, because a required query property and a
-    // required header are the same rejection: `400` problem+json, naming the
-    // field. Read off the emitted parameters rather than off the schema fns,
-    // because "required" is what the expansion just decided.
-    //
-    // A path parameter is exempt and is the only one: it is part of the URL, so
-    // omitting it does not reach this operation at all — it reaches another
-    // route, or none.
+    // A path parameter is exempt: omitting it reaches another route, never a `400`.
     let requires_parameter = parameters
         .iter()
         .any(|p| p["required"] == true && p["in"] != "path");
@@ -538,9 +465,7 @@ fn operation_object(
     if let Some(body) = route.request_body {
         let schema = match body.schema() {
             Some(schema_fn) => schema_fn(generator).to_value(),
-            // A bare `Multipart` parameter: the media type is known, the parts
-            // are not. A free-form object says exactly that — and says it to a
-            // generated client, which silence never did.
+            // A bare `Multipart`: the media type is known, the parts are not.
             None => json!({ "type": "object", "additionalProperties": true }),
         };
         op.insert(
@@ -549,23 +474,19 @@ fn operation_object(
         );
     }
 
-    // A guarded, non-public route demands a bearer token.
     if route_is_guarded(route, global_guards) {
         op.insert("security".into(), json!([{ "bearerAuth": [] }]));
+    } else if route.public {
+        // OpenAPI 3.1 §4.8.10.1: an empty list removes any requirement, the
+        // `#[public]` opening stated in the document as in the code.
+        op.insert("security".into(), json!([]));
     }
 
     let mut responses = Map::new();
-    // The effective success status (OAPI-O3): `#[http_code(201)]`, a `#[crud]`
-    // delete's `204`, or a `#[redirect(_, 301)]` no longer masquerade as `200`.
     let status = route.success_status;
     let mut ok = Map::new();
-    // A `204 No Content` and a `3xx` redirect carry no response body.
     let has_body = status != 204 && !is_redirect(status);
     let schema = has_body.then_some(route.response).flatten();
-    // An ability-shaped route publishes its full shape and says so: the caller
-    // receives whichever of these properties its ability grants. Saying nothing
-    // — the previous behaviour — typed every `#[crud]` response as `any` in a
-    // generated client (OAPI-O5).
     ok.insert(
         "description".into(),
         json!(match (route.masked, schema.is_some()) {
@@ -577,12 +498,6 @@ fn operation_object(
             _ => reason_phrase(status).to_owned(),
         }),
     );
-    // What the success body arrives as: `application/json` unless the route
-    // declared otherwise (`#[api(response_content_type = …)]`) or returns an
-    // `SSE` stream. A declared media type with no schema is still documented —
-    // a streamed download and an event stream both have a body, and typing it
-    // `string` (`format: binary` off the text types) is what OpenAPI spells for
-    // a body a schema cannot describe.
     let media = route.response_content_type.unwrap_or(JSON_MEDIA_TYPE);
     match (schema, route.response_content_type) {
         (Some(schema_fn), _) => {
@@ -599,42 +514,55 @@ fn operation_object(
         }
         _ => {}
     }
-    // The success pendant of the `429`'s `Retry-After` below: a `#[crud]`
-    // create's `201` names the row it minted and a `#[redirect]` names its
-    // target, both in `Location`. Declared for the same reason — a generated
-    // client only reads headers the document lists.
-    if route.sets_location {
-        ok.insert("headers".into(), location_header(status));
+    let headers = success_headers(route, status);
+    if !headers.is_empty() {
+        ok.insert("headers".into(), Value::Object(headers));
     }
     responses.insert(status.to_string(), Value::Object(ok));
     for (status, title) in error_statuses(route, full_path, global_guards, requires_parameter) {
         let mut response = problem_response(title);
-        // The throttler's `429` carries a `Retry-After` (seconds to window
-        // reset) — document it so generated clients can honour the back-off.
-        if status == "429"
-            && let Value::Object(map) = &mut response
-        {
-            map.insert("headers".into(), retry_after_header());
+        if let Value::Object(map) = &mut response {
+            match status {
+                "401" => {
+                    map.insert("headers".into(), challenge_header());
+                }
+                "429" => {
+                    map.insert("headers".into(), retry_after_header());
+                }
+                _ => {}
+            }
         }
         responses.insert(status.into(), response);
+    }
+    // A body the handler writes itself sits beside the framework's problem
+    // document for that status, when both can answer.
+    for (status, schema_fn) in route.error_responses {
+        let schema = schema_fn(generator).to_value();
+        let response = responses
+            .entry(status.to_string())
+            .or_insert_with(|| json!({ "description": reason_phrase(*status) }));
+        if let Value::Object(response) = response {
+            let content = response
+                .entry("content")
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Value::Object(content) = content {
+                content.insert(JSON_MEDIA_TYPE.into(), json!({ "schema": schema }));
+            }
+        }
     }
     op.insert("responses".into(), Value::Object(responses));
 
     Value::Object(op)
 }
 
-/// Path parameters typed from the handler's `Path<T>` extractor: the `i`-th
-/// `:name` segment gets the schema of `path_params[i]`. Positional typing is
-/// only applied when every segment has a matching `Path<T>` component; a handler
-/// that binds some segments another way (`Bind<_, _>`, leaving fewer
-/// `path_params` than segments) would misalign, so all segments fall back to the
-/// `string`/`format: uuid` guess for an id-like name.
+/// Path parameters typed positionally from the handler's `Path<T>`, only when
+/// every segment has one: a `Bind<_, _>` leaves fewer and would misalign.
 fn typed_path_parameters(
-    path: &str,
-    path_params: &[nest_rs_http::SchemaFn],
+    path: &RouteTemplate,
+    path_params: &[nest_rs_http::__private::SchemaFn],
     generator: &mut SchemaGenerator,
 ) -> Vec<Value> {
-    let names = path_parameter_names(path);
+    let names: Vec<&str> = path.parameters().collect();
     let positional = path_params.len() == names.len();
     names
         .iter()
@@ -653,25 +581,15 @@ fn typed_path_parameters(
 }
 
 /// Expand each payload struct into one parameter per property of its object
-/// schema, filed under `location` (`query` or `header`) — this is how the
-/// `#[crud]` list op's `Query<PageParams>` surfaces `first` and `after`, and how
-/// a `Header<T>` surfaces the headers it reads. A property absent from the
-/// schema's `required` is an optional parameter.
-///
-/// One expansion for both because they are the same shape: a struct whose
-/// properties are named, flat, scalar-ish values. Only the `in` differs, and a
-/// second copy would drift the day one side learned about `$ref`s.
+/// schema, filed under `location` (`query` or `header`).
 fn expand_object_params(
-    params: &[nest_rs_http::SchemaFn],
+    params: &[nest_rs_http::__private::SchemaFn],
     location: &str,
     generator: &mut SchemaGenerator,
 ) -> Vec<Value> {
     let mut out = Vec::new();
     for schema_fn in params {
-        // A named struct (`PageParams`) yields a `$ref`, not inline properties.
-        // Build it against the *shared* generator so any nested struct/enum a
-        // property references lands in the document's `components/schemas` — a
-        // throwaway generator would drop those, leaving a dangling `$ref`.
+        // The shared generator, or a nested type's `$ref` dangles.
         let schema = schema_fn(generator).to_value();
         let object = resolve_ref(&schema, generator.definitions());
         let required: Vec<&str> = object
@@ -693,8 +611,6 @@ fn expand_object_params(
     out
 }
 
-/// Follow a top-level `{"$ref": "…/Name"}` to its definition; return the schema
-/// unchanged when it is already inline.
 fn resolve_ref(schema: &Value, defs: &Map<String, Value>) -> Value {
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
         && let Some(name) = reference.rsplit('/').next()
@@ -706,60 +622,47 @@ fn resolve_ref(schema: &Value, defs: &Map<String, Value>) -> Value {
 }
 
 /// The error responses an operation can actually produce, as `(status, title)`.
-/// Honest per route: auth codes only on a guarded route, `404` only where a
-/// path binds an id, `409` only on a `#[crud]` write, `400` only with a body or
-/// a parameter the caller must send.
 fn error_statuses(
     route: &HttpRouteMeta,
-    full_path: &str,
+    full_path: &RouteTemplate,
     global_guards: bool,
     requires_parameter: bool,
 ) -> Vec<(&'static str, &'static str)> {
     let mut out = Vec::new();
     if route.request_body.is_some() || requires_parameter {
-        // The framework's edge validation (`Valid`/`Piped`) rejects with a `400`
-        // RFC-9457 problem+json (see `nest_rs_http::pipe::reject`), not `422` —
-        // the generated document must state the status clients will actually see
-        // (OAPI-O2). `Query<T>` and `Header<T>` reject a missing required
-        // property the same way, and a version token that does not parse is
-        // refused before it reaches a path.
+        // Edge validation answers `400`, never `422` (`nest_rs_http::pipe::reject`).
         out.push(("400", "Bad Request"));
     }
+    // The transport's body cap, whatever the media type.
+    let content_too_large = route
+        .request_body
+        .is_some()
+        .then_some(("413", "Content Too Large"));
     if route_is_guarded(route, global_guards) {
         out.push(("401", "Unauthorized"));
         out.push(("403", "Forbidden"));
     }
-    // `404` where a path *segment* binds an id (`/users/:id`) — a lookup that
-    // can miss. Match a leading-`:` segment, not any `:` in the string, so a
-    // literal colon in a static segment doesn't spuriously advertise a `404`
-    // (OAPI-O4). Driven off the path rather than `path_params` on purpose: a
-    // `Bind<_, _>` route looks up its id and can 404 but carries no typed
-    // `Path<…>` param, so `path_params` would be empty for exactly those routes.
-    if !path_parameter_names(full_path).is_empty() {
+    // Off the path, not `path_params`: a `Bind<_, _>` route can 404 and has none.
+    if full_path.parameters().next().is_some() {
         out.push(("404", "Not Found"));
     }
     if route.may_conflict {
         out.push(("409", "Conflict"));
     }
-    // `429` on a `ThrottlerGuard`-covered route — the guard answers with a
-    // `Retry-After` header (added on the response below), so clients that read
-    // the document know to back off (OAPI-O4).
+    out.extend(content_too_large);
     if route.throttled {
         out.push(("429", "Too Many Requests"));
     }
+    // A handler's `Err` answers an opaque `500`; not `default`, which would
+    // also claim a status a handler writes with a body of its own.
+    out.push(("500", "Internal Server Error"));
     out
 }
 
-/// A `3xx`. Written once because two decisions must agree by construction: a
-/// redirect carries no response body, and its `Location` points at a target
-/// rather than at a row it created.
 fn is_redirect(status: u16) -> bool {
     (300..400).contains(&status)
 }
 
-/// Reason phrase for a success status, for the response `description`. Reuses
-/// the `http` crate's canonical table (the same source `nest_rs_http::problem`
-/// draws error phrases from) rather than a hand-kept copy that would drift.
 fn reason_phrase(status: u16) -> &'static str {
     StatusCode::from_u16(status)
         .ok()
@@ -767,25 +670,16 @@ fn reason_phrase(status: u16) -> &'static str {
         .unwrap_or("Success")
 }
 
-/// The media type a body is documented under when nothing declares another.
 const JSON_MEDIA_TYPE: &str = "application/json";
 
-/// A `content` map with one entry: `{"<media type>": {"schema": …}}`. Built
-/// rather than written inline because the key is a value here, not a literal.
 fn media_content(media_type: &str, schema: Value) -> Value {
     let mut content = Map::new();
     content.insert(media_type.to_owned(), json!({ "schema": schema }));
     Value::Object(content)
 }
 
-/// The body schema for a response the framework knows the media type of and
-/// nothing more — a streamed download, an event stream. OpenAPI spells an
-/// opaque byte stream `string` / `format: binary`; a `text/*` stream is text,
-/// so it carries no binary format and claims none.
-///
-/// The test is case-insensitive because RFC 9110 §8.3.1 says the type is:
-/// `TEXT/CSV` names the same media type as `text/csv`, and a bytewise
-/// `starts_with` typed it as opaque bytes.
+/// The body schema for a response known only by its media type; case-insensitive
+/// per RFC 9110 §8.3.1.
 fn stream_schema(media_type: &str) -> Value {
     let is_text = media_type
         .split('/')
@@ -798,8 +692,6 @@ fn stream_schema(media_type: &str) -> Value {
     }
 }
 
-/// A single `application/problem+json` error response referencing the shared
-/// `ProblemDetails` schema.
 fn problem_response(title: &str) -> Value {
     json!({
         "description": title,
@@ -811,8 +703,19 @@ fn problem_response(title: &str) -> Value {
     })
 }
 
-/// The `Retry-After` response header a throttled route's `429` carries: the
-/// integer seconds a client should wait before retrying (RFC-9110 §10.2.3).
+/// The `WWW-Authenticate` challenge every `401` carries (RFC 9110 §15.5.2).
+fn challenge_header() -> Value {
+    json!({
+        "WWW-Authenticate": {
+            "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential \
+                            arrived and was refused.",
+            "required": true,
+            "schema": { "type": "string" }
+        }
+    })
+}
+
+/// The `Retry-After` header a `429` carries, in seconds (RFC 9110 §10.2.3).
 fn retry_after_header() -> Value {
     json!({
         "Retry-After": {
@@ -822,13 +725,56 @@ fn retry_after_header() -> Value {
     })
 }
 
-/// The `Location` response header a route that mints or points elsewhere
-/// carries. An **absolute-path reference** on both paths the framework emits
-/// (`/orgs/<id>`, a redirect target), hence `uri-reference` rather than `uri`.
-///
-/// `required` is deliberately absent, as it is on `Retry-After`: a `#[crud]`
-/// create omits the header for an entity that does not key on a `Uuid`, and the
-/// document would be claiming a guarantee the route does not make.
+/// The headers the success response carries on the framework's behalf.
+fn success_headers(route: &HttpRouteMeta, status: u16) -> Map<String, Value> {
+    let mut headers = Map::new();
+    if route.sets_location {
+        headers.insert("Location".into(), location_header(status));
+    }
+    if route.sets_next_link {
+        headers.insert(
+            "Link".into(),
+            json!({
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor \
+                                carried in its query; absent on the last page.",
+                "schema": { "type": "string" }
+            }),
+        );
+    }
+    if let Some(deprecation) = route.deprecation {
+        headers.insert(
+            "Deprecation".into(),
+            json!({
+                "description": format!("RFC 9745: deprecated since {}.", deprecation.since),
+                "required": true,
+                "schema": { "type": "string", "const": deprecation.header }
+            }),
+        );
+    }
+    for (name, value) in route.response_headers {
+        // RFC 9110 §5.3: `Set-Cookie` alone is sent as several fields, so no
+        // one value describes it.
+        let several = name.eq_ignore_ascii_case("set-cookie")
+            || route
+                .response_headers
+                .iter()
+                .filter(|(n, _)| n == name)
+                .count()
+                > 1;
+        let schema = match several {
+            true => json!({ "type": "string" }),
+            false => json!({ "type": "string", "const": value }),
+        };
+        headers.insert(
+            (*name).into(),
+            json!({ "required": true, "schema": schema }),
+        );
+    }
+    headers
+}
+
+/// The `Location` header, an absolute-path reference (`uri-reference`). Not
+/// `required`: a `#[crud]` create omits it for an entity not keyed on a `Uuid`.
 fn location_header(status: u16) -> Value {
     let description = if is_redirect(status) {
         "URI to follow for this resource."
@@ -836,21 +782,13 @@ fn location_header(status: u16) -> Value {
         "URI of the resource that was just created."
     };
     json!({
-        "Location": {
-            "description": description,
-            "schema": { "type": "string", "format": "uri-reference" }
-        }
+        "description": description,
+        "schema": { "type": "string", "format": "uri-reference" }
     })
 }
 
 /// Order two versions the way a reader does: unversioned below versioned, then
-/// **naturally** — digit runs compared as numbers, so `2` < `9` < `10` and
-/// `2024-08-11` < `2024-09-01`.
-///
-/// A version is a free-form token (`#[controller(version = "2024-08-11")]` is
-/// declarable), so this cannot parse it as one number. Comparing digit runs
-/// numerically and everything else bytewise is what makes both shapes order the
-/// way they read, and it is the only property "the highest version wins" needs.
+/// **naturally** — digit runs compared as numbers, so `2` < `9` < `10`.
 fn compare_versions(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
     match (a, b) {
         (None, None) => std::cmp::Ordering::Equal,
@@ -861,9 +799,7 @@ fn compare_versions(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
 }
 
 fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    /// The leading run of digits with its leading zeros dropped, and what
-    /// follows it. Leading zeros are spelling, not significance, so `007` and
-    /// `7` compare equal and `007` sorts below `10`.
+    /// The leading run of digits without its leading zeros, and what follows it.
     fn digits(s: &[u8]) -> (&[u8], &[u8]) {
         let run = s.iter().take_while(|c| c.is_ascii_digit()).count();
         let (run, rest) = s.split_at(run);
@@ -879,8 +815,6 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
             (Some(_), None) => return std::cmp::Ordering::Greater,
             (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
                 let ((a_digits, a_rest), (b_digits, b_rest)) = (digits(a), digits(b));
-                // More significant digits is a larger number; same count falls
-                // back to the digits themselves.
                 let ordering = a_digits
                     .len()
                     .cmp(&b_digits.len())
@@ -900,74 +834,17 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// What one poem path segment is, in the terms OpenAPI can express.
-///
-/// The single reading of a path segment in this module. It was three: the path
-/// rewriter, the parameter derivation and the `404` test each did their own
-/// `strip_prefix(':')`, and all three therefore agreed only about `:name` —
-/// which is why the other three forms poem's own matcher parses
-/// (`nest_rs_http`'s `segment_matches`) reached the document verbatim, with no
-/// parameter and no `404`.
-enum Segment<'a> {
-    /// A fixed segment, published as written.
-    Literal(&'a str),
-    /// A whole-segment parameter, named. `:id` and `:id<\d+>` alike — the
-    /// pattern constrains the value, not the shape of the template.
-    Parameter(&'a str),
-    /// A segment OpenAPI has no template for, and this is a property of the
-    /// standard rather than of this code. A path template is a whole segment
-    /// (RFC 6570 level 1 as OpenAPI profiles it), so poem's catch-all (`*rest`),
-    /// its unnamed regex segment (`<\d+>`) and a literal sharing a segment with
-    /// a parameter (`/@:handle`) have no expression here.
-    Untemplatable,
-}
-
-fn classify_segment(seg: &str) -> Segment<'_> {
-    let Some(rest) = seg.strip_prefix(':') else {
-        // A pattern or a catch-all anywhere else in the segment, or a literal
-        // sharing the segment with one, has no whole-segment template.
-        return match seg.contains([':', '<', '*']) {
-            true => Segment::Untemplatable,
-            false => Segment::Literal(seg),
-        };
-    };
-    // `:name`, or `:name<pattern>` — the name runs to the pattern, which
-    // constrains the value rather than the shape of the template.
-    let name = rest.split_once('<').map_or(rest, |(name, _pattern)| name);
-    match name.is_empty() {
-        true => Segment::Untemplatable,
-        false => Segment::Parameter(name),
+/// The OpenAPI path template of `template`, which the route grammar already
+/// spells (OpenAPI 3.1 §4.8.2), or `None` for what the standard cannot
+/// template: a catch-all spans segments, and a literal brace reads as a
+/// template expression.
+fn openapi_path(template: &RouteTemplate) -> Option<&str> {
+    let path = template.as_str();
+    // A template doubles a brace only to write it literally.
+    match template.catch_all().is_some() || path.contains("{{") || path.contains("}}") {
+        true => None,
+        false => Some(path),
     }
-}
-
-/// The parameters a path declares, in order.
-fn path_parameter_names(path: &str) -> Vec<&str> {
-    path.split('/')
-        .filter_map(|seg| match classify_segment(seg) {
-            Segment::Parameter(name) => Some(name),
-            _ => None,
-        })
-        .collect()
-}
-
-/// poem path syntax (`/users/:id`) → OpenAPI syntax (`/users/{id}`), or `None`
-/// when a segment has no OpenAPI template.
-///
-/// `None` is a refusal, not a fallback. Publishing the poem spelling put
-/// `"/blobs/*rest"` in `paths` as a literal address, with no parameter and no
-/// `404` — a generated client would call that URL verbatim. An operation the
-/// standard cannot describe is left out and reported, which is the difference
-/// between an incomplete document and a wrong one.
-fn openapi_path(path: &str) -> Option<String> {
-    let mut out = Vec::new();
-    for seg in path.split('/') {
-        match classify_segment(seg) {
-            Segment::Literal(seg) => out.push(seg.to_owned()),
-            Segment::Parameter(name) => out.push(format!("{{{name}}}")),
-            Segment::Untemplatable => return None,
-        }
-    }
-    Some(out.join("/"))
 }
 
 #[cfg(test)]
@@ -979,55 +856,34 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn joins_and_converts_paths() {
-        assert_eq!(join_path("/users", "/:id"), "/users/:id");
-        assert_eq!(openapi_path("/users/:id").as_deref(), Some("/users/{id}"));
-        assert_eq!(join_path("/", "/"), "/");
+    fn template(path: &str) -> RouteTemplate {
+        RouteTemplate::parse(path).expect("a route template")
     }
 
     #[test]
-    fn openapi_path_handles_root_and_no_params() {
-        assert_eq!(openapi_path("/").as_deref(), Some("/"));
-        assert_eq!(openapi_path("/users").as_deref(), Some("/users"));
-        assert_eq!(openapi_path("").as_deref(), Some(""));
+    fn the_document_spells_a_template_as_the_route_declares_it() {
+        for path in [
+            "/",
+            "/users",
+            "/users/{id}",
+            "/orgs/{org_id}/users/{id}",
+            "/users/@{handle}",
+        ] {
+            assert_eq!(openapi_path(&template(path)), Some(path));
+        }
     }
 
-    #[test]
-    fn openapi_path_handles_multiple_params() {
-        assert_eq!(
-            openapi_path("/orgs/:org_id/users/:id").as_deref(),
-            Some("/orgs/{org_id}/users/{id}"),
-        );
-    }
-
-    /// Every segment form poem's own matcher parses, and what the standard can
-    /// say about each. The three that cannot be templated used to reach `paths`
-    /// verbatim — a generated client called `/blobs/*rest` as a literal URL.
     #[test]
     fn openapi_path_refuses_what_the_standard_cannot_template() {
-        // A pattern constrains the value, not the shape of the template.
-        assert_eq!(
-            openapi_path("/users/:id<\\d+>").as_deref(),
-            Some("/users/{id}"),
-        );
-
-        for path in [
-            "/blobs/*rest",    // a catch-all spans segments
-            "/blobs/<\\d+>",   // an unnamed pattern names no parameter
-            "/users/@:handle", // a literal sharing a segment with a parameter
-            "/users/:",        // a parameter with no name
-        ] {
+        // A catch-all spans segments; a literal brace reads as a template.
+        for path in ["/blobs/{*rest}", "/b/{{x}}"] {
             assert!(
-                openapi_path(path).is_none(),
+                openapi_path(&template(path)).is_none(),
                 "{path} has no OpenAPI path template",
             );
         }
     }
 
-    /// "The highest version is the one described" was a string comparison, so a
-    /// v9/v10 pair described v9 — deterministic, and the opposite of what this
-    /// module's own comment, the docs page and the CHANGELOG all state.
     #[test]
     fn versions_order_the_way_they_read() {
         use std::cmp::Ordering;
@@ -1035,11 +891,8 @@ mod tests {
         assert_eq!(compare_versions(Some("9"), Some("10")), Ordering::Less);
         assert_eq!(compare_versions(Some("2"), Some("10")), Ordering::Less);
         assert_eq!(compare_versions(Some("10"), Some("10")), Ordering::Equal);
-        // Unversioned sorts below every version, so a versioned controller wins
-        // a contested path.
         assert_eq!(compare_versions(None, Some("1")), Ordering::Less);
         assert_eq!(compare_versions(None, None), Ordering::Equal);
-        // A date version is not a number, and still orders as it reads.
         assert_eq!(
             compare_versions(Some("2024-08-11"), Some("2024-09-01")),
             Ordering::Less,
@@ -1048,35 +901,17 @@ mod tests {
             compare_versions(Some("2024-09-01"), Some("2025-01-01")),
             Ordering::Less,
         );
-        // Leading zeros are spelling, not significance.
         assert_eq!(compare_versions(Some("007"), Some("10")), Ordering::Less);
         assert_eq!(compare_versions(Some("01"), Some("1")), Ordering::Equal);
-        // A sort over the whole set lands where a reader expects.
         let mut all = [Some("10"), None, Some("9"), Some("1"), Some("2")];
         all.sort_by(|a, b| compare_versions(*a, *b));
         assert_eq!(all, [None, Some("1"), Some("2"), Some("9"), Some("10")]);
     }
 
-    /// The `404` test and the parameter derivation read the path through the
-    /// same classifier the rewriter does — they each had their own
-    /// `strip_prefix(':')`, which is why all three agreed only about `:name`.
-    #[test]
-    fn path_parameters_are_read_one_way() {
-        assert_eq!(
-            path_parameter_names("/orgs/:org_id/users/:id"),
-            ["org_id", "id"]
-        );
-        assert_eq!(path_parameter_names("/users/:id<\\d+>"), ["id"]);
-        assert!(path_parameter_names("/blobs/*rest").is_empty());
-        assert!(path_parameter_names("/users/@:handle").is_empty());
-        assert!(path_parameter_names("/static/css").is_empty());
-    }
-
     #[test]
     fn derives_path_parameters() {
         let mut g = generator();
-        // No `Path<T>` schema ⇒ an `id` segment falls back to `format: uuid`.
-        let params = typed_path_parameters("/users/:id", &[], &mut g);
+        let params = typed_path_parameters(&template("/users/{id}"), &[], &mut g);
         assert_eq!(params.len(), 1);
         assert_eq!(params[0]["name"], "id");
         assert_eq!(params[0]["in"], "path");
@@ -1088,21 +923,19 @@ mod tests {
     #[test]
     fn path_parameters_is_empty_for_a_static_path() {
         let mut g = generator();
-        assert!(typed_path_parameters("/health", &[], &mut g).is_empty());
-        assert!(typed_path_parameters("/", &[], &mut g).is_empty());
+        assert!(typed_path_parameters(&template("/health"), &[], &mut g).is_empty());
+        assert!(typed_path_parameters(&template("/"), &[], &mut g).is_empty());
     }
 
     #[test]
     fn path_parameters_emits_one_object_per_segment() {
         let mut g = generator();
-        let params = typed_path_parameters("/orgs/:org_id/users/:id", &[], &mut g);
+        let params = typed_path_parameters(&template("/orgs/{org_id}/users/{id}"), &[], &mut g);
         assert_eq!(params.len(), 2);
         assert_eq!(params[0]["name"], "org_id");
         assert_eq!(params[1]["name"], "id");
     }
 
-    // Building an `HttpRouteMeta` from outside `nest-rs-http` is awkward —
-    // build a minimal one via `Default` if possible, else thread real values.
     fn generator() -> SchemaGenerator {
         let mut settings = SchemaSettings::draft2020_12();
         settings.definitions_path = "/components/schemas".into();
@@ -1118,8 +951,6 @@ mod tests {
         generator.subschema_for::<DummyBody>()
     }
 
-    /// The optional-property twin — what an `Option<_>` field on a header DTO
-    /// produces, and the input for "an optional parameter advertises no `400`".
     #[derive(Serialize, JsonSchema)]
     struct OptionalHeader {
         #[serde(rename = "Last-Event-ID")]
@@ -1141,6 +972,7 @@ mod tests {
             request_body: None,
             response: None,
             response_content_type: None,
+            error_responses: &[],
             masked: false,
             path_params: &[],
             query_params: &[],
@@ -1148,20 +980,18 @@ mod tests {
             may_conflict: false,
             throttled: false,
             sets_location: false,
+            sets_next_link: false,
+            response_headers: &[],
             success_status: 200,
             scoped_guarded: false,
             public: false,
+            deprecation: None,
             versions: &[],
         }
     }
 
-    /// The controller token the operation-body tests are served under — they
-    /// are about what an operation *says*, not what it is called.
     const HOST_TOKEN: &str = "test";
 
-    /// One operation as an unversioned deployment publishes it. The id is
-    /// derived here rather than spelled, so a test about the body of an
-    /// operation cannot pin an id the document would never have given it.
     fn operation(
         route: &HttpRouteMeta,
         full_path: &str,
@@ -1171,7 +1001,7 @@ mod tests {
     ) -> Value {
         operation_object(
             route,
-            full_path,
+            &template(full_path),
             &operation_id(HOST_TOKEN, route.handler, None),
             generator,
             global_guards,
@@ -1180,26 +1010,32 @@ mod tests {
     }
 
     #[test]
-    fn a_path_param_segment_advertises_404_but_a_literal_colon_does_not() {
-        // OAPI-O4: `404` on a route that binds an id segment (`:id`) — Path OR
-        // Bind — but not on a static segment that merely contains a colon.
-        let bound = error_statuses(&route("get_user", "/users/:id"), "/users/:id", false, false);
+    fn a_path_param_segment_advertises_404_but_a_literal_segment_does_not() {
+        let bound = error_statuses(
+            &route("get_user", "/users/{id}"),
+            &template("/users/{id}"),
+            false,
+            false,
+        );
         assert!(
             bound.iter().any(|(s, _)| *s == "404"),
-            "an `:id` route advertises 404",
+            "an `{{id}}` route advertises 404",
         );
 
-        let literal = error_statuses(&route("weird", "/a:b/list"), "/a:b/list", false, false);
+        let literal = error_statuses(
+            &route("weird", "/a-b/list"),
+            &template("/a-b/list"),
+            false,
+            false,
+        );
         assert!(
             !literal.iter().any(|(s, _)| *s == "404"),
-            "a literal colon in a static segment must not advertise 404",
+            "a literal segment must not advertise 404",
         );
     }
 
     #[test]
     fn a_throttled_route_advertises_429_with_a_retry_after_header() {
-        // OAPI-O4: a `ThrottlerGuard`-covered route can answer `429`, and the
-        // guard sends `Retry-After` — both must reach the document.
         let mut g = generator();
         let mut r = route("upload", "/audio/uploads");
         r.throttled = true;
@@ -1212,10 +1048,6 @@ mod tests {
         );
     }
 
-    /// R10: the `Location` a `#[crud]` create ships went undeclared while the
-    /// `429` two lines away declared its `Retry-After` for the same stated
-    /// reason. A generated client reads the document, not the prose, so an
-    /// undeclared header is one no client will ever look at.
     #[test]
     fn a_create_route_declares_the_location_header_on_its_201() {
         let mut g = generator();
@@ -1238,8 +1070,6 @@ mod tests {
         );
     }
 
-    /// The other producer: a redirect's response *is* its `Location`, and its
-    /// description points at a target rather than a new row.
     #[test]
     fn a_redirect_declares_the_location_it_sends() {
         let mut g = generator();
@@ -1260,8 +1090,6 @@ mod tests {
         );
     }
 
-    /// The negative half — the document states what the framework knows it
-    /// emitted. A plain `200` route declares no header it does not send.
     #[test]
     fn a_route_that_sends_no_location_declares_none() {
         let mut g = generator();
@@ -1274,7 +1102,7 @@ mod tests {
 
     #[test]
     fn an_unthrottled_route_does_not_advertise_429() {
-        let statuses = error_statuses(&route("list", "/audio"), "/audio", false, false);
+        let statuses = error_statuses(&route("list", "/audio"), &template("/audio"), false, false);
         assert!(
             !statuses.iter().any(|(s, _)| *s == "429"),
             "a route with no ThrottlerGuard must not advertise 429",
@@ -1316,8 +1144,8 @@ mod tests {
     #[test]
     fn operation_object_inlines_parameters_when_path_has_any() {
         let mut g = generator();
-        let r = route("get_user", "/users/:id");
-        let op = operation(&r, "/users/:id", &mut g, false, None);
+        let r = route("get_user", "/users/{id}");
+        let op = operation(&r, "/users/{id}", &mut g, false, None);
         assert!(op["parameters"].is_array());
         assert_eq!(op["parameters"][0]["name"], "id");
     }
@@ -1332,9 +1160,6 @@ mod tests {
         assert!(op["requestBody"]["content"]["application/json"]["schema"].is_object());
     }
 
-    /// A `#[api(multipart = T)]` upload files its schema under the media type
-    /// it actually arrives as — the gap that left `/audio/uploads/direct` with
-    /// no `requestBody` at all.
     #[test]
     fn a_multipart_body_is_documented_under_its_own_media_type() {
         let mut g = generator();
@@ -1354,9 +1179,6 @@ mod tests {
         );
     }
 
-    /// A handler pulling the parts itself types none of them — but the media
-    /// type it accepts is still knowledge a client needs, so it is stated with
-    /// a free-form object rather than omitted.
     #[test]
     fn an_untyped_multipart_body_still_declares_its_media_type() {
         let mut g = generator();
@@ -1373,8 +1195,6 @@ mod tests {
         );
     }
 
-    /// A streamed download: the framework knows what it sends, not what shape
-    /// the bytes have. OpenAPI's spelling for that is `string`/`format: binary`.
     #[test]
     fn a_declared_response_media_type_carries_a_binary_body_schema() {
         let mut g = generator();
@@ -1390,8 +1210,6 @@ mod tests {
         );
     }
 
-    /// An event stream is text, so it claims no binary format — the half of the
-    /// rule that stops `text/event-stream` being described as bytes.
     #[test]
     fn a_text_stream_is_typed_string_without_a_binary_format() {
         let mut g = generator();
@@ -1405,9 +1223,6 @@ mod tests {
 
     #[test]
     fn a_declared_media_type_files_a_declared_response_schema_under_itself() {
-        // `response = T` states the shape, `response_content_type` states how it
-        // travels — a JSON-shaped body served as `application/problem+json`, an
-        // NDJSON feed. Neither overrides the other.
         let mut g = generator();
         let mut r = route("export", "/exports");
         r.response = Some(schema_for_dummy);
@@ -1418,7 +1233,6 @@ mod tests {
 
     #[test]
     fn a_bodyless_success_declares_no_streamed_content() {
-        // A `204` carries no body, whatever media type the route declared.
         let mut g = generator();
         let mut r = route("purge", "/exports");
         r.success_status = 204;
@@ -1449,8 +1263,6 @@ mod tests {
 
     #[test]
     fn an_optional_header_does_not_advertise_a_400() {
-        // The honesty half: a header nobody has to send cannot produce the
-        // missing-header rejection.
         let mut g = generator();
         let mut r = route("events", "/audio/events");
         r.header_params = &[schema_for_optional];
@@ -1481,23 +1293,18 @@ mod tests {
         let mut g = generator();
         let op = operation(&route("h", "/h"), "/h", &mut g, false, None);
         assert_eq!(op["responses"]["200"]["description"], "OK");
-        // No `response` fn → no content block on 200.
         assert!(op["responses"]["200"].get("content").is_none());
     }
 
     #[test]
     fn operation_object_attaches_response_schema_when_present() {
         let mut g = generator();
-        let mut r = route("get_user", "/users/:id");
+        let mut r = route("get_user", "/users/{id}");
         r.response = Some(schema_for_dummy);
-        let op = operation(&r, "/users/:id", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, false, None);
         assert!(op["responses"]["200"]["content"]["application/json"]["schema"].is_object());
     }
 
-    // OAPI-O5: a shaper masks *fields*, so the schema is published and the
-    // description says the field set is ability-dependent. Publishing nothing
-    // — the previous behaviour — typed every `#[crud]` response as `any` in a
-    // generated client.
     #[test]
     fn a_masked_route_publishes_its_schema_and_flags_the_field_set() {
         let mut g = generator();
@@ -1519,24 +1326,20 @@ mod tests {
         );
     }
 
-    // A `204` masked route has no body to describe, so the caveat would be
-    // noise — the description stays the plain reason phrase.
     #[test]
     fn a_masked_bodyless_response_keeps_the_plain_description() {
         let mut g = generator();
-        let mut r = route("delete_user", "/users/:id");
+        let mut r = route("delete_user", "/users/{id}");
         r.response = Some(schema_for_dummy);
         r.masked = true;
         r.success_status = 204;
-        let op = operation(&r, "/users/:id", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, false, None);
         assert_eq!(op["responses"]["204"]["description"], "No Content");
         assert!(op["responses"]["204"].get("content").is_none());
     }
 
     #[test]
     fn a_non_200_success_status_replaces_the_200_response() {
-        // OAPI-O3: `#[http_code(201)]` advertises `201 Created`, not `200`, and
-        // still carries the body schema.
         let mut g = generator();
         let mut r = route("create_user", "/users");
         r.success_status = 201;
@@ -1549,14 +1352,12 @@ mod tests {
 
     #[test]
     fn a_204_or_redirect_success_carries_no_body() {
-        // A `204 No Content` (a `#[crud]` delete) and a `3xx` redirect advertise
-        // no response body even when a return schema exists (OAPI-O3).
         for (status, reason) in [(204, "No Content"), (307, "Temporary Redirect")] {
             let mut g = generator();
-            let mut r = route("delete_user", "/users/:id");
+            let mut r = route("delete_user", "/users/{id}");
             r.success_status = status;
             r.response = Some(schema_for_dummy);
-            let op = operation(&r, "/users/:id", &mut g, false, None);
+            let op = operation(&r, "/users/{id}", &mut g, false, None);
             let key = status.to_string();
             assert_eq!(op["responses"][&key]["description"], reason);
             assert!(
@@ -1568,13 +1369,14 @@ mod tests {
 
     #[test]
     fn a_global_guard_pool_marks_an_otherwise_unguarded_route_as_secured() {
-        // scoped_guarded=false, public=false: no controller/method guard, but a
-        // `use_guards_global` pool covers it — the document must reflect that.
         let mut g = generator();
         let r = route("list", "/users");
         let op = operation(&r, "/users", &mut g, true, None);
         assert_eq!(op["security"][0]["bearerAuth"], json!([]));
-        assert!(op["responses"].get("401").is_some());
+        assert_eq!(
+            op["responses"]["401"]["headers"]["WWW-Authenticate"]["required"], true,
+            "a 401 names its challenge: {op}",
+        );
         assert!(op["responses"].get("403").is_some());
     }
 
@@ -1584,13 +1386,159 @@ mod tests {
         let mut r = route("health", "/health");
         r.public = true;
         let op = operation(&r, "/health", &mut g, true, None);
-        assert!(op.get("security").is_none());
+        assert_eq!(
+            op["security"],
+            json!([]),
+            "the opening is stated, not inferred from an absence: {op}",
+        );
         assert!(op["responses"].get("401").is_none());
     }
 
-    /// The `info` block a document under test is built from. Named apart from
-    /// the API *version* a document claims — the two are different strings and
-    /// they meet in `build_document`'s arguments.
+    #[test]
+    fn an_implicit_route_claims_no_posture_in_the_document() {
+        let mut g = generator();
+        let op = operation(&route("list", "/things"), "/things", &mut g, false, None);
+        assert!(
+            op.get("security").is_none(),
+            "neither guarded nor `#[public]`: the document states nothing the code does not: {op}",
+        );
+    }
+
+    #[test]
+    fn every_operation_types_the_opaque_500_as_problem_details() {
+        let mut g = generator();
+        let op = operation(&route("h", "/h"), "/h", &mut g, false, None);
+        assert_eq!(
+            op["responses"]["500"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "{op}",
+        );
+        assert!(
+            op["responses"].get("413").is_none(),
+            "no body, no cap: {op}"
+        );
+    }
+
+    #[test]
+    fn a_route_taking_a_body_advertises_the_cap_it_can_hit() {
+        let mut g = generator();
+        let mut r = route("upload", "/uploads");
+        r.verb = HttpVerb::Post;
+        r.request_body = Some(RequestBodyMeta::Multipart(None));
+        let op = operation(&r, "/uploads", &mut g, false, None);
+        assert_eq!(
+            op["responses"]["413"]["description"], "Content Too Large",
+            "{op}"
+        );
+    }
+
+    #[test]
+    fn a_deprecated_route_is_marked_and_documents_its_header() {
+        let mut g = generator();
+        let mut r = route("list", "/v1/posts");
+        r.deprecation = Some(nest_rs_http::DeprecationMeta {
+            since: "2026-10-08",
+            header: "@1791417600",
+        });
+        let op = operation(&r, "/v1/posts", &mut g, false, None);
+        assert_eq!(op["deprecated"], true, "{op}");
+        let header = &op["responses"]["200"]["headers"]["Deprecation"];
+        assert_eq!(header["schema"]["const"], "@1791417600", "{op}");
+        assert!(
+            header["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("2026-10-08")),
+            "{header}",
+        );
+        let current = operation(
+            &route("list", "/v2/posts"),
+            "/v2/posts",
+            &mut g,
+            false,
+            None,
+        );
+        assert!(current.get("deprecated").is_none());
+    }
+
+    #[test]
+    fn a_declared_error_body_is_documented_under_its_status() {
+        let mut g = generator();
+        let mut r = route("ready", "/health/ready");
+        r.error_responses = &[(503, schema_for_dummy)];
+        let op = operation(&r, "/health/ready", &mut g, false, None);
+        let unavailable = &op["responses"]["503"];
+        assert_eq!(unavailable["description"], "Service Unavailable", "{op}");
+        assert!(
+            unavailable["content"]["application/json"]["schema"].is_object(),
+            "{op}"
+        );
+        assert!(
+            unavailable["content"]
+                .get("application/problem+json")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_declared_error_body_sits_beside_the_frameworks_problem_document() {
+        let mut g = generator();
+        let mut r = route("get", "/users/{id}");
+        r.error_responses = &[(404, schema_for_dummy)];
+        let op = operation(&r, "/users/{id}", &mut g, false, None);
+        let content = &op["responses"]["404"]["content"];
+        assert!(content["application/problem+json"].is_object(), "{op}");
+        assert!(content["application/json"].is_object(), "{op}");
+    }
+
+    #[test]
+    fn a_problem_points_at_uri_references_so_a_relative_instance_validates() {
+        let schema = problem_details_schema();
+        assert_eq!(schema["properties"]["type"]["format"], "uri-reference");
+        assert_eq!(schema["properties"]["instance"]["format"], "uri-reference");
+    }
+
+    #[test]
+    fn a_paginated_list_declares_the_link_it_sends() {
+        let mut g = generator();
+        let mut r = route("list", "/posts");
+        r.sets_next_link = true;
+        let op = operation(&r, "/posts", &mut g, false, None);
+        let header = &op["responses"]["200"]["headers"]["Link"];
+        assert_eq!(header["schema"]["type"], "string", "{op}");
+        assert!(
+            header.get("required").is_none(),
+            "the last page sends none: {header}",
+        );
+    }
+
+    #[test]
+    fn a_declared_response_header_is_documented_with_its_value() {
+        let mut g = generator();
+        let mut r = route("feed", "/feed");
+        r.response_headers = &[("cache-control", "no-store")];
+        let op = operation(&r, "/feed", &mut g, false, None);
+        let header = &op["responses"]["200"]["headers"]["cache-control"];
+        assert_eq!(header["required"], true, "{op}");
+        assert_eq!(header["schema"]["const"], "no-store", "{op}");
+    }
+
+    #[test]
+    fn a_header_sent_as_several_fields_claims_no_single_value() {
+        let mut g = generator();
+        let mut r = route("login", "/login");
+        r.response_headers = &[("set-cookie", "a=1"), ("x-tier", "a"), ("x-tier", "b")];
+        let op = operation(&r, "/login", &mut g, false, None);
+        let headers = &op["responses"]["200"]["headers"];
+        assert!(
+            headers["set-cookie"]["schema"].get("const").is_none(),
+            "{headers}"
+        );
+        assert!(
+            headers["x-tier"]["schema"].get("const").is_none(),
+            "{headers}"
+        );
+    }
+
     fn info(title: &str, version: &str, description: Option<&str>) -> OpenApiConfig {
         OpenApiConfig {
             title: title.to_owned(),
@@ -1618,6 +1566,51 @@ mod tests {
     }
 
     #[test]
+    fn a_query_payload_leaves_no_orphan_component_but_a_body_keeps_its_own() {
+        let mut search = route("search", "/");
+        search.query_params = &[schema_for_dummy];
+        let mut submit = route("submit", "/");
+        submit.verb = HttpVerb::Post;
+        submit.request_body = Some(RequestBodyMeta::Json(schema_for_optional));
+        let container = deployment(vec![controller(
+            "ThingsController",
+            "things",
+            "/things",
+            &[],
+            vec![search],
+        )]);
+        let doc = build_document(
+            &container,
+            &info("X", "0", None),
+            None,
+            &mut Reported::default(),
+        );
+        assert!(
+            doc["components"]["schemas"].get("DummyBody").is_none(),
+            "a query payload is expanded into parameters, its definition reached by nothing: {doc}",
+        );
+
+        let container = deployment(vec![controller(
+            "ThingsController",
+            "things",
+            "/things",
+            &[],
+            vec![submit],
+        )]);
+        let doc = build_document(
+            &container,
+            &info("X", "0", None),
+            None,
+            &mut Reported::default(),
+        );
+        assert!(
+            doc["components"]["schemas"].get("OptionalHeader").is_some(),
+            "a body's component is referenced and stays: {doc}",
+        );
+        assert!(doc["components"]["schemas"].get("ProblemDetails").is_some());
+    }
+
+    #[test]
     fn build_document_carries_description_when_supplied() {
         let container = Container::builder().build();
         let doc = build_document(
@@ -1630,7 +1623,42 @@ mod tests {
     }
 
     #[test]
-    fn no_servers_field_without_a_global_prefix() {
+    fn the_info_object_carries_every_field_the_config_sets() {
+        let config = OpenApiConfig {
+            summary: Some("Publish's REST surface".into()),
+            terms_of_service: Some("https://publish.example/terms".into()),
+            contact: Some(crate::OpenApiContact {
+                name: Some("API team".into()),
+                url: None,
+                email: Some("api@publish.example".into()),
+            }),
+            license: Some(crate::OpenApiLicense {
+                name: "Apache 2.0".into(),
+                identifier: Some("Apache-2.0".into()),
+                url: None,
+            }),
+            ..info("Publish", "2.0.0", None)
+        };
+        let info = info_object(&config);
+        assert_eq!(info["summary"], "Publish's REST surface");
+        assert_eq!(info["termsOfService"], "https://publish.example/terms");
+        assert_eq!(
+            info["contact"],
+            json!({ "name": "API team", "email": "api@publish.example" })
+        );
+        assert_eq!(
+            info["license"],
+            json!({ "name": "Apache 2.0", "identifier": "Apache-2.0" })
+        );
+        assert!(
+            info_object(&OpenApiConfig::default())
+                .get("license")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_server_is_the_origin_root_without_a_global_prefix() {
         let container = Container::builder().build();
         let doc = build_document(
             &container,
@@ -1638,21 +1666,17 @@ mod tests {
             None,
             &mut Reported::default(),
         );
-        assert!(
-            doc.get("servers").is_none(),
-            "with no global prefix the paths are absolute — no `servers` needed",
-        );
+        assert_eq!(doc["servers"], json!([{ "url": "/" }]));
     }
 
     #[test]
     fn global_prefix_is_declared_as_a_normalized_server_base_url() {
-        // OAPI-O5: under a global prefix the documented paths stay prefix-free
-        // and the prefix rides in `servers`, so a client (and Swagger UI) is
-        // prepended it correctly. The base is normalized (leading slash, no
-        // trailing slash) regardless of how the operator wrote the prefix.
         for raw in ["api", "/api", "api/", "/api/"] {
             let container = Container::builder()
-                .provide(HttpConfig::default().with_global_prefix(raw))
+                .provide(HttpConfig {
+                    global_prefix: Some(raw.into()),
+                    ..HttpConfig::default()
+                })
                 .build();
             let doc = build_document(
                 &container,
@@ -1667,11 +1691,6 @@ mod tests {
         }
     }
 
-    /// The versioning view a deployment publishes, from the one config that
-    /// decides it. `versions` is what the controllers declare — the container
-    /// holds no `HttpControllerMeta` here, so the selection is exercised
-    /// directly rather than through a booted app (the integration suite does
-    /// that half).
     fn selection(
         versioning: ApiVersioning,
         default_version: Option<&str>,
@@ -1689,8 +1708,6 @@ mod tests {
 
     #[test]
     fn the_uri_strategy_produces_no_version_selection_at_all() {
-        // The regression risk of the whole feature: under `uri` the mounted
-        // path *is* the client-facing one, so nothing about the document moves.
         assert!(selection(ApiVersioning::Uri, Some("1"), Some("1")).is_none());
         assert!(selection(ApiVersioning::Uri, None, None).is_none());
     }
@@ -1726,9 +1743,6 @@ mod tests {
 
     #[test]
     fn the_media_type_strategy_documents_the_accept_header_it_reads() {
-        // The version rides in a media-type parameter, so the value a client
-        // sends is a media range — not a bare version, which is what an enum of
-        // versions would have told it to send.
         let selection = selection(ApiVersioning::MediaType, None, None).expect("a selection");
         let parameter = selection.parameter("2", &route("list", "/posts"));
         assert_eq!(parameter["name"], "accept");
@@ -1743,7 +1757,6 @@ mod tests {
             "the description names the parameter a caller writes: {parameter}",
         );
 
-        // A route that answers in another media type is asked for in that one.
         let mut streamed = route("events", "/audio/events");
         streamed.response_content_type = Some("text/event-stream");
         assert_eq!(
@@ -1765,21 +1778,16 @@ mod tests {
             "an unversioned controller carries no version parameter, so it belongs everywhere",
         );
 
-        // `/api-json` claims the default version without being told which.
         let default = selection(ApiVersioning::Header, Some("1"), None).expect("a selection");
         assert!(default.describes(Some("1")));
         assert!(!default.describes(Some("2")));
 
-        // With no default named, one document describes every version.
         let all = selection(ApiVersioning::Header, None, None).expect("a selection");
         assert!(all.describes(Some("1")) && all.describes(Some("2")));
     }
 
     #[test]
     fn a_versioned_operation_advertises_the_400_its_version_token_can_produce() {
-        // The version parameter is a parameter like any other: a caller that
-        // must send one can send a malformed one, and that is a `400` before
-        // the request reaches a path.
         let mut g = generator();
         let selection = selection(ApiVersioning::Header, None, None).expect("a selection");
         let r = route("list", "/posts");
@@ -1796,8 +1804,6 @@ mod tests {
 
     #[test]
     fn a_required_query_property_advertises_the_400_it_produces() {
-        // The half that used to disagree with headers: `expand_object_params`
-        // marked the property required and the error set said nothing.
         let mut g = generator();
         let mut r = route("search", "/posts");
         r.query_params = &[schema_for_dummy];
@@ -1822,12 +1828,10 @@ mod tests {
 
     #[test]
     fn a_path_parameter_alone_advertises_no_400() {
-        // Path parameters are required by construction; omitting one reaches
-        // another route or none, so it is a `404`, never this operation's `400`.
         let mut g = generator();
         let op = operation(
-            &route("get", "/users/:id"),
-            "/users/:id",
+            &route("get", "/users/{id}"),
+            "/users/{id}",
             &mut g,
             false,
             None,
@@ -1850,10 +1854,6 @@ mod tests {
         assert!(remedy.contains("/api-json/v"), "{remedy}");
     }
 
-    /// One controller as discovery hands it over. `token` is what `#[routes]`
-    /// derives from `name` and the document reads for every `operationId`; it
-    /// is stated here rather than re-derived, so these tests assert the
-    /// contract instead of reimplementing the macro's half of it.
     fn controller(
         name: &'static str,
         token: &'static str,
@@ -1861,27 +1861,23 @@ mod tests {
         versions: &'static [&'static str],
         routes: Vec<HttpRouteMeta>,
     ) -> HttpControllerMeta {
-        HttpControllerMeta::new(name, token, path, versions, routes, |_, route| route)
+        HttpControllerMeta::new(name, token, path, versions, routes, |_, _| {})
     }
 
-    /// The five routes `#[crud]` writes for a resource, which is where the
-    /// collisions live: every resource in the app declares these same names.
     fn crud_routes() -> Vec<HttpRouteMeta> {
         let mut list = route("list", "/");
-        let mut get = route("get", "/:id");
+        let mut get = route("get", "/{id}");
         let mut create = route("create", "/");
         create.verb = HttpVerb::Post;
-        let mut update = route("update", "/:id");
+        let mut update = route("update", "/{id}");
         update.verb = HttpVerb::Patch;
-        let mut delete = route("delete", "/:id");
+        let mut delete = route("delete", "/{id}");
         delete.verb = HttpVerb::Delete;
         list.tags = &["crud"];
         get.tags = &["crud"];
         vec![list, get, create, update, delete]
     }
 
-    /// A deployment of nothing but controllers — no `HttpConfig`, so the version
-    /// is where the URI strategy puts it: in the path.
     fn deployment(controllers: Vec<HttpControllerMeta>) -> Container {
         controllers
             .into_iter()
@@ -1891,13 +1887,10 @@ mod tests {
             .build()
     }
 
-    /// The `operationId` at one address, or `None` when the document names no
-    /// operation there.
     fn id_at<'a>(document: &'a Value, path: &str, method: &str) -> Option<&'a str> {
         document["paths"][path][method]["operationId"].as_str()
     }
 
-    /// Every `operationId` a document publishes, in no particular order.
     fn ids(document: &Value) -> Vec<&str> {
         document["paths"]
             .as_object()
@@ -1911,10 +1904,6 @@ mod tests {
 
     #[test]
     fn two_crud_shaped_controllers_publish_no_duplicate_id() {
-        // The regression this rule exists for, and the one every nestrs app
-        // meets: `#[crud]` names each resource's operations `list`/`get`/…, so
-        // two resources in one document published ten operations under five ids
-        // — five collisions, in an app that never asked for anything unusual.
         let logs = nest_rs_testing::LogCapture::install();
         let container = deployment(vec![
             controller("PostsController", "posts", "/posts", &[], crud_routes()),
@@ -1949,8 +1938,6 @@ mod tests {
 
     #[test]
     fn one_handler_mounted_under_two_versions_gets_two_operation_ids() {
-        // The other collision: `version = ["1", "2"]` mounts `list` at two
-        // addresses, so the controller alone does not tell them apart.
         let container = deployment(vec![controller(
             "ReportsController",
             "reports",
@@ -1970,12 +1957,6 @@ mod tests {
 
     #[test]
     fn a_path_two_versions_contest_names_the_one_the_default_document_drops() {
-        // Under `header`/`media-type` the mounted prefix is not an address, so
-        // both versions of `/posts` key to the same OpenAPI path — and OpenAPI
-        // has one operation per (path, method). One of the two is dropped, and
-        // this line is the only place that fact exists: the served document
-        // simply describes v2, indistinguishable from a deployment that only
-        // ever had v2.
         let logs = nest_rs_testing::LogCapture::install();
         let container = Container::builder()
             .provide(HttpConfig {
@@ -2012,9 +1993,6 @@ mod tests {
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("path").as_deref(), Some("/posts"));
         assert_eq!(event.field("method").as_deref(), Some("GET"));
-        // Which of the two survived is the whole content of the event: named
-        // the wrong way round it sends a reader to check the version that is
-        // in fact published.
         assert_eq!(event.field("described").as_deref(), Some("2"));
         assert_eq!(event.field("omitted").as_deref(), Some("1"));
         assert!(
@@ -2029,9 +2007,6 @@ mod tests {
 
     #[test]
     fn two_versions_of_different_paths_contest_nothing() {
-        // The other direction, and what keeps the warning meaningful: header
-        // versioning alone is not a collision. Without this, a deployment that
-        // versions every controller would warn on all of them.
         let logs = nest_rs_testing::LogCapture::install();
         let container = Container::builder()
             .provide(HttpConfig {
@@ -2069,10 +2044,6 @@ mod tests {
 
     #[test]
     fn an_id_is_the_controller_token_and_the_handler() {
-        // The token itself — `PostsController` → `posts`, and the `Controller`
-        // suffix that says nothing about which one this is — is `#[routes]`'
-        // half, asserted in `nest-rs-http-macros`. What this crate owns is how
-        // the two halves join.
         assert_eq!(operation_id("posts", "list", None), "posts_list");
         assert_eq!(
             operation_id("audio_uploads", "get", None),
@@ -2082,10 +2053,6 @@ mod tests {
 
     #[test]
     fn a_raw_ident_handler_reaches_the_document_as_an_identifier() {
-        // `async fn r#type` is legal Rust and mounts like any other handler, and
-        // what `#[routes]` records is the ident *as written* — so the `r#` used
-        // to travel into the id, where `#` is not something a client generator
-        // can name a method after.
         let id = operation_id("probe", "r#type", None);
         assert_eq!(id, "probe_r_type");
         assert!(
@@ -2096,9 +2063,6 @@ mod tests {
 
     #[test]
     fn a_raw_ident_controller_is_mapped_by_the_same_rule() {
-        // The half the audit left to decide: `snake_case` lowercases and inserts
-        // `_`, it does not drop anything, so `struct r#Type` arrives here as
-        // `r#_type`. One map over the composed id answers for all three halves.
         assert_eq!(operation_id("r#_type", "list", None), "r__type_list");
         assert_eq!(
             operation_id("r#_type", "r#type", Some("2024-08-11")),
@@ -2108,9 +2072,6 @@ mod tests {
 
     #[test]
     fn two_handler_spellings_that_map_to_one_id_are_reported_by_the_ledger() {
-        // What sanitising can now create: `r#type` and `r_type` are two handlers
-        // to Rust and one id to the document. No second mechanism for it — this
-        // is the collision the uniqueness ledger already exists to name.
         let logs = nest_rs_testing::LogCapture::install();
         let container = deployment(vec![controller(
             "ProbeController",
@@ -2142,7 +2103,6 @@ mod tests {
             "and the remedy covers the half that produced this one: {event:#?}",
         );
 
-        // Degraded documentation, not a broken app — both are still published.
         assert!(
             id_at(&doc, "/probe/raw", "get").is_some()
                 && id_at(&doc, "/probe/plain", "get").is_some()
@@ -2151,9 +2111,6 @@ mod tests {
 
     #[test]
     fn a_version_that_is_not_a_bare_integer_still_reads_as_an_identifier() {
-        // A version is opaque — a date is as legal as `2` — but the id it lands
-        // in becomes a method name in a generated client, so what an identifier
-        // cannot carry is mapped, not passed through.
         let id = operation_id("reports", "list", Some("2024-08-11"));
         assert_eq!(id, "reports_list_v2024_08_11");
         assert!(
@@ -2179,9 +2136,6 @@ mod tests {
 
     #[test]
     fn two_controller_names_that_reduce_to_one_token_are_both_named_in_a_warning() {
-        // What is left once the controller and the version have done their work:
-        // two names that differ only by the suffix every controller carries. The
-        // document cannot publish both, and nothing else in the boot says so.
         let logs = nest_rs_testing::LogCapture::install();
         let container = deployment(vec![
             controller(
@@ -2223,8 +2177,6 @@ mod tests {
             "and what to do about it: {event:#?}",
         );
 
-        // Degraded documentation, not a broken app: both operations are still
-        // published, and the boot that emitted this went on.
         assert!(
             id_at(&doc, "/posts", "get").is_some()
                 && id_at(&doc, "/archive/posts", "get").is_some()
@@ -2257,10 +2209,6 @@ mod tests {
 
     #[test]
     fn two_controllers_on_one_address_are_a_duplicate_mount_not_a_duplicate_id() {
-        // The id is claimed once because the operation is written once — the
-        // second controller overwrote the first. Reporting a shared id here
-        // would name a document that does not exist; the duplicate *mount* is
-        // the transport's to name.
         let logs = nest_rs_testing::LogCapture::install();
         let container = deployment(vec![
             controller(

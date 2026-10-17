@@ -1,6 +1,5 @@
-//! `DbContext` opens a real transaction around mutating handlers — commits on
-//! 2xx/3xx, rolls back on anything else, and surfaces a leaked executor as a
-//! loud 500 (silent rollback of a "successful" mutation is data loss).
+//! `DbContext` opens a real transaction around mutating handlers: commits on
+//! 2xx/3xx, rolls back on anything else, and fails a leaked executor with a 500.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,13 +50,9 @@ async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
         "a leaked transaction must surface as a 500, never a false 2xx",
     );
 
-    // The `500` is an opaque problem+json, so from the outside a leaked
-    // executor is indistinguishable from any other internal error — including
-    // the ordinary bug the developer will look for first. The event is what
-    // names the actual cause, and `outcome` is what says whether the boundary
-    // rolled back or rolled back *and* failed a response it had already built.
+    // The `500` is opaque: the event alone names the cause.
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "executor escaped into a spawned task",
     );
     assert_eq!(event.level, "error");
@@ -87,7 +82,6 @@ async fn a_well_behaved_mutating_handler_keeps_its_status() {
 async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
     let conn = crate::harness::connect_arc().await;
 
-    // A committed scratch table on the pool, isolated from the request txn.
     conn.execute_unprepared("DROP TABLE IF EXISTS mapped_rollback_probe")
         .await
         .expect("drop any leftover probe table");
@@ -97,11 +91,8 @@ async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
 
     let ctx = DbContext::new(conn.clone(), config());
 
-    // A handler that writes inside the request transaction, then hands back a
-    // 2xx tagged `MappedError` — exactly what a route-site Filter emits after
-    // mapping the handler's `Err`. `DbContext` must roll back regardless of the
-    // success status: the mapping shapes the client answer, it does not bless
-    // the failed handler's writes.
+    // A 2xx tagged `MappedError`, as a route-site Filter emits: the mapping
+    // shapes the answer, it does not bless the failed handler's writes.
     let endpoint = make(|_req: Request| async {
         let executor = current_executor().expect("the handler runs with an ambient executor");
         let inserted = executor
@@ -126,8 +117,6 @@ async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
         "the mapped success status is still returned to the client",
     );
 
-    // The pool sees the committed, empty table: the tagged 2xx rolled the insert
-    // back rather than committing it behind a success status.
     let remaining: i32 = conn
         .query_one_raw(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -148,20 +137,9 @@ async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
         .expect("clean up the probe table");
 }
 
-/// A handler that runs a statement, gets a `DbErr`, ignores it, and answers
-/// `200`.
-///
-/// This is the one combination that loses writes in silence: Postgres aborts a
-/// transaction on the first failed statement, so every statement after it fails
-/// too and the eventual `COMMIT` *succeeds* having written nothing. A boundary
-/// that trusted the response would have committed nothing and reported
-/// success — the client is told the write landed, the row is not there, and no
-/// error exists anywhere.
-///
-/// The `?`-shaped handler never reaches this: a propagated `DbErr` is a 500 and
-/// the boundary rolls back. What reaches it is a handler that swallows — a
-/// `let _ =`, a `.ok()`, a `match` whose error arm logs and carries on — which
-/// is ordinary defensive code everywhere except inside a transaction.
+/// A handler that swallows a `DbErr` and answers `200`: Postgres aborts the
+/// transaction on the first failure, so its `COMMIT` succeeds having written
+/// nothing.
 #[tokio::test]
 async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -176,7 +154,6 @@ async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit
             ))
             .await;
         assert!(failed.is_err(), "the statement really did fail");
-        // Swallowed, deliberately — and then a success is reported anyway.
         StatusCode::OK.into_response()
     });
 
@@ -188,7 +165,7 @@ async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit
     );
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "a statement failed inside this transaction but the boundary reported success; \
          nothing it wrote could be committed",
     );
@@ -199,9 +176,7 @@ async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit
         "which edge swallowed it, since all four settle through this one seam: {:?}",
         event.fields,
     );
-    // Whether repeating the request could ever end differently. A missing table
-    // never will, so spending a retry budget on it buys nothing and replays
-    // every non-transactional side effect the handler had.
+    // A missing table never heals: a retry would only replay side effects.
     assert_eq!(
         event.field("retryable").as_deref(),
         Some("false"),
@@ -212,8 +187,6 @@ async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit
 
 #[tokio::test]
 async fn a_clean_mutation_commits_without_any_of_that() {
-    // The other direction: every successful mutation goes through the same
-    // settle, so a check reading the flag wrongly would fail all of them.
     let logs = nest_rs_testing::LogCapture::install();
     let ctx = DbContext::new(crate::harness::connect_arc().await, config());
 
@@ -242,17 +215,8 @@ async fn a_clean_mutation_commits_without_any_of_that() {
     );
 }
 
-/// A `COMMIT` that fails on a constraint Postgres checks *at commit time*.
-///
-/// This is the branch the whole boundary exists for and the hardest to believe
-/// without seeing it: every statement in the handler succeeded, the handler
-/// returned `200`, and the write still did not land. A deferred foreign key is
-/// the plainest way to produce it — the standard's own mechanism for "check
-/// this at the end of the transaction" — and a row inserted against a parent
-/// that never arrives is exactly the shape it exists to catch.
-///
-/// Without the boundary refusing here, the client is told `200` and the row is
-/// not there, with nothing anywhere to say so.
+/// A `COMMIT` that fails on a deferred foreign key, after every statement
+/// succeeded and the handler returned `200`.
 async fn deferred_constraint_tables() -> Arc<sea_orm::DatabaseConnection> {
     let conn = crate::harness::connect_arc().await;
     crate::harness::deferred_probe_tables(&conn, "commit_probe").await;
@@ -295,7 +259,7 @@ async fn a_commit_the_database_refuses_fails_the_response_it_had_already_built()
         .expect("read the count");
     assert_eq!(landed, 0, "and nothing was written");
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "transaction commit failed");
+    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "transaction commit failed");
     assert_eq!(event.level, "error");
     assert!(
         event
@@ -306,17 +270,6 @@ async fn a_commit_the_database_refuses_fails_the_response_it_had_already_built()
         event.fields,
     );
 }
-
-// --- when the rollback itself cannot be issued -------------------------------
-//
-// Both branches below share one situation: the boundary decided to roll back
-// and the connection was already gone. Postgres has ended the transaction
-// itself in that case, so nothing is left half-applied — but the boundary
-// cannot *know* that, and an operator reading "rolled back" about a session
-// that died has been told something the framework did not verify. Hence a line
-// per branch, and two branches because they answer different questions: one is
-// a handler that failed, the other a handler that reported success over a
-// failed statement.
 
 /// Terminate the backend serving the ambient executor, from a second
 /// connection — so the pending `ROLLBACK` has no session left to reach.
@@ -339,7 +292,6 @@ async fn a_rollback_with_no_session_left_to_reach_is_reported_rather_than_assume
             .await
             .expect("a statement opens the lazy transaction");
         kill_this_transactions_backend().await;
-        // A failing handler: the boundary is going to roll back.
         StatusCode::BAD_REQUEST.into_response()
     });
 
@@ -351,7 +303,7 @@ async fn a_rollback_with_no_session_left_to_reach_is_reported_rather_than_assume
          could not be issued does not change what the request answered",
     );
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "transaction rollback failed");
+    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "transaction rollback failed");
     assert_eq!(event.level, "error");
     assert!(
         event.field("error").is_some(),
@@ -362,16 +314,12 @@ async fn a_rollback_with_no_session_left_to_reach_is_reported_rather_than_assume
 
 #[tokio::test]
 async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
-    // Its twin, and the reason they are two messages rather than one: here the
-    // handler reported *success*. An operator seeing only "rollback failed"
-    // would look for the error the handler returned, and there was none.
     let logs = nest_rs_testing::LogCapture::install();
     let ctx = DbContext::new(crate::harness::connect_arc().await, config());
 
     let endpoint = make(|_req: Request| async {
         let executor = current_executor().expect("the handler runs with an ambient executor");
-        // The pid is read *first*: a poisoned transaction refuses every
-        // subsequent statement, this one included.
+        // Read first: a poisoned transaction refuses every later statement.
         let pid = crate::harness::backend_pid(&executor).await;
         let failed = executor
             .execute_unprepared("INSERT INTO a_table_this_test_never_created VALUES (1)")
@@ -390,7 +338,7 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
     );
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "poisoned transaction rollback failed",
     );
     assert_eq!(event.level, "error");
@@ -400,27 +348,12 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
         event.fields,
     );
     assert!(
-        logs.find(nest_rs_seaorm::TARGET, "transaction rollback failed")
+        logs.find(nest_rs_seaorm::target::ORM, "transaction rollback failed")
             .is_empty(),
         "and it is *this* line, not the failing-handler one: {:#?}",
         logs.events(),
     );
 }
-
-// --- a commit the database refuses because another transaction won ------------
-//
-// Under SERIALIZABLE, Postgres lets two transactions run to completion and then
-// refuses one of them at `COMMIT` with `40001` — the whole point of the
-// isolation level. That is not a bug in the app and not an outage: it is the
-// database asking for the work to be done again, and a deployment that runs
-// SERIALIZABLE sees it under normal load.
-//
-// So it is a `warn` with a remedy rather than an `error`: the interceptor
-// cannot retry (a handler body is not replayable from outside it), and an
-// operator staring at `error`-level "commit failed" lines would be hunting an
-// incident that is really a tuning signal. `observe_serialization_conflicts`
-// is the switch, off by default, because a deployment on READ COMMITTED never
-// sees one and does not want the branch.
 
 fn conflict_observing_config() -> Arc<SeaOrmConfig> {
     Arc::new(SeaOrmConfig {
@@ -429,10 +362,8 @@ fn conflict_observing_config() -> Arc<SeaOrmConfig> {
     })
 }
 
-/// The textbook SSI conflict: each side reads the rows the *other* is about to
-/// write. Neither read sees the other's insert, so both would be serializable
-/// only in an order that does not exist — and Postgres finds that out at
-/// `COMMIT`.
+/// The textbook SSI conflict: each side reads the rows the other writes, so
+/// Postgres refuses one of them at `COMMIT`.
 async fn racing_write(
     conn: Arc<sea_orm::DatabaseConnection>,
     read_barrier: Arc<tokio::sync::Barrier>,
@@ -446,8 +377,7 @@ async fn racing_write(
         let write_barrier = Arc::clone(&write_barrier);
         async move {
             let executor = current_executor().expect("the handler runs with an ambient executor");
-            // First statement in the transaction, which is where Postgres
-            // accepts it: `BEGIN` is issued lazily just before this.
+            // Postgres accepts it only as the first statement; `BEGIN` is lazy.
             executor
                 .execute_unprepared("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
                 .await
@@ -466,14 +396,8 @@ async fn racing_write(
                 ))
                 .await
                 .expect("the write the other side's read did not see");
-            // And both must have *written* before either commits. Without this
-            // the test was flaky at ~21%: SSI can cancel the loser eagerly, at
-            // its `INSERT`, once the winner has already committed — a correct
-            // `40001`, raised at the statement instead of at `COMMIT`, which is
-            // a different branch of the interceptor and made the `.expect`
-            // above panic. Which side loses is still the database's choice; all
-            // this pins is that neither has committed when the other writes, so
-            // the conflict has nowhere to surface but the commit.
+            // Both must have written before either commits, or SSI may cancel
+            // the loser at its `INSERT` instead of at `COMMIT`.
             write_barrier.wait().await;
             StatusCode::OK.into_response()
         }
@@ -517,8 +441,7 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
         ),
     );
 
-    // Which side loses is the database's choice, so the assertion is on the
-    // pair: exactly one of them must have been refused.
+    // Which side loses is the database's choice: assert on the pair.
     let refused = [left, right]
         .into_iter()
         .filter(|status| *status == StatusCode::INTERNAL_SERVER_ERROR)
@@ -528,7 +451,10 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
         "SERIALIZABLE lets one through and refuses the other, got {left} and {right}",
     );
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "serialization conflict at commit");
+    let event = logs.expect_one(
+        nest_rs_seaorm::target::ORM,
+        "serialization conflict at commit",
+    );
     assert_eq!(
         event.level, "warn",
         "a conflict is the isolation level working, not an incident — filed at \
@@ -543,9 +469,131 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
         event.fields,
     );
     assert!(
-        logs.find(nest_rs_seaorm::TARGET, "transaction commit failed")
+        logs.find(nest_rs_seaorm::target::ORM, "transaction commit failed")
             .is_empty(),
         "and it is not also filed as a plain commit failure: {:#?}",
         logs.events(),
     );
+}
+
+/// Work held for the commit of a mutating request runs after it — on the pool,
+/// seeing the row the request committed — and before the response leaves.
+#[tokio::test]
+async fn work_held_for_the_commit_runs_once_the_request_committed() {
+    use crate::harness::{Sighting, Sightings, after_commit_table, sighted, write_and_hold};
+    const TABLE: &str = "after_commit_http_commit";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, TABLE).await;
+    let sightings = Sightings::default();
+    let ctx = DbContext::new(conn.clone(), config());
+
+    let (observer, record) = (conn.clone(), sightings.clone());
+    let endpoint = make(move |_req: Request| {
+        let (observer, record) = (observer.clone(), record.clone());
+        async move {
+            write_and_hold(TABLE, observer, record).await;
+            StatusCode::CREATED.into_response()
+        }
+    });
+
+    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        sighted(&sightings),
+        [Sighting {
+            committed: 1,
+            on_pool: true
+        }],
+        "the work ran once, after the commit, outside the transaction",
+    );
+}
+
+/// A request that fails rolls its writes back, and the work that waited for
+/// their commit never runs.
+#[tokio::test]
+async fn work_held_by_a_request_that_rolled_back_never_runs() {
+    use crate::harness::{Sightings, after_commit_table, committed_rows, sighted, write_and_hold};
+    const TABLE: &str = "after_commit_http_rollback";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, TABLE).await;
+    let sightings = Sightings::default();
+    let ctx = DbContext::new(conn.clone(), config());
+
+    let (observer, record) = (conn.clone(), sightings.clone());
+    let endpoint = make(move |_req: Request| {
+        let (observer, record) = (observer.clone(), record.clone());
+        async move {
+            write_and_hold(TABLE, observer, record).await;
+            StatusCode::UNPROCESSABLE_ENTITY.into_response()
+        }
+    });
+
+    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(committed_rows(&conn, TABLE).await, 0);
+    assert!(
+        sighted(&sightings).is_empty(),
+        "nothing reacts to a write that never landed",
+    );
+}
+
+/// How many times the listener on the request's committed write ran.
+static LISTENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The request timeout bounds the handler: one that wrote and answered within
+/// it answers its own status, never `503`, however long what listens to its
+/// commit runs — the response waits for that until the deadline, then lets it
+/// run on.
+#[tokio::test]
+async fn a_post_whose_listener_outlives_the_request_timeout_answers_its_own_status() {
+    let conn = crate::harness::connect_arc().await;
+    conn.execute_unprepared("DROP TABLE IF EXISTS deadline_commit_probe")
+        .await
+        .expect("drop any leftover probe table");
+    conn.execute_unprepared("CREATE TABLE deadline_commit_probe (id INT PRIMARY KEY)")
+        .await
+        .expect("create the probe table");
+    let ctx = DbContext::new(conn.clone(), config());
+
+    let endpoint = make(|_req: Request| async {
+        current_executor()
+            .expect("the handler runs with an ambient executor")
+            .execute_unprepared("INSERT INTO deadline_commit_probe (id) VALUES (1)")
+            .await
+            .expect("the insert runs inside the request transaction");
+        nest_rs_database::after_commit(async {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            LISTENED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        StatusCode::CREATED.into_response()
+    });
+
+    let mut req = mutating_request();
+    let started = tokio::time::Instant::now();
+    req.extensions_mut()
+        .insert(nest_rs_http::RequestDeadline::new(
+            started + Duration::from_secs(1),
+            Duration::from_secs(1),
+        ));
+    let status = status_of(endpoint.interceptor(ctx).call(req).await);
+    let took = started.elapsed();
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a write that landed is never a 503"
+    );
+    assert!(
+        took < Duration::from_millis(1900),
+        "answered at the deadline, not after the listener, took {took:?}",
+    );
+    assert_eq!(
+        crate::harness::committed_rows(&conn, "deadline_commit_probe").await,
+        1
+    );
+    nest_rs_testing::wait_until(Duration::from_secs(5), || {
+        LISTENED.load(std::sync::atomic::Ordering::SeqCst) == 1
+    })
+    .await;
 }

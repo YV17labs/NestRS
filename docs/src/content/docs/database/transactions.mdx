@@ -1,7 +1,6 @@
 ---
 title: Transactions
-description: Mutating routes commit on 2xx/3xx, roll back otherwise — plus the retry primitive for serialization conflicts.
-tier: all-options
+description: Mutating routes commit on 2xx/3xx, roll back otherwise — plus atomic blocks and the retry primitive for serialization conflicts.
 sidebar:
   order: 9
 ---
@@ -41,12 +40,143 @@ interceptor installed — same code, different mode. The decision matrix:
 | `Ok(2xx)` or `Ok(3xx)`   | commit    |
 | `Ok(4xx)` or `Ok(5xx)`   | rollback  |
 | `Err(_)` from the handler| rollback  |
+| Handler past the request timeout | rollback; `503` with `Retry-After` |
 | Commit error             | response becomes `500`, rollback is implicit |
+| Commit did not answer    | response becomes `500`, no `Retry-After`: its writes may have landed |
 
 A failed mutation never half-persists, even when the failure surfaces as
 a typed 4xx body from a `thiserror`-derived error. See
 [Repo and executor](/database/repo-and-executor/) for the full sequence,
 including the escape-on-spawn case.
+
+Every other edge runs the same unit of work, through the same binding, and
+commits on its own outcome — you list nothing for it:
+
+| Unit | Commits when |
+|---|---|
+| WebSocket message | the reply is not an error frame |
+| WebSocket connect or disconnect hook | the hook ran to its end |
+| MCP operation | it answered `Ok`, with no `isError: true` in the tool's result |
+| Queue attempt, scheduled tick | the method returned `Ok` (or the pool, on `transactional = false`) |
+
+A read is a touch: a message or a tool that only reads still opens the
+transaction on its first query, and commits it.
+
+### A deadline cuts the body, never the commit
+
+Every unit with a deadline — a request's timeout, a WebSocket message's, an
+MCP operation's, a job's or a tick's `timeout` — cuts its **body** there and
+nothing else. A body cut at its deadline is rolled back and answered as a
+timeout: `503` with `Retry-After`, an `UNAVAILABLE` frame or error with
+`reason: "timeout"`, a retryable `JobTimedOut`. Its rollback may still wait on
+a statement Postgres holds behind a lock; the edge answers at the deadline all
+the same, and the driver ends the rollback on a task of its own.
+
+A body that answered in time is never turned into a timeout by its commit: the
+`COMMIT` runs to its answer on the driver's task, which a client gone, an
+operation stopped or a closing window does not cut, and which the driver drains
+before the pool closes at shutdown. SeaORM waits for that answer at most the
+statement budget plus a second (`<PREFIX>_SEAORM__STATEMENT_TIMEOUT_SECS`, `15`
+by default); a commit that does not answer by then **may have landed**, so the
+unit fails *in doubt* — never retried, a request answered `500` without
+`Retry-After`, a job dead-lettered, a tick reported `retryable=false`:
+
+```text frame="terminal"
+ERROR nest_rs::orm: the unit's commit did not answer within its net; its writes may have landed transport="queue" outcome="in_doubt" net_ms=16000 trace_id=… span_id=…
+```
+
+## What waits for the commit
+
+An [event](/events/) emitted inside the transaction is dispatched **after**
+the commit, and dropped when the transaction rolls back or fails to commit, or
+the request fails — an event announces a fact, and a write that did not land is
+not one. The same holds at every boundary that settles a transaction: a
+WebSocket message, an MCP operation, a queue attempt, a scheduled tick. The
+listeners run outside the transaction they waited for, on the pool, with the
+caller's scope, ability and every value the emitter carries; the response
+leaves once they have — or at the unit's deadline, whichever comes first.
+Past the deadline a listener runs on, the unit answers the outcome it
+committed, and a slow listener never turns a committed write into a timeout
+(a `debug` line on `nest_rs::orm`: `after-commit work outlived the unit's
+deadline`).
+
+A `push`, a WebSocket broadcast and a storage write do **not** wait, and
+cannot: each answers its caller — a receipt, `UniqueKeyHeld`, a send failure,
+an object key — and that answer only exists once the backend has been asked.
+Inside a transaction they happen where they are written. A push that fails
+fails the request, so its writes roll back and nothing is lost; the price is
+a job a later rollback leaves behind. When the work must follow the commit,
+emit an event and push from its listener — the demo's publish does exactly
+that.
+
+An [atomic block](#atomic-blocks) holds what is emitted inside it: when it
+keeps its writes, the events join the request's and wait for the request's
+commit; when it rolls back, they are dropped with its writes.
+
+The primitive underneath is `nest_rs::database::after_commit`, which the bus
+calls; a [database driver](/database/writing-a-driver/) implements it for its
+own transactions.
+
+## Atomic blocks
+
+A statement that fails inside a transaction aborts the whole transaction, so a
+service that expects a failure — a unique key a concurrent request may have
+just taken — runs that statement in `nest_rs::database::atomic`. The block is a
+savepoint inside the request's transaction: an error rolls back the block
+alone, and the request carries on and commits.
+
+```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
+let linked = atomic(async {
+    let conn = Repo::<UserIdentities>::conn()?;
+    Ok::<_, ServiceError>(
+        Repo::<UserIdentities>::insert_unscoped(
+            new_identity_active(user_id, identity),
+            &conn,
+        )
+        .await?,
+    )
+})
+.await;
+match linked {
+    Ok(_) => {
+        // …
+        Ok(())
+    }
+    Err(ServiceError::Conflict(_)) => Ok(()),
+    Err(e) => Err(e),
+}
+```
+
+- **`Ok` keeps the block's writes** in the request's transaction, which still
+  commits or rolls back as a whole.
+- **`Err`, a panic, or a failure the block swallowed** rolls the block back
+  and nothing else. A block that returns `Ok` over a failed statement answers
+  `AtomicError::Poisoned`, since nothing it wrote stands.
+- **On a safe route**, where the request runs on the pool, the block is a
+  transaction of its own, committed when it returns `Ok`. A block in a block
+  is a savepoint of its own and rolls back alone. Its `COMMIT` runs on the
+  driver's task too: a deadline that cuts the body while it commits leaves
+  it to finish, and the unit fails *in doubt*, its writes possibly landed.
+- **Nothing is sent until the block's first statement**: a block that never
+  queries costs no round trip.
+
+The block's error type takes an `AtomicError` — `ServiceError` does, by the
+class of the database's refusal — so `?` works inside it. Read the block's
+executor through `Repo::conn()` inside it: the request waits while a block is
+open, since a statement of its own would land inside the savepoint, and a
+statement issued from inside the block on an executor taken before it is
+refused, whether or not the block has opened yet, rather than left to wait for
+the block that holds it.
+
+A transaction you opened and installed yourself (`Executor::Txn`) is not held
+back that way: a statement you issue on it beside an open block lands inside
+the block and rolls back with it. Await the block before writing on.
+
+<Aside type="caution">
+A block dropped before it settles — cancelled by a timeout or a `select!` —
+leaves its savepoint open, so the request can no longer commit: it answers
+`500`. Keep a deadline outside the block, around the work that may cancel it.
+</Aside>
 
 ## Why retrying belongs to the service, not the interceptor
 
@@ -57,8 +187,9 @@ the time a conflict surfaces. Two consequences:
 
 1. **The interceptor observes the conflict, it does not retry it.** The
    failed commit has already consumed its handle, and the handler's
-   non-transactional side effects — a queued job, an emitted event, an
-   object written to storage — would replay with it.
+   non-transactional side effects — a queued job, an object written to
+   storage — would replay with it. (An emitted event is not among them: it
+   waits for the commit, and a failed one drops it.)
 2. **Retrying is the service's job.** Only the service knows which
    boundary is replayable, so the replayable closure owns that boundary
    itself.
@@ -78,7 +209,7 @@ SeaOrmModule::for_root(SeaOrmConfig {
 })
 ```
 
-With the flag on, the `DbContext` interceptor matches a commit-time
+With the flag on, the unit of work matches a request's commit-time
 conflict against the SQLSTATE markers below and logs it at `warn` with
 the conflict tag (target `nest_rs::orm`) so ops sees the failure mode
 distinctly from a generic commit error.
@@ -86,9 +217,9 @@ distinctly from a generic commit error.
 <Aside type="note">
 **The flag observes; it never retries** — which is why it is named for what
 it does. Replaying a commit-time conflict means re-running the whole handler,
-and a handler may already have pushed a job, emitted an event, or written an
-object. None of those roll back with the transaction, so a transparent retry
-would duplicate them silently. The framework will not make that call on your
+and a handler may already have pushed a job or written an object. Neither
+rolls back with the transaction, so a transparent retry would duplicate them
+silently. The framework will not make that call on your
 behalf; the response fails closed with a `500` after the `warn` line, and
 retrying is the service's decision at a boundary it knows is replayable.
 </Aside>
@@ -125,12 +256,18 @@ impl PostsService {
 }
 ```
 
+The closure's transaction is yours, committed out of the framework's sight,
+so an event emitted inside it would not wait for it: emit once
+`retry_on_conflict` has returned `Ok`, after the commit that stood.
+
 `retry_on_conflict` runs the closure up to `attempts` times, sleeping
 `initial_backoff << attempt` between tries (5 ms → 10 ms → 20 ms with the
-defaults). A non-retryable error returns immediately; a retryable one is
-logged at `warn` and the closure re-runs from scratch — that's what makes
-the retry honest, the body re-opens a fresh transaction against a fresh
-snapshot.
+defaults), each sleep scaled by a jitter between 0.8 and 1.2 drawn per call —
+two transactions that conflicted with each other retry apart, not at one
+instant into the same conflict. A non-retryable error returns immediately; a
+retryable one is logged at `warn` and the closure re-runs from scratch —
+that's what makes the retry honest, the body re-opens a fresh transaction
+against a fresh snapshot.
 
 The defaults are conservative on purpose:
 
@@ -139,12 +276,11 @@ The defaults are conservative on purpose:
 | `DEFAULT_RETRY_ATTEMPTS`  | 3                      |
 | `DEFAULT_INITIAL_BACKOFF` | 5 ms                   |
 | `MAX_RETRY_ATTEMPTS`      | 32 (hard ceiling)      |
-| Per-sleep cap             | 30 s                   |
+| Per-sleep cap             | 30 s, before jitter    |
 
-The hard ceiling and per-sleep cap exist because `1u32 << attempt`
-overflows at `attempt >= 32` (UB in debug, wraps to `0` in release —
-which would hot-spin). Pass `usize::MAX` and the function still terminates
-in bounded time.
+The two limits bound what a caller can ask for: no sleep goes past 30 s
+before jitter, however many attempts have failed, and no call makes more than
+32 attempts, so a call passing `usize::MAX` still ends in bounded time.
 
 <Aside type="caution">
 **This is a service primitive.** It lives in `nest_rs::seaorm::retry` and
@@ -192,6 +328,6 @@ explicitly (replay the work against a fresh snapshot). One way to do each.
 
 - [Database](/database/) — the slice that imports `SeaOrmDatabaseModule`.
 - [Repo and executor](/database/repo-and-executor/) — what the interceptor
-  installs, the escape-on-spawn fail-closed.
+  installs, the escape-on-spawn fail-closed, the savepoint a block runs on.
 - [Pagination](/database/pagination/) — the other knob the entity carries.
-- [Configuration](/configuration/) — the full `NESTRS_SEAORM__*` scheme.
+- [Configuration](/configuration/) — the full `<PREFIX>_SEAORM__*` scheme.

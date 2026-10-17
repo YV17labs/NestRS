@@ -1,0 +1,5 @@
+error: `#[use_pipes]` is not taken on a `#[operations]` method: a GraphQL operation's variables are folded once per request — bind `Piped<P, T>` or `Valid<T>` on the argument
+  --> tests/integration/diagnostics/graphql/pipes_on_an_operation.rs:17:5
+   |
+17 |     #[use_pipes(Trim)]
+   |     ^^^^^^^^^^^^^^^^^^

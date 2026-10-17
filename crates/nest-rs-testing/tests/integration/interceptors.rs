@@ -1,13 +1,10 @@
-//! Per-handler / per-controller interceptor binding + guard-before-interceptor
-//! ordering, end-to-end through the HTTP harness. Also pins the cross-scope
-//! TypeId dedup: an interceptor declared at any combination of global /
-//! controller / method scopes is composed through `compose_chain` by the
-//! per-route pool and executes exactly once.
+//! Interceptor binding per handler and controller, guard-before-interceptor
+//! ordering, the cross-scope `TypeId` dedup and the transport-edge band.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
@@ -39,12 +36,15 @@ impl Layer for DenyGuard {}
 
 #[async_trait]
 impl Guard for DenyGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("denied"))
     }
 }
 
-impl HttpGuard for DenyGuard {}
+impl GuardFor<nest_rs_http::HttpView> for DenyGuard {}
 
 #[controller(path = "/a")]
 struct PerHandlerController;
@@ -129,13 +129,6 @@ async fn guard_short_circuits_before_the_interceptor() {
     resp.assert_header_is_not_exist("x-trace");
 }
 
-// --- TypeId dedup across scopes ---------------------------------------------
-//
-// The interceptor under test ([`CounterInterceptor`]) bumps a process-global
-// counter every time `intercept` runs, then forwards. Tests share that
-// counter, so a `tokio::sync::Mutex` serializes them — `cargo nextest`
-// parallelizes by default.
-
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 static GATE: Mutex<()> = Mutex::const_new(());
 
@@ -211,9 +204,6 @@ async fn same_interceptor_global_and_controller_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Declared globally AND redeclared on the controller. The per-route pool
-    // composes global + controller and dedups by TypeId — broadest (global)
-    // wins, so the interceptor runs once.
     let app = TestApp::builder()
         .module::<DedupModule>()
         .use_interceptors_global([interceptor::<CounterInterceptor>()])
@@ -235,8 +225,6 @@ async fn same_interceptor_global_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Same shape as the controller case — global + method compose and dedup
-    // to a single execution (broadest scope wins).
     let app = TestApp::builder()
         .module::<DedupModule>()
         .use_interceptors_global([interceptor::<CounterInterceptor>()])
@@ -258,10 +246,6 @@ async fn same_interceptor_controller_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Controller and method both declare `CounterInterceptor`. The per-route
-    // pool composer (`wrap_route_response_layers`) runs every layer kind through
-    // the same `compose_chain` dedup as guards / pipes — broadest scope wins —
-    // so the interceptor executes exactly once, no Global declaration needed.
     let app = TestApp::for_module::<DedupModule>().await.expect("boots");
 
     let resp = app.http().get("/dup-ctrl-method/echo").send().await;
@@ -278,8 +262,6 @@ async fn same_interceptor_at_all_three_scopes_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Global + controller + method — the broadest (global) wins and executes
-    // at the transport edge; both narrower redeclarations are dropped.
     let app = TestApp::builder()
         .module::<DedupModule>()
         .use_interceptors_global([interceptor::<CounterInterceptor>()])
@@ -296,13 +278,9 @@ async fn same_interceptor_at_all_three_scopes_runs_once() {
     );
 }
 
-// --- infra `#[interceptor]` — transport-edge band, auto-mounted, non-provider ---
-
 static EDGE_EVENTS: Mutex<Vec<&'static str>> = Mutex::const_new(Vec::new());
 
-/// Infra interceptor (the `DbContext` shape): attached by `#[interceptor]`
-/// as an `HttpEndpointWrap` at the transport edge — never a provider, never
-/// in the per-route pool.
+/// Infra interceptor (the `DbContext` shape), mounted at the transport edge.
 #[nest_rs_http::interceptor]
 struct EdgeStamp;
 
@@ -311,8 +289,7 @@ impl Layer for EdgeStamp {}
 #[async_trait]
 impl Interceptor for EdgeStamp {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        // The edge band sees matched and unmatched routes alike — resolve
-        // the error branch so a 404 is observed (and stamped) too.
+        // An unmatched route arrives as an `Err`, so a 404 is stamped too.
         let mut resp = next
             .run(req)
             .await
@@ -361,8 +338,6 @@ async fn infra_interceptor_mounts_at_the_transport_edge_and_is_not_a_provider() 
 
     let app = TestApp::for_module::<EdgeModule>().await.expect("boots");
 
-    // A matched route: the scoped interceptor completes inside, the infra
-    // wrap completes outside — band nesting matches the CLAUDE.md table.
     let resp = app.http().get("/edge/probe").send().await;
     resp.assert_status_is_ok();
     resp.assert_header("x-edge", "hit");
@@ -372,23 +347,17 @@ async fn infra_interceptor_mounts_at_the_transport_edge_and_is_not_a_provider() 
         "infra band wraps outside the per-route interceptor pool",
     );
 
-    // An unmatched path: the infra band still sees (and stamps) the 404 —
-    // the pool interceptors never run for it.
     EDGE_EVENTS.lock().await.clear();
     let resp = app.http().get("/edge/nowhere").send().await;
     resp.assert_status(StatusCode::NOT_FOUND);
     resp.assert_header("x-edge", "hit");
     assert_eq!(*EDGE_EVENTS.lock().await, vec!["edge"]);
 
-    // `#[interceptor]` mounts infrastructure; it must not register the type
-    // as a resolvable provider.
     assert!(
         app.container().get::<EdgeStamp>().is_none(),
         "an infra interceptor is not a provider",
     );
 }
-
-// --- E7: the global pool must actually reach the transport edge ---
 
 #[controller(path = "/edgeband")]
 struct EdgeBandController;
@@ -404,16 +373,6 @@ impl EdgeBandController {
 #[module(providers = [Tracer, EdgeBandController])]
 struct EdgeBandModule;
 
-/// The interceptors page, the request-lifecycle table and the controllers
-/// troubleshooting note all promise that a `use_interceptors_global`
-/// interceptor "folds at the transport edge — it sees 404s and denials".
-///
-/// It saw denials (those happen on a *matched* route) but not 404s or 405s:
-/// poem's router answers an unmatched path with `Err(NotFoundError)`, so the
-/// documented interceptor body — `let mut resp = next.run(req).await?;` —
-/// short-circuited before it could observe or stamp anything. An audit or
-/// request-id interceptor bound globally therefore skipped exactly the
-/// traffic an audit trail wants.
 #[tokio::test]
 async fn a_global_interceptor_sees_matched_routes_denials_404s_and_405s() {
     let app = TestApp::builder()
@@ -427,10 +386,7 @@ async fn a_global_interceptor_sees_matched_routes_denials_404s_and_405s() {
     matched.assert_status_is_ok();
     matched.assert_header("x-trace", "hit");
 
-    // R9-5: the trailing-slash form used to be this test's 404 case. The edge
-    // now trims the slash before routing, so it is the *same* route — which is
-    // the point: the interceptor stamps it either way, and the request no
-    // longer 404s on a spelling.
+    // The edge trims a trailing slash before routing.
     let trailing = app.http().get("/edgeband/ok/").send().await;
     trailing.assert_status_is_ok();
     trailing.assert_header("x-trace", "hit");
@@ -439,8 +395,6 @@ async fn a_global_interceptor_sees_matched_routes_denials_404s_and_405s() {
     bogus.assert_status(StatusCode::NOT_FOUND);
     bogus.assert_header("x-trace", "hit");
 
-    // A genuine 404 stays one with the slash on — normalization matches
-    // existing routes, it does not invent them.
     let bogus_slashed = app.http().get("/totally-bogus/").send().await;
     bogus_slashed.assert_status(StatusCode::NOT_FOUND);
     bogus_slashed.assert_header("x-trace", "hit");

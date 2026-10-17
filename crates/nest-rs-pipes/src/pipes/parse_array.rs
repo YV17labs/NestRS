@@ -1,25 +1,37 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
 
+use nest_rs_core::__private::short_type_name;
+
 use crate::{PipeError, pipe::Pipe};
 
 /// Split a comma-separated `String` into `Vec<T>`, parsing each item with
 /// `T: FromStr` (surrounding whitespace trimmed). Empty input yields an empty
-/// `Vec`.
+/// `Vec`. A refusal names the item's position and the expected type, never
+/// the item.
 pub struct ParseArray<T>(PhantomData<fn() -> T>);
 
 impl<T: FromStr> Pipe for ParseArray<T> {
     type In = String;
     type Out = Vec<T>;
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the refusal is the client's 400: it names the expected shape, never a parser's internals"
+    )]
     fn transform(input: String) -> Result<Vec<T>, PipeError> {
         if input.trim().is_empty() {
             return Ok(Vec::new());
         }
         input
             .split(',')
-            .map(|item| {
+            .enumerate()
+            .map(|(index, item)| {
                 item.trim().parse::<T>().map_err(|_| {
-                    PipeError::new(format!("contains an invalid item: `{}`", item.trim()))
+                    PipeError::new(format!(
+                        "item {} must be a valid {}",
+                        index + 1,
+                        short_type_name::<T>()
+                    ))
                 })
             })
             .collect()
@@ -50,5 +62,17 @@ mod tests {
     #[test]
     fn one_bad_item_rejects_the_whole_list() {
         assert!(ParseArray::<u32>::transform("1,x,3".into()).is_err());
+    }
+
+    #[test]
+    fn the_refusal_names_the_position_and_the_type() {
+        let err = ParseArray::<u32>::transform("1, x ,3".into()).unwrap_err();
+        assert_eq!(err.message(), "item 2 must be a valid u32");
+    }
+
+    #[test]
+    fn a_generic_item_type_is_named_whole() {
+        let err = ParseArray::<std::num::NonZeroU64>::transform("1,0,3".into()).unwrap_err();
+        assert_eq!(err.message(), "item 2 must be a valid NonZero<u64>");
     }
 }

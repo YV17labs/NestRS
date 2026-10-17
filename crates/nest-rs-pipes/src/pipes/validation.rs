@@ -15,9 +15,7 @@ impl<T: Validate> Pipe for ValidationPipe<T> {
     fn transform(input: T) -> Result<T, PipeError> {
         match input.validate() {
             Ok(()) => Ok(input),
-            // Shared with the global `ValidateProbe` path so the submitted
-            // value (`params.value`) is stripped from the details on every
-            // transport — a rejected credential never echoes back.
+            // Shared with `ValidateProbe`: a rule's parameters are dropped on every transport.
             Err(errors) => Err(crate::validate::validation_error(errors)),
         }
     }
@@ -50,9 +48,6 @@ mod tests {
 
     #[test]
     fn rejection_details_never_echo_the_submitted_value() {
-        // A too-short secret must not come back in the details — only the field
-        // name and the constraint bound survive, so the message stays
-        // actionable ("password: length min 8") without leaking what was typed.
         #[derive(Debug, Validate)]
         struct Login {
             #[validate(length(min = 8))]
@@ -72,6 +67,7 @@ mod tests {
             details.get("password").is_some(),
             "the failing field name is kept: {text}",
         );
-        assert!(text.contains('8'), "the constraint bound is kept: {text}");
+        assert_eq!(details["password"][0]["code"], "length", "{text}");
+        assert!(!text.contains("params"), "no rule parameter: {text}");
     }
 }

@@ -15,19 +15,25 @@ categories = ["authentication", "web-programming"]
 # `AuthnGuard` is `#[injectable]` (it resolves the app's `Strategy`); `AuthnModule`
 # is a `DynamicModule` that provides the configured `JwtService` as global infra.
 nest-rs-core.workspace = true
-# `AuthnModule` owns `JwtConfig` (namespace `authn`), loaded from
+# `AuthnModule` owns `AuthnConfig` (namespace `authn`), loaded from
 # `NESTRS_AUTHN__*`. The `#[config]` derive routes through
-# `nest_rs_config::validator`, so this crate declares no `validator` of its own.
-nest-rs-config.workspace = true
-# `Strategy` reads the `poem::Request`; `AuthnGuard` implements the `Guard` trait
-# re-exported by the HTTP surface.
+# `nest_rs_config::__private::validator`, so this crate declares no `validator`
+# of its own.
+# `reqwest` is `ClientTls`, what the JWK Set endpoint's certificate chains to
+# and the certificate presented to it, converted for the client fetching it.
+nest-rs-config = { workspace = true, features = ["reqwest"] }
+# `Strategy` reads the `poem::Request`; `AuthnGuard` reads it through the HTTP
+# edge's view.
 nest-rs-http.workspace = true
 nest-rs-guards.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on
-# jsonwebtoken directly), mirroring how nest-rs-redis hides apalis.
+# jsonwebtoken directly). Its `jwk` module reads an issuer's JWK Set.
 jsonwebtoken.workspace = true
+# Fetching an external issuer's JWK Set (`<PREFIX>_AUTHN__JWKS_URI`) over
+# verified TLS, on the workspace's one HTTP client, private to this crate.
+reqwest.workspace = true
 # Decoding `Authorization: Basic` for the `basic_credentials` helper, symmetric
 # to `bearer_token` — the two credential forms a `Strategy` reads off a request.
 base64.workspace = true
@@ -36,9 +42,6 @@ serde.workspace = true
 # JSON object before the framework's own claims are merged into it.
 serde_json.workspace = true
 thiserror.workspace = true
-# Constant-time comparison for the machine-client registry — the same
-# fail-closed discipline `verify_password` needs, for the other credential kind.
-subtle.workspace = true
 # Argon2id for local credential storage (`hash_password` / `verify_password`).
 argon2.workspace = true
 # `AuthnModule::for_root` provides `JwtService` through the factory phase, whose
@@ -47,14 +50,31 @@ anyhow.workspace = true
 # `AuthnGuard` logs the authentication outcome — a failure at `warn` so it is
 # visible in production, the audit point every strategy shares.
 tracing.workspace = true
+# The JWK Set's refresh: the task that fetches the set, the channel callers
+# wait on while that fetch is in flight, and the clock its freshness reads.
+tokio.workspace = true
 
 [dev-dependencies]
-# Booting the `AuthnModule::for_root` seam and reading the resolved service back.
-nest-rs-testing = { path = "../nest-rs-testing" }
-tokio = { workspace = true }
+# Booting the `AuthnModule::for_root` seam and reading the resolved service back;
+# `tls` issues the certificate the in-process JWK Set double presents.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# The signing keys a JWK Set test publishes — RSA, P-256 and Ed25519 —
+# generated in process rather than committed.
+rcgen = { workspace = true }
+# `test-util` (not part of tokio's `full`) pauses time, so a strategy that never
+# answers is denied at `AUTHENTICATE_TIMEOUT` without the suite waiting it out.
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
+# The guard's bound is witnessed on every edge it authenticates for — a route,
+# the GraphQL POST, the MCP POST, the WS upgrade — each booted as an app binds
+# it.
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+nest-rs-ws = { path = "../nest-rs-ws" }
+# The suite's `#[routes]` wrap each route's response layers.
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 
 [lints]
 workspace = true

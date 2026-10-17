@@ -1,6 +1,8 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
 
+use nest_rs_core::__private::short_type_name;
+
 use crate::{PipeError, pipe::Pipe};
 
 /// Parse a `String` into any `T: FromStr`. Covers integer, float, and bool
@@ -10,6 +12,10 @@ pub struct Parse<T>(PhantomData<fn() -> T>);
 impl<T: FromStr> Pipe for Parse<T> {
     type In = String;
     type Out = T;
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the refusal is the client's 400: it names the expected shape, never a parser's internals"
+    )]
     fn transform(input: String) -> Result<T, PipeError> {
         input
             .parse::<T>()
@@ -23,11 +29,6 @@ pub type ParseInt = Parse<i64>;
 pub type ParseFloat = Parse<f64>;
 /// Parse the input string into a `bool`.
 pub type ParseBool = Parse<bool>;
-
-fn short_type_name<T>() -> &'static str {
-    let name = std::any::type_name::<T>();
-    name.rsplit("::").next().unwrap_or(name)
-}
 
 #[cfg(test)]
 mod tests {

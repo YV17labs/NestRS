@@ -1,4 +1,4 @@
-//! `.filter()` composition (HTTP-T3). A `Filter` maps a handler `Err` to a
+//! `.filter()` composition. A `Filter` maps a handler `Err` to a
 //! response; when several are stacked the **innermost** (closest to the handler)
 //! maps first and turns the error into `Ok`, so outer filters never see it. A
 //! successful handler passes through every filter unmapped. Every mapped
@@ -38,14 +38,12 @@ impl Filter for LogFilter {
     }
 }
 
-/// A handler that always fails with a 500.
 fn failing() -> impl Endpoint<Output = Response> {
     make(|_req: Request| async {
         Err::<Response, _>(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     })
 }
 
-/// A handler that always succeeds.
 fn succeeding() -> impl Endpoint<Output = Response> {
     make(|_req: Request| async { Ok::<_, poem::Error>("ok".into_response()) })
 }
@@ -71,8 +69,6 @@ async fn the_innermost_filter_maps_and_outer_filters_never_see_the_error() {
         .await
         .expect("the error is mapped, not propagated");
 
-    // Inner mapped the error to a teapot and turned it into `Ok`, so outer's
-    // filter body never ran and its status never applied.
     assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
     assert_eq!(
         trace.lock().expect("trace lock").clone(),

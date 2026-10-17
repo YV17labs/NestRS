@@ -92,7 +92,7 @@ there is no `controller.rs` or `service.rs` in the app crate — those live in
 The `blog` feature is a placeholder with one job: proving the wiring works
 end to end on the first run. Delete it once `posts` is serving something real.
 
-```toml title="apps/blog/Cargo.toml (from the demo)"
+```toml title="apps/blog/Cargo.toml"
 [package]
 name = "blog"
 version.workspace = true
@@ -102,17 +102,18 @@ publish = false
 [dependencies]
 features.workspace = true
 nest-rs.workspace = true
-tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
 nest-rs.workspace = true
+tokio.workspace = true
 ```
 
 One `nest-rs` line, and it stays one for the rest of this tutorial: the
 capabilities arrive as **features** on it (`[workspace.dependencies]` in the
-root manifest is where the list lives). `tokio` and `anyhow` are there because
-`main.rs` writes them.
+root manifest is where the list lives). `anyhow` is there because `main.rs`
+writes it, and `tokio` only for the tests, which write `#[tokio::test]`:
+`#[nest_rs::main]` builds the runtime `main` runs on itself.
 
 The root module is where transports come in. `HttpModule::for_root` pins
 the listen port in code — not in `.env`:
@@ -145,15 +146,12 @@ crates, no collision — the app only ever names the `…HttpModule` edge.
 
 ```rust title="apps/blog/src/main.rs"
 use anyhow::Result;
-use nest_rs::config::Environment;
 use nest_rs::core::App;
 
 use blog::BlogModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
-    let _environment = Environment::init();
-
     App::builder()
         .module::<BlogModule>()
         .build()
@@ -165,10 +163,13 @@ async fn main() -> Result<()> {
 
 `App::builder()` runs the four boot phases — seeds, collect, factories,
 register — verifies the access graph, then `.run()` blocks on the
-transports. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
+transports. `#[nest_rs::main]` builds the runtime all of it runs on, and once
+`run` returns it ends the process within the
+[shutdown budget](/fundamentals/lifecycle/#the-way-down) rather than waiting on
+whatever the way down abandoned. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
 for the tests in [Test it end to end](/tutorial/testing/)), a smoke test that
 asserts the greeting, and an **empty** `tests/e2e/main.rs`. The e2e suite has to
-exist even while empty: `nestrs run test unit` filters on `not binary(e2e)`, and
+exist even while empty: `nestrs run test integration` filters on `not binary(e2e)`, and
 nextest rejects a filterset naming a binary the workspace does not have.
 
 ## Run it again
@@ -182,10 +183,10 @@ nextest rejects a filterset naming a binary the workspace does not have.
        Compiling blog v0.1.0
         Running `target/debug/blog`
    INFO nest_rs::routes: mounted route controller="BlogController" method="GET" path="/" handler="hello"
-   DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
+   INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3005"
    ```
 
-   The route table prints on every boot, and the `DEBUG` line shows the port
+   The route table prints on every boot, and `app ready` shows the port
    from your `module.rs`.
 
 2. In another terminal:

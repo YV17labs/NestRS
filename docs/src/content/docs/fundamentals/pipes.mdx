@@ -1,7 +1,6 @@
 ---
 title: Pipes
 description: Stateless transforms at the request boundary — parse, normalize, validate before the handler runs.
-tier: basics
 sidebar:
   order: 7
 ---
@@ -65,8 +64,8 @@ impl Pipe for Trim {
 }
 ```
 
-If you need DI-injected logic at the request boundary, that's a service
-or an interceptor — not a pipe.
+If you need DI-injected logic at the request boundary, that's a service,
+an interceptor, or a [global pipe](/fundamentals/global-pipes/) — not a per-argument pipe.
 
 ## The built-in set
 
@@ -78,7 +77,7 @@ your own:
 | `Parse<T>` | `String → T` (any `FromStr`) | Generic conversion: `ParseInt`, `ParseFloat`, `ParseBool` |
 | `ParseUuid` | `String → Uuid` | Any-version UUID |
 | `ParseUuidV4` / `ParseUuidV7` / … | `String → Uuid` | Version-pinned UUID |
-| `ParseArray<P>` | `String → Vec<P::Out>` | Comma-separated list, each item piped through `P` |
+| `ParseArray<T>` | `String → Vec<T>` (any `FromStr`) | Comma-separated list; a refused item is named by its position (`item 2 must be a valid u64`), never quoted |
 | `Trim`, `Lowercase`, `Uppercase` | `String → String` | Edge normalization |
 | `ValidationPipe<T>` | `T → T` (where `T: Validate`) | Run [validator](https://docs.rs/validator) attribute rules |
 
@@ -135,13 +134,16 @@ that fails validation is an RFC 9457 `problem+json` `400` with:
   "status": 400,
   "detail": "validation failed",
   "errors": {
-    "email": [{ "code": "email", "message": null, "params": { /* ... */ } }],
-    "password": [{ "code": "length", "params": { "min": 8 } }]
+    "email": [{ "code": "email", "message": null }],
+    "password": [{ "code": "length", "message": null }]
   }
 }
 ```
 
-No manual checks in the handler.
+A failure names its field and its rule, never the rule's parameters: they hold
+what was sent (`value`, and `must_match`'s other field), and a bound such as
+`max = self.limit` can read another field. A rule that should tell the client
+its bound says so in its `message`. No manual checks in the handler.
 
 ## Custom transforms with `Piped<P, E>`
 
@@ -153,7 +155,7 @@ use nest_rs::http::Piped;
 use nest_rs::pipes::ParseUuidV7;
 use nest_rs::http::poem::web::Path;
 
-#[get("/:id")]
+#[get("/{id}")]
 async fn get(&self, id: Piped<ParseUuidV7, Path<String>>) -> Json<User> {
     Json(self.svc.find(*id).await?)
 }
@@ -223,6 +225,13 @@ async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
 }
 ```
 
+## Global pipes
+
+A pipe bound per argument runs where its argument is decoded. One that shapes
+every input of the app at once — a body, a GraphQL operation's variables, a
+WebSocket message's `data` — is a [global pipe](/fundamentals/global-pipes/),
+registered in `main`.
+
 ## Pipes vs `Bind`
 
 A pipe converts a *primitive* input — an ID string into a `Uuid`, a JSON
@@ -233,13 +242,13 @@ caller's scope, `403` if denied.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 // Pipe — pure conversion, no DB
-#[get("/_validate/:id")]
+#[get("/_validate/{id}")]
 async fn validate(&self, id: Piped<ParseUuidV7, Path<String>>) -> String {
     format!("{} is valid", *id)
 }
 
 // Bind — convert + load + authorize
-#[get("/:id")]
+#[get("/{id}")]
 async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
     Json(User::from(&*user))
 }
@@ -300,6 +309,8 @@ apps belongs in `crates/nest-rs-pipes/`.
 
 - [HTTP / controllers](/http/controllers/) — every extractor that
   composes with a pipe.
+- [Global pipes](/fundamentals/global-pipes/) — one pipe over every body,
+  set of variables and message.
 - [Guards](/fundamentals/guards/) — gate access; pipes don't.
 - [Database / `Bind`](/database/) — pipes are for primitives, `Bind`
   loads and authorizes a row.

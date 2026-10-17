@@ -1,0 +1,957 @@
+//! The port's worker, in process: the behaviour kit over an in-memory backend
+//! that files a record due later and over one that does not — where the worker
+//! waits a retry's backoff itself — and what the worker refuses at boot.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use nest_rs_core::{Transport, injectable, module};
+use nest_rs_queue::{BoundConsumer, JobProducer, QueueName, QueueWorker, processor, queue};
+use nest_rs_testing::TestApp;
+use nest_rs_testing::queue::KitBackend;
+use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
+
+use crate::memory::{DELAYING, Memory, PLAIN};
+
+/// How long an in-memory delivery's lease lasts in the kit.
+const LEASE: Duration = Duration::from_millis(500);
+
+/// The kit's backend over one in-memory store, shared by every app a case
+/// builds.
+struct MemoryKit {
+    memory: Memory,
+}
+
+impl MemoryKit {
+    fn delaying() -> Self {
+        Self {
+            memory: Memory::new(&DELAYING, LEASE),
+        }
+    }
+
+    fn plain() -> Self {
+        Self {
+            memory: Memory::new(&PLAIN, LEASE),
+        }
+    }
+}
+
+impl KitBackend for MemoryKit {
+    const IN_PROCESS: bool = true;
+
+    fn app(&self) -> nest_rs_testing::TestAppBuilder {
+        let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
+        TestApp::builder()
+            .provide(BoundConsumer::new(self.memory.consumer()))
+            .provide_dyn(producer)
+    }
+
+    fn lease(&self) -> Duration {
+        LEASE
+    }
+
+    async fn purge(&self, queue: &QueueName) -> anyhow::Result<()> {
+        self.memory.purge(queue.as_str());
+        Ok(())
+    }
+
+    async fn lapse(&self, queue: &QueueName) -> anyhow::Result<()> {
+        self.memory.lapse(queue.as_str());
+        Ok(())
+    }
+
+    async fn take(&self, queue: &QueueName) -> anyhow::Result<()> {
+        self.memory.take(queue.as_str());
+        Ok(())
+    }
+}
+
+/// The kit over a backend that files a record due later.
+mod delaying {
+    use super::MemoryKit;
+
+    nest_rs_testing::queue_kit!(MemoryKit::delaying());
+}
+
+/// The kit over a backend that files nothing due later: a retry's backoff is
+/// the worker's to wait, holding its permit and renewing its lease.
+mod plain {
+    use super::MemoryKit;
+
+    nest_rs_testing::queue_kit!(MemoryKit::plain());
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WorkerCommand {
+    seq: u32,
+}
+
+#[queue(name = "nestrs-worker-boot", job = WorkerCommand)]
+struct BootQueue;
+
+#[injectable]
+#[derive(Default)]
+struct BootProcessor;
+
+#[processor]
+impl BootProcessor {
+    #[process(queue = BootQueue)]
+    async fn run(&self, _job: WorkerCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(providers = [BootProcessor])]
+struct BootModule;
+
+#[module]
+struct EmptyModule;
+
+#[tokio::test]
+async fn a_method_with_no_backend_bound_fails_the_boot_naming_the_remedy() {
+    let app = TestApp::builder()
+        .module::<BootModule>()
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let refused = QueueWorker::new()
+        .configure(app.container())
+        .await
+        .expect_err("no backend runs the method")
+        .to_string();
+    for expected in [
+        "BootProcessor::run",
+        "nestrs-worker-boot",
+        nest_rs_queue::BACKEND_REMEDY,
+    ] {
+        assert!(refused.contains(expected), "{expected:?} in {refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_producer_and_a_consumer_of_two_backends_fail_the_boot_naming_both() {
+    let producer: Arc<dyn JobProducer> = Arc::new(Memory::new(&PLAIN, LEASE));
+    let consumer = Memory::new(&DELAYING, LEASE).consumer();
+    let app = TestApp::builder()
+        .module::<BootModule>()
+        .provide(BoundConsumer::new(consumer))
+        .provide_dyn(producer)
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let refused = QueueWorker::new()
+        .configure(app.container())
+        .await
+        .expect_err("two backends")
+        .to_string();
+    for expected in ["memory-plain", "`memory`"] {
+        assert!(refused.contains(expected), "{expected:?} in {refused}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_worker_with_nothing_to_run_idles_and_stops_at_once() {
+    let app = TestApp::builder()
+        .module::<EmptyModule>()
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("nothing to run is no error");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    stop.cancel();
+    tokio::time::timeout(Duration::from_secs(1), serving)
+        .await
+        .expect("an idle worker stops at once")
+        .expect("its task ends")
+        .expect("cleanly");
+}
+
+/// A worker over `memory` serving [`BootModule`], with `memory`'s producer.
+async fn boot_worker(
+    memory: &Memory,
+) -> (
+    nest_rs_testing::HeadlessApp,
+    CancellationToken,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    boot_worker_of::<BootModule>(memory).await
+}
+
+/// [`boot_worker`] serving the module `M`.
+async fn boot_worker_of<M: nest_rs_core::Module>(
+    memory: &Memory,
+) -> (
+    nest_rs_testing::HeadlessApp,
+    CancellationToken,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let app = TestApp::builder()
+        .module::<M>()
+        .provide(BoundConsumer::new(memory.consumer()))
+        .provide_dyn(producer)
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the worker configures");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    (app, stop, serving)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_record_that_is_not_json_is_dead_lettered_alone_without_its_value() {
+    let memory = Memory::new(&DELAYING, LEASE);
+    let queue = "nestrs-worker-boot";
+    memory.file_raw(queue, b"secret-token-not-json".to_vec());
+    let (app, stop, serving) = boot_worker(&memory).await;
+    let producer = app
+        .container()
+        .get_dyn::<dyn JobProducer>()
+        .expect("the producer");
+    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 1 }, None)
+        .await
+        .expect("a push");
+    nest_rs_testing::wait_until(Duration::from_secs(10), || {
+        memory.dead(queue).len() == 1 && memory.held(queue) == 0
+    })
+    .await;
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+    let dead = memory.dead(queue);
+    assert_eq!(dead[0].record, b"secret-token-not-json", "kept as stored");
+    assert!(
+        !dead[0].reason.contains("secret-token"),
+        "the reason never quotes the record: {}",
+        dead[0].reason
+    );
+}
+
+/// A consumer over `memory` down for its first `failures` settles: its
+/// renewals fail meanwhile too.
+struct Flaky {
+    inner: crate::memory::MemoryConsumer,
+    failures: std::sync::atomic::AtomicU32,
+}
+
+impl nest_rs_queue::JobConsumer for Flaky {
+    type Lease = crate::memory::MemoryLease;
+
+    fn backend(&self) -> &'static nest_rs_queue::QueueBackend {
+        self.inner.backend()
+    }
+
+    async fn prepare(
+        &self,
+        methods: &[&'static nest_rs_queue::ProcessMethod],
+    ) -> Result<nest_rs_queue::Prepared, nest_rs_queue::QueueError> {
+        self.inner.prepare(methods).await
+    }
+
+    async fn receive(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        ask: nest_rs_queue::Ask,
+    ) -> Result<nest_rs_queue::Received<Self::Lease>, nest_rs_queue::QueueError> {
+        self.inner.receive(method, ask).await
+    }
+
+    async fn renew(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        leases: &[&Self::Lease],
+    ) -> Result<Vec<nest_rs_queue::LeaseHold>, nest_rs_queue::QueueError> {
+        // Down for the settle is down for the renewal too.
+        if self.failures.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+            return Err(nest_rs_queue::QueueError::backend(std::io::Error::other(
+                "the backend is unreachable",
+            )));
+        }
+        self.inner.renew(method, leases).await
+    }
+
+    async fn settle(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        lease: &Self::Lease,
+        disposition: nest_rs_queue::Disposition<'_>,
+    ) -> Result<nest_rs_queue::LeaseHold, nest_rs_queue::QueueError> {
+        let left = self.failures.load(std::sync::atomic::Ordering::Relaxed);
+        if left > 0 {
+            self.failures
+                .store(left - 1, std::sync::atomic::Ordering::Relaxed);
+            return Err(nest_rs_queue::QueueError::backend(std::io::Error::other(
+                "the backend is unreachable",
+            )));
+        }
+        self.inner.settle(method, lease, disposition).await
+    }
+
+    async fn maintain(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+    ) -> Result<Option<Duration>, nest_rs_queue::QueueError> {
+        self.inner.maintain(method).await
+    }
+}
+
+/// The lease of the settle cases: long enough for two retries of a settle.
+const SETTLE_LEASE: Duration = Duration::from_secs(2);
+
+/// Run one job of [`BootQueue`] over a consumer whose settle fails `failures`
+/// times, and return the store once the job's record is gone or `within` passed.
+async fn settle_failing(failures: u32, within: Duration) -> Memory {
+    let memory = Memory::new(&DELAYING, SETTLE_LEASE);
+    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let app = TestApp::builder()
+        .module::<BootModule>()
+        .provide(BoundConsumer::new(Flaky {
+            inner: memory.consumer(),
+            failures: std::sync::atomic::AtomicU32::new(failures),
+        }))
+        .provide_dyn(Arc::clone(&producer))
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the worker configures");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
+        .await
+        .expect("a push");
+    let deadline = tokio::time::Instant::now() + within;
+    while memory.held("nestrs-worker-boot") > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+    memory
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_settle_that_errs_is_retried_while_its_lease_holds() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let memory = settle_failing(2, Duration::from_secs(5)).await;
+    assert_eq!(memory.held("nestrs-worker-boot"), 0, "the outcome landed");
+    assert!(
+        logs.find(
+            nest_rs_queue::TARGET,
+            "job outcome not confirmed; unless it was written, the job runs again once its lease lapses",
+        )
+        .is_empty()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_settle_failing_past_its_lease_is_said_and_the_job_left_to_its_lease() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let memory = settle_failing(u32::MAX, SETTLE_LEASE * 2).await;
+    assert_eq!(
+        memory.held("nestrs-worker-boot"),
+        1,
+        "the job is still held"
+    );
+    // Every redelivery the lapsed lease allows says so again.
+    let said = logs.find(
+        nest_rs_queue::TARGET,
+        "job outcome not confirmed; unless it was written, the job runs again once its lease lapses",
+    );
+    assert!(!said.is_empty(), "the lost outcome is said");
+    assert!(said.iter().all(|line| line.level == "error"));
+    assert_eq!(said[0].field("disposition").as_deref(), Some("complete"));
+}
+
+/// A consumer over `memory` whose first `checkpoint` panics — a backend's
+/// defect, met inside a delivery's task, outside any attempt and outside any
+/// call the worker bounds.
+struct PanicsOnce {
+    inner: crate::memory::MemoryConsumer,
+    panicked: std::sync::atomic::AtomicBool,
+}
+
+impl nest_rs_queue::JobConsumer for PanicsOnce {
+    type Lease = crate::memory::MemoryLease;
+
+    fn backend(&self) -> &'static nest_rs_queue::QueueBackend {
+        self.inner.backend()
+    }
+
+    async fn prepare(
+        &self,
+        methods: &[&'static nest_rs_queue::ProcessMethod],
+    ) -> Result<nest_rs_queue::Prepared, nest_rs_queue::QueueError> {
+        self.inner.prepare(methods).await
+    }
+
+    async fn receive(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        ask: nest_rs_queue::Ask,
+    ) -> Result<nest_rs_queue::Received<Self::Lease>, nest_rs_queue::QueueError> {
+        self.inner.receive(method, ask).await
+    }
+
+    async fn renew(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        leases: &[&Self::Lease],
+    ) -> Result<Vec<nest_rs_queue::LeaseHold>, nest_rs_queue::QueueError> {
+        self.inner.renew(method, leases).await
+    }
+
+    async fn settle(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        lease: &Self::Lease,
+        disposition: nest_rs_queue::Disposition<'_>,
+    ) -> Result<nest_rs_queue::LeaseHold, nest_rs_queue::QueueError> {
+        self.inner.settle(method, lease, disposition).await
+    }
+
+    async fn maintain(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+    ) -> Result<Option<Duration>, nest_rs_queue::QueueError> {
+        self.inner.maintain(method).await
+    }
+
+    fn checkpoint(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        lease: &Self::Lease,
+        job: &nest_rs_queue::JobId,
+    ) -> Option<Arc<dyn nest_rs_queue::CheckpointStore>> {
+        assert!(
+            self.panicked
+                .swap(true, std::sync::atomic::Ordering::SeqCst),
+            "the backend's first checkpoint panics",
+        );
+        self.inner.checkpoint(method, lease, job)
+    }
+}
+
+#[queue(name = "nestrs-worker-checkpointed", job = WorkerCommand)]
+struct CheckpointedQueue;
+
+#[injectable]
+#[derive(Default)]
+struct CheckpointedProcessor;
+
+#[processor]
+impl CheckpointedProcessor {
+    #[process(queue = CheckpointedQueue, transactional = false)]
+    async fn run(
+        &self,
+        _job: WorkerCommand,
+        _checkpoint: nest_rs_queue::Checkpoint<u32>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(providers = [CheckpointedProcessor])]
+struct CheckpointedModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let lease = Duration::from_millis(500);
+    let memory = Memory::new(&DELAYING, lease);
+    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let app = TestApp::builder()
+        .module::<CheckpointedModule>()
+        .provide(BoundConsumer::new(PanicsOnce {
+            inner: memory.consumer(),
+            panicked: std::sync::atomic::AtomicBool::new(false),
+        }))
+        .provide_dyn(Arc::clone(&producer))
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the worker configures");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    nest_rs_queue::JobProducerExt::push(
+        &*producer,
+        CheckpointedQueue,
+        WorkerCommand { seq: 0 },
+        None,
+    )
+    .await
+    .expect("a push");
+    let queue = "nestrs-worker-checkpointed";
+    let deadline = tokio::time::Instant::now() + lease * 10;
+    tokio::time::sleep(lease).await;
+    while memory.held(queue) > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let held = memory.held(queue);
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+    assert_eq!(
+        held, 0,
+        "the job ran again once its lease lapsed, and settled"
+    );
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "queue delivery panicked outside its attempt; its job is left to its lease",
+    );
+    assert_eq!(said.level, "error");
+    assert_eq!(said.field("queue").as_deref(), Some(queue));
+}
+
+/// A consumer over `memory` that declares `answer_bound` at prepare, and whose
+/// first receive or first settle unwinds when `unwind_receive` or
+/// `unwind_settle` is set — a backend's defect, met by the worker's own loop.
+struct Misbehaving {
+    inner: crate::memory::MemoryConsumer,
+    answer_bound: Duration,
+    unwind_receive: std::sync::atomic::AtomicBool,
+    unwind_settle: std::sync::atomic::AtomicBool,
+}
+
+impl Misbehaving {
+    fn over(memory: &Memory) -> Self {
+        Self {
+            inner: memory.consumer(),
+            answer_bound: Duration::from_millis(100),
+            unwind_receive: std::sync::atomic::AtomicBool::new(false),
+            unwind_settle: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl nest_rs_queue::JobConsumer for Misbehaving {
+    type Lease = crate::memory::MemoryLease;
+
+    fn backend(&self) -> &'static nest_rs_queue::QueueBackend {
+        self.inner.backend()
+    }
+
+    async fn prepare(
+        &self,
+        methods: &[&'static nest_rs_queue::ProcessMethod],
+    ) -> Result<nest_rs_queue::Prepared, nest_rs_queue::QueueError> {
+        self.inner.prepare(methods).await?;
+        Ok(nest_rs_queue::Prepared::new(self.answer_bound))
+    }
+
+    async fn receive(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        ask: nest_rs_queue::Ask,
+    ) -> Result<nest_rs_queue::Received<Self::Lease>, nest_rs_queue::QueueError> {
+        if self
+            .unwind_receive
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("the backend's client unwound");
+        }
+        self.inner.receive(method, ask).await
+    }
+
+    async fn renew(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        leases: &[&Self::Lease],
+    ) -> Result<Vec<nest_rs_queue::LeaseHold>, nest_rs_queue::QueueError> {
+        self.inner.renew(method, leases).await
+    }
+
+    async fn settle(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        lease: &Self::Lease,
+        disposition: nest_rs_queue::Disposition<'_>,
+    ) -> Result<nest_rs_queue::LeaseHold, nest_rs_queue::QueueError> {
+        if self
+            .unwind_settle
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("the backend's client unwound");
+        }
+        self.inner.settle(method, lease, disposition).await
+    }
+
+    async fn maintain(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+    ) -> Result<Option<Duration>, nest_rs_queue::QueueError> {
+        self.inner.maintain(method).await
+    }
+}
+
+/// A settle that unwinds is a call that did not answer: the worker files the
+/// panic once and settles again under its backoff while the lease holds, so
+/// the job ends now rather than once its lease lapsed.
+#[tokio::test(start_paused = true)]
+async fn a_settle_that_panics_is_retried_and_said_once() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let memory = Memory::new(&DELAYING, SETTLE_LEASE);
+    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let app = TestApp::builder()
+        .module::<BootModule>()
+        .provide(BoundConsumer::new(Misbehaving {
+            unwind_settle: std::sync::atomic::AtomicBool::new(true),
+            ..Misbehaving::over(&memory)
+        }))
+        .provide_dyn(Arc::clone(&producer))
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the worker configures");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    let sent = tokio::time::Instant::now();
+    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
+        .await
+        .expect("a push");
+    let queue = "nestrs-worker-boot";
+    nest_rs_testing::wait_until(SETTLE_LEASE, || memory.held(queue) == 0).await;
+    let settled = sent.elapsed();
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+
+    assert!(
+        settled < SETTLE_LEASE,
+        "settled before the lease lapsed: {settled:?}"
+    );
+    assert!(memory.dead(queue).is_empty(), "the job completed");
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "queue backend panicked answering the worker; the call counts as unanswered",
+    );
+    assert_eq!(said.level, "error");
+    assert_eq!(said.field("queue").as_deref(), Some(queue));
+    assert_eq!(said.field("call").as_deref(), Some("JobConsumer::settle"));
+    logs.expect_none(
+        nest_rs_queue::TARGET,
+        "queue delivery panicked outside its attempt; its job is left to its lease",
+    );
+}
+
+/// A consumer over `memory` whose renewals never answer — a backend gone
+/// silent under the leases it handed over.
+struct Silent {
+    inner: crate::memory::MemoryConsumer,
+}
+
+impl nest_rs_queue::JobConsumer for Silent {
+    type Lease = crate::memory::MemoryLease;
+
+    fn backend(&self) -> &'static nest_rs_queue::QueueBackend {
+        self.inner.backend()
+    }
+
+    async fn prepare(
+        &self,
+        methods: &[&'static nest_rs_queue::ProcessMethod],
+    ) -> Result<nest_rs_queue::Prepared, nest_rs_queue::QueueError> {
+        self.inner.prepare(methods).await
+    }
+
+    async fn receive(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        ask: nest_rs_queue::Ask,
+    ) -> Result<nest_rs_queue::Received<Self::Lease>, nest_rs_queue::QueueError> {
+        self.inner.receive(method, ask).await
+    }
+
+    async fn renew(
+        &self,
+        _method: &'static nest_rs_queue::ProcessMethod,
+        _leases: &[&Self::Lease],
+    ) -> Result<Vec<nest_rs_queue::LeaseHold>, nest_rs_queue::QueueError> {
+        std::future::pending().await
+    }
+
+    async fn settle(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        lease: &Self::Lease,
+        disposition: nest_rs_queue::Disposition<'_>,
+    ) -> Result<nest_rs_queue::LeaseHold, nest_rs_queue::QueueError> {
+        self.inner.settle(method, lease, disposition).await
+    }
+
+    async fn maintain(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+    ) -> Result<Option<Duration>, nest_rs_queue::QueueError> {
+        self.inner.maintain(method).await
+    }
+}
+
+#[queue(name = "nestrs-worker-long", job = WorkerCommand)]
+struct LongQueue;
+
+#[injectable]
+#[derive(Default)]
+struct LongProcessor;
+
+#[processor]
+impl LongProcessor {
+    #[process(queue = LongQueue)]
+    async fn run(&self, _job: WorkerCommand) -> anyhow::Result<()> {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        Ok(())
+    }
+}
+
+#[module(providers = [LongProcessor])]
+struct LongModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let memory = Memory::new(&DELAYING, LEASE);
+    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let app = TestApp::builder()
+        .module::<LongModule>()
+        .provide(BoundConsumer::new(Silent {
+            inner: memory.consumer(),
+        }))
+        .provide_dyn(Arc::clone(&producer))
+        .provide(nest_rs_queue::QueueConfig {
+            shutdown_timeout: Duration::from_secs(1),
+        })
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the worker configures");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    nest_rs_queue::JobProducerExt::push(&*producer, LongQueue, WorkerCommand { seq: 0 }, None)
+        .await
+        .expect("a push");
+    let cut = "job lease not renewed for a whole lease; its attempt is cut and the job handed back";
+    let deadline = tokio::time::Instant::now() + LEASE * 4;
+    while logs.find(nest_rs_queue::TARGET, cut).is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the attempt runs on past its {LEASE:?} lease while the renewal waits out the port's \
+             {:?} net",
+            nest_rs_queue::BACKEND_TIMEOUT,
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+}
+
+#[queue(name = "nestrs-worker-hung", job = WorkerCommand)]
+struct HungQueue;
+
+/// How many attempts at a hung job started.
+static HUNG_STARTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct HungProcessor;
+
+#[processor]
+impl HungProcessor {
+    #[process(queue = HungQueue, retries = 1, timeout = "1s")]
+    async fn run(&self, _job: WorkerCommand) -> anyhow::Result<()> {
+        HUNG_STARTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
+#[module(providers = [HungProcessor])]
+struct HungModule;
+
+#[tokio::test(start_paused = true)]
+async fn an_attempt_past_its_timeout_is_cut_retried_and_dead_lettered_naming_it() {
+    let memory = Memory::new(&DELAYING, LEASE);
+    let queue = "nestrs-worker-hung";
+    let (app, stop, serving) = boot_worker_of::<HungModule>(&memory).await;
+    let producer = app
+        .container()
+        .get_dyn::<dyn JobProducer>()
+        .expect("the producer");
+    nest_rs_queue::JobProducerExt::push(&*producer, HungQueue, WorkerCommand { seq: 1 }, None)
+        .await
+        .expect("a push");
+    nest_rs_testing::wait_until(Duration::from_secs(10), || {
+        memory.dead(queue).len() == 1 && memory.held(queue) == 0
+    })
+    .await;
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+    assert_eq!(
+        HUNG_STARTS.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the first attempt was retried"
+    );
+    let reason = &memory.dead(queue)[0].reason;
+    assert!(reason.contains("1s timeout"), "{reason}");
+}
+
+/// A backend whose own budget reaches the port's net never fails before it:
+/// the net would cut every answer it is still bounding, so the boot refuses
+/// it, naming the backend and both durations.
+#[tokio::test]
+async fn a_backend_answering_at_or_past_the_net_fails_the_boot_naming_it() {
+    let memory = Memory::new(&DELAYING, LEASE);
+    for bound in [nest_rs_queue::BACKEND_TIMEOUT, Duration::MAX] {
+        let app = TestApp::builder()
+            .module::<BootModule>()
+            .provide(BoundConsumer::new(Misbehaving {
+                answer_bound: bound,
+                ..Misbehaving::over(&memory)
+            }))
+            .build_headless()
+            .await
+            .expect("the app boots");
+        let refused = QueueWorker::new()
+            .configure(app.container())
+            .await
+            .expect_err("a budget at the net is refused")
+            .to_string();
+        for expected in [
+            "the queue backend `memory`".to_owned(),
+            format!("{bound:?}"),
+            format!("{:?}", nest_rs_queue::BACKEND_TIMEOUT),
+            "lower the backend's budget".to_owned(),
+        ] {
+            assert!(refused.contains(&expected), "{expected:?} in {refused}");
+        }
+    }
+}
+
+/// A receive that unwinds is a call that did not answer: the worker files the
+/// panic once and asks again under its backoff, where the method used to stop
+/// receiving for the life of the process.
+#[tokio::test(start_paused = true)]
+async fn a_receive_that_panics_is_retried_and_said_once() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let memory = Memory::new(&DELAYING, LEASE);
+    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let consumer = Misbehaving::over(&memory);
+    consumer
+        .unwind_receive
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let app = TestApp::builder()
+        .module::<BootModule>()
+        .provide(BoundConsumer::new(consumer))
+        .provide_dyn(Arc::clone(&producer))
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the worker configures");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
+        .await
+        .expect("a push");
+    let queue = "nestrs-worker-boot";
+    nest_rs_testing::wait_until(Duration::from_secs(10), || memory.held(queue) == 0).await;
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "queue backend panicked answering the worker; the call counts as unanswered",
+    );
+    assert_eq!(said.level, "error");
+    assert_eq!(said.field("queue").as_deref(), Some(queue));
+    assert_eq!(said.field("call").as_deref(), Some("JobConsumer::receive"));
+    assert_eq!(
+        said.field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the backend's client unwound"),
+    );
+}
+
+#[queue(name = "nestrs-worker-attempted", job = WorkerCommand)]
+struct AttemptedQueue;
+
+/// Each attempt's identity, as the method was handed it.
+static ATTEMPTS_SEEN: std::sync::Mutex<Vec<(nest_rs_queue::JobId, u32, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[injectable]
+#[derive(Default)]
+struct AttemptedProcessor;
+
+#[processor]
+impl AttemptedProcessor {
+    #[process(queue = AttemptedQueue, retries = 2)]
+    async fn run(
+        &self,
+        _job: WorkerCommand,
+        attempt: nest_rs_queue::Attempt,
+    ) -> anyhow::Result<()> {
+        ATTEMPTS_SEEN.lock().expect("lock").push((
+            attempt.job_id().clone(),
+            attempt.number(),
+            attempt.queue().to_string(),
+        ));
+        anyhow::bail!("failing, so the job is attempted again")
+    }
+}
+
+#[module(providers = [AttemptedProcessor])]
+struct AttemptedModule;
+
+#[tokio::test(start_paused = true)]
+async fn a_method_is_handed_the_id_its_push_returned_and_the_number_of_each_attempt() {
+    let memory = Memory::new(&DELAYING, LEASE);
+    let queue = "nestrs-worker-attempted";
+    let (app, stop, serving) = boot_worker_of::<AttemptedModule>(&memory).await;
+    let producer = app
+        .container()
+        .get_dyn::<dyn JobProducer>()
+        .expect("the producer");
+    let receipt = nest_rs_queue::JobProducerExt::push(
+        &*producer,
+        AttemptedQueue,
+        WorkerCommand { seq: 1 },
+        None,
+    )
+    .await
+    .expect("a push");
+    nest_rs_testing::wait_until(Duration::from_secs(60), || {
+        memory.dead(queue).len() == 1 && memory.held(queue) == 0
+    })
+    .await;
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+    let seen = ATTEMPTS_SEEN.lock().expect("lock").clone();
+    let expected: Vec<_> = (1..=3)
+        .map(|number| (receipt.id().clone(), number, queue.to_owned()))
+        .collect();
+    assert_eq!(seen, expected, "one id across attempts, counted from 1");
+}

@@ -1,34 +1,223 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 use poem::http::HeaderName;
 
-use crate::cors::CorsConfig;
+use crate::cors::HttpCors;
 use crate::raw_body::RawBody;
-use crate::security_headers::SecurityHeadersConfig;
-use crate::tls::TlsConfig;
+use crate::security_headers::HttpSecurityHeaders;
+use crate::tls::HttpTls;
 use crate::versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, VersionSelector};
 
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 3000;
-/// Default `#[sse]` stream ceiling: 4 hours — the same value
-/// `NESTRS_WS__MAX_CONNECTION_SECS` and `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`
-/// default to, because it bounds the same stale-privilege window.
+/// Default `#[sse]` stream ceiling: 4 hours, the WS and GraphQL connection
+/// ceilings' default too.
 const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
-/// Default keep-alive comment interval on a `#[sse]` stream: 15 seconds, under
-/// the 30–60 s idle timeout common to proxies and browsers.
+/// 15 seconds: under the 30–60 s idle timeout common to proxies and browsers.
 const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
-/// Default wall-clock budget for one request.
-const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+/// 20 seconds, plus 5 for the shutdown hooks, 3 for the telemetry flush and 1
+/// for the console's (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`): 29, under
+/// Kubernetes' default 30.
+pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
+/// The shutdown window's own default, so a request admitted just before a stop
+/// is answered inside the window.
+const DEFAULT_REQUEST_TIMEOUT: Duration = DEFAULT_SHUTDOWN_TIMEOUT;
 
-/// HTTP transport options resolved at boot. Every field is settable both via
-/// `NESTRS_HTTP__*` env vars (read by [`Config::from_env`]) and via the pinned
-/// struct (passed to [`HttpModule::for_root`](crate::HttpModule::for_root)) —
-/// and the two compose **per field**: a pinned struct is the base the
-/// environment overlays, so pinning `port` leaves `NESTRS_HTTP__TLS_CERT_FILE`
-/// and every other `NESTRS_HTTP__*` key live. See [`Config`] for the full
-/// precedence chain.
+const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "SHUTDOWN_TIMEOUT_SECS",
+    "HttpConfig::shutdown_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter window cuts every request in flight at the signal, and `0` is not the \
+              off switch it is for `REQUEST_TIMEOUT_SECS`: a shutdown that waits without a bound \
+              is what this window exists to prevent",
+    }),
+    Bound {
+        count: 3600,
+        why: "a window past an hour is a unit slip more often than a choice (`25000` meant as \
+              milliseconds is seven hours), and it outlasts the grace period an orchestrator \
+              gives a replica, whose kill then cuts what the window held without a word",
+    },
+);
+
+/// The floor every long-lived connection's lifetime ceiling is held to — an
+/// `#[sse]` stream here, a WebSocket and a GraphQL subscription in their own
+/// crates — and its off switch: `0` from the environment, `None` in code.
+pub const MAX_CONNECTION_FLOOR: Floor = Floor::UnitsOrOff(Bound {
+    count: 1,
+    why: "a ceiling under a second ends every connection as it opens, so its client reconnects \
+          in a loop",
+});
+
+/// The ceiling on [`MAX_CONNECTION_FLOOR`]'s settings — a day.
+pub const MAX_CONNECTION_CEILING: Bound = Bound {
+    count: 24 * 60 * 60,
+    why: "a connection keeps the privileges it authenticated with until it ends, so past a day \
+          it outlives the token that admitted it — an hour by default — many times over; a \
+          deployment that means no ceiling turns it off",
+};
+
+/// The floor of a server-sent stream's keep-alive interval — HTTP's `#[sse]`
+/// here, MCP's stream in its own crate — and its off switch.
+pub const SSE_KEEP_ALIVE_FLOOR: Floor = Floor::UnitsOrOff(Bound {
+    count: 1,
+    why: "a comment under a second apart is traffic, not a keep-alive",
+});
+
+/// The ceiling on [`SSE_KEEP_ALIVE_FLOOR`]'s settings — an hour.
+pub const SSE_KEEP_ALIVE_CEILING: Bound = Bound {
+    count: 60 * 60,
+    why: "a keep-alive exists to beat an intermediary's idle timeout, and those are minutes — \
+          nginx's and a cloud load balancer's sixty seconds by default — so one sent less often \
+          than hourly keeps nothing alive",
+};
+
+/// The floor of an edge's per-unit timeout — HTTP's request here, a WebSocket
+/// message's and an MCP operation's in their own crates — and its off switch.
+pub const UNIT_TIMEOUT_FLOOR: Floor = Floor::UnitsOrOff(Bound {
+    count: 1,
+    why: "a timeout under a second cuts every unit before its handler has run",
+});
+
+/// The ceiling on [`UNIT_TIMEOUT_FLOOR`]'s settings — an hour.
+pub const UNIT_TIMEOUT_CEILING: Bound = Bound {
+    count: 60 * 60,
+    why: "a unit still running after an hour has outlived every client and proxy timeout in \
+          front of it, and a timeout that long is a typo more often than a choice (`30000` meant \
+          as milliseconds is eight hours); a handler that runs longer turns it off",
+};
+
+const REQUEST_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "REQUEST_TIMEOUT_SECS",
+    "HttpConfig::request_timeout",
+    UNIT_TIMEOUT_FLOOR,
+    UNIT_TIMEOUT_CEILING,
+);
+
+/// hyper's own head default, and Kestrel's `RequestHeadersTimeout`.
+pub(crate) const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Under the default request timeout: that budget starts at the request's
+/// arrival, before any wait on its body, so a gap as long could never fire
+/// first, and a body that stops arriving would be answered the budget's `503`
+/// rather than `408`. Counted between two reads, as nginx's
+/// `client_body_timeout` is.
+pub(crate) const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// nginx's `keepalive_timeout`, above the 60 s idle of AWS's load balancer and
+/// of nginx's upstream connections, so the balancer closes first.
+pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(75);
+
+/// nginx's `send_timeout`, counted between two writes.
+pub(crate) const DEFAULT_SEND_TIMEOUT: Duration = Duration::from_secs(60);
+
+const HEADER_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "HEADER_READ_TIMEOUT_SECS",
+    "HttpConfig::header_read_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter deadline cuts a client on a slow network before its request is out, and \
+              `0` is no off switch: a head without a deadline is how a client that sends nothing \
+              holds a connection",
+    }),
+    Bound {
+        count: 300,
+        why: "a head is a few hundred bytes, so a client taking five minutes over one is holding \
+              the connection rather than sending it, and a deadline that long no longer bounds \
+              what a slow head holds",
+    },
+);
+
+const BODY_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "BODY_READ_TIMEOUT_SECS",
+    "HttpConfig::body_read_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter bound fails an upload on a slow network between two of its packets, and \
+              `0` is no off switch: a body that stops arriving would hold its request, its task \
+              and its place under the connection cap for as long as the client likes",
+    }),
+    Bound {
+        count: 3600,
+        why: "a body that has sent nothing for an hour has stopped, and a bound that long is a \
+              unit slip more often than a choice (`30000` meant as milliseconds is eight hours)",
+    },
+);
+
+const IDLE_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "IDLE_TIMEOUT_SECS",
+    "HttpConfig::idle_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter deadline closes a kept-alive connection between two requests of one \
+              client, which then pays a new handshake for each, and `0` is no off switch: an idle \
+              connection holds its place under the connection cap",
+    }),
+    Bound {
+        count: 3600,
+        why: "a connection idle for an hour is one its client forgot, holding a place under the \
+              connection cap, and a deadline that long is a unit slip more often than a choice \
+              (`75000` meant as milliseconds is twenty hours)",
+    },
+);
+
+const SEND_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "SEND_TIMEOUT_SECS",
+    "HttpConfig::send_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter deadline cuts a reader on a slow network mid-body, and `0` is no off \
+              switch: a peer that stops reading would hold the write, its buffers and its place \
+              under the connection cap forever",
+    }),
+    Bound {
+        count: 3600,
+        why: "a peer that has taken no byte for an hour has stopped reading, and a deadline that \
+              long is a unit slip more often than a choice (`60000` meant as milliseconds is \
+              seventeen hours)",
+    },
+);
+
+pub(crate) const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 10_000;
+
+/// The key of [`HttpConfig::max_concurrent_connections`].
+const MAX_CONCURRENT_CONNECTIONS: &str = "MAX_CONCURRENT_CONNECTIONS";
+
+/// The key of [`HttpConfig::version_header`].
+const VERSION_HEADER: &str = "VERSION_HEADER";
+
+const CONNECTIONS_FLOOR: Bound = Bound {
+    count: 1,
+    why: "a cap of none binds the port and never accepts a connection",
+};
+
+const CONNECTIONS_CEILING: Bound = Bound {
+    count: 1 << 20,
+    why: "a process holds no more open files than Linux's `fs.nr_open` allows, 1048576 by \
+          default, so the kernel refuses a socket past it before the cap is reached",
+};
+
+const SSE_MAX_CONNECTION: DurationBounds = DurationBounds::secs(
+    "SSE_MAX_CONNECTION_SECS",
+    "HttpConfig::sse_max_connection",
+    MAX_CONNECTION_FLOOR,
+    MAX_CONNECTION_CEILING,
+);
+
+const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
+    "SSE_KEEP_ALIVE_SECS",
+    "HttpConfig::sse_keep_alive",
+    SSE_KEEP_ALIVE_FLOOR,
+    SSE_KEEP_ALIVE_CEILING,
+);
+
+/// HTTP transport options resolved at boot.
+///
+/// `<PREFIX>_HTTP__*` overlays the struct pinned in
+/// [`HttpModule::for_root`](crate::HttpModule::for_root) per field; see
+/// [`Config`] for the precedence chain.
 #[config(namespace = "http")]
 #[derive(Clone, Debug)]
 pub struct HttpConfig {
@@ -37,130 +226,164 @@ pub struct HttpConfig {
     /// Listen port; defaults to `3000`.
     pub port: u16,
     /// PEM cert + key for HTTPS. `None` ⇒ plain HTTP. Picked up from
-    /// `NESTRS_HTTP__TLS_CERT[_FILE]` + `NESTRS_HTTP__TLS_KEY[_FILE]`.
-    pub tls: Option<TlsConfig>,
+    /// `<PREFIX>_HTTP__TLS_CERT[_FILE]` + `<PREFIX>_HTTP__TLS_KEY[_FILE]`.
+    pub tls: Option<HttpTls>,
     /// CORS policy. `None` ⇒ no CORS layer. Populated when
-    /// `NESTRS_HTTP__CORS_ORIGINS` is set (see [`CorsConfig`]).
-    pub cors: Option<CorsConfig>,
-    /// How a caller selects an API version. `uri` (the default) reads it from
-    /// the path a `#[controller(version = …)]` mounts at; `header` and
-    /// `media_type` resolve it per request instead. Read from
-    /// `NESTRS_HTTP__VERSIONING`.
+    /// `<PREFIX>_HTTP__CORS_ORIGINS` is set (see [`HttpCors`]). Its origins are
+    /// also the browser origins a WebSocket gateway, the graphql-ws upgrade and
+    /// `/mcp` admit; with `None`, those admit the request's own origin alone.
+    pub cors: Option<HttpCors>,
+    /// How a caller selects an API version: `uri` (the default), `header` or
+    /// `media_type`. Read from `<PREFIX>_HTTP__VERSIONING`.
     pub versioning: ApiVersioning,
     /// The header [`ApiVersioning::Header`] reads. Defaults to
-    /// `X-API-Version`; read from `NESTRS_HTTP__VERSION_HEADER`. Ignored by the
-    /// other two strategies.
+    /// `X-API-Version`; read from `<PREFIX>_HTTP__VERSION_HEADER`. Ignored by the
+    /// other two strategies, but a value that is no HTTP header name fails the
+    /// boot under any, from the environment and from the pinned struct alike.
     pub version_header: String,
     /// The version served to a caller that states none. `None` (the default)
     /// leaves such a request on the unversioned routes. Read from
-    /// `NESTRS_HTTP__DEFAULT_VERSION`.
+    /// `<PREFIX>_HTTP__DEFAULT_VERSION`.
     pub default_version: Option<String>,
-    /// `true` ⇒ emit `Server: nestrs/<version>` on every response.
-    /// Defaults to `false` (production-safe — no framework fingerprint).
-    /// Flip to `true` in `.env.development` to expose the version locally.
+    /// `true` ⇒ emit `Server: nestrs/<version>` on every response that sets
+    /// none. Defaults to `false`: no framework fingerprint.
     pub server_header: bool,
     /// Mount every controller under a shared path prefix (e.g. `/api`). `None`
-    /// ⇒ no prefix. Read from `NESTRS_HTTP__GLOBAL_PREFIX`; normalization
-    /// (trim, drop empty/`"/"`, ensure leading `/`, strip trailing `/`) lives
-    /// in [`HttpTransport::global_prefix`](crate::HttpTransport::global_prefix).
+    /// ⇒ no prefix. Read from `<PREFIX>_HTTP__GLOBAL_PREFIX`; a missing leading
+    /// `/` is added and a trailing one stripped, and empty or `"/"` is no
+    /// prefix. One literal path: a template's `{` `}`, or a `:`, `*` or `<` the
+    /// router reads as a parameter, fails the boot.
     pub global_prefix: Option<String>,
-    /// Transport-wide cap on the request body size. Enforced at the transport
-    /// edge for **every** extractor — a bare `Json`/`String`/`Vec<u8>`/
-    /// `Multipart`, not only [`RawBody`](crate::RawBody) — via a fast `413` on
-    /// an oversized `Content-Length` plus a streaming cap for chunked bodies. A
-    /// per-route [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit)
-    /// can pin a *tighter* cap under this ceiling. `None` ⇒ the default (2 MiB).
-    /// Read from `NESTRS_HTTP__MAX_BODY_BYTES`.
-    ///
-    /// `0` **fails the boot**, like its two nearest siblings
-    /// (`NESTRS_MCP__MAX_REQUEST_BODY_BYTES`, `NESTRS_WS__MAX_MESSAGE_BYTES`):
-    /// a zero-byte cap rejects every request that carries a body, which is a
-    /// deployment nobody types on purpose and which reads as an outage rather
-    /// than as a misconfiguration. Turning the cap *off* is not spelled here at
-    /// all — the transport falls back to the 2 MiB default for `None`, so the
-    /// ceiling always exists.
+    /// Transport-wide cap on the request body size, for every reader — an
+    /// extractor, a guard, a global pipe — counted as the body is read, after
+    /// routing and the guards: the edge reads nothing, and refuses only a
+    /// declared `Content-Length` past it. A per-route
+    /// [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit) can
+    /// pin a tighter one. `None` ⇒ the default (2 MiB); there is no off. Read
+    /// from `<PREFIX>_HTTP__MAX_BODY_BYTES`; `0` fails the boot.
     #[validate(range(min = 1, message = "must be at least 1 byte"))]
     pub max_body_bytes: Option<usize>,
-    /// Wall-clock budget for a single request. A handler exceeding it is
-    /// aborted and the client gets `503 Service Unavailable` with a
-    /// `Retry-After`, bounding how long a slow/stuck request ties up a
-    /// connection. `None` ⇒ no timeout. Read from
-    /// `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (whole seconds; `0` ⇒ no timeout);
-    /// defaults to 30 seconds.
-    ///
-    /// **The `0` spelling is the framework's shared one**, not this field's:
-    /// [`ConfigService::seconds`] is where every duration ceiling reads its off
-    /// state, and the reason it is shared is that four crates each reading `0`
-    /// their own way is four chances for one of them to read it as *zero
-    /// seconds* — which here would time every request out before its handler
-    /// ran. Reading it through `parse` did exactly that, and left `None` (no
-    /// timeout at all) reachable from the pinned struct and from no value of
-    /// the variable, which is the dual-path rule broken in the one direction a
-    /// deployment cannot work around.
+    /// Wall-clock budget for a single request, counted from its arrival, so the
+    /// reading of its body counts against it; a request still running past it
+    /// is aborted with `503 Service Unavailable` and a `Retry-After`. `None` ⇒
+    /// no timeout. Read from `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, whole
+    /// seconds from 1 to 3600 or `0` for no timeout — refused outside, from the
+    /// environment and from the pinned struct alike; defaults to 20 seconds,
+    /// the [`shutdown_timeout`](Self::shutdown_timeout) default, so a request
+    /// admitted just before a stop is answered inside the window. A budget past
+    /// the window, or none, is said once at boot with a `warn`. Off in code is
+    /// `None`; a pinned zero is refused.
     pub request_timeout: Option<Duration>,
-    /// `true` (the default) fails boot when global guards are registered and
-    /// an endpoint the transport cannot shape (an imperative `mount(...)`)
-    /// would bypass the guard pool; `false` downgrades to a `warn`. Read from
-    /// `NESTRS_HTTP__FAIL_SECURE_STRICT`.
-    pub fail_secure_strict: bool,
     /// Default security response headers (`nosniff`, `X-Frame-Options`,
-    /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS). On by
-    /// default; tune via `NESTRS_HTTP__SECURITY_HEADERS` (the master switch)
-    /// and one key per header — see [`SecurityHeadersConfig`], which also
-    /// carries the argument for the three members that ship off.
-    pub security_headers: SecurityHeadersConfig,
+    /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS), each on a
+    /// response that sets none. On by default; tune via
+    /// `<PREFIX>_HTTP__SECURITY_HEADERS` (the master switch) and one key per
+    /// header — see [`HttpSecurityHeaders`].
+    pub security_headers: HttpSecurityHeaders,
     /// Negotiate response compression (gzip / deflate / brotli / zstd) from the
-    /// request's `Accept-Encoding`. Off by default — leave it to the reverse
-    /// proxy in most deployments; flip on with `NESTRS_HTTP__COMPRESSION=true`
-    /// when the app terminates responses directly.
+    /// request's `Accept-Encoding`. Off by default; read from
+    /// `<PREFIX>_HTTP__COMPRESSION`.
     pub compression: bool,
     /// Emit one access event per request on `nest_rs::operation` — method, path,
     /// status, byte-exact size, duration, client, `trace_id` and `span_id`, plus
     /// `actor_id` once an authn guard resolved a principal. **On by default**,
-    /// and read from `NESTRS_HTTP__ACCESS_LOG`.
-    ///
-    /// It belongs to the transport rather than to `nest-rs-opentelemetry`
-    /// because everything it reports is what *this* transport knows about a
-    /// request it served: no collector, no exporter and no propagator is
-    /// involved, so none may be required. Turning it off does **not** turn off
-    /// the correlation id — that is minted and echoed on every request either
-    /// way, because it is what everything else is filed under.
+    /// and read from `<PREFIX>_HTTP__ACCESS_LOG`. Turning it off leaves the
+    /// correlation id minted and echoed.
     pub access_log: bool,
     /// Reverse proxies whose `Forwarded` / `X-Forwarded-For` / `X-Real-IP` this
-    /// deployment believes. Empty by default — with no entry the framework
-    /// reads none of the three and every caller is identified by its transport
-    /// peer, which is the only value a client cannot forge.
+    /// deployment believes. Empty by default: every caller is identified by its
+    /// transport peer.
     ///
-    /// Name the balancer here (`NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2`)
-    /// and both [`ClientIp`](crate::ClientIp) and the throttler's rate-limit
-    /// bucket start resolving the real client behind it — one list, so the two
-    /// can never disagree about who a request came from. An unparseable entry
-    /// **aborts the boot** naming the variable. See
+    /// Read from `<PREFIX>_HTTP__TRUSTED_PROXIES` (`10.0.0.1,10.0.0.2`) by
+    /// [`ClientIp`](crate::ClientIp), the throttler's rate-limit bucket and the
+    /// browser-origin check of the WebSocket gateways, the graphql-ws upgrade
+    /// and `/mcp`, where a trusted proxy's `Forwarded` (`proto=`, `host=`) or
+    /// `X-Forwarded-Proto` / `X-Forwarded-Host` set the request's own origin;
+    /// an unparseable entry aborts the boot. See
     /// [`ClientOrigin`](crate::ClientOrigin) for the resolution rule.
     pub trusted_proxies: Vec<IpAddr>,
-    /// Maximum lifetime of a single `#[sse]` stream. When it elapses the server
-    /// stops emitting and ends the stream, so the client's `EventSource`
-    /// reconnects — re-running the guard chain, and with it authn/authz and the
-    /// token's `exp`. It bounds **emission**: no event is produced past the
-    /// ceiling at any rate a peer reads at. A peer that stops reading parks the
-    /// write and keeps its *socket* past the ceiling — a reported gap, not a
-    /// closed one; see [`SseSettings`](crate::SseSettings) for why it cannot be
-    /// closed from this crate, and bound idle sockets at the server or proxy.
+    /// Maximum lifetime of a single `#[sse]` stream: when it elapses the stream
+    /// ends, so the client's `EventSource` reconnects through the guard chain.
+    /// A peer that stops reading is cut sooner, at
+    /// [`send_timeout`](Self::send_timeout).
     ///
-    /// **A security control, not a resource knob**, and the third instance of
-    /// the same one: a stream authenticates once, at the request, then emits
-    /// with those privileges for as long as it lives. Same reading, same
-    /// 4-hour default and same `0` ⇒ unlimited spelling as
-    /// `NESTRS_WS__MAX_CONNECTION_SECS` and
-    /// `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`. Read from
-    /// `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS`; the `http` namespace because SSE
-    /// is a response shape of this transport rather than a module of its own.
+    /// A security control: 4 hours by default, one second to a day
+    /// ([`MAX_CONNECTION_CEILING`]), `0` ⇒ unlimited. Read from
+    /// `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`.
     pub sse_max_connection: Option<Duration>,
     /// How often a `#[sse]` stream emits a keep-alive comment, so an idle
     /// stream is not dropped by an intermediary that sees no bytes. `None` ⇒
-    /// none sent. Read from `NESTRS_HTTP__SSE_KEEP_ALIVE_SECS` (whole seconds;
-    /// `0` ⇒ none); defaults to 15 seconds.
+    /// none sent. Read from `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS`, whole seconds
+    /// from 1 to 3600 or `0` for none; defaults to 15 seconds.
     pub sse_keep_alive: Option<Duration>,
+    /// How long the transport lets open connections finish after a shutdown
+    /// signal; what is still open then is closed, and one `warn` on
+    /// `nest_rs::http` counts it. An `#[sse]` or MCP `GET` stream ends at the
+    /// signal; a WebSocket or graphql-ws socket closes `1001 Going Away` after
+    /// what it is answering. A socket a hand-built self-mount upgraded is
+    /// never waited for: it ends with its handler or the process, counted as
+    /// `upgraded_open`.
+    ///
+    /// Read from `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
+    /// 3600 — refused outside, from the environment and from the pinned struct
+    /// alike; defaults to 20 seconds. Keep the pod's grace period above it plus
+    /// 9.5 seconds (`serve`'s unwind, the shutdown hooks, the telemetry flush and
+    /// the console's).
+    pub shutdown_timeout: Duration,
+    /// How many connections the transport holds open at once, an upgraded
+    /// socket counted until it closes. Past it a new connection waits in the
+    /// kernel's listen backlog — it sees latency, then the kernel's own refusal
+    /// once the backlog is full, never a reset of a connection it holds — and
+    /// one `warn` on `nest_rs::http` names the variable.
+    ///
+    /// Read from `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, from 1 to
+    /// 1 048 576 — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 10 000.
+    pub max_concurrent_connections: usize,
+    /// How long a connection has to deliver its first request head, counted
+    /// from accept with the TLS handshake and HTTP/2's preface inside it, and on
+    /// HTTP/1 how long a later head has from its first byte. Past it the
+    /// connection is closed, so a client sending nothing, or a head a byte at a
+    /// time, frees its place under the connection cap.
+    ///
+    /// Read from `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS`, whole seconds from 1
+    /// to 300 — refused outside, from the environment and from the pinned struct
+    /// alike; defaults to 30 seconds.
+    pub header_read_timeout: Duration,
+    /// How long a kept-alive connection waits for its next request once its last
+    /// answer has ended: then an HTTP/1 connection is closed and an HTTP/2 one
+    /// is sent `GOAWAY`. A load balancer keeping its connections to this server
+    /// open longer reuses one as it closes and answers that request `502`: set
+    /// it above the balancer's own idle timeout.
+    ///
+    /// Read from `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS`, whole seconds from 1 to 3600
+    /// — refused outside, from the environment and from the pinned struct alike;
+    /// defaults to 75 seconds.
+    pub idle_timeout: Duration,
+    /// How long a write waits on a peer that takes nothing: past it the
+    /// connection is dropped — a response body, an event stream or a WebSocket
+    /// alike. Counted between two writes, so a slow reader that keeps taking
+    /// bytes is never cut.
+    ///
+    /// Read from `<PREFIX>_HTTP__SEND_TIMEOUT_SECS`, whole seconds from 1 to 3600
+    /// — refused outside, from the environment and from the pinned struct alike;
+    /// defaults to 60 seconds.
+    pub send_timeout: Duration,
+    /// How long a request body may go without a byte once something reads it.
+    /// Past it the read fails and the request is answered `408 Request
+    /// Timeout` — on HTTP/1 with `Connection: close`, since the unread rest
+    /// leaves the connection unusable; on HTTP/2 its stream alone ends.
+    /// Counted between two frames, so an upload that keeps sending is never
+    /// cut by it; the whole request is
+    /// [`request_timeout`](Self::request_timeout)'s, the one bound on a body
+    /// when that is off. Kept under it, since that budget counts from the
+    /// request's arrival: at or past it, a body that stops arriving is answered
+    /// the budget's `503` first, which is said once at boot with a `warn`.
+    ///
+    /// Read from `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS`, whole seconds from 1
+    /// to 3600 — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 10 seconds.
+    pub body_read_timeout: Duration,
 }
 
 impl Default for HttpConfig {
@@ -176,54 +399,130 @@ impl Default for HttpConfig {
             server_header: false,
             global_prefix: None,
             max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
-            request_timeout: Some(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)),
-            fail_secure_strict: true,
-            security_headers: SecurityHeadersConfig::default(),
+            request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
+            security_headers: HttpSecurityHeaders::default(),
             compression: false,
-            // On by default. A deployment that serves requests and records none
-            // of them is the surprising configuration, not the reverse.
             access_log: true,
             trusted_proxies: Vec::new(),
             sse_max_connection: Some(Duration::from_secs(DEFAULT_SSE_MAX_CONNECTION_SECS)),
             sse_keep_alive: Some(Duration::from_secs(DEFAULT_SSE_KEEP_ALIVE_SECS)),
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            max_concurrent_connections: DEFAULT_MAX_CONCURRENT_CONNECTIONS,
+            header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            send_timeout: DEFAULT_SEND_TIMEOUT,
+            body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
         }
     }
 }
 
 impl HttpConfig {
-    /// The version selector this configuration describes, or `None` when the
-    /// URI strategy is in force — routing already resolves that one, so there
-    /// is nothing for the transport to wrap.
-    ///
-    /// The header name is validated at boot ([`Config::from_env`]), so this
-    /// cannot fail here.
-    pub(crate) fn version_selector(&self) -> Option<VersionSelector> {
-        let header = HeaderName::from_bytes(self.version_header.as_bytes()).ok()?;
+    /// The version selector this configuration describes, or `None` under the
+    /// URI strategy, which routing resolves;
+    /// [`version_header`](Self::version_header) is refused as its variable is,
+    /// whatever the strategy, for a config that never met the environment.
+    pub(crate) fn version_selector(&self) -> Result<Option<VersionSelector>> {
+        let header = header_name(
+            nest_rs_config::var_name(
+                <Self as nest_rs_config::Namespaced>::NAMESPACE,
+                VERSION_HEADER,
+            ),
+            &self.version_header,
+            "",
+        )?;
         let selector = VersionSelector::new(self.versioning, header, self.default_version.clone());
-        selector.rewrites().then_some(selector)
+        Ok(selector.rewrites().then_some(selector))
     }
 
-    /// Pin the global prefix in code. Empty / `"/"` collapse to `None` via the
-    /// transport's normalization, so callers can pass user-provided strings
-    /// without sanitizing first.
-    pub fn with_global_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.global_prefix = Some(prefix.into());
-        self
+    /// [`max_concurrent_connections`](Self::max_concurrent_connections), held to
+    /// the range the variable is, for a config that never met the environment.
+    pub(crate) fn connection_cap(&self) -> Result<usize> {
+        check_connection_cap(
+            Self::connection_cap_variable(),
+            self.max_concurrent_connections,
+            "",
+        )
     }
 
-    /// Pin the [`RawBody`](crate::RawBody) byte cap in code. Applies to every
-    /// extractor invocation that does not pick its own limit via
-    /// [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit).
-    pub fn with_max_body_bytes(mut self, n: usize) -> Self {
-        self.max_body_bytes = Some(n);
-        self
+    /// [`request_timeout`](Self::request_timeout), held to the range its
+    /// variable is, for a config that never met the environment.
+    pub(crate) fn request_budget(&self) -> Result<Option<Duration>> {
+        self.request_timeout
+            .map(|budget| in_range(REQUEST_TIMEOUT, budget))
+            .transpose()
+    }
+
+    /// [`shutdown_timeout`](Self::shutdown_timeout), held to the range its
+    /// variable is, for a config that never met the environment.
+    pub(crate) fn shutdown_window(&self) -> Result<Duration> {
+        in_range(SHUTDOWN_TIMEOUT, self.shutdown_timeout)
+    }
+
+    /// The four connection deadlines, each held to the range its variable is,
+    /// for a config that never met the environment.
+    pub(crate) fn deadlines(&self) -> Result<crate::server::Deadlines> {
+        Ok(crate::server::Deadlines {
+            header_read: in_range(HEADER_READ_TIMEOUT, self.header_read_timeout)?,
+            body_read: in_range(BODY_READ_TIMEOUT, self.body_read_timeout)?,
+            idle: in_range(IDLE_TIMEOUT, self.idle_timeout)?,
+            send: in_range(SEND_TIMEOUT, self.send_timeout)?,
+        })
+    }
+
+    /// One boot `warn` when [`request_timeout`](Self::request_timeout) is off
+    /// or outlasts [`shutdown_timeout`](Self::shutdown_timeout): a request
+    /// admitted just before a stop can then be cut unanswered. Not a refusal —
+    /// a deployment may accept it knowingly.
+    pub(crate) fn warn_when_requests_outlast_the_window(&self) {
+        if self
+            .request_timeout
+            .is_some_and(|budget| budget <= self.shutdown_timeout)
+        {
+            return;
+        }
+        tracing::warn!(
+            target: crate::target::HTTP,
+            request_timeout_secs = self.request_timeout.map_or(0, |budget| budget.as_secs()),
+            shutdown_timeout_secs = self.shutdown_timeout.as_secs(),
+            "the request timeout outlasts the shutdown window: a request admitted just before a \
+             stop can be cut unanswered",
+        );
+    }
+
+    /// One boot `warn` when [`body_read_timeout`](Self::body_read_timeout)
+    /// reaches [`request_timeout`](Self::request_timeout): the budget counts
+    /// from the request's arrival, so the gap can never fire first and a body
+    /// that stops arriving is answered the budget's `503`, never `408`. Not a
+    /// refusal — the request is still bounded.
+    pub(crate) fn warn_when_the_body_gap_reaches_the_budget(&self) {
+        let Some(budget) = self.request_timeout else {
+            return;
+        };
+        if self.body_read_timeout < budget {
+            return;
+        }
+        tracing::warn!(
+            target: crate::target::HTTP,
+            body_read_timeout_secs = self.body_read_timeout.as_secs(),
+            request_timeout_secs = budget.as_secs(),
+            "the body-read timeout reaches the request timeout: a body that stops arriving is \
+             answered the request timeout's 503, never 408",
+        );
+    }
+
+    /// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, as this process spells it.
+    pub(crate) fn connection_cap_variable() -> String {
+        nest_rs_config::var_name(
+            <Self as nest_rs_config::Namespaced>::NAMESPACE,
+            MAX_CONCURRENT_CONNECTIONS,
+        )
     }
 }
 
 impl Config for HttpConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let global_prefix = env
-            .get("GLOBAL_PREFIX")
+            .get("GLOBAL_PREFIX")?
             .map(|raw| {
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
@@ -234,84 +533,266 @@ impl Config for HttpConfig {
             })
             .unwrap_or(base.global_prefix);
         Ok(Self {
-            host: env.get("HOST").unwrap_or(base.host),
+            host: env.get("HOST")?.unwrap_or(base.host),
             port: env.parse("PORT")?.unwrap_or(base.port),
-            // The reader owns the name: a literal here would cite a variable
-            // the operator does not have once the app declares its own prefix.
-            tls: TlsConfig::from_env(env, base.tls).map_err(|e| {
-                nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), e.to_string())
+            tls: HttpTls::from_env(env, base.tls).map_err(|e| {
+                // Kept whole: it names its variable and carries the I/O source.
+                match e.downcast::<nest_rs_config::ConfigError>() {
+                    Ok(worded) => worded,
+                    Err(e) => {
+                        nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), format!("{e:#}"))
+                    }
+                }
             })?,
-            cors: CorsConfig::from_env(env, base.cors).map_err(|e| {
-                nest_rs_config::ConfigError::parse(env.var_name("CORS_*"), e.to_string())
-            })?,
-            versioning: match env.get("VERSIONING") {
-                Some(raw) => raw.parse().map_err(|msg: String| {
-                    nest_rs_config::ConfigError::parse(env.var_name("VERSIONING"), msg)
-                })?,
-                None => base.versioning,
-            },
+            cors: HttpCors::from_env(env, base.cors)?,
+            versioning: env.parse("VERSIONING")?.unwrap_or(base.versioning),
             version_header: version_header(env, base.version_header)?,
-            default_version: env.get("DEFAULT_VERSION").or(base.default_version),
+            default_version: env.get("DEFAULT_VERSION")?.or(base.default_version),
             server_header: env.flag("SERVER_HEADER", base.server_header)?,
             global_prefix,
             max_body_bytes: env.parse("MAX_BODY_BYTES")?.or(base.max_body_bytes),
-            request_timeout: env.seconds("REQUEST_TIMEOUT_SECS", base.request_timeout)?,
-            fail_secure_strict: env.flag("FAIL_SECURE_STRICT", base.fail_secure_strict)?,
-            security_headers: SecurityHeadersConfig::from_env(env, base.security_headers)?,
+            request_timeout: optional(REQUEST_TIMEOUT.read_optional(env, base.request_timeout)?),
+            security_headers: HttpSecurityHeaders::from_env(env, base.security_headers)?,
             compression: env.flag("COMPRESSION", base.compression)?,
             access_log: env.flag("ACCESS_LOG", base.access_log)?,
             trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
-            sse_max_connection: env.seconds("SSE_MAX_CONNECTION_SECS", base.sse_max_connection)?,
-            sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,
+            sse_max_connection: optional(
+                SSE_MAX_CONNECTION.read_optional(env, base.sse_max_connection)?,
+            ),
+            sse_keep_alive: optional(SSE_KEEP_ALIVE.read_optional(env, base.sse_keep_alive)?),
+            shutdown_timeout: SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?.value,
+            max_concurrent_connections: max_concurrent_connections(
+                env,
+                base.max_concurrent_connections,
+            )?,
+            header_read_timeout: HEADER_READ_TIMEOUT
+                .read(env, base.header_read_timeout)?
+                .value,
+            idle_timeout: IDLE_TIMEOUT.read(env, base.idle_timeout)?.value,
+            send_timeout: SEND_TIMEOUT.read(env, base.send_timeout)?.value,
+            body_read_timeout: BODY_READ_TIMEOUT.read(env, base.body_read_timeout)?.value,
         })
     }
 }
 
-/// The header the [`ApiVersioning::Header`] strategy reads, validated here so
-/// an unusable name aborts the boot naming the variable rather than silently
-/// disabling version selection at the first request.
-fn version_header(env: &ConfigService, base: String) -> Result<String> {
-    let raw = env.get("VERSION_HEADER").unwrap_or(base);
-    match HeaderName::from_bytes(raw.as_bytes()) {
-        Ok(_) => Ok(raw),
-        Err(_) => Err(nest_rs_config::ConfigError::parse(
-            env.var_name("VERSION_HEADER"),
-            format!("{raw:?} is not a valid HTTP header name"),
+/// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` over `base`, refused outside its
+/// range from either side, never clamped.
+fn max_concurrent_connections(env: &ConfigService, base: usize) -> Result<usize> {
+    let Some(setting) = env.setting(MAX_CONCURRENT_CONNECTIONS)? else {
+        return check_connection_cap(
+            env.var_name(MAX_CONCURRENT_CONNECTIONS),
+            base,
+            "is not set, and ",
+        );
+    };
+    let count: usize = setting.parse()?;
+    match outside_connection_range(count) {
+        None => Ok(count),
+        Some((_, must, bound)) => Err(setting.refuse(format_args!(
+            "must be {must} {} — {}",
+            bound.count, bound.why
+        ))),
+    }
+}
+
+/// `count`, set in code, refused under `var` when it is outside the range;
+/// `lead` opens the sentence with what is known of the variable.
+fn check_connection_cap(var: String, count: usize, lead: &str) -> Result<usize> {
+    match outside_connection_range(count) {
+        None => Ok(count),
+        Some((side, must, bound)) => Err(nest_rs_config::ConfigError::parse(
+            var,
+            format!(
+                "{lead}`HttpConfig::max_concurrent_connections` set in code is {count}, {side} \
+                 the {} it must be {must} — {}",
+                bound.count, bound.why,
+            ),
         )),
     }
 }
 
-/// Parse `NESTRS_HTTP__TRUSTED_PROXIES` into addresses. A typo here silently
-/// disables the trust it was meant to grant — the proxy would never match the
-/// peer and every caller behind it would collapse onto the balancer's address —
-/// so a bad entry fails the boot naming the variable and the offending value,
-/// never a silent skip.
-fn parse_trusted_proxies(env: &ConfigService, base: Vec<IpAddr>) -> Result<Vec<IpAddr>> {
-    const KEY: &str = "TRUSTED_PROXIES";
-    // `ConfigService` has no typed-list reader, so the raw list is parsed here.
-    // The pinned base short-circuits rather than round-tripping through strings.
-    let Some(raw) = env.get(KEY) else {
+/// Which end of the range `count` falls past, if either.
+fn outside_connection_range(count: usize) -> Option<(&'static str, &'static str, Bound)> {
+    let count = u64::try_from(count).unwrap_or(u64::MAX);
+    if count < CONNECTIONS_FLOOR.count {
+        Some(("below", "at least", CONNECTIONS_FLOOR))
+    } else if count > CONNECTIONS_CEILING.count {
+        Some(("above", "at most", CONNECTIONS_CEILING))
+    } else {
+        None
+    }
+}
+
+/// `value`, set in code, refused under the variable `bounds` reads when it is
+/// outside that variable's range.
+fn in_range(bounds: DurationBounds, value: Duration) -> Result<Duration> {
+    bounds.check(
+        <HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
+        bounds.field(),
+        value,
+    )
+}
+
+fn optional(read: Option<nest_rs_config::BoundedDuration>) -> Option<Duration> {
+    read.map(|read| read.value)
+}
+
+/// The header the [`ApiVersioning::Header`] strategy reads, refused from either
+/// side when it is no HTTP header name.
+fn version_header(env: &ConfigService, base: String) -> Result<String> {
+    let Some(raw) = env.setting(VERSION_HEADER)? else {
+        header_name(env.var_name(VERSION_HEADER), &base, "is not set, and ")?;
         return Ok(base);
     };
-    raw.split(',')
+    match HeaderName::from_bytes(raw.value.as_bytes()) {
+        Ok(_) => Ok(raw.value),
+        Err(_) => Err(raw.refuse("is not a valid HTTP header name")),
+    }
+}
+
+/// `name`, [`HttpConfig::version_header`] set in code, refused under `var` when
+/// it is no HTTP header name, and never quoted; `lead` opens the sentence with
+/// what is known of the variable.
+fn header_name(var: String, name: &str, lead: &str) -> Result<HeaderName> {
+    match HeaderName::from_bytes(name.as_bytes()) {
+        Ok(header) => Ok(header),
+        Err(_) => Err(nest_rs_config::ConfigError::parse(
+            var,
+            format!(
+                "{lead}`HttpConfig::version_header` set in code is not a valid HTTP header name"
+            ),
+        )),
+    }
+}
+
+/// Parse `<PREFIX>_HTTP__TRUSTED_PROXIES`; a bad entry fails the boot, since a
+/// skipped one collapses every caller onto the balancer's address.
+fn parse_trusted_proxies(env: &ConfigService, base: Vec<IpAddr>) -> Result<Vec<IpAddr>> {
+    const KEY: &str = "TRUSTED_PROXIES";
+    let Some(raw) = env.setting(KEY)? else {
+        return Ok(base);
+    };
+    raw.value
+        .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| {
+        .enumerate()
+        .map(|(index, s)| {
             s.parse::<IpAddr>().map_err(|e| {
-                nest_rs_config::ConfigError::parse(
-                    env.var_name(KEY),
-                    format!("invalid IP `{s}`: {e}"),
-                )
+                raw.refuse(format_args!(
+                    "entry {} of the list is not an IP address: {e}",
+                    index + 1
+                ))
             })
         })
         .collect()
 }
 
 #[cfg(test)]
-// figment::Jail's fixed closure signature triggers this lint unactionably.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 mod tests {
     use super::*;
+
+    /// A TLS file the transport cannot read fails the boot with its I/O reason
+    /// as the source.
+    #[test]
+    fn an_unreadable_tls_file_fails_the_boot_with_its_reason() {
+        let env = ConfigService::with_vars(
+            "http",
+            [
+                ("TLS_CERT_FILE", "/nonexistent/nest-rs-http/cert.pem"),
+                ("TLS_KEY_FILE", "/nonexistent/nest-rs-http/key.pem"),
+            ],
+        );
+        let error = HttpConfig::from_env(&env, HttpConfig::default())
+            .expect_err("an unreadable file fails the boot");
+        assert!(
+            matches!(error, nest_rs_config::ConfigError::File { .. }),
+            "{error}"
+        );
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "the I/O reason travels as the source: {error}",
+        );
+    }
+
+    /// A value read from a `_FILE` spelling is refused under that spelling and
+    /// never quoted — at every key `HttpConfig` judges itself.
+    #[test]
+    fn a_refused_value_from_a_file_names_its_file_variable_and_is_never_shown() {
+        const SECRET: &str = "hunter2_secret";
+        for (key, content) in [
+            ("VERSIONING", SECRET.to_owned()),
+            ("TRUSTED_PROXIES", format!("10.0.0.1,{SECRET}")),
+            ("VERSION_HEADER", format!("{SECRET} bad")),
+            ("TLS_RELOAD_SECS", SECRET.to_owned()),
+            ("CORS_MAX_AGE", SECRET.to_owned()),
+            ("HSTS", format!("{SECRET}\u{7}")),
+            ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
+            ("MAX_CONCURRENT_CONNECTIONS", SECRET.to_owned()),
+            ("HEADER_READ_TIMEOUT_SECS", SECRET.to_owned()),
+            ("IDLE_TIMEOUT_SECS", SECRET.to_owned()),
+            ("SEND_TIMEOUT_SECS", SECRET.to_owned()),
+            ("BODY_READ_TIMEOUT_SECS", SECRET.to_owned()),
+        ] {
+            figment::Jail::expect_with(|jail| {
+                jail.create_file("value", &content)?;
+                let file_key = format!("{key}_FILE");
+                let mut vars = vec![(file_key.as_str(), "value")];
+                if key == "CORS_MAX_AGE" {
+                    vars.push(("CORS_ORIGINS", "https://a.example"));
+                }
+                let env = ConfigService::with_vars("http", vars);
+                let err = HttpConfig::from_env(&env, HttpConfig::default())
+                    .expect_err("the value is refused")
+                    .to_string();
+                assert!(
+                    err.contains(&nest_rs_config::var_name("http", &file_key)),
+                    "{key}: names the file spelling: {err}"
+                );
+                assert!(!err.contains(SECRET), "{key}: never shows the value: {err}");
+                Ok(())
+            });
+        }
+    }
+
+    /// An inline value is refused as a file's is, by its variable and never
+    /// by the value — at every key `HttpConfig` judges itself.
+    #[test]
+    fn a_refused_inline_value_names_its_variable_and_is_never_shown() {
+        const SECRET: &str = "hunter2_secret";
+        for (key, value) in [
+            ("VERSIONING", SECRET.to_owned()),
+            ("TRUSTED_PROXIES", format!("10.0.0.1,{SECRET}")),
+            ("VERSION_HEADER", format!("{SECRET} bad")),
+            ("TLS_RELOAD_SECS", SECRET.to_owned()),
+            ("CORS_MAX_AGE", SECRET.to_owned()),
+            ("HSTS", format!("{SECRET}\u{7}")),
+            ("PORT", SECRET.to_owned()),
+            ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
+            ("MAX_CONCURRENT_CONNECTIONS", SECRET.to_owned()),
+            ("HEADER_READ_TIMEOUT_SECS", SECRET.to_owned()),
+            ("IDLE_TIMEOUT_SECS", SECRET.to_owned()),
+            ("SEND_TIMEOUT_SECS", SECRET.to_owned()),
+        ] {
+            let mut vars = vec![(key, value.as_str())];
+            if key == "CORS_MAX_AGE" {
+                vars.push(("CORS_ORIGINS", "https://a.example"));
+            }
+            let env = ConfigService::with_vars("http", vars);
+            let err = HttpConfig::from_env(&env, HttpConfig::default())
+                .expect_err("the value is refused")
+                .to_string();
+            assert!(
+                err.contains(&nest_rs_config::var_name("http", key)),
+                "{key}: names the variable: {err}"
+            );
+            assert!(!err.contains(SECRET), "{key}: never shows the value: {err}");
+        }
+    }
 
     #[test]
     fn defaults_bind_all_interfaces_on_3000_with_no_tls_no_cors() {
@@ -357,9 +838,6 @@ mod tests {
         });
     }
 
-    // A typo here would silently disable the trust it grants: the entry never
-    // matches a peer, so every caller behind the balancer collapses onto its
-    // address and the deployment looks like it has one client. Fail the boot.
     #[test]
     fn an_unparseable_trusted_proxy_fails_instead_of_being_skipped() {
         figment::Jail::expect_with(|jail| {
@@ -371,16 +849,16 @@ mod tests {
             let err = HttpConfig::from_env(&env, Default::default())
                 .expect_err("a bad IP must abort the boot");
             let msg = err.to_string();
-            // The variable name is derived from the reader's namespace, not
-            // retyped — a `#[config]` struct read under another namespace would
-            // otherwise blame a variable nobody set.
             assert!(msg.contains("TRUSTED_PROXIES"), "{msg}");
-            assert!(msg.contains("10.0.0.oops"), "{msg}");
+            assert!(
+                msg.contains("entry 2 of the list is not an IP address"),
+                "names the entry by its place, not its value: {msg}"
+            );
+            assert!(!msg.contains("10.0.0.oops"), "{msg}");
             Ok(())
         });
     }
 
-    // The dual-path config rule: a pinned list survives when the env sets none.
     #[test]
     fn a_pinned_trusted_proxy_list_survives_an_unrelated_env_override() {
         figment::Jail::expect_with(|jail| {
@@ -411,11 +889,6 @@ mod tests {
         });
     }
 
-    // The finding: the scaffold writes `HttpConfig { port: 3000,
-    // ..Default::default() }`, which used to freeze every field — a
-    // deployment setting `NESTRS_HTTP__PORT` or `NESTRS_HTTP__TLS_CERT_FILE` got
-    // silence. The overlay makes the pin a *base*: the env wins per field, and
-    // the pin survives wherever the env is silent.
     #[test]
     fn a_pinned_port_does_not_freeze_the_rest_of_the_namespace() {
         let pinned = HttpConfig {
@@ -430,7 +903,6 @@ mod tests {
                     ("GLOBAL_PREFIX", "/api"),
                     ("MAX_BODY_BYTES", "4096"),
                     ("COMPRESSION", "true"),
-                    ("FAIL_SECURE_STRICT", "false"),
                 ],
             ),
             pinned,
@@ -440,13 +912,15 @@ mod tests {
         assert_eq!(cfg.global_prefix.as_deref(), Some("/api"));
         assert_eq!(cfg.max_body_bytes, Some(4096));
         assert!(cfg.compression);
-        assert!(!cfg.fail_secure_strict);
         assert_eq!(cfg.host, "0.0.0.0", "and an untouched field keeps the base");
     }
 
     #[test]
     fn a_pinned_field_survives_a_silent_environment() {
-        let pinned = HttpConfig::default().with_global_prefix("/pinned");
+        let pinned = HttpConfig {
+            global_prefix: Some("/pinned".into()),
+            ..Default::default()
+        };
         let cfg = HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned)
             .expect("the overlay resolves");
         assert_eq!(
@@ -456,24 +930,33 @@ mod tests {
         );
     }
 
+    /// A set `FAIL_SECURE_STRICT` changes nothing, and the boot names it as a
+    /// key no config reads.
+    #[test]
+    fn the_fail_secure_strict_variable_is_no_longer_read() {
+        let var = nest_rs_config::var_name("http", "FAIL_SECURE_STRICT");
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(&var, "false");
+            let logs = nest_rs_testing::LogCapture::install();
+            let read = HttpConfig::resolve(None).expect("an unread variable is no refusal");
+            assert_eq!(
+                format!("{read:?}"),
+                format!("{:?}", HttpConfig::defaults()),
+                "a set value changes nothing",
+            );
+            let line = logs.expect_one(
+                nest_rs_config::TARGET,
+                nest_rs_config::unclaimed::UNREAD_CONFIG_VARIABLE,
+            );
+            assert_eq!(line.field("variable").as_deref(), Some(var.as_str()));
+            Ok(())
+        });
+    }
+
     #[test]
     fn default_constants_do_not_drift() {
-        // App ops read `DEFAULT_PORT` indirectly via `HttpConfig::default()` —
-        // a rename or value change is a deployment surprise. Pin them.
         assert_eq!(DEFAULT_HOST, "0.0.0.0");
         assert_eq!(DEFAULT_PORT, 3000);
-    }
-
-    #[test]
-    fn with_global_prefix_pins_in_code() {
-        let cfg = HttpConfig::default().with_global_prefix("/api");
-        assert_eq!(cfg.global_prefix.as_deref(), Some("/api"));
-    }
-
-    #[test]
-    fn with_max_body_bytes_pins_in_code() {
-        let cfg = HttpConfig::default().with_max_body_bytes(64);
-        assert_eq!(cfg.max_body_bytes, Some(64));
     }
 
     #[test]
@@ -489,8 +972,6 @@ mod tests {
 
     #[test]
     fn from_env_treats_blank_global_prefix_as_unset() {
-        // `NESTRS_HTTP__GLOBAL_PREFIX=` (or whitespace) must not pin an empty
-        // prefix that the transport would still try to nest under.
         figment::Jail::expect_with(|jail| {
             jail.set_env(nest_rs_config::var_name("http", "GLOBAL_PREFIX"), "   ");
             let env = ConfigService::for_namespace("http");
@@ -511,10 +992,6 @@ mod tests {
         });
     }
 
-    // `0` used to install a zero-byte cap, so every request carrying a body
-    // answered `413` — an outage that reads like a framework bug. Its two
-    // nearest siblings (`McpConfig::max_request_body_bytes`,
-    // `WsConfig::max_message_bytes`) have refused it all along.
     #[test]
     fn a_zero_body_cap_fails_the_boot_rather_than_rejecting_every_request() {
         figment::Jail::expect_with(|jail| {
@@ -526,10 +1003,6 @@ mod tests {
         });
     }
 
-    // The shared `0` ⇒ off spelling, which this field did not have: `0` read as
-    // *zero seconds* timed every request out before its handler ran, and `None`
-    // — no budget at all — was reachable from the pinned struct and from no
-    // value of the variable.
     #[test]
     fn a_zero_request_timeout_turns_the_budget_off_rather_than_zeroing_it() {
         let cfg = HttpConfig::from_env(
@@ -562,6 +1035,352 @@ mod tests {
             .request_timeout,
             Some(Duration::from_secs(15)),
         );
+    }
+
+    #[test]
+    fn the_shutdown_window_defaults_to_20s_and_reads_whole_seconds_over_a_pinned_base() {
+        assert_eq!(
+            HttpConfig::default().shutdown_timeout,
+            Duration::from_secs(20)
+        );
+        let pinned = HttpConfig {
+            shutdown_timeout: Duration::from_secs(10),
+            ..Default::default()
+        };
+        assert_eq!(
+            HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned.clone())
+                .expect("the overlay resolves")
+                .shutdown_timeout,
+            Duration::from_secs(10),
+            "nothing in the env ⇒ the pin is the answer",
+        );
+        assert_eq!(
+            HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("SHUTDOWN_TIMEOUT_SECS", "40")]),
+                pinned,
+            )
+            .expect("the overlay resolves")
+            .shutdown_timeout,
+            Duration::from_secs(40),
+        );
+    }
+
+    /// `0` is refused here, not read as the shared off.
+    #[test]
+    fn a_shutdown_window_outside_its_range_is_refused_naming_the_variable() {
+        let var = nest_rs_config::var_name("http", "SHUTDOWN_TIMEOUT_SECS");
+        for (value, reason) in [
+            ("0", "must be at least 1"),
+            ("3601", "must be at most 3600"),
+        ] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("SHUTDOWN_TIMEOUT_SECS", value)]),
+                HttpConfig::default(),
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(refused.contains(&var), "{value}: {refused}");
+            assert!(refused.contains(reason), "{value}: {refused}");
+        }
+        for (value, secs) in [("1", 1), ("3600", 3600)] {
+            let cfg = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("SHUTDOWN_TIMEOUT_SECS", value)]),
+                HttpConfig::default(),
+            )
+            .expect("an edge of the range is inside it");
+            assert_eq!(cfg.shutdown_timeout, Duration::from_secs(secs));
+        }
+    }
+
+    /// Refused only while the variable is silent: a set variable overrides the pin.
+    #[test]
+    fn a_pinned_shutdown_window_outside_its_range_is_refused_naming_the_field() {
+        let var = nest_rs_config::var_name("http", "SHUTDOWN_TIMEOUT_SECS");
+        for pinned in [
+            Duration::ZERO,
+            Duration::from_millis(999),
+            Duration::from_secs(3601),
+        ] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", []),
+                HttpConfig {
+                    shutdown_timeout: pinned,
+                    ..Default::default()
+                },
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(refused.contains(&var), "{pinned:?}: {refused}");
+            assert!(
+                refused.contains("HttpConfig::shutdown_timeout"),
+                "{pinned:?}: {refused}"
+            );
+        }
+        let cfg = HttpConfig::from_env(
+            &ConfigService::with_vars("http", [("SHUTDOWN_TIMEOUT_SECS", "5")]),
+            HttpConfig {
+                shutdown_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+        )
+        .expect("the variable overrides the pin");
+        assert_eq!(cfg.shutdown_timeout, Duration::from_secs(5));
+    }
+
+    /// Refused whatever the strategy and never quoted, while the variable is
+    /// silent and by the selector a config built in code describes; a set
+    /// variable overrides the pin.
+    #[test]
+    fn a_pinned_version_header_that_is_no_header_name_is_refused_naming_the_field() {
+        let var = nest_rs_config::var_name("http", "VERSION_HEADER");
+        for versioning in [ApiVersioning::Header, ApiVersioning::Uri] {
+            let pinned = HttpConfig {
+                versioning,
+                version_header: "X S3cr3t".into(),
+                ..Default::default()
+            };
+            for refused in [
+                HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned.clone())
+                    .expect_err("refused")
+                    .to_string(),
+                pinned.version_selector().expect_err("refused").to_string(),
+            ] {
+                assert!(refused.contains(&var), "{versioning:?}: {refused}");
+                assert!(
+                    refused.contains("HttpConfig::version_header"),
+                    "{versioning:?}: {refused}"
+                );
+                assert!(!refused.contains("S3cr3t"), "{versioning:?}: {refused}");
+            }
+        }
+        let read = HttpConfig::from_env(
+            &ConfigService::with_vars("http", [("VERSION_HEADER", "X-Version")]),
+            HttpConfig {
+                version_header: "X Version".into(),
+                ..Default::default()
+            },
+        )
+        .expect("the variable overrides the pin");
+        assert_eq!(read.version_header, "X-Version");
+    }
+
+    #[test]
+    fn the_connection_cap_defaults_to_ten_thousand_and_reads_over_a_pinned_base() {
+        assert_eq!(HttpConfig::default().max_concurrent_connections, 10_000);
+        let pinned = HttpConfig {
+            max_concurrent_connections: 64,
+            ..Default::default()
+        };
+        assert_eq!(
+            HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned.clone())
+                .expect("the overlay resolves")
+                .max_concurrent_connections,
+            64,
+            "nothing in the env ⇒ the pin is the answer",
+        );
+        assert_eq!(
+            HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("MAX_CONCURRENT_CONNECTIONS", "512")]),
+                pinned,
+            )
+            .expect("the overlay resolves")
+            .max_concurrent_connections,
+            512,
+        );
+    }
+
+    /// `0` is no off switch here: a cap of none would bind and accept nothing.
+    #[test]
+    fn a_connection_cap_outside_its_range_is_refused_naming_the_variable() {
+        let var = nest_rs_config::var_name("http", "MAX_CONCURRENT_CONNECTIONS");
+        for (value, reason) in [
+            ("0", "must be at least 1"),
+            ("1048577", "must be at most 1048576"),
+        ] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("MAX_CONCURRENT_CONNECTIONS", value)]),
+                HttpConfig::default(),
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(refused.contains(&var), "{value}: {refused}");
+            assert!(refused.contains(reason), "{value}: {refused}");
+            assert!(
+                !refused.contains(&format!(" {value}")),
+                "{value}: the value read is never quoted: {refused}"
+            );
+        }
+        for (value, count) in [("1", 1), ("1048576", 1_048_576)] {
+            let cfg = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("MAX_CONCURRENT_CONNECTIONS", value)]),
+                HttpConfig::default(),
+            )
+            .expect("an edge of the range is inside it");
+            assert_eq!(cfg.max_concurrent_connections, count);
+        }
+    }
+
+    /// Refused only while the variable is silent: a set variable overrides the pin.
+    #[test]
+    fn a_pinned_connection_cap_outside_its_range_is_refused_naming_the_field() {
+        let var = nest_rs_config::var_name("http", "MAX_CONCURRENT_CONNECTIONS");
+        for pinned in [0, 1_048_577] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", []),
+                HttpConfig {
+                    max_concurrent_connections: pinned,
+                    ..Default::default()
+                },
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(refused.contains(&var), "{pinned}: {refused}");
+            assert!(
+                refused.contains("HttpConfig::max_concurrent_connections"),
+                "{pinned}: {refused}"
+            );
+        }
+        let cfg = HttpConfig::from_env(
+            &ConfigService::with_vars("http", [("MAX_CONCURRENT_CONNECTIONS", "5")]),
+            HttpConfig {
+                max_concurrent_connections: 0,
+                ..Default::default()
+            },
+        )
+        .expect("the variable overrides the pin");
+        assert_eq!(cfg.max_concurrent_connections, 5);
+    }
+
+    /// The "default is ordered" half of the rule: a request admitted just
+    /// before a stop is answered inside the window.
+    #[test]
+    fn the_default_request_timeout_fits_the_default_shutdown_window() {
+        let defaults = HttpConfig::default();
+        let budget = defaults
+            .request_timeout
+            .expect("a request is bounded by default");
+        assert!(
+            budget <= defaults.shutdown_timeout,
+            "{budget:?} outlasts the {:?} window",
+            defaults.shutdown_timeout,
+        );
+    }
+
+    #[test]
+    fn the_connection_deadlines_default_to_30_10_75_and_60_seconds() {
+        let defaults = HttpConfig::default();
+        assert_eq!(defaults.header_read_timeout, Duration::from_secs(30));
+        assert_eq!(defaults.body_read_timeout, Duration::from_secs(10));
+        assert_eq!(defaults.idle_timeout, Duration::from_secs(75));
+        assert_eq!(defaults.send_timeout, Duration::from_secs(60));
+    }
+
+    /// Where a deadline sits in [`HttpConfig`].
+    type Slot = fn(&mut HttpConfig) -> &mut Duration;
+
+    /// Each deadline's key, the field pinning it, its ceiling in seconds, and
+    /// its slot.
+    const DEADLINES: [(&str, &str, u64, Slot); 4] = [
+        (
+            "HEADER_READ_TIMEOUT_SECS",
+            "HttpConfig::header_read_timeout",
+            300,
+            |config| &mut config.header_read_timeout,
+        ),
+        (
+            "BODY_READ_TIMEOUT_SECS",
+            "HttpConfig::body_read_timeout",
+            3600,
+            |config| &mut config.body_read_timeout,
+        ),
+        (
+            "IDLE_TIMEOUT_SECS",
+            "HttpConfig::idle_timeout",
+            3600,
+            |config| &mut config.idle_timeout,
+        ),
+        (
+            "SEND_TIMEOUT_SECS",
+            "HttpConfig::send_timeout",
+            3600,
+            |config| &mut config.send_timeout,
+        ),
+    ];
+
+    /// `HttpConfig::default()` with the deadline in `slot` pinned to `value`.
+    fn pinning(slot: Slot, value: Duration) -> HttpConfig {
+        let mut config = HttpConfig::default();
+        *slot(&mut config) = value;
+        config
+    }
+
+    /// `0` is no off switch for any of them: a phase without a deadline is the
+    /// hole they close.
+    #[test]
+    fn a_connection_deadline_outside_its_range_is_refused_naming_its_variable() {
+        for (key, _, ceiling, slot) in DEADLINES {
+            let var = nest_rs_config::var_name("http", key);
+            for (value, reason) in [
+                ("0".to_owned(), "must be at least 1".to_owned()),
+                (
+                    (ceiling + 1).to_string(),
+                    format!("must be at most {ceiling}"),
+                ),
+            ] {
+                let refused = HttpConfig::from_env(
+                    &ConfigService::with_vars("http", [(key, value.as_str())]),
+                    HttpConfig::default(),
+                )
+                .expect_err("refused")
+                .to_string();
+                assert!(refused.contains(&var), "{key}={value}: {refused}");
+                assert!(refused.contains(&reason), "{key}={value}: {refused}");
+            }
+            for secs in [1, ceiling] {
+                let mut read = HttpConfig::from_env(
+                    &ConfigService::with_vars("http", [(key, secs.to_string().as_str())]),
+                    pinning(slot, Duration::from_secs(7)),
+                )
+                .expect("an edge of the range is inside it");
+                assert_eq!(*slot(&mut read), Duration::from_secs(secs), "{key}");
+            }
+        }
+    }
+
+    /// Refused only while the variable is silent, and by the transport built
+    /// from a config that never met the environment.
+    #[test]
+    fn a_pinned_connection_deadline_outside_its_range_is_refused_naming_its_field() {
+        for (key, field, ceiling, slot) in DEADLINES {
+            let var = nest_rs_config::var_name("http", key);
+            for pinned in [
+                Duration::ZERO,
+                Duration::from_millis(999),
+                Duration::from_secs(ceiling + 1),
+            ] {
+                for refused in [
+                    HttpConfig::from_env(
+                        &ConfigService::with_vars("http", []),
+                        pinning(slot, pinned),
+                    )
+                    .expect_err("refused")
+                    .to_string(),
+                    pinning(slot, pinned)
+                        .deadlines()
+                        .expect_err("refused")
+                        .to_string(),
+                ] {
+                    assert!(refused.contains(&var), "{key} {pinned:?}: {refused}");
+                    assert!(refused.contains(field), "{key} {pinned:?}: {refused}");
+                }
+            }
+            let mut read = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [(key, "5")]),
+                pinning(slot, Duration::ZERO),
+            )
+            .expect("the variable overrides the pin");
+            assert_eq!(*slot(&mut read), Duration::from_secs(5), "{key}");
+        }
     }
 
     #[test]

@@ -3,31 +3,21 @@
 //! Every module here is `const` source strings; `crud.rs` holds the one
 //! computed set of placeholders, because it varies by transport.
 
-pub mod adapter;
-pub mod auth;
-pub mod crud;
-pub mod entity;
-pub mod feature;
-pub mod hello;
-pub mod migration;
-pub mod resource;
-pub mod shared;
-pub mod workspace;
+pub(crate) mod adapter;
+pub(crate) mod auth;
+pub(crate) mod crud;
+pub(crate) mod entity;
+pub(crate) mod feature;
+pub(crate) mod hello;
+pub(crate) mod migration;
+pub(crate) mod resource;
+pub(crate) mod shared;
+pub(crate) mod workspace;
 
 /// Every template module, as `(file name, source)` — **read from the
-/// directory**, never listed. A list is edited by a different hand than the one
-/// that adds a template, and the list this replaced had already lost `crud.rs`:
-/// the module that renders every adapter's handler body sat outside both guards
-/// below while the doc above them claimed the population was scanned.
-///
-/// `include_str!` cannot glob, so the scan is a `read_dir` at test time. It is
-/// `#[cfg(test)]`-only, so nothing ships a runtime directory read.
-///
-/// **One scan, three guards.** `generate::cargo`'s Rust-floor sweep reads the
-/// same corpus, and the two spelled it apart: this one excluded `mod.rs` and
-/// checked a floor, that one did neither — so a change to what counts as a
-/// template file had to be made twice, or one guard silently stopped seeing
-/// part of the corpus. Which is the failure this scan exists to prevent.
+/// directory**, never listed, so no template escapes the guards below.
+/// `include_str!` cannot glob, so the scan is a test-only `read_dir`; the
+/// `generate::cargo` sweep reads the same corpus.
 #[cfg(test)]
 pub(crate) fn sources() -> Vec<(String, String)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/templates");
@@ -35,8 +25,6 @@ pub(crate) fn sources() -> Vec<(String, String)> {
         .expect("the templates directory")
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("rs"))
-        // The folder index is not a template: it declares the modules the
-        // others are.
         .filter(|path| path.file_name().and_then(|n| n.to_str()) != Some("mod.rs"))
         .collect();
     files.sort();
@@ -52,8 +40,7 @@ pub(crate) fn sources() -> Vec<(String, String)> {
             )
         })
         .collect();
-    // Finding nothing reads exactly like finding nothing wrong, so the scan
-    // says it is still matching.
+    // Finding nothing reads exactly like finding nothing wrong.
     assert!(
         found.len() >= 10,
         "the templates scan found {} modules — it stopped matching, and a \
@@ -68,17 +55,15 @@ mod tests {
     use super::sources;
 
     /// A template that spells `NESTRS_` writes a variable an `--env-prefix`
-    /// project never reads — a `.env` key silently inert, or a generated tool
-    /// looking at the wrong name. The placeholder is the only legal form, so
-    /// the guard is mechanical rather than a review habit.
+    /// project never reads; the placeholder is the only legal form.
     #[test]
     fn templates_use_the_env_prefix_placeholder_not_a_literal() {
         let scanned = sources();
         let literals: Vec<&str> = scanned
             .iter()
             .flat_map(|(_, src)| src.lines())
-            // Rust doc/line comments in the CLI's own source describe the
-            // scheme; only the emitted template strings are the contract.
+            // Comments in the CLI's own source describe the scheme; only the emitted
+            // template strings are the contract.
             .filter(|line| !line.trim_start().starts_with("//"))
             .filter(|line| line.contains("NESTRS_"))
             .map(str::trim)
@@ -89,25 +74,75 @@ mod tests {
         );
     }
 
-    /// `CLAUDE.md`: *metadata is mandatory — a bare log is a defect*. A scaffold
-    /// emits what the rules mandate, so a template that logs without a field
-    /// ships that defect into every generated project. The whole framework holds
-    /// this at zero; the generated code has to as well.
+    /// `container.md`, *Every wait the framework owns is bounded*: a scaffolded
+    /// binary's `main` is `#[nest_rs::main]`, never `#[tokio::main]`.
+    #[test]
+    fn every_scaffolded_entry_point_runs_on_nest_rs_main() {
+        /// The app's `main`, the migration runner's and the seed's.
+        const FLOOR: usize = 3;
+
+        let scanned = sources();
+        let mut entries = 0;
+        let mut wrong = Vec::new();
+        for (file, src) in &scanned {
+            let lines: Vec<&str> = src.lines().map(str::trim).collect();
+            for (at, line) in lines.iter().enumerate() {
+                if line.starts_with("#[tokio::main]") {
+                    wrong.push(format!("{file}:{} is `#[tokio::main]`", at + 1));
+                }
+                if line.starts_with("async fn main(") {
+                    entries += 1;
+                    let above = at.checked_sub(1).and_then(|above| lines.get(above));
+                    if above != Some(&"#[nest_rs::main]") {
+                        wrong.push(format!(
+                            "{file}:{} is an `async fn main` without `#[nest_rs::main]` above it",
+                            at + 1,
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            entries >= FLOOR,
+            "the scan found {entries} scaffolded `async fn main` — it stopped matching",
+        );
+        assert!(
+            wrong.is_empty(),
+            "a scaffolded entry point whose runtime's teardown nothing bounds:\n{}",
+            wrong.join("\n"),
+        );
+    }
+
+    /// `#[nest_rs::main]` publishes the `.env` cascade before the runtime
+    /// exists, so a scaffolded `main` writes no line for it.
+    #[test]
+    fn no_scaffolded_main_publishes_the_cascade_itself() {
+        let calls: Vec<String> = sources()
+            .into_iter()
+            .filter(|(_, src)| src.contains("Environment::init"))
+            .map(|(file, _)| file)
+            .collect();
+        assert!(
+            calls.is_empty(),
+            "`Environment::init` is gone — the kernel publishes the cascade: {calls:?}",
+        );
+    }
+
+    /// `CLAUDE.md`: a log line carries at least one field.
     ///
-    /// Matches the macro-call shape (`tracing::<level>!(target: "…"`), so prose
-    /// mentioning `tracing::` never trips it.
+    /// Matches the macro-call shape (`tracing::<level>!(target: …`), so prose
+    /// mentioning `tracing::` never trips it; the next field must come before the
+    /// message's opening quote.
     #[test]
     fn no_scaffolded_log_is_emitted_without_a_structured_field() {
         let scanned = sources();
         let bare: Vec<&str> = scanned
             .iter()
             .flat_map(|(_, src)| src.lines())
-            .filter(|line| line.contains("tracing::") && line.contains("!(target: \""))
+            .filter(|line| line.contains("tracing::") && line.contains("!(target: "))
             .filter(|line| {
-                // Between the target's closing quote and the message's opening
-                // one there must be at least one `field = value` pair.
-                line.split_once("!(target: \"")
-                    .and_then(|(_, rest)| rest.split_once('"'))
+                line.split_once("!(target: ")
+                    .and_then(|(_, rest)| rest.split_once(','))
                     .is_some_and(|(_, after)| !after.split('"').next().unwrap_or("").contains('='))
             })
             .map(|line| line.trim())
@@ -117,6 +152,68 @@ mod tests {
             bare.is_empty(),
             "these scaffolded logs carry no structured field:\n{}",
             bare.join("\n"),
+        );
+    }
+
+    /// `CLAUDE.md` hard "no": a `Debug` over a credential is one `?field` away
+    /// from a log line, so no scaffolded struct derives it over one.
+    #[test]
+    fn no_scaffolded_struct_derives_debug_over_a_credential() {
+        const CREDENTIALS: [&str; 4] = ["token", "password", "secret", "credential"];
+
+        let scanned = sources();
+        let mut derives = 0;
+        let mut exposed = Vec::new();
+        for (file, src) in &scanned {
+            let mut debug = false;
+            let mut fields = false;
+            for line in src.lines().map(str::trim) {
+                if line.starts_with("#[derive(") {
+                    debug |= line.contains("Debug");
+                } else if fields {
+                    if line == "}" {
+                        fields = false;
+                    } else if let Some((name, _)) = line.trim_start_matches("pub ").split_once(':')
+                        && name.split('_').any(|word| CREDENTIALS.contains(&word))
+                    {
+                        exposed.push(format!("{file}: `{line}`"));
+                    }
+                } else if line.starts_with("pub struct ") || line.starts_with("struct ") {
+                    derives += usize::from(debug);
+                    fields = debug && line.ends_with('{');
+                    debug = false;
+                } else if !line.starts_with("#[") {
+                    debug = false;
+                }
+            }
+        }
+        assert!(
+            derives >= 2,
+            "the scan found {derives} scaffolded structs deriving `Debug` — it stopped matching",
+        );
+        assert!(
+            exposed.is_empty(),
+            "a scaffolded `Debug` prints these credentials:\n{}",
+            exposed.join("\n"),
+        );
+    }
+
+    /// `CLAUDE.md`: a target is a constant its owner declares, never a literal at
+    /// the call site — a feature's files log on `crate::<feature>::TARGET`.
+    #[test]
+    fn no_scaffolded_log_spells_its_target_as_a_literal() {
+        let scanned = sources();
+        let literal: Vec<&str> = scanned
+            .iter()
+            .flat_map(|(_, src)| src.lines())
+            .filter(|line| line.contains("!(target: \""))
+            .map(|line| line.trim())
+            .collect();
+
+        assert!(
+            literal.is_empty(),
+            "these scaffolded logs spell their target as a literal:\n{}",
+            literal.join("\n"),
         );
     }
 }

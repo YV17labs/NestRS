@@ -1,7 +1,6 @@
 ---
 title: Entities
 description: "The entity is the wire contract. One #[expose]d SeaORM model emits the DTO, inputs, JSON schema, relation loaders, and lifecycle — opt-in, fail-secure."
-tier: basics
 sidebar:
   order: 2
 ---
@@ -34,7 +33,7 @@ The reference entity lives at `crates/features/src/posts/entity.rs`.
 Copy it before inventing a second shape.
 
 ```rust title="crates/features/src/posts/entity.rs"
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -97,7 +96,7 @@ a set of bare flags.
 | `service = …` | path | The service that owns the entity. Required as soon as the entity exposes a relation or another feature needs its PK loader — it's where the macro emits the loaders. |
 | `graphql` | flag | Emit the GraphQL object + input objects, and auto-resolve exposed relations through dataloaders. An exposed relation **without** `graphql` is a compile error. |
 | `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and `updated_at` on every save. Requires both columns. |
-| `soft_delete` | flag | Emit `impl SoftDeletable` so deletes set `deleted_at` and reads filter tombstoned rows. Requires a `deleted_at: Option<…>` column. |
+| `soft_delete` | flag | Deletes set `deleted_at`, and every `Repo` read hides a tombstoned row. Requires a `deleted_at: Option<…>` column. |
 | `complex` | flag | Force `#[graphql(complex)]` on the wire DTO. Auto-enabled when `graphql` is set and the entity has auto-resolved relations — you rarely set it by hand. |
 
 ## Recommended standard columns
@@ -152,15 +151,21 @@ response. Because exposure is opt-in, they stay off the wire by
 default, and a column a future migration adds never leaks until someone
 deliberately exposes it.
 
+The wire is not the only place a secret prints: sea-orm derives `Debug` for
+the `ActiveModel`, so a `Set` hash shows up in any `{:?}` of it. Give a secret
+column a value type whose `Debug` says nothing — the demo stores its hash as
+`PasswordHash`, a `DeriveValueType` over `String` that prints `<redacted>`.
+
 <Aside type="caution">
 Response masking reconstructs the full row from the wire body to apply
 `Ability::mask`, which needs a default for every unexposed column. The
 macro provides one for the trivial scalar types (`String`, `Option`,
 `bool`, numbers). A hidden column of a type it can't default — `Uuid`,
-a timestamp, `Decimal`, a custom enum — needs a hand-written
-`impl WireModelDefaults`, or the crate fails to **compile**, naming the
-missing impl. A column an ability rule predicates on is therefore best left
-**exposed**.
+a timestamp, `Decimal`, a custom enum — takes `#[wire_default]` (its
+type's `Default`) or `#[wire_default(expr)]`; without one, a masked
+response fails closed with a **500**. A rule reading a hidden column
+decides no pushed row, so a column an ability rule predicates on is best
+left **exposed**, read-only.
 See [Response masking](/security/authorization/response-masking/).
 </Aside>
 
@@ -173,7 +178,7 @@ An exposed column whose type is your own enum passes through to the wire
 `async_graphql::Enum`, plus the `Clone`/`Copy`/`Eq` shape those require:
 
 ```rust title="crates/features/src/posts/entities/post.rs"
-use nest_rs::resource::{expose, wire_enum};
+use nest_rs::seaorm::{expose, wire_enum};
 
 #[wire_enum(graphql)]
 #[derive(EnumIter, DeriveActiveEnum)]
@@ -190,7 +195,7 @@ pub enum PostStatus {
 Each of those derives expands against the **call site's** prelude, so
 hand-writing them put `schemars` and `async-graphql` in your manifest for
 code you never wrote. The decorator routes them back through
-`nest-rs-resource` with a `crate = ` override, so your manifest names
+`nest-rs-seaorm` with a `crate = ` override, so your manifest names
 neither.
 
 It deliberately emits **nothing from SeaORM**: `EnumIter`,
@@ -214,7 +219,6 @@ input field:
 #[expose(input(create, update), validate(length(min = 1)))]
 pub title: String,
 
-#[sea_orm(unique)]
 #[expose(input(create, update), validate(email))]
 pub email: String,
 ```
@@ -302,14 +306,15 @@ SeaORM-level behaviour:
 - **`timestamps`** emits `ActiveModelBehavior::before_save`, stamping
   `created_at` on insert and `updated_at` on every save with
   `chrono::Utc::now().fixed_offset()`.
-- **`soft_delete`** emits `impl SoftDeletable for Entity` (declaring
-  the `deleted_at` column). This is only **half** the wiring: the entity
-  flag makes the column addressable, but the service must also override
-  `soft_delete_column()` to return it (default `None` ⇒ hard delete). With
-  both halves in place, `CrudService` deletes by setting the tombstone and
-  ANDs `deleted_at IS NULL` onto every read so a soft-deleted row is
-  invisible — in lists, by-id loads, and relation batches alike. See
-  [CRUD](/database/crud/#soft-delete-and-timestamps) for the service side.
+- **`soft_delete`** emits `impl SoftDeletable for Entity` and registers
+  the entity, with or without a `service`. `SoftDeletable` is sealed: only
+  the decorator implements it, so the trait never goes without the
+  registration. That is the whole wiring:
+  `Deletable::delete` sets the tombstone instead of erasing the row, and
+  every `Repo` read and update ANDs `deleted_at IS NULL`, so a soft-deleted
+  row is invisible — in lists, by-id loads, relation batches and your own
+  queries alike. `Repo::with_tombstones` is the one read that keeps it. See
+  [CRUD](/database/crud/#soft-delete-and-timestamps).
 
 <Aside type="caution">
 SeaORM requires exactly **one** `ActiveModelBehavior` per entity. The

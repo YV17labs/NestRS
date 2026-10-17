@@ -1,0 +1,5 @@
+error: `#[routes]` declares `GET /` on `first` and again on `second`: a controller serves each verb and path with one handler in each version, so the second would never run — give one a distinct path, verb or `#[version]`
+  --> tests/integration/diagnostics/http/duplicate_route.rs:16:5
+   |
+16 |     #[get("/")]
+   |     ^^^^^^^^^^^

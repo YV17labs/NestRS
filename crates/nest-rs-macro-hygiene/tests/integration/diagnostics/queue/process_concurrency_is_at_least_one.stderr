@@ -1,0 +1,5 @@
+error: #[process] `concurrency` takes a whole number of at least 1 — how many jobs of this method one worker replica runs at once; 0 would never run a job
+  --> tests/integration/diagnostics/queue/process_concurrency_is_at_least_one.rs:21:48
+   |
+21 |     #[process(queue = DemoQueue, concurrency = 0)]
+   |                                                ^

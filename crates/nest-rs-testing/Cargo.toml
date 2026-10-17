@@ -10,12 +10,19 @@ description = "In-process testing harness for NestRS: boot an app's real DI grap
 keywords = ["framework", "nestrs", "testing", "test", "harness"]
 categories = ["development-tools::testing"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
+
 
 [features]
 # Satisfy the OpenTelemetryModule boot guard in tests (`with_test_telemetry`).
 opentelemetry = ["dep:nest-rs-opentelemetry"]
-# An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`).
-orm = ["dep:sea-orm", "dep:sea-orm-migration"]
+# An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`),
+# opening its connections through the app pool's own options.
+orm = ["dep:nest-rs-seaorm", "dep:sea-orm", "dep:sea-orm-migration"]
 # The graphql-ws subscription driver (`TestApp::graphql_socket`). Gated because a
 # headless app's suite should not link a GraphQL schema to assert on a queue.
 graphql = ["dep:nest-rs-graphql", "dep:async-graphql"]
@@ -24,6 +31,16 @@ graphql = ["dep:nest-rs-graphql", "dep:async-graphql"]
 # suite that never opens a socket should not link a client or turn poem's
 # non-default `websocket` feature on for the whole build.
 ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws", "poem/websocket"]
+# The queue backend kit (`queue_kit!`): the behaviour a queue backend owes the
+# port's worker, as tests a driver runs against its own implementation. tokio's
+# `test-util` (not part of `full`) is what pauses time under a backend running
+# in process.
+queue = ["dep:nest-rs-queue", "dep:serde", "tokio/test-util"]
+# A test certificate authority (`TestAuthority`): the certificates a TLS test
+# presents or trusts, issued in process rather than committed, and the
+# handshakes a double accepts with them and dials a service with; and the
+# `ClientTls` a framework client trusting the authority holds.
+tls = ["dep:rcgen", "dep:rustls", "dep:tokio-rustls", "nest-rs-config/tls"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -32,6 +49,7 @@ nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-filters.workspace = true
 nest-rs-exception-filters.workspace = true
+nest-rs-pipes.workspace = true
 anyhow.workspace = true
 # `test` adds poem's in-process TestClient; `tower-compat` comes from the
 # workspace default and is harmless here.
@@ -41,6 +59,10 @@ tokio.workspace = true
 tokio-util.workspace = true
 # Every e2e boot loads the project's `.env` via `load_project_env` — normal dep.
 nest-rs-config.workspace = true
+# Behind `tls`.
+rcgen = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
 # Behind `graphql`: the subscription driver composes the app's schema and runs
 # async-graphql's own graphql-ws engine over it. Optional so the harness stays
 # GraphQL-free for a suite that has no schema.
@@ -66,24 +88,34 @@ futures-util = { workspace = true, optional = true }
 # read from it rather than re-spelled here — a copy of a wire grammar drifts
 # silently, because nothing joins the two spellings.
 nest-rs-ws = { workspace = true, optional = true }
+# Behind `queue`: the port the kit runs its cases through, and the serde its
+# job derives.
+nest-rs-queue = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
+# Behind `orm`: `SeaOrmConfig::connect_options`, the one constructor of a
+# Postgres connection, so the fixture verifies TLS as the app's pool does. It
+# also selects the pool's TLS backend. `nest-rs-seaorm` dev-depends on this
+# crate with `orm`; cargo allows that cycle, and its test binaries link one
+# copy of it.
+nest-rs-seaorm = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 sea-orm-migration = { workspace = true, optional = true }
 
 [dev-dependencies]
-# `transport_parity` boots one module serving both `Exempt`-edge transports to
-# pin that they answer one app wiring identically. That is cross-crate wiring
-# (guards' fallbacks × graphql × mcp), so it lives here rather than in any
-# single surface crate — and dev-deps let it enable the two fallback features
-# without them reaching a consumer of the harness.
-# `ws` rides here too, not in `[dependencies]`: it is the `ws_gateway_guards`
-# test that drives `GuardAsWsMessageCheck`, and `guards/ws` pulls `nest-rs-ws`
-# and turns on `poem/websocket` — which a consumer asserting on a log line
-# should not link, and which silently made this crate's own `ws` feature gate a
-# no-op.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp", "ws"] }
+# Self dev-dependency: the suite proves the fixture against a TLS double, so it
+# runs with `EphemeralDatabase` and `TestAuthority` on whatever features a
+# caller builds with, and `guard_markers` opens a real socket (`build_ws`).
+nest-rs-testing = { path = ".", features = ["orm", "tls", "ws"] }
+# `transport_parity` boots one module serving both in-band endpoints to pin
+# that they answer one app wiring identically. That is cross-crate wiring (the
+# global pool × graphql × mcp), so it lives here rather than in any single
+# surface crate.
 nest-rs-mcp = { path = "../nest-rs-mcp" }
+# `transport_parity` registers the two authz bridges, whose `covers()` is what
+# keeps a guard listed both in the pool and in a bridge running once.
+nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql", "mcp"] }
 # `destructured_args` and `transport_parity` name `nest_rs_graphql` directly.
 # Without this the suite compiles only under `--workspace`, where feature
 # unification lends it `nest-rs-testing/graphql` from a crate two directories
@@ -91,21 +123,20 @@ nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 # `#[derive(SimpleObject)]` on the payload those two share.
 async-graphql.workspace = true
-tokio.workspace = true
+# `test-util` (not part of tokio's `full`) pauses time, so the close of a
+# transport that unwinds for seconds is asserted on a virtual clock.
+tokio = { workspace = true, features = ["test-util"] }
 # The config DI test boots a module wiring `ConfigModule::for_feature` and a
 # service injecting the loaded config; `nest-rs-config` is already a normal
 # dependency. `validator` backs the `#[config]` struct's `#[validate]` derive.
 validator.workspace = true
-# The pipes test (`tests/integration/pipes.rs`) needs the `GlobalPipe` trait + a
-# `serde_json::Value` body to observe a pipe rewriting it.
-nest-rs-pipes = { path = "../nest-rs-pipes" }
 # The exception-filters test (`tests/integration/exception_filters.rs`) needs the
 # trait + a typed error to throw and catch.
 thiserror.workspace = true
 async-trait.workspace = true
-# `tests/integration/ws_gateway_guards.rs` drives a `#[gateway]` + `#[messages]`
-# impl over `TestClient` — no socket, hence no `ws` feature — so it needs the
-# macros and `WsModule` even when that feature is off.
+# `tests/integration/ws_gateway_guards.rs` and `guard_markers.rs` declare a
+# `#[gateway]` + `#[messages]` impl, so the suite names the macros and
+# `WsModule` itself rather than through the `ws` feature.
 nest-rs-ws = { path = "../nest-rs-ws" }
 # `figment::Jail` isolates the real process env for the pinned-config override
 # test (the deployment tier of the precedence rule), matching how
@@ -119,3 +150,13 @@ nest-rs-queue = { path = "../nest-rs-queue" }
 # an HTTP `Json` body needs `JsonSchema` for the OpenAPI document.
 serde.workspace = true
 schemars.workspace = true
+# `shutdown.rs` sums the way down from every crate that bounds a step of it —
+# each transport's window, the telemetry flush — so it reads their constants
+# whatever features this crate is built with. Behind a feature, the sum was a
+# test the Definition-of-done run never compiled, and raising any constant
+# passed the whole suite. Path-only, so publishing drags none of them.
+nest-rs-opentelemetry = { path = "../nest-rs-opentelemetry" }
+nest-rs-schedule = { path = "../nest-rs-schedule" }
+
+[lints]
+workspace = true

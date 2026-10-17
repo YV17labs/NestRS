@@ -1,23 +1,13 @@
-//! The harness boots the transport the **app** configured, not a fresh one.
-//!
-//! `TestApp` used to build a bare `HttpTransport::new()`, so every field
-//! `HttpModule::for_root(cfg)` sets — the global prefix, the versioning
-//! strategy, the body cap, the request timeout, CORS, compression, the security
-//! headers — was silently absent under test. A suite then asserted against a
-//! transport the deployment never runs, which is the exact failure e2e exists
-//! to catch: `CLAUDE.md` opens its testing section with "wiring bugs don't
-//! surface in unit tests", and the wiring was what the harness dropped.
-//!
-//! Two fields are pinned here rather than all of them, chosen because they
-//! change the *address* a request must use: a harness that gets these wrong
-//! passes a suite whose app answers `404` in production.
+//! The harness boots the transport the **app** configured, not a fresh one,
+//! pinned on the two fields that change the address a request must use, or the
+//! one a suite seeds.
 
 use nest_rs_core::module;
 use nest_rs_http::{
     ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpModule, controller, routes,
 };
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
+use poem::http::{StatusCode, header};
 
 #[controller(path = "/widgets", version = "1")]
 struct WidgetsController;
@@ -50,8 +40,6 @@ async fn the_harness_serves_under_the_global_prefix_the_module_declared() {
     resp.assert_status_is_ok();
     resp.assert_text("widgets").await;
 
-    // And the un-prefixed address is not a second one. This is the assertion
-    // that used to be backwards: the bare harness served here and 404'd above.
     app.http()
         .get("/v1/widgets")
         .send()
@@ -84,8 +72,6 @@ async fn the_harness_resolves_the_version_strategy_the_module_declared() {
     resp.assert_status_is_ok();
     resp.assert_text("widgets").await;
 
-    // Under `header`, the URI form is not a second address — a fact a bare
-    // harness could never observe, because it never installed the selector.
     app.http()
         .get("/v1/widgets")
         .send()
@@ -105,11 +91,6 @@ struct MisversionedApp;
 
 #[tokio::test]
 async fn a_default_version_nothing_declares_fails_the_boot_without_openapi() {
-    // The check used to live in `nest-rs-openapi`, so an app that publishes no
-    // document got no answer at all: every caller stating no version resolved
-    // to a path that does not exist and fell through in silence. It is HTTP's
-    // config, so it is now HTTP's boot failure — this app imports no
-    // `OpenApiModule`.
     let err = TestApp::for_module::<MisversionedApp>()
         .await
         .err()
@@ -120,4 +101,31 @@ async fn a_default_version_nothing_declares_fails_the_boot_without_openapi() {
         "the boot failure names the variable to change: {err}",
     );
     assert!(err.contains('1'), "and the versions that do exist: {err}",);
+}
+
+#[module(providers = [WidgetsController])]
+struct UnconfiguredApp;
+
+/// A suite configures the transport by seeding the config it wants, which the
+/// harness boots from; no builder stands beside it.
+#[tokio::test]
+async fn the_harness_boots_the_transport_a_seeded_config_describes() {
+    let app = TestApp::builder()
+        .module::<UnconfiguredApp>()
+        .provide(HttpConfig {
+            compression: true,
+            ..HttpConfig::default()
+        })
+        .build()
+        .await
+        .expect("a seeded HttpConfig is ordinary composition");
+
+    let resp = app
+        .http()
+        .get("/v1/widgets")
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    resp.assert_header(header::CONTENT_ENCODING, "gzip");
 }

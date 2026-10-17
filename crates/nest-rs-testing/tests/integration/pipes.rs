@@ -1,31 +1,19 @@
-//! Pipe effectiveness across the three Layer-System scopes — **handler**,
-//! **controller**, and **global** (`use_pipes_global`) — plus the
-//! `#[no_pipes]` opt-out and the TypeId dedup that guarantees the same
-//! pipe declared at multiple scopes still runs exactly once.
-//!
-//! The pipe under test ([`StripPassword`]) is observable two ways: it
-//! strips the `"password"` key from the JSON body the controller echoes
-//! back, and it increments a process-global counter on every invocation.
-//! Tests share that counter, so a `tokio::sync::Mutex` serializes them —
-//! `cargo nextest` parallelizes by default.
+//! Pipe effectiveness across the three scopes — **handler**, **controller**
+//! and **global** — plus the `#[no_pipes]` opt-out, the `TypeId` dedup, and
+//! what a pipe is handed on a route: the body, as the route's unit.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::pipe;
-use nest_rs_http::{controller, routes};
-use nest_rs_pipes::{GlobalPipe, PipeError};
+use nest_rs_core::{Edge, Layer, UnitContext, injectable, module};
+use nest_rs_http::{HttpView, controller, routes};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError, pipe};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::web::Json;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-// --- shared observable state -------------------------------------------------
-
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
-// `nextest` runs `#[tokio::test]`s in parallel; the pipe's counter is
-// process-global, so each test holds this async gate for its full body.
 static GATE: Mutex<()> = Mutex::const_new(());
 
 fn reset_counter() {
@@ -36,11 +24,8 @@ fn counter() -> usize {
     COUNTER.load(Ordering::SeqCst)
 }
 
-// --- the pipe under test -----------------------------------------------------
-
 /// Strips the `"password"` key from a top-level JSON object body and bumps
-/// [`COUNTER`] every invocation. The default-constructed instance is what
-/// `#[injectable]` builds; counter sharing is via a static, not via DI.
+/// [`COUNTER`] every invocation.
 #[injectable]
 #[derive(Default)]
 struct StripPassword;
@@ -48,7 +33,13 @@ struct StripPassword;
 impl Layer for StripPassword {}
 
 impl GlobalPipe for StripPassword {
-    fn transform_body(&self, value: &mut Value) -> Result<(), PipeError> {
+    fn transform(
+        &self,
+        _cx: &UnitContext<'_>,
+        argument: ArgumentKind,
+        value: &mut Value,
+    ) -> Result<(), PipeError> {
+        assert_eq!(argument, ArgumentKind::Body, "a route hands its body");
         COUNTER.fetch_add(1, Ordering::SeqCst);
         if let Some(map) = value.as_object_mut() {
             map.remove("password");
@@ -56,8 +47,6 @@ impl GlobalPipe for StripPassword {
         Ok(())
     }
 }
-
-// --- controllers, one per scope variant --------------------------------------
 
 #[controller(path = "/global")]
 struct GlobalScope;
@@ -131,7 +120,52 @@ impl DupCtrlMethod {
     }
 }
 
+/// What one pipe call was handed: the input, the unit's edge, the site's
+/// address, and the matched route the view holds.
+type Seen = (ArgumentKind, Option<Edge>, &'static str, Option<String>);
+
+static SEEN: std::sync::Mutex<Vec<Seen>> = std::sync::Mutex::new(Vec::new());
+
+/// Records what it is handed, and changes nothing.
+#[injectable]
+#[derive(Default)]
+struct RecordingPipe;
+
+impl Layer for RecordingPipe {}
+
+impl GlobalPipe for RecordingPipe {
+    fn transform(
+        &self,
+        cx: &UnitContext<'_>,
+        argument: ArgumentKind,
+        _value: &mut Value,
+    ) -> Result<(), PipeError> {
+        let route = cx
+            .switch_to::<HttpView>()
+            .and_then(HttpView::route)
+            .map(str::to_owned);
+        SEEN.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((argument, cx.edge(), cx.handler().address(), route));
+        Ok(())
+    }
+}
+
+#[controller(path = "/recorded")]
+struct RecordedScope;
+
+#[routes]
+impl RecordedScope {
+    #[post("/echo/{id}")]
+    #[use_pipes(RecordingPipe)]
+    async fn echo_recorded(&self, body: Json<Value>) -> Json<Value> {
+        Json(body.0)
+    }
+}
+
 #[module(providers = [
+    RecordingPipe,
+    RecordedScope,
     StripPassword,
     GlobalScope,
     ControllerScope,
@@ -142,8 +176,6 @@ impl DupCtrlMethod {
 ])]
 struct PipesModule;
 
-// --- helpers -----------------------------------------------------------------
-
 fn payload() -> Value {
     json!({ "a": 1, "password": "secret" })
 }
@@ -153,8 +185,6 @@ async fn post_payload(app: &TestApp, path: &str) -> Value {
     resp.assert_status(StatusCode::OK);
     resp.json().await.value().deserialize::<Value>()
 }
-
-// --- tests -------------------------------------------------------------------
 
 #[tokio::test]
 async fn pipe_at_global_scope_strips_field() {
@@ -214,8 +244,6 @@ async fn no_pipes_skips_all_pipes() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Even with a global registration, `#[no_pipes]` on the route must
-    // suppress every pipe — global, controller, method.
     let app = TestApp::builder()
         .module::<PipesModule>()
         .use_pipes_global([pipe::<StripPassword>()])
@@ -237,9 +265,6 @@ async fn same_pipe_global_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Declared globally AND redeclared on the method — the per-route shaper
-    // dedups by TypeId so the broadest scope wins; the method redeclaration
-    // is dropped. The pipe runs exactly once.
     let app = TestApp::builder()
         .module::<PipesModule>()
         .use_pipes_global([pipe::<StripPassword>()])
@@ -261,8 +286,6 @@ async fn same_pipe_controller_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Same dedup story without globals: controller wins, the method
-    // redeclaration is skipped — one execution, body still rewritten.
     let app = TestApp::for_module::<PipesModule>().await.expect("boots");
 
     let body = post_payload(&app, "/dup-ctrl-method/echo").await;
@@ -279,8 +302,6 @@ async fn same_pipe_at_all_three_scopes_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Global + controller + method — the broadest (global) wins inside the
-    // route shaper's pipe pool; both narrower redeclarations are dropped.
     let app = TestApp::builder()
         .module::<PipesModule>()
         .use_pipes_global([pipe::<StripPassword>()])
@@ -294,5 +315,32 @@ async fn same_pipe_at_all_three_scopes_runs_once() {
         counter(),
         1,
         "global + controller + method pipe declaration still executes exactly once",
+    );
+}
+
+#[tokio::test]
+async fn a_pipe_on_a_route_is_handed_the_body_as_the_routes_unit() {
+    let app = TestApp::for_module::<PipesModule>().await.expect("boots");
+
+    let resp = app
+        .http()
+        .post("/recorded/echo/7")
+        .body_json(&payload())
+        .send()
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let seen = SEEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        seen,
+        [(
+            ArgumentKind::Body,
+            Some(Edge::Http),
+            "/echo/{id}",
+            Some("/recorded/echo/{id}".to_owned()),
+        )],
+        "one call, on the route's body, with the route's handler and view",
     );
 }

@@ -10,7 +10,7 @@ const DEFAULT_HTTP_PORT: u16 = 3000;
 /// for explicit `HttpConfig { port: … }` (and treats `for_root(None)` as the
 /// base). The base is the workspace's `[workspace.metadata.nestrs] port-base`
 /// when set, else 3000.
-pub fn next_http_port(ws: &NestrsWorkspace) -> CliResult<u16> {
+pub(crate) fn next_http_port(ws: &NestrsWorkspace) -> CliResult<u16> {
     let base = ws.metadata.port_base;
     let used = collect_used_ports(&ws.apps_root())?;
     if used.is_empty() {
@@ -94,10 +94,7 @@ HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
         .unwrap();
 
         let mut used = collect_used_ports(&apps).unwrap();
-        // `collect_used_ports` walks `fs::read_dir`, whose order is not
-        // guaranteed — sort before asserting on the set of discovered ports.
-        // `next_http_port` only reads `.max()`, so production never depends on
-        // the order.
+        // `read_dir` order is not guaranteed.
         used.sort_unstable();
         assert_eq!(used, vec![3001, 3002]);
         assert_eq!(used.into_iter().max().unwrap() + 1, 3003);

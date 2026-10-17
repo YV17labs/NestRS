@@ -139,7 +139,7 @@ HTTP stack.
 
 <div class="rs-band-foot">
 
-**31 capabilities**, one dependency to install them. [Packages →](/packages/)
+**33 capabilities**, one dependency to install them. [Packages →](/packages/)
 
 </div>
 
@@ -155,13 +155,20 @@ HTTP stack.
 
 <Band label="05 — SCALABILITY" alt>
 
-## One domain, several workloads
+## A modular monolith, deployed per workload
 
 Entities, services and policy live once in a shared `features` crate; each app
 under `apps/*` is a thin composition root importing only the transports it
-serves. Microservice scaling without the distributed-systems tax.
+serves. Every workload scales on its own signal, and one app importing them all
+is a plain monolith: microservice scaling without the distributed-systems tax.
 
 <Workspace />
+
+<div class="rs-band-foot">
+
+**Service Weaver's goal**, with the queue and the database where it draws RPC. [The architecture →](/why/#a-modular-monolith-deployed-per-workload)
+
+</div>
 
 </Band>
 

@@ -229,6 +229,8 @@ pub enum GenerateCommand {
     Schedule(GenTarget),
     /// Add an MCP tool adapter to an existing feature.
     Mcp(GenTarget),
+    /// Add an event listener adapter to an existing feature.
+    Events(GenTarget),
 }
 
 pub fn run(cli: Cli) -> CliResult<()> {
@@ -319,6 +321,7 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
         Queue(t) => adapter(Transport::Queue, t),
         Schedule(t) => adapter(Transport::Schedule, t),
         Mcp(t) => adapter(Transport::Mcp, t),
+        Events(t) => adapter(Transport::Events, t),
     }
 }
 

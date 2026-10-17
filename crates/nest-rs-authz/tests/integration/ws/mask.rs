@@ -1,20 +1,16 @@
 //! Automatic reply masking through the real macro: `#[authorize(Action, Entity)]`
 //! beside a `#[subscribe_message]` makes `#[messages]` emit `masked_reply_for`
 //! around the reply — the gateway body writes no masking call.
-//!
-//! That last clause is the whole point of this file. Before it, a WS handler
-//! returning entity rows had to hand-write `serde_json::to_value` +
-//! `masked_reply` + two `map_err`s, which meant the posture was an `Action::Read`
-//! argument buried in a function call rather than a greppable `#[authorize]` —
-//! and a handler that simply forgot the call shipped unmasked rows and compiled.
 
-use nest_rs_authz::Read;
+use std::sync::Arc;
+
+use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::input;
-// `WsError` is the handler-error type here purely because it is `Display` and
-// already in scope — the suite is about the mask, not about error mapping.
+// `WsError` is the handler error only because it is `Display` and in scope.
 use nest_rs_ws::{Gateway, WsClient, WsError, gateway, messages};
 
 use super::{ability_for, body, dispatch_with, widget};
+use crate::post;
 
 /// The wire shape: `name` optional so a field-restricted mask yields `null`
 /// rather than an irreconcilable value.
@@ -32,6 +28,14 @@ struct WidgetDto {
 struct StrictWidgetDto {
     id: i32,
     name: String,
+}
+
+/// A post as a message replies with it.
+#[input]
+struct PostDto {
+    id: i32,
+    org_id: i32,
+    title: String,
 }
 
 #[gateway(path = "/ws/mask")]
@@ -82,6 +86,21 @@ impl MaskGateway {
             id: 1,
             name: "first".to_owned(),
         })
+    }
+
+    /// The rows a `Repo` read under the caller's ability returns: posts of
+    /// orgs 7 and 8.
+    #[subscribe_message("posts")]
+    #[authorize(Read, post::Entity)]
+    async fn posts(&self) -> Result<Vec<PostDto>, WsError> {
+        Ok([(1, 7), (2, 8)]
+            .into_iter()
+            .map(|(id, org_id)| PostDto {
+                id,
+                org_id,
+                title: format!("post {id}"),
+            })
+            .collect())
     }
 
     /// The opt-out: no gate, no mask.
@@ -146,10 +165,8 @@ async fn a_scalar_answer_passes_through_the_mask() {
     );
 }
 
-// The case that separates WS from MCP. A stripped key the *return type* declares
-// required is not a refusal here: the envelope promises no schema, so the frame
-// simply omits it — HTTP's behaviour, not GraphQL's or MCP's. The masked JSON is
-// what ships, so nothing ever has to fit back into `StrictWidgetDto`.
+// A stripped key the return type requires is not a refusal on WS: the frame
+// omits it, as an HTTP body does.
 #[tokio::test]
 async fn a_stripped_required_field_is_omitted_from_the_frame_not_refused() {
     let body = reply("viewer", "strict_widget").await;
@@ -168,8 +185,7 @@ async fn a_stripped_required_field_is_omitted_from_the_frame_not_refused() {
     );
 }
 
-// What *is* fail-closed: nothing installed an ability, so nothing decided what
-// this caller may read. Shipping the value would answer that with "everything".
+// What is fail-closed: no ambient ability installed.
 #[tokio::test]
 async fn no_ambient_ability_refuses_rather_than_shipping_the_rows() {
     let reply = MaskGateway
@@ -200,5 +216,24 @@ async fn public_opts_out_of_masking() {
         body.contains("first"),
         "`#[public]` declares no gate and no mask — the message is responsible for \
          its own output: {body}",
+    );
+}
+
+/// The read behind the reply already left out what a relational denial names,
+/// so the mask keeps every row it was handed.
+#[tokio::test]
+async fn a_relational_denial_keeps_every_row_the_read_admitted() {
+    let mut member = AbilityBuilder::new();
+    member.can(Action::Read, post::Entity);
+    member
+        .cannot(Action::Read, post::Entity)
+        .when(|p| post::in_org(&p, 9));
+    let member = Arc::new(member.build().expect("valid test ability"));
+
+    let body = body(dispatch_with(&MaskGateway, member, "posts").await);
+
+    assert!(
+        body.contains(r#""id":1"#) && body.contains(r#""id":2"#),
+        "{body}"
     );
 }

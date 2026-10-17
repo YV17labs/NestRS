@@ -1,96 +1,59 @@
 //! MCP — `#[mcp]` mounts a Model Context Protocol server on the HTTP transport,
 //! and `#[tools]` declares the operations it serves.
 //!
-//! MCP is **not a transport**, it is a graft on `HttpTransport` (the same
-//! pattern as WS): `#[mcp]` on a struct emits an [`endpoint`] factory that
-//! mounts under the HTTP server. Apps activate MCP by listing the
-//! `#[mcp]`-decorated provider — there is no `<Transport>Module` activation
-//! seam to import, and no `Transport` impl. [`McpModule`] exists only to
-//! configure the streamable-HTTP server ([`McpConfig`]) and name the app
-//! ([`McpIdentity`]); it activates nothing.
-//!
-//! A host's `path` is the whole URL path: omit it for [`DEFAULT_PATH`]
-//! (`/mcp`), or write one to serve a second endpoint. It is not a namespace the
-//! host owns the way a `#[controller]`'s is — nothing nests under it, it names
-//! the one endpoint the host joins, and peers writing the same path share it.
+//! An app activates MCP by listing an `#[mcp]` provider; [`McpModule`] only
+//! configures the streamable-HTTP server ([`McpConfig`]) and names the app
+//! ([`McpIdentity`]). A host's `path` is the whole URL path, [`DEFAULT_PATH`]
+//! (`/mcp`) when omitted; nothing nests under it, and hosts writing the same
+//! path share one endpoint.
 //!
 //! # An operation declares the same layers a `#[query]` does
 //!
-//! `#[tools]` is a request-layer site, not just a router: each
-//! `#[tool]` / `#[prompt]` takes `#[use_guards(...)]` / `#[force_guards(...)]`,
+//! Each `#[tool]` / `#[prompt]` takes `#[use_guards(...)]` / `#[force_guards(...)]`,
 //! a **mandatory** access posture (`#[authorize(Action, Entity)]` or
 //! `#[public]`), and a pipe on its arguments (`Parameters<Valid<T>>` /
-//! `Parameters<Piped<P, T>>`). They expand in that order, so a caller the class
-//! gate refuses never pays for validation.
+//! `Parameters<Piped<P, T>>`), run in that order. The host's `#[use_guards]` and
+//! the app-wide pool join one chain per site, deduplicated by `TypeId`, which
+//! runs `check_mcp`; the endpoint's [`McpOperationGuard`] runs `check_http`
+//! apart from it.
 //!
-//! The host struct takes `#[use_guards(...)]` too, and the app-wide pool joins
-//! them: all three scopes compose into one chain per site, deduplicated by
-//! `TypeId` like every other layer family. The endpoint's
-//! [`McpOperationGuard`] is not part of it and does not shorten it — that guard
-//! is handed an HTTP request and runs `check_http`, while this chain is handed
-//! the operation and runs `check_mcp`.
-//!
-//! Two things this transport does not inherit, and both follow from the
-//! protocol rather than from a preference. Response masking has no selection set
-//! to excuse a stripped **required** field, so it fails *closed*; declare
-//! `unmasked` when a tool deliberately answers with a narrower projection. And
-//! `bind = Service` has no MCP form: an operation takes one `Parameters<T>`
-//! struct, not the named id argument the binding reads.
+//! Response masking fails *closed* on a stripped **required** field — declare
+//! `unmasked` when a tool deliberately answers with a narrower projection — and
+//! `bind = Service` has no MCP form: an operation takes one `Parameters<T>`.
 //!
 //! # Every capability, not just tools
 //!
-//! A host serves whatever it implements: `#[tool_router]`/`#[tool]` for tools,
-//! `#[prompt_router]`/`#[prompt]` for prompts, and hand-written `ServerHandler`
-//! methods for resources and templates, completion, logging levels,
-//! subscriptions (SEP-2575), the `tasks/*` extension (SEP-2663), elicitation
-//! and multi-round tool responses (SEP-2322), and custom methods. The protocol
-//! types live under [`model`], the per-operation handles under [`service`], and
-//! anything not re-exported here is reachable through [`rmcp`] itself.
+//! A host serves `#[tool_router]`/`#[tool]` tools, `#[prompt_router]`/`#[prompt]`
+//! prompts, and whatever else it implements by hand on `ServerHandler`. The
+//! protocol types live under [`model`], the per-operation handles under
+//! [`service`], and anything not re-exported here under [`rmcp`].
 //!
 //! # Ambient request state reaches every operation
 //!
-//! rmcp dispatches each operation on its own spawned task, so a task-local
-//! installed around the poem endpoint would not reach it. [`PropagatingHandler`]
-//! closes that gap: the endpoint stashes the per-operation state in the request
-//! extensions, rmcp forwards them as `http::request::Parts` into the operation's
-//! `RequestContext`, and the handler re-installs everything *inside* the
-//! dispatch. A handler method therefore gets the same transparency HTTP and
-//! GraphQL have:
+//! rmcp dispatches each operation on its own task; [`PropagatingHandler`]
+//! re-installs the per-operation state inside that dispatch, for every
+//! capability, so a handler method gets:
 //!
-//! * [`Scoped<T>::from_context`](Scoped) resolves an
-//!   `#[injectable(scope = request)]` provider.
-//! * The caller's ability is installed by the operation guard's
-//!   [`around`](McpOperationGuard::around) — the same seam
-//!   `GraphqlOperationGuard` uses, so "who installs the ability" has one answer
-//!   on both transports.
-//! * A `Repo`-backed body reads through the ambient executor, row-filtered by
-//!   the caller's ability — provide `nest_rs_seaorm::mcp::McpDataContext`
-//!   `as dyn McpToolContext` (what `AuthzMcpModule` does) to install it.
+//! * [`Scoped<T>::from_context`](Scoped) for an `#[injectable(scope = request)]`
+//!   provider;
+//! * the caller's ability, installed by the operation guard's
+//!   [`around`](McpOperationGuard::around);
+//! * a `Repo`-backed body reading through the ambient executor of the
+//!   operation's own unit of work, opened through the bound
+//!   `nest_rs_database::UnitOfWork`, row-filtered by the caller's ability.
 //!
-//! This holds for **every** capability, not the tool call alone: the wrapper
-//! delegates the whole `ServerHandler` surface, so a prompt fetch, a resource
-//! read and a `tasks/get` are scoped and transacted exactly like `tools/call`.
-//! The two documented exceptions — notifications and the long-lived
-//! `subscriptions/listen` — are on [`McpToolContext::around`].
+//! Notifications and `subscriptions/listen` are the exceptions, documented on
+//! [`McpToolContext::around`].
 //!
-//! The guard chain is enforced ahead of all that, in the order
-//! [`resolve_operation_guard`] mounts: the app's registered
-//! [`McpOperationGuard`] (`nest_rs_authz::mcp::McpAbilityBridge`, which answers
-//! `401` without a valid token), else the global guard pool through
-//! [`FallbackMcpGuard`], else **deny-all**. Without a registered
-//! [`McpToolContext`] a `Repo`-backed body still fails **closed and loud**
-//! (`Repo::conn` errors; `scope_for` denies every row), never a silent wrong
-//! answer.
-//!
+//! The endpoint guard is what [`resolve_operation_guard`] mounts: the global
+//! guard pool with the app's registered [`McpOperationGuard`] in it, the
+//! registered guard alone when the pool is empty, else **deny-all**. Without a
+//! bound unit of work a `Repo`-backed body fails closed (`Repo::conn` errors),
+//! and without an ability `scope_for` denies every row.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — MCP operations, hosts and the merged endpoint.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::mcp";
 
 mod composite;
@@ -104,58 +67,67 @@ mod host;
 mod identity;
 mod module;
 mod operation;
+mod parameters;
 mod propagate;
 mod registry;
 mod scope;
+mod sessions;
 pub mod unit;
+mod view;
 
 pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
 pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
-pub use error::{Opaque, pipe_error, unresolvable_chain};
-pub use guard::{BoxFuture, FallbackMcpGuard, McpOperationGuard};
+pub use error::{Opaque, pipe_error, problem_error, unresolvable_chain};
+pub use guard::{BoxFuture, McpOperationGuard, denial_to_mcp_error};
 pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpOptions, McpSetup};
-pub use operation::{McpOperationContext, McpOperationKind, current_container};
+pub use operation::{McpOperationKind, current_container};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
-#[doc(hidden)]
-pub use registry::{DefaultOperationLayers, DefaultToolRouter, register_host};
 /// Per-operation accessor for `#[injectable(scope = request)]` providers inside
 /// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;
+pub use view::McpView;
 
-// --- The ergonomic surface: what a tool, prompt or resource host writes -----
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::endpoint::endpoint_site;
+    pub use crate::error::{OperationAnswer, refused};
+    pub use crate::identity::declared_identity;
+    pub use crate::operation::{description_is_blank, run_layered_mcp_chain};
+    pub use crate::registry::{
+        DefaultOperationLayers, DefaultToolRouter, ENDPOINT, declare_endpoint, register_host,
+    };
+    pub use nest_rs_core::__private::install_pending;
+}
 
 pub use rmcp::model::ProtocolVersion;
+/// What a host reports about itself and advertises.
+pub use rmcp::model::{ServerCapabilities, ServerConfig};
 pub use rmcp::{ErrorData as McpError, ServerHandler};
-/// Host decorators. rmcp owns them; `nest-rs-mcp` re-exports them so a host
-/// file imports one path. `#[tool_router]`/`#[prompt_router]` scan an inherent
+/// Host decorators, rmcp's own. `#[tool_router]`/`#[prompt_router]` scan an inherent
 /// `impl` for `#[tool]`/`#[prompt]` methods; `#[tool_handler]`/
 /// `#[prompt_handler]` fill in the matching `ServerHandler` methods and stack on
 /// one `impl ServerHandler` block when a host serves both.
 pub use rmcp::{prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router};
 
+/// `Parameters<T>` deserializes an operation's typed input — the framework's
+/// own, refusing without the value; `Json<T>` returns a typed structured result
+/// (`structuredContent`, SEP-2106).
+pub use parameters::Parameters;
 pub use rmcp::handler::server::router::prompt::PromptRouter;
 pub use rmcp::handler::server::router::tool::ToolRouter;
-/// `Parameters<T>` deserializes a tool's typed input; `Json<T>` returns a typed
-/// structured result (`structuredContent`, SEP-2106).
-pub use rmcp::handler::server::wrapper::{Json, Parameters};
+pub use rmcp::handler::server::wrapper::Json;
 
 /// The two results almost every tool body names.
 pub use rmcp::model::{CallToolResult, ContentBlock};
-
-// --- The whole protocol, one module each ------------------------------------
-//
-// Re-exported wholesale rather than name by name. MCP grows a capability every
-// few revisions — tasks (SEP-2663), subscriptions (SEP-2575), MRTR (SEP-2322),
-// cache hints (SEP-2549) all landed in one rmcp major — and a hand-curated list
-// of protocol types is a list that silently lags the protocol. Forwarding the
-// modules means a capability rmcp gains is reachable through `nest_rs::mcp::`
-// the day it ships, with no framework release in between.
 
 /// Routers and argument wrappers behind the host decorators.
 pub use rmcp::handler;
@@ -178,31 +150,155 @@ pub use rmcp::transport::streamable_http_server::{
 
 /// The rmcp SDK itself, at the exact version the framework built against.
 ///
-/// Two uses, both first-class:
-///
-/// * **Macro hygiene.** rmcp's `#[tool]` / `#[tool_router]` / `#[tool_handler]`
-///   / `#[prompt]` family expands to bare `rmcp::` paths resolved against the
-///   *call site's* scope. `#[tools]` carries that import for you, inside a
-///   module named for the host — so two hosts in one file cannot
-///   collide on the name, and the host's file writes no `use rmcp` at all. A
-///   host that hand-writes `ServerHandler` is outside that expansion and imports
-///   this itself, which is also what keeps its manifest free of an `rmcp` entry
-///   that could drift from the major the framework built against.
-/// * **Reaching anything not re-exported above** — a newer rmcp item, or one
-///   this crate has no opinion about.
+/// rmcp's macros expand to bare `rmcp::` paths: `#[tools]` imports this for them,
+/// and a host hand-writing `ServerHandler` imports it itself rather than adding
+/// an `rmcp` manifest entry that could drift from this major.
 pub use rmcp;
 
 /// The wire-DTO shorthand — same decorator the HTTP layer uses, re-exported
 /// here so a payload crossing this transport needs no `serde` of its own.
 pub use nest_rs_core::input;
 
-/// The two pipe carriers an operation's arguments go through, re-exported so a
-/// host file writing `Parameters<Valid<T>>` imports one path.
+/// The two pipe carriers an operation's arguments go through.
 ///
 /// `Valid<T>` validates the deserialized arguments; `Piped<P, T>` runs any
 /// [`Pipe`](nest_rs_pipes::Pipe) over them. `#[tools]` strips the carrier from
-/// the wire signature — the tool's JSON Schema stays `T`'s — runs the pipe
-/// before the body, and answers a rejection with `invalid_params`.
+/// the wire signature — the tool's JSON Schema stays `T`'s — and answers a
+/// rejection with `invalid_params`.
 pub use nest_rs_pipes::{Piped, Valid};
 
-pub use nest_rs_mcp_macros::{mcp, tools};
+/// Mark a struct as an MCP host that self-mounts over HTTP.
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_core::Discoverable;
+/// use nest_rs_mcp::{DEFAULT_PATH, hosts_on, mcp};
+/// # use nest_rs_core::{injectable, module};
+/// # use nest_rs_mcp::{
+/// #     AllowAllMcpGuard, McpError, McpIdentity, McpModule, McpOperationGuard, McpOptions, tools,
+/// # };
+/// # use nest_rs_testing::mcp::{initialize, result};
+/// #
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct MyService;
+/// #
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct PostsService;
+///
+/// #[mcp]
+/// struct MyHandler {
+///     #[inject]
+///     svc: Arc<MyService>,
+/// }
+///
+/// #[mcp(path = "/mcp/posts", name = "assistant-posts")]
+/// struct PostsHandler {
+///     #[inject]
+///     svc: Arc<PostsService>,
+/// }
+/// #
+/// # #[tools]
+/// # impl MyHandler {
+/// #     #[tool(description = "Answer a ping.")]
+/// #     #[public]
+/// #     async fn ping(&self) -> Result<String, McpError> {
+/// #         Ok("pong".into())
+/// #     }
+/// # }
+/// #
+/// # #[tools]
+/// # impl PostsHandler {
+/// #     #[tool(description = "Count the posts.")]
+/// #     #[public]
+/// #     async fn count_posts(&self) -> Result<String, McpError> {
+/// #         Ok("0".into())
+/// #     }
+/// # }
+/// #
+/// # #[module(imports = [
+/// #     McpModule::for_root(McpOptions {
+/// #         server: Some(McpIdentity::new("assistant", "1.0.0")),
+/// #         ..Default::default()
+/// #     }),
+/// # ], providers = [
+/// #     MyService,
+/// #     PostsService,
+/// #     MyHandler,
+/// #     PostsHandler,
+/// #     AllowAllMcpGuard as dyn McpOperationGuard,
+/// # ])]
+/// # struct AppModule;
+///
+/// fn implements<T: Discoverable>() {}
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// implements::<MyHandler>();
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+///
+/// assert_eq!(hosts_on(app.container(), DEFAULT_PATH).len(), 1);
+/// assert_eq!(hosts_on(app.container(), "/mcp/posts").len(), 1);
+///
+/// let handshake = result(&initialize(app.http(), "/mcp/posts", None).await);
+/// assert_eq!(handshake["result"]["serverInfo"]["name"], "assistant-posts");
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_mcp_macros::mcp;
+
+/// Declare an `#[mcp]` host's operations on its inherent impl block. Each tool
+/// declares its posture, `#[public]` or `#[authorize(Action, Entity)]`; the gate
+/// and the reply mask `#[authorize]` emits run in `nest_rs_authz::mcp`.
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_mcp::{McpError, Parameters, ServerHandler, Valid, input, mcp, tools};
+/// # use nest_rs_core::{injectable, module};
+/// # use nest_rs_mcp::{AllowAllMcpGuard, DEFAULT_PATH, McpOperationGuard, hosts_on};
+/// # use nest_rs_testing::mcp::{call_tool_with, result};
+/// #
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct MyService;
+///
+/// #[input]
+/// struct FindDto {
+///     #[validate(length(min = 1))]
+///     name: String,
+/// }
+///
+/// #[mcp]
+/// struct MyHandler {
+///     #[inject]
+///     svc: Arc<MyService>,
+/// }
+///
+/// #[tools]
+/// impl MyHandler {
+///     #[tool(description = "Find a user by name.")]
+///     #[public]
+///     async fn find(&self, Parameters(p): Parameters<Valid<FindDto>>) -> Result<String, McpError> {
+///         Ok(p.into_inner().name)
+///     }
+/// }
+///
+/// fn implements<T: ServerHandler>() {}
+/// # #[module(providers = [MyService, MyHandler, AllowAllMcpGuard as dyn McpOperationGuard])]
+/// # struct AppModule;
+/// #
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// implements::<MyHandler>();
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+///
+/// let declared = hosts_on(app.container(), DEFAULT_PATH)[0].declared_tools();
+/// assert_eq!(declared[0].name, "find");
+///
+/// let arguments = serde_json::json!({ "name": "ada" });
+/// let body = call_tool_with(app.http(), DEFAULT_PATH, "find", None, arguments).await;
+/// assert_eq!(result(&body)["result"]["content"][0]["text"], "ada");
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_mcp_macros::tools;

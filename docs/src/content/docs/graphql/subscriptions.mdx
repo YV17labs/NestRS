@@ -1,7 +1,6 @@
 ---
 title: Subscriptions
 description: A long-lived operation over graphql-ws — declared like a query, gated at subscribe, and filtered per item for the subscriber who is reading.
-tier: all-options
 sidebar:
   order: 6
 ---
@@ -71,6 +70,15 @@ published in org A reaches the first and never reaches the second. The
 resolver body writes no filter — the posture attribute is the whole
 mechanism, the same one `#[authorize]` arms on a query.
 
+That policy reads `org_id`, a column the item carries. An item is pushed,
+not read through `Repo`, so a rule that reads what the item does not carry
+— a relation, an unexposed column, a column the item's type leaves out —
+cannot be decided on it: such a grant admits no item, and such a denial
+refuses every one
+([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)).
+Expose the column the rule reads, read-only, carry it on the item, and the
+item is decided like a row.
+
 ## Feeding a subscription
 
 A stream needs a source. The demo publishes one from the event it already
@@ -120,6 +128,16 @@ The caller authenticates on the **upgrade** request, with the same
 serves the playground when it is enabled; the upgrade header is what
 selects the socket.
 
+A browser never consults CORS before it opens a socket, so the upgrade
+checks the `Origin` header itself (RFC 6455 §10.2), before the guard runs.
+With no CORS policy, a browser page on the server's own origin gets its
+socket; any other gets `403`, and a `warn` on `nest_rs::graphql` names the
+origin sent and the one the server took for its own. Once
+`<PREFIX>_HTTP__CORS_ORIGINS` is set, only the origins it lists get one — the
+server's own included, when it serves the page — and the CORS layer's `403`
+files no `warn` ([CORS](/http/configuration/#cors)). A client that sends no
+`Origin` — anything but a browser — is not concerned.
+
 <Aside type="caution">
 A browser cannot set headers on a WebSocket handshake. Deployments that
 subscribe from a browser terminate the upgrade behind a proxy that adds
@@ -141,8 +159,9 @@ whole request.
 
 The middle row is what makes a `Repo`-backed subscription work at all: the
 `101` is answered before the connection task starts, so the request
-boundary's handle is already gone. The socket takes a pool-bound one
-instead. Carrying the transaction would pin a pooled connection for hours
+boundary's handle is already gone. The socket runs as a pool unit of the
+app's unit-of-work binding instead, so a DataLoader batch under it reads
+through that pool too. Carrying the transaction would pin a pooled connection for hours
 and write through something nobody will commit.
 
 The second row's span covers the **connection**, not each item: async-graphql
@@ -157,26 +176,57 @@ something that looks right and is not.
 ## Configuration
 
 A subscription socket captures its principal once, at the upgrade, and
-replays it for every item it pushes. `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`
+replays it for every item it pushes. `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`
 bounds how long that may last — the same control, and the same default of
-four hours, that `NESTRS_WS__MAX_CONNECTION_SECS` applies to a gateway
-socket. When it elapses the server closes the socket, so the peer
+four hours, that `<PREFIX>_WS__MAX_CONNECTION_SECS` applies to a gateway
+socket. When it elapses the server ends the socket, so the peer
 re-upgrades, which re-runs the guard chain and re-checks the token's
 `exp`. Set it to `0` to disable the ceiling.
+
+The server ends a socket the protocol's way, at the ceiling and at the
+shutdown signal alike: each subscription still running gets a `complete`, a
+query or a mutation sent over the socket is answered first, then the socket
+closes with RFC 6455's `1001 Going Away` and a reason saying what to do —
+re-upgrade, or reconnect to a replica still serving. A client that takes
+nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) is dropped without a close,
+which no longer reaches it, and one `warn` on `nest_rs::graphql` says so. A
+socket the server ended files its `graphql.subscription` line `cancelled`; one
+its client closed files `ok`, one the protocol refused `error`. A subscription
+whose stream panics closes the socket with `1011 Internal Error` and files
+`panic`.
+
+The socket is bounded in what one client can hold, whatever it is
+authorised for:
+
+| Bound | Variable | Default | Past it |
+|---|---|---|---|
+| A message's size | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | 64 KiB | the frame is refused before it is buffered, and the socket closes `1011` |
+| The wait for `connection_init` | `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS` | 3 s, from 1 to 60 | the socket closes `4408 Connection initialisation timeout` |
+| Operations running at once | `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` | 100, `0` ⇒ unlimited | the `subscribe` is answered an `error` message for its id, and the socket stays |
+
+A `subscribe` reusing the id of an operation still running closes the socket
+`4409 Subscriber already exists`, as graphql-ws requires, rather than
+replacing the running one. Both `44xx` closes file the socket's line `error`.
 
 Everything else is the GraphQL module's own configuration — see
 [Configuration](/graphql/configuration/).
 
 ## Limits
 
-- **The method must be `async` and its fallible return spelled
-  `Result<…>`.** async-graphql reads the last path segment of the return
-  type, so an aliased `Result` is taken for an ordinary value. Both are
-  compile errors naming the rule.
+- **The fallible return is spelled `Result<…>`.** async-graphql reads the last
+  path segment of the return type and takes any other spelling for the stream
+  itself, so a `Result` under another name — `GqlResult<impl Stream<…>>` from
+  `use async_graphql::Result as GqlResult`, or an alias around a named stream —
+  is a compile error naming the rule, at the return type. A query or a mutation
+  answers such a `Result` by its type; a subscription cannot. The method may be
+  `fn` or `async fn`.
 - **An item that cannot be masked is dropped, not raised.** A stream
   field's type is the item's, not a `Result`, so there is no error channel
   per item: failing closed means the item does not ship. The drop is
   logged at `warn` on `nest_rs::graphql` with the operation name.
+- **A relational rule decides no item.** The subscriber sees nothing, and
+  `nest_rs::authz` logs one `warn` (`reason = "undecidable_on_push"`) per
+  entity and action, not one per item.
 - **`bind = Service` binds at subscribe, not per item** — it names one
   subject for the subscription, the way it names one for a mutation.
 - **A request-scoped provider is unreachable** from a subscription — see

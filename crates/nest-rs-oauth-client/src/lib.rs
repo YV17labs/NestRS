@@ -1,31 +1,20 @@
 //! OAuth 2.0 **client** for nestrs — this app acting as the party that obtains
 //! a token from somebody else's authorization server.
 //!
-//! RFC 6749 §1.1 names four roles, and this crate is exactly one of them. It
-//! holds the Authorization Code flow with PKCE ([`OAuthClient`]), the signed
-//! CSRF/PKCE transaction that lets the round-trip work without server-side
-//! session storage, and the `for_root` seam that wires one configured client as
-//! global infrastructure ([`OAuthClientModule`]).
+//! It holds the Authorization Code flow with PKCE ([`OAuthClient`]) and the
+//! `for_root` seam that wires one configured client ([`OAuthClientModule`]).
+//! Authenticating a client at *our* token endpoint lives in `nest-rs-authn`; social
+//! login (GitHub, Google, custom providers) in `nest-rs-social`, built on this client.
 //!
-//! What it deliberately does **not** hold is the mirror direction:
-//! authenticating somebody else's registered client at *our* token endpoint is
-//! credential verification, so it lives in `nest-rs-authn` beside the password
-//! and token paths. The two used to share a module named `oauth`, where a
-//! reader could not tell which direction a symbol faced.
-//!
-//! For **social login** — mounting GitHub/Google or a custom provider behind an
-//! open, discovered provider contract — reach for `nest-rs-social`, whose
-//! providers compose this client as their shared flow.
-//!
-//! Integration tests: `tests/integration/main.rs`, with paths mirroring `src/`.
+//! **The authorization server is not proved at boot** (`nest_rs_core::prove`):
+//! it is a third party's, reached once per login, and one briefly down must cost
+//! those logins, never the app's start.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — the outbound OAuth flow: redirect, callback
 /// refusal, token exchange, userinfo.
-///
-/// Declared by the crate that **owns** the concern, so a target's one job — to
-/// say *where* an event came from — stays true.
 pub const TARGET: &str = "nest_rs::oauth::client";
 
 mod client;
@@ -33,5 +22,5 @@ mod config;
 mod module;
 
 pub use client::{AuthorizationRedirect, OAuthClient, TokenSet};
-pub use config::OAuthClientConfig;
+pub use config::{OAuthClientConfig, refuse_plaintext_redirect};
 pub use module::{OAuthClientModule, OAuthClientSetup};

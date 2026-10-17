@@ -1,67 +1,99 @@
-//! What a failing operation tells the client, and what it tells the operator — the
-//! GraphQL half of the seam MCP established.
+//! A failure the client is owed no word of, said where it is met: `.opaque()`
+//! turns any error into the `async_graphql::Error` a resolver body returns,
+//! answering [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE)
+//! under the `INTERNAL` code and filing the whole chain at `error`, whatever the
+//! error's type would otherwise have answered.
 //!
-//! An operation's error frame is built from whatever the resolver's error type
-//! prints, and `Display` is the wrong default for that: a `DbErr` carries SQL,
-//! column names and sometimes row values. The framework's own `ServiceError::Db`
-//! is `#[error("database error")]` so nothing leaks today, but a feature's own
-//! error type has no such discipline imposed on it — and a GraphQL client is
-//! exactly as untrusted as a language model.
-//!
-//! ```ignore
+//! ```
+//! # use std::sync::Arc;
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_graphql::async_graphql::{Result, SimpleObject};
+//! # use nest_rs_graphql::{GraphqlModule, Opaque, operations, resolver};
+//! #
+//! # #[derive(SimpleObject)]
+//! # struct Room {
+//! #     name: String,
+//! # }
+//! #
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct RoomsService;
+//! #
+//! # impl RoomsService {
+//! #     async fn list(&self) -> Result<Vec<Room>, std::io::Error> {
+//! #         Err(std::io::Error::other("relation \"rooms\" does not exist"))
+//! #     }
+//! # }
+//! #
+//! # #[resolver]
+//! # struct RoomsResolver {
+//! #     #[inject]
+//! #     svc: Arc<RoomsService>,
+//! # }
+//! #
+//! # #[operations]
+//! # impl RoomsResolver {
 //! #[query]
-//! #[authorize(Read, rooms::Entity)]
+//! #[public]
 //! async fn rooms(&self) -> Result<Vec<Room>> {
 //!     Ok(self.svc.list().await.opaque()?)
 //! }
+//! # }
+//! #
+//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [RoomsService, RoomsResolver])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+//! # let resp = app.http().post("/graphql")
+//! #     .body_json(&serde_json::json!({ "query": "{ rooms { name } }" })).send().await;
+//! # let body: serde_json::Value = resp.json().await.value().deserialize();
+//!
+//! assert_eq!(body["errors"][0]["message"], nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! **A deliberate error is not this.** A validation rejection, a `Denial`, a
 //! message a client can act on — those exist to be *read*. Return them directly;
 //! `denial_to_graphql_error` is the shape a refusal already travels through.
 
-use std::fmt::Display;
-
 use async_graphql::Error as GraphqlError;
-use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
 
 /// Turn a failure the client must not read into one it may.
 ///
-/// Implemented for every `Result` whose error is printable, so it covers a
-/// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
-/// any of them having to know GraphQL exists.
+/// Implemented for every `Result` whose error converts into a boxed error, so
+/// the whole cause chain reaches the operator's line.
 ///
-/// The twin traits on MCP and WS are deliberately separate types rather than one
-/// trait generic over the error: the output is what lets `.opaque()?` infer from
-/// the enclosing resolver's return type. See `nest_rs_core::opaque`.
+/// Separate from the MCP and WS twins: the output type is what lets `.opaque()?`
+/// infer from the resolver's return type (see `nest_rs_core::opaque`).
 pub trait Opaque<T> {
     /// Log the real error for the operator, hand the client an opaque one.
     fn opaque(self) -> Result<T, GraphqlError>;
 }
 
-impl<T, E: Display> Opaque<T> for Result<T, E> {
+impl<T, E> Opaque<T> for Result<T, E>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
+{
     fn opaque(self) -> Result<T, GraphqlError> {
-        self.map_err(|err| {
-            tracing::error!(
-                target: crate::TARGET,
-                error = %err,
-                "graphql operation failed",
-            );
-            // Extended with the same `INTERNAL` code an internal denial carries, so
-            // a client cannot tell an unexpected failure from a refused one — which
-            // is the point of both.
-            use async_graphql::ErrorExtensions;
-            GraphqlError::new(OPAQUE_CLIENT_MESSAGE).extend_with(|_, e| e.set("code", "INTERNAL"))
-        })
+        self.map_err(|err| crate::error::opaque_error(&*nest_rs_core::boxed_error(err)))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Display;
+
+    use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
+
     use super::*;
 
-    /// An error whose `Display` carries exactly what must not ship.
+    #[derive(Debug)]
     struct Leaky;
+
+    impl std::error::Error for Leaky {}
 
     impl Display for Leaky {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -102,15 +134,11 @@ mod tests {
         assert_eq!(out.ok(), Some(7));
     }
 
-    /// The other half of the same contract, and the half nobody read.
-    ///
-    /// Withholding the cause from the client is only safe because it is
-    /// recorded somewhere else — here, an error frame a client reads as untrusted. If this event ever stopped
-    /// carrying `error`, every `.opaque()?` on this edge would turn a real
-    /// failure into a blank refusal with no trace at all, and the
-    /// nothing-leaks test next door would still pass: it only asserts what is
-    /// *absent* from the wire.
     #[test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test reads the line the call logs, not its result"
+    )]
     fn and_the_operator_gets_the_error_the_client_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
         let _ = Err::<(), _>(Leaky).opaque();

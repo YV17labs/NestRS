@@ -1,92 +1,188 @@
-//! The [`DynamicModule`] trait — the contract a configured import
-//! (`Foo::for_root(opts)`) implements to seed values or queue async factories
-//! at its import site, distinct from a bare `#[module]` type.
+//! [`Module`] and [`DynamicModule`]: the contracts a module listed by type and
+//! one configured at its import site (`Foo::for_root(opts)`) implement.
+
+use std::any::TypeId;
+use std::marker::PhantomData;
 
 use crate::container::ContainerBuilder;
 
-/// Boot-time trace emitted by the `#[module]` macro after a module finishes
-/// registering its providers. Idempotent registration means a diamond import
-/// fires this exactly once. Target `nest_rs::module`, level `info` — quiet under
-/// `RUST_LOG=warn`, visible by default.
-#[doc(hidden)]
-pub fn __module_registered(name: &'static str) {
-    tracing::info!(
-        target: crate::target::MODULE,
-        module = name,
-        "module dependencies initialized",
-    );
+/// The framework's proof that `M`'s collect phase runs through an import, once
+/// per app; only the framework makes one (`.claude/decisions/module-phases-by-import.md`).
+pub struct Collecting<M: ?Sized>(PhantomData<fn(&M)>);
+
+impl<M: ?Sized> Collecting<M> {
+    pub(crate) fn new() -> Self {
+        Self(PhantomData)
+    }
 }
 
-/// A statically-composed module — the common case, listed by type in
-/// `#[module(imports = [...])]`. The `#[module]` macro makes registration
-/// idempotent via [`ContainerBuilder::mark_registered`], so a diamond import
-/// builds its providers exactly once.
-pub trait Module {
-    /// Build this module's providers and recurse into imports. Runs in the
-    /// register phase, after every async factory has produced its value.
-    fn register(builder: ContainerBuilder) -> ContainerBuilder;
+/// [`Collecting`]'s twin for `M`'s register phase, run once per app after its collect.
+pub struct Registering<M: ?Sized>(PhantomData<fn(&M)>);
 
-    /// Queue the async factories declared by this module's import tree.
-    /// Default is a no-op; the `#[module]` macro overrides it to recurse.
-    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+impl<M: ?Sized> Registering<M> {
+    pub(crate) fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+/// `module` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
+pub(crate) mod __private {
+    use std::any::TypeId;
+
+    use super::DynamicModule;
+
+    /// Logs that the module `name` registered its providers; emitted by `#[module]`.
+    pub fn module_registered(name: &'static str) {
+        tracing::info!(
+            target: crate::target::MODULE,
+            module = name,
+            "module dependencies initialized",
+        );
+    }
+
+    /// The module a dynamic import declares it is, read off its expression's
+    /// type without evaluating it; emitted by `#[module]`.
+    pub fn dynamic_import_module<D: DynamicModule>(_import: impl FnOnce() -> D) -> TypeId {
+        D::module()
+    }
+}
+
+/// A module listed by type in `#[module(imports = [...])]`; each phase runs
+/// once per app, so a diamond import builds its providers once.
+///
+/// # Written by hand
+///
+/// A hand-written module imports its modules with [`ContainerBuilder::import`]
+/// in both phases: `register` alone fails the boot with
+/// [`LateFactoryError`](crate::LateFactoryError), `collect` alone with
+/// [`UnregisteredModuleError`](crate::UnregisteredModuleError).
+pub trait Module: 'static {
+    /// Build this module's providers, after every async factory has produced its value.
+    fn register(builder: ContainerBuilder, registering: Registering<Self>) -> ContainerBuilder;
+
+    /// Queue the async factories this module and its imports declare.
+    fn collect(builder: ContainerBuilder, collecting: Collecting<Self>) -> ContainerBuilder {
+        let _ = collecting;
         builder
     }
 }
 
-/// A module configured at its import site (e.g. `Module::for_root(opts)`),
-/// built synchronously via `register` or asynchronously via `collect`.
+/// A module configured at its import site (e.g. `Module::for_root(opts)`): a
+/// value that captures options.
 ///
-/// Unlike [`Module`], a dynamic module is a value that captures options:
-///
-/// ```ignore
+/// ```
+/// # use std::any::TypeId;
+/// # use nest_rs_core::{App, ContainerBuilder, DynamicModule, Registering, module};
+/// # #[module]
+/// # pub struct UsersModule;
+/// # pub struct Greeting(&'static str);
+/// # pub struct GreetingModule;
+/// # pub struct GreetingSetup(Greeting);
+/// # impl GreetingModule {
+/// #     pub fn for_root(greeting: Greeting) -> GreetingSetup { GreetingSetup(greeting) }
+/// # }
+/// # impl DynamicModule for GreetingSetup {
+/// #     fn module() -> TypeId { TypeId::of::<GreetingModule>() }
+/// #     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+/// #         builder.provide(self.0)
+/// #     }
+/// # }
 /// #[module(imports = [
-///     UsersModule,                  // static, by type
-///     OpenApiModule::for_root(),    // dynamic, configured at its import site
+///     UsersModule,                                  // static, by type
+///     GreetingModule::for_root(Greeting("hello")),  // dynamic, configured at its import site
 /// ])]
 /// pub struct AppModule;
+///
+/// let app = App::new::<AppModule>()?;
+/// assert_eq!(app.container().get::<Greeting>().map(|g| g.0), Some("hello"));
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 ///
-/// Dynamic modules are **not** auto-deduplicated — each carries its own
-/// config.
+/// Dynamic modules are **not** deduplicated — each carries its own config.
 ///
-/// Two phases, both defaulting to no-op:
+/// # Importing it imports the module it declares
 ///
-/// - [`collect`](Self::collect) — queue an async factory (for resources like
-///   a DB pool that must be built asynchronously).
-/// - [`register`](Self::register) — install synchronous providers, metadata,
-///   or config.
+/// A provider beside the import injects what the module its [`module`] names
+/// provides; a façade that is no `#[module]` names itself and contributes
+/// global infrastructure only.
+///
+/// ```
+/// # use std::any::TypeId;
+/// # use std::sync::Arc;
+/// # use nest_rs_core::{App, Collecting, ContainerBuilder, DynamicModule, Registering, injectable, module};
+/// #[injectable]
+/// pub struct Client;
+///
+/// #[module(providers = [Client])]
+/// pub struct ClientModule;
+///
+/// pub struct ClientSetup;
+///
+/// impl DynamicModule for ClientSetup {
+///     fn module() -> TypeId {
+///         TypeId::of::<ClientModule>()
+///     }
+///
+///     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+///         builder.import::<ClientModule>()
+///     }
+///
+///     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+///         builder.import::<ClientModule>()
+///     }
+/// }
+/// # impl ClientModule {
+/// #     pub fn for_root() -> ClientSetup { ClientSetup }
+/// # }
+///
+/// #[injectable]
+/// pub struct Uploads {
+///     #[inject]
+///     client: Arc<Client>,
+/// }
+///
+/// #[module(imports = [ClientModule::for_root()], providers = [Uploads])]
+/// pub struct UploadsModule;
+///
+/// let app = App::new::<UploadsModule>()?;
+/// assert!(app.container().get::<Uploads>().is_some());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// A setup that wires the module it declares imports it in **both** phases
+/// ([`ContainerBuilder::import`]); in `register` alone the boot fails with
+/// [`LateFactoryError`](crate::LateFactoryError).
 ///
 /// # The import expression is evaluated exactly once
 ///
-/// `#[module(imports = [Foo::for_root(opts)])]` builds the value in the
-/// [`collect`] phase and parks it on the [`ContainerBuilder`], so [`register`]
-/// consumes *that* value rather than re-running the expression; the
-/// synchronous [`App::new`](crate::App::new) path has no collect phase and
-/// builds it in `register` instead. Both phases therefore see the same value,
-/// and a `for_root` that is not idempotent still behaves (it runs once).
-///
-/// Because the value outlives its construction site, an implementor must be
+/// [`collect`] and [`register`] see the same value, so an implementor must be
 /// `Send + 'static` to be usable from `#[module(imports = [...])]`.
 ///
 /// [`collect`]: Self::collect
+/// [`module`]: Self::module
 /// [`register`]: Self::register
 pub trait DynamicModule {
+    /// The module this import *is*, as NestJS's `DynamicModule { module }`; a
+    /// façade that is no `#[module]` names itself.
+    fn module() -> TypeId
+    where
+        Self: Sized;
+
     /// Install synchronous providers, metadata or config from this module's
-    /// configuration. Consumes `self` — the config is moved into the providers.
-    /// Defaults to a no-op for modules that only queue async work in
-    /// [`collect`](Self::collect).
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder
+    /// configuration.
+    fn register(self, builder: ContainerBuilder, registering: Registering<Self>) -> ContainerBuilder
     where
         Self: Sized,
     {
+        let _ = registering;
         builder
     }
 
-    /// Queue an async factory (for resources like a DB pool that must be built
-    /// asynchronously) to be awaited in the factories phase. Takes `&self`, and
-    /// the very same value is handed to [`register`](Self::register) afterwards
-    /// (see the trait docs). Defaults to a no-op.
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    /// Queue an async factory (a DB pool, say) to be awaited in the factories
+    /// phase.
+    fn collect(&self, builder: ContainerBuilder, collecting: Collecting<Self>) -> ContainerBuilder {
+        let _ = collecting;
         builder
     }
 }

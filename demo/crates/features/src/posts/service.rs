@@ -22,10 +22,6 @@ pub struct PostsService {
 
 impl CrudService for PostsService {
     type Entity = Posts;
-
-    fn soft_delete_column() -> Option<super::entities::post::Column> {
-        Some(super::entities::post::Column::DeletedAt)
-    }
 }
 
 impl Creatable for PostsService {
@@ -51,7 +47,7 @@ impl PostsService {
         active.status = Set(PostStatus::Draft);
         let model = self.create_from_active(active).await?;
         tracing::debug!(
-            target: "features::posts",
+            target: crate::posts::TARGET,
             id = %model.id,
             %org_id,
             "post created",
@@ -84,10 +80,13 @@ impl PostsService {
             &conn,
         )
         .await
-        .map_err(ServiceError::from)?;
+        .map_err(|err| match ServiceError::from(err) {
+            ServiceError::Conflict(_) => PostError::AlreadyPublished { id: post_id },
+            other => PostError::Service(other),
+        })?;
 
         tracing::debug!(
-            target: "features::posts",
+            target: crate::posts::TARGET,
             id = %post_id,
             %org_id,
             "post published",

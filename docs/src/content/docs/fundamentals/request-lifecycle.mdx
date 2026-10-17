@@ -1,7 +1,6 @@
 ---
 title: The request lifecycle
 description: "One pool per layer family, deduplicated by TypeId, run exactly once — how scope chooses where a guard, pipe, interceptor or filter executes."
-tier: all-options
 sidebar:
   order: 5
 ---
@@ -18,7 +17,7 @@ re-explaining it.
 
 Declaring a layer at any scope — **global** (`use_*_global`), **controller**
 (on the struct), or **handler** (beside the verb) — contributes to **one pool
-per family**, deduplicated by `TypeId` through a single `compose_chain`. The
+per family**, deduplicated by `TypeId` in a single composition. The
 layer executes **exactly once per request**. Broadest scope wins;
 `#[force_guards]` is the opt-in to re-run.
 
@@ -47,14 +46,17 @@ site differs:
 | Family | Global scope | Controller / handler scope |
 |---|---|---|
 | Guard | `RouteShaper` (post-routing — reads `#[public]`) | same site |
-| Pipe | `RouteShaper` | `RouteShaper` |
+| Pipe | `RouteShaper`; `/graphql` POST variables and a WS message's `data`, at their endpoint — a graphql-ws operation runs none | `RouteShaper`; per argument on the other edges |
 | ExceptionFilter | route site (closest to the handler) | route site |
 | Interceptor | transport edge (before auth — sees 404s, denials) | around the handler, inside guards |
 | Filter | transport edge | around the handler, inside guards |
 
 Global guards are **pooled** globally but **execute** post-routing at the
 `RouteShaper`, because a guard reads `#[public]` route data that only exists
-after routing — they do **not** run "before routing".
+after routing — they do **not** run "before routing". Nothing the framework
+runs before them reads the request body: the transport wraps it, and whatever
+reads it first — a guard, the pipe pool, an extractor — reads it under
+[the body cap and its gap bound](/http/configuration/#request-body-size-limit).
 
 Two ways to be transport-wide, deliberately distinct: `use_*_global` adds to
 the **pool** (TypeId-deduped against narrower scopes); `#[interceptor]` is
@@ -64,8 +66,8 @@ the **pool** (TypeId-deduped against narrower scopes); `#[interceptor]` is
 ## Nesting order
 
 Per route, innermost → outermost: **handler → ability shaper → exception-filter
-pool → scoped filters → scoped interceptors → `RouteShaper` (guard pool → pipe
-pool) → `#[meta]`/`#[public]` route data**. At the transport edge
+pool → scoped filters → scoped interceptors → `RouteShaper` (guard pool →
+`#[authorize]` class gate → pipe pool)**. At the transport edge
 (innermost → outermost band): **routing → DbContext (−10) → global filter pool
 (50) → error resolution (70) → global interceptor pool (90) → infra
 `#[interceptor]` (100)**. The error-resolution band is what makes a global
@@ -76,16 +78,28 @@ so every stage above logs under one `trace_id` — see
 [Correlation](/fundamentals/correlation/).
 
 Interceptors sit outside filters; exception-filters sit closest to the handler
-— at both sites. `Layer::priority` orders entries *within* a site, never across
-sites.
+— at both sites. The route's `#[authorize]` class gate runs with its guards,
+after the ability guard and before any interceptor or filter the route declares:
+a caching interceptor never answers a caller the gate refuses, and a filter never
+sees the refusal. `Layer::priority` orders entries *within* a site, never across
+sites: a handler-scope guard at `-10` still runs after every global and
+controller guard.
 
 ## `#[public]` and `#[meta]`
 
-`#[public]` and `#[meta(EXPR)]` are not layers — they are **route metadata** a
-guard reads after routing. `#[public]` marks a route as anonymous-admissible
-(the guard admits it through); `#[meta]` attaches per-handler data a guard reads
-via `nest_rs::http::Reflector`. A denial is an `Ok(4xx)` response, never an
-`Err` — filters never see it; global interceptors do.
+`#[public]` and `#[meta(EXPR)]` are not layers — they are **declarations** a
+layer reads. `#[public]` marks a route as anonymous-admissible (the guard admits
+it through); `#[meta]` declares typed data on a route or its controller, which a
+guard reads through `cx.reflector()`. Each route keeps one declaration for
+the process, its values built on first read; its layers read it through a
+pointer, so nothing is copied per request. A denial is an `Ok(4xx)` response,
+never an `Err` — filters never see it; global interceptors do.
+
+Every guarded site's `#[meta]` is read the same way: a resolver, a gateway, an
+MCP host and each of their methods keep theirs with their site, and a guard's
+`check` reads it through `cx.reflector()` as `check_http` does on a route. A
+processor, scheduled tasks and listeners take `#[meta]` too, but run no guard,
+so a value declared there is read by nothing yet.
 
 ## What fails at boot
 
@@ -102,10 +116,21 @@ provides it. `AuthzGuard` is provided by `AuthzModule` — add
 route the dependency through a module `PostsHttpModule` already imports.
 ```
 
-A global layer spec that cannot resolve (its provider's module is not imported)
-fails the boot through `HttpBootCheck`, naming the type. An imperative
-self-mount under active global guards fails too, unless
-`fail_secure_strict = false` downgrades it to a warn (it defaults to `true`).
+A global guard, pipe, interceptor, filter or exception filter that cannot
+resolve (its provider's module is not imported) fails the boot of every app, one
+that serves no HTTP included, naming the type: the check runs at the boot's
+wiring step, before any hook.
+
+A layer a site declares — on a controller, a route, a gateway or one of its
+messages — that no imported module provides fails the boot too, naming the
+layer and the site; a GraphQL or MCP operation, which composes its chain on its
+first call, refuses that call opaquely and logs one `error` naming both. No
+site ever runs without a layer it declares.
+
+A route whose guards are misordered — an authorization guard listed before the
+authentication guard whose principal it reads, at any scope — fails the boot
+naming both, rather than answering `500` to every request; a global pool listed
+that way fails it in an app serving no route too.
 
 <Aside type="caution">
 These are boot-time failures, by design. A missing guard module is a compile-

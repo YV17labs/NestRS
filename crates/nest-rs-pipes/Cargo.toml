@@ -12,14 +12,15 @@ categories = ["web-programming", "rust-patterns"]
 
 
 [dependencies]
-# Pipes are pure data transforms — no transport, no DI container.
+# Pipes are pure data transforms — no transport.
 thiserror.workspace = true
 # `ValidationPipe` surfaces field-level errors as structured `details`.
 serde_json.workspace = true
 validator.workspace = true
 # `ParseUuid` / `ParseUuidVersion`.
 uuid.workspace = true
-# `GlobalPipe` extends `nest_rs_core::Layer` for the Layer System.
+# `GlobalPipe` extends `nest_rs_core::Layer` for the Layer System, and the
+# global pool registers on `AppBuilder` and is checked at the wiring step.
 nest-rs-core.workspace = true
 
 [lints]

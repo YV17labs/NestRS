@@ -1,4 +1,7 @@
 use nest_rs::authn::{JwtOptions, JwtService};
+use nest_rs::config::Config;
+use nest_rs::redis::RedisConfig;
+use nest_rs::testing::url_on;
 use uuid::Uuid;
 
 use crate::{Claims, Role};
@@ -39,4 +42,39 @@ pub fn token_for(org_id: &str, role: &str, sub: Option<Uuid>) -> String {
         _ => vec![Role::User],
     };
     token(Uuid::parse_str(org_id).expect("valid org uuid"), roles, sub)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RedisDatabase {
+    WorkerRuns = 2,
+    AudioUpload = 3,
+    AudioMultipart = 4,
+    PostsNotify = 5,
+    AudioSchedule = 6,
+    PostsRollback = 7,
+}
+
+impl RedisDatabase {
+    const SUITES: u8 = 1;
+    const OWN: std::ops::RangeInclusive<u8> = 2..=8;
+
+    pub fn config(self) -> RedisConfig {
+        let index = self as u8;
+        assert!(
+            Self::OWN.contains(&index),
+            "{self:?} takes database {index}, outside the demo's own {:?}",
+            Self::OWN,
+        );
+        nest_rs::testing::load_project_env();
+        let suites = RedisConfig::load().expect("the suites' Redis config parses");
+        assert!(
+            url_on(&suites.url, Self::SUITES) == suites.url,
+            "the e2e suites' Redis URL must name database {}, the one nothing drains",
+            Self::SUITES,
+        );
+        RedisConfig {
+            url: url_on(&suites.url, index),
+            ..suites
+        }
+    }
 }

@@ -1,11 +1,7 @@
 //! Mirror tests for `src/ws/` — only compiled when the `ws` feature is on.
 //!
-//! A gateway is `EdgePosture::Guarded`, so there is no bridge to boot and no
-//! in-band chain to re-run: the upgrade already carried the real HTTP guards, and
-//! what a message needs is the ambient ability its `SocketContext` re-installs.
-//! These suites therefore install it with [`with_ability`] and drive
-//! `Gateway::dispatch` directly — the same seam `nest-rs-ws`'s own tests use, and
-//! the one the connection loop calls.
+//! A gateway is `Gated`, so these suites install the ambient ability with
+//! [`with_ability`] and drive `Gateway::dispatch` directly, as the connection loop does.
 
 mod authorize;
 mod mask;
@@ -17,8 +13,8 @@ use nest_rs_ws::{Gateway, WsClient, WsReply};
 
 use crate::widget;
 
-/// Dispatch `event` on `gateway` with `ability` installed, exactly as
-/// `WsDataContext` would around a real message.
+/// Dispatch `event` on `gateway` with `ability` installed, as the connection
+/// carries it into a real message.
 pub(crate) async fn dispatch_with<G: Gateway>(
     gateway: &G,
     ability: Arc<Ability>,
@@ -31,8 +27,7 @@ pub(crate) async fn dispatch_with<G: Gateway>(
     .await
 }
 
-/// The reply's JSON, or the error frame's message — one accessor so a suite reads
-/// the outcome without re-matching `WsReply` at every assertion.
+/// The reply's JSON, or the error frame's message.
 pub(crate) fn body(reply: WsReply) -> String {
     match reply {
         WsReply::Reply(value) => value.to_string(),
@@ -42,8 +37,7 @@ pub(crate) fn body(reply: WsReply) -> String {
 }
 
 /// The three grants every suite here needs: unrestricted, `id`-only, and
-/// `id`-only on widget 1. Built by name so the suites read as roles rather than
-/// as builder calls.
+/// `id`-only on widget 1.
 pub(crate) fn ability_for(role: &str) -> Arc<Ability> {
     let mut builder = AbilityBuilder::new();
     match role {

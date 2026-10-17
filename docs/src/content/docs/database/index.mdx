@@ -35,9 +35,8 @@ an entity crate declares none of them. `nestrs g resource` writes the file.
 ## The entity
 
 ```rust title="crates/features/src/posts/entity.rs"
-use nest_rs::resource::expose;
-use nest_rs::seaorm::sea_orm;
-use nest_rs::seaorm::sea_orm::entity::prelude::*;
+use nest_rs::seaorm::{expose, sea_orm};
+use sea_orm::entity::prelude::*;
 
 #[expose(name = "Post", service = super::service::PostsService)]
 #[sea_orm::model]
@@ -196,14 +195,29 @@ pub struct AppModule;
 ```
 
 Two lines, two shapes. `SeaOrmModule::for_root(None)` opens the one pool: it
-reads `NESTRS_SEAORM__URL` and the other `NESTRS_SEAORM__*` keys from the
+reads `<PREFIX>_SEAORM__URL` and the other `<PREFIX>_SEAORM__*` keys from the
 environment, or a `SeaOrmConfig` you pass to set those values in code —
 still overridable per field by the environment (see [the dual-path
 rule](/configuration/#the-dual-path-rule)). `SeaOrmDatabaseModule`, a bare
 import, then binds the data layer over it. The
 variable is named for the crate that parses it, exactly as the type is: from
-`NESTRS_SEAORM__URL` you find `SeaOrmConfig`, and from `SeaOrmModule` you find
+`<PREFIX>_SEAORM__URL` you find `SeaOrmConfig`, and from `SeaOrmModule` you find
 the variable.
+
+The boot proves the pool before anything is served. What Postgres refuses on
+every attempt — the user and password, a database it does not have, TLS that
+fails — fails the boot at once, naming `<PREFIX>_SEAORM__URL` and the SQLSTATE.
+Anything else — a server not listening yet, still starting or full, a host
+whose name does not resolve yet — is tried again within
+`<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, each attempt said at `warn` on
+`nest_rs::orm` by host and port, never by the URL, which carries the password;
+past the budget, the boot fails as unreachable, naming what the last attempt
+met.
+
+The pool closes when the app ends, after every shutdown hook: each connection
+gets Postgres's goodbye rather than a dropped socket, and one still checked out
+is waited for within what the hooks left of [the way
+down](/fundamentals/lifecycle/#the-way-down)'s five seconds.
 
 ## What the data layer hands you for free
 
@@ -228,7 +242,7 @@ slice inherits, without writing any of them:
 - [Entity checklist](/database/entity-checklist/) — every decision one
   entity asks of you, one line each.
 - [Repo and executor](/database/repo-and-executor/) — the ambient executor,
-  the `DbContext` interceptor, the contextless-path escape hatch.
+  the unit of work every edge runs through, the contextless-path escape hatch.
 - [Migrations](/database/migrations/) — write one, register it, run it with
   `nestrs run db`.
 - [CRUD](/database/crud/) — `#[crud(...)]` on a controller or a resolver.

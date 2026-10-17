@@ -10,13 +10,16 @@ description = "Reusable Kubernetes-style liveness/readiness probe module for Nes
 keywords = ["framework", "nestrs", "health", "kubernetes", "readiness"]
 categories = ["web-programming"]
 
-
 [dependencies]
 nest-rs-config.workspace = true
 nest-rs-core.workspace = true
+# The probe controller's `#[controller]`/`#[routes]` expansion names the guard
+# declarations and composes the route's response-side layers through the
+# interceptors, as every route does.
 nest-rs-guards.workspace = true
 nest-rs-health-macros.workspace = true
 nest-rs-http.workspace = true
+nest-rs-interceptors.workspace = true
 poem.workspace = true
 # The indicators of one probe run concurrently on the probe's own task — never
 # `spawn`, which would file their events under no unit of work — so the join is
@@ -25,15 +28,13 @@ futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
-# `tokio::time::timeout` bounds each health indicator so a dead peer can't hang
-# the public `/health/ready` probe (HEALTH-I7).
+# The probe's deadline over its indicators (`timeout_at`); each indicator's own
+# ceiling is `nest_rs_core::within`, so a dead peer can't hang the public
+# `/health/ready` probe.
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# Pins the wording of the `on_provider` wrong-shape diagnostic: the rule is
-# that it names the sibling decorator, and only a snapshot keeps it there.
-trybuild.workspace = true
 # `test-util` (not part of tokio's `full`) pauses time, so "four checks cost one
 # interval, not four" is asserted on a virtual clock instead of a wall-clock
 # margin that flakes on a loaded runner.

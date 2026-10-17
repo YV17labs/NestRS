@@ -6,9 +6,10 @@ sidebar:
   order: 1
 ---
 
-NestRS's HTTP layer is built on [poem](https://docs.rs/poem) — listener,
-extractors, middleware. NestRS wraps it so a controller is a struct, routes
-come from `#[routes]`, and the transport activates by importing
+NestRS's HTTP layer routes with [poem](https://docs.rs/poem) — its router,
+extractors and middleware — and accepts connections itself, on
+[hyper](https://docs.rs/hyper). A controller is a struct, routes come from
+`#[routes]`, and the transport activates by importing
 [`HttpModule::for_root(...)`](/http/configuration/) in `AppModule.imports`
 — `main` never holds a transport.
 
@@ -42,7 +43,7 @@ which is a crate you name.
 - [Errors](/http/errors/) — `ResponseError` on a feature error enum,
   RFC 9457 `ProblemDetails` for one-off problem responses.
 - [Extractors](/http/extractors/) — the full extractor surface:
-  `RawBody`, `ClientIp`, `Scoped<T>`, `Ctx<T>`, `Reflector` +
+  `RawBody`, `ClientIp`, `Scoped<T>`, `Ctx<T>` and
   `#[meta(...)]`.
 
 ### All options
@@ -57,6 +58,8 @@ which is a crate you name.
   Server-Sent Events stream returned from a handler.
 - [File uploads](/http/file-uploads/) — a `multipart/form-data` part
   streamed straight into object storage.
+- [Static files](/http/static-files/) — a built single-page app and public
+  files, served from a directory or embedded in the binary.
 
 ## Going further
 

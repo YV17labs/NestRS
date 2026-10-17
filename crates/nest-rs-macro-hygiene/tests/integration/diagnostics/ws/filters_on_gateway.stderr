@@ -1,0 +1,5 @@
+error: `#[use_filters]` is not taken beside `#[gateway]`: it binds HTTP's untyped `Filter`, which an exception filter replaces — one whose `Exception` is `dyn Error + Send + Sync` catches every error; bind that with `#[use_exception_filters]`
+ --> tests/integration/diagnostics/ws/filters_on_gateway.rs:8:1
+  |
+8 | #[use_filters(SomeFilter)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^

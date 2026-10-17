@@ -1,7 +1,6 @@
 ---
 title: End-to-end tests
 description: TestApp boots the real AppModule against an EphemeralDatabase — the route table, the DI graph, the access-graph check, authn/authz, and the data path all run.
-tier: basics
 sidebar:
   order: 4
 ---
@@ -21,22 +20,27 @@ never trips.
 
 ## A round-trip e2e test
 
-```rust title="apps/api/tests/e2e/harness.rs (abridged)"
+```rust title="apps/api/tests/e2e/main.rs (from the demo, abridged)"
 use api::ApiModule;
-use nest_rs::authn::JwtConfig;
-use nest_rs::testing::{EphemeralDatabase, TestApp};
-use nest_rs::http::poem::http::header;
-use serde_json::json;
+use nest_rs::authn::AuthnConfig;
+use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
+// …
 
 pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
+    boot_with(TestApp::builder()).await
+}
+// …
+
+async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
-    let app = TestApp::builder()
+    let app = builder
         .module::<ApiModule>()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
+            audience: Some(AUDIENCE.into()),
             ..Default::default()
         })
         .build()
@@ -49,29 +53,31 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
 Each test module reaches for that `boot()` and the token helpers beside it:
 
 ```rust title="apps/api/tests/e2e/users.rs (from the demo, abridged)"
-use super::harness::*;
+use poem::http::{StatusCode, header};
+// …
+use serde_json::json;
+// …
+use crate::*;
 
 #[tokio::test]
-async fn create_then_list_users() {
+async fn users_are_scoped_to_their_org_and_bound_by_id() {
     let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+
+    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org_a = create_org(&app, &bootstrap, "Acme").await;
+    // …
+    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
+    // …
 
     let created = app
         .http()
         .post("/users")
-        .header(header::AUTHORIZATION, &bearer)
+        .header(header::AUTHORIZATION, &token_a)
         .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
         .send()
         .await;
     created.assert_status_is_ok();
-
-    let listed = app
-        .http()
-        .get("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .send()
-        .await;
-    listed.assert_status_is_ok();
+    // …
 }
 ```
 
@@ -81,8 +87,9 @@ regression fails this test, in this binary.
 
 ## Splitting a large suite
 
-A small suite keeps its tests directly in `main.rs`. When it gets
-unwieldy, add sibling modules — the path never changes. Cargo
+`main.rs` is the suite root — the `mod` list and the fixtures the siblings
+share — and each concern is a sibling module, so the path never changes as
+the suite grows. Cargo
 auto-detects `tests/e2e/main.rs` as a single integration-test binary
 named `e2e`, and — unlike top-level `tests/*.rs` — it does **not**
 compile the sibling files under `tests/e2e/` as their own binaries. So
@@ -93,35 +100,36 @@ the whole subtree links into one `e2e` binary that the nextest
 apps/api/
 └── tests/
     └── e2e/
-        ├── main.rs         ← the crate root: mod harness; mod users; …
-        ├── harness.rs      ← boot(), token_for(), fixtures
+        ├── main.rs         ← the suite root: mod users; …, boot(), token_for(), fixtures
         ├── users.rs
         ├── orgs.rs
         ├── posts.rs
         └── graphql.rs
 ```
 
-`tests/e2e/main.rs` is a flat index:
+Its `mod` list is the suite's index:
 
-```rust title="apps/api/tests/e2e/main.rs (from the demo)"
-mod harness;
-
+```rust title="apps/api/tests/e2e/main.rs (from the demo, abridged)"
 mod audio;
 mod graphql;
 mod health;
 mod http;
+mod module;
 mod openapi;
 mod orgs;
 mod posts;
+mod scopes;
+mod subscription;
 mod users;
 ```
 
-Each module pulls shared setup from the harness with one line —
-`use super::harness::*;`, as in the test above.
+Each module pulls the shared setup with one line — `use crate::*;`, as in
+the test above.
 
 Because `main.rs` is the crate root, `mod users;` resolves to a sibling
-`tests/e2e/users.rs` in the same directory — and `harness.rs` needs no `mod.rs`
-trick, since nothing under `tests/e2e/` is auto-discovered as a binary.
+`tests/e2e/users.rs` in the same directory, and the `pub(crate)` fixtures
+beside the `mod` list are `crate::` items every sibling reaches — nothing
+under `tests/e2e/` is auto-discovered as a binary.
 
 <Aside type="caution">
 Do **not** split with a top-level `tests/e2e.rs` plus `mod users;`. That `mod`
@@ -132,8 +140,8 @@ unfiltered. The `tests/e2e/main.rs` directory form is what keeps it one binary.
 
 Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
 
-- The four-phase boot is the expensive part — sharing `boot()` through
-  `harness` keeps it written once.
+- The four-phase boot is the expensive part — sharing `boot()` from
+  `main.rs` keeps it written once.
 - Cargo links the app crate once per binary; one binary means one link
   step instead of one per concern file.
 - `nestrs run test e2e` runs the whole suite from the workspace root.
@@ -144,7 +152,9 @@ Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
 Postgres database, runs migrations, and drops it on the guard's `Drop`
 — even on panic, even after a crashed previous run (it reaps
 `nest_rs_e2e_*` databases older than five minutes on the next call). The
-admin URL comes from `NESTRS_SEAORM__URL`.
+admin URL comes from `<PREFIX>_SEAORM__URL`, and every connection the fixture
+opens is the app's pool's: TLS verified or off as the URL says, an `sslmode`
+that encrypts without verifying refused.
 
 `provide_arc(db.connection())` seeds the real connection into the
 container, short-circuiting `SeaOrmDatabaseModule`'s `for_root` factory. The
@@ -169,9 +179,20 @@ ride the same client because they self-mount as HTTP endpoints.
 
 It drives **the transport your app's `HttpModule::for_root(cfg)` describes**, not
 a bare one — so a global prefix, a versioning strategy, a body cap or a request
-timeout you pin on the module is what the suite exercises. Pin the `HttpConfig`
-on the module to test one; `TestAppBuilder::http(transport)` is for a transport
-the app does not declare at all.
+timeout you pin on the module is what the suite exercises. A suite that needs
+another value seeds the whole config, which the harness boots from in place of
+the module's:
+
+```rust title="apps/api/tests/e2e/http.rs"
+let app = TestApp::builder()
+    .module::<ApiModule>()
+    .provide(HttpConfig {
+        compression: true,
+        ..Default::default()
+    })
+    .build()
+    .await?;
+```
 
 ```rust title="apps/api/tests/e2e/openapi.rs"
 let resp = app.http().get("/api-json").send().await;
@@ -182,9 +203,10 @@ assert!(paths.get_opt("/users").is_some());
 
 ## Provider overrides
 
-Three builders swap a provider after the four-phase build. The override
-applies before any consumer resolves the type, so controllers, resolvers,
-and guards pick it up.
+Three builders swap a provider for a double. The override is in place
+before anything is built, so every consumer injects the double — a
+singleton service built at boot as much as a controller, a resolver or a
+guard.
 
 | Builder | Takes | Use when |
 |---------|-------|----------|
@@ -215,18 +237,18 @@ let app = TestApp::builder()
     .await?;
 ```
 
-`override_arc` is the right shape when the test needs to observe what
-the fake recorded — wrap it in `Arc` once, hand the same handle to the
-container *and* the test, then assert against the shared state after the
-request:
+When the test needs to observe what the double recorded, keep a handle
+to it: build it in an `Arc` once, hand a clone to the container, and
+assert against the shared state after the request. The app binds
+`SmtpMailer as dyn Mailer`, so the double replaces `dyn Mailer` — the key
+`UsersService` injects — and the `Arc<RecordingMailer>` coerces on the way
+in:
 
 ```rust title="apps/api/tests/e2e/users.rs"
 use std::sync::Arc;
 
-use nest_rs::core::injectable;
 use parking_lot::Mutex;
 
-#[injectable]
 #[derive(Default)]
 struct RecordingMailer {
     sent: Mutex<Vec<String>>,
@@ -248,7 +270,7 @@ async fn signup_emails_the_new_user() {
     let mailer = Arc::new(RecordingMailer::default());
     let app = TestApp::builder()
         .module::<UsersModule>()
-        .override_arc::<RecordingMailer>(Arc::clone(&mailer))
+        .override_dyn::<dyn Mailer>(mailer.clone())
         .build()
         .await
         .unwrap();
@@ -269,6 +291,48 @@ The difference is who keeps the handle: `override_value` consumes its
 argument (you can't read it back later), `override_arc` takes a
 pre-cloned `Arc` so the test and the container share the same instance.
 
+### What an override does to the provider it replaces
+
+The double stands in for the whole provider, as NestJS's
+`overrideProvider(X).useValue(v)` does:
+
+- **The real provider is never built.** Its constructor never runs and
+  its own dependencies need not exist, so a test of `UsersService` can
+  override its mailer without wiring what the mailer would have needed.
+  An overridden factory output — a connection, a config — skips its
+  factory: no connection opens, and the module's close never runs on the
+  double.
+- **The double keeps the provider's module.** The access graph holds every
+  consumer to the imports production holds it to: a consumer outside the
+  module's imports fails the boot in the test as it would in production.
+- **A provider bound `Foo as dyn Trait` is overridden whole**, through
+  either key. Overriding `dyn Trait` leaves no `Foo`, and overriding `Foo`
+  leaves no `dyn Trait`: a consumer injecting the key left out fails the
+  boot with `OverriddenDependencyError`, which tells you to override the
+  key that consumer injects.
+- **Its hooks follow the double.** A double of the provider's own type
+  runs the provider's `#[hooks]`, `#[scheduled]` and kin on itself; one
+  given through the trait object leaves no host for them, so they do not
+  run, and the boot says so at `debug`.
+- **A request-scoped or transient provider becomes one double** serving
+  every request and every resolution.
+- **A seed of the same type is replaced**, whichever call comes first.
+- **A duplicate stays a duplicate.** A type two modules register, or a
+  trait object two modules bind, fails the boot with
+  `DuplicateProviderError` whether a test overrides it or not.
+
+An override nothing in the app's graph provides fails the boot with
+`UnclaimedOverrideError`: no module lists the type, no factory or seed
+makes it, so the double would never be read. Overriding an edge host
+such as a `#[controller]`, which registers routes rather than a value, is
+refused the same way.
+
+A seeded config is held to the same ranges and validation as one read
+from the environment, before any factory reads it: a test that seeds
+`HttpConfig { shutdown_timeout: Duration::MAX, .. }` fails the boot
+naming `HttpConfig::shutdown_timeout` and its range. So is a config
+given through an override.
+
 External-IO services — HTTP clients to third-party APIs, queue producers
 reaching an outside system — are the right override target. **The
 database is not.** A test that mocks `Repo` to make a service compile is
@@ -280,21 +344,90 @@ asserting on a fiction; use `EphemeralDatabase` instead.
 schedulers, or any binary without an HTTP surface. The four-phase build
 still runs, so the access-graph check still fires.
 
-```rust title="apps/api/tests/e2e/worker.rs"
+```rust title="apps/worker/tests/e2e/module.rs"
 let app = TestApp::builder()
-    .module::<RedisWorkerModule>()
+    .module::<WorkerModule>()
     .provide_arc(db.connection())
     .build_headless()
     .await?;
 ```
 
-Drive non-HTTP transports through `HeadlessApp::spawn_transport`.
+Drive non-HTTP transports through `HeadlessApp::spawn_transport` — the queue's
+is `nest_rs::queue::QueueWorker`. It runs a transport the way `App::run` does:
+configured, held to a stop bound the kernel accepts, listening, then serving —
+so once it returns, what the transport listens on accepts, and a client needs
+no retry loop.
+
+### A worker drains its whole Redis database
+
+A `QueueWorker` on Redis takes every job on the queues its module declares, from
+whoever filed it on the logical database its Redis URL names — your running
+`nestrs run dev`, another test's process, a job a previous run left behind.
+The queue names are your `#[queue]`s, so a test cannot rename them; what it
+can own is the database. Two settings keep a suite apart:
+
+- **The suites' default is not your app's.** A committed `.env.test`,
+  loaded only under the test profile, points every suite at a database
+  nothing drains, so what a test enqueues never reaches the app you are
+  running:
+
+  ```bash title=".env.test"
+  NESTRS_REDIS__URL=rediss://valkey-standalone:6379/1
+  ```
+
+- **A test that starts a worker takes a database of its own**, and seeds it
+  into every app of the test that must meet — the one that enqueues and the
+  one that drains. A seeded `RedisConfig` outranks the environment, so both
+  land on it whatever the suite's URL says:
+
+  ```rust title="apps/worker/tests/e2e/module.rs (from the demo, abridged)"
+  let worker = TestApp::builder()
+      .module::<WorkerModule>()
+      .provide_arc(db.connection())
+      .provide(RedisDatabase::WorkerRuns.config())
+      .build_headless()
+      .await
+      .expect("WorkerModule boots against the throwaway database and its own Redis database");
+  let queue = worker
+      .spawn_transport(QueueWorker::new())
+      .await
+      .expect("WorkerModule's QueueWorker configures against Redis");
+  ```
+
+  `RedisDatabase` is the demo's list, in `features::testing`: an enum with one
+  entry per such test, so two entries on one database is a compile error, and
+  `config()` rewrites the suite's URL to that index. Redis ships sixteen, so the list is short: one
+  database per test that starts a worker, not one per test.
+
+## Proving the way down
+
+A harness app is dropped at the end of its test, and a drop runs no shutdown
+hook and closes nothing. A test that proves a teardown — a hook that
+deregisters, a pool that says goodbye — ends the app with `close()`, which
+`TestApp`, `HeadlessApp` and `WsApp` each have and which tears down exactly as
+[`App::close`](/fundamentals/lifecycle/#running-without-serving) does:
+
+```rust title="apps/api/tests/e2e/lifecycle.rs"
+let app = TestApp::builder().module::<ApiModule>().build().await?;
+let lifecycle = app.lifecycle().clone();
+
+app.close().await;
+
+assert_eq!(lifecycle.cause(), Some(StopCause::Closed));
+```
+
+A `HeadlessApp` stops the transports it spawned first — they serve under the
+app's stop token — and waits for them within the longest of their stop bounds,
+so a worker's last job finishes before the hooks it may depend on run; its
+`init()` does the same before tearing down an init that fails, and a spawned
+transport whose `serve` fails is logged at `error` with its cause. A boot
+that fails inside `build()` — a transport's configuration, an init hook — is
+torn down before the error returns, as `App::run` tears it down.
 
 ## Test telemetry
 
-`with_test_telemetry()` calls `OpenTelemetry::init_for_tests` — a
-console-only init honouring `NESTRS_LOG` then `RUST_LOG` (default `warn` for noise
-control). It is idempotent; the first test to run wins, the rest no-op.
+`with_test_telemetry()` installs console-only telemetry, honouring
+`<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control). It is idempotent; the first test to run wins, the rest no-op.
 Required when the module tree imports `OpenTelemetryModule` (the boot
 guard panics otherwise). Gated by the `opentelemetry` feature on
 `nest-rs-testing`.

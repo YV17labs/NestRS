@@ -25,6 +25,7 @@ per crate.
 | HTTP request span | `nest_rs::http` — opened by the transport, not by this crate |
 | Operation log, one line per unit of work | `nest_rs::operation` — the only target naming a *kind of line* rather than a subsystem; see [Logs](/opentelemetry/logs/) |
 | ORM queries | `nest_rs::orm` |
+| Relation dataloaders | `nest_rs::loader` |
 | Authentication | `nest_rs::authn` |
 | Authorization | `nest_rs::authz` |
 | WebSocket events | `nest_rs::ws` |
@@ -64,7 +65,7 @@ both scope the span to the future, not the thread.
 `traceparent` propagation is automatic on incoming HTTP requests — **behind a
 trusted proxy**. The transport, not this crate, decides whether an inbound
 `traceparent` may be believed: it is continued when the direct peer is in
-`NESTRS_HTTP__TRUSTED_PROXIES`, and the trace is **restarted** otherwise, which
+`<PREFIX>_HTTP__TRUSTED_PROXIES`, and the trace is **restarted** otherwise, which
 is what the specification defines a front gate to do. Without that gate any
 client could file its request into a trace of its choosing and set the `sampled`
 flag on traffic it generates. The response carries `traceresponse` so a caller
@@ -111,8 +112,10 @@ installed: the span itself, its W3C trace context, the `traceresponse` response
 header, and the access log. The span carries the OTel HTTP semantic-convention attributes:
 `http.request.method`, `url.path` (the addressed path), `http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
-`http.response.status_code`, `http.response.body.size`, `client.address` and
-`user_agent.original`.
+`http.response.status_code`, `http.response.body.size` and
+`user_agent.original`. It carries no `client.address`, which the conventions
+recommend: a client's address is personal data, and a collector keeps what it
+receives — no access line carries it either.
 
 It is named `{method} {route}` through `otel.name`. `tracing` fixes a span
 name to a literal, and one literal for every route makes a trace list
@@ -127,7 +130,7 @@ The request span and the access event both belong to `nest-rs-http`, and exist
 whether or not this crate is installed. What the interceptor adds is the parent
 from an inbound `traceparent` and the sampler's verdict — the access
 line reads that header, which is the whole of the coupling between the two.
-Toggle the line with `NESTRS_HTTP__ACCESS_LOG=false`; nothing about propagation
+Toggle the line with `<PREFIX>_HTTP__ACCESS_LOG=false`; nothing about propagation
 or OTLP export changes.
 
 ## Going further

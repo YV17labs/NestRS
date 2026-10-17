@@ -1,0 +1,5 @@
+error: a `#[subscription]` returns `impl Stream<Item = T>`, a stream type, or one of those inside `Result<…>` / `FieldResult<…>`. This return nests an `impl Trait` inside another path, and async-graphql's derive builds paths from the return type, where Rust refuses one (E0562): if it is a `Result` under another name, spell it `Result<…>`
+  --> tests/integration/diagnostics/graphql/aliased_result_subscription.rs:23:27
+   |
+23 |     async fn ticks(&self) -> GqlResult<impl Stream<Item = i32>> {
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

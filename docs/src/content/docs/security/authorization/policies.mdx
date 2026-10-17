@@ -1,7 +1,6 @@
 ---
 title: Policies
 description: AbilityBuilder turns subjects, actions, predicates, and fields into one Ability — the same AST renders SQL and runs in memory.
-tier: basics
 sidebar:
   order: 2
 ---
@@ -10,8 +9,8 @@ import { Aside } from '@astrojs/starlight/components';
 
 A policy is a function from a principal to an `Ability`. The function
 runs per request — `AbilityFactory::define` is called once after
-authn, the returned `Ability` lives in the request's task-local and
-extensions. This page covers the builder API: subjects, actions,
+authn, and the guard attaches the returned `Ability`, ambient for the
+rest of the request. This page covers the builder API: subjects, actions,
 conditional rules, restricted fields, denials.
 
 Predicates compile through a single `Predicate` AST that lowers to
@@ -194,7 +193,10 @@ traverse the relation without loading the parent, so row visibility
 for a relational rule is decided **in SQL** everywhere — including
 the by-id binding and create paths, which re-check against the same
 lowered condition (see
-[By-id binding](/security/authorization/by-id-binding/)).
+[By-id binding](/security/authorization/by-id-binding/)). `Ability::can`
+grants nothing on a relation, and `Repo::can` decides it in SQL. A pushed
+value went through no SQL read, so a relational grant admits none of it
+([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)).
 
 ## Field grants
 

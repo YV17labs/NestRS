@@ -11,9 +11,7 @@ use crate::scaffold::{Scaffold, ensure_module_imports, rustfmt};
 /// one-line summary plus the change report.
 ///
 /// `what` is the noun phrase alone (`"feature `orders`"`); the tense is this
-/// function's to choose, because only it knows whether anything was written. A
-/// line claiming something was created directly above "no files written" reads
-/// as a bug in the tool.
+/// function's, since only it knows whether anything was written.
 pub(super) fn finish(s: Scaffold, dry_run: bool, base: &Path, what: &str) -> CliResult<()> {
     let report = s.apply(dry_run)?;
     if !dry_run {
@@ -30,9 +28,7 @@ pub(super) fn finish(s: Scaffold, dry_run: bool, base: &Path, what: &str) -> Cli
 /// `SeaOrmDatabaseModule`, since mounting it into an app without one compiles yet
 /// panics at boot.
 ///
-/// Takes the whole set at once so a command wiring several modules spends one
-/// `edit` on `module.rs`: a second edit of the same path re-reads it from disk
-/// and its write drops the first one's.
+/// Takes the whole set so `module.rs` gets one `edit`.
 pub(super) fn wire_into_app(
     ctx: &Context,
     s: &mut Scaffold,

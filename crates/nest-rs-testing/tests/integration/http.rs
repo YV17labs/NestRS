@@ -65,8 +65,6 @@ async fn override_dyn_swaps_in_a_mock_seen_by_the_controller() {
         .build()
         .await
         .expect("the module boots with the override");
-    // The controller is built from the final container at mount, so it resolves
-    // the overridden binding — the response proves the swap reached the handler.
     let resp = app.http().get("/").send().await;
     resp.assert_status_is_ok();
     resp.assert_text("Mocked").await;
@@ -85,4 +83,24 @@ async fn container_exposes_the_overridden_binding() {
         .get_dyn::<dyn Greeter>()
         .expect("dyn Greeter is registered");
     assert_eq!(greeter.greet(), "Mocked");
+}
+
+#[tokio::test]
+async fn an_override_of_a_controller_is_refused_since_nothing_reads_it() {
+    let Err(refused) = TestApp::builder()
+        .module::<GreeterModule>()
+        .override_value(GreeterController {
+            greeter: Arc::new(MockGreeter),
+        })
+        .build()
+        .await
+    else {
+        panic!("an override of an edge host boots");
+    };
+    assert!(
+        refused
+            .downcast_ref::<nest_rs_core::UnclaimedOverrideError>()
+            .is_some(),
+        "{refused:#}"
+    );
 }

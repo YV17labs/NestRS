@@ -1,7 +1,6 @@
 ---
 title: Modules
 description: "The composition unit of every NestRS app — what #[module] declares, how imports wire up, and how a root module grows."
-tier: basics
 sidebar:
   order: 2
 ---
@@ -160,8 +159,17 @@ both reach `SeaOrmDatabaseModule` (the bare binding beside `SeaOrmModule`), its
 providers are built once. Dynamic
 modules do **not** dedupe — each call carries its own config.
 
+A dynamic import is the module it configures, as a NestJS `DynamicModule`
+names its `module`: importing `StorageModule::for_root(cfg)` reaches what
+`StorageModule` provides, exactly as importing `StorageModule` does.
+
+A module an app can open once per [instance](/fundamentals/providers/#instances--one-resource-opened-twice)
+names it in both shapes: a dynamic import in its value, `for_root((Cache, None))`
+beside the default's `for_root(None)`, and a static one as a type argument,
+`BucketModule::<Cache>` beside the default's bare `BucketModule`.
+
 <Aside type="tip">
-Env vars (`NESTRS_<NAMESPACE>__<KEY>`) fill a dynamic import's config at boot.
+Env vars (`<PREFIX>_<NAMESPACE>__<KEY>`) fill a dynamic import's config at boot.
 Pass `None` for env-only; pass a config to set defaults in code that the
 environment can still override **per field** — never a lock, see
 [the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
@@ -242,22 +250,28 @@ reachable only through `PostsHttpModule` — that is the point.
 
 `App::builder().build().await` runs four phases, in order:
 
-1. **Seeds** — runtime values from `main` via `.seed(value)`. A seed
-   wins over a module-built provider of the same type.
-2. **Collect** — async factories run (DB pools, …). A dynamic module's
-   `collect()` lives here.
-3. **Factories** — awaited outputs land in the container as global
-   infrastructure.
-4. **Register** — `Module::register()` builds every provider in
-   dependency order.
+1. **Seeds** — runtime values from `main` via `.provide(value)`. A seed
+   wins over a factory of the same type; a seed of a type a module lists is
+   a duplicate the boot refuses — a test replaces a provider with an
+   override.
+2. **Collect** — every imported module queues the async factories it
+   declares (DB pools, …), a dynamic module's from its `collect`.
+3. **Factories** — the queue is awaited; outputs land in the container as
+   global infrastructure.
+4. **Register** — every imported module builds its providers in
+   dependency order, its imports first. A provider whose dependency nothing
+   had registered yet — across an import cycle, or a type a hand-written
+   module registers later — fails the boot naming it and why
+   (`UnbuiltProviderError`).
 
 Sync-only apps skip collect/factories and call
 `App::new::<BlogModule>()` directly.
 
 ## Safe to import twice
 
-The `#[module]` macro registers a module the first time `register()`
-runs, then short-circuits on later calls. A **diamond import** — two
+The framework runs each phase of a module once, however many modules
+import it, and a module's collect before its register — a module never
+reaches another's phases but through an import. A **diamond import** — two
 branches that both reach the same module — still builds that module's
 providers once:
 

@@ -1,10 +1,8 @@
-//! CORS via `HttpTransport::cors`: a configured poem `Cors` middleware wraps the
-//! whole route tree, exercised end-to-end through the in-process harness.
+//! CORS via `HttpConfig.cors`, seeded: the policy wraps the whole route tree.
 
 use nest_rs_core::module;
 use nest_rs_http::poem::http::Method;
-use nest_rs_http::poem::middleware::Cors;
-use nest_rs_http::{HttpTransport, controller, routes};
+use nest_rs_http::{HttpConfig, HttpCors, controller, routes};
 use nest_rs_testing::TestApp;
 
 #[controller(path = "/")]
@@ -21,16 +19,21 @@ impl ThingController {
 #[module(providers = [ThingController])]
 struct CorsModule;
 
-fn cors() -> Cors {
-    Cors::new()
-        .allow_origin("http://example.com")
-        .allow_method(Method::GET)
+fn cors() -> HttpConfig {
+    HttpConfig {
+        cors: Some(HttpCors {
+            origins: vec!["http://example.com".into()],
+            methods: vec!["GET".into()],
+            ..HttpCors::default()
+        }),
+        ..HttpConfig::default()
+    }
 }
 
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<CorsModule>()
-        .http(HttpTransport::new().cors(cors()))
+        .provide(cors())
         .build()
         .await
         .expect("boots")

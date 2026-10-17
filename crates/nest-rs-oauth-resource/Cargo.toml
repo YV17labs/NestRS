@@ -14,17 +14,18 @@ categories = ["authentication", "web-programming"]
 [dependencies]
 nest-rs-core.workspace = true
 # `ProtectedResourceModule` owns `ProtectedResourceConfig` (namespace
-# `oauth_resource`), loaded from `NESTRS_OAUTH_RESOURCE__*`. The `#[config]`
-# derive routes through `nest_rs_config::validator`, so no `validator` here.
+# `oauth__resource`), loaded from `NESTRS_OAUTH__RESOURCE__*`. The `#[config]`
+# derive routes through `nest_rs_config::__private::validator`, so no
+# `validator` here.
 nest-rs-config.workspace = true
 # The document is served by a `#[controller]`, and the challenge is an
-# `#[interceptor]` auto-mounted at the transport edge.
+# `#[interceptor]` auto-mounted at the transport edge. `NoBearerChallenge` is
+# how a non-resource `401` opts out of the pointer.
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
-# `RequiredScopes` carries the refused operation's scopes to the edge, and
-# `NoBearerChallenge` is how a non-resource `401` opts out of the pointer.
+# `RequiredScopes` carries the refused operation's scopes to the edge.
 nest-rs-guards.workspace = true
-# The boot check binds the advertised `resource` to `JwtConfig.audience`
+# The boot check binds the advertised `resource` to `AuthnConfig.audience`
 # (RFC 8707), and a misconfiguration is an `AuthError`.
 nest-rs-authn.workspace = true
 poem.workspace = true
@@ -39,12 +40,9 @@ tracing.workspace = true
 [dev-dependencies]
 # The discovery-flow proof boots a real app and walks 401 → metadata → AS.
 nest-rs-testing = { path = "../nest-rs-testing" }
-# `mcp` brings `GlobalPoolMcpGuard`, the fallback that folds the global guard
-# pool in-band on `/mcp`. Without it a `use_guards_global` denial never reaches
-# the MCP endpoint and the step-up parity test silently proves nothing.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["mcp"] }
-# The challenge is attached once at the transport edge; these prove it reaches
-# an MCP client and a WS client, not only an HTTP one.
+# The challenge is attached once at the transport edge; the MCP endpoint and a
+# test gateway prove it reaches an MCP client and a WS client, not only an HTTP
+# one.
 nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-ws = { path = "../nest-rs-ws" }
 jsonwebtoken = { workspace = true }

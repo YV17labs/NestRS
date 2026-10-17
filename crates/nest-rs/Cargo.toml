@@ -10,16 +10,22 @@ description = "NestRS framework umbrella — re-exports the core and the surface
 keywords = ["framework", "nestrs", "web", "backend", "async"]
 categories = ["web-programming", "asynchronous"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
+
 
 ##
 ## Capability features — the install contract.
 ##
 ## Enabling a capability MUST pull everything its decorators' expansions name
 ## unconditionally, or the developer meets `E0433` inside a macro expansion —
-## the defect this matrix exists to prevent (`CLAUDE.md`, *The umbrella is the
-## front door*). Emissions that depend on an attribute the developer writes
-## themselves (`#[authorize]` → authz, `#[crud]` → seaorm) are their own
-## feature: one more feature, never one more dependency line.
+## the defect this matrix exists to prevent. Emissions that depend on an
+## attribute the developer writes themselves (`#[authorize]` → authz,
+## `#[crud]` → seaorm) are their own feature: one more feature, never one more
+## dependency line.
 ##
 ## `dep?/feat` (weak) forwards a binding only when both sides are already on —
 ## an HTTP-only build never compiles the GraphQL stack through those edges.
@@ -44,11 +50,12 @@ default = ["http", "config"]
 # under `full` and does not find it is meeting a decision, not a hole.
 full = [
     "http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue",
-    "redis", "redis-throttler", "schedule", "events", "authn", "authz",
+    "redis", "redis-queue", "redis-throttler", "redis-schedule",
+    "schedule", "events", "authn", "authz",
     "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry",
     "openapi", "health", "throttler", "server-timing", "guards", "pipes",
-    "interceptors", "filters", "exception-filters", "worker",
-    "storage",
+    "interceptors", "filters", "exception-filters",
+    "storage", "static-files",
 ]
 
 # `#[controller]` / `#[routes]` expand to the per-route Layer System chain —
@@ -66,22 +73,22 @@ http = [
 ]
 config = ["dep:nest-rs-config"]
 database = ["dep:nest-rs-database"]
-# `#[expose]` is the entity-side twin of `#[crud]`; a seaorm app always has one.
+# `#[expose]` and `#[wire_enum]` are seaorm's own decorators.
 # `nest-rs-testing?/orm` carries `EphemeralDatabase`: a suite that tests against
 # a real schema needs it, and "which extra feature turns the fixture on" is not
 # a question the app should have to answer.
 # `authz` is not optional here even though `#[authorize]` is: `#[crud]` emits
 # `::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, _>` and an
-# `::nest_rs_authz::Action` on *every* operation it generates, whether or not the
-# developer writes a posture attribute. `nest-rs-seaorm` already depends on the
-# crate, so it was compiled and only the umbrella's `pub use` was gated out —
+# `::nest_rs_authz::Action` on *every* operation it generates, and `#[expose]`
+# implements `::nest_rs_authz::WireModelDefaults` on every entity, whether or
+# not the developer writes a posture attribute. `nest-rs-seaorm` already depends
+# on the crate, so it was compiled and only the umbrella's `pub use` was gated out —
 # `cargo add nest-rs --features http,seaorm` + `#[crud]` was
 # `E0433: cannot find `authz` in `nest_rs``, blamed on the attribute. That is the
 # defect this matrix exists to prevent, so the feature carries what the
 # expansion names.
 seaorm = [
     "dep:nest-rs-seaorm",
-    "dep:nest-rs-resource",
     "database",
     "authz",
     "nest-rs-testing?/orm",
@@ -98,55 +105,53 @@ graphql = [
     "dep:nest-rs-graphql",
     "http",
     "authz",
-    "nest-rs-guards/graphql",
     "nest-rs-testing?/graphql",
     "nest-rs-seaorm?/graphql",
     "nest-rs-authz?/graphql",
-    "nest-rs-resource?/graphql",
-    "nest-rs-throttler?/graphql",
 ]
-# `#[messages]` names `GuardAsWsMessageCheck` and the per-message chain runner,
-# both behind guards' `ws`. The gateway reuses the HTTP guards at the upgrade, so
-# authz's `http` binding is what runs there; `nest-rs-authz/ws` is the separate
-# per-message half `#[messages]` emits from an `#[authorize(Action, Entity)]` —
-# the class gate and the reply mask. Both, because a gateway needs the upgrade
-# chain *and* the posture.
+# `#[messages]` names the per-message chain the gateway runs and binds each
+# guard on `GuardFor<WsView>`. The gateway reuses the HTTP guards at the upgrade,
+# so authz's `http` binding is what runs there; `nest-rs-authz/ws` is the
+# separate per-message half `#[messages]` emits from an
+# `#[authorize(Action, Entity)]` — the class gate and the reply mask. Both,
+# because a gateway needs the upgrade chain *and* the posture.
 ws = [
     "dep:nest-rs-ws",
     "http",
-    "nest-rs-guards/ws",
     "nest-rs-testing?/ws",
-    "nest-rs-seaorm?/ws",
     "nest-rs-authz?/http",
     "nest-rs-authz?/ws",
-    "nest-rs-throttler?/ws",
 ]
-# `#[mcp]` mounts through `HttpEndpointMeta` and resolves its operation guard
-# against the global pool, which guards' `mcp` feature seeds.
+# `#[mcp]` mounts through `HttpEndpointMeta` and runs the global pool at its
+# request and in each operation's chain.
 mcp = [
     "dep:nest-rs-mcp",
     "http",
-    "nest-rs-guards/mcp",
-    "nest-rs-seaorm?/mcp",
     "nest-rs-authz?/mcp",
-    "nest-rs-throttler?/mcp",
 ]
-# `#[processor]` folds pipes over the job payload and reaches the worker-context
-# seam; neither is a crate a `#[process]` method names.
-queue = ["dep:nest-rs-queue", "worker", "pipes"]
-redis = ["dep:nest-rs-redis", "queue"]
-# The cross-process rate-limit store. A capability the umbrella could not reach:
-# `nest-rs-redis` gated `RedisThrottler` behind its own `throttler` feature and
-# nothing here forwarded to it, so `nest_rs::redis::RedisThrottlerModule` existed
-# in no umbrella build — `demo/` enables all 28 features and still could not name
-# the type. The only way in was a second `nest-rs-redis` manifest line, which is
-# the thing *The umbrella is the front door* forbids: "A capability that cannot
-# hold 'one dependency' is reported, never absorbed into prose."
+# `#[processor]` folds pipes over the job payload, which is no crate a
+# `#[process]` method names.
+# A port forwards its kit weakly: beside `testing`, a queue driver's suite
+# reaches `queue_kit!` with no second manifest line, and a build without
+# `testing` compiles no harness.
+queue = ["dep:nest-rs-queue", "pipes", "nest-rs-testing?/queue"]
+# The one Redis connection (`RedisModule`, `RedisConnection`) and nothing else:
+# an app that sends its own commands, or a health check, compiles no port.
+redis = ["dep:nest-rs-redis"]
+# `redis-<port>`: one feature per binding of `nest-rs-redis`, read off its
+# folder, each closing over the port it binds — the binding is imported beside
+# that port's module, which the developer's own code names. Never a feature
+# named for a use (`redis-cache`). A binding the umbrella does not forward
+# exists in no umbrella build, short of the second manifest line the umbrella
+# forbids.
 #
-# Its own feature rather than a widening of `redis`, because the two Redis uses
-# are independent: a producer/consumer app that never rate-limits should not
-# compile `nest-rs-throttler`, which is the split `nest-rs-redis` already made.
+# The job queue on Redis Streams (`RedisQueueModule`).
+redis-queue = ["redis", "queue", "nest-rs-redis/queue"]
+# The cross-process rate-limit store (`RedisThrottlerModule`).
 redis-throttler = ["redis", "throttler", "nest-rs-redis/throttler"]
+# The occurrence lock a `replicas = "one"` job claims through
+# (`RedisScheduleModule`).
+redis-schedule = ["redis", "schedule", "nest-rs-redis/schedule"]
 schedule = ["dep:nest-rs-schedule"]
 events = ["dep:nest-rs-events"]
 # `Strategy::authenticate` takes a `poem::Request` and a custom strategy's
@@ -159,13 +164,14 @@ authn = ["dep:nest-rs-authn", "http"]
 # authorization server. Its transaction cookie is `JwtService`-signed, hence
 # `authn`.
 oauth-client = ["dep:nest-rs-oauth-client", "authn"]
-# The OAuth 2.0 *authorization server* role: RFC 6749 §5.2's token-endpoint
-# error set and §2.3.1 client authentication. `TokenError` renders itself as a
-# poem response and marks it `NoBearerChallenge`, so the capability closes over
-# `http` (which brings `guards`) the way every other request-shaped row does.
+# The OAuth 2.0 *authorization server* role: RFC 6749 §5.1's access token
+# response, §5.2's token-endpoint error set and §2.3.1 client authentication.
+# Both bodies render themselves as poem responses, and `TokenError` marks its
+# own `NoBearerChallenge`, so the capability closes over `http` the way every
+# other request-shaped row does.
 oauth-server = ["dep:nest-rs-oauth-server", "http"]
 # RFC 9728 discovery. Mounts a controller and an interceptor, so `http`; the
-# boot check reads `JwtConfig`, so `authn`.
+# boot check reads `AuthnConfig`, so `authn`.
 oauth-resource = ["dep:nest-rs-oauth-resource", "authn", "http"]
 # The `#[authorize]` half: the developer writes the attribute, so they enable
 # the feature named after it. Transport bindings ride the transport features.
@@ -176,16 +182,19 @@ social = ["dep:nest-rs-social", "authn", "oauth-client"]
 opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-testing?/opentelemetry"]
 openapi = ["dep:nest-rs-openapi", "http"]
 health = ["dep:nest-rs-health", "http", "nest-rs-seaorm?/health"]
-# HTTP only, deliberately: `ThrottlerGuard` checks all four request-carrying
-# edges, and each of the other three rides its own transport feature above
-# (`nest-rs-throttler?/graphql`, `?/ws`, `?/mcp`) — weakly, so this stays the
-# one dependency an HTTP-only app pays for.
+# HTTP only: `ThrottlerGuard` checks every edge through one `check`, and
+# declares it once for every view, so no edge's feature reaches it.
 throttler = ["dep:nest-rs-throttler", "http"]
 server-timing = ["dep:nest-rs-server-timing", "http"]
-testing = ["dep:nest-rs-testing"]
+# Mounts as the HTTP router's fallback; `#[derive(Embed)]` resolves through
+# `nest_rs::static_files::rust_embed`, so an embedded source needs no line of its own.
+static-files = ["dep:nest-rs-static-files", "http"]
+# `tls` carries `TestAuthority`, the certificates a TLS test double presents:
+# test-only like the rest, so always on here.
+testing = ["dep:nest-rs-testing", "nest-rs-testing/tls"]
 # Layer-System extension-point crates. Writing a custom `Guard` (the mandated
-# authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` — or a
-# `#[resource]`/worker provider — should not force a direct per-crate dep.
+# authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` should
+# not force a direct per-crate dep.
 # Capability features above depend on these by name, which is what makes a bare
 # `features = ["http"]` sufficient.
 guards = ["dep:nest-rs-guards"]
@@ -193,7 +202,6 @@ pipes = ["dep:nest-rs-pipes"]
 interceptors = ["dep:nest-rs-interceptors"]
 filters = ["dep:nest-rs-filters"]
 exception-filters = ["dep:nest-rs-exception-filters"]
-worker = ["dep:nest-rs-worker"]
 storage = ["dep:nest-rs-storage"]
 
 [dependencies]
@@ -221,14 +229,13 @@ nest-rs-openapi = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
 nest-rs-throttler = { workspace = true, optional = true }
 nest-rs-server-timing = { workspace = true, optional = true }
+nest-rs-static-files = { workspace = true, optional = true }
 nest-rs-testing = { workspace = true, optional = true }
 nest-rs-guards = { workspace = true, optional = true }
 nest-rs-pipes = { workspace = true, optional = true }
 nest-rs-interceptors = { workspace = true, optional = true }
 nest-rs-filters = { workspace = true, optional = true }
 nest-rs-exception-filters = { workspace = true, optional = true }
-nest-rs-resource = { workspace = true, optional = true }
-nest-rs-worker = { workspace = true, optional = true }
 nest-rs-storage = { workspace = true, optional = true }
 
 [lints]

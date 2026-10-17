@@ -2,17 +2,11 @@
 //! through the entity model so the typed [`Ability::mask`] policy can run,
 //! then strain the result against the entity's statically-known exposed
 //! columns ([`WireModelDefaults::wire_keys`]).
-//!
-//! The HTTP response shaper ([`crate::http::mask_entity_response`]) and the
-//! GraphQL resolver wrapper ([`crate::graphql::masked_value_for`]) both
-//! delegate here — one masking semantics for every transport, so the two
-//! can't drift apart.
 
-use crate::ability::mask_reason;
+use crate::ability::{Provenance, mask_reason};
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 use std::collections::BTreeSet;
 
-use nest_rs_resource::WireModelDefaults;
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::{Deserialize, DeserializeOwned};
@@ -20,48 +14,30 @@ use serde_json::Value;
 
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 use crate::FieldSet;
-use crate::{Ability, Action};
+use crate::error::MaskReplyError;
+use crate::{Ability, Action, WireModelDefaults};
 
-// `warn_mask_failure` lives in `crate::ability` (always compiled) so the
-// ambient `Ability::mask` can reach it in a feature-less build; re-exported
-// here since the transport masking paths import it alongside `mask_wire_json`.
 pub(crate) use crate::ability::warn_mask_failure;
 
-/// Why [`masked_reply`] could not produce a masked value. Callers must treat
-/// either case as fail-closed: send an error frame, never the unmasked body.
-#[derive(Debug, thiserror::Error)]
-pub enum MaskReplyError {
-    /// No ambient [`Ability`] is installed — the auth bridge for this
-    /// transport is missing, so masking cannot run.
-    #[error("no ambient ability — is the transport's authz bridge installed?")]
-    NoAmbientAbility,
-    /// The wire value could not be reconciled with the entity model.
-    #[error("wire value could not be reconciled with the entity model")]
-    Irreconcilable(#[source] serde_json::Error),
-}
-
-/// Mask a handler's wire JSON with the **ambient** ability — the manual
-/// analog of the HTTP response shaper and the GraphQL resolver wrapper, for
-/// surfaces with no automatic shaper (a WS gateway reply, a hand-built
-/// payload). One call replaces the hand-rolled serialize + permitted-fields +
-/// retain dance, with the same fail-closed semantics: rows the ability
-/// refuses are dropped, field grants strip columns, unexposed columns are
-/// strained out, and an irreconcilable body is an error, never a passthrough.
+/// Mask a pushed wire value with the **ambient** ability — the manual analog of
+/// the masks `#[authorize]` arms, for a surface no decorator reaches (a
+/// hand-written `ServerHandler`, a value a WS handler builds for its own
+/// caller). Propagate the `Err`, never fall back to the unmasked body.
 ///
-/// # Not for a decorated handler — every edge arms its own mask
+/// Rows the ability refuses are dropped, and a lone object it refuses comes back
+/// `null`; field grants strip columns; what ships is the exposed keys the value
+/// carried, never one the rebuild filled; an irreconcilable body is an error,
+/// never a passthrough.
 ///
-/// All four request-carrying transports now emit masking from the posture:
-/// `#[routes]` installs the HTTP response shaper, and `#[operations]`,
-/// `#[messages]` and `#[tools]` emit `masked_value_for` from an
-/// `#[authorize(Action, Entity)]`. So a `#[subscribe_message]` returning entity
-/// rows declares the posture and writes **no** masking call —
-/// `demo/crates/features/src/users/ws/gateway.rs` is the exemplar, and it used to
-/// be the counter-example.
+/// The value is judged as a **push**: no `Repo` read decided a relation or a
+/// column the value does not carry — unexposed, or exposed and left out — so a
+/// rule reading one grants nothing and a denial reading one denies. Decide such
+/// a rule before pushing, or expose the column and send it.
 ///
-/// What is left for this function is a surface **no decorator reaches**: a
-/// hand-built server push (`WsServer::emit`), a hand-written
-/// `ServerHandler`. There, forgetting it ships raw rows — so propagate the `Err`
-/// to the transport's error shape and never fall back to the unmasked body.
+/// It masks for the principal whose ability is ambient — right for a reply to
+/// that principal. A push to other connections (`WsServer::emit`,
+/// `broadcast`) carries what this caller may see, not what each recipient may:
+/// the framework does not mask per recipient.
 pub fn masked_reply<S>(action: Action, wire: Value) -> Result<Value, MaskReplyError>
 where
     S: EntityTrait + WireModelDefaults,
@@ -70,7 +46,7 @@ where
     let Some(ability) = crate::current_ability() else {
         return Err(MaskReplyError::NoAmbientAbility);
     };
-    match mask_wire_json::<S>(&ability, action, &wire) {
+    match mask_wire_json::<S>(&ability, action, &wire, Provenance::Pushed) {
         Ok(MaskedWire::Masked(masked)) => Ok(masked),
         Ok(MaskedWire::Passthrough) => Ok(wire),
         Err(err) => {
@@ -83,7 +59,9 @@ where
                 None,
                 Some(&err),
             );
-            Err(MaskReplyError::Irreconcilable(err))
+            Err(MaskReplyError::Irreconcilable(
+                nest_rs_core::DecodeError::new(&err),
+            ))
         }
     }
 }
@@ -97,14 +75,15 @@ pub(crate) enum MaskedWire {
 }
 
 /// Mask a wire JSON value (an object or an array of objects) by
-/// reconstructing each into `S::Model`, running [`Ability::mask`] /
-/// [`Ability::mask_many`], and retaining only the exposed wire keys. Scalars
-/// and `null` pass through. `Err` means the value could not be reconciled
-/// with `S::Model` — callers must fail **closed**.
+/// reconstructing each into `S::Model`, judging it as `provenance` says, and
+/// retaining only the exposed wire keys it carried. Scalars and `null` pass
+/// through. `Err` means the value could not be reconciled with `S::Model` —
+/// callers must fail **closed**.
 pub(crate) fn mask_wire_json<S>(
     ability: &Ability,
     action: Action,
     wire: &Value,
+    provenance: Provenance,
 ) -> Result<MaskedWire, serde_json::Error>
 where
     S: EntityTrait + WireModelDefaults,
@@ -112,75 +91,48 @@ where
 {
     let masked = match wire {
         Value::Array(items) => {
-            let models: Result<Vec<S::Model>, _> =
-                items.iter().map(|item| wire_to_model::<S>(item)).collect();
-            models.map(|models| {
-                let masked = ability.mask_many::<S>(action, models.iter());
-                match S::wire_keys() {
-                    // Strain every surviving row against the entity's static
-                    // exposed-column set. `mask_many` may drop rows, so the
-                    // masked vec no longer aligns with `items` by index — but
-                    // the static key set needs no per-row body to strain
-                    // against, which is exactly what closes the dropped-row leak.
-                    Some(keys) => Value::Array(
-                        masked
-                            .into_iter()
-                            .map(|mut row| {
-                                retain_static_keys(&mut row, keys);
-                                row
-                            })
-                            .collect(),
-                    ),
-                    // Opt-out entity (no `#[expose]`): we can only strain against
-                    // the per-row body, which is sound only when nothing was
-                    // dropped (index alignment preserved).
-                    None => {
-                        if masked.len() == items.len() {
-                            Value::Array(
-                                masked
-                                    .into_iter()
-                                    .zip(items.iter())
-                                    .map(|(mut row, wire_row)| {
-                                        retain_body_keys(&mut row, wire_row);
-                                        row
-                                    })
-                                    .collect(),
-                            )
-                        } else {
-                            Value::Array(masked)
-                        }
-                    }
+            let mut masked = Vec::with_capacity(items.len());
+            for item in items {
+                let model = wire_to_model::<S>(item)?;
+                let verdict =
+                    ability.evaluate::<S>(action, &model, provenance, &invented_in::<S>(item));
+                if verdict.allowed {
+                    masked.push(strained::<S>(
+                        ability.mask_with::<S>(action, &model, verdict.fields),
+                        item,
+                    ));
                 }
-            })
-        }
-        Value::Object(_) => wire_to_model::<S>(wire).map(|model| {
-            let mut masked = ability.mask::<S>(action, &model);
-            match S::wire_keys() {
-                Some(keys) => retain_static_keys(&mut masked, keys),
-                None => retain_body_keys(&mut masked, wire),
             }
-            masked
-        }),
-        // Scalar / null — nothing to strip.
+            Value::Array(masked)
+        }
+        Value::Object(_) => {
+            let model = wire_to_model::<S>(wire)?;
+            let verdict =
+                ability.evaluate::<S>(action, &model, provenance, &invented_in::<S>(wire));
+            // A reply's lone row is the one its read admitted; a pushed one had
+            // no read, so it is judged like any row of a list.
+            if provenance == Provenance::Pushed && !verdict.allowed {
+                Value::Null
+            } else {
+                strained::<S>(ability.mask_with::<S>(action, &model, verdict.fields), wire)
+            }
+        }
         _ => return Ok(MaskedWire::Passthrough),
     };
-    masked.map(MaskedWire::Masked)
+    Ok(MaskedWire::Masked(masked))
 }
 
 /// What [`mask_wire_detail`] found: the rows that survived, still carrying
 /// their original keys, and which keys the mask took off at least one of them.
-///
-/// Both typed-value edges need it, for one fact read two ways: a key the mask
-/// removes cannot be represented in a non-null schema field. GraphQL decides
-/// between refusing the operation (the client selected that field) and
-/// returning the surviving rows untouched (it did not, so the field is never
-/// serialized); MCP, having no selection set, always refuses — and asks only
-/// *which* keys, so the refusal it files can name them.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
-// MCP asks only *which* keys went missing; `kept` and `dropped_rows` answer
-// GraphQL's second question — whether the surviving value can be handed back as
-// it stands — so a build without that edge reads neither.
-#[cfg_attr(not(feature = "graphql"), allow(dead_code))]
+#[cfg_attr(
+    not(feature = "graphql"),
+    expect(
+        dead_code,
+        reason = "MCP asks only which keys went missing; `kept` and `dropped_rows` answer \
+                  GraphQL's question of whether the surviving value can be handed back as is"
+    )
+)]
 pub(crate) struct MaskedDetail {
     /// Surviving rows with their original keys — same row set as
     /// [`mask_wire_json`] produces, without the field-level stripping.
@@ -194,14 +146,8 @@ pub(crate) struct MaskedDetail {
     pub(crate) dropped_rows: bool,
 }
 
-/// The row/field verdicts behind [`mask_wire_json`], reported instead of
-/// applied.
-///
-/// **Not a rare path.** Any principal holding a partial field grant on a wire
-/// type with non-null fields reaches it on *every* read, so it evaluates each
-/// row's rules exactly once ([`Ability::evaluate`], the same scan `mask_many`
-/// makes) and takes ownership of the wire value rather than cloning rows out of
-/// it.
+/// The row/field verdicts behind [`mask_wire_json`] on a decorated reply,
+/// reported instead of applied.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 pub(crate) fn mask_wire_detail<S>(
     ability: &Ability,
@@ -220,7 +166,12 @@ where
             let mut kept = Vec::with_capacity(items.len());
             for item in items {
                 let model = wire_to_model::<S>(&item)?;
-                let verdict = ability.evaluate::<S>(action, &model);
+                let verdict = ability.evaluate::<S>(
+                    action,
+                    &model,
+                    Provenance::Loaded,
+                    &invented_in::<S>(&item),
+                );
                 // Same verdict `mask_many` applies — a refused row is dropped,
                 // never handed back for the caller to render.
                 if !verdict.allowed {
@@ -233,12 +184,15 @@ where
             Value::Array(kept)
         }
         // A lone object is never dropped by `mask` (the class gate and `bind`
-        // decide instance visibility for a singleton) — only its fields go.
-        // A scalar never reaches here: `mask_wire_json` reports those as
-        // `Passthrough`, which the caller answers before asking for detail.
+        // decide a singleton's visibility); only its fields go.
         other => {
             let model = wire_to_model::<S>(&other)?;
-            let verdict = ability.evaluate::<S>(action, &model);
+            let verdict = ability.evaluate::<S>(
+                action,
+                &model,
+                Provenance::Loaded,
+                &invented_in::<S>(&other),
+            );
             collect_removed(&verdict.fields, exposed, &other, &mut removed);
             other
         }
@@ -263,13 +217,6 @@ pub(crate) struct MaskedRow {
 /// [`mask_wire_json`] for a single row whose model and verdict the caller
 /// **already holds**.
 ///
-/// The entry point a per-item path needs. `mask_wire_json` starts from the wire
-/// value, so reaching it means serializing the item, deep-cloning the JSON
-/// object, rebuilding `S::Model` and re-running the whole rule scan — all of
-/// which a caller that has already decided "may this subscriber see this row?"
-/// has just done. On a stream that is per item, per subscriber, so it is worth
-/// an entry point rather than the tidier delegation.
-///
 /// Takes the verdict by value because [`Ability::mask_with`] consumes the field
 /// set; `removed` is collected first, off the same one.
 #[cfg(feature = "graphql")]
@@ -284,22 +231,14 @@ where
     S: EntityTrait + WireModelDefaults,
     S::Model: Serialize,
 {
-    let exposed = S::wire_keys();
     let mut removed = BTreeSet::new();
-    collect_removed(&verdict.fields, exposed, wire, &mut removed);
-    let mut masked = ability.mask_with::<S>(action, model, verdict.fields);
-    match exposed {
-        Some(keys) => retain_static_keys(&mut masked, keys),
-        None => retain_body_keys(&mut masked, wire),
-    }
+    collect_removed(&verdict.fields, S::wire_keys(), wire, &mut removed);
+    let masked = strained::<S>(ability.mask_with::<S>(action, model, verdict.fields), wire);
     MaskedRow { masked, removed }
 }
 
-/// The keys [`mask_wire_json`] strips from this row, read off the same two
-/// rules instead of performing them: the row's field grant (what
-/// [`Ability::mask`] retains) and the entity's statically exposed columns (what
-/// [`retain_static_keys`] retains). Change either rule and this reads the
-/// change — it holds no copy of its own.
+/// The keys [`mask_wire_json`] strips from this row: those outside the row's
+/// field grant or the entity's statically exposed columns.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 fn collect_removed(
     granted: &FieldSet,
@@ -324,21 +263,14 @@ fn collect_removed(
 
 /// Deserialize a handler JSON object into `S::Model`, filling columns the wire
 /// DTO omits so policy can run. The placeholder defaults are stripped again by
-/// [`retain_static_keys`] before the response ships — they never reach the wire.
-///
-/// Defaults are filled **before** the single deserialize rather than after a
-/// speculative one: `fill_wire_defaults` only inserts keys the body is missing,
-/// so the outcome is identical, while the straight-attempt-first shape used to
-/// burn a whole clone and a doomed parse per row for every entity that hides a
-/// non-`Option` column (`password_hash` — the common case).
+/// [`strained`] before the response ships — they never reach the wire.
 pub(crate) fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
 where
     S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned,
 {
     let Value::Object(map) = wire else {
-        // Not an object — nothing to fill; borrow-deserialize so the error path
-        // costs no clone either.
+        // Not an object: nothing to fill, and no clone on the error path.
         return S::Model::deserialize(wire);
     };
     let mut map = map.clone();
@@ -346,23 +278,28 @@ where
     serde_json::from_value(Value::Object(map))
 }
 
-/// Keep only the entity's statically-known exposed (`#[expose]`) columns, so
-/// neither an unrestricted field grant nor a handler returning a raw `Model`
-/// can leak an unexposed column. Keying on the static set (not the response
-/// body) is what makes this hold even when `mask_many` drops rows, and it cuts
-/// a raw-`Model` body down to its exposed columns rather than trusting it.
-fn retain_static_keys(masked: &mut Value, keys: &'static [&'static str]) {
-    if let Some(masked_obj) = masked.as_object_mut() {
-        masked_obj.retain(|key, _| keys.contains(&key.as_str()));
+/// The columns a row rebuilt from `wire` was given rather than sent: one the
+/// fill may invent, and one the object left out, which serde defaulted.
+pub(crate) fn invented_in<S: WireModelDefaults>(wire: &Value) -> impl Fn(S::Column) -> bool + '_ {
+    let sent = wire.as_object();
+    move |column| {
+        S::is_placeholdered(column)
+            || S::wire_key(column).is_some_and(|key| !sent.is_some_and(|row| row.contains_key(key)))
     }
 }
 
-/// Fallback strainer for entities that opt out of [`WireModelDefaults::wire_keys`]
-/// (no `#[expose]`): keep only keys the response body already carried. Sound
-/// only when the body is itself the wire shape and rows weren't dropped.
-fn retain_body_keys(masked: &mut Value, wire: &Value) {
-    let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
-        return;
-    };
-    masked_obj.retain(|key, _| wire_obj.contains_key(key));
+/// A masked row cut back to the keys its wire row carried, among the entity's
+/// exposed (`#[expose]`) columns when it states them: neither an unrestricted
+/// field grant nor a handler returning a raw `Model` leaks an unexposed column,
+/// and no key the row left out comes back with the value the rebuild gave it.
+fn strained<S: WireModelDefaults>(mut masked: Value, wire: &Value) -> Value {
+    let exposed = S::wire_keys();
+    let sent = wire.as_object();
+    if let Some(row) = masked.as_object_mut() {
+        row.retain(|key, _| {
+            sent.is_some_and(|sent| sent.contains_key(key))
+                && exposed.is_none_or(|keys| keys.contains(&key.as_str()))
+        });
+    }
+    masked
 }

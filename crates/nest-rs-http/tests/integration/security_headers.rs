@@ -1,20 +1,9 @@
-//! `src/security_headers.rs` reaching the wire, and the one way a value gets
-//! there without having been checked.
-//!
-//! Every value that arrives through configuration is boot-validated
-//! (`validate_header_value`, HTTP-S4), so a misconfigured
-//! `NESTRS_HTTP__SECURITY_HEADERS__FRAME_OPTIONS` fails the boot naming the
-//! variable. `HttpTransport::security_headers` is the other door — a builder
-//! call, taking the struct directly, skipping config resolution entirely — and
-//! it is what the harness in this file uses.
-//!
-//! What must not happen there is a security header quietly disappearing. The
-//! response is otherwise identical, the app answers `200`, and `X-Frame-Options`
-//! is simply absent — which is a clickjacking exposure that no test of the
-//! *response* would think to look for, because nothing asked for it to be gone.
+//! Security headers on the wire, through `HttpConfig.security_headers` built in
+//! code, which no environment read validated: an invalid value must not make a
+//! header quietly disappear, and a value a route set is its own.
 
 use nest_rs_core::{Module, module};
-use nest_rs_http::{HttpTransport, SecurityHeadersConfig, controller, routes};
+use nest_rs_http::{HttpConfig, HttpSecurityHeaders, controller, routes};
 use poem::endpoint::BoxEndpoint;
 use poem::test::TestClient;
 
@@ -27,28 +16,37 @@ impl PagesController {
     async fn index(&self) -> &'static str {
         "a page worth framing"
     }
+
+    /// An image other origins embed: it states its own resource policy.
+    #[get("/badge")]
+    #[response_header("cross-origin-resource-policy", "cross-origin")]
+    async fn badge(&self) -> &'static str {
+        "an embeddable badge"
+    }
 }
 
 #[module(providers = [PagesController])]
 struct PagesModule;
 
-/// [`crate::boot`], with a `SecurityHeadersConfig` pinned on the transport
-/// rather than resolved from the environment.
+/// [`crate::boot`], with a `HttpSecurityHeaders` pinned in code rather than
+/// resolved from the environment.
 async fn boot_with<M>(
-    headers: SecurityHeadersConfig,
+    headers: HttpSecurityHeaders,
 ) -> TestClient<BoxEndpoint<'static, poem::Response>>
 where
     M: Module + 'static,
 {
-    crate::boot_on::<M>(HttpTransport::new().security_headers(headers)).await
+    crate::boot_on::<M>(HttpConfig {
+        security_headers: headers,
+        ..HttpConfig::default()
+    })
+    .await
 }
 
 #[tokio::test]
 async fn the_default_headers_are_stamped_on_every_response() {
-    // The baseline the failure below is a departure from — without it, a run
-    // where *no* security header is ever emitted would satisfy the assertions
-    // that follow.
-    let client = boot_with::<PagesModule>(SecurityHeadersConfig::default()).await;
+    // The baseline: without it, a run emitting no header would pass below.
+    let client = boot_with::<PagesModule>(HttpSecurityHeaders::default()).await;
     let resp = client.get("/pages").send().await;
     resp.assert_status_is_ok();
     resp.assert_header("x-frame-options", "DENY");
@@ -58,11 +56,10 @@ async fn the_default_headers_are_stamped_on_every_response() {
 #[tokio::test]
 async fn a_header_value_that_cannot_be_built_is_reported_rather_than_dropped() {
     let logs = nest_rs_testing::LogCapture::install();
-    let client = boot_with::<PagesModule>(SecurityHeadersConfig {
-        // A newline: legal in a `String`, refused by `HeaderValue::from_str`,
-        // and the shape a value assembled from a template would take.
+    let client = boot_with::<PagesModule>(HttpSecurityHeaders {
+        // A newline: legal in a `String`, refused by `HeaderValue::from_str`.
         frame_options: Some("DENY\nX-Injected: yes".to_owned()),
-        ..SecurityHeadersConfig::default()
+        ..HttpSecurityHeaders::default()
     })
     .await;
 
@@ -87,4 +84,23 @@ async fn a_header_value_that_cannot_be_built_is_reported_rather_than_dropped() {
          since its whole symptom is an absence: {:?}",
         event.fields,
     );
+}
+
+#[tokio::test]
+async fn a_response_without_the_header_gets_the_default() {
+    let client = boot_with::<PagesModule>(HttpSecurityHeaders::default()).await;
+    let resp = client.get("/pages").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_header("cross-origin-resource-policy", "same-origin");
+}
+
+/// The deployment's `same-origin` is the default; a route that is meant to be
+/// embedded says so, and its value is the one sent, alone.
+#[tokio::test]
+async fn a_route_that_sets_corp_keeps_its_value() {
+    let client = boot_with::<PagesModule>(HttpSecurityHeaders::default()).await;
+    let resp = client.get("/pages/badge").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_header_all("cross-origin-resource-policy", ["cross-origin"]);
+    resp.assert_header("x-frame-options", "DENY");
 }

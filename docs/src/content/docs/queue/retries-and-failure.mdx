@@ -1,21 +1,17 @@
 ---
 title: Retries and failure
-description: "What an Err from a #[process] method means — the apalis retry shape, panic handling, and the dead-letter story."
-tier: all-options
+description: "What an Err from a #[process] method means — the retry budget and its backoff, resuming from a checkpoint, panic handling, and where a dead-lettered job goes."
 sidebar:
-  order: 4
+  order: 5
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 The contract is small: a `#[process]` method returns `anyhow::Result<()>`,
-`Err(_)` marks the attempt failed, and `Ok(())` acknowledges it — once the
+`Err(_)` marks the attempt failed, and `Ok(())` completes the job — once the
 attempt's transaction has settled, which is the one way a body that returned
 `Ok` can still fail (see
-[below](#panics-deserialization-errors-container-misses)). After that the
-backend decides — and Redis (via apalis) gives you a fixed retry budget
-per method, a panic safety net, and a failed-jobs list. Anything richer
-than that is bolted on top.
+[below](#panics-deserialization-errors-container-misses)). The budget is the
+queue port's, the same on every backend: a retryable failure runs again after
+a backoff, as the same job, until the budget is spent.
 
 ## The basic shape
 
@@ -26,108 +22,184 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 }
 ```
 
-- `Ok(())` ⇒ the attempt's transaction commits and the job is removed
-  from the queue. apalis acknowledges it; that's the end of its life. If
-  the commit cannot be honoured, nothing it wrote landed and the attempt
-  fails instead — the one case where `Ok` is not the end.
-- `Err(e)` ⇒ the job goes back for another attempt. apalis tracks the
-  attempt count, and after `retries` failures it's moved to the
-  queue's failed-jobs list (see [Where failed jobs go](#where-failed-jobs-go)).
+- `Ok(())` ⇒ the attempt's transaction commits and the job is done. If the
+  commit cannot be honoured, nothing it wrote landed and the attempt fails
+  instead — the one case where `Ok` is not the end.
+- `Err(e)` ⇒ the attempt failed. While the budget holds another attempt, the
+  job runs again after the backoff below, under the same `job_id` with
+  `attempt` one higher. After `retries` failed retries it is dead-lettered
+  (see [Where failed jobs go](#where-failed-jobs-go)).
 - A **panic** inside the method is caught, logged as
-  `job dead-lettered: handler panicked` at `error` (inside the job's own
-  span, so it carries `queue`, `processor`, `job_id` and `attempt`), and
-  converted to `Error::Abort`. The job dead-letters immediately, the
-  worker keeps running — one bad job doesn't kill the queue's consumer.
+  `job dead-lettered: handler panicked` at `error` with the panic's message,
+  and the job dead-letters at once. The attempt's `queue.job` line reports
+  `outcome="panic"` beside it, under the same `span_id`. The worker keeps
+  running — one bad job doesn't stop the queue's consumer.
 
-Hot-path layer order: `CatchPanicLayer` sits *inside* `RetryLayer`,
-which sits inside `ErrorHandlingLayer`. `RetryLayer` reacts to `Err`,
-not to panics, so without the panic layer a single `unwrap()` in user
-code would tear down the worker. The order is fixed in
-`nest-rs-redis`'s `build_worker`, which also catches the panic itself,
-one level in — that is what keeps the structured event inside the per-job span
-(with `queue`, `processor`, `job_id` and `attempt`) instead of losing it to an
-unwind.
+The panic is caught by the queue port itself, around the handler, which is
+what keeps the event inside the attempt's trace. Each delivery also runs on a
+task of its own, so the worker goes on to its next job.
 
-Rust's **default panic hook still prints its own `thread … panicked at …` line
-to stderr** first: catching an unwind does not replace the hook. That line
-carries no target, so `RUST_LOG` cannot filter it — the framework's own record
-is the `job dead-lettered: handler panicked` event beneath it. Install
-`std::panic::set_hook` in `main` if you need the raw line gone.
+That event is the panic's one record: under `#[nest_rs::main]` the process
+hook stays quiet for a panic the attempt contains, so no raw
+`thread … panicked at …` line reaches stderr, and the event names where the
+handler panicked under `panic_location`
+([a panic is said once](/opentelemetry/logs/#a-panic-is-said-once-without-its-value)).
 
 ## The retry shape
 
-`retries = N` uses `RetryPolicy::retries(N)` from apalis. That's a
-**fixed retry count, no backoff** — the policy retries up to `N` times
-back-to-back. The number of total attempts a job sees is `N + 1` (the
-first try plus N retries). Default if you omit `retries`: `0` — the
-job is tried once.
+`retries = N` is `N + 1` attempts in all: the first try and `N` retries. The
+default is `0` — the job is tried once. The budget counts attempts that
+answered. A delivery that ends without an answer — its process killed, frozen
+or cut off past its lease — spends none: the job runs again at the attempt it
+was at. That has its own bound, the **stall limit**: a job whose deliveries end
+that way three times in a row (`STALL_LIMIT`) is taking its workers down — an
+abort, an OOM kill, a hang until the pod is killed — and is dead-lettered
+without running, as
+`job dead-lettered: its deliveries ended without an answer past the stall limit`.
+See [Crashes, and the stall limit](/queue/delivery/#crashes-and-the-stall-limit).
 
-<Aside type="caution">
-There's no exponential backoff, no jitter, no per-attempt delay in the
-default policy. A method that fails because Redis itself is briefly
-unreachable retries immediately, three times in a row, and is then
-flagged failed. If the work is sensitive to bursts (downstream HTTP
-calls, third-party rate limits), the service the method delegates to
-holds that policy — retry inside `svc.transcode()` with `tokio::time::sleep`
-between attempts, or use a circuit breaker in the service.
-</Aside>
+After attempt `n` fails, the job waits `min(5 min, 1 s · 2^(n − 1))` before
+attempt `n + 1`, scaled by a jitter between 0.8 and 1.2. The jitter is derived
+from the job's id and `n` rather than drawn, so jobs a shared outage failed
+together come back apart, and one job waits the same on every replay. It is the
+one retry policy the framework runs — `nest_rs::core::Backoff`, the shape of
+gRPC's connection backoff — and the worker's own calls to its backend, Redis's
+reconnections and `retry_on_conflict` wait on it too, each from a seed of its
+own:
 
-If you need a different retry curve, today the path is to wrap the
-business call in the service:
+| After attempt | Wait before jitter | Wait |
+|---|---|---|
+| 1 | 1 s | 0.8 – 1.2 s |
+| 2 | 2 s | 1.6 – 2.4 s |
+| 3 | 4 s | 3.2 – 4.8 s |
+| 9 | 256 s | 204.8 – 307.2 s |
+| 10 and after | 5 min | 4 – 6 min |
 
-```rust title="crates/features/src/audio/service.rs"
-impl AudioService {
-    pub async fn transcode(&self, file: &str) -> Result<()> {
-        let mut attempt = 0;
-        loop {
-            match self.do_transcode(file).await {
-                Ok(()) => return Ok(()),
-                Err(e) if attempt < 5 => {
-                    let delay = Duration::from_millis(100 * 2u64.pow(attempt));
-                    tracing::warn!(target: "features::audio", %file, attempt, error = %e, "transcode failed; retrying");
-                    tokio::time::sleep(delay).await;
-                    attempt += 1;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
+The worker says how long it chose, on the line that reports the failure:
+
+```text frame="terminal"
+ WARN nest_rs::queue: job failed; will retry within the budget error=transcode failed retry_after_ms=1143 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
+```
+
+On Redis the next attempt waits off the stream, due on Redis's clock, until a
+running worker files it back — see [Delayed jobs](/queue/delivery/#delayed-jobs)
+— and the worker that ran the failed attempt moves on: no permit is held while
+a job waits, and a shutdown during the wait loses nothing. The port counts the
+budget once; the backend keeps no retry count of its own.
+
+A failure a retry cannot fix is **non-retryable** and dead-letters on the
+attempt it happens: a payload that does not deserialize, a pipe rejection, a
+missing provider. Every `Err` your method returns is retryable — the budget is
+how many times a transient fault gets another chance.
+
+## How long an attempt runs
+
+An attempt runs for at most **ten minutes** unless its decorator says otherwise.
+`timeout` takes a whole number of `ms`, `s`, `m` or `h`, up to `"24h"`:
+
+```rust
+#[process(queue = AudioQueue, retries = 3, timeout = "30m")]
+async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
+    self.svc.transcode(&job.file).await
 }
 ```
 
-The `#[process]` budget then acts as the outer safety net — a couple
-of immediate retries after the service-level backoff already gave up,
-useful for transient framework-level issues (the container resolution
-failing under load, a panic in deserialization).
+No edge deadline sits above a job, so the timeout is what ends an attempt
+waiting on a call that never answers — an outbound request with no timeout of
+its own. It bounds the method's **body**: past it, the attempt is cut where it
+waits and fails **retryably**, since the next attempt may meet the answer the
+first waited on in vain, and what it wrote in its transaction is rolled back.
+The failure names the deadline, on the retry `warn`, the dead-letter line and
+its record alike:
+
+```text frame="terminal"
+ WARN nest_rs::queue: job failed; will retry within the budget error=the attempt did not end within its 1800s timeout, and was cut — the `timeout` key on its job decorator sets it retry_after_ms=1143 trace_id=… span_id=…
+```
+
+A body that returned within its timeout is never retried for what comes after
+it: its `COMMIT` runs to its answer, and a listener on what it committed runs
+on past the timeout rather than failing the attempt. A commit that does not
+answer within the driver's bound may have landed, so that attempt is
+**dead-lettered, never replayed** — running it again could write twice:
+
+```text frame="terminal"
+ERROR nest_rs::queue: job dead-lettered: its commit did not answer in time, and what it wrote may have landed outcome="in_doubt" error=the unit's commit did not answer within its bound; its writes may have landed trace_id=… span_id=…
+```
+
+The default is the dispatch deadline of Google Cloud Tasks, and the same key,
+default and ceiling hold on `#[every]`, `#[cron]` and `#[after]` — see
+[How long a run lasts](/schedule/#how-long-a-run-lasts).
+
+## Resuming where an attempt stopped
+
+A retry replays the whole body. A job that works through a long file can keep
+its place instead, with a `Checkpoint<S>` parameter beside the job:
+
+```rust title="crates/features/src/audio/queue/processor.rs"
+#[process(queue = AudioQueue, retries = 3, transactional = false)]
+async fn transcode(&self, job: TranscodeCommand, mut progress: Checkpoint<TranscodeProgress>) -> Result<()> {
+    let first = progress.get().map_or(0, |saved| saved.next_chunk);
+    for chunk in first..self.svc.chunks(&job.file).await? {
+        self.svc.transcode_chunk(&job.file, chunk).await?;
+        progress.save(TranscodeProgress { next_chunk: chunk + 1 }).await?;
+    }
+    Ok(())
+}
+```
+
+`get` answers the last state saved for this job — by an earlier attempt, or by
+a replica that died holding it — and `save` stores a new one at once. The
+state is any `Serialize + DeserializeOwned` value, lasts through the job's
+retries and redeliveries, and is cleared when the job completes, dead-letters
+or is cancelled.
+
+The method must declare `transactional = false`, and the decorator refuses a
+`Checkpoint` without it: a save reaches the backend at once, while a
+transactional attempt rolls its database work back when it fails, so the retry
+would resume past rows that were undone. A checkpoint needs a backend declaring
+`Capability::Checkpoint`; on Redis it is one field beside the job, written
+only by the delivery holding it and removed when the job ends — see
+[Delivery on Redis](/queue/delivery/#where-a-queue-lives).
+
+A store that does not answer within the port's net — `BACKEND_TIMEOUT`, eighteen
+seconds — or panics answering fails the attempt, retryably, the panic said once
+at `error`: the read before your method runs does so on its own, and a save does
+when you return its error with `?`. The clear at the job's end comes after the
+attempt, so a store that does not answer it is said at `warn` and the outcome
+stands.
 
 ## Where failed jobs go
 
-apalis moves a job whose budget is exhausted (or that aborted) to a Redis
-sorted set named after the queue with **`:dead`** appended, and records
-the terminal error under `<queue>:data::result`. Both are apalis-internal
-keys you normally read through its CLI or admin tools:
+A dead-lettered job leaves one entry on the queue's
+`nestrs:queue:{<queue>}:dead` stream: its `job` id, its `record` as stored, and
+the `reason` — the sentence the `job dead-lettered` line carries: the failure
+and every cause beneath it, a `.context(…)` included, with any decode failure
+said without its value and a database error by its SQLSTATE and the names the
+server reported (`database error 22P02`), never by the server's message, which
+quotes the input it refused:
 
 ```bash frame="terminal"
-$ redis-cli KEYS 'audio*'
-audio:data          audio:data::result          audio:consumers          audio:dead
-
-$ redis-cli ZRANGE audio:dead 0 -1
-01KYQ7RH444ZAHA2JP8JBJVRA1
-
-$ redis-cli HGET audio:data::result 01KYQ7RH444ZAHA2JP8JBJVRA1
-RetryPolicyError: Out of retries after 4 attempts: FailedError: transcode failed
+$ valkey-cli XRANGE 'nestrs:queue:{audio}:dead' - +
+1) 1) "1790442140102-0"
+   2) 1) "job"
+      2) "01a0deaa-cf96-70f8-a924-efd8fbbe3d38"
+      3) "record"
+      4) "{\"v\":1,…}"
+      5) "reason"
+      6) "transcode failed"
 ```
 
-The framework does **not** ship a dead-letter routing layer of its own —
-the dead list is the storage's, and inspecting / replaying it is an
-operational task you run with apalis tooling or your own admin handler.
+The `job` is the id the push returned; the job's lines name the stream entry
+each attempt ran from as `backend_id`. The stream keeps a week of dead letters
+and about the last 10,000. The framework does **not** ship a dead-letter
+routing layer: the dead letters are the storage's, and inspecting them is an
+operational task — filing one back, once its cause is fixed, is the one command
+under [Dead letters](/queue/delivery/#dead-letters).
 
-If you need richer dead-lettering — alerting, replay, archival to a
-separate queue — write a wrapper service that catches the `Err` from
-the work and republishes the payload to a dedicated queue (e.g.
-`audio.dead`) before returning the error to apalis. A `#[processor]`
-on `audio.dead` then runs your DLQ logic. That's the same pattern any
-non-Redis backend would expose.
+If you need richer dead-lettering — alerting, replay, archival — catch the
+`Err` in the method and republish the payload to a dedicated queue before
+returning the error. A `#[processor]` on that queue then runs your
+dead-letter logic, and the pattern is the same on any backend:
 
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[process(queue = AudioQueue, retries = 3)]
@@ -147,17 +219,23 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 Four failure modes the framework converts into the same `Err` path,
 so you don't have to think about them separately:
 
-- **Panics in the method body** — caught and surfaced as
-  `Error::Abort`, with a `job dead-lettered: handler panicked` event
-  carrying the panic message. The job dead-letters immediately
-  (regardless of remaining retries), the worker stays up.
-- **Deserialization errors** — the macro-emitted `JobHandler` does the
+- **Panics in the method body** — caught, with a
+  `job dead-lettered: handler panicked` event carrying the panic message. The
+  job dead-letters immediately (regardless of remaining retries), the worker
+  stays up.
+- **Deserialization errors** — the macro-emitted handler does the
   `serde_json::from_value`. A payload that doesn't match the method's
   job type returns `Err` before your method even runs. Retrying won't
   help: the payload shape is wrong, so it is classified **non-retryable**
   and dead-letters on the **first** attempt, logging
   `job dead-lettered: non-retryable failure` at `error`. The `retries`
-  budget is not consumed.
+  budget is not consumed. The reason names where the payload failed and what
+  kind of value it found — ``invalid type: a string, expected u64`` — and never
+  the value: serde's own sentence quotes it, and the reason lands in the log
+  line and the dead-letter record, where a payload's data does not belong. A
+  decode your method does itself — `serde_json::from_str(&reply)?` in an
+  `anyhow::Result` — is said the same way when it fails, on the retry `warn`,
+  the dead-letter line and the record alike.
 - **Container resolution failures** — `Container::get` of the
   `#[processor]` host can fail if a dep wasn't seeded. The handler
   returns `Err` with the resolution error. This usually means a
@@ -182,50 +260,78 @@ so you don't have to think about them separately:
 
 ## Wire-format mismatch
 
-A processor reads only payloads it understands. The wire envelope
-(`{ "v": 1, "payload": ... }`) carries a version; the macro-emitted
-handler validates it. A future release that bumps
-`WIRE_FORMAT_VERSION` to `2` makes a `v: 1` worker refuse to decode
-`v: 2` jobs — fails closed with a clear error rather than
-misinterpreting bytes. During a rolling deploy this means jobs queue
-up; afterward the new worker drains them.
+A processor reads only payloads it understands. The wire envelope carries a
+version, and the port checks it before the handler runs.
+A future release that bumps `WIRE_FORMAT_VERSION` to `2` makes a `v: 1` worker
+leave `v: 2` jobs unread rather than misinterpret them: the job goes back to the
+queue exactly as it was stored, due again in a minute, with no attempt spent,
+and the worker files one line per delivery at `warn`, in the trace the newer
+producer sealed:
 
-**Unversioned legacy payloads** (a bare job JSON, no `v` key) are
-decoded directly with a `tracing::warn` — so jobs left in Redis from a
-release before envelopes existed don't get stuck. New producers
-always wrap.
+```text
+WARN nest_rs::queue: job sealed by a newer release handed back unread queue=audio job_id=01a0… version=2 supported=1 retry_after_ms=60000 waited_ms=0 patience_ms=86400000 hint="a newer release sealed this job and only its consumers can run it: finish rolling them forward, or, rolling back, keep one running until the queue holds none of its jobs — a job still unread a day after it was first handed back is dead-lettered, naming both versions, and kept with the dead letters for a consumer of that release" trace_id=4bf9… span_id=…
+```
+
+So during a rolling deploy jobs from the new producers wait, and the new
+workers run them as they come up — under the id their push returned, which the
+line names. **A rollout that stopped does not hand its jobs back forever.**
+`waited_ms` counts from the job's first hand-back — never from its push, so a
+job pushed with a delay is not charged for the delay — and a job still unread a
+day later (`NEWER_RELEASE_PATIENCE`) is dead-lettered, once, at
+`error`:
+
+```text
+ERROR nest_rs::queue: job dead-lettered: a newer release sealed it, and none of its consumers ran it in time version=2 supported=1 waited_ms=86400412 patience_ms=86400000 hint="…"
+```
+
+Rolling the producers back stops new such jobs and recovers none already
+sealed: those need a consumer of the release that sealed them. Keep one
+running until the queue holds none of them — a job it runs is cleared of its
+wait — or let them reach the dead letters, where each keeps its record a week,
+naming both versions, for a consumer of that release. An **older** version — a `v: 1` job
+met by a `v: 2` worker — is dead-lettered naming the direction of the gap,
+since a newer consumer reading an older shape is a decision the release that
+bumps the version makes, not a default.
+
+An envelope with no `id` or `attempt` — what 6.x sealed — still runs, as
+attempt 1 under an id minted for its delivery. **Unversioned legacy payloads**
+(a bare job JSON, no `v` key) are decoded directly with a `tracing::warn`, so
+jobs left from a release before envelopes existed don't get stuck. New
+producers always seal.
 
 ## Limits
 
-- **No backoff.** `retries = N` is a fixed count, retried
-  back-to-back — see the caution above.
-- **`will retry` is logged on the terminal attempt too.** Every failed
-  attempt including the last logs `job failed; will retry within the
-  budget`; after attempt `N + 1` there is no budget left and the job
-  dead-letters with no further line. Read the `attempt` field on the
-  span, not the message, to tell the last try from the others.
-- **The dead list is not routed anywhere.** Nothing alerts, replays or
-  archives on your behalf; wire the wrapper above if you need that.
-- **Scaling the worker up re-runs in-flight jobs.** Delivery is exclusive —
-  two replicas never get the same job from the queue — but a replica's
-  *startup* sweep requeues work its peers are currently running, so the same
-  `job_id` executes twice (both reported as `attempt=1`). It comes from
-  apalis-redis's startup call to `reenqueue_orphaned` using a cutoff of *now*,
-  which matches every registered consumer instead of only the worker's own
-  previous incarnation. Until it is fixed upstream, treat a `#[process]`
-  handler as **at-least-once** and make it idempotent — the practical rule for
-  any durable queue, and load-bearing here because replicas are how throughput
-  scales. Measured in
-  `crates/nest-rs-redis/tests/e2e/replicas.rs`, which pins both halves.
+- **The dead letters are not routed anywhere.** Nothing alerts or archives on
+  your behalf, and the stream keeps a week of them; wire the wrapper above if
+  you need more.
+- **A retry replays the whole body.** The transaction bounds what an attempt
+  leaves behind in the database, never an email sent or an API called before
+  the failure — keep those behind an idempotency key.
+- **Delivery is at least once, so a handler is idempotent.** A second delivery
+  comes only once a lease lapses — a worker that crashed, froze, or was cut off
+  from Redis for longer than its lease — and runs the job again, while every
+  write the first delivery makes after that lands nowhere. See
+  [At least once, and the fence](/queue/delivery/#at-least-once-and-the-fence).
+
+## Reference
+
+- `crates/nest-rs-queue/src/consume.rs` — `attempt`: the budget, the backoff,
+  the stall limit, the events and the operation line.
+- `crates/nest-rs-queue/src/backoff.rs` — the wait before each retry, and the
+  waits pinned for one job.
+- `crates/nest-rs-queue/src/checkpoint.rs` — `Checkpoint<S>`, and the
+  `CheckpointStore` a backend keeps it in.
+- `crates/nest-rs-redis/src/queue/scripts.rs` — how an outcome settles on
+  Redis, fenced on its lease: acknowledged, filed for later, or dead-lettered.
+- `crates/nest-rs-redis/tests/e2e/queue/consumer.rs` — the behaviour kit's
+  retry, dead letter and stall limit, a dead letter's record, and a checkpoint
+  across a retry and a dead replica, against live Redis.
 
 ## Going further
 
+- [Delivery on Redis](/queue/delivery/) — leases, redeliveries, shutdown and
+  delayed jobs.
 - [Observability](/queue/observability/) — what shows up in spans and
   logs when a job retries or fails.
 - [OpenTelemetry](/opentelemetry/) — wiring the queue spans into a
   trace backend.
-- `crates/nest-rs-redis/src/worker/consumer.rs` — `build_worker`: the
-  apalis layer stack, the `CatchPanicLayer` placement, the
-  `RetryLayer` budget.
-- `crates/nest-rs-queue/src/inventory.rs` — `WIRE_FORMAT_VERSION`,
-  the envelope spec.

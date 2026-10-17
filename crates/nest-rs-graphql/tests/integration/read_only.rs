@@ -1,12 +1,5 @@
-//! DATA-S5: a GraphQL operation proven read-only runs **outside** the request
-//! transaction, a mutation keeps it. Every GraphQL request is a POST, so the
-//! HTTP data boundary hands the whole batch a transaction; the endpoint routes
-//! read-only work onto `Executor::non_transactional` instead.
-//!
-//! No ORM here — the executor is a marker implementing the ORM-agnostic
-//! `nest_rs_database::Executor` seam, installed by an interceptor that mirrors
-//! what `DbContext` does for SeaORM. The resolver reports which handle was
-//! ambient when it ran.
+//! A GraphQL operation proven read-only runs **outside** the request
+//! transaction every POST is handed; a mutation keeps it.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -20,8 +13,7 @@ use nest_rs_interceptors::{Interceptor, Next};
 use nest_rs_testing::TestApp;
 use poem::{Request, Response, Result};
 
-/// A stand-in for the ORM's executor. The `"txn"` handle yields a `"pool"`
-/// sibling exactly as SeaORM's unopened `Executor::Lazy` yields its pool.
+/// A stand-in for the ORM's executor: `"txn"` yields a `"pool"` sibling.
 struct MarkerExecutor {
     kind: &'static str,
 }
@@ -124,8 +116,6 @@ async fn a_query_runs_outside_the_request_transaction() {
 
 #[tokio::test]
 async fn a_mutation_keeps_the_request_transaction() {
-    // The safety half: misrouting a write onto the pool would cost it
-    // atomicity and rollback.
     assert_eq!(
         ambient_executor_for("mutation { writeAmbientExecutor }", "writeAmbientExecutor",).await,
         "txn",
@@ -134,9 +124,7 @@ async fn a_mutation_keeps_the_request_transaction() {
 
 #[tokio::test]
 async fn a_batch_holding_a_mutation_keeps_the_transaction_for_the_query_too() {
-    // Classification is per batch, not per operation: one shared executor is
-    // installed for the whole request, so a batch that writes anywhere stays
-    // transactional throughout.
+    // Per batch: one executor is installed for the whole request.
     let app = TestApp::builder()
         .module::<ReadOnlyTestModule>()
         .build()

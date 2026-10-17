@@ -15,24 +15,27 @@ categories = ["authentication", "web-programming"]
 # `OAuthClient` is provided through the factory phase; `OAuthClientModule` is the
 # `DynamicModule` that queues it.
 nest-rs-core.workspace = true
-# `OAuthClientModule` owns `OAuthClientConfig` (namespace `oauth_client`), loaded from
-# `NESTRS_OAUTH_CLIENT__*`; `validator` backs this crate's own `Validate` impls.
-nest-rs-config.workspace = true
+# `OAuthClientModule` owns `OAuthClientConfig` (namespace `oauth__client`), loaded from
+# `NESTRS_OAUTH__CLIENT__*`; `validator` backs this crate's own `Validate` impls.
+# `reqwest` is `ClientTls`, what the provider's certificate must chain to and
+# the certificate presented to it, converted for the client calling it.
+nest-rs-config = { workspace = true, features = ["reqwest"] }
 validator.workspace = true
 # `AuthError` is the framework's authentication failure, and the CSRF/PKCE
 # transaction is a `JwtService`-signed cookie — both belong to the crate that
 # answers *who*, so this crate reads them rather than declaring a second pair.
 nest-rs-authn.workspace = true
-# OAuth2 Authorization Code flow; its bundled reqwest (re-exported as
-# `oauth2::reqwest`) drives the token exchange, so we add no second reqwest. The
-# default features (reqwest + rustls-tls) are exactly what we want.
+# OAuth2 Authorization Code flow, without its bundled reqwest 0.12: that one can
+# only speak TLS through ring, so the exchange runs on the workspace's reqwest
+# through `oauth2::AsyncHttpClient`, and every TLS client shares one provider.
 oauth2.workspace = true
+reqwest.workspace = true
 serde.workspace = true
-# Parsing the OAuth userinfo response (oauth2's reqwest is built without its
-# `json` feature, so we read the body and deserialize it ourselves).
+# Parsing the OAuth userinfo response: the body is read whole and deserialized
+# here, so a refusal says where it failed without quoting the profile.
 serde_json.workspace = true
 # Constant-time comparison of the CSRF state carried in the transaction cookie.
-subtle.workspace = true
+aws-lc-rs.workspace = true
 # `OAuthClientModule::for_root` provides the client through the factory phase, whose
 # error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
@@ -40,13 +43,16 @@ anyhow.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# `LogCapture` asserts the callback-refusal `warn` carries its `reason`.
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `LogCapture` asserts the callback-refusal `warn` carries its `reason`;
+# `TestAuthority` issues the certificate each provider double presents over TLS.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # Forging an expired transaction cookie, to prove `exchange` refuses it. The
 # crate hides `jsonwebtoken` from consumers; only the test that has to mint a
 # malformed token names it.
 jsonwebtoken = { workspace = true }
-tokio = { workspace = true }
+# `test-util` stops the clock once a silent provider has taken the connection, so
+# the bounds are waited out without the suite waiting them.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-use nest_rs::resource::{expose, wire_enum};
+use nest_rs::seaorm::{expose, wire_enum};
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,34 @@ pub enum UserRole {
     Admin,
 }
 
+#[derive(Clone, PartialEq, Eq, DeriveValueType, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PasswordHash(String);
+
+impl PasswordHash {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for PasswordHash {
+    fn from(hash: String) -> Self {
+        Self(hash)
+    }
+}
+
+impl From<&str> for PasswordHash {
+    fn from(hash: &str) -> Self {
+        Self(hash.to_owned())
+    }
+}
+
+impl std::fmt::Debug for PasswordHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 #[expose(
     name = "User",
     service = super::super::service::UsersService,
@@ -22,7 +50,7 @@ pub enum UserRole {
     timestamps
 )]
 #[sea_orm::model]
-#[derive(Clone, Debug, DeriveEntityModel)]
+#[derive(Clone, DeriveEntityModel)]
 #[sea_orm(
     table_name = "user",
     model_attrs(derive(PartialEq, Serialize, Deserialize))
@@ -35,12 +63,11 @@ pub struct Model {
     pub org_id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
-    #[sea_orm(unique)]
     #[expose(input(create, update), validate(email))]
     pub email: String,
     #[wire_default]
     pub role: UserRole,
-    pub password_hash: Option<String>,
+    pub password_hash: Option<PasswordHash>,
     #[expose]
     pub created_at: DateTimeWithTimeZone,
     #[expose]
@@ -54,9 +81,67 @@ pub struct Model {
     pub posts: HasMany<crate::posts::Entity>,
 }
 
+impl std::fmt::Debug for Model {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            id,
+            org_id,
+            name,
+            email,
+            role,
+            password_hash: _,
+            created_at,
+            updated_at,
+            deleted_at,
+        } = self;
+        f.debug_struct("Model")
+            .field("id", id)
+            .field("org_id", org_id)
+            .field("name", name)
+            .field("email", email)
+            .field("role", role)
+            .field("password_hash", &"<redacted>")
+            .field("created_at", created_at)
+            .field("updated_at", updated_at)
+            .field("deleted_at", deleted_at)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ModelEx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            id,
+            org_id,
+            name,
+            email,
+            role,
+            password_hash: _,
+            created_at,
+            updated_at,
+            deleted_at,
+            org,
+            posts,
+        } = self;
+        f.debug_struct("ModelEx")
+            .field("id", id)
+            .field("org_id", org_id)
+            .field("name", name)
+            .field("email", email)
+            .field("role", role)
+            .field("password_hash", &"<redacted>")
+            .field("created_at", created_at)
+            .field("updated_at", updated_at)
+            .field("deleted_at", deleted_at)
+            .field("org", org)
+            .field("posts", posts)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use nest_rs::resource::WireModelDefaults;
+    use nest_rs::authz::WireModelDefaults;
     use serde_json::Map;
 
     use super::*;
@@ -71,6 +156,55 @@ mod tests {
             Some(&serde_json::Value::String("user".into()))
         );
         assert_eq!(body.get("password_hash"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn a_rule_on_a_filled_column_is_never_decided_on_its_placeholder() {
+        assert!(Entity::is_placeholdered(Column::Role));
+        assert!(Entity::is_placeholdered(Column::PasswordHash));
+        assert!(Entity::is_placeholdered(Column::DeletedAt));
+        assert!(!Entity::is_placeholdered(Column::OrgId));
+        assert!(!Entity::is_placeholdered(Column::Id));
+    }
+
+    #[test]
+    fn debug_redacts_the_password_hash() {
+        let model = Model {
+            id: Uuid::nil(),
+            org_id: Uuid::nil(),
+            name: "Ada".into(),
+            email: "ada@example.com".into(),
+            role: UserRole::User,
+            password_hash: Some("$argon2id$v=19$secret".into()),
+            created_at: DateTimeWithTimeZone::default(),
+            updated_at: DateTimeWithTimeZone::default(),
+            deleted_at: None,
+        };
+
+        for printed in [format!("{model:?}"), format!("{:?}", ModelEx::from(model))] {
+            assert!(!printed.contains("argon2id"), "{printed}");
+            assert!(
+                printed.contains("password_hash: \"<redacted>\""),
+                "{printed}"
+            );
+            assert!(printed.contains("ada@example.com"), "{printed}");
+        }
+    }
+
+    #[test]
+    fn active_models_debug_redacts_the_password_hash() {
+        let active = ActiveModel {
+            password_hash: sea_orm::Set(Some("$argon2id$v=19$secret".into())),
+            ..Default::default()
+        };
+
+        for printed in [
+            format!("{active:?}"),
+            format!("{:?}", ActiveModelEx::from(active.clone())),
+        ] {
+            assert!(!printed.contains("argon2id"), "{printed}");
+            assert!(printed.contains("password_hash"), "{printed}");
+        }
     }
 
     #[test]

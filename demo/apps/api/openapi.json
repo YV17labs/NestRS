@@ -59,18 +59,61 @@
         ],
         "type": "object"
       },
+      "IndicatorReport": {
+        "description": "Outcome of a single indicator check, included in a [`ProbeReport`].",
+        "properties": {
+          "error": {
+            "description": "`Some` only when the check failed — a **fixed, opaque** reason\n(`\"check failed\"`, for an error or a panic / `\"timed out\"` / `\"probe\ndeadline exceeded\"`), never the indicator's own error, which is logged\non `nest_rs::health` — at `warn`, a panic at `error`: `/health/*` is\nroutinely unauthenticated.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The indicator's stable id (its snake_case method name).",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IndicatorStatus",
+            "description": "Whether this indicator's check passed."
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "IndicatorStatus": {
+        "description": "`up` when the indicator's check returned `Ok`; `down` otherwise.",
+        "oneOf": [
+          {
+            "const": "up",
+            "description": "The check returned `Ok`.",
+            "type": "string"
+          },
+          {
+            "const": "down",
+            "description": "The check returned an error.",
+            "type": "string"
+          }
+        ]
+      },
       "Notification": {
         "properties": {
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "message": {
             "type": "string"
           },
           "org_id": {
+            "format": "uuid",
             "type": "string"
           }
         },
@@ -85,15 +128,18 @@
       "Org": {
         "properties": {
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "name": {
             "type": "string"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           }
         },
@@ -105,43 +151,25 @@
         ],
         "type": "object"
       },
-      "PageParams": {
-        "description": "The `?first=&after=` cursor query. An unparsable `after` is ignored — paging\nfrom the start, never an error.",
-        "properties": {
-          "after": {
-            "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "first": {
-            "description": "Requested page size; defaults to 20 and is clamped to `1..=100`.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
       "Post": {
         "properties": {
           "author_id": {
+            "format": "uuid",
             "type": "string"
           },
           "body": {
             "type": "string"
           },
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "org_id": {
+            "format": "uuid",
             "type": "string"
           },
           "status": {
@@ -151,6 +179,7 @@
             "type": "string"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           }
         },
@@ -188,7 +217,45 @@
         ],
         "type": "object"
       },
+      "ProbeReport": {
+        "description": "Aggregated outcome of a probe: an overall `status` (`200` up, `503` down)\nplus per-indicator reports.",
+        "properties": {
+          "details": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Every indicator that ran, up or down — the union of `info` and `error`.",
+            "type": "object"
+          },
+          "error": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Down indicators, keyed by name. Empty when `status == Up`.",
+            "type": "object"
+          },
+          "info": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Up indicators, keyed by name.",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IndicatorStatus",
+            "description": "The overall probe result — `down` if any indicator is down."
+          }
+        },
+        "required": [
+          "status",
+          "info",
+          "error",
+          "details"
+        ],
+        "type": "object"
+      },
       "ProblemDetails": {
+        "description": "An RFC 9457 problem details object.",
         "properties": {
           "detail": {
             "type": "string"
@@ -198,17 +265,19 @@
             "type": "object"
           },
           "instance": {
-            "format": "uri",
+            "format": "uri-reference",
             "type": "string"
           },
           "status": {
+            "maximum": 599,
+            "minimum": 100,
             "type": "integer"
           },
           "title": {
             "type": "string"
           },
           "type": {
-            "format": "uri",
+            "format": "uri-reference",
             "type": "string"
           }
         },
@@ -217,19 +286,6 @@
           "title",
           "status"
         ],
-        "type": "object"
-      },
-      "StreamResumeDto": {
-        "properties": {
-          "Last-Event-ID": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
         "type": "object"
       },
       "TranscodeDto": {
@@ -309,21 +365,25 @@
       "User": {
         "properties": {
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "email": {
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "name": {
             "type": "string"
           },
           "org_id": {
+            "format": "uuid",
             "type": "string"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           }
         },
@@ -348,6 +408,10 @@
   },
   "info": {
     "description": "Demo API built with nestrs",
+    "license": {
+      "identifier": "MIT",
+      "name": "MIT"
+    },
     "title": "nestrs API",
     "version": "0.1.0"
   },
@@ -399,7 +463,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -430,6 +503,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -439,7 +522,7 @@
         ],
         "summary": "Stream a transcoded object back through the server",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
@@ -501,7 +584,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -532,6 +624,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -541,7 +643,7 @@
         ],
         "summary": "Stream transcode progress as Server-Sent Events",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
@@ -590,7 +692,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -621,6 +732,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -630,7 +751,7 @@
         ],
         "summary": "Fetch a presigned GET URL for a transcoded object",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
@@ -677,7 +798,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -688,6 +818,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -708,6 +848,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -717,7 +867,7 @@
         ],
         "summary": "Enqueue a transcode job for the worker to process",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
@@ -764,7 +914,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -775,6 +934,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -795,6 +964,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -804,7 +983,7 @@
         ],
         "summary": "Mint a presigned PUT URL for a direct audio upload",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
@@ -851,7 +1030,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -862,6 +1050,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -882,6 +1080,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -891,7 +1099,7 @@
         ],
         "summary": "Upload an audio file directly as multipart/form-data",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
@@ -900,11 +1108,40 @@
         "operationId": "health_live",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
+        "security": [],
+        "summary": "Liveness probe: whether the process should keep running",
         "tags": [
-          "HealthController"
+          "health"
         ]
       }
     },
@@ -913,11 +1150,40 @@
         "operationId": "health_ready",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
+        "security": [],
+        "summary": "Readiness probe: whether the process can take traffic",
         "tags": [
-          "HealthController"
+          "health"
         ]
       }
     },
@@ -926,11 +1192,40 @@
         "operationId": "health_startup",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
+        "security": [],
+        "summary": "Startup probe: whether the process has finished booting",
         "tags": [
-          "HealthController"
+          "health"
         ]
       }
     },
@@ -943,7 +1238,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
+              "description": "Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.",
               "type": [
                 "string",
                 "null"
@@ -977,7 +1272,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "Link": {
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -987,7 +1290,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -998,6 +1310,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1007,7 +1329,7 @@
         ],
         "summary": "List Notification",
         "tags": [
-          "Notification"
+          "notifications"
         ]
       }
     },
@@ -1044,7 +1366,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1065,6 +1396,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1074,7 +1415,7 @@
         ],
         "summary": "Fetch Notification by id",
         "tags": [
-          "Notification"
+          "notifications"
         ]
       }
     },
@@ -1087,7 +1428,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
+              "description": "Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.",
               "type": [
                 "string",
                 "null"
@@ -1121,7 +1462,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "Link": {
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1131,7 +1480,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1142,6 +1500,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1151,7 +1519,7 @@
         ],
         "summary": "List Org",
         "tags": [
-          "Org"
+          "orgs"
         ]
       },
       "post": {
@@ -1204,7 +1572,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1225,6 +1602,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1234,7 +1631,7 @@
         ],
         "summary": "Create Org",
         "tags": [
-          "Org"
+          "orgs"
         ]
       }
     },
@@ -1264,7 +1661,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1295,6 +1701,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1304,7 +1720,7 @@
         ],
         "summary": "Delete Org by id",
         "tags": [
-          "Org"
+          "orgs"
         ]
       },
       "get": {
@@ -1339,7 +1755,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1360,6 +1785,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1369,7 +1804,7 @@
         ],
         "summary": "Fetch Org by id",
         "tags": [
-          "Org"
+          "orgs"
         ]
       },
       "patch": {
@@ -1424,7 +1859,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1455,6 +1899,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1464,7 +1928,7 @@
         ],
         "summary": "Update Org by id",
         "tags": [
-          "Org"
+          "orgs"
         ]
       }
     },
@@ -1477,7 +1941,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
+              "description": "Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.",
               "type": [
                 "string",
                 "null"
@@ -1511,7 +1975,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "Link": {
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1521,7 +1993,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1532,6 +2013,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1541,7 +2032,7 @@
         ],
         "summary": "List Post",
         "tags": [
-          "Post"
+          "posts"
         ]
       },
       "post": {
@@ -1586,7 +2077,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1597,6 +2097,26 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1606,7 +2126,7 @@
         ],
         "summary": "Create a post in the caller's org",
         "tags": [
-          "Post"
+          "posts"
         ]
       }
     },
@@ -1636,7 +2156,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1667,6 +2196,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1676,7 +2215,7 @@
         ],
         "summary": "Delete Post by id",
         "tags": [
-          "Post"
+          "posts"
         ]
       },
       "get": {
@@ -1711,7 +2250,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1732,6 +2280,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1741,7 +2299,7 @@
         ],
         "summary": "Fetch Post by id",
         "tags": [
-          "Post"
+          "posts"
         ]
       },
       "patch": {
@@ -1796,7 +2354,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1827,6 +2394,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1836,7 +2423,7 @@
         ],
         "summary": "Update Post by id",
         "tags": [
-          "Post"
+          "posts"
         ]
       }
     },
@@ -1874,7 +2461,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1895,6 +2491,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1904,7 +2510,7 @@
         ],
         "summary": "Publish a draft post",
         "tags": [
-          "Post"
+          "posts"
         ]
       }
     },
@@ -1917,7 +2523,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
+              "description": "Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.",
               "type": [
                 "string",
                 "null"
@@ -1951,7 +2557,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "Link": {
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1961,7 +2575,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1972,6 +2595,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1981,7 +2614,7 @@
         ],
         "summary": "List User",
         "tags": [
-          "User"
+          "users"
         ]
       },
       "post": {
@@ -2026,7 +2659,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -2037,6 +2679,26 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -2046,7 +2708,7 @@
         ],
         "summary": "Create a user in the caller's org",
         "tags": [
-          "User"
+          "users"
         ]
       }
     },
@@ -2076,7 +2738,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -2107,6 +2778,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -2116,7 +2797,7 @@
         ],
         "summary": "Delete User by id",
         "tags": [
-          "User"
+          "users"
         ]
       },
       "get": {
@@ -2152,7 +2833,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -2173,6 +2863,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -2182,7 +2882,7 @@
         ],
         "summary": "Get a user in the caller's org by id",
         "tags": [
-          "User"
+          "users"
         ]
       },
       "patch": {
@@ -2237,7 +2937,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -2268,6 +2977,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -2277,9 +3006,14 @@
         ],
         "summary": "Update User by id",
         "tags": [
-          "User"
+          "users"
         ]
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ]
 }

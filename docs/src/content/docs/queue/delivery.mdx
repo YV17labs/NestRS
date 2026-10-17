@@ -1,0 +1,354 @@
+---
+title: Delivery on Redis
+description: "What the Redis backend promises about each job — its keys and their ACL, at least once and the fence, a crash, a timeout, shutdown, delays, dead letters, and what each capability keeps."
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every job is delivered **at least once**, and a handler is written so that
+running it twice is harmless. This page is the contract behind that sentence on
+Redis: the keys a queue holds and the ACL that reaches them, the fence every
+transition passes, what a crash, a Redis timeout and a shutdown do to a job in
+flight, and what each capability the backend declares keeps.
+
+The backend is written on the `redis` client and Redis Streams: one stream per
+queue, read through one consumer group, and every transition a job makes is one
+Lua script. What a job attempt *is* — its id, its retries, its trace, the drain
+— is the queue port's, run by its `QueueWorker` on every backend; this page is
+what Redis adds. A queue named `audio`, after one job completed, one
+dead-lettered and one held back for an hour:
+
+```text frame="terminal"
+$ valkey-cli --scan --pattern 'nestrs:queue:{audio}:*' | sort
+nestrs:queue:{audio}:dead
+nestrs:queue:{audio}:delayed
+nestrs:queue:{audio}:due
+nestrs:queue:{audio}:jobs
+```
+
+## Where a queue lives
+
+Every key of a queue is `nestrs:queue:{<queue>}:<structure>`. The braces are a
+hash tag, so a queue's keys share one hash slot, and every script names each key
+it touches. A fact about one job is a field of a per-queue hash, keyed by the job
+id a push returns — never a key of its own.
+
+| Key | Type | Holds | Until |
+|---|---|---|---|
+| `…:jobs` | stream | One entry per job ready to run or running — `job` and `record` — read by the consumer group `workers`; its length is what an autoscaler reads | the delivery ends |
+| `…:entries` | hash | Each job's entry in `jobs`, for a cancel to find it | the delivery ends |
+| `…:due` | sorted set | Each delayed job, scored by when it is due, in Redis's milliseconds | it is due |
+| `…:delayed` | hash | Each delayed job's record | it is due |
+| `…:unique` | hash | The job holding each unique key | the job ends |
+| `…:claims` | hash | The unique key each job holds | the job ends |
+| `…:deferred` | hash | When a job a newer release sealed was first handed back unread | a delivery reads it |
+| `…:checkpoints` | hash | The progress each job saved | the job ends |
+| `…:throttle` | string | The starts counted in the current throttle window | the window ends |
+| `…:dead` | stream | One entry per dead letter — `job`, `record`, `reason`, and `unique` when it held a key | 7 days, or 10,000 entries |
+
+**No record outlives its job.** Every transition writes what the job's next
+state needs and removes what it no longer does, in the one script that makes the
+transition, so a job that ended leaves nothing behind but its dead letter, and no
+key needs an expiry to bound it.
+
+Nothing sits at the root of the keyspace, so a Redis user whose ACL reaches
+`~nestrs:queue:*` and nothing else runs a queue. Most of what the binding sends
+is Lua — sent as `EVALSHA`, each script loaded with `SCRIPT LOAD` when the
+binding boots and again whenever Redis has forgotten it — and Redis checks the
+commands *inside* a script against the caller's ACL as well. With the connection's `PING`, which proves it at boot, and
+the `SELECT` of the database its URL names, each role's user is one rule and
+nothing more. A producer pushes and cancels:
+
+```text title="Redis ACL — producer"
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +evalsha +script|load +time +hget +hset +hdel +xadd +xdel +xpending +zadd +zrem
+```
+
+A worker runs jobs, and pushes or cancels as well:
+
+```text title="Redis ACL — worker"
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +evalsha +script|load +xreadgroup +xgroup|create +xgroup|delconsumer +xinfo|consumers +xpending +xclaim +xack +xdel +xadd +xtrim +time +hget +hset +hdel +zadd +zrem +zrange +zrangebyscore +get +set +pttl
+```
+
+A KEDA scaler reads a queue's length. Its client, go-redis, proves the
+connection with a `PING`, selects the trigger's `databaseIndex` and names itself
+with `CLIENT SETINFO` before it does:
+
+```text title="Redis ACL — KEDA"
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +client|setinfo +xlen
+```
+
+Under Sentinel and on a Cluster, each rule is created on every node and takes
+what its topology's connection adds — see
+[ACL on Sentinel and Cluster](/queue/topologies/#acl-on-sentinel-and-cluster).
+
+Each rule is held to what its role sends: the suite runs a producer and a worker
+as users created from these lines through every path the binding has, and fails
+when a role sends a command its rule lacks, or its rule allows one the role never
+sends. An app that also rate-limits or fires scheduled jobs once gives the same
+user [the rate limiter's](/rate-limiting/#redis-shipped) and
+[the schedule's](/schedule/#the-keys) rules as well.
+
+## At least once, and the fence
+
+A worker reads its queue with `XREADGROUP`, which hands an entry over, records
+the worker as its owner and starts its idle clock in one command — so a job is
+never handed over without a **lease**. While the attempt runs, the port renews
+the lease every third of its length, by claiming the entry again without
+counting a delivery. A lease no renewal reached for a whole lease has
+**lapsed**: the next worker that asks, with a permit free, takes the entry over,
+which counts a delivery. A worker looks for lapsed leases once a second: Redis
+filters a pending list of up to ten thousand entries whole, and a longer one is
+read a page of a thousand at a time from where the last look stopped, so no look
+costs Redis more however many deliveries run elsewhere; behind such a list, a
+lapsed entry waits up to a look per page.
+
+Every write a delivery makes — its outcome, a renewal, a checkpoint — is
+**fenced**: the script first reads the entry's owner and delivery count, and
+writes nothing unless both are still what the worker received. So once a lease
+has lapsed and another worker holds the job, the first one's outcome, renewal
+and checkpoint land nowhere; its attempt is cut, filed `cancelled`, and the
+delivery holding the job decides.
+
+A job's outcome — completed, filed for its retry, dead-lettered — acknowledges
+and deletes its entry in the script that writes it, so a job that ended is
+never delivered again. A second delivery happens only when a lease lapses under
+a worker: the worker crashed, froze past its lease, or was cut off from Redis
+for longer than it — and then the first delivery's writes land nowhere.
+
+A push is filed once per job, too. The script that files it skips a job its
+queue still holds — on the stream, running, or held back in `…:delayed` — so
+a push the client sends again after its answer was lost files nothing twice.
+Once the job ended, the same job is filed as a new one.
+
+<Aside type="caution">
+**Delivery is at least once, so a handler is idempotent.** A worker that
+crashes between a database commit and its outcome leaves the job to its lease,
+and the next delivery runs it again from the start of its body — the
+transaction bounds a retry, never a redelivery. A handler whose effects leave
+the process — an email, a charge — keys them on its `Attempt` parameter's
+`job_id()`: the id its push minted, the same on every attempt and every
+redelivery, which the provider then refuses to act on twice.
+</Aside>
+
+## Crashes, and the stall limit
+
+A replica that crashes mid-attempt leaves its job leased to it. Once the lease
+lapses — `<PREFIX>_REDIS__QUEUE__LEASE_SECS`, thirty seconds by default — the
+next replica asking for jobs takes it over, and the job runs again.
+
+**A delivery that ends without an answer does not spend the retry budget.**
+`retries` counts the attempts that answered; a delivery that ended without one —
+its worker killed, frozen, or cut off past its lease — is counted by the entry's
+own delivery count instead, and every filing of the job's record starts it over.
+A job whose deliveries end that way three times in a row (`STALL_LIMIT`) takes
+its workers down every time — an abort, an OOM kill, a hang until the pod is
+killed — and is dead-lettered without running, as
+`job dead-lettered: its deliveries ended without an answer past the stall limit`.
+
+## When Redis is slow or gone
+
+Every command a worker or a producer sends answers or fails within
+`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so an outage
+fails calls rather than holding them. The boot refuses a budget of eighteen
+seconds or more, the queue port's own net on every call: the port would stop
+waiting first, and a failure would reach its caller as a bare timeout instead of
+Redis's own cause. A worker's read blocks on a connection of
+its own — on the shared one it would stall every other caller — for at most a
+second, so its bound is that second plus the budget. A timeout says the answer
+did not arrive in time, never that the command did not run: a settle whose
+answer is lost may have ended the job all the same, which is why the line says
+*not confirmed*.
+
+| The call that failed | What happens to the job | The line, on `nest_rs::queue` |
+|---|---|---|
+| a read | nothing was handed over, or what was waits leased until its lease lapses; the read is tried again after a backoff doubling from 250 ms to 5 s, each wait within a fifth either way so replicas come back apart | `queue receive failed; retrying`, `warn` |
+| renewing leases | the attempts run on, and the renewal is tried again; one no renewal reached for a whole lease is cut and its job handed back | `job leases not renewed; retrying`, `warn` |
+| an outcome | tried again while the lease holds; past it, said, and left to its lease — the next delivery runs the job again unless the outcome landed | `job outcome not confirmed; unless it was written, the job runs again once its lease lapses`, `error` |
+| filing due jobs | they wait, and the next upkeep files them | `queue upkeep failed; retrying`, `warn` |
+
+A backend call that panics — a driver's defect, not an outage — is treated as
+one that did not answer: the worker files the panic once, `queue backend
+panicked answering the worker; the call counts as unanswered`, at `error` with
+the `queue` and the `call`, then goes on as the table says.
+
+**A failover is followed.** A failover demotes the primary under its open
+connections; the first that answers `READONLY` is opened again, once, through
+the URL's name — which now reaches the new primary — and says so at `warn`,
+`redis connection opened again: the server it reached answered as a read-only
+replica`. The writes refused meanwhile fail as any refused call does.
+
+A push, a cancel and a checkpoint's read or save fail within one budget too, as
+the connection's own failure, before the queue port's net — eighteen seconds —
+gives up on the call; see
+[When a push fails](/queue/producing-jobs/#when-a-push-fails).
+
+**An attempt ends within its timeout.** A handler still running at its
+method's `timeout` — ten minutes unless `#[process]` says otherwise — is cut
+where it waits and fails retryably, so a call that never answers holds its
+permit and its renewed lease that long and no longer; see
+[How long an attempt runs](/queue/retries-and-failure/#how-long-an-attempt-runs).
+
+## Shutdown
+
+A shutdown stops asking for jobs at once, and hands back what a read brought
+after it. Running attempts get the shutdown window, less a reserve, to finish
+where they run, their leases renewed until each ends. What still runs when the
+window closes is interrupted — its `queue.job` line filed with
+`outcome="cancelled"` — and its job handed back to the stream inside the
+reserve, due at once for another replica, so the orchestrator's `SIGKILL` never
+lands on a job the worker still holds. The window is
+`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, 20 seconds by default, which leaves the
+shutdown hooks' five, the telemetry flush's three and the console's one inside
+Kubernetes' default 30-second grace period; a window you raise needs the pod's
+grace period at least 9.5 seconds above it
+([the way down](/fundamentals/lifecycle/#the-way-down)).
+
+**The reserve is one Redis call long**: the connection's budget, or five seconds
+when that is shorter, and never more than half the window. A delivery still
+waiting on Redis once the whole window has passed is said at `error` and left to
+its lease: the next delivery runs its job.
+
+## Delayed jobs
+
+The Redis backend declares `Capability::DelayedPush`, so a push can hold a job
+back:
+
+```rust title="crates/features/src/audio/service.rs"
+self.queue
+    .push(
+        AudioQueue,
+        TranscodeCommand { file },
+        PushOptions::default().with_delay(Duration::from_secs(60)),
+    )
+    .await?;
+```
+
+The job waits off the stream, its record in `…:delayed` and its due instant in
+`…:due`, **on Redis's clock**: the push measures the delay and the script adds
+it to Redis's own time, so a host whose clock drifts holds no job back for less
+or more than it asked. Every worker draining the queue files the jobs that fell
+due onto the stream, up to a hundred at a time and within a second of their
+instant. A retry is the same filing: the port's backoff decides when, and the
+next attempt waits in `…:due` rather than in a worker. What that means for a
+deployment scaled to zero is on
+[Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).
+
+## Unique keys
+
+A push under a unique key reads and claims `…:unique` for its job in the script
+that files the job — so pushes racing for one key queue one job, and a push
+refused because the key is held files nothing. The job lets go of the key in the
+script that ends it, completed or dead-lettered, and a cancel lets go of it
+too. A push lands whole or not at all, so no claim ever outlives a job that was
+never filed.
+
+## Cancels
+
+A cancel removes a job still waiting — on the stream and not yet handed over, or
+held back — with everything it held: its unique key, its checkpoint, its
+deferral. It answers `true` only then, in one script, so a job it cancelled
+never starts. A job a delivery runs is left to run to its outcome, and the
+cancel answers `false`.
+
+## Throttles
+
+A method's throttle is counted in `…:throttle` before a read asks for jobs: the
+read asks for no more than the window has left, and gives back what it counted
+and did not receive. Every replica counts against one number, and a full window
+holds the replica's reads for the method until it ends, so the backlog waits on
+the stream. The window's shape, and what it allows at its edges, is on
+[Concurrency and scaling](/queue/scaling/#throttling-starts).
+
+## Dead letters
+
+A job dead-lettered — its retry budget spent, or past the stall limit — leaves
+an entry on `…:dead`: its `job` id, its `record` as it was stored, the
+`reason` its line rendered, which quotes no payload value, and the `unique` key
+it held, if any. The stream keeps a week of them, trimmed at every upkeep, and
+about the last 10,000 — Redis trims it by whole nodes, so a few more may stay —
+and nothing else of the job is left.
+
+The record is the job as it was pushed: its payload, its trace context, and the
+`actor_id` the push was served for when somebody was authenticated. So a dead
+letter holds what the payload and the actor hold, for up to a week, where a
+backup or a replica of Redis reads it too; a deployment's retention policy
+covers `…:dead`, and `XDEL` removes one dead letter.
+
+Filing a dead letter back, once its cause is fixed, is one command — the queue's
+dead letters, its stream, its job index and its two unique-key hashes as keys,
+the dead letter's id as the argument. It files the record on the stream as it
+was stored, so the job runs once more as the attempt it died on, and takes its
+unique key again; when another job took the key meanwhile, it files nothing and
+names that job, since two jobs under one key would break what the key promises:
+
+```bash
+valkey-cli EVAL "local e = redis.call('XRANGE', KEYS[1], ARGV[1], ARGV[1])[1] if not e then return false end local f = {} for i = 1, #e[2], 2 do f[e[2][i]] = e[2][i + 1] end if f.unique then local holder = redis.call('HGET', KEYS[4], f.unique) if holder and holder ~= f.job then return redis.error_reply('its unique key is held by job ' .. holder) end redis.call('HSET', KEYS[4], f.unique, f.job) redis.call('HSET', KEYS[5], f.job, f.unique) end local id = redis.call('XADD', KEYS[2], '*', 'job', f.job, 'record', f.record) redis.call('HSET', KEYS[3], f.job, id) redis.call('XDEL', KEYS[1], ARGV[1]) return id" 5 'nestrs:queue:{audio}:dead' 'nestrs:queue:{audio}:jobs' 'nestrs:queue:{audio}:entries' 'nestrs:queue:{audio}:unique' 'nestrs:queue:{audio}:claims' 1767225600000-0
+```
+
+An operator runs it as a user of their own, which this rule allows and nothing
+more:
+
+```text title="Redis ACL — operator"
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +eval +xrange +hget +hset +xadd +xdel
+```
+
+## Configuration
+
+`RedisQueueModule::for_root(RedisQueueConfig { .. })` and
+`QueueModule::for_root(QueueConfig { .. })`, or the environment:
+
+| Variable | Default | What it bounds |
+|---|---|---|
+| `<PREFIX>_REDIS__QUEUE__LEASE_SECS` | `30` | How long a delivery holds its job without a renewal — so how long a crashed replica's job waits before another runs it; at least `1`, at most `3600`, and more than one and a half times `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, since a renewal sent a third into the lease may wait out the whole budget |
+| `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` | `20` | The drain window, hand-backs included; at least `1`, at most `3600` |
+
+A value out of its bounds fails the boot, whether the environment set it or
+`for_root` pinned it, naming the variable.
+
+## Limits
+
+- **Valkey, its latest release** — 9.1 at this release, the one the suite
+  runs on. The connection speaks the Redis protocol, hence `redis://`,
+  `rediss://` and `nest_rs::redis`; Redis itself is not a supported server.
+- **No eviction of a job.** At least once covers what Redis kept. A server
+  holding the queue alone runs `noeviction`, or a `volatile-*` policy, which
+  evicts only keys with an expiry — of the queue's, only the throttle window has
+  one, and an evicted window starts the next early. An `allkeys-*` policy can
+  evict a job. A server the rate limiter or the schedule shares runs
+  `noeviction`: see [Eviction](/queue/topologies/#eviction).
+- **What Redis persisted and replicated.** A job Redis acknowledged and then
+  lost — a restart without persistence, a failover to a replica that had not
+  received it — is gone; keep AOF on, and accept the window a failover leaves.
+- **A script that errors keeps what it wrote before the error.** Redis rolls
+  nothing back; the rules above allow every command a script sends, and every key
+  a script writes is the queue's own.
+- **Never delete or trim `…:jobs` by hand.** An entry deleted while a delivery
+  holds it takes its job with it, yet the queue still holds the job: its envelope
+  sent again files nothing, and its unique key stays taken, until `cancel` or
+  `cancel_unique` lets it go. The worker says so at `warn`,
+  `queue entries deleted while delivered; …`, naming the entries.
+- **Never delete a field of `…:delayed` by hand.** A held-back job whose record
+  went never runs: the upkeep that finds it due lets go of what it held, its
+  unique key included, and says so at `warn`,
+  `held-back queue jobs found due without their record are gone; …`, naming the
+  jobs.
+
+## Reference
+
+- `crates/nest-rs-redis/src/queue/layout.rs` — every key of a queue.
+- `crates/nest-rs-redis/src/queue/scripts.rs` — every transition, fenced.
+- `crates/nest-rs-redis/src/queue/producer.rs` — the push, the unique claim and
+  the cancel.
+- `crates/nest-rs-redis/src/queue/consumer.rs` — the read, the reclaim, the
+  renewal, the outcome and the upkeep.
+- `crates/nest-rs-redis/tests/e2e/queue/consumer.rs` — the behaviour kit every
+  queue backend runs, and what only Redis decides beside it.
+- `crates/nest-rs-redis/tests/e2e/queue/layout.rs` — the rules above, held exact.
+
+## Going further
+
+- [Retries and failure](/queue/retries-and-failure/) — the budget, the backoff and the dead letters.
+- [Upgrading queues from 6.x](/queue/upgrading/) — draining 6.x's jobs before 7.0 runs.
+- [Observability](/queue/observability/) — every line a delivery files.

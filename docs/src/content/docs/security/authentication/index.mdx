@@ -80,10 +80,11 @@ async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
 }
 ```
 
-`Ctx<Claims>` is a typed lookup into the request's extensions; missing
-the guard means missing the type, and the framework returns `500` —
-the access graph would already have failed the boot if the controller's
-import tree did not provide `AuthnGuard`.
+`Ctx<Claims>` reads the `Claims` the guard attached, which are ambient
+for the rest of the request; a value something else put in the request's
+extensions is never read. Missing the guard means missing the value, and
+the framework returns `500` — the access graph would already have failed
+the boot if the controller's import tree did not provide `AuthnGuard`.
 
 ## Advanced: write your own strategy
 
@@ -96,7 +97,7 @@ so authentication stays a pure request → principal mapping.
 
 ```rust title="crates/features/src/authn/strategies/api_key.rs"
 use nest_rs::authn::{AuthError, PrincipalIdentity, Strategy};
-use nest_rs::core::{async_trait, injectable};
+use nest_rs::core::{AmbientValue, async_trait, injectable};
 use nest_rs::http::poem::Request;
 
 #[injectable]
@@ -118,6 +119,9 @@ impl Strategy for ApiKeyStrategy {
     }
 }
 
+// The guard attaches the principal for the rest of the request.
+impl AmbientValue for ApiKey {}
+
 // Every principal declares its audit identity — the value the framework
 // records as `actor_id` on the request span, so denials are attributable.
 impl PrincipalIdentity for ApiKey {
@@ -130,6 +134,26 @@ impl PrincipalIdentity for ApiKey {
 A custom strategy binds exactly like the shipped one:
 `AuthnGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
 bound with `#[use_guards(...)]`.
+
+The guard waits for `authenticate` for at most
+`nest_rs::authn::AUTHENTICATE_TIMEOUT` — 18 seconds — and then denies the
+request. That is a net, not a budget: a strategy that calls a backend bounds
+each call itself, the way the [OAuth2 client](/security/authentication/oauth2/)
+does, so an outage reaches the caller as your strategy's own failure, with its
+cause, long before the net. The net sits above every login the framework ships
+(a social login spends at most 15 s on its provider) and below the HTTP edge's
+20-second request timeout, so a strategy that hangs is refused by the guard, on
+every edge — a route, the GraphQL POST, the MCP POST, the WebSocket upgrade —
+with the 503 an unreachable identity store gets, `#[public]` routes included.
+The guard logs `strategy did not answer within the guard's timeout; denying
+(fail-closed)` at `warn` with the `strategy` (your type's name), the
+`transport` and `waited_ms`. A strategy that panics decided nothing either, and
+is denied the same way, with one line at `error`, `strategy panicked; denying
+(fail-closed)`, carrying the `panic` — so answer your store's failure as
+`AuthError::Unavailable` rather than an `unwrap`.
+
+The call is dropped where it stands when the net fires, so keep no state in a
+strategy that a half-finished call would have had to undo.
 
 You declare `actor_id` once, here. Reading it back is
 `nest_rs::core::current_actor_id()`, anywhere the framework carries work — a
@@ -169,11 +193,14 @@ anonymously. Visitor-rule policy belongs in the authorization layer,
 not in `AuthnGuard`.
 
 **One failure `#[public]` does not absorb**: `AuthError::Unavailable`.
-An unreachable identity store means the credential was never evaluated,
-so the request fails closed with a 500 rather than being served as
-anonymous — otherwise an outage would silently downgrade every
+An unreachable identity store or identity provider means the credential
+was never evaluated, so the request fails closed with a 503 — carrying
+the provider's `Retry-After` when it gave one — rather than being served
+as anonymous: otherwise an outage would silently downgrade every
 authenticated caller to a visitor, and a `#[public]` route's visitor
-rules would decide what they see.
+rules would decide what they see. A strategy that does not answer within
+`AUTHENTICATE_TIMEOUT` never evaluated the credential either, and gets
+the same 503 on every route.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[get("/health")]
@@ -210,17 +237,27 @@ route.
 
 `AuthError` covers the failure modes a strategy hits:
 `MissingCredentials`, `InvalidToken`, `InvalidSignature`,
-`InvalidAlgorithm`, `NotYetValid`, `Expired`, `Failed(String)` — each
-a **401** — plus `Unavailable(String)`, which is a **500**. `Failed`
-collapses to a generic `"authentication failed"` on the wire so the
-message never leaks configuration detail.
+`InvalidAlgorithm`, `UnknownKey`, `NotYetValid`, `Expired`, `Failed(String)` — each
+a **401** — plus `Unavailable { detail, retry_after }`, which is a
+**503**. `Failed` collapses to a generic `"authentication failed"` on the
+wire so the message never leaks configuration detail.
 
-`Unavailable` is the odd one deliberately: it means the identity store
-was unreachable, so the credential was never evaluated. That is an
-infrastructure failure, not a credential signal — reporting it as a 401
-would tell a caller with a perfectly good token to go get another one,
-and would let an outage read as a wave of authentication failures. It is
-logged at `error` and rendered as a 500.
+`Unavailable` is the odd one deliberately: it means the identity store or
+the identity provider could not be reached, or answered that it cannot
+answer now, so the credential was never evaluated. The caller did nothing
+wrong (RFC 9110 §15.6.4) — reporting it as a 401 would tell a caller with
+a perfectly good token to go get another one, and would let an outage
+read as a wave of authentication failures. It is logged at `error` and
+rendered as a `503` with a `Retry-After` when `retry_after` is known — an
+identity provider's own, given in seconds — and none invented when it is
+not. The guard answers a strategy that outlived `AUTHENTICATE_TIMEOUT`
+with the same 503, and files its own `warn` saying the strategy never
+answered. What the refusal says of the identity store stays on the
+server: HTTP's 503 carries no `detail`, and the GraphQL, MCP and
+WebSocket edges, which have no status line, answer `"service
+unavailable"` with the class a client branches on — `extensions.code:
+"UNAVAILABLE"` on GraphQL, `code: "UNAVAILABLE"` under `data` on MCP and
+`data.errors` on WebSocket — and, when known, `retryAfterSeconds`.
 
 A rejected credential also names *why* on the challenge, per RFC 6750
 §3.1:
@@ -242,8 +279,9 @@ shape of that path.
 ## Pick the strategy that matches
 
 - [JWT](/security/authentication/jwt/) — a resource server verifies a
-  signed bearer token. HS256 (shared secret) or EdDSA (asymmetric, the
-  resource server holds only the public key).
+  signed bearer token. HS256 (shared secret), EdDSA (asymmetric, the
+  resource server holds only the public key), or the JWK Set an external
+  issuer publishes.
 - [OAuth2](/security/authentication/oauth2/) — full
   authorization-code flow with PKCE, against any provider.
 - [Password](/security/authentication/password/) — Argon2id hashing
@@ -270,8 +308,12 @@ over — see [Authorization](/security/authorization/).
   with PKCE, and stateless CSRF state.
 - [Split deployment](/security/authentication/split-deployment/) — one
   signer, many verifiers, no RPC across the boundary.
-- [Social login](/security/authentication/social-login/) — one import
-  activates every configured provider, through an open contract.
+- [Social login](/security/authentication/social-login/) — each provider
+  is one module import, active once its credentials are configured, through
+  an open contract.
+- [External identity provider](/security/authentication/external-identity-provider/)
+  — accept the tokens better-auth, Keycloak or Auth0 issues, against the JWK
+  Set it publishes.
 
 ## Going further
 

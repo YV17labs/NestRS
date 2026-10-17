@@ -1,73 +1,79 @@
-//! `#[interceptor]` — mark a struct as a **global** HTTP interceptor (for
-//! infrastructure that must wrap everything: a DB-transaction context,
-//! tracing). The macro attaches an
-//! [`HttpEndpointWrap`](::nest_rs_http::HttpEndpointWrap) but does *not*
-//! register the type as a provider — it is mounted automatically. To bind
-//! per-controller/handler, write a plain `#[injectable] + impl Interceptor`
-//! and list it in `#[use_interceptors(...)]`.
+//! `#[interceptor]` — mark a struct as a **global** HTTP interceptor, mounted
+//! as an `nest_rs_http::__private::HttpEndpointWrap` rather than provided.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
-use syn::{ItemStruct, Meta, Token, parse_macro_input};
+use syn::{ItemStruct, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
-    from_container_method, injected_method, optional_dependencies_method,
+    from_container_method, injected_method, injected_optional_method,
+    injected_optional_names_method, optional_dependencies_method, optional_dependency_names_method,
 };
+
+const INTERCEPTOR: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("interceptor", &["priority"]);
 
 fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
     if args.is_empty() {
-        return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
+        return Ok(quote! { ::nest_rs_http::__private::endpoint_wrap_priority::INTERCEPTORS });
     }
-    // **The whole list, then exactly one of it.** `syn::parse::<Meta>` consumes
-    // one and reports the rest as syn's "unexpected token", which names neither
-    // the key nor the fact — so `#[interceptor(priority = 1, priority = 2)]`
-    // died on the grammar rather than on the duplicate, and the shared sentence
-    // this decorator already uses for an unknown key had no counterpart for a
-    // repeated one.
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(TokenStream2::from(args))?;
-    let mut metas = metas.into_iter();
-    let meta = metas.next().expect("a non-empty argument list");
-    if let Some(second) = metas.next() {
-        return Err(syn::Error::new_spanned(
-            second,
-            nest_rs_codegen::duplicate_argument("interceptor", "priority"),
-        ));
-    }
-    // Both questions through the shared helper that answers them together: a
-    // bare `#[interceptor(priority)]` is a `Meta::Path`, and so is a bare
-    // *unknown* key — one wording said "expected `priority = <integer>`" to
-    // both, which is right for the first and false for the second.
-    let Meta::NameValue(nv) = meta else {
-        return Err(nest_rs_codegen::unmatched_meta(
-            "interceptor",
-            &meta,
-            &["priority"],
-        ));
+    let mut priority: Option<syn::Expr> = None;
+    INTERCEPTOR.parse2(TokenStream2::from(args), |arg| {
+        priority = Some(arg.expr()?);
+        Ok(())
+    })?;
+    let Some(written) = priority else {
+        return Ok(quote! { ::nest_rs_http::__private::endpoint_wrap_priority::INTERCEPTORS });
     };
-    if !nv.path.is_ident("priority") {
-        let name = nest_rs_codegen::key_as_written(&nv.path);
-        return Err(syn::Error::new(
-            nv.path.span(),
-            nest_rs_codegen::unknown_argument("interceptor", &name, &["priority"]),
-        ));
-    }
-    let syn::Expr::Lit(syn::ExprLit {
-        lit: syn::Lit::Int(lit),
-        ..
-    }) = nv.value
-    else {
-        return Err(syn::Error::new(
-            nv.value.span(),
-            "priority must be an integer",
-        ));
-    };
-    let priority: i32 = lit.base10_parse()?;
+    let priority = priority_value(&written)?;
     Ok(quote! { #priority })
+}
+
+/// A `priority = …` value: an integer literal in `i32`'s range, negative ones
+/// included. syn hands a lone `-10` over as a negative literal and one followed
+/// by another argument as a negation, so both shapes are read.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
+fn priority_value(written: &syn::Expr) -> syn::Result<i32> {
+    use syn::{Expr, ExprLit, ExprUnary, Lit, UnOp};
+
+    let written = nest_rs_codegen::ungrouped_expr(written);
+    let refused = || {
+        syn::Error::new_spanned(
+            written,
+            nest_rs_codegen::takes_value(
+                "interceptor",
+                Some("priority"),
+                "an integer literal in `i32`'s range, e.g. `priority = 10` — a lower priority \
+                 wraps closer to the handler",
+            ),
+        )
+    };
+    let (negated, literal) = match written {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(literal),
+            ..
+        }) => (false, literal),
+        Expr::Unary(ExprUnary {
+            op: UnOp::Neg(_),
+            expr,
+            ..
+        }) => match nest_rs_codegen::ungrouped_expr(expr) {
+            Expr::Lit(ExprLit {
+                lit: Lit::Int(literal),
+                ..
+            }) => (true, literal),
+            _ => return Err(refused()),
+        },
+        _ => return Err(refused()),
+    };
+    let magnitude: i64 = literal.base10_parse().map_err(|_| refused())?;
+    let value = if negated { -magnitude } else { magnitude };
+    i32::try_from(value).map_err(|_| refused())
 }
 
 pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -82,6 +88,7 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
         dep_keys,
         dep_names,
         opt_keys,
+        opt_names,
         ..
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
@@ -94,7 +101,10 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
     let dependencies = dependencies_method(&dep_keys);
     let dependency_names = dependency_names_method(&dep_names);
     let optional_dependencies = optional_dependencies_method(&opt_keys);
+    let optional_dependency_names = optional_dependency_names_method(&opt_names);
     let injected = injected_method(&dep_keys);
+    let injected_optional = injected_optional_method(&opt_keys);
+    let injected_optional_names = injected_optional_names_method(&opt_names);
 
     quote! {
         #item
@@ -107,26 +117,30 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
             #dependencies
             #dependency_names
             #optional_dependencies
+            #optional_dependency_names
             #injected
+            #injected_optional
+            #injected_optional_names
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
                 let __snapshot = builder.snapshot();
-                let __value = Self::from_container(&__snapshot);
+                let __value = Self::__nestrs_from_container(&__snapshot);
                 let __arc: ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor> =
                     ::std::sync::Arc::new(__value);
-                builder.attach_meta::<Self, ::nest_rs_http::HttpEndpointWrap>(
-                    ::nest_rs_http::HttpEndpointWrap::with_priority(
+                builder.attach_meta::<Self, ::nest_rs_http::__private::HttpEndpointWrap>(
+                    ::nest_rs_http::__private::HttpEndpointWrap::with_priority(
                         #priority,
                         move |_container, __endpoint| {
-                        ::nest_rs_http::poem::EndpointExt::boxed(::nest_rs_http::poem::EndpointExt::map_to_response(
-                            ::nest_rs_interceptors::InterceptorExt::interceptor(
+                            ::nest_rs_http::__private::poem_bridge::wrap_poem(
                                 __endpoint,
-                                ::std::sync::Arc::clone(&__arc),
-                            ),
-                        ))
-                    },
+                                |__inner| ::nest_rs_interceptors::InterceptorExt::interceptor(
+                                    __inner,
+                                    ::std::sync::Arc::clone(&__arc),
+                                ),
+                            )
+                        },
                     ),
                 )
             }

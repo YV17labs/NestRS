@@ -1,0 +1,5 @@
+error: #[instance] takes no arguments, and `name` is none: an instance's name is its struct's ident in snake case, read and never chosen — rename the struct
+ --> tests/integration/diagnostics/core/instance_with_an_argument.rs:6:12
+  |
+6 | #[instance(name = "cache")]
+  |            ^^^^

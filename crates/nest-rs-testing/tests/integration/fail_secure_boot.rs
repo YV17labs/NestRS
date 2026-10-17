@@ -1,24 +1,20 @@
-//! Boot-time fail-secure contract of the layer pool, mirroring the access
-//! graph's posture: a wiring error is a **boot error**, never a runtime
-//! surprise.
-//!
-//! Two checks are pinned here:
-//!
-//! - a global layer spec whose provider was never registered fails boot
-//!   (it would otherwise resolve to `None` and silently drop — for a guard
-//!   that means every route quietly loses its fail-secure net);
-//! - an imperative `HttpTransport::mount(...)` endpoint — opaque to the
-//!   shaper — fails boot when global guards are active, unless the app
-//!   explicitly opts down to a warn with `fail_secure_strict(false)`.
+//! Boot-time fail-secure contract of the layer pool: a global layer spec whose
+//! provider was never registered, a controller guard no module provides, or two
+//! controllers on one prefix, fail the boot.
 
 use nest_rs_core::{Layer, injectable, module, target};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_exception_filters::{ExceptionFilter, exception_filter};
+use nest_rs_filters::{Filter, RequestSnapshot, filter};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
+use nest_rs_pipes::{GlobalPipe, pipe};
 use nest_rs_testing::TestApp;
-use poem::{Request, Response};
+use poem::{IntoResponse, Request, Response};
 
-/// Registered as a provider — the resolvable control case.
+use crate::refused_wiring;
+
+/// Registered as a provider: the resolvable control case.
 #[injectable]
 #[derive(Default)]
 struct WiredGuard;
@@ -27,12 +23,15 @@ impl Layer for WiredGuard {}
 
 #[async_trait]
 impl Guard for WiredGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for WiredGuard {}
+impl GuardFor<nest_rs_http::HttpView> for WiredGuard {}
 
 /// Deliberately **not** listed in any module's providers.
 #[injectable]
@@ -43,12 +42,15 @@ impl Layer for GhostGuard {}
 
 #[async_trait]
 impl Guard for GhostGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for GhostGuard {}
+impl GuardFor<nest_rs_http::HttpView> for GhostGuard {}
 
 /// Deliberately **not** listed in any module's providers.
 #[injectable]
@@ -63,6 +65,45 @@ impl Interceptor for GhostInterceptor {
         next.run(req).await
     }
 }
+
+/// Deliberately **not** listed in any module's providers.
+#[injectable]
+#[derive(Default)]
+struct GhostFilter;
+
+impl Layer for GhostFilter {}
+
+#[async_trait]
+impl Filter for GhostFilter {
+    async fn filter(&self, _req: &RequestSnapshot, error: poem::Error) -> Response {
+        error.into_response()
+    }
+}
+
+/// Deliberately **not** listed in any module's providers.
+#[injectable]
+#[derive(Default)]
+struct GhostExceptionFilter;
+
+impl Layer for GhostExceptionFilter {}
+
+#[async_trait]
+impl ExceptionFilter for GhostExceptionFilter {
+    type Exception = std::fmt::Error;
+
+    async fn catch(&self, _err: std::fmt::Error) -> Response {
+        poem::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    }
+}
+
+/// Deliberately **not** listed in any module's providers.
+#[injectable]
+#[derive(Default)]
+struct GhostPipe;
+
+impl Layer for GhostPipe {}
+
+impl GlobalPipe for GhostPipe {}
 
 #[module(providers = [WiredGuard])]
 struct GuardOnlyModule;
@@ -87,8 +128,8 @@ async fn an_unresolvable_global_guard_fails_boot() {
         "a global guard with no provider must fail boot, not silently drop",
     );
     assert!(
-        err.to_string().contains("GhostGuard"),
-        "the error names the unresolvable guard: {err}",
+        format!("{err:#}").contains("GhostGuard"),
+        "the error names the unresolvable guard: {err:#}",
     );
 }
 
@@ -104,22 +145,139 @@ async fn an_unresolvable_global_interceptor_fails_boot() {
         "a global interceptor with no provider must fail boot",
     );
     assert!(
-        err.to_string().contains("GhostInterceptor"),
-        "the error names the unresolvable interceptor: {err}",
+        format!("{err:#}").contains("GhostInterceptor"),
+        "the error names the unresolvable interceptor: {err:#}",
     );
 }
 
-// The three imperative-mount cases — strict refusal, the `fail_secure_strict`
-// opt-out, and "no global pool, no violation" — live in
-// `nest-rs-http/tests/integration/fail_secure.rs`, the crate that owns
-// `HttpTransport::fail_secure_strict` and emits the warn. They were asserted in
-// both places, more weakly here; a duplicate in the convenient crate is what
-// hides a concern from anyone surveying the crate that owns it.
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_interceptor() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_interceptors_global([interceptor::<GhostInterceptor>()])
+        .build_headless()
+        .await;
+    let Err(err) = result else {
+        panic!("a worker would boot with a global interceptor silently dropped");
+    };
+    assert!(
+        format!("{err:#}").contains("GhostInterceptor"),
+        "the error names the unresolvable interceptor: {err:#}",
+    );
+}
 
-/// A controller route with no guard and no `#[public]` marker — an *implicit*
-/// access decision. With no global guard pool to cover it, the transport warns
-/// at boot (`access_is_implicit`) but does **not** fail: the warning nudges the
-/// developer to make the decision explicit; it never blocks an honest build.
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_guard() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_guards_global([guard::<GhostGuard>()])
+        .build_headless()
+        .await;
+    let (registry, chain) = refused_wiring(
+        result,
+        "a worker would boot with a global guard silently dropped",
+    );
+    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert!(
+        chain.contains("GhostGuard"),
+        "the error names the unresolvable guard: {chain}",
+    );
+}
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_pipe() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_pipes_global([pipe::<GhostPipe>()])
+        .build_headless()
+        .await;
+    let (registry, chain) = refused_wiring(
+        result,
+        "a worker would boot with a global pipe silently dropped",
+    );
+    assert_eq!(registry, "nest_rs::pipes::global", "{chain}");
+    assert!(
+        chain.contains("GhostPipe"),
+        "the error names the unresolvable pipe: {chain}",
+    );
+}
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_filter() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_filters_global([filter::<GhostFilter>()])
+        .build_headless()
+        .await;
+    let Err(err) = result else {
+        panic!("a worker would boot with a global filter silently dropped");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("GhostFilter") && chain.contains("nest_rs::filters::global"),
+        "the error names the unresolvable filter and the wiring refusing it: {chain}",
+    );
+}
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_exception_filter() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_exception_filters_global([exception_filter::<GhostExceptionFilter>()])
+        .build_headless()
+        .await;
+    let Err(err) = result else {
+        panic!("a worker would boot with a global exception filter silently dropped");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("GhostExceptionFilter")
+            && chain.contains("nest_rs::exception_filters::global"),
+        "the error names the unresolvable exception filter and the wiring refusing it: {chain}",
+    );
+}
+
+/// Gated by a guard no module provides.
+#[controller(path = "/ghost-gated")]
+#[use_guards(GhostGuard)]
+struct GhostGatedController;
+
+#[routes]
+impl GhostGatedController {
+    #[get("/")]
+    async fn read(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(providers = [GhostGatedController])]
+struct GhostGatedModule;
+
+#[tokio::test]
+async fn a_controller_guard_no_module_provides_fails_the_boot_naming_it_and_the_controller() {
+    // Built by hand, so the access graph does not refuse first.
+    let container = nest_rs_core::Container::builder()
+        .import::<GhostGatedModule>()
+        .build();
+    let mut transport =
+        nest_rs_http::HttpTransport::from_config(&nest_rs_http::HttpConfig::default())
+            .expect("the defaults are in range");
+    let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
+        panic!("the controller would serve without the guard it declares");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("GhostGuard") && chain.contains("GhostGatedController"),
+        "the refusal names the guard and the controller declaring it: {chain}",
+    );
+    assert!(
+        chain.contains("no imported module provides it"),
+        "…and the remedy: {chain}",
+    );
+}
+
+/// A controller route with no guard and no `#[public]` marker: an *implicit*
+/// access decision.
 #[controller(path = "/")]
 struct OpenController;
 
@@ -140,14 +298,8 @@ async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
     let app = TestApp::for_module::<OpenModule>()
         .await
         .expect("an implicit access decision is a warning, not a boot failure");
-    // The route is served — the posture check observes, it does not gate.
     app.http().post("/thing").send().await.assert_status_is_ok();
 
-    // The whole value of an observing check is the line it prints: the route is
-    // served either way, so a deploy learns its access posture was implicit here
-    // or nowhere. The test asserted the boot and the 200 and never the warning,
-    // which left the one thing that distinguishes this from a working app
-    // unpinned. Single-thread runtime — `LogCapture` is thread-local.
     let event = logs
         .find(target::LAYERS, "unguarded routes detected")
         .into_iter()
@@ -165,10 +317,8 @@ async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
     );
 }
 
-/// Two controllers claiming the same prefix. Each `nest`s under it, so the
-/// prefix is an exclusive namespace — poem would panic deep in route assembly
-/// ("duplicate path: /dup/*--poem-rest"). The transport catches it at boot
-/// instead, the same posture as every other wiring error.
+/// Two controllers claiming the same prefix, on which poem would panic deep in
+/// route assembly ("duplicate path: /dup/*--poem-rest").
 #[controller(path = "/dup")]
 struct FirstDupController;
 

@@ -1,15 +1,4 @@
 //! The composition witness: the documented import, booted, answering.
-//!
-//! `CLAUDE.md`'s *Shipping a new capability* asks every capability for "a test
-//! in the capability's **own crate** that boots the documented wiring … and
-//! asserts what a caller gets back", and says composition is **executed**, never
-//! merely compiled — a boot proves the access graph, the mounted routes and the
-//! lifecycle hook at once, and compiling proves none of the three.
-//!
-//! What this one catches that `module.rs` cannot: `module.rs` registers
-//! `HealthModule` into a bare container, so the three routes could stop mounting
-//! and the `OnApplicationBootstrap` hook could stop installing the container
-//! without a word. Both are only observable from an app that ran.
 
 use nest_rs_core::module;
 use nest_rs_health::HealthModule;
@@ -33,8 +22,39 @@ async fn the_documented_import_mounts_the_three_probes() {
     }
 }
 
-/// A probe with no indicator registered still answers, and the answer is the
-/// one an orchestrator reads — not an empty body it would have to interpret.
+#[tokio::test]
+async fn each_probe_is_documented_under_one_health_tag() {
+    let app = TestApp::for_module::<AppModule>()
+        .await
+        .expect("the documented wiring boots");
+
+    let routes: Vec<_> = nest_rs_core::Discovery::new(app.container())
+        .meta::<nest_rs_http::HttpControllerMeta>()
+        .into_iter()
+        .flat_map(|d| d.meta.routes.clone())
+        .collect();
+    assert_eq!(routes.len(), 3, "the three probes");
+    for route in &routes {
+        assert_eq!(route.tags, ["health"], "{}", route.handler);
+        assert!(route.summary.is_some(), "{} has a summary", route.handler);
+        assert!(
+            route.response.is_some(),
+            "{} types its report",
+            route.handler
+        );
+        assert_eq!(
+            route
+                .error_responses
+                .iter()
+                .map(|(s, _)| *s)
+                .collect::<Vec<_>>(),
+            [503],
+            "{} documents the report a failing probe answers with",
+            route.handler,
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_probe_with_no_indicators_reports_healthy() {
     let app = TestApp::for_module::<AppModule>()
@@ -57,15 +77,6 @@ async fn a_probe_with_no_indicators_reports_healthy() {
     );
 }
 
-/// What `global_prefix` does to a probe path, and what the framework owes the
-/// operator about it.
-///
-/// A probe path is a contract with an orchestrator: a manifest written from
-/// this crate's documented `/health/live` gets a `404` under a prefixed app,
-/// the kubelet scores `404` as a failed probe, and a failed liveness probe
-/// restarts the container. The transport nests every mount inside the prefix
-/// — nothing this crate contributes can opt out — so the obligation it *can*
-/// meet is that the difference is never silent.
 mod under_a_global_prefix {
     use nest_rs_core::module;
     use nest_rs_health::HealthModule;
@@ -73,7 +84,10 @@ mod under_a_global_prefix {
     use nest_rs_testing::{LogCapture, TestApp};
 
     fn prefixed_http() -> nest_rs_http::HttpSetup {
-        HttpModule::for_root(HttpConfig::default().with_global_prefix("/api/v1"))
+        HttpModule::for_root(HttpConfig {
+            global_prefix: Some("/api/v1".into()),
+            ..HttpConfig::default()
+        })
     }
 
     #[module(imports = [prefixed_http(), HealthModule])]
@@ -102,8 +116,6 @@ mod under_a_global_prefix {
             app.http().get(&path).send().await.assert_status_is_ok();
         }
 
-        // …and the documented path is exactly the 404 the line exists to warn
-        // about.
         app.http()
             .get("/health/live")
             .send()
@@ -111,8 +123,6 @@ mod under_a_global_prefix {
             .assert_status(poem::http::StatusCode::NOT_FOUND);
     }
 
-    /// An app with no prefix serves the documented paths and says nothing: the
-    /// line is a report of a *difference*, not boot noise every app pays for.
     #[tokio::test]
     async fn an_unprefixed_app_says_nothing() {
         let logs = LogCapture::install();

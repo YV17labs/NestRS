@@ -1,7 +1,6 @@
 ---
 title: Extractors
 description: The full HTTP extractor surface — JSON, raw body, client IP, request-scoped providers, guard-attached context, route metadata.
-tier: basics
 sidebar:
   order: 6
 ---
@@ -15,8 +14,8 @@ JSON body, and form body. NestRS adds the framework-specific extractors:
 the validated `Valid<E>`, the typed header reader `Header<T>`, the
 raw-body reader `RawBody`, the spoofable but observation-grade
 `ClientIp`, the request-scoped DI resolver `Scoped<T>`, the
-guard-attached context reader `Ctx<T>`, and the route metadata reader
-`Reflector` paired with `#[meta(...)]`.
+guard-attached context reader `Ctx<T>`, and the route metadata a guard reads
+through `cx.reflector()`, declared with `#[meta(...)]`.
 
 This page is the reference: one extractor, one example, one rule. The
 [Guards](/fundamentals/guards/) for `Ctx<T>` and
@@ -94,7 +93,7 @@ use nest_rs::pipes::ParseUuid;
 use nest_rs::http::poem::web::Path;
 use uuid::Uuid;
 
-#[get("/posts/:id")]
+#[get("/posts/{id}")]
 async fn show(&self, id: Piped<ParseUuid, Path<String>>) -> Json<Post> {
     let id: Uuid = id.into_inner();
     Json(self.svc.find(id))
@@ -142,36 +141,42 @@ DTO, `Piped<P, Header<T>>` pipes it.
 
 ## `RawBody` — exact bytes, with a size cap
 
-Some handlers — webhook signatures (Stripe, GitHub), proxied protobuf
-bodies — need the exact byte string before any parsing. `RawBody` reads
-the whole body into [`Bytes`](https://docs.rs/bytes), capped at
-`RawBody::DEFAULT_LIMIT` (2 MiB). Past the cap the extractor returns
-`413 Payload Too Large` — never silently truncates, never buffers
-unbounded memory.
+Some handlers need the exact byte string before any parsing — a proxied
+protobuf body, a document stored as it was sent. `RawBody` reads the whole body
+into [`Bytes`](https://docs.rs/bytes), capped at the transport's
+`max_body_bytes` (`RawBody::DEFAULT_LIMIT`, 2 MiB, by default). Past the cap the
+request is answered `413 Payload Too Large` — never silently truncated, never
+buffered unbounded. Like every extractor it reads after the guards, so a
+refused request never had its body read.
 
-```rust title="crates/features/src/notify/http/controller.rs"
-use nest_rs::http::{ClientIp, RawBody};
+```rust title="crates/features/src/posts/http/controller.rs"
+use nest_rs::http::RawBody;
 use nest_rs::http::poem::Result;
+use nest_rs::http::poem::web::Path;
+use uuid::Uuid;
 
-#[post("/webhooks/stripe")]
-async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
-    verify_stripe_signature(&body, /* ... */)?;
-    self.svc.handle_event(&body).await?;
-    Ok("ok")
+#[put("/{id}/source")]
+async fn replace_source(&self, id: Path<Uuid>, body: RawBody) -> Result<()> {
+    self.svc.replace_source(*id, body.into_inner()).await
 }
 ```
 
+A webhook's signature is a credential, so it is verified in a guard that reads
+the same bytes and hands them on, never in the handler — see
+[Read the body in a guard](/fundamentals/guards/#read-the-body-in-a-guard).
+
 For a tighter cap on a specific route, take the body manually:
 
-```rust title="crates/features/src/notify/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::RawBody;
 use nest_rs::http::poem::{Result, RequestBody};
+use nest_rs::http::poem::web::Path;
+use uuid::Uuid;
 
-#[post("/webhooks/small")]
-async fn small(&self, mut body: RequestBody) -> Result<&'static str> {
+#[put("/{id}/summary")]
+async fn replace_summary(&self, id: Path<Uuid>, mut body: RequestBody) -> Result<()> {
     let raw = RawBody::extract_with_limit(&mut body, 16 * 1024).await?;
-    self.svc.handle_small(&raw).await?;
-    Ok("ok")
+    self.svc.replace_summary(*id, raw.into_inner()).await
 }
 ```
 
@@ -194,7 +199,7 @@ forwarding header when that peer is a proxy you listed:
 
 1. No peer address at all (a unix socket, or a proxy that hides it) ⇒
    `0.0.0.0`, `forwarded = false`. The extractor never fails.
-2. The peer is **not** in `NESTRS_HTTP__TRUSTED_PROXIES` ⇒ that peer is the
+2. The peer is **not** in `<PREFIX>_HTTP__TRUSTED_PROXIES` ⇒ that peer is the
    client, `forwarded = false`, and the headers are not read.
 3. The peer **is** a trusted proxy ⇒ the client is the **rightmost** hop that
    is not itself a trusted proxy, read from `Forwarded` (RFC 7239) first, then
@@ -216,14 +221,15 @@ infrastructure wrote; a caller can only prepend, and a prepended entry lands to
 the left of it. Keying on the leftmost hop is the spoofable rule.
 
 <Aside type="caution">
-Treat the result as **observational** (logging, geolocation hints, sampling
-keys), never as an authn or authz input. The peer is trustworthy; the hop behind
+Treat the result as **observational** (geolocation hints, sampling keys),
+never as an authn or authz input — and as personal data: the framework writes it
+on no line and no span, and a line of yours holding it holds personal data. The peer is trustworthy; the hop behind
 it is only as trustworthy as the proxy that wrote it — list an ingress here only
 if it strips and rewrites the client's own forwarding headers.
 
 The [throttler](/rate-limiting/) resolves the client through this same
 mechanism, from this same list, so a request is never rate-limited as one
-address and logged as another.
+address and handed to a handler as another.
 </Aside>
 
 ## `Scoped<T>` — resolve a request-scoped provider
@@ -265,8 +271,8 @@ another request-scoped one.
 ## `Ctx<T>` — read context a guard attached
 
 A guard runs before the handler, can short-circuit with a response, and
-can attach a typed value to the request. `Ctx<T>` is how the handler reads
-that value back:
+can attach a typed value for the rest of the request. `Ctx<T>` is how the
+handler reads that value back:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::Ctx;
@@ -284,24 +290,27 @@ async fn create(
 
 `Ctx<T>` rejects with `500` if `T` is absent — a missing context means
 the guard that should have set it never ran on this route (a wiring bug,
-not a client error). The value is cloned out of the request's
-extensions; store an `Arc<_>` if the value is large.
+not a client error). `T` implements `AmbientValue` and `Clone`; the value is
+cloned out of the ambient context, so a large one goes in a newtype holding an
+`Arc` (`struct Catalog(Arc<Entries>)`), which implements `AmbientValue` itself.
 
 The canonical use is the authenticated principal: `AuthnGuard` runs the
-strategy, then inserts a `Claims` (or whatever the resource server's
-principal is) into the request. Every authenticated handler reads it as
-`auth: Ctx<Claims>`.
+strategy, then attaches a `Claims` (or whatever the resource server's
+principal is). Every authenticated handler reads it as `auth: Ctx<Claims>`.
+On a `#[public]` route reached with a credential the strategy rejected,
+`Ctx<Claims>` answers the `401` that credential earned rather than a `500`.
 
 See [Guards](/fundamentals/guards/) for how to attach a value, and for
 the design rule (guards gate and attach; handlers read).
 
-## `Reflector` + `#[meta(EXPR)]` — typed route metadata
+## `#[meta(EXPR)]` — typed route metadata
 
 A route can carry typed metadata a guard reads at decision time —
 the cleanest case is a rate-limit guard reading the route's quota. The
-decorator attaches; the reader picks it up by type.
+decorator declares; the reader picks it up by type.
 
-Attach metadata on the route:
+Declare metadata on the route, or on its `#[controller]` for every route it
+serves:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
@@ -309,23 +318,22 @@ use nest_rs::throttler::{Throttle, ThrottlerGuard};
 #[post("/login")]
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]
-async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<AccessTokenDto>> {
-    Ok(Json(self.issuer.grant_password(&body.email, &body.password).await?))
+#[api(response = AccessTokenResponse)]
+async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse> {
+    Ok(self.issuer.grant_password(&body.email, &body.password).await?)
 }
 ```
 
 ### Advanced: reading `#[meta]` from a guard
 
 Everything below is for the **guard author**, not the handler — a
-handler only attaches metadata; the guard reads it back at decision
+handler only declares metadata; the guard reads it back at decision
 time:
 
 ```rust title="crates/features/src/authn/guard.rs"
-use nest_rs::http::Reflector;
-use nest_rs::http::poem::Request;
-
-async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-    let throttle = Reflector::new(req)
+async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    let throttle = cx
+        .reflector()
         .get::<Throttle>()
         .copied()
         .unwrap_or(self.default_throttle);
@@ -333,37 +341,43 @@ async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
 }
 ```
 
-Two rules pin the contract:
+Three rules pin the contract:
 
-- The value type must be `Clone + Send + Sync + 'static`. The macro
-  attaches it to the request extensions; the reader resolves by
-  `TypeId`. Wrap multiple values of the same underlying shape in
-  distinct newtypes when they need to coexist.
+- The value type must be `Send + Sync + 'static`. The expression is
+  evaluated once, the first time a layer reads the route's metadata, and
+  every request reads that one value through a pointer — never cloned,
+  never shadowed by what a guard attaches. The reader
+  resolves by `TypeId`: wrap values of one underlying shape in distinct
+  newtypes when they need to coexist, and declare each type once per
+  level.
+- The method's value of a type wins over its controller's, and a
+  controller's value of another type still reads through.
 - Scope does not change what a guard reads. The pool executes
-  post-routing at the `RouteShaper`, inside the metadata wrap, so a guard
-  bound with `use_guards_global` reads the route's `#[meta]` exactly as a
-  `#[use_guards]` one does — see
+  post-routing at the `RouteShaper`, which carries the route's
+  declaration, so a guard bound with `use_guards_global` reads the
+  route's `#[meta]` exactly as a `#[use_guards]` one does — see
   [the request lifecycle](/fundamentals/request-lifecycle/).
 
-`Reflector` implements the framework-wide `HandlerMetadata` trait. The
-same guard can read `Reflector` on HTTP, the per-message metadata reader
-on WS, and the per-call reader on MCP — one trait, one shape, three
-transports.
+`#[meta]` is declared the same way on a resolver, a gateway, an MCP host and
+their operations, and on a processor's, scheduled tasks' or listeners' impl
+block and its methods. Each site keeps both levels in its one declaration, and
+a guard's `check` reads a resolver's, a message's or a tool's through
+`cx.reflector()` exactly as `check_http` reads a route's.
 
 ## `#[public]` — the only universal marker
 
-`#[public]` is shorthand for `#[meta(Public)]` — it attaches the
-framework's only universal route marker. Guards read it through
-`HandlerMetadata::is_public()` and decide whether to honor it. The
-framework itself does *not* act on the marker — `AuthnGuard`, for
-example, still runs the strategy on a `#[public]` route, but lets an
-anonymous request through instead of returning `401`.
+`#[public]` declares the route's posture, the framework's only universal
+route marker. Guards read it through `cx.reflector().posture()`, which
+answers `Posture::Public` for it, and decide whether to honor it. The framework itself does *not* act on the
+marker — `AuthnGuard`, for example, still runs the strategy on a `#[public]`
+route, but lets an anonymous request through instead of returning `401`.
+It admits one on `/graphql`, `Posture::InBand`, the same way.
 
 ```rust title="crates/features/src/authn/http/controller.rs"
 #[post("/login")]
 #[public]
 #[use_guards(ThrottlerGuard)]
-async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<AccessTokenDto>> {
+async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse> {
     // ...
 }
 ```

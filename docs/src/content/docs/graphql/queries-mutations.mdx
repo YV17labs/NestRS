@@ -1,7 +1,6 @@
 ---
 title: Queries and mutations
 description: Top-level operations as plain async methods — typed arguments, typed returns, the wire shape that follows.
-tier: basics
 sidebar:
   order: 3
 ---
@@ -60,8 +59,14 @@ $ curl -sX POST http://localhost:3000/graphql \
 {"data":{"userCount":42}}
 ```
 
-The method name is camelCased; primitive returns map to their GraphQL
-scalar (`i32` → `Int`, `String` → `String`, `bool` → `Boolean`).
+The method name is camelCased by async-graphql's own rule: a new word starts
+after each `_` **and after a digit**, and a capital after a lowercase letter is
+kept — `user_count` is `userCount`, `get_2fa` is `get2Fa`, `userID` stays
+`userID`. The framework states that name on the field itself, so the name a
+duplicate is checked under is the name served: two methods the rule reads as one
+field (`a1_b` and `a_1b` are both `a1B`) are a compile error rather than one body
+answering for the other. `#[graphql(name = "…")]` overrides it. Primitive returns map to their GraphQL scalar (`i32` → `Int`,
+`String` → `String`, `bool` → `Boolean`).
 
 ## Arguments
 
@@ -270,12 +275,11 @@ use nest_rs::graphql::{operations, resolver};
 use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
-use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, User, UsersService};
 
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -303,12 +307,15 @@ The service stays the single audited choke point to the database. The
 resolver only translates between the wire shape and the service —
 `#[authorize(Action, Entity)]` is each operation's access posture,
 gating the call against the ambient ability and masking the returned
-value automatically. The `#[use_guards(AuthnGuard, AuthzGuard)]` binding
-on the struct is what runs authn + the ability chain per operation; its
-`AuthzGuard` marker is provided by `AuthzGraphqlModule`, which the
-feature's `UsersGraphqlModule` imports (omit it and boot fails naming
-the missing guard). See [Database / CRUD](/database/crud/) for the
-service contract and [Security](/security/) for the guard wiring.
+value automatically. The `#[use_guards(AuthzGuard)]` binding on the
+struct scopes each operation to the caller's ability. Authentication runs
+in band, per operation, through the bridge `AuthzGraphqlModule` registers:
+`/graphql` has no guard at the HTTP edge, and `AuthnGuard` checks HTTP
+requests only, so binding it on a resolver is a compile error rather than
+a check that passes every operation. The feature's `UsersGraphqlModule`
+imports `AuthzGraphqlModule`, which provides `AuthzGuard` (omit it and
+boot fails naming the missing guard). See [Database / CRUD](/database/crud/)
+for the service contract and [Security](/security/) for the guard wiring.
 
 ## Going further
 

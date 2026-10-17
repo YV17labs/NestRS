@@ -1,6 +1,6 @@
 ---
 title: Expose over HTTP
-description: A PostsService that goes through Repo, a PostsController that mounts GET /posts/:id and POST /posts, the first curl that returns a post.
+description: A PostsService that goes through Repo, a PostsController that mounts GET /posts/{id} and POST /posts, the first curl that returns a post.
 sidebar:
   order: 5
 ---
@@ -25,7 +25,7 @@ it provides `CrudService`, `Repo`, `ServiceError`, and the SeaORM
 integration. SeaORM stays the source of truth for the column types and
 the active-model semantics.
 
-```rust title="crates/features/src/posts/service.rs (from the demo)"
+```rust title="crates/features/src/posts/service.rs"
 use nest_rs::core::injectable;
 use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 
@@ -67,7 +67,7 @@ data layer installs it before the handler runs
 
 Register the service in the port module:
 
-```rust title="crates/features/src/posts/module.rs (from the demo)"
+```rust title="crates/features/src/posts/module.rs"
 use nest_rs::core::module;
 
 use super::service::PostsService;
@@ -88,7 +88,7 @@ a silent no-op — a forgotten write path fails to compile. You don't
 write handler bodies unless you need domain logic the trait doesn't
 cover.
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
@@ -132,12 +132,15 @@ them once. Generate them:
 nestrs g auth
 ```
 
-That writes `crates/features/src/{identity,authn,authz}/`, adds the modules to
-the app, appends a development `NESTRS_AUTHN__SECRET` to `.env`, and gives you
-`POST /auth/dev-token` — the route the next page gets its bearer token from.
+That writes `crates/features/src/{authn,authz}/`, adds the modules to the app,
+draws two random `<PREFIX>_AUTHN__SECRET`s — yours into the git-ignored
+`.env.local`, the test suites' into `.env.test` — and gives you
+`POST /auth/dev-token`, the route the next page gets its bearer token from. The
+committed `.env`, which every environment reads, holds no secret: a deployment
+sets its own.
 Then grant the ability — the policy starts empty, so `Post` needs a rule:
 
-```rust title="crates/features/src/authz/ability.rs (from the demo)" {2, 8}
+```rust title="crates/features/src/authz/ability.rs" {2, 8}
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use crate::posts as post;
 
@@ -160,7 +163,7 @@ The feature's HTTP adapter is a separate module. It imports the port
 (`PostsModule`) and `AuthzModule`, which is what makes the ability guard
 reachable — omit it and the access graph fails the boot by name.
 
-```rust title="crates/features/src/posts/http/module.rs (from the demo)"
+```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
 
 use super::controller::PostsController;
@@ -174,7 +177,7 @@ use crate::posts::PostsModule;
 pub struct PostsHttpModule;
 ```
 
-```rust title="crates/features/src/posts/http/mod.rs (from the demo)"
+```rust title="crates/features/src/posts/http/mod.rs"
 mod controller;
 mod module;
 
@@ -184,7 +187,7 @@ pub use module::PostsHttpModule;
 
 Add the adapter to the feature root:
 
-```rust title="crates/features/src/posts/mod.rs (from the demo)"
+```rust title="crates/features/src/posts/mod.rs"
 mod entity;
 mod module;
 mod service;
@@ -233,12 +236,11 @@ them.
 
 Add `features` to `apps/blog/Cargo.toml`:
 
-```toml title="apps/blog/Cargo.toml (from the demo)" {3}
+```toml title="apps/blog/Cargo.toml" {3}
 [dependencies]
 nest-rs.workspace = true
 features.workspace = true
 anyhow.workspace = true
-tokio.workspace = true
 ```
 
 The port `3005` is what the reference workspace pins — yours may differ
@@ -251,15 +253,15 @@ Boot the binary and read the route table from the boot log — the
 
 ```bash frame="terminal"
 $ nestrs run dev blog
-DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
+INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3005"
 ```
 
 ```text frame="terminal"
 INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts" handler="list"
 INFO nest_rs::routes: mounted route controller="PostsController" method="POST" path="/posts" handler="create"
-INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts/:id" handler="get"
-INFO nest_rs::routes: mounted route controller="PostsController" method="PATCH" path="/posts/:id" handler="update"
-INFO nest_rs::routes: mounted route controller="PostsController" method="DELETE" path="/posts/:id" handler="delete"
+INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts/{id}" handler="get"
+INFO nest_rs::routes: mounted route controller="PostsController" method="PATCH" path="/posts/{id}" handler="update"
+INFO nest_rs::routes: mounted route controller="PostsController" method="DELETE" path="/posts/{id}" handler="delete"
 ```
 
 Five routes mounted from one `#[crud]` block — the full CRUD surface,

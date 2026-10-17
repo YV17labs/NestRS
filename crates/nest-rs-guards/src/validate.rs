@@ -1,0 +1,232 @@
+//! Boot-time guard-chain validation — declared [`GuardPhase`] ordering and
+//! produced/expected [`PrincipalClaim`](crate::PrincipalClaim) cross-checks: a
+//! chain whose declarations cannot line up fails boot with a named error
+//! instead of answering `500` on every request.
+
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_scoped};
+use nest_rs_core::Container;
+use nest_rs_core::layer_chain::LayerSite;
+
+use crate::registry::{GuardSpec, resolve_global_guards};
+use crate::{Guard, GuardPhase};
+
+/// Validate one resolved guard chain (in execution order).
+///
+/// Fails on: an `Authentication`-phase guard listed after an
+/// `Authorization`-phase one; a guard expecting a principal type produced
+/// only *later* in the chain; a guard expecting a principal type while the
+/// chain's producer(s) attach a **different** type. A consumer with no
+/// producer anywhere in the chain only warns — a controller may serve
+/// exclusively `#[public]` routes, where the authorization guard admits the
+/// anonymous actor.
+///
+/// A guard is checked where it first runs: a `#[force_guards]` replay later in
+/// the chain is no misorder, since every guard between the two runs already
+/// read what the first one attached.
+pub fn validate_guard_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> Result<(), String> {
+    let first_runs: Vec<&ResolvedLayer<dyn Guard>> = chain
+        .iter()
+        .enumerate()
+        .filter(|(i, entry)| !chain[..*i].iter().any(|e| e.type_id == entry.type_id))
+        .map(|(_, entry)| entry)
+        .collect();
+    let chain = first_runs.as_slice();
+
+    let mut saw_authorization: Option<&'static str> = None;
+    for entry in chain {
+        match entry.layer.phase() {
+            GuardPhase::Authorization => saw_authorization = Some(entry.name),
+            GuardPhase::Authentication => {
+                if let Some(authz) = saw_authorization {
+                    return Err(format!(
+                        "guard chain for {label} lists authentication guard `{}` after \
+                         authorization guard `{authz}` — authentication must run first \
+                         so the principal it attaches is available; reorder the \
+                         `use_guards` declaration",
+                        entry.name,
+                    ));
+                }
+            }
+            GuardPhase::Other => {}
+        }
+    }
+
+    let producers: Vec<(usize, &'static str, crate::PrincipalClaim)> = chain
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| e.layer.produced_principal().map(|c| (i, e.name, c)))
+        .collect();
+    for (i, entry) in chain.iter().enumerate() {
+        let Some(expected) = entry.layer.expected_principal() else {
+            continue;
+        };
+        // `producers` is in chain order, so the first type match is the
+        // earliest — one scan decides all four outcomes.
+        match producers
+            .iter()
+            .find(|(_, _, c)| c.type_id == expected.type_id)
+        {
+            Some((j, _, _)) if *j < i => {}
+            Some((_, late_name, _)) => {
+                return Err(format!(
+                    "guard chain for {label}: `{}` expects principal `{}` which `{late_name}` \
+                     only attaches later in the chain — list `{late_name}` before `{}`",
+                    entry.name, expected.type_name, entry.name,
+                ));
+            }
+            None if !producers.is_empty() => {
+                let produced: Vec<&str> = producers.iter().map(|(_, _, c)| c.type_name).collect();
+                return Err(format!(
+                    "guard chain for {label}: `{}` expects principal `{}` but the chain's \
+                     authentication guard(s) attach [{}] — the auth strategy's principal and \
+                     the ability factory's `Actor` must be the same type",
+                    entry.name,
+                    expected.type_name,
+                    produced.join(", "),
+                ));
+            }
+            None => {
+                tracing::warn!(
+                    target: nest_rs_core::target::LAYERS,
+                    route = label,
+                    guard = entry.name,
+                    expected = expected.type_name,
+                    "guard expects a principal but no guard in the chain produces one — \
+                     non-public routes will answer 500",
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Boot check for one controller or gateway upgrade: compose the global pool
+/// with the host-scope specs (same dedup as the route shaper) and validate the
+/// result. A host-scope spec no imported module provides fails it, naming the
+/// guard and `label`. A route whose method scope declares guards is validated
+/// again, whole, as it mounts.
+pub fn boot_validate_guards(
+    container: &Container,
+    controller_specs: &[GuardSpec],
+    label: &str,
+) -> Result<(), String> {
+    let global = resolve_global_guards(container);
+    let controller = resolve_scoped(container, controller_specs, LayerSite::Host, label)
+        .map_err(|unresolved| unresolved.to_string())?;
+    let chain =
+        compose_chain::<dyn Guard>(dedup_bucket(global), controller, Vec::new(), &[], label);
+    validate_guard_chain(label, &chain)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use nest_rs_core::Layer;
+    use nest_rs_core::layer_chain::LayerSite;
+
+    use super::*;
+    use crate::PrincipalClaim;
+
+    #[derive(Clone)]
+    struct ClaimsA;
+    #[derive(Clone)]
+    struct ClaimsB;
+
+    struct Authn;
+    impl Layer for Authn {}
+    impl Guard for Authn {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+        fn produced_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<ClaimsA>())
+        }
+    }
+
+    struct Authz;
+    impl Layer for Authz {}
+    impl Guard for Authz {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authorization
+        }
+        fn expected_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<ClaimsA>())
+        }
+    }
+
+    struct AuthzWantsB;
+    impl Layer for AuthzWantsB {}
+    impl Guard for AuthzWantsB {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authorization
+        }
+        fn expected_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<ClaimsB>())
+        }
+    }
+
+    fn entry<G: Guard + 'static>(guard: G, name: &'static str) -> ResolvedLayer<dyn Guard> {
+        ResolvedLayer {
+            type_id: std::any::TypeId::of::<G>(),
+            name,
+            source: LayerSite::Host,
+            layer: Arc::new(guard) as Arc<dyn Guard>,
+        }
+    }
+
+    #[test]
+    fn authn_before_authz_with_matching_principal_passes() {
+        let chain = vec![entry(Authn, "Authn"), entry(Authz, "Authz")];
+        validate_guard_chain("test", &chain).expect("valid chain");
+    }
+
+    #[test]
+    fn reversed_order_fails_boot() {
+        let chain = vec![entry(Authz, "Authz"), entry(Authn, "Authn")];
+        let err = validate_guard_chain("test", &chain).expect_err("reversed order");
+        assert!(err.contains("after authorization guard"), "{err}");
+    }
+
+    #[test]
+    fn a_forced_authentication_replay_after_authorization_passes() {
+        let mut replay = entry(Authn, "Authn");
+        replay.source = LayerSite::Method;
+        let chain = vec![entry(Authn, "Authn"), entry(Authz, "Authz"), replay];
+        validate_guard_chain("test", &chain)
+            .expect("the authorization guard read what the first authentication run attached");
+    }
+
+    #[test]
+    fn principal_type_mismatch_fails_boot() {
+        let chain = vec![entry(Authn, "Authn"), entry(AuthzWantsB, "AuthzWantsB")];
+        let err = validate_guard_chain("test", &chain).expect_err("mismatch");
+        assert!(err.contains("ClaimsB"), "{err}");
+        assert!(err.contains("ClaimsA"), "{err}");
+    }
+
+    #[test]
+    fn consumer_without_any_producer_only_warns() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let chain = vec![entry(Authz, "Authz")];
+        validate_guard_chain("test", &chain).expect("no producer at all is a warn, not an error");
+
+        // A warn, not a boot error: a `#[public]` route on the same chain is
+        // legitimate, so this is all that is said before other routes answer 500.
+        let event = logs.expect_one(
+            "nest_rs::layers",
+            "guard expects a principal but no guard in the chain produces one — \
+             non-public routes will answer 500",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("route").as_deref(), Some("test"));
+        assert_eq!(event.field("guard").as_deref(), Some("Authz"));
+        assert!(
+            event
+                .field("expected")
+                .is_some_and(|e| e.contains("ClaimsA")),
+            "the event names the principal type nobody attaches, got {:?}",
+            event.fields,
+        );
+    }
+}

@@ -11,8 +11,17 @@
 //! [`LogCapture`] covers the other half of a transport's contract: the events
 //! it emits. A denial that fails closed but logs nothing passes every response
 //! assertion — and is exactly what nobody can debug at 3am.
-#![cfg_attr(not(test), deny(unsafe_code))]
+//!
+//! [`url_on`], [`url_as`] and [`url_at`] put the suite's own URL on a test's
+//! own database, as its own user or at a proxy's address, keeping everything
+//! else the deployment set.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
+#![expect(
+    clippy::panic,
+    clippy::expect_used,
+    reason = "a test harness fails the test it runs in by panicking, as assert! does"
+)]
 
 // An edge module keeps its namespace and gets no root re-export: `graphql::`
 // and `ws::` say which protocol a name belongs to, and that is the scheme every
@@ -24,6 +33,13 @@ mod env;
 mod headless;
 mod logs;
 pub mod mcp;
+mod url;
+mod wait;
+
+#[cfg(feature = "tls")]
+mod tls;
+#[cfg(feature = "tls")]
+pub use tls::{TestAuthority, TestCertificate, system_connector};
 
 #[cfg(feature = "orm")]
 mod database;
@@ -39,9 +55,27 @@ pub mod graphql;
 #[cfg(feature = "ws")]
 pub mod ws;
 
+/// The queue backend kit (feature `queue`).
+#[cfg(feature = "queue")]
+pub mod queue;
+
 pub use app::{TestApp, TestAppBuilder};
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
 pub use logs::{CapturedEvent, CapturedSpan, LogCapture};
+pub use url::{url_as, url_at, url_on};
+pub use wait::{wait_for, wait_until};
 
 pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    /// What `queue_kit!` expands to: the cases and the runner each one goes through.
+    #[cfg(feature = "queue")]
+    pub mod queue {
+        pub use crate::queue::kit::{cases, run};
+    }
+}

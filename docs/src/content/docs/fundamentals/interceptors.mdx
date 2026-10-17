@@ -1,7 +1,6 @@
 ---
 title: Interceptors
 description: Wrap handler execution — install ambient state, observe, transform the response, in a single intercept(req, next) call.
-tier: basics
 sidebar:
   order: 8
 ---
@@ -94,7 +93,7 @@ or per handler.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs::interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level `HttpEndpointWrap` wrap + the per-route shaper |
+| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs::interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level wrap + the per-route shaper |
 | **Controller / Resolver / Gateway** | `#[use_interceptors(Tracer)]` on the struct | The container, at mount |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 
@@ -121,10 +120,10 @@ second's.
 
 Like every other [`Layer`](/fundamentals/request-lifecycle/), an `Interceptor` declared
 globally and redeclared on the controller or method runs **exactly
-once** per request — the transport-level `HttpEndpointWrap` wrap
-carries the single execution, the inner wraps are skipped at mount
-time. The full rationale and the cross-transport wiring details live
-on the guards page; the same rules apply here.
+once** per request — the transport-level wrap carries the single
+execution, the inner wraps are skipped at mount time. The full
+rationale and the cross-transport wiring details live on the guards
+page; the same rules apply here.
 
 See [Guards / Declare on the provider](/fundamentals/guards/#declare-on-the-provider)
 for the worked example and the defense-in-depth argument.
@@ -140,7 +139,7 @@ registration order — no `#[use_interceptors]` needed anywhere.
 #[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
-    db: Arc<DatabaseConnection>,
+    unit: Arc<dyn UnitOfWork>,
 }
 
 impl Layer for DbContext {}
@@ -148,21 +147,30 @@ impl Layer for DbContext {}
 #[async_trait]
 impl Interceptor for DbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        if is_safe(req.method()) {
-            return with_request_executor(Executor::Pool(self.db.clone()), next.run(req)).await;
-        }
-        let txn = Arc::new(self.db.begin().await?);
-        let result = with_request_executor(Executor::Txn(txn.clone()), next.run(req)).await;
-        commit_or_rollback(txn, &result).await?;
-        result
+        let policy = if is_safe(req.method()) {
+            TransactionPolicy::Pool
+        } else {
+            TransactionPolicy::PerUnit
+        };
+        let spec = UnitSpec::new(nest_rs_http::unit::REQUEST, ExecutorScope::Request, policy);
+        run_unit(
+            Some(&self.unit),
+            spec,
+            next.run(req),
+            should_commit,
+            |_| Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
+        )
+        .await
     }
 }
 ```
 
 That's the entire transactional boundary. Import `SeaOrmDatabaseModule`, the
-interceptor is auto-mounted, and every handler runs inside a transaction
-on a mutating verb, on the pool on a safe verb. No `#[use_interceptors]`
-on any controller.
+interceptor is auto-mounted, and every handler runs as one unit of work: inside
+a transaction on a mutating verb — opened on its first query — and on the pool
+on a safe verb; the unit commits or rolls back on the response, then
+dispatches the events the handler emitted, or drops them. No
+`#[use_interceptors]` on any controller.
 
 ## Where interceptors run in the chain
 

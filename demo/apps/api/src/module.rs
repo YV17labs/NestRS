@@ -4,7 +4,7 @@ use nest_rs::graphql::GraphqlModule;
 use nest_rs::health::HealthModule;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::openapi::OpenApiModule;
-use nest_rs::redis::{RedisModule, RedisQueueModule};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::ScheduleModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 use nest_rs::server_timing::ServerTimingModule;
@@ -29,6 +29,7 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         HealthModule,
         ServerTimingModule,
         ScheduleModule,
+        RedisScheduleModule,
         HttpModule::for_root(HttpConfig {
             port: 3002,
             compression: true,

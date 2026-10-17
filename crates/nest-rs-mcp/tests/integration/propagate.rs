@@ -1,30 +1,22 @@
-//! `src/propagate.rs`: every `ServerHandler` method reaches the wrapped host.
+//! `src/propagate.rs`: every `ServerHandler` method reaches the wrapped host —
+//! a dropped delegation is answered by rmcp's default, silently — and an
+//! operation ends when it is stopped as well as when it settles.
 //!
-//! [`PropagatingHandler`](nest_rs_mcp::PropagatingHandler) has to *be* a
-//! `ServerHandler` since rmcp 3.x — the single `Service::handle_request` seam it
-//! used to wrap is gone. A method it forgets to delegate does not merely lose
-//! the ambient request scope: rmcp's **default** answers instead, so the host's
-//! own `prompts/get` becomes `-32601 Method not found` and its `tools/list`
-//! becomes an empty list. Silently, and only on the wire.
-//!
-//! So this suite drives a probe host that records the name of every method it
-//! is asked for, through the real streamable-HTTP endpoint, and asserts the
-//! recorded set. Adding a capability to the delegation means adding it here.
-//!
-//! **This proves delegation, not exhaustiveness** — the probe is hand-written,
-//! so `#[deny(clippy::missing_trait_methods)]` on the impl is what makes the
-//! list complete. Two methods are absent from [`EXPECTED`] on purpose:
-//! `initialize` for the reason below, and `negotiate_initialize` because it is
-//! reachable *through* that `initialize`, so the wire cannot tell a delegated
-//! call from an inherited one. `src/propagate.rs` proves that one directly.
+//! This proves delegation, not exhaustiveness: `#[deny(clippy::missing_trait_methods)]`
+//! on the wrapper does that. `negotiate_initialize` is absent from [`EXPECTED`]:
+//! the wire cannot tell it delegated, so `src/propagate.rs` proves it.
 
-// The probe implements the *whole* trait, deprecated members included: rmcp
-// still routes legacy protocol versions to `subscribe`/`unsubscribe` and
-// `logging/setLevel`, so a wrapper that drops them drops real traffic.
-#![expect(deprecated)]
+#![expect(
+    deprecated,
+    reason = "rmcp still routes the deprecated methods for legacy protocol versions"
+)]
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use nest_rs_core::module;
 
 use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams,
@@ -33,19 +25,20 @@ use nest_rs_mcp::model::{
     GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
     ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-    ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, SetLevelRequestParams,
+    ReadResourceResult, ResourceContents, ServerCapabilities, ServerConfig, SetLevelRequestParams,
     SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
 };
 use nest_rs_mcp::rmcp::serde_json::{self, json};
 use nest_rs_mcp::service::{NotificationContext, RequestContext, RoleServer};
 use nest_rs_mcp::{
     AllowAllMcpGuard, McpError, McpMount, McpOperationGuard, PropagatingHandler, ServerHandler,
-    endpoint,
+    endpoint, mcp, tools,
 };
-use nest_rs_testing::mcp::{call_method, notify, open_session_with};
+use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with};
+use nest_rs_testing::{LogCapture, TestApp};
 use poem::test::TestClient;
+use tokio::sync::Notify;
 
-/// The set of method names the probe host was asked for.
 type Seen = Arc<Mutex<BTreeSet<&'static str>>>;
 
 /// Client capabilities declaring the SEP-2663 tasks extension, without which
@@ -54,11 +47,8 @@ fn tasks_client_capabilities() -> serde_json::Value {
     json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } })
 }
 
-/// A host that implements every `ServerHandler` method this suite asserts on,
-/// and records which one ran. `initialize` is deliberately not overridden: rmcp's
-/// default performs protocol negotiation through a `pub(crate)` helper a host
-/// cannot call, and a wrapper that dropped it would break the handshake this
-/// whole suite depends on — the loudest possible failure, so it needs no probe.
+/// Records which `ServerHandler` method ran. `initialize` is not overridden:
+/// rmcp's default negotiates through a `pub(crate)` helper a host cannot call.
 #[derive(Clone)]
 struct ProbeHandler {
     seen: Seen,
@@ -71,9 +61,9 @@ impl ProbeHandler {
 }
 
 impl ServerHandler for ProbeHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         self.mark("get_info");
-        ServerInfo::new(
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -101,13 +91,11 @@ impl ServerHandler for ProbeHandler {
         _requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
         self.mark("accepted_subscription_filter");
-        // Accepting is what routes the request on to `listen`; declining would
-        // leave the wrapper's longest-lived delegation unexercised.
+        // Accepting routes the request on to `listen`.
         Some(_requested.clone())
     }
 
-    /// Returns at once rather than awaiting cancellation, so the suite proves
-    /// the delegation without holding the request open.
+    /// Returns at once, so the request is not held open.
     async fn listen(
         &self,
         _context: nest_rs_mcp::service::SubscriptionContext,
@@ -302,8 +290,6 @@ impl ServerHandler for ProbeHandler {
     }
 }
 
-/// Every method the wire exercises below are expected to reach on the host. A
-/// delegation this wrapper drops makes the corresponding name go missing.
 const EXPECTED: &[&str] = &[
     "accepted_subscription_filter",
     "call_tool",
@@ -334,9 +320,19 @@ const EXPECTED: &[&str] = &[
     "update_task",
 ];
 
-/// The revision that carries SEP-2575 discovery/subscriptions and SEP-2243
-/// standard headers — the surface the legacy session below cannot reach.
+/// The revision carrying SEP-2575 discovery/subscriptions and SEP-2243 headers.
 const MODERN_VERSION: &str = "2026-07-28";
+
+/// rmcp accepts every older revision forever, so nothing else fails when the
+/// stateless suite falls behind.
+#[test]
+fn the_stateless_suite_drives_the_sdk_latest() {
+    assert_eq!(
+        MODERN_VERSION,
+        ProtocolVersion::LATEST.as_str(),
+        "rmcp moved its LATEST: bump `MODERN_VERSION` to match",
+    );
+}
 
 /// Per-request `_meta` a modern (stateless, inline-lifecycle) request must
 /// carry, per SEP-2575.
@@ -351,8 +347,7 @@ fn modern_meta() -> serde_json::Value {
 }
 
 /// Notifications are answered `202` and processed on the session worker, so the
-/// recorder lags the POST. Poll until the expected names land rather than
-/// sleeping a guessed interval.
+/// recorder lags the POST.
 async fn await_seen(seen: &Seen, expected: &[&str]) {
     for _ in 0..200 {
         let current = seen.lock().expect("probe lock").clone();
@@ -374,7 +369,7 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
         move || host.clone(),
     ));
 
-    // --- a legacy session: the capabilities reachable through `initialize` ---
+    // A legacy session: the capabilities reachable through `initialize`.
     let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
 
     let requests: &[(&str, serde_json::Value)] = &[
@@ -408,8 +403,7 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
         call_method(&client, "/", &session, None, method, params.clone()).await;
     }
 
-    // Notifications. `notifications/initialized` already ran inside the
-    // handshake; the rest are sent here.
+    // `notifications/initialized` already ran inside the handshake.
     let notifications: &[(&str, serde_json::Value)] = &[
         (
             "notifications/cancelled",
@@ -426,11 +420,8 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
         notify(&client, "/", &session, None, method, params.clone()).await;
     }
 
-    // --- the 2026-07-28 surface: stateless, inline-lifecycle requests -------
-    // `server/discover` and `subscriptions/listen` do not exist for a legacy
-    // session, and `get_tool` is only consulted to validate SEP-2243
-    // `Mcp-Param-*` headers — all three are new in the revision this upgrade is
-    // about, so leaving them unexercised would leave the new surface unproven.
+    // `server/discover`, `subscriptions/listen` and `get_tool` (consulted only to
+    // validate SEP-2243 `Mcp-Param-*` headers) need stateless 2026-07-28 requests.
     let modern: &[(&str, serde_json::Value)] = &[
         ("server/discover", json!({ "_meta": modern_meta() })),
         (
@@ -494,11 +485,849 @@ async fn post_modern<E: poem::Endpoint>(
     request.send().await;
 }
 
-/// The wrapper is a `ServerHandler`, which is what `StreamableHttpService`
-/// bounds on since rmcp 3.x. Asserting it in a test keeps the bound from being
-/// re-satisfied by accident (e.g. by an inherent method of the same name).
+/// `StreamableHttpService` bounds on `ServerHandler`.
 #[test]
 fn the_wrapper_is_itself_a_server_handler() {
     fn assert_server_handler<T: ServerHandler>() {}
     assert_server_handler::<PropagatingHandler<ProbeHandler>>();
+}
+
+/// Set when `slow`'s future is dropped, finished, and started, in turn.
+static SLOW_DROPPED: AtomicBool = AtomicBool::new(false);
+static SLOW_FINISHED: AtomicBool = AtomicBool::new(false);
+static SLOW_STARTED: Notify = Notify::const_new();
+/// The same three for `held`.
+static HELD_DROPPED: AtomicBool = AtomicBool::new(false);
+static HELD_FINISHED: AtomicBool = AtomicBool::new(false);
+static HELD_STARTED: Notify = Notify::const_new();
+
+/// Sets its flag when dropped — which is what stopping an operation is.
+struct SetOnDrop(&'static AtomicBool);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+const STOPPING: &str = "/mcp/stopping";
+
+#[mcp(path = "/mcp/stopping")]
+#[derive(Clone, Default)]
+struct StoppingTools;
+
+#[tools]
+impl StoppingTools {
+    #[tool(description = "Outlasts the shutdown window it is served under.")]
+    #[public]
+    async fn slow(&self) -> Result<String, McpError> {
+        let _dropped = SetOnDrop(&SLOW_DROPPED);
+        SLOW_STARTED.notify_one();
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        SLOW_FINISHED.store(true, Ordering::SeqCst);
+        Ok("finished".to_owned())
+    }
+
+    #[tool(description = "Waits until its client gives up on it.")]
+    #[public]
+    async fn held(&self) -> Result<String, McpError> {
+        let _dropped = SetOnDrop(&HELD_DROPPED);
+        HELD_STARTED.notify_one();
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        HELD_FINISHED.store(true, Ordering::SeqCst);
+        Ok("finished".to_owned())
+    }
+}
+
+#[module(providers = [StoppingTools, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct StoppingModule;
+
+/// The one `mcp.operation` line filed for `operation`, once it is filed.
+async fn operation_line(logs: &LogCapture, operation: &str) -> nest_rs_testing::CapturedEvent {
+    for _ in 0..200 {
+        let filed: Vec<_> = logs
+            .find(
+                nest_rs_core::operation_log::TARGET,
+                nest_rs_mcp::unit::OPERATION.name(),
+            )
+            .into_iter()
+            .filter(|line| line.field("operation").as_deref() == Some(operation))
+            .collect();
+        match filed.as_slice() {
+            [] => tokio::time::sleep(Duration::from_millis(10)).await,
+            [line] => return line.clone(),
+            _ => panic!("one line per operation, got {filed:?}"),
+        }
+    }
+    panic!("no mcp.operation line was filed for {operation}");
+}
+
+/// rmcp runs an operation on a task of its own, which outlives the connection
+/// the shutdown window cuts unless the transport stops it.
+#[tokio::test]
+async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_cancelled() {
+    let logs = LogCapture::install();
+    let window = Duration::from_secs(1);
+    let serving = crate::serve_on_loopback::<StoppingModule>(window).await;
+    let port = serving.port;
+    let session = crate::open_raw_session(port, STOPPING).await;
+    let (_open, head) = crate::post(
+        port,
+        STOPPING,
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "slow", "arguments": {} }
+        }),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the call is accepted: {head}"
+    );
+    tokio::time::timeout(Duration::from_secs(5), SLOW_STARTED.notified())
+        .await
+        .expect("the tool starts");
+
+    let took = serving.stop().await;
+
+    assert!(
+        SLOW_DROPPED.load(Ordering::SeqCst) && !SLOW_FINISHED.load(Ordering::SeqCst),
+        "the operation was dropped where it waited before the transport returned",
+    );
+    assert!(
+        took >= window
+            && took < window + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT + Duration::from_secs(1),
+        "the transport stopped at its window, took {took:?}",
+    );
+    let line = operation_line(&logs, "slow").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    let stopped = logs.expect_one(
+        nest_rs_http::target::HTTP,
+        "work a self-mount ran off its connections is stopped with the transport; a unit still \
+         running is dropped unanswered",
+    );
+    assert_eq!(stopped.level, "warn");
+    assert_eq!(stopped.field("path").as_deref(), Some(STOPPING));
+    assert_eq!(stopped.field("stopped").as_deref(), Some("1"));
+}
+
+/// `notifications/cancelled` reaches rmcp as a token no handler is obliged to watch.
+#[tokio::test]
+async fn an_operation_its_client_cancels_is_dropped_and_files_cancelled() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<StoppingModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), STOPPING, None).await;
+
+    let call = call_method(
+        app.http(),
+        STOPPING,
+        &session,
+        None,
+        "tools/call",
+        json!({ "name": "held", "arguments": {} }),
+    );
+    tokio::pin!(call);
+    tokio::select! {
+        body = &mut call => panic!("the call answered before it was cancelled: {body}"),
+        () = HELD_STARTED.notified() => {}
+    }
+    // `call_method` sends every request as id 99.
+    notify(
+        app.http(),
+        STOPPING,
+        &session,
+        None,
+        "notifications/cancelled",
+        json!({ "requestId": 99, "reason": "the user gave up" }),
+    )
+    .await;
+
+    let line = operation_line(&logs, "held").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert!(
+        HELD_DROPPED.load(Ordering::SeqCst) && !HELD_FINISHED.load(Ordering::SeqCst),
+        "the operation was dropped where it waited",
+    );
+}
+
+const EXPLODING: &str = "/mcp/exploding";
+
+#[mcp(path = "/mcp/exploding")]
+#[derive(Clone, Default)]
+struct ExplodingTools;
+
+#[tools]
+impl ExplodingTools {
+    #[tool(description = "Unwinds instead of answering.")]
+    #[public]
+    async fn boom(&self) -> Result<String, McpError> {
+        tokio::task::yield_now().await;
+        panic!("the tool exploded with sk_live_secret in hand")
+    }
+}
+
+#[module(providers = [ExplodingTools, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct ExplodingModule;
+
+/// rmcp runs a tool on a task of its own: a panic there answers nothing unless
+/// the dispatch contains it.
+#[tokio::test]
+async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<ExplodingModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), EXPLODING, None).await;
+
+    let body = tokio::time::timeout(
+        Duration::from_secs(5),
+        call_method(
+            app.http(),
+            EXPLODING,
+            &session,
+            None,
+            "tools/call",
+            json!({ "name": "boom", "arguments": {} }),
+        ),
+    )
+    .await
+    .expect("the client is answered rather than left to its own timeout");
+
+    let answer = nest_rs_testing::mcp::result(&body);
+    assert_eq!(
+        answer["error"]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "an internal error, worded for nobody in particular: {answer}",
+    );
+    assert!(
+        !body.contains("sk_live"),
+        "nothing of the panic reaches the client: {body}"
+    );
+    let line = operation_line(&logs, "boom").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_mcp::unit::OPERATION.name()
+                && span.field("mcp.operation.name").as_deref() == Some("boom")
+        })
+        .expect("the operation's span");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    let contained = logs.expect_one(
+        nest_rs_mcp::TARGET,
+        "mcp operation panicked; its client is answered with an internal error",
+    );
+    assert_eq!(contained.level, "error");
+    assert_eq!(contained.field("operation").as_deref(), Some("boom"));
+    assert!(
+        contained
+            .field(nest_rs_core::panic::FIELD)
+            .is_some_and(|panic| panic.contains("the tool exploded")),
+        "the operator reads what unwound: {contained:#?}",
+    );
+}
+
+const SUBSCRIBED: &str = "/mcp/subscribed";
+
+/// A host whose subscription only its client ends: `listen` waits for the
+/// cancellation and nothing else, as rmcp's own default does.
+#[mcp(path = "/mcp/subscribed")]
+#[derive(Clone)]
+struct SubscribedHost;
+
+#[nest_rs_mcp::tool_router(allow_empty)]
+impl SubscribedHost {}
+
+#[nest_rs_mcp::tool_handler]
+impl ServerHandler for SubscribedHost {
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.clone())
+    }
+
+    async fn listen(
+        &self,
+        context: nest_rs_mcp::service::SubscriptionContext,
+    ) -> Result<(), McpError> {
+        context.cancelled().await;
+        Ok(())
+    }
+}
+
+#[module(providers = [SubscribedHost, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct SubscribedModule;
+
+/// The 2026-07-28 schema's graceful teardown is the final
+/// `SubscriptionsListenResult`; the subscriber did not end it, so it files `cancelled`.
+#[tokio::test]
+async fn a_subscription_is_answered_its_final_result_at_the_shutdown_signal() {
+    let logs = LogCapture::install();
+    let window = Duration::from_secs(5);
+    let serving = crate::serve_on_loopback::<SubscribedModule>(window).await;
+    let body = json!({
+        "jsonrpc": "2.0", "id": 42, "method": "subscriptions/listen",
+        "params": { "notifications": {}, "_meta": modern_meta() },
+    })
+    .to_string();
+    let (mut stream, head) = crate::exchange(
+        serving.port,
+        &format!(
+            "POST {SUBSCRIBED} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
+             accept: application/json, text/event-stream\r\nmcp-protocol-version: {MODERN_VERSION}\r\n\
+             mcp-method: subscriptions/listen\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len(),
+        ),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the subscription opened: {head}"
+    );
+    let line = |logs: &LogCapture| {
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_mcp::unit::OPERATION.name(),
+        )
+        .into_iter()
+        .filter(|line| line.field("method").as_deref() == Some("subscriptions/listen"))
+        .collect::<Vec<_>>()
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(line(&logs).is_empty(), "the subscription is running");
+
+    let took = serving.stop().await;
+
+    assert!(
+        took < Duration::from_secs(1),
+        "the subscription did not hold the {window:?} window, took {took:?}",
+    );
+    let rest = crate::read_to_end(&mut stream).await;
+    let last = rest
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+        .find(|message| message["id"] == 42)
+        .unwrap_or_else(|| panic!("the final result reached the subscriber: {rest:?}"));
+    assert!(
+        last.get("result").is_some(),
+        "a result, not an error: {last}"
+    );
+    let filed = line(&logs);
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    assert_eq!(
+        filed[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+}
+
+const STALLED: &str = "/mcp/stalled";
+
+/// Set when `stalled`'s future is dropped, and once it has started.
+static STALLED_DROPPED: AtomicBool = AtomicBool::new(false);
+static STALLED_STARTED: Notify = Notify::const_new();
+
+#[mcp(path = "/mcp/stalled")]
+#[derive(Clone, Default)]
+struct StalledTools;
+
+#[tools]
+impl StalledTools {
+    #[tool(description = "Never answers.")]
+    #[public]
+    async fn stalled(&self) -> Result<String, McpError> {
+        let _dropped = SetOnDrop(&STALLED_DROPPED);
+        STALLED_STARTED.notify_one();
+        std::future::pending::<()>().await;
+        Ok("never".to_owned())
+    }
+}
+
+/// sse-stream re-arms rmcp's keep-alive on the system clock, which a paused
+/// tokio clock runs past: every poll would find it due and flood the stream
+/// ahead of the answer.
+fn without_keep_alive() -> nest_rs_mcp::McpConfig {
+    nest_rs_mcp::McpConfig {
+        sse_keep_alive: None,
+        ..nest_rs_mcp::McpConfig::default()
+    }
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(without_keep_alive())],
+    providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard],
+)]
+struct StalledModule;
+
+/// The HTTP request timeout the stalled tool is served under: the floor.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// What the operation deadline answers past `McpConfig::operation_timeout`'s
+/// default, 20 seconds.
+const PAST_THE_OPERATION_DEADLINE: Duration = Duration::from_secs(21);
+
+async fn serve_stalled<M: nest_rs_core::Module + 'static>() -> crate::Serving {
+    crate::serve_under::<M>(nest_rs_http::HttpConfig {
+        request_timeout: Some(REQUEST_TIMEOUT),
+        ..nest_rs_http::HttpConfig::default()
+    })
+    .await
+}
+
+/// Reads the response stream until the JSON-RPC message answering `id` arrives.
+async fn answer_to(stream: &mut tokio::net::TcpStream, id: u64) -> serde_json::Value {
+    use tokio::io::AsyncReadExt as _;
+    let mut read = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let text = String::from_utf8_lossy(&read).into_owned();
+            if let Some(message) = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+                .find(|message| message["id"] == id)
+            {
+                return message;
+            }
+            let n = stream
+                .read(&mut chunk)
+                .await
+                .expect("the stream is readable");
+            assert!(n > 0, "the stream ended unanswered: {text:?}");
+            read.extend_from_slice(&chunk[..n]);
+        }
+    })
+    .await;
+    found.unwrap_or_else(|_| {
+        panic!(
+            "no answer to {id}: {:?}",
+            String::from_utf8_lossy(&read).into_owned()
+        )
+    })
+}
+
+/// The HTTP request timeout bounds a response head, and a `tools/call` answers
+/// its head at once with an event stream: the operation deadline bounds it.
+async fn assert_cut_at_the_operation_deadline(
+    logs: &LogCapture,
+    stream: &mut tokio::net::TcpStream,
+) {
+    tokio::time::timeout(Duration::from_secs(5), STALLED_STARTED.notified())
+        .await
+        .expect("the tool starts");
+    tokio::time::pause();
+    tokio::time::sleep(REQUEST_TIMEOUT * 2).await;
+    assert!(
+        !STALLED_DROPPED.load(Ordering::SeqCst),
+        "the request timeout does not reach an operation rmcp runs on its own task",
+    );
+    tokio::time::sleep(PAST_THE_OPERATION_DEADLINE - REQUEST_TIMEOUT * 2).await;
+    tokio::time::resume();
+
+    let answer = answer_to(stream, 7).await;
+    assert_eq!(
+        answer["error"]["code"], -32603,
+        "an internal error: {answer}"
+    );
+    assert_eq!(
+        answer["error"]["message"], "the operation was not answered in time",
+        "{answer}"
+    );
+    assert_eq!(answer["error"]["data"]["reason"], "timeout", "{answer}");
+    assert_eq!(answer["error"]["data"]["code"], "UNAVAILABLE", "{answer}");
+    assert!(
+        STALLED_DROPPED.load(Ordering::SeqCst),
+        "the operation was dropped at its deadline"
+    );
+    let line = operation_line(logs, "stalled").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+    );
+    let cut = logs.expect_one(
+        nest_rs_mcp::TARGET,
+        "mcp operation not answered within its deadline; it is cut",
+    );
+    assert_eq!(cut.level, "warn");
+    assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
+    assert_eq!(cut.field("operation").as_deref(), Some("stalled"));
+    assert_eq!(cut.field("operation_timeout_secs").as_deref(), Some("20"));
+}
+
+#[tokio::test]
+async fn a_session_tool_call_past_the_request_timeout_is_cut_at_the_operation_deadline() {
+    let logs = LogCapture::install();
+    let serving = serve_stalled::<StalledModule>().await;
+    let session = crate::open_raw_session(serving.port, STALLED).await;
+    let (mut stream, head) = crate::post(
+        serving.port,
+        STALLED,
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "stalled", "arguments": {} }
+        }),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the call is accepted: {head}"
+    );
+
+    assert_cut_at_the_operation_deadline(&logs, &mut stream).await;
+    serving.stop().await;
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
+        legacy_session_mode: false,
+        ..without_keep_alive()
+    })],
+    providers = [StalledTools, AllowAllMcpGuard as dyn McpOperationGuard],
+)]
+struct StatelessStalledModule;
+
+/// A legacy client with sessions turned off is served statelessly, its answer
+/// streamed after a head sent at once.
+#[tokio::test]
+async fn a_stateless_tool_call_past_the_request_timeout_is_cut_at_the_operation_deadline() {
+    let logs = LogCapture::install();
+    let serving = serve_stalled::<StatelessStalledModule>().await;
+    let (mut stream, head) = crate::post(
+        serving.port,
+        STALLED,
+        None,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "stalled", "arguments": {} }
+        }),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the call is accepted: {head}"
+    );
+
+    assert_cut_at_the_operation_deadline(&logs, &mut stream).await;
+    serving.stop().await;
+}
+
+/// A `2026-07-28` request holds its head until the operation's first message,
+/// so the request timeout reaches it first, and rmcp drops the operation with
+/// the response it can no longer send.
+#[tokio::test]
+async fn a_modern_tool_call_is_cut_by_the_request_timeout_before_it_answers() {
+    let logs = LogCapture::install();
+    let serving = serve_stalled::<StalledModule>().await;
+    let body = json!({
+        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": { "name": "stalled", "arguments": {}, "_meta": modern_meta() },
+    })
+    .to_string();
+    let request = format!(
+        "POST {STALLED} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
+         accept: application/json, text/event-stream\r\nmcp-protocol-version: {MODERN_VERSION}\r\n\
+         mcp-method: tools/call\r\nmcp-name: stalled\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len(),
+    );
+    let port = serving.port;
+    let exchanged = tokio::spawn(async move { crate::exchange(port, &request).await });
+    tokio::time::timeout(Duration::from_secs(5), STALLED_STARTED.notified())
+        .await
+        .expect("the tool starts");
+    tokio::time::pause();
+    tokio::time::sleep(REQUEST_TIMEOUT * 2).await;
+    tokio::time::resume();
+
+    let (_stream, head) = exchanged.await.expect("the exchange does not panic");
+    assert!(
+        head.starts_with("HTTP/1.1 503"),
+        "the request timeout answered: {head}"
+    );
+    let line = operation_line(&logs, "stalled").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert!(
+        STALLED_DROPPED.load(Ordering::SeqCst),
+        "the operation was dropped"
+    );
+    serving.stop().await;
+}
+
+/// How a unit the recording binding opened ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnitEnd {
+    /// Settled, told whether the unit succeeded.
+    Settled { ok: bool },
+    /// Dropped before it settled: whatever it held stays unsettled.
+    Abandoned,
+}
+
+static UNITS_ENDED: Mutex<Vec<UnitEnd>> = Mutex::new(Vec::new());
+
+fn units_ended() -> Vec<UnitEnd> {
+    UNITS_ENDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// A unit-of-work binding recording how each unit it opened ended.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct RecordingUnitOfWork;
+
+/// One unit of [`RecordingUnitOfWork`], which records its end once.
+struct RecordingUnit {
+    settled: bool,
+}
+
+fn record(end: UnitEnd) {
+    UNITS_ENDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(end);
+}
+
+struct NoExecutor;
+
+impl nest_rs_database::Executor for NoExecutor {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(RecordingUnit { settled: false }))
+    }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
+}
+
+impl nest_rs_database::OpenUnit for RecordingUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        mut self: Box<Self>,
+        ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        self.settled = true;
+        record(UnitEnd::Settled { ok });
+        Box::pin(std::future::ready(nest_rs_database::Settlement::Settled))
+    }
+}
+
+impl Drop for RecordingUnit {
+    fn drop(&mut self) {
+        if !self.settled {
+            record(UnitEnd::Abandoned);
+        }
+    }
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(without_keep_alive())],
+    providers = [
+        StalledTools,
+        AllowAllMcpGuard as dyn McpOperationGuard,
+        RecordingUnitOfWork as dyn nest_rs_database::UnitOfWork,
+    ],
+)]
+struct StalledInUnitModule;
+
+/// The deadline cuts the operation's body inside its unit, never the unit
+/// around it: one cut around the unit would drop it unsettled, a transaction
+/// neither committed nor rolled back.
+#[tokio::test]
+async fn a_tool_call_cut_at_its_deadline_settles_its_unit_as_a_failure() {
+    let logs = LogCapture::install();
+    let serving = serve_stalled::<StalledInUnitModule>().await;
+    let session = crate::open_raw_session(serving.port, STALLED).await;
+    let (mut stream, head) = crate::post(
+        serving.port,
+        STALLED,
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "stalled", "arguments": {} }
+        }),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the call is accepted: {head}"
+    );
+
+    assert_cut_at_the_operation_deadline(&logs, &mut stream).await;
+    let ended = units_ended();
+    assert!(
+        !ended.contains(&UnitEnd::Abandoned),
+        "no unit was dropped unsettled: {ended:?}",
+    );
+    assert_eq!(
+        ended
+            .iter()
+            .filter(|end| **end == UnitEnd::Settled { ok: false })
+            .count(),
+        1,
+        "the cut call's unit settled as a failure: {ended:?}",
+    );
+    serving.stop().await;
+}
+
+const SETTLING: &str = "/mcp/settling";
+
+#[mcp(path = "/mcp/settling")]
+#[derive(Clone, Default)]
+struct SettlingTools;
+
+#[tools]
+impl SettlingTools {
+    #[tool(description = "Answers at once; its unit takes its time to commit.")]
+    #[public]
+    async fn quick(&self) -> Result<String, McpError> {
+        Ok("committed".to_owned())
+    }
+}
+
+/// Told when a unit's settle has started, and told back to let it land.
+static SETTLE_STARTED: Notify = Notify::const_new();
+static SETTLE_RELEASED: Notify = Notify::const_new();
+/// Set once a held commit landed.
+static SETTLE_LANDED: AtomicBool = AtomicBool::new(false);
+/// Whether the next unit to settle is held — the tool call's, not the
+/// handshake's.
+static HOLD_NEXT: AtomicBool = AtomicBool::new(false);
+
+/// A binding whose commit waits, on a task of its own, until the test lets it
+/// land — the settle in flight a stop arrives during.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct HeldCommit;
+
+struct HeldCommitUnit;
+
+impl nest_rs_database::UnitOfWork for HeldCommit {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(HeldCommitUnit))
+    }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
+}
+
+impl nest_rs_database::OpenUnit for HeldCommitUnit {
+    fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
+        Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        _ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        let held = HOLD_NEXT.swap(false, Ordering::SeqCst);
+        let landed = tokio::spawn(async move {
+            if held {
+                SETTLE_STARTED.notify_one();
+                SETTLE_RELEASED.notified().await;
+                SETTLE_LANDED.store(true, Ordering::SeqCst);
+            }
+        });
+        Box::pin(async move {
+            drop(landed.await);
+            nest_rs_database::Settlement::Settled
+        })
+    }
+}
+
+#[module(
+    providers = [
+        SettlingTools,
+        AllowAllMcpGuard as dyn McpOperationGuard,
+        HeldCommit as dyn nest_rs_database::UnitOfWork,
+    ],
+)]
+struct SettlingModule;
+
+/// A stop cuts the body, never the commit: one arriving while the unit
+/// settles leaves the operation to end as it answered, once its commit landed.
+/// rmcp sends a client nothing for a request it cancelled, as the protocol
+/// asks, so the line says how it ended.
+#[tokio::test]
+async fn a_stop_arriving_while_its_unit_commits_lets_the_operation_end_as_it_answered() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<SettlingModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), SETTLING, None).await;
+    HOLD_NEXT.store(true, Ordering::SeqCst);
+
+    let call = call_method(
+        app.http(),
+        SETTLING,
+        &session,
+        None,
+        "tools/call",
+        json!({ "name": "quick", "arguments": {} }),
+    );
+    tokio::pin!(call);
+    tokio::select! {
+        body = &mut call => panic!("the call answered before its unit settled: {body}"),
+        () = SETTLE_STARTED.notified() => {}
+    }
+    notify(
+        app.http(),
+        SETTLING,
+        &session,
+        None,
+        "notifications/cancelled",
+        json!({ "requestId": 99, "reason": "the user gave up" }),
+    )
+    .await;
+    // Past the stop: an operation it cut would file its line now.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    SETTLE_RELEASED.notify_one();
+
+    let line = operation_line(&logs, "quick").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "the stop came once the operation had answered: {line:?}",
+    );
+    assert!(SETTLE_LANDED.load(Ordering::SeqCst), "its commit landed");
 }

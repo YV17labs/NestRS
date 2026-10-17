@@ -9,16 +9,14 @@ the same commit.
 
 Requires **Node.js 22.12 or newer** — Astro 7's own floor, and what
 `package.json`'s `engines` declares. CI and the devcontainer both run **Node 24**
-(the active LTS), pinned in `.github/workflows/docs-pages.yml` and
+(the active LTS), pinned in `.github/workflows/docs.yml` and
 `.devcontainer/Dockerfile`; that is the version a build is proven against.
 
 ```bash
 cd docs
 npm install
 npm run dev        # → http://localhost:4321
-npm run lint:docs  # the style & code-truth gate — CI runs this before the build
-npm test           # the linter joined against itself
-npm run build      # static site under docs/dist/
+npm run build      # static site under docs/dist/, internal links checked — CI runs it on every pull request
 ```
 
 `npm run build` produces a fully static tree (HTML, CSS, minimal JS, a static
@@ -31,19 +29,8 @@ search index, and the `llms.txt` family). `npm run preview` serves it.
 | `src/content/docs/` | every page — one directory per section |
 | `STYLE.md` | **the law** for docs prose and structure; read it before editing a page |
 | `templates/` | the five skeletons `STYLE.md` §B names — T-CONCEPT, T-INDEX, T-TUTORIAL, T-RECIPE, T-SINGLE |
-| `scripts/lint-docs.mjs` | the gate: every rule in §F, plus the H2 vocabulary, the caps, links and anchors |
-| `scripts/lint-baseline.json` | violations a rule inherited when it landed — shrinks only |
-| `canon.json` | **generated** — the framework facts the linter checks pages against |
-| `demo-sources.json` | **generated** — every `demo/` file a fence may quote, with the port it pins |
-| `src/sidebar.mjs` | the Basics / All options tier split — threshold, vocabulary, exemption |
 | `src/components/Sidebar.astro` | the menu: two levels, and only the section you are in lists its pages |
 | `src/redirects.mjs` | one entry per route that ever shipped and moved |
-
-**The two `*.json` are written by `cargo nextest run -p nest-rs-conformance`, never
-by hand.** They are what lets the linter derive nothing: it opens no file outside
-`docs/`, so the workflow's `docs/**` path filter is an exact declaration of the
-job's input set. A framework change that moves a documented fact regenerates the
-canon, lands a `docs/**` diff, and trips the docs job on the commit that caused it.
 
 ## Editorial rules
 
@@ -58,8 +45,8 @@ wrong first.
    `apps/<app>/src/…` for composition. No page mixes in the `--standalone`
    `src/…` shape. A block quoting the demo says so in words —
    `(from the demo)`, `(from the demo, abridged)` — and that marker, not the
-   path, is what makes it an excerpt the linter checks line by line. §F lists
-   what the linter greps for, each rule filed against a shipped release by a
+   path, is what makes it an excerpt, which the author keeps line for line.
+   §F lists what to check, each class filed against a shipped release by a
    reader following a page verbatim.
 3. **A "Why this design" subsection on every non-trivial concept.** NestRS's
    value is in the *decisions* — make them legible.
@@ -97,19 +84,19 @@ its four pages by slug — autogenerating it would nest `authentication/` under 
 which is the third level again.
 
 A section of **five or more non-index pages** presents two lists — **Basics**
-then **All options** — in its index's "In this section" prose. A page declares
-which one it is in with `tier:` in its frontmatter. That split is *not* a menu
-level: it is a reading of one section, offered where the reader of that section
-already is. `tutorial/` is exempt at any size: its pages are steps 1..n, so a
-tier boundary mid-sequence would claim something false. `STYLE.md` §G is the
-norm, `src/sidebar.mjs` owns the threshold, and the linter gates it.
+then **All options** — in its index's "In this section" list. That split is
+*not* a menu level: it is a reading of one section, offered where the reader of
+that section already is. `tutorial/` is exempt at any size: its pages are steps
+1..n, so a tier boundary mid-sequence would claim something false. `STYLE.md`
+§G is the norm.
 
 ## Deploying
 
-GitHub Pages, from `.github/workflows/docs-pages.yml`, on every push to `main`
-touching `docs/**`: `npm ci` → `npm run lint:docs` → `npm run build` with
-`ASTRO_SITE=https://nestrs.dev` and `ASTRO_BASE=/` → `deploy-pages`. There is no
-other docs CI, and the lint step gates the deploy.
+GitHub Pages, from `.github/workflows/docs.yml`: every push or pull request
+touching `docs/**` runs `npm ci` → `npm run build` with
+`ASTRO_SITE=https://nestrs.dev` and `ASTRO_BASE=/`, so a page that breaks it is
+stopped before `main`; on `main` alone the `deploy` job hands the build to
+`deploy-pages`.
 
 The output is a plain static tree, so publishing it anywhere else is
 `npm ci && npm run build` from `docs/` and serving `docs/dist/` — set

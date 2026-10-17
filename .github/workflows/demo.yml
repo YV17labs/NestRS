@@ -1,0 +1,99 @@
+# The demo's checks — its lint, its suites in process and against Postgres,
+# Valkey and S3 — on every change to what its build or its services read: its
+# tree, the framework it builds on by path, the dev container files the
+# services start from. The demo is its own workspace with its own commands;
+# this runs them.
+
+name: Demo
+
+on:
+  push:
+    branches: [main, 'release/**']
+    paths: &tree
+      - 'demo/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'clippy.toml'
+      - '.cargo/**'
+      - '.github/actions/**'
+      - '.github/workflows/demo.yml'
+      - '.devcontainer/compose/**'
+      - '.devcontainer/config/**'
+      - '.devcontainer/scripts/**'
+      - '!**.md'
+      - 'demo/**/src/**'
+      - 'crates/**/src/**'
+  pull_request:
+    paths: *tree
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: demo-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: demo-lint
+          workspaces: |
+            . -> target
+            demo -> target
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: just@1
+      # `nestrs lint` is the CLI of this tree, not a released one.
+      - name: Build the nestrs CLI
+        run: |
+          cargo build --locked -p nest-rs-cli
+          echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
+      - run: just lint
+        working-directory: demo
+
+  test:
+    name: test (unit, integration, doctests, e2e)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    # The dev container's services, as the runner reaches them: on TLS alone,
+    # trusting through the system's store the authority the dev-services
+    # action issues into CERTS; the
+    # suites push on Redis database 1, as demo/.env.test sets it.
+    env:
+      CERTS: /tmp/nestrs-certs
+      NESTRS_SEAORM__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
+      NESTRS_REDIS__URL: rediss://localhost:6379/1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/dev-services
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: demo
+          workspaces: 'demo -> target'
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest@0.9,just@1
+      # One build: nextest compiles every suite whichever it runs.
+      - run: just test unit
+        working-directory: demo
+      - run: just test e2e
+        working-directory: demo

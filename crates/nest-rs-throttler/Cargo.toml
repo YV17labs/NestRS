@@ -10,40 +10,19 @@ description = "Rate limiting for NestRS: a ThrottlerGuard reading a #[meta(Throt
 keywords = ["framework", "nestrs", "rate-limit", "throttle", "middleware"]
 categories = ["web-programming"]
 
-# The three per-edge `check_*` entries — GraphQL, MCP, WS — are each behind
-# their edge's feature, and docs.rs builds default features only. Without this
-# the published page would show a guard that checks HTTP and nothing else, which
-# is the very claim this crate stopped making.
-[package.metadata.docs.rs]
-all-features = true
-
-[features]
-default = []
-# GraphQL surface: `Guard::check_graphql`, keyed on the field name. Forwards
-# `nest-rs-guards/graphql` because that feature is what makes the trait entry and
-# the `GraphqlGuard` marker exist at all.
-graphql = ["dep:nest-rs-graphql", "nest-rs-guards/graphql"]
-# MCP surface: `Guard::check_mcp`, keyed on the operation's kind and name.
-mcp = ["dep:nest-rs-mcp", "nest-rs-guards/mcp"]
-# WebSocket surface: `Guard::check_ws_message`, keyed on the event and the
-# connection. `serde_json` is the payload's type in that signature — the guard
-# never reads it (deciding access from a payload is a pipe's job, and one step
-# from deciding it *from* the payload), but the entry names the type.
-ws = ["dep:nest-rs-ws", "dep:serde_json", "nest-rs-guards/ws"]
-
 [dependencies]
 # `ThrottlerGuard` is `#[injectable]`; `ThrottlerModule` is a `DynamicModule`.
 nest-rs-core.workspace = true
+# `ThrottlerStoreError`, the error channel of `ThrottlerStore::hit`.
+thiserror.workspace = true
 # `ThrottlerModule` owns its `#[config]` (`ThrottlerConfig`, namespace `throttler`),
-# loaded from `NESTRS_THROTTLER__*`; `validator` backs the derives.
+# loaded from `<PREFIX>_THROTTLER__*`.
 nest-rs-config.workspace = true
-validator.workspace = true
 # `ThrottlerGuard` plugs into the Layer System (RateLimit category).
 nest-rs-guards.workspace = true
-# The guard implements the `Guard` trait and reads route metadata via `Reflector`,
-# both re-exported here.
+# The guard's HTTP entry reads the request through the edge's view: the client
+# address and the route the router matched.
 nest-rs-http.workspace = true
-poem.workspace = true
 async-trait.workspace = true
 # A `429` denial is a security event — logged at `warn` on the `nest_rs::throttler` target.
 tracing.workspace = true
@@ -52,35 +31,33 @@ parking_lot.workspace = true
 # `ThrottlerModule::for_root` provides the throttler through the factory phase,
 # whose error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
+# HMAC-SHA256 of each bucket's subject before a store outside the process sees
+# it — already in every build through rustls.
+aws-lc-rs.workspace = true
 
-# Optional — one per edge whose `check_*` entry names its operation type. An
-# HTTP-only app compiles none of them.
-nest-rs-graphql = { workspace = true, optional = true }
-nest-rs-mcp = { workspace = true, optional = true }
-nest-rs-ws = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Self dev-dependency: turn on every edge for this crate's own test targets,
-# the shape `nest-rs-authz` already uses. Without it `cargo nextest run
-# --workspace` builds this crate with `default = []`, so the three per-edge
-# suites would compile away and never run. Dev-deps do not propagate, so no
-# consumer gains an edge from this.
-nest-rs-throttler = { path = ".", features = ["graphql", "mcp", "ws"] }
+# The guard's unit tests hand it a request with a peer address, which only
+# poem's request carries until the HTTP edge moves onto its own vocabulary.
+poem.workspace = true
 # The wiring suite boots a real app: `#[routes]` wraps each verb in poem's own
 # `#[handler]`, and a rate-limited controller is the shape the docs describe.
-tokio = { workspace = true, features = ["macros", "rt"] }
-nest-rs-interceptors.workspace = true
+# `test-util` (not part of tokio's `full`) pauses time, so a store that never
+# answers is denied at `HIT_TIMEOUT` without the suite waiting those seconds out.
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # The scope half of the guard's contract is only observable in a status code:
 # `guard.rs` boots the documented global wiring and counts requests against a
-# route's own `#[meta(Throttle)]`. Path-only (intra-workspace dev-edge), per the
-# manifest rule.
-nest-rs-testing = { path = "../nest-rs-testing" }
-# The per-edge suites declare the real thing rather than calling `check_*` by
+# route's own `#[meta(Throttle)]`; `ws` drives a gateway over a real socket, the
+# one way to see a refused message's frame. Path-only (intra-workspace
+# dev-edge), per the manifest rule.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["ws"] }
+# The per-edge suites declare the real thing rather than calling a check by
 # hand: a `#[resolver]`, an `#[mcp]` host and a `#[gateway]`, each binding the
-# guard where a developer would. That is also the only witness the capability
-# markers have — an unattested binding is a compile error at the `#[use_guards]`
-# line. Path-only (intra-workspace dev-edge), per the manifest rule.
+# guard where a developer would and answering through each real transport. That
+# is also the only witness the guard's `GuardFor` declarations have — an
+# undeclared binding is a compile error at the `#[use_guards]` line.
+# Path-only (intra-workspace dev-edge), per the manifest rule.
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-ws = { path = "../nest-rs-ws" }

@@ -1,3 +1,5 @@
+pub const TARGET: &str = "features::chat";
+
 mod module;
 mod service;
 

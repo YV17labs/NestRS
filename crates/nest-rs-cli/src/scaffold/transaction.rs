@@ -27,11 +27,14 @@ enum Action {
     Edit {
         path: PathBuf,
         transform: Transform,
+        /// The edit writes a secret: the report shows each added assignment's
+        /// name, never its value.
+        secret: bool,
     },
 }
 
 #[derive(Debug, Default)]
-pub struct Report {
+pub(crate) struct Report {
     pub created: Vec<PathBuf>,
     pub modified: Vec<(PathBuf, Vec<String>)>,
     pub unchanged: Vec<PathBuf>,
@@ -39,17 +42,21 @@ pub struct Report {
 }
 
 #[derive(Default)]
-pub struct Scaffold {
+pub(crate) struct Scaffold {
     actions: Vec<Action>,
 }
 
 impl Scaffold {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Queue a brand-new file. Fails at `apply` time if it already exists.
-    pub fn create(&mut self, path: impl Into<PathBuf>, contents: impl Into<String>) -> &mut Self {
+    pub(crate) fn create(
+        &mut self,
+        path: impl Into<PathBuf>,
+        contents: impl Into<String>,
+    ) -> &mut Self {
         self.actions.push(Action::Create {
             path: path.into(),
             contents: contents.into(),
@@ -58,7 +65,7 @@ impl Scaffold {
     }
 
     /// Queue a file that is only written when absent (shared root files).
-    pub fn create_if_missing(
+    pub(crate) fn create_if_missing(
         &mut self,
         path: impl Into<PathBuf>,
         contents: impl Into<String>,
@@ -71,16 +78,32 @@ impl Scaffold {
     }
 
     /// Queue an idempotent edit on an existing file.
-    pub fn edit(&mut self, path: impl Into<PathBuf>, transform: Transform) -> &mut Self {
+    pub(crate) fn edit(&mut self, path: impl Into<PathBuf>, transform: Transform) -> &mut Self {
         self.actions.push(Action::Edit {
             path: path.into(),
             transform,
+            secret: false,
+        });
+        self
+    }
+
+    /// Queue an idempotent edit that adds a secret: the report prints each added
+    /// `KEY=value` as `KEY=<redacted>`, so a terminal or a CI log never holds it.
+    pub(crate) fn edit_secret(
+        &mut self,
+        path: impl Into<PathBuf>,
+        transform: Transform,
+    ) -> &mut Self {
+        self.actions.push(Action::Edit {
+            path: path.into(),
+            transform,
+            secret: true,
         });
         self
     }
 
     /// Validate everything, then commit (unless `dry_run`).
-    pub fn apply(self, dry_run: bool) -> CliResult<Report> {
+    pub(crate) fn apply(self, dry_run: bool) -> CliResult<Report> {
         // Phase 1 — validate creates up front so we fail before any write.
         for action in &self.actions {
             if let Action::Create { path, .. } = action
@@ -111,11 +134,18 @@ impl Scaffold {
                         planned.push(PlannedWrite { path, contents });
                     }
                 }
-                Action::Edit { path, transform } => {
+                Action::Edit {
+                    path,
+                    transform,
+                    secret,
+                } => {
                     let current = fs::read_to_string(&path).map_err(CliError::Io)?;
                     match transform(&current) {
                         Some(updated) => {
-                            let added = added_lines(&current, &updated);
+                            let mut added = added_lines(&current, &updated);
+                            if secret {
+                                added = added.into_iter().map(redact_assignment).collect();
+                            }
                             report.modified.push((path.clone(), added));
                             planned.push(PlannedWrite {
                                 path,
@@ -147,6 +177,14 @@ struct PlannedWrite {
     contents: String,
 }
 
+/// A `.env` assignment with its value withheld; a comment or any other line as is.
+fn redact_assignment(line: String) -> String {
+    match line.split_once('=') {
+        Some((name, _)) if !line.trim_start().starts_with('#') => format!("{name}=<redacted>"),
+        _ => line,
+    }
+}
+
 /// Lines present in `new` but not in `old` (used for the wiring diff).
 fn added_lines(old: &str, new: &str) -> Vec<String> {
     let old_lines: Vec<&str> = old.lines().collect();
@@ -159,17 +197,14 @@ fn added_lines(old: &str, new: &str) -> Vec<String> {
 impl Report {
     /// The tense to announce this report in — `verb("Created", "Would create")`.
     ///
-    /// Read off the report rather than off the caller's own `dry_run` flag,
-    /// because the two are one fact and only the commit knows it: a command
-    /// that got the flag right here and wrong there would print "Created"
-    /// directly above [`print`](Self::print)'s "Dry run — no files written.",
-    /// which reads as a bug in the tool.
-    pub fn verb(&self, past: &'static str, conditional: &'static str) -> &'static str {
+    /// Read off the report rather than the caller's `dry_run` flag: only the commit
+    /// knows which it was.
+    pub(crate) fn verb(&self, past: &'static str, conditional: &'static str) -> &'static str {
         if self.dry_run { conditional } else { past }
     }
 
     /// Print the human-facing summary (`+ created`, `~ modified` + diff).
-    pub fn print(&self, base: &Path) {
+    pub(crate) fn print(&self, base: &Path) {
         if self.dry_run {
             println!("Dry run — no files written.\n");
         }
@@ -185,7 +220,7 @@ impl Report {
     }
 
     /// Every `.rs` file the report touched — for best-effort formatting.
-    pub fn rust_files(&self) -> Vec<PathBuf> {
+    pub(crate) fn rust_files(&self) -> Vec<PathBuf> {
         self.created
             .iter()
             .chain(self.modified.iter().map(|(p, _)| p))
@@ -204,7 +239,7 @@ fn rel(path: &Path, base: &Path) -> String {
 
 /// Run `rustfmt` over the given files, best-effort: a missing or failing
 /// rustfmt never fails the command (the scaffold already wrote valid code).
-pub fn rustfmt(paths: &[PathBuf]) {
+pub(crate) fn rustfmt(paths: &[PathBuf]) {
     if paths.is_empty() {
         return;
     }
@@ -241,7 +276,6 @@ mod tests {
 
         let err = s.apply(false).unwrap_err();
         assert!(matches!(err, CliError::AlreadyExists(_)));
-        // nothing partially written
         assert!(!dir.path().join("new.txt").exists());
         assert_eq!(fs::read_to_string(&existing).unwrap(), "keep");
     }
@@ -254,6 +288,23 @@ mod tests {
         let report = s.apply(true).unwrap();
         assert_eq!(report.created.len(), 1);
         assert!(!dir.path().join("new.txt").exists());
+    }
+
+    #[test]
+    fn an_edit_holding_a_secret_reports_its_variable_and_never_its_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join(".env.local");
+        fs::write(&f, "APP_LOG=debug\n").unwrap();
+
+        let mut s = Scaffold::new();
+        s.edit_secret(
+            &f,
+            Box::new(|content: &str| Some(format!("{content}# a key\nAPP_KEY=s3cr3t\n"))),
+        );
+        let report = s.apply(true).unwrap();
+
+        let (_, added) = &report.modified[0];
+        assert_eq!(added, &["# a key", "APP_KEY=<redacted>"]);
     }
 
     #[test]

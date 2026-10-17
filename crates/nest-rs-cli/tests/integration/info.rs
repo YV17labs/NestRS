@@ -17,11 +17,8 @@ fn info_reports_the_workspace_the_cursor_stands_in() {
 
     assert!(stdout.contains("Layout:"), "{stdout}");
     assert!(stdout.contains("workspace"), "{stdout}");
-    // The project's name is the workspace directory's own — it appears nowhere
-    // below it, so this is the one place to read it from.
     let name = dir.path().file_name().unwrap().to_string_lossy();
     assert!(stdout.contains(name.as_ref()), "{stdout}");
-    // What the tree holds, and which app a generator would wire into.
     assert!(
         stdout.contains("Apps:") && stdout.contains("api"),
         "{stdout}"
@@ -31,14 +28,12 @@ fn info_reports_the_workspace_the_cursor_stands_in() {
         "{stdout}",
     );
     assert!(stdout.contains("Current app:"), "{stdout}");
-    // The environment the CLI and the app both read, plus the toolchain that
-    // will build it — the two answers that depend on the shell, not the tree.
     assert!(stdout.contains("Env prefix:"), "{stdout}");
     assert!(stdout.contains("Toolchain:"), "{stdout}");
 }
 
-/// A report worth pasting into an issue must not carry someone's home
-/// directory, so the root is reported as the climb from where the reader stands.
+/// The root is reported as the climb from where the reader stands, never an
+/// absolute path.
 #[test]
 fn info_reports_the_root_relatively_and_leaks_no_absolute_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -58,8 +53,7 @@ fn info_reports_the_root_relatively_and_leaks_no_absolute_path() {
     );
 }
 
-/// Running it in the wrong directory is a question, not an error: answering it
-/// with a non-zero exit would make `info` unusable as the first thing you type.
+/// Running it in the wrong directory is answered, not an error.
 #[test]
 fn info_says_so_plainly_outside_a_project() {
     let dir = tempfile::tempdir().unwrap();
@@ -70,9 +64,8 @@ fn info_says_so_plainly_outside_a_project() {
     assert!(stdout.contains("not inside a nestrs"), "{stdout}");
 }
 
-/// The two commands exist because they answer different questions: `about` is
-/// the framework and is identical on every machine; `info` is the tree in front
-/// of you. Neither may drift into the other, or one of them is redundant.
+/// `about` is the framework, identical on every machine; `info` is the tree in
+/// front of you.
 #[test]
 fn info_and_about_answer_different_questions() {
     let dir = tempfile::tempdir().unwrap();

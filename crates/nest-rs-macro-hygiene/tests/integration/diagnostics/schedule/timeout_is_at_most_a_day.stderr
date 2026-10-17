@@ -1,0 +1,5 @@
+error: #[every] `timeout` is at most `"24h"`: an attempt running past a day is a process of its own — split it into jobs that each end within one
+  --> tests/integration/diagnostics/schedule/timeout_is_at_most_a_day.rs:14:29
+   |
+14 |     #[every("1h", timeout = "25h")]
+   |                             ^^^^^

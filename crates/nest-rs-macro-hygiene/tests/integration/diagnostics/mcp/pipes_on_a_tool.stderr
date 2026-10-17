@@ -1,0 +1,5 @@
+error: `#[use_pipes]` is not taken on a `#[tools]` method: an MCP operation's arguments are decoded once per call — bind `Piped<P, T>` or `Valid<T>` inside `Parameters<…>`
+  --> tests/integration/diagnostics/mcp/pipes_on_a_tool.rs:15:5
+   |
+15 |     #[use_pipes(Trim)]
+   |     ^^^^^^^^^^^^^^^^^^

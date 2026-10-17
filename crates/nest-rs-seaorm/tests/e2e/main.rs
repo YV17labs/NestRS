@@ -1,20 +1,45 @@
-//! Postgres-backed tests for the database crate.
-//!
-//! Runs under `nestrs run test e2e`; gated out of `nestrs run test unit` by the
-//! `binary(e2e)` nextest filter.
-//!
+//! `nest-rs-seaorm`'s suite against the dev container's Postgres: every test
+//! here needs the database. What the decorators emit runs in process, in
+//! `tests/integration`.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod harness;
 
+mod atomic;
 mod create;
+mod database;
+mod error;
+mod executor;
 #[cfg(feature = "graphql")]
 mod graphql;
 mod interceptor;
 mod lazy;
 mod lifecycle_hooks;
+mod mcp;
+mod module;
+mod mutual_tls;
 mod public_visitor;
 mod relational_authz;
 mod scope;
+mod soft_delete;
 mod worker;
-#[cfg(feature = "ws")]
 mod ws;
+
+/// The principal the suite's authentication stand-ins attach: a caller with no
+/// identity of its own.
+#[derive(Clone, Debug, Default)]
+pub struct Anyone;
+
+impl nest_rs_core::AmbientValue for Anyone {}
+
+impl nest_rs_authn::PrincipalIdentity for Anyone {
+    fn actor_id(&self) -> Option<String> {
+        None
+    }
+}

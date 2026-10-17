@@ -1,57 +1,39 @@
 //! The grammar of a **declared mount path** — `#[controller(path = …)]`,
 //! `#[gateway(path = …)]`, `#[mcp(path = …)]`.
 //!
-//! One key, three host decorators, and until this module three answers: two
-//! took the literal through `require_str_lit` and checked nothing at all, while
-//! the third refused only the empty string. So `#[controller(path = "")]` and
-//! `#[controller(path = "a b")]` compiled, mounted, and were logged and
-//! documented under an address no client can name.
-//!
-//! **The sibling key in the same attribute list is what decides this.**
-//! `version` — declared beside `path` on `#[controller]` and `#[gateway]` — has
-//! a shared parser, a shared grammar, a shared bound and a wire-side pin test,
-//! and [`versioning`](crate::versioning) gives the reason: *"A version is
-//! spliced into a URL path and echoed into an `operationId`, so it is bounded
-//! on both sides of the wire… A declaration the framework accepts and its own
-//! wire half rejects is the worst place for the two to disagree."* A declared
-//! path is spliced into the same URL, at the same two decorators, and was
-//! bounded by nothing.
-//!
-//! **The grammar is RFC 3986 §3.3's, narrowed to what a mount can be.** A path
-//! is `path-absolute`: it begins with `/`, and every character after it is a
-//! `pchar` (unreserved / sub-delims / `:` / `@`) or a `/` separator — plus `{`
-//! and `}`, which are not `pchar` at all and are this framework's documented
-//! widening for a template segment (`/users/{id}`). Percent-encoding is
-//! deliberately **not** accepted: a mount path is written by the developer, not
-//! received from the wire, and `%2F` in a declaration is a request to mount an
-//! address the router will never match.
-//!
-//! **A leading `//` is the standard's own refusal; an interior one is ours.**
-//! §3.3 spells an absolute path `"/" [ segment-nz *( "/" segment ) ]`, so the
-//! first segment may not be empty — `//users` would parse as an authority, not
-//! a path. An *interior* or trailing empty segment the RFC permits, and this
-//! grammar still refuses it: two spellings of one address, of which the mount
-//! normalizes one, is an ambiguity a declaration has no reason to carry. That
-//! second half is the framework's narrowing and is stated as such rather than
-//! attributed to the standard.
+//! RFC 3986 §3.3 `path-absolute`, widened with `{`/`}` for a template segment
+//! and narrowed twice: no percent-encoding (`%2F` mounts an address the router
+//! never matches), and no interior empty segment, which the RFC permits. What
+//! is left is read with the route grammar ([`RoutePath`]).
 
 use syn::LitStr;
 
+use crate::route_path::RoutePath;
+
+/// What a declared mount path holds beyond literal text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MountPath {
+    /// A controller's: route parameters, since every route's template opens
+    /// with it, and no catch-all, since its routes follow it.
+    Prefix,
+    /// A gateway's or an MCP host's: literal text alone, since the surface is
+    /// mounted whole at one address.
+    Literal,
+}
+
 /// The longest declared mount path.
-///
-/// `pub(crate)` and not `pub`, unlike
-/// [`MAX_VERSION_LEN`](crate::versioning::MAX_VERSION_LEN) which it otherwise
-/// mirrors: that one is `pub` because `nest-rs-http` carries the wire half of
-/// the same grammar and a test pins the two together. A mount path has no wire
-/// half — the router matches what was mounted — so exporting this would be an
-/// API promising a symmetry that does not exist here.
 pub(crate) const MAX_PATH_LEN: usize = 256;
 
+impl MountPath {
+    /// Why `raw` is not a declared mount path of this kind — the clause after
+    /// a decorator's site — or `None` when it is one.
+    pub fn refusal(self, raw: &str) -> Option<String> {
+        violation(raw, self)
+    }
+}
+
 /// Why a declared mount path is not one, or `None` when it is.
-///
-/// Returns the *fact*, not a sentence: the caller owns the decorator's name and
-/// [`reject_path`] is what assembles the two.
-fn violation(raw: &str) -> Option<String> {
+fn violation(raw: &str, kind: MountPath) -> Option<String> {
     if raw.is_empty() {
         return Some("it is empty — drop the argument to take the default".to_owned());
     }
@@ -85,13 +67,28 @@ fn violation(raw: &str) -> Option<String> {
              template segment."
         ));
     }
-    None
+    // Before the grammar, whose remedy would be a template this path refuses.
+    if kind == MountPath::Literal && raw.contains(['{', '}', ':', '*']) {
+        return Some(LITERAL.to_owned());
+    }
+    match RoutePath::read(raw) {
+        Err(why) => Some(why),
+        Ok(route) if route.has_catch_all() => Some(
+            "it ends with a catch-all, and a controller's routes follow its path — declare \
+             `{*rest}` on a route"
+                .to_owned(),
+        ),
+        Ok(_) => None,
+    }
 }
 
-/// One character of a declared mount path: RFC 3986 `pchar`, the `/` separator,
-/// or this framework's `{`/`}` template braces.
-///
-/// Percent-encoding is excluded deliberately — see the module doc.
+/// Why a literal mount path holds no template syntax, worded as
+/// `nest_rs_http::RouteTemplate` words it for a path mounted at boot.
+const LITERAL: &str = "it is mounted at one literal address, so it holds no parameter, no brace, and no `:`, `*` \
+     or `<`";
+
+/// One character of a declared mount path: RFC 3986 `pchar` without
+/// percent-encoding, the `/` separator, or the `{`/`}` template braces.
 fn is_path_char(c: char) -> bool {
     matches!(c,
         // unreserved (RFC 3986 §2.3)
@@ -107,15 +104,14 @@ fn is_path_char(c: char) -> bool {
 
 /// Refuse a declared mount path that is not one, naming the decorator, the
 /// offending value and the fact from the standard that decides it.
-///
-/// Spanned at the literal, so the caret lands on the value rather than on the
-/// item — the span defect six of this repo's refusals shipped before their
-/// sentences were shared.
-pub fn reject_path(attr: &str, path: &LitStr) -> syn::Result<()> {
-    match violation(&path.value()) {
+pub fn reject_path(attr: &str, path: &LitStr, kind: MountPath) -> syn::Result<()> {
+    match violation(&path.value(), kind) {
         Some(why) => Err(syn::Error::new_spanned(
             path,
-            format!("#[{attr}] `path` is not a mount path: {why}"),
+            format!(
+                "{} is not a mount path: {why}",
+                crate::args::site(attr, Some("path"))
+            ),
         )),
         None => Ok(()),
     }
@@ -125,9 +121,6 @@ pub fn reject_path(attr: &str, path: &LitStr) -> syn::Result<()> {
 mod tests {
     use super::*;
 
-    /// Every mount path either workspace declares today, so the grammar is
-    /// derived from what the framework actually mounts rather than from a guess
-    /// about what it might.
     #[test]
     fn every_shape_the_repo_declares_is_accepted() {
         for raw in [
@@ -136,16 +129,18 @@ mod tests {
             "/.well-known",
             "/fund/drafts",
             "/ctx-bare",
-            "/users/{id}",
             "/ws/chat",
             "/mcp",
         ] {
-            assert!(
-                violation(raw).is_none(),
-                "rejected `{raw}`: {:?}",
-                violation(raw)
-            );
+            for kind in [MountPath::Prefix, MountPath::Literal] {
+                assert!(
+                    violation(raw, kind).is_none(),
+                    "rejected `{raw}`: {:?}",
+                    violation(raw, kind)
+                );
+            }
         }
+        assert!(violation("/orgs/{org}/members", MountPath::Prefix).is_none());
     }
 
     #[test]
@@ -156,15 +151,34 @@ mod tests {
             ("/a b", "not allowed"),
             ("//users", "empty segment"),
         ] {
-            let why = violation(raw).unwrap_or_else(|| panic!("accepted `{raw}`"));
+            let why =
+                violation(raw, MountPath::Prefix).unwrap_or_else(|| panic!("accepted `{raw}`"));
             assert!(why.contains(expect), "`{raw}` said: {why}");
         }
     }
 
-    /// A bound nothing reads is a bound that drifts.
     #[test]
     fn the_length_bound_is_enforced() {
         let long = format!("/{}", "a".repeat(MAX_PATH_LEN));
-        assert!(violation(&long).is_some_and(|why| why.contains("bounded")));
+        assert!(violation(&long, MountPath::Literal).is_some_and(|why| why.contains("bounded")));
+    }
+
+    #[test]
+    fn a_mount_path_reads_the_route_grammar() {
+        for (raw, kind, expect) in [
+            ("/orgs/:org", MountPath::Prefix, "write `/orgs/{org}`"),
+            ("/files/*rest", MountPath::Prefix, "write `/files/{*rest}`"),
+            ("/tools/:tenant", MountPath::Literal, "one literal address"),
+            (
+                "/files/{*rest}",
+                MountPath::Prefix,
+                "routes follow its path",
+            ),
+            ("/ws/{room}", MountPath::Literal, "one literal address"),
+            ("/ws/{{x}}", MountPath::Literal, "one literal address"),
+        ] {
+            let why = violation(raw, kind).unwrap_or_else(|| panic!("accepted `{raw}`"));
+            assert!(why.contains(expect), "`{raw}` said: {why}");
+        }
     }
 }

@@ -1,29 +1,12 @@
-//! One W3C trace, from the producer's process into the consumer's.
-//!
-//! Every other propagation in the framework crosses a *task*, and a task-local
-//! is enough. A queue crosses a **process**: the producer is an API pod, the
-//! consumer is a worker pod, and the only thing that reaches from one to the
-//! other is the payload. So the `traceparent` rides the wire envelope
-//! (`nest_rs_queue::envelope`), and this is where that is measured rather than
-//! asserted about.
-//!
-//! What it buys, concretely: "show me everything this request caused" answers
-//! across the enqueue boundary, with the job appearing **under** the enqueue in
-//! any conformant backend rather than merely beside it — and with no collector
-//! and no shared process required for the logs to say so.
-//!
-//! The in-process envelope tests cover the shape; only a live worker shows the
-//! context survives Redis, apalis and the dispatch.
+//! One W3C trace, from the producer's process into the consumer's: only a live
+//! worker shows the context survives Redis and the dispatch.
 
 use std::sync::Mutex;
 use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
-use nest_rs_queue::{JobProducerExt, processor, queue};
-use nest_rs_redis::{
-    RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker,
-    RedisWorkerModule,
-};
+use nest_rs_queue::{JobProducerExt, QueueModule, QueueWorker, processor, queue};
+use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer};
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 
@@ -36,16 +19,8 @@ struct Observed {
     actor_id: Option<String>,
 }
 
-/// What each job reported, keyed by the `seq` it carried.
-///
-/// A map rather than one slot, and the queue is the reason: its name is a
-/// compile-time literal, so every run of this test shares one Redis queue with
-/// every run before it — including runs that were killed mid-job and left work
-/// in `:active`. A single slot recorded whichever job the consumer happened to
-/// reach first, which on a dirty queue is a *previous* run's, carrying that
-/// run's trace and this run's actor (the literal is the same every time). The
-/// result was a failure that read exactly like a broken propagation and was
-/// not one.
+/// What each job reported, keyed by the `seq` it carried: every run shares one
+/// Redis queue, which a killed earlier run may have left jobs on.
 static SEEN: Mutex<Vec<(usize, Observed)>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,7 +56,7 @@ impl CorrelationProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, QueueModule::for_root(None)],
     providers = [CorrelationProcessor],
 )]
 struct CorrelationModule;
@@ -95,18 +70,18 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
         .expect("a worker boots against the dev container Redis");
     app.init().await.expect("init phases");
     let worker = app
-        .spawn_transport(RedisWorker::default())
+        .spawn_transport(QueueWorker::new())
         .await
         .expect("the queue worker transport starts");
 
     // Enqueue *under an ambient context*, the way an HTTP handler does. This id
     // is the one the consumer must end up running under.
     let conn = RedisQueueProducer::new(
-        RedisConnection::connect(&crate::redis_config().url)
+        RedisConnection::connect(&crate::redis_config())
             .await
             .expect("connect"),
     );
-    let correlation = nest_rs_core::Correlation::mint();
+    let correlation = nest_rs_core::Correlation::minted(None);
     // This run's own marker, so a job left behind by an earlier run cannot be
     // mistaken for it — see `SEEN`.
     let seq = std::time::SystemTime::now()
@@ -116,8 +91,8 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
     nest_rs_core::with_request_scope(None, correlation.clone(), async {
         // Exactly what an authenticated HTTP handler's guard did before it
         // reached the service that enqueues.
-        nest_rs_core::set_actor_id("alice-42");
-        conn.push_to::<CorrelationQueue>(TraceCommand { seq })
+        nest_rs_core::__private::set_actor_id("alice-42");
+        conn.push(CorrelationQueue, TraceCommand { seq }, None)
             .await
             .expect("enqueue");
     })

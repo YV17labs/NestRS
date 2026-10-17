@@ -1,13 +1,6 @@
-//! Keyed / multi-instance providers (`provide_keyed`) through the real
-//! `#[module]` / `#[injectable]` macros and the `App` boot path.
-//!
-//! Two facets are covered end to end:
-//! * a `#[inject(key = "…")]` dependency with no keyed provider fails the boot
-//!   with a `KeyedDependencyError` naming **both** the type and the key —
-//!   validated by the access graph like a bare dependency, but with a clean
-//!   boot error instead of a `get_keyed(...).expect(...)` panic;
-//! * a keyed provider seeded at the composition root satisfies the boot and
-//!   resolves, letting two instances of one concrete type coexist by key.
+//! Keyed providers (`provide_keyed`) through `#[module]` and the `App` boot: a
+//! missing keyed dependency fails the boot naming type and key, and a seeded
+//! one resolves.
 //!
 //! The link-time registry is shared across a test binary, so the graphs below
 //! use disjoint roots and types.
@@ -19,13 +12,11 @@ use nest_rs_core::{
     injectable, module,
 };
 
-/// The keyed provider type — registered imperatively via `provide_keyed`,
-/// never listed in a module's `providers = [...]`.
+/// Registered via `provide_keyed`, never listed in a module's `providers`.
 struct StubClient(&'static str);
 
-/// A lazily-built consumer (controller shape): `register` is a no-op, so the
-/// keyed dependency is validated by the access graph rather than resolved
-/// eagerly at register time.
+/// A lazily-built consumer (controller shape), so the keyed dependency is
+/// validated by the access graph rather than resolved at register time.
 struct KeyedConsumer;
 
 impl Discoverable for KeyedConsumer {

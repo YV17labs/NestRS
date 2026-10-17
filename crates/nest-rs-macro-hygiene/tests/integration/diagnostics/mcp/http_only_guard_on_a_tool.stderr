@@ -1,0 +1,23 @@
+error[E0277]: `HttpOnlyGuard` does not declare that it checks `McpView` units
+  --> tests/integration/diagnostics/mcp/http_only_guard_on_a_tool.rs:26:14
+   |
+26 | #[use_guards(HttpOnlyGuard)]
+   |              ^^^^^^^^^^^^^ bound at a site whose units are `McpView`
+   |
+   = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
+   = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<McpView> for HttpOnlyGuard {}`
+help: the trait `GuardFor<McpView>` is not implemented for `HttpOnlyGuard`
+      but trait `GuardFor<HttpView>` is implemented for it
+  --> tests/integration/diagnostics/mcp/http_only_guard_on_a_tool.rs:23:1
+   |
+23 | impl GuardFor<HttpView> for HttpOnlyGuard {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `HttpView`, found `McpView`
+note: required by a bound in `__nestrs_assert_guard_capability`
+  --> tests/integration/diagnostics/mcp/http_only_guard_on_a_tool.rs:25:1
+   |
+25 | #[mcp]
+   | ^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
+26 | #[use_guards(HttpOnlyGuard)]
+   |              ------------- required by a bound in this function
+   = note: this error originates in the attribute macro `mcp` (in Nightly builds, run with -Z macro-backtrace for more info)

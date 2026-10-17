@@ -1,0 +1,61 @@
+{
+	// ../devcontainer.json but for its name and its compose files.
+	"name": "nestrs — Valkey Cluster",
+	"dockerComposeFile": ["../compose/base.yml", "../compose/valkey-cluster.yml"],
+	"service": "dev",
+	"workspaceFolder": "/workspaces/nestrs",
+	"postCreateCommand": "bash .devcontainer/scripts/post-create.sh",
+	"postStartCommand": "bash .devcontainer/scripts/post-start.sh",
+	// Keep in sync with .vscode/extensions.json.
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer",
+				"vadimcn.vscode-lldb",
+				"fill-labs.dependi",
+				"tombi-toml.tombi",
+				"usernamehw.errorlens",
+				"ryanluker.vscode-coverage-gutters",
+				"nefrob.vscode-just-syntax",
+				"mtxr.sqltools",
+				"mtxr.sqltools-driver-pg",
+				"graphql.vscode-graphql-syntax",
+				"astro-build.astro-vscode",
+				"unifiedjs.vscode-mdx",
+				"bierner.markdown-mermaid",
+				"anthropic.claude-code"
+			]
+		}
+	},
+	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installZsh": true,
+			"configureZshAsDefaultShell": true,
+			"installOhMyZsh": true
+		}
+	},
+	"forwardPorts": [
+		3001,
+		3002,
+		3003,
+		3004,
+		4321
+	],
+	"portsAttributes": {
+		"3001": {
+			"label": "auth"
+		},
+		"3002": {
+			"label": "api"
+		},
+		"3003": {
+			"label": "assistant"
+		},
+		"3004": {
+			"label": "live"
+		},
+		"4321": {
+			"label": "docs"
+		}
+	}
+}

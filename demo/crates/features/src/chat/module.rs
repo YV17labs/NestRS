@@ -9,12 +9,16 @@ pub struct ChatModule;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs::core::{Container, Module};
+    use nest_rs::core::Container;
+    use nest_rs::ws::WsConfig;
     use std::sync::Arc;
 
     #[test]
     fn registers_chat_service() {
-        let container = ChatModule::register(Container::builder()).build();
+        let container = Container::builder()
+            .provide(WsConfig::default())
+            .import::<ChatModule>()
+            .build();
         let svc: Option<Arc<ChatService>> = container.get();
         assert!(svc.is_some());
     }

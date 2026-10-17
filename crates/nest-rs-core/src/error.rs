@@ -1,21 +1,12 @@
-//! Every error the boot can fail with, and nothing else.
-//!
-//! They are here rather than beside the pass that raises them because four of
-//! the nine are not the access graph's at all — `DuplicateProviderError`,
-//! `ContestedDeclarationError`, `UnresolvedFactoryError` and `FactoryCycleError`
-//! are constructed only in [`app`](crate::app), by the registration and factory
-//! phases. Filed under `access.rs` the file's name was a claim about all nine
-//! and false for four: from the type a reader derived the wrong file, and from
-//! the file they were offered errors its own pass never raises.
-//!
-//! This is the role table's own row — *domain error → `error.rs`* — and eleven
-//! `nest-rs-*` crates already carry one; the kernel was the outlier.
-//!
-//! What stays in [`access`](crate::access) is the graph vocabulary and the
-//! validators: the descriptors the `#[module]` macro submits, the reachability
-//! set, and the passes themselves.
+//! Every error the boot can fail with, and [`DecodeError`] — the one error the
+//! kernel lends every edge rather than raises.
 
+use std::borrow::Cow;
+
+use serde_json::error::Category;
 use thiserror::Error;
+
+use crate::container::ProviderScope;
 
 /// A provider depends on something its module does not import and that is not
 /// global infrastructure. Raised at boot by the access-graph validation.
@@ -38,12 +29,8 @@ pub struct AccessGraphError {
 }
 
 /// A provider depends on something **no module provides** — not global
-/// infrastructure, not in its import closure, not registered anywhere. Raised at
-/// boot so a lazily-built scoped/transient provider fails cleanly here instead
-/// of panicking at its first `get(...).expect(...)` resolution. An *eager*
-/// provider's missing dependency lands here too: the register phase defers it
-/// to this check rather than panicking ahead of it, so every wiring failure is
-/// one `Result`.
+/// infrastructure, not in its import closure, not registered anywhere. Raised
+/// at boot, for lazily- and eagerly-built providers alike.
 #[derive(Debug, Error)]
 #[error(
     "unmet dependency: `{consumer}` (in module `{module}`) depends on `{dependency}`, but no \
@@ -64,31 +51,9 @@ pub struct MissingDependencyError {
 /// singleton map — a `#[injectable(scope = request)]` or `scope = transient`
 /// provider.
 ///
-/// Raised at boot because the container cannot honour it and, before this error,
-/// did not say so: the register phase gates readiness on the singleton map, so
-/// such a provider never became ready, was classified unprovided, and was
-/// **dropped** — with everything downstream of it — while the boot returned
-/// `Ok` and emitted nothing. The symptom surfaced far away, as a service
-/// missing at its first `Container::get`, or as an inert-host `warn` offering
-/// five causes none of which was this one.
-///
-/// **The remedy names the concept, never the edge crates**, and that is the
-/// same law [`target`](crate::target) and [`operation_log`](crate::operation_log)
-/// state for themselves: the kernel holds no name for a concern it does not know
-/// exists. It listed three `Scoped<T>` paths for one round — `nest_rs_http`,
-/// `nest_rs_graphql`, `nest_rs_mcp` — copied from a prose list in
-/// `framework.md` that was itself three of four, so a developer who hit this on
-/// a WS gateway was handed three paths none of which was theirs while
-/// `nest_rs_ws::Scoped<T>` existed. Nothing compiles against a message, so the
-/// fourth would never have been added; every future edge would have inherited
-/// the same wrong remedy.
-///
-/// **The reason is worded per arm, because the two arms are not the same fact.**
-/// A request-scoped provider genuinely has no instance outside a request. A
-/// transient one does — `Container::get` opens a throwaway scope and builds it
-/// ([`Discoverable`](crate::Discoverable)'s own table says so). What is true of
-/// both, and is what this check reads, is that neither is ever in the singleton
-/// map the register phase gates readiness on.
+/// Neither is ever placed in the singleton map the register phase gates
+/// readiness on, so the singleton could never be built. The remedy names the
+/// concept (`Scoped<T>`), never an edge crate: the kernel knows none.
 #[derive(Debug, Error)]
 #[error(
     "scope violation: `{consumer}` (in module `{module}`) is a singleton and injects \
@@ -110,9 +75,8 @@ pub struct ScopeViolationError {
 /// The failure modes of the bare (non-keyed) access-graph pass: a cross-module
 /// reach that no import covers, or a dependency no module provides.
 ///
-/// `pub(crate)`, unlike every other error here, and [`into_anyhow`](Self::into_anyhow) is why: the
-/// wrapper is discarded before a boot failure leaves the crate, so no public
-/// signature can hand a caller one and nothing could downcast to it.
+/// `pub(crate)`: [`into_anyhow`](Self::into_anyhow) discards it before a boot
+/// failure leaves the crate.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub(crate) enum AccessError {
@@ -129,11 +93,8 @@ pub(crate) enum AccessError {
 
 impl AccessError {
     /// Flatten into an `anyhow::Error` carrying the **concrete** inner error,
-    /// discarding the enum wrapper, so a boot failure downcasts to
-    /// `AccessGraphError` / `MissingDependencyError` directly — the wrapper is an
-    /// internal detail of the pass, not part of the boot-error contract.
-    /// `anyhow::Error::new` (over the concrete type) is what preserves the
-    /// downcast; boxing to `dyn Error` first would lose it.
+    /// so a boot failure downcasts to it directly; boxing to `dyn Error` first
+    /// would lose the downcast.
     pub(crate) fn into_anyhow(self) -> anyhow::Error {
         match self {
             AccessError::CrossModule(e) => anyhow::Error::new(e),
@@ -143,41 +104,62 @@ impl AccessError {
     }
 }
 
-/// A concrete or keyed provider was registered more than once — two modules,
-/// or a seed and a module, providing the same type. Raised at boot rather than
-/// silently last-write-wins, uniform with every other wiring error.
-/// Trait-object bindings (`provide_dyn`) and the test override path are exempt
-/// (they are the *intended* replacement mechanisms).
+/// A type registered twice — a concrete type or a trait object, under any two
+/// scopes; names both registrations and, when they differ, their scopes. A
+/// test override is never one of the two: what would register its type stands
+/// down for it.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 #[error(
-    "duplicate provider: `{type_name}` is registered more than once. Two modules (or a seed and a \
-     module) provide the same type — remove the redundant registration, or expose it as a \
-     `dyn Trait` binding if a deliberate override was intended."
+    "duplicate provider: `{type_name}` is registered by {first} and again by {second}{} — one \
+     type has one provider: remove one registration; a test replaces a provider with \
+     `override_value`, `override_arc` or `override_dyn`",
+    scopes_clause(*.scopes)
 )]
 pub struct DuplicateProviderError {
-    /// The type registered more than once.
+    /// The type registered twice.
     pub type_name: &'static str,
+    /// The registration made first: an import site, a seed, or a factory and
+    /// the site that queued it.
+    pub first: String,
+    /// The registration that repeated it, the same way.
+    pub second: String,
+    /// The two scopes, first then second, when they differ.
+    pub scopes: Option<(ProviderScope, ProviderScope)>,
+}
+
+/// ` (first as a singleton, then request-scoped)` when two registrations hold
+/// one type under two scopes; nothing otherwise.
+fn scopes_clause(scopes: Option<(ProviderScope, ProviderScope)>) -> String {
+    match scopes {
+        Some((first, second)) => format!(
+            " (first {}, then {})",
+            first.as_registered(),
+            second.as_registered()
+        ),
+        None => String::new(),
+    }
 }
 
 /// Two import sites each *declared* a value for the same type, and one of them
 /// would have to lose. Raised by `AppBuilder::build` before any factory runs.
 ///
-/// The framework refuses to pick because both call sites are deliberate: the
-/// container resolves an ordinary collision by keeping the first factory
-/// queued, which would make the surviving value a function of `imports = [..]`
-/// order — silently dropped, on the wrong side of *no silent failure*. Only a
-/// **declaration** contests (`ContainerBuilder::provide_declared_factory`): a
-/// pinned config base, or a module binding an implementation a sibling module
-/// also binds. A module queuing the same default twice never does, so a diamond
-/// import stays legal.
-///
-/// `remedy` comes from the declaring call site, which is the only place that
-/// knows what the two sites were.
+/// Only a **declaration** contests (`ContainerBuilder::provide_declared_factory`,
+/// or the trait object a `provide_factory_dyn` binds); the same default or
+/// binding queued twice never does, so a diamond import stays legal. Both
+/// declarations are named by their import site; `remedy` comes from the
+/// declaring seam.
 #[derive(Debug, Error)]
-#[error("contested declaration: `{type_name}` is declared by two import sites. {remedy}")]
+#[error(
+    "contested declaration: `{type_name}` is declared twice — by {first}, and by {second}. {remedy}"
+)]
 pub struct ContestedDeclarationError {
     /// The type declared more than once.
     pub type_name: &'static str,
+    /// The declaration made first, as the import that made it.
+    pub first: String,
+    /// The declaration that contested it, the same way.
+    pub second: String,
     /// What the reader should do instead, supplied by the declaring seam.
     pub remedy: &'static str,
 }
@@ -185,10 +167,7 @@ pub struct ContestedDeclarationError {
 /// A module queued an async factory, but the boot went through the synchronous
 /// [`App::new`](crate::App::new), which has no factory phase to drain it.
 ///
-/// The value would simply never exist: a `Module::for_root(cfg)` whose config
-/// resolves to nothing, a pool nobody opened. Injecting it fails the access
-/// graph, but reading it through `Container::get` would just return `None` —
-/// so the boot refuses instead of leaving the hole open.
+/// The value would never exist, and `Container::get` would return `None` for it.
 #[derive(Debug, Error)]
 #[error(
     "`{type_name}` is provided by an async factory, which the synchronous `App::new` never runs. \
@@ -202,9 +181,7 @@ pub struct UnresolvedFactoryError {
 
 /// Every factory left in the queue waits on a factory output still in it — one
 /// another's, or its own — so none can run first: a cycle in the `*_after`
-/// declarations. Raised by `AppBuilder::build` instead of running them in queue
-/// order, which would hand one of them a snapshot missing what it declared it
-/// reads.
+/// declarations.
 #[derive(Debug, Error)]
 #[error(
     "factory cycle: {type_names:?} — each waits on a factory output that a member \
@@ -216,13 +193,291 @@ pub struct FactoryCycleError {
     pub type_names: Vec<&'static str>,
 }
 
+/// A factory failed, so the boot ends before any provider is built from it:
+/// named by the type it would have built, its cause the factory's own error.
+#[derive(Debug, Error)]
+#[error("the factory for `{type_name}` failed")]
+pub struct FactoryFailedError {
+    /// The type the factory would have built.
+    pub type_name: &'static str,
+    /// What the factory failed with.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+/// A stop was asked while the boot waited on one of its steps: the step was
+/// dropped where it waited, and the app never served.
+#[derive(Debug, Error)]
+#[error("the boot was stopped by {cause:?} during {step}")]
+pub struct BootInterruptedError {
+    /// Why the app stops.
+    pub cause: crate::StopCause,
+    /// The step the stop interrupted.
+    pub step: crate::BootStep,
+}
+
+/// A transport states a stop past [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND) —
+/// [`Duration::MAX`](std::time::Duration::MAX) among them —, refused at the
+/// boot before any init hook runs: the kernel holds every transport to its
+/// bound.
+#[derive(Debug, Error)]
+#[error(
+    "transport `{transport}` states a stop bound of {stop_bound_ms} ms, past the one-day \
+     ceiling: a transport's stop is bounded: declare its drain window"
+)]
+pub struct UnboundedTransportError {
+    /// The transport, as its module names it.
+    pub transport: &'static str,
+    /// The bound it states, in milliseconds, saturated at `u64::MAX`.
+    pub stop_bound_ms: u64,
+}
+
+/// The app's init phases failed, were interrupted, or were dropped before they
+/// finished, on an earlier call: they do not run again, so neither
+/// [`App::init`](crate::App::init) nor [`App::run`](crate::App::run) proceeds.
+#[derive(Debug, Error)]
+#[error("the app's init failed earlier: it does not run again")]
+pub struct InitFailedError;
+
+/// A module queued an async factory during the register phase, once the
+/// collect phase had ended, so no boot drains it. A default whose output is
+/// already present is discarded instead; a declaration is refused all the same.
+///
+/// The usual cause is a module or [`DynamicModule`](crate::DynamicModule)
+/// importing another in its `register` alone: that module is collected there,
+/// and refused before its `register` runs.
+#[derive(Debug, Error)]
+#[error(
+    "`{type_name}` is provided by an async factory queued during the register phase, which no \
+     boot drains. Queue it in `collect` — a module imported in its importer's `register` alone \
+     collects there, so import it through `ContainerBuilder::import` in that importer's \
+     `collect` too."
+)]
+pub struct LateFactoryError {
+    /// The type whose factory was queued too late to run.
+    pub type_name: &'static str,
+}
+
+/// A module was imported in a collect phase and in no register phase, so none
+/// of its providers registered. The cause is a module or
+/// [`DynamicModule`](crate::DynamicModule) importing it in its `collect` alone.
+#[derive(Debug, Error)]
+#[error(
+    "`{module}` was imported in a collect phase alone, so none of its providers registered: \
+     import it through `ContainerBuilder::import` in its importer's `register` too."
+)]
+pub struct UnregisteredModuleError {
+    /// The module imported in a collect phase alone.
+    pub module: &'static str,
+}
+
+/// A `#[module]`'s dynamic import reached the register phase with no value its
+/// collect phase built — only a hand call of the expansion's internal seam.
+#[derive(Debug, Error)]
+#[error(
+    "{site} reached the register phase with no value its module's collect built — the import's \
+     two phases ran apart, which only a hand call of `#[module]`'s internal seam does"
+)]
+pub(crate) struct UncollectedImportError {
+    /// The import, as a boot error names its site.
+    pub(crate) site: String,
+}
+
+/// Providers waiting on each other, so none can be built first: singletons of
+/// one module, refused by the register phase that cannot order them, or
+/// request-scoped and transient providers, refused at the seal before a
+/// request would resolve them.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "module `{module}`: {} provider cycle {} — {CYCLE_REMEDY}",
+    .scope.as_adjective(),
+    arrow_chain(.chain)
+)]
+pub struct ProviderCycleError {
+    /// The module of the chain's first provider.
+    pub module: &'static str,
+    /// The scope of the chain's first provider.
+    pub scope: ProviderScope,
+    /// The providers in the order each waits on the next, the first repeated
+    /// last: `["A", "B", "A"]`.
+    pub chain: Vec<&'static str>,
+}
+
+/// The edit every provider cycle has, whichever scope and wherever it is
+/// caught.
+pub(crate) const CYCLE_REMEDY: &str = "break it by moving what both need into a third provider \
+     both inject, by passing the value as a method argument, or by publishing an event one side \
+     listens to";
+
+/// What a resolution that closes a cycle among providers registered by hand —
+/// which no descriptor shows the boot — panics with.
+pub(crate) fn cycle_panic_message(scope: ProviderScope, chain: &str) -> String {
+    format!(
+        "{} provider cycle: {chain} — {CYCLE_REMEDY}",
+        scope.as_adjective()
+    )
+}
+
+/// `` `A` → `B` → `A` ``.
+fn arrow_chain(chain: &[&str]) -> String {
+    let quoted: Vec<String> = chain.iter().map(|name| format!("`{name}`")).collect();
+    quoted.join(" → ")
+}
+
+/// A provider a `#[module]` lists that the register phase never built: what it
+/// injects was not registered yet when its module's providers were built.
+/// Raised once the access graph passes, which names a missing dependency's
+/// owner more precisely.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "module `{module}`: `{provider}` was never built — it needs {}, which nothing had registered \
+     when `{module}`'s providers were built; {}",
+    and_list(.missing),
+    unbuilt_clause(.cause, .module, .missing.len())
+)]
+pub struct UnbuiltProviderError {
+    /// The module listing the provider.
+    pub module: &'static str,
+    /// The provider never built.
+    pub provider: &'static str,
+    /// What it injects that was absent when it would have been built.
+    pub missing: Vec<&'static str>,
+    /// Why it was absent.
+    pub cause: UnbuiltCause,
+}
+
+/// Why a dependency was absent when its consumer's module built its providers,
+/// though the same boot registered it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnbuiltCause {
+    /// The modules of an import cycle, the consumer's first: one of them
+    /// registers before the other's providers exist.
+    ImportCycle(Vec<&'static str>),
+    /// Registered later in the boot, by a hand-written module or a `for_root`
+    /// the consumer's module does not import.
+    RegisteredLater,
+}
+
+/// A provider built without an optional dependency the same boot registered
+/// afterwards: it would run as if the capability were absent. Raised once the
+/// access graph passes.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "module `{module}`: `{provider}` was built without its optional `{dependency}`, registered \
+     only afterwards, so it would run as if the capability were absent; {}",
+    unbuilt_clause(.cause, .module, 1)
+)]
+pub struct LateOptionalDependencyError {
+    /// The module listing the provider.
+    pub module: &'static str,
+    /// The provider built without it.
+    pub provider: &'static str,
+    /// The optional dependency registered after the provider was built.
+    pub dependency: &'static str,
+    /// Why it was absent then.
+    pub cause: UnbuiltCause,
+}
+
+/// What an [`UnbuiltCause`] says of `count` dependencies of a provider in
+/// `module`: the cause, then its edit.
+fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
+    match cause {
+        UnbuiltCause::ImportCycle(modules) if modules.len() == 2 => format!(
+            "{} import each other, so one registers before the other's providers exist: move \
+             what both need into a module both import",
+            and_list(modules)
+        ),
+        UnbuiltCause::ImportCycle(modules) => format!(
+            "{} import each other in a cycle, so one registers before another's providers \
+             exist: move what they need into a module they all import",
+            and_list(modules)
+        ),
+        UnbuiltCause::RegisteredLater => format!(
+            "a hand-written module or a `for_root` outside `{module}`'s imports registers {} \
+             later: import that module in `{module}`'s `imports`",
+            if count == 1 { "it" } else { "them" }
+        ),
+    }
+}
+
+/// A test override nothing in the app's graph would register: no module lists
+/// a provider the container holds under that type, and no factory or seed
+/// makes it, so the double would never be read. Raised once the register phase
+/// ends.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "the test overrides `{type_name}`, which nothing in this app's graph provides — no module \
+     lists it, and no factory or seed makes it — so the double would never be read: override \
+     the type the app registers (for a `Foo as dyn Trait` binding, `override_dyn::<dyn Trait>`)"
+)]
+pub struct UnclaimedOverrideError {
+    /// The overridden type.
+    pub type_name: &'static str,
+}
+
+/// A provider injects a key a test override removed: the override stands in
+/// for a whole provider through one of its keys, so the provider is never
+/// built and its other keys are absent. Raised once the access graph passes.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "unmet dependency: `{consumer}` (in module `{module}`) injects `{dependency}`, which the \
+     test removed with its provider — `{provider}` is overridden through `{through}`: override \
+     the key this consumer injects"
+)]
+pub struct OverriddenDependencyError {
+    /// The module listing the consumer.
+    pub module: &'static str,
+    /// The provider injecting the removed key.
+    pub consumer: &'static str,
+    /// The removed key, as the consumer labels it.
+    pub dependency: &'static str,
+    /// The overridden provider, by its own type.
+    pub provider: &'static str,
+    /// The key the test overrode it through.
+    pub through: &'static str,
+}
+
+/// `` `A` ``, `` `A` and `B` ``, `` `A`, `B` and `C` ``.
+fn and_list(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => format!("`{only}`"),
+        [init @ .., last] => {
+            let init: Vec<String> = init.iter().map(|name| format!("`{name}`")).collect();
+            format!("{} and `{last}`", init.join(", "))
+        }
+    }
+}
+
+/// A resource's [`Budget`](crate::Budget) at or past the [`Net`](crate::Net) of
+/// a port that waits on it: the port would cut a call the resource was still
+/// answering, replacing its cause with a bare timeout.
+#[derive(Debug, Error)]
+#[error(
+    "{resource}'s budget ({budget:?}) must be shorter than {port}'s net ({net:?}), which would \
+     otherwise give up on a call still answering and lose its cause: lower {setting}"
+)]
+pub struct BudgetPastNetError {
+    /// The resource, as a sentence names it.
+    pub resource: &'static str,
+    /// What the resource waits, at most, for one answer.
+    pub budget: std::time::Duration,
+    /// The port whose net reaches the resource, as a sentence names it.
+    pub port: &'static str,
+    /// What the port waits before it gives up.
+    pub net: std::time::Duration,
+    /// What lowers the budget: the variable, and the field that pins it in code.
+    pub setting: String,
+}
+
 /// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider
-/// registered as global infrastructure (a seed or a factory output). Raised at
-/// boot by the keyed pass of the access-graph validation. Unlike a bare
-/// dependency — deferred to the register-phase fixpoint when genuinely missing —
-/// a keyed dependency is validated here so the failure is a clean boot error
-/// naming **both** the type and the key, not a `get_keyed(...).expect(...)`
-/// panic during construction.
+/// registered as global infrastructure (a seed or a factory output).
 #[derive(Debug, Error)]
 #[error(
     "keyed dependency unreachable: `{consumer}` (in module `{module}`) injects `{type_name}` \
@@ -239,4 +494,945 @@ pub struct KeyedDependencyError {
     pub type_name: &'static str,
     /// The requested key — named alongside the type so both appear in the error.
     pub key: &'static str,
+}
+
+/// A wiring a module attaches at the kernel's wiring step failed: the boot ends
+/// before any transport is built or any lifecycle hook runs, its cause the
+/// wiring's own error.
+#[derive(Debug, Error)]
+#[error("the `{registry}` wiring failed")]
+pub struct WiringFailedError {
+    /// The registry the wiring fills, as its module names it.
+    pub registry: &'static str,
+    /// What the wiring failed with.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+/// A layer declared on a site — a route, a gateway's upgrade or message, an
+/// operation — whose provider no imported module registers, so the site would
+/// otherwise run without it.
+#[derive(Debug, Error)]
+#[error(
+    "`{layer}` is declared on `{site}`, and no imported module provides it — import the module \
+     that provides it"
+)]
+pub struct UnresolvedLayerError {
+    /// The layer type, as declared.
+    pub layer: &'static str,
+    /// The site declaring it, as its boot log names it.
+    pub site: String,
+}
+
+/// A payload that did not decode, as every edge reports it: the category of the
+/// failure, the line and column when the payload was text, the kind of value
+/// found and the type expected — never the value.
+///
+/// serde's own sentences quote the payload (``invalid type: string
+/// "sk_live_…", expected u64``), so the sentence is rebuilt from the shapes
+/// serde words; any other — a type's own `custom` message — is reported by its
+/// category alone. A key or variant the payload spelled is dropped like a
+/// value, and what is kept is bounded ([`MAX_LEN`](Self::MAX_LEN)).
+///
+/// Built with `DecodeError::from(&error)` from serde_json's error or serde's
+/// [`value::Error`](serde::de::value::Error) (`serde_urlencoded`); a text
+/// already rendered from an error goes through [`redact`](Self::redact).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{sentence}")]
+pub struct DecodeError {
+    sentence: String,
+}
+
+impl DecodeError {
+    /// The longest a report runs before its position, in bytes; past it the
+    /// sentence is cut at a character boundary and ends in `…`.
+    pub const MAX_LEN: usize = 512;
+
+    /// The report of `error`, without the value it quoted.
+    pub fn new(error: &serde_json::Error) -> Self {
+        let rendered = error.to_string();
+        let position = (error.line() > 0)
+            .then(|| format!(" at line {} column {}", error.line(), error.column()));
+        let message = position
+            .as_deref()
+            .and_then(|position| rendered.strip_suffix(position))
+            .unwrap_or(&rendered);
+        let sentence = match error.classify() {
+            Category::Data => data(message),
+            // One fixed sentence per fault, naming no byte of the input.
+            Category::Syntax | Category::Eof | Category::Io => message.to_owned(),
+        };
+        let mut sentence = bounded(&sentence).into_owned();
+        if let Some(position) = position {
+            sentence.push_str(&position);
+        }
+        Self { sentence }
+    }
+
+    /// The report of the first decode failure in `error`'s chain, `error`
+    /// itself first, down to an opaque failure's cause: what an edge answers
+    /// for a failure it reads as one.
+    ///
+    /// ```
+    /// use nest_rs_core::DecodeError;
+    ///
+    /// #[derive(Debug, thiserror::Error)]
+    /// #[error("the stored profile is unreadable")]
+    /// struct Unreadable(#[source] serde_json::Error);
+    ///
+    /// let failure = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+    /// let report = DecodeError::in_chain(&Unreadable(failure)).expect("a decode failure in the chain");
+    /// assert_eq!(report.to_string(), "invalid type: a string, expected u64 at line 1 column 16");
+    /// ```
+    pub fn in_chain(error: &(dyn std::error::Error + 'static)) -> Option<Self> {
+        crate::error_message::__private::answerable_links(error).find_map(Self::of)
+    }
+
+    /// `link` as the report it is, when it is a decode failure — serde_json's
+    /// error, or serde's own value error.
+    pub(crate) fn of(link: &(dyn std::error::Error + 'static)) -> Option<Self> {
+        if let Some(error) = link.downcast_ref::<serde_json::Error>() {
+            return Some(Self::new(error));
+        }
+        link.downcast_ref::<serde::de::value::Error>()
+            .map(Self::from)
+    }
+
+    /// `text` said without the values a decode failure quotes in it — a reply's
+    /// detail, a frame, any sentence rendered from an error before the edge that
+    /// reports it held it.
+    ///
+    /// Each decode failure in `error`'s chain is replaced by its report wherever
+    /// `text` spells it, and each link a [`SafeLink`](crate::SafeLink) claims by
+    /// what its driver says of it; then any sentence still in one of serde's
+    /// quoting shapes (`invalid type:`, `invalid value:`, ``unknown variant ` ``,
+    /// ``unknown field ` ``) is rebuilt without its value, from there to the
+    /// end of `text`. Each `validator` `Validation error: <code> [<params>]` is
+    /// said as `Validation error: <code>`.
+    ///
+    /// Borrowed when nothing in `text` was a decode, validation or claimed
+    /// failure's.
+    pub fn redact<'t>(
+        text: &'t str,
+        error: Option<&(dyn std::error::Error + 'static)>,
+    ) -> Cow<'t, str> {
+        Redactions::of(error).redact(text)
+    }
+}
+
+impl From<serde_json::Error> for DecodeError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::new(&error)
+    }
+}
+
+impl From<&serde_json::Error> for DecodeError {
+    fn from(error: &serde_json::Error) -> Self {
+        Self::new(error)
+    }
+}
+
+/// serde's own error for a value read through `IntoDeserializer`
+/// (`serde_urlencoded`): always a data error, with no position.
+impl From<&serde::de::value::Error> for DecodeError {
+    fn from(error: &serde::de::value::Error) -> Self {
+        Self {
+            sentence: bounded(&data(&error.to_string())).into_owned(),
+        }
+    }
+}
+
+impl From<serde::de::value::Error> for DecodeError {
+    fn from(error: serde::de::value::Error) -> Self {
+        Self::from(&error)
+    }
+}
+
+/// The links of an error's chain that quote a value, each as the text it
+/// displays and the sentence it is said as: a decode failure as its report, a
+/// link a [`SafeLink`](crate::SafeLink) claims as its driver says it.
+pub(crate) struct Redactions(Vec<(String, String)>);
+
+impl Redactions {
+    /// Every link of `error`'s chain that says something its safe sentence does
+    /// not, down to the first link a driver claims: what is below it is that
+    /// driver's to say.
+    pub(crate) fn of(error: Option<&(dyn std::error::Error + 'static)>) -> Self {
+        let mut pairs = Vec::new();
+        let mut link = error;
+        while let Some(current) = link {
+            let claimed = crate::SafeLink::said(current);
+            link = if claimed.is_some() {
+                None
+            } else {
+                current.source()
+            };
+            let safe = claimed.or_else(|| DecodeError::of(current).map(|report| report.sentence));
+            if let Some(said) = safe {
+                let displayed = current.to_string();
+                if !displayed.is_empty() && displayed != said {
+                    pairs.push((displayed, said));
+                }
+            }
+        }
+        Self(pairs)
+    }
+
+    /// `text`, with each link it spells said as its safe sentence, and any
+    /// sentence left in serde's quoting shapes rebuilt without its value.
+    pub(crate) fn redact<'t>(&self, text: &'t str) -> Cow<'t, str> {
+        let mut text = Cow::Borrowed(text);
+        for (displayed, said) in &self.0 {
+            if text.contains(displayed.as_str()) {
+                text = Cow::Owned(text.replace(displayed.as_str(), said));
+            }
+        }
+        // validator's wording first: a value it lists may spell what serde's
+        // shapes look for, and serde's reading keeps what follows them.
+        let validated = match validation_sentences(&text) {
+            Cow::Owned(validated) => Some(validated),
+            Cow::Borrowed(_) => None,
+        };
+        let text = validated.map_or(text, Cow::Owned);
+        let rebuilt = match quoting_sentences(&text) {
+            Cow::Owned(rebuilt) => Some(rebuilt),
+            Cow::Borrowed(_) => None,
+        };
+        rebuilt.map_or(text, Cow::Owned)
+    }
+}
+
+/// `text` within [`DecodeError::MAX_LEN`] bytes, cut at a character boundary,
+/// and whether it was cut.
+fn within_bound(text: &str) -> (&str, bool) {
+    if text.len() <= DecodeError::MAX_LEN {
+        return (text, false);
+    }
+    let mut end = DecodeError::MAX_LEN;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
+}
+
+/// `text` within [`DecodeError::MAX_LEN`] bytes, ending in `…` when it was cut.
+fn bounded(text: &str) -> Cow<'_, str> {
+    match within_bound(text) {
+        (kept, true) => Cow::Owned(format!("{kept}…")),
+        (kept, false) => Cow::Borrowed(kept),
+    }
+}
+
+/// What a data error — a value that is valid JSON and not the type — is reported
+/// as, rebuilt from the shapes serde words.
+fn data(message: &str) -> String {
+    if let Some(rebuilt) = quoting(message) {
+        return rebuilt;
+    }
+    // Sentences naming a count, or a field of the type's own, and nothing the
+    // payload holds as a value. `missing field` and `duplicate field` name a
+    // field the derive spelled (`&'static str`); `unknown field` names the
+    // payload's key, and is a quoting shape above.
+    const KEPT: [&str; 5] = [
+        "invalid length ",
+        "missing field `",
+        "duplicate field `",
+        "data did not match any variant of untagged enum ",
+        "no variant of enum ",
+    ];
+    if KEPT.iter().any(|kept| message.starts_with(kept)) {
+        return message.to_owned();
+    }
+    "a value its type does not accept".to_owned()
+}
+
+/// A sentence in one of serde's quoting shapes, rebuilt without what the payload
+/// spelled; `None` for any other.
+fn quoting(sentence: &str) -> Option<String> {
+    if let Some(rest) = sentence.strip_prefix("invalid type: ") {
+        return Some(found("invalid type", rest));
+    }
+    if let Some(rest) = sentence.strip_prefix("invalid value: ") {
+        return Some(found("invalid value", rest));
+    }
+    // The variant and the key are spelled by whoever wrote the payload; the list
+    // the type expected is the type's.
+    if let Some(rest) = sentence.strip_prefix("unknown variant ") {
+        return Some(unknown("unknown variant", rest, ", there are no variants"));
+    }
+    if let Some(rest) = sentence.strip_prefix("unknown field ") {
+        return Some(unknown("unknown field", rest, ", there are no fields"));
+    }
+    None
+}
+
+/// The kinds serde's `Unexpected` quotes a value after, and what each is said as
+/// — a string's opening quote also as `Debug` escapes it, which is how a wrapper
+/// formatting its cause with `{:?}` spells it.
+const QUOTING_KINDS: [(&str, &str); 6] = [
+    ("boolean `", "a boolean"),
+    ("integer `", "an integer"),
+    ("floating point `", "a floating point number"),
+    ("character `", "a character"),
+    ("string \"", "a string"),
+    ("string \\\"", "a string"),
+];
+
+/// Where one of serde's quoting sentences opens in `text`, read by serde's own
+/// wording: `invalid type:` or `invalid value:` then a kind that quotes a value,
+/// or `` unknown variant ` `` / `` unknown field ` ``, each closed later by the
+/// tail serde always writes. Anything else — `invalid value: must be positive`,
+/// a sentence this module already rebuilt — is somebody's own words, and read as
+/// they are.
+fn quoting_opens_at(text: &str) -> Option<usize> {
+    const FOUND: [&str; 2] = ["invalid type: ", "invalid value: "];
+    const UNKNOWN: [&str; 2] = ["unknown variant `", "unknown field `"];
+    // Found once: per-opening search is quadratic in a text a client can fill
+    // with openings, and an opening is closed exactly when the last tail follows it.
+    let expected = text.rfind(", expected ");
+    let closed = expected.max(text.rfind(", there are no "));
+    let found = FOUND.iter().filter_map(|open| {
+        text.match_indices(open)
+            .map(|(at, _)| at)
+            .take_while(|at| expected.is_some_and(|tail| tail >= at + open.len()))
+            .find(|at| {
+                let rest = &text[at + open.len()..];
+                QUOTING_KINDS.iter().any(|(head, _)| rest.starts_with(head))
+            })
+    });
+    let unknown = UNKNOWN.iter().filter_map(|open| {
+        text.find(open)
+            .filter(|at| closed.is_some_and(|tail| tail >= *at))
+    });
+    found.chain(unknown).min()
+}
+
+/// `text` with each of serde's quoting sentences in it rebuilt, from the first
+/// one to the end of `text` — nothing marks where a failure ends in free text,
+/// so all that follows it is the failure's. Bounded before it is read, so the
+/// walk over the `expected` tails it recurses into is bounded too.
+fn quoting_sentences(text: &str) -> Cow<'_, str> {
+    let Some(at) = quoting_opens_at(text) else {
+        return Cow::Borrowed(text);
+    };
+    let (failure, cut) = within_bound(&text[at..]);
+    // Every opening `quoting_opens_at` finds is one `quoting` rebuilds; the
+    // fallback is the report for a shape it does not know, which says nothing
+    // the payload held.
+    let rebuilt = quoting(failure).unwrap_or_else(|| "a value its type does not accept".to_owned());
+    let mut redacted = String::with_capacity(at + rebuilt.len() + '…'.len_utf8());
+    redacted.push_str(&text[..at]);
+    redacted.push_str(&bounded(&rebuilt));
+    if cut && !redacted.ends_with('…') {
+        redacted.push('…');
+    }
+    Cow::Owned(redacted)
+}
+
+/// What opens `validator`'s wording of a failing rule: `Validation error: <code>
+/// [<params>]`, its `Display` for a rule given no message of its own.
+const VALIDATION_OPENING: &str = "Validation error: ";
+
+/// `text` with each `validator` failure in it said without its parameters.
+///
+/// The parameters hold the rejected input, so they are dropped up to their
+/// closing bracket — read past quoted strings, so a value cannot close them
+/// early — or to the end of `text`, marked `…`. The rule's code is kept. Each
+/// stretch of `text` is read a bounded number of times.
+fn validation_sentences(text: &str) -> Cow<'_, str> {
+    if !text.contains(VALIDATION_OPENING) {
+        return Cow::Borrowed(text);
+    }
+    let mut said = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(VALIDATION_OPENING) {
+        let after = &rest[at + VALIDATION_OPENING.len()..];
+        // The code ends at ` [`, before the next opening and on the same line.
+        let next = after.find(VALIDATION_OPENING).unwrap_or(after.len());
+        let line = after[..next].split('\n').next().unwrap_or_default();
+        let Some(open) = line.find(" [") else {
+            said.push_str(&rest[..at + VALIDATION_OPENING.len()]);
+            rest = after;
+            continue;
+        };
+        said.push_str(&rest[..at + VALIDATION_OPENING.len() + open]);
+        match past_closing_bracket(&after[open + 2..]) {
+            Some(tail) => rest = tail,
+            None => {
+                said.push('…');
+                rest = "";
+            }
+        }
+    }
+    said.push_str(rest);
+    Cow::Owned(said)
+}
+
+/// What follows the `]` closing a bracket already open, read past quoted
+/// strings and their escapes; `None` when it never closes.
+fn past_closing_bracket(text: &str) -> Option<&str> {
+    let mut depth = 1_usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        if quoted {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[at + 1..]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `invalid type` or `invalid value`, said with the kind of value found and the
+/// type expected.
+fn found(what: &str, rest: &str) -> String {
+    let kind = kind(rest);
+    match expected(rest) {
+        Some(expected) => format!("{what}: {kind}, {}", quoting_sentences(expected)),
+        None => format!("{what}: {kind}"),
+    }
+}
+
+/// `unknown variant` or `unknown field`, said with what the type expected and
+/// without what the payload spelled.
+fn unknown(what: &str, rest: &str, none_expected: &str) -> String {
+    match expected(rest) {
+        Some(expected) => format!("{what}, {}", quoting_sentences(expected)),
+        None if rest.ends_with(none_expected) => format!("{what}{none_expected}"),
+        None => what.to_owned(),
+    }
+}
+
+/// The `expected …` tail serde closes a refusal with. The last one: a value
+/// spelled before it may itself contain the words, the type's description after
+/// it does not.
+fn expected(rest: &str) -> Option<&str> {
+    rest.rfind(", expected ").map(|at| &rest[at + 2..])
+}
+
+/// The kind of value serde's `Unexpected` names at the head of `rest`, without
+/// the value it quotes after the kind.
+fn kind(rest: &str) -> &'static str {
+    // The kinds that quote nothing.
+    const BARE: [(&str, &str); 12] = [
+        ("unit value", "null"),
+        ("byte array", "a byte array"),
+        ("Option value", "an optional value"),
+        ("newtype struct", "a newtype struct"),
+        ("sequence", "a sequence"),
+        ("map", "a map"),
+        ("enum", "an enum"),
+        ("unit variant", "a unit variant"),
+        ("newtype variant", "a newtype variant"),
+        ("tuple variant", "a tuple variant"),
+        ("struct variant", "a struct variant"),
+        ("null", "null"),
+    ];
+    if let Some((_, kind)) = QUOTING_KINDS
+        .iter()
+        .find(|(head, _)| rest.starts_with(head))
+    {
+        return kind;
+    }
+    BARE.iter()
+        .find(|(head, _)| {
+            rest.strip_prefix(head)
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with(", expected "))
+        })
+        .map_or("a value", |(_, kind)| kind)
+}
+
+#[cfg(test)]
+mod decode_error_tests {
+    use serde::Deserialize;
+    use serde_json::json;
+
+    use super::*;
+
+    #[derive(Debug, Deserialize)]
+    enum Card {
+        Visa,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[expect(
+        dead_code,
+        reason = "the fields exist for serde to read; the test asserts the error, never a value"
+    )]
+    struct Charge {
+        amount: u64,
+        card: Card,
+    }
+
+    fn from_value(value: serde_json::Value) -> String {
+        let error = serde_json::from_value::<Charge>(value).expect_err("does not decode");
+        DecodeError::new(&error).to_string()
+    }
+
+    fn from_str(text: &str) -> String {
+        let error = serde_json::from_str::<Charge>(text).expect_err("does not decode");
+        DecodeError::new(&error).to_string()
+    }
+
+    #[test]
+    fn a_refused_value_is_said_by_its_kind_and_never_quoted() {
+        let secret = from_value(json!({ "amount": "sk_live_51HsecretTOKEN", "card": "Visa" }));
+        assert_eq!(secret, "invalid type: a string, expected u64");
+        let card = from_value(json!({ "amount": 1, "card": "4242424242424242" }));
+        assert_eq!(card, "unknown variant, expected `Visa`");
+        for report in [secret, card] {
+            assert!(
+                !report.contains("sk_live") && !report.contains("4242"),
+                "{report}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_payload_read_from_text_keeps_its_line_and_column() {
+        assert_eq!(
+            from_str(r#"{"amount": true, "card": "Visa"}"#),
+            "invalid type: a boolean, expected u64 at line 1 column 15"
+        );
+        assert_eq!(
+            from_str(r#"{"amount": 1, "card": "Visa""#),
+            "EOF while parsing an object at line 1 column 28",
+            "a fault of the text is serde_json's own sentence, which quotes nothing",
+        );
+    }
+
+    /// A value spelling serde's own separator cannot move the cut into the type's
+    /// half of the sentence.
+    #[test]
+    fn a_value_spelling_the_separator_is_still_not_quoted() {
+        let report = from_value(json!({ "amount": "x, expected u64, leaked", "card": "Visa" }));
+        assert_eq!(report, "invalid type: a string, expected u64");
+    }
+
+    #[test]
+    fn kinds_and_the_type_s_own_sentences_are_kept() {
+        assert_eq!(
+            from_value(json!({ "amount": null, "card": "Visa" })),
+            "invalid type: null, expected u64"
+        );
+        assert_eq!(
+            from_value(json!({ "amount": [1], "card": "Visa" })),
+            "invalid type: a sequence, expected u64"
+        );
+        assert_eq!(
+            from_value(json!({ "amount": -5, "card": "Visa" })),
+            "invalid value: an integer, expected u64"
+        );
+        assert_eq!(
+            from_value(json!({ "amount": 1.5, "card": "Visa" })),
+            "invalid type: a floating point number, expected u64"
+        );
+        assert_eq!(
+            from_value(json!({ "card": "Visa" })),
+            "missing field `amount`"
+        );
+    }
+
+    /// `unknown field` names the key the *payload* spelled, so it is dropped like
+    /// a variant: what is kept is the list the type expected.
+    #[test]
+    fn an_unknown_key_is_the_payload_s_and_is_dropped() {
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[expect(
+            dead_code,
+            reason = "the fields exist for serde to read; the test asserts the error, never a value"
+        )]
+        struct Strict {
+            amount: u64,
+        }
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[expect(
+            dead_code,
+            reason = "the fields exist for serde to read; the test asserts the error, never a value"
+        )]
+        struct Pair {
+            amount: u64,
+            currency: String,
+        }
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Empty {}
+
+        let text = serde_json::from_str::<Strict>(r#"{"amount":1,"sk_live_KEY":1}"#)
+            .expect_err("an unknown key");
+        assert_eq!(
+            DecodeError::new(&text).to_string(),
+            "unknown field, expected `amount` at line 1 column 25"
+        );
+        let value = serde_json::from_value::<Strict>(json!({ "amount": 1, "sk_live_KEY": 1 }))
+            .expect_err("an unknown key");
+        assert_eq!(
+            DecodeError::new(&value).to_string(),
+            "unknown field, expected `amount`"
+        );
+        let pair = serde_json::from_value::<Pair>(json!({ "sk_live_KEY": 1 }))
+            .expect_err("an unknown key");
+        assert_eq!(
+            DecodeError::new(&pair).to_string(),
+            "unknown field, expected `amount` or `currency`"
+        );
+        let empty =
+            serde_json::from_value::<Empty>(json!({ "sk_live_KEY": 1 })).expect_err("no fields");
+        assert_eq!(
+            DecodeError::new(&empty).to_string(),
+            "unknown field, there are no fields"
+        );
+    }
+
+    #[test]
+    fn what_a_report_keeps_is_bounded() {
+        #[derive(Debug)]
+        struct Verbose;
+        impl<'de> Deserialize<'de> for Verbose {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                struct Visitor;
+                impl serde::de::Visitor<'_> for Visitor {
+                    type Value = Verbose;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str(&"é".repeat(2 * DecodeError::MAX_LEN))
+                    }
+                }
+                d.deserialize_u64(Visitor)
+            }
+        }
+        let error = serde_json::from_str::<Verbose>("true").expect_err("not a number");
+        let report = DecodeError::new(&error).to_string();
+        let (sentence, position) = report
+            .rsplit_once('…')
+            .expect("a report past the bound says it was cut");
+        assert!(sentence.len() <= DecodeError::MAX_LEN, "{}", sentence.len());
+        assert!(sentence.starts_with("invalid type: a boolean, expected é"));
+        assert_eq!(position, " at line 1 column 4");
+    }
+
+    #[test]
+    fn serde_s_value_error_is_reported_like_serde_json_s() {
+        use serde::de::IntoDeserializer;
+        use serde::de::value::Error as ValueError;
+
+        let quoted = u64::deserialize(IntoDeserializer::<ValueError>::into_deserializer(
+            "sk_live_51HsecretTOKEN",
+        ))
+        .expect_err("not a number");
+        assert!(
+            quoted.to_string().contains("sk_live"),
+            "serde quotes it: {quoted}"
+        );
+        assert_eq!(
+            DecodeError::from(&quoted).to_string(),
+            "invalid type: a string, expected u64"
+        );
+        let custom = <ValueError as serde::de::Error>::custom("token ya29.secret refused");
+        assert_eq!(
+            DecodeError::from(custom).to_string(),
+            "a value its type does not accept"
+        );
+    }
+
+    #[test]
+    fn a_rendered_text_is_redacted_by_the_chain_and_by_serde_s_wording() {
+        let secret =
+            serde_json::from_str::<u64>(r#""sk_live_51HsecretTOKEN""#).expect_err("not a number");
+        let detail = format!("parse error: {secret}");
+        assert_eq!(
+            DecodeError::redact(&detail, Some(&secret)),
+            "parse error: invalid type: a string, expected u64 at line 1 column 24"
+        );
+        assert_eq!(
+            DecodeError::redact(&detail, None),
+            "parse error: invalid type: a string, expected u64 at line 1 column 24",
+            "serde's wording is read without the chain too",
+        );
+        assert!(
+            matches!(
+                DecodeError::redact("not found", Some(&secret)),
+                Cow::Borrowed(_)
+            ),
+            "a text quoting nothing is handed back as it was",
+        );
+
+        // A type's `custom` message has no shape to read; only the chain knows it.
+        let custom = <serde_json::Error as serde::de::Error>::custom("bad token sk_live_51H");
+        let detail = format!("could not read: {custom}");
+        assert_eq!(
+            DecodeError::redact(&detail, Some(&custom)),
+            "could not read: a value its type does not accept"
+        );
+
+        // The quoted value may spell anything, the separator and a second
+        // sentence included; every shape after the first is rebuilt as well.
+        let text = r#"x: invalid type: string "a, expected u64, b", expected u64; unknown field `sk_live`, there are no fields"#;
+        let redacted = DecodeError::redact(text, None);
+        assert!(
+            !redacted.contains("sk_live") && !redacted.contains("\"a"),
+            "{redacted}"
+        );
+        assert_eq!(
+            redacted,
+            "x: invalid type: a string, expected u64; unknown field, there are no fields"
+        );
+
+        // Somebody's own words in serde's vocabulary are not serde's sentence.
+        for own in [
+            "invalid value: must be positive",
+            "invalid type: expected an admin token",
+            "unknown field `limit` in the request",
+        ] {
+            assert_eq!(DecodeError::redact(own, None), own);
+        }
+
+        // A report read again reads the same, so the two readings compose.
+        for report in [
+            "invalid type: a string, expected u64 at line 1 column 24",
+            "invalid value: an integer, expected u64",
+            "unknown variant, expected `Visa`",
+            "unknown field, there are no fields",
+        ] {
+            assert_eq!(DecodeError::redact(report, None), report);
+        }
+
+        // A client can fill a text with openings; reading them is linear.
+        let crowded = format!(
+            "{}, expected u64",
+            "invalid type: string \"".repeat(200_000)
+        );
+        let started = std::time::Instant::now();
+        let redacted = DecodeError::redact(&crowded, None);
+        assert!(
+            redacted.len() < 2 * DecodeError::MAX_LEN,
+            "{}",
+            redacted.len()
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?} for {} bytes",
+            started.elapsed(),
+            crowded.len(),
+        );
+
+        // Nothing marks where a failure ends in free text, so what follows the
+        // first one is the failure's, and bounded like a report.
+        let long = format!(
+            "x: invalid type: string \"{}\", expected u64",
+            "s".repeat(10_000)
+        );
+        let redacted = DecodeError::redact(&long, None);
+        assert!(
+            redacted.len() < 2 * DecodeError::MAX_LEN,
+            "{}",
+            redacted.len()
+        );
+        assert!(!redacted.contains("sss"), "{redacted}");
+    }
+
+    #[test]
+    fn a_message_of_no_known_shape_is_reported_without_its_text() {
+        let error = <serde_json::Error as serde::de::Error>::custom("token ya29.secret refused");
+        assert_eq!(
+            DecodeError::new(&error).to_string(),
+            "a value its type does not accept"
+        );
+    }
+
+    #[test]
+    fn a_validator_failure_keeps_its_rule_and_drops_its_parameters() {
+        let text = "signup refused: password: Validation error: length \
+                    [{\"min\": Number(32), \"value\": String(\"sk_live_secret\")}]\n\
+                    email: Validation error: email [{\"value\": String(\"sk_live_secret\")}]";
+        assert_eq!(
+            DecodeError::redact(text, None),
+            "signup refused: password: Validation error: length\nemail: Validation error: email"
+        );
+    }
+
+    /// A value spelling the closing bracket, or a quote, cannot end the
+    /// parameters early; parameters that never close run to the end of the text.
+    #[test]
+    fn a_validator_parameter_cannot_close_itself_early() {
+        let spelled =
+            r#"x: Validation error: must_match [{"other": String("a]\"b] sk_live_secret")}] tail"#;
+        assert_eq!(
+            DecodeError::redact(spelled, None),
+            "x: Validation error: must_match tail"
+        );
+        let cut = r#"x: Validation error: length [{"value": String("sk_live_sec"#;
+        assert_eq!(
+            DecodeError::redact(cut, None),
+            "x: Validation error: length…"
+        );
+    }
+
+    /// serde's reading keeps the text after the last `, expected `, which a value
+    /// validator lists can spell; validator's wording is read first.
+    #[test]
+    fn a_validator_value_cannot_hide_behind_a_serde_sentence() {
+        let text = r#"body: invalid type: string "x", expected u64; pw: Validation error: length [{"value": String("zz, expected sk_live_secret")}]"#;
+        let redacted = DecodeError::redact(text, None);
+        assert!(!redacted.contains("sk_live"), "{redacted}");
+    }
+
+    #[test]
+    fn openings_without_parameters_are_left_as_they_are() {
+        let crowded = "Validation error: x ".repeat(10_000);
+        assert_eq!(DecodeError::redact(&crowded, None), crowded);
+    }
+
+    #[test]
+    fn a_validator_rule_with_its_own_message_is_left_to_its_author() {
+        let text = "password: must be at least 32 characters";
+        assert!(matches!(DecodeError::redact(text, None), Cow::Borrowed(_)));
+    }
+}
+
+#[cfg(test)]
+mod boot_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn a_provider_cycle_names_its_chain_and_prescribes_an_edit_that_works() {
+        let cycle = ProviderCycleError {
+            module: "PostsModule",
+            scope: ProviderScope::Request,
+            chain: vec!["Drafts", "Reviews", "Drafts"],
+        };
+        assert_eq!(
+            cycle.to_string(),
+            "module `PostsModule`: request-scoped provider cycle `Drafts` → `Reviews` → `Drafts` \
+             — break it by moving what both need into a third provider both inject, by passing \
+             the value as a method argument, or by publishing an event one side listens to"
+        );
+        let sentences = [
+            cycle.to_string(),
+            ProviderCycleError {
+                scope: ProviderScope::Singleton,
+                ..cycle
+            }
+            .to_string(),
+            cycle_panic_message(ProviderScope::Transient, "A → B → A"),
+            cycle_panic_message(ProviderScope::Request, "A → B → A"),
+        ];
+        for sentence in sentences {
+            assert!(
+                !sentence.contains("dyn"),
+                "an `Arc<dyn Trait>` is a dependency gated like a concrete one, so injecting one \
+                 keeps the cycle: {sentence}"
+            );
+            assert!(sentence.ends_with(CYCLE_REMEDY), "{sentence}");
+        }
+    }
+
+    #[test]
+    fn a_provider_never_built_names_what_it_needed_and_the_edit_its_cause_has() {
+        let cycle = UnbuiltProviderError {
+            module: "UsersModule",
+            provider: "UsersService",
+            missing: vec!["PostsService"],
+            cause: UnbuiltCause::ImportCycle(vec!["UsersModule", "PostsModule"]),
+        };
+        assert_eq!(
+            cycle.to_string(),
+            "module `UsersModule`: `UsersService` was never built — it needs `PostsService`, \
+             which nothing had registered when `UsersModule`'s providers were built; \
+             `UsersModule` and `PostsModule` import each other, so one registers before the \
+             other's providers exist: move what both need into a module both import"
+        );
+        let longer = UnbuiltProviderError {
+            cause: UnbuiltCause::ImportCycle(vec!["UsersModule", "PostsModule", "OrgsModule"]),
+            ..cycle
+        };
+        assert!(
+            longer.to_string().contains(
+                "`UsersModule`, `PostsModule` and `OrgsModule` import each other in a cycle, so \
+                 one registers before another's providers exist: move what they need into a \
+                 module they all import"
+            ),
+            "{longer}"
+        );
+        let later = UnbuiltProviderError {
+            module: "BillingModule",
+            provider: "Invoices",
+            missing: vec!["Ledger", "Clock"],
+            cause: UnbuiltCause::RegisteredLater,
+        };
+        assert_eq!(
+            later.to_string(),
+            "module `BillingModule`: `Invoices` was never built — it needs `Ledger` and `Clock`, \
+             which nothing had registered when `BillingModule`'s providers were built; a \
+             hand-written module or a `for_root` outside `BillingModule`'s imports registers \
+             them later: import that module in `BillingModule`'s `imports`"
+        );
+    }
+
+    #[test]
+    fn an_interruption_names_its_cause_and_its_step() {
+        let factory = BootInterruptedError {
+            cause: crate::StopCause::Terminate,
+            step: crate::BootStep::Factory {
+                type_name: "app::Pool",
+            },
+        };
+        assert_eq!(
+            factory.to_string(),
+            "the boot was stopped by Terminate during the factory for `app::Pool`"
+        );
+        let configure = BootInterruptedError {
+            cause: crate::StopCause::Interrupt,
+            step: crate::BootStep::Configure {
+                transport: "HttpTransport".to_owned(),
+            },
+        };
+        assert_eq!(
+            configure.to_string(),
+            "the boot was stopped by Interrupt during the `configure` of transport `HttpTransport`"
+        );
+        let hook = BootInterruptedError {
+            cause: crate::StopCause::Terminate,
+            step: crate::BootStep::InitHook {
+                phase: crate::LifecyclePhase::OnModuleInit,
+                provider: "CacheWarmer",
+                method: "warm",
+                origin: "app::cache",
+            },
+        };
+        assert_eq!(
+            hook.to_string(),
+            "the boot was stopped by Terminate during lifecycle hook app::cache::CacheWarmer::warm \
+             (OnModuleInit)"
+        );
+    }
+
+    #[test]
+    fn a_failed_factory_is_named_and_says_its_cause_after_it() {
+        let failed = FactoryFailedError {
+            type_name: "app::Pool",
+            source: anyhow::anyhow!("connection refused"),
+        };
+        assert_eq!(
+            crate::error_message(&failed),
+            "the factory for `app::Pool` failed: connection refused"
+        );
+    }
 }

@@ -1,13 +1,19 @@
-//! Integration tests for `nest-rs-authn`. Layout strictly mirrors `src/` (see CLAUDE.md).
-//!
-//! - This file is the only `tests/*.rs` binary; paths under `tests/` are modules.
-//! - Shared fixtures live below at the suite root (`crate::…`), so every module
-//!   in the tree mirrors a `src/` counterpart.
+//! Integration tests for `nest-rs-authn`, mirroring `src/`; shared fixtures sit
+//! at the suite root.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
+mod algorithm;
 mod config;
 mod credentials;
 mod error;
 mod guard;
+mod jwks;
 mod module;
 mod password;
 mod service;

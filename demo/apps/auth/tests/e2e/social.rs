@@ -1,3 +1,5 @@
+use nest_rs::oauth::client::{OAuthClient, TARGET};
+use nest_rs::testing::LogCapture;
 use poem::http::StatusCode;
 
 use super::harness::*;
@@ -52,4 +54,41 @@ async fn the_social_callback_rejects_a_forged_state() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn the_social_callback_reads_the_transaction_cookie_the_redirect_set() {
+    let logs = LogCapture::install();
+    let (_db, app) = boot().await;
+    let authorize = app.http().get("/social/github/authorize").send().await;
+    let set_cookie = authorize
+        .0
+        .headers()
+        .get("set-cookie")
+        .expect("the redirect sets the transaction cookie")
+        .to_str()
+        .expect("an ascii cookie")
+        .to_owned();
+    assert!(
+        set_cookie.starts_with(&format!("{}=", OAuthClient::TRANSACTION_COOKIE)),
+        "{set_cookie}"
+    );
+    let cookie = set_cookie
+        .split(';')
+        .next()
+        .expect("the cookie's name and value");
+
+    app.http()
+        .get("/social/github/callback?code=abc&state=forged")
+        .header("cookie", format!("theme=dark; {cookie}"))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let rejected = logs.expect_one(TARGET, "OAuth callback rejected");
+    assert_eq!(
+        rejected.field("reason").as_deref(),
+        Some("csrf_state_mismatch"),
+        "the transaction was read and verified; only the forged state stopped it"
+    );
 }

@@ -1,7 +1,6 @@
 ---
 title: OAuth scopes
 description: Gate a rule on the scope a token carries with .requires_scope(...) — the refusal is an RFC 6750 insufficient_scope challenge naming what to request.
-tier: all-options
 sidebar:
   order: 8
 ---
@@ -22,7 +21,7 @@ Roles and scopes answer different questions, and both have to hold:
 
 ## Declare the scope on the rule it conditions
 
-```rust title="crates/features/src/authz/ability.rs (from the demo)" {5,9}
+```rust title="crates/features/src/authz/ability.rs" {5,9}
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
@@ -62,9 +61,10 @@ Scopes reach the ability layer from the principal. Implement
 space-delimited `scope` claim with the `serde` helper the framework
 ships:
 
-```rust title="crates/features/src/authn/claims.rs (from the demo)" {6-11,19-21}
+```rust title="crates/features/src/authn/claims.rs (from the demo, abridged)" {7-13,22-24}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub: Option<Uuid>,
     pub org_id: Uuid,
     pub roles: Vec<Role>,
@@ -77,8 +77,8 @@ pub struct Claims {
     pub scopes: Vec<String>,
     pub exp: u64,
 }
-
-impl PrincipalIdentity for Claims {
+// …
+impl nest_rs::authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|sub| sub.to_string())
     }
@@ -104,6 +104,46 @@ every scoped rule is withheld. For a bearer token, returning `Some` is
 the fail-closed choice: a token arriving with no `scope` claim was
 granted no scopes, not exempted from them.
 </Aside>
+
+## Grant no more than was registered
+
+Scopes only narrow if the issuer never hands out more than a client may
+hold. The demo's token endpoint (`apps/auth`, the `client_credentials`
+grant) follows RFC 6749 §3.3: a request naming scopes gets exactly those
+when every one is registered for the client, a request naming one that is
+not gets `invalid_scope`, and a request naming none gets the client's whole
+registration:
+
+```rust title="crates/features/src/oauth/scope.rs (from the demo, abridged)"
+pub(crate) fn granted_scopes(
+    requested: Option<&str>,
+    registered: &[String],
+) -> Result<Vec<String>, TokenError> {
+    let Some(requested) = requested.filter(|raw| !raw.trim().is_empty()) else {
+        return Ok(registered.to_vec());
+    };
+    let mut granted: Vec<String> = Vec::new();
+    for scope in requested.split_whitespace() {
+        if !registered.iter().any(|own| own == scope) {
+            return Err(TokenError::InvalidScope);
+        }
+        if !granted.iter().any(|kept| kept == scope) {
+            granted.push(scope.to_owned());
+        }
+    }
+    Ok(granted)
+}
+```
+
+The token's `scope` claim is the granted set, and the response states it
+with `AccessTokenResponse::with_scope`, which RFC 6749 §5.1 requires
+whenever the grant differs from the request. The client's roles come from
+its registration's `payload`, never from the scopes it asks for — the two
+answer different questions on the issuer's side too. The demo's
+`demo-service` client is an admin of its org: asking for `posts:read`
+alone, it reads posts, and an edit or a delete answers the challenge
+below. Creating a post answers a plain `403` instead, since a post needs
+an author and no scope makes a machine token one.
 
 ## What the refused caller receives
 
@@ -145,7 +185,7 @@ The scopes your rules require and the scopes your resource server
 advertises must be the same set:
 
 ```bash title=".env"
-NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
+NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
 ```
 
 A scope a rule requires but the metadata document omits is a dead end —

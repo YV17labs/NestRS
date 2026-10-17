@@ -1,7 +1,6 @@
 ---
 title: JWT
-description: JwtStrategy verifies a bearer token, JwtService signs and verifies, and the resource server holds only the public key when EdDSA is on.
-tier: basics
+description: JwtStrategy verifies a bearer token against a secret, an EdDSA public key or an external issuer's JWK Set, and JwtService signs with the first two.
 sidebar:
   order: 3
 ---
@@ -12,13 +11,14 @@ JSON Web Tokens are the framework's default bearer credential.
 `JwtStrategy<C>` is generic over the claims type — your app picks the
 shape, the framework verifies the signature, checks expiry, and hands
 the claims to the handler. Signing and verifying both run through
-`JwtService`, configured once via `JwtConfig` and injected wherever a
+`JwtService`, configured once via `AuthnConfig` and injected wherever a
 token is minted.
 
 The implementation is a thin wrapper over
-[`jsonwebtoken`](https://docs.rs/jsonwebtoken). The crate's
-`Algorithm` enum is re-exported as `nest_rs::authn::Algorithm` so an app
-configures the algorithm without taking a direct dependency.
+[`jsonwebtoken`](https://docs.rs/jsonwebtoken), which your code never names:
+the algorithms are nestrs's own `Algorithm`, spelled as RFC 7518 spells
+`alg` — `RS256`, `ES256`, `EdDSA` — so a release of the library reaches you
+in a nestrs minor.
 
 ## The three-line setup
 
@@ -46,8 +46,8 @@ use super::strategy::{AuthnGuard, AuthnStrategy};
 pub struct AuthnModule;
 ```
 
-`AuthnModule::for_root(None)` reads `JwtConfig` from the environment;
-pass a `JwtConfig` to pin it in code. The factory phase builds
+`AuthnModule::for_root(None)` reads `AuthnConfig` from the environment;
+pass an `AuthnConfig` to pin it in code. The factory phase builds
 `JwtService` once and registers it as global infrastructure —
 controllers, login services, OAuth flows all inject the same instance.
 
@@ -55,7 +55,7 @@ One env var makes it work end to end — a shared HS256 secret (32 bytes
 minimum; anything shorter fails the boot):
 
 ```bash frame="terminal"
-export NESTRS_AUTHN__SECRET='a-32-byte-minimum-development-secret!!'
+export NESTRS_AUTHN__SECRET="$(openssl rand -hex 32)"
 ```
 
 With that set, `JwtService` signs and verifies against the same
@@ -83,11 +83,12 @@ with `WWW-Authenticate: Bearer`.
 ## Claims — your shape, your business rules
 
 The framework's `JwtStrategy<C>` is generic. `C` is any
-`DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static` type —
-usually a struct with the standard `sub`, `exp`, plus whatever your app needs:
+`DeserializeOwned + PrincipalIdentity + AmbientValue + Clone` type — usually a
+struct with the standard `sub`, `exp`, plus whatever your app needs:
 
-```rust title="crates/features/src/authn/claims.rs (from the demo)"
+```rust title="crates/features/src/authn/claims.rs"
 use nest_rs::authn::PrincipalIdentity;
+use nest_rs::core::AmbientValue;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -99,6 +100,8 @@ pub struct Claims {
     pub exp: u64,
 }
 
+impl AmbientValue for Claims {}
+
 impl PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|id| id.to_string())
@@ -106,12 +109,14 @@ impl PrincipalIdentity for Claims {
 }
 ```
 
-`PrincipalIdentity` is the one required impl. On a successful authentication
-`AuthnGuard` records `actor_id` onto the request span, so every downstream
-event — denials included — is attributable without threading the identity
-through each call site. Return `None` for a principal that genuinely has no
-identity (a machine token scoped to an org, say). `nestrs g auth` writes both
-the struct and the impl.
+`AmbientValue` is what lets `AuthnGuard` attach the claims for the rest of the
+request — every guard after it, `Ctx<Claims>` in a handler and a resolver below
+`/graphql` read them there. `PrincipalIdentity` names the audit identity: on a
+successful authentication `AuthnGuard` records `actor_id` onto the request
+span, so every downstream event — denials included — is attributable without
+threading the identity through each call site. Return `None` for a principal
+that genuinely has no identity (a machine token scoped to an org, say).
+`nestrs g auth` writes the struct and both impls.
 
 The handler reads them back through `Ctx<Claims>`:
 
@@ -153,13 +158,14 @@ queue job carrying a signed envelope — injects `Arc<JwtService>` and
 calls `verify`:
 
 ```rust title="crates/features/src/authn/service.rs"
-let claims: Claims = self.jwt.verify(token)?;
+let claims: Claims = self.jwt.verify(token).await?;
 ```
 
-The verification path runs `Validation::leeway`, checks `nbf`, and
+`verify` is `async` because a JWK Set may have to be fetched first; against a
+secret or a PEM key it never waits. The verification path runs `Validation::leeway`, checks `nbf`, and
 applies RFC 7519 §4.1.3 to `aud` **always**: a token carrying an audience
 this service is not named in is rejected whether or not
-`JwtConfig::audience` is set. Setting it adds the other direction — the
+`AuthnConfig::audience` is set. Setting it adds the other direction — the
 claim becomes mandatory, so a token omitting `aud` is rejected too.
 Verification failures here log at `tracing::debug!` under `nest_rs::authn`,
 carrying the typed decode reason — and an *expired* token logs nothing at all.
@@ -169,40 +175,55 @@ name, so a second line from the service would double-count every denial.
 
 ## Configuration
 
-`JwtConfig` follows the framework-wide dual-path rule: every field is
-settable from `NESTRS_AUTHN__*` env vars **or** from a pinned struct
+`AuthnConfig` follows the framework-wide dual-path rule: every field is
+settable from `<PREFIX>_AUTHN__*` env vars **or** from a pinned struct
 passed to `AuthnModule::for_root(config)`.
 
 | Field | Env var | Notes |
 |-------|---------|-------|
-| `secret` | `NESTRS_AUTHN__SECRET` | HS256 shared secret |
-| `private_key` | `NESTRS_AUTHN__PRIVATE_KEY` | EdDSA PEM, issuer only |
-| `public_key` | `NESTRS_AUTHN__PUBLIC_KEY` | EdDSA PEM, verifier needs it |
-| `leeway_secs` | `NESTRS_AUTHN__LEEWAY_SECS` | Clock skew, default 30 |
-| `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
-| `issuer` | `NESTRS_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
-| `expires_in_secs` | `NESTRS_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default 3600 |
-| `explicit_typing` | `NESTRS_AUTHN__EXPLICIT_TYPING` | RFC 9068 §2.1/§4 — stamp and require `typ: at+jwt`, default `true`. Turn off only for a legacy issuer minting plain `typ: JWT` |
-| `allow_any_audience` | `NESTRS_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`. Refused beside `audience`; `warn`s once per boot |
+| `secret` | `<PREFIX>_AUTHN__SECRET` | HS256 shared secret |
+| `private_key` | `<PREFIX>_AUTHN__PRIVATE_KEY`, or a path in `<PREFIX>_AUTHN__PRIVATE_KEY_FILE` | EdDSA PEM, issuer only |
+| `public_key` | `<PREFIX>_AUTHN__PUBLIC_KEY`, or a path in `<PREFIX>_AUTHN__PUBLIC_KEY_FILE` | EdDSA PEM, verifier needs it |
+| `jwks_uri` | `<PREFIX>_AUTHN__JWKS_URI` | An external issuer's JWK Set, `https` only — verify-only, see [below](#verifying-another-issuers-tokens) |
+| `algorithms` | `<PREFIX>_AUTHN__ALGORITHMS` | Comma-separated JOSE names (`EdDSA,RS256`), each a `nest_rs::authn::Algorithm` — `HS256`, `HS384`, `HS512`, `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384` or `EdDSA`, case and all. Unset: HS256 for a secret, EdDSA for a PEM key, every asymmetric algorithm for a JWK Set. A secret or a PEM key takes exactly one, which must fit it |
+| `tls` | `<PREFIX>_AUTHN__TLS_CA_CERT`, `<PREFIX>_AUTHN__TLS_CERT` and `<PREFIX>_AUTHN__TLS_KEY`, each or a path in its `_FILE` spelling | A `nest_rs::config::ClientTls`: the PEM authorities the JWK Set endpoint's certificate chains to, replacing the system's, and the client certificate presented to an endpoint that requires one. Without `jwks_uri`, fails the boot |
+| `leeway_secs` | `<PREFIX>_AUTHN__LEEWAY_SECS` | Clock skew, default 30, at most 300 — RFC 7519 §4.1.4's "a few minutes" |
+| `audience` | `<PREFIX>_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
+| `issuer` | `<PREFIX>_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
+| `expires_in_secs` | `<PREFIX>_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default 3600, from 1 to 2592000 (thirty days). Outside it — from the environment, a pinned `AuthnConfig` or a `JwtOptions` built in code — the boot fails naming the variable |
+| `explicit_typing` | `<PREFIX>_AUTHN__EXPLICIT_TYPING` | RFC 9068 §2.1/§4 — stamp and require `typ: at+jwt`, default `true`. Turn off only for an issuer minting a plain `typ: JWT`, or no `typ` |
+| `allow_any_audience` | `<PREFIX>_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`. Refused beside `audience`; `warn`s once per boot |
 
-`JwtConfig::into_options` walks the three key fields and chooses a
+`AuthnConfig::into_options` walks the four key fields and chooses a
 mode:
 
-- `secret` set → HMAC HS256 (both sign and verify).
-- `private_key` + `public_key` → EdDSA (sign and verify).
+- `private_key` + `public_key` → EdDSA (sign and verify). The two are proved
+  one pair at boot: a signature the private key makes has to verify under the
+  public key.
 - `public_key` alone → EdDSA verify-only — a resource server with no
   private key cannot mint a token even if it wanted to.
+- `secret` alone → HMAC HS256 (both sign and verify).
+- `jwks_uri` alone → verify-only, against the keys an external issuer
+  publishes.
 - nothing → boot fails with `"no JWT key configured"`.
 
-A misconfiguration (`private_key` without `public_key`) fails the boot
-loudly, naming the offending env var.
+Each field is read on its own, like every other setting, and the combination
+is then judged whole. A `secret` beside either key fails the boot — two signing
+modes, and nothing says which one is meant — whether both come from the
+environment, from `.env`, from code, or the environment beside code. A config
+pinned in code stops `.env` being read for this namespace, so a `.env` value
+never meets a pinned one. A `jwks_uri` beside a secret or a key fails the boot
+the same way. A `private_key` without its `public_key` fails the
+boot too, and so does key material that does not parse as EdDSA PEM, a
+`jwks_uri` that is not `https`, and an `algorithms` entry that does not fit the
+key. Each refusal names the settings that are set.
 
-## HS256 vs EdDSA — pick on deployment shape
+## HS256, EdDSA or a JWK Set — pick on deployment shape
 
 **HS256** is fine when one binary both issues and verifies tokens.
 Symmetric — anyone with the secret can mint a token. Convenient for
 local development and single-process apps. Set
-`NESTRS_AUTHN__SECRET`.
+`<PREFIX>_AUTHN__SECRET`.
 
 **EdDSA** is the production posture for split deployments. The issuer
 holds the private PEM; every resource server holds the public PEM
@@ -212,6 +233,12 @@ issuer sets both `PRIVATE_KEY` and `PUBLIC_KEY`; verifiers set only
 
 See [Split deployment](/security/authentication/split-deployment/)
 for the deployment pattern.
+
+**A JWK Set** is the posture when someone else issues the tokens — an
+identity provider you run beside the API or buy as a service. The resource
+server holds no key at all: it reads the ones the issuer publishes, and picks
+up a rotation on its own. Set `<PREFIX>_AUTHN__JWKS_URI`; the
+[next section](#verifying-another-issuers-tokens) says what it checks.
 
 ```bash
 # generate an EdDSA key pair
@@ -228,10 +255,75 @@ endpoint when the UX demands long sessions. See
 not catch.
 </Aside>
 
+## Verifying another issuer's tokens
+
+When an identity provider you do not run issues the tokens — better-auth,
+Keycloak, Auth0, Cognito, Entra ID, Google, Firebase, Clerk, Zitadel — point
+the resource server at the JWK Set
+([RFC 7517](https://datatracker.ietf.org/doc/html/rfc7517)) it publishes, the
+`jwks_uri` of its discovery document:
+
+```bash frame="terminal"
+export NESTRS_AUTHN__JWKS_URI='https://auth.example.com/.well-known/jwks.json'
+export NESTRS_AUTHN__ISSUER='https://auth.example.com'
+export NESTRS_AUTHN__AUDIENCE='https://api.example.com'
+```
+
+Nothing else changes: `JwtStrategy` verifies, the claims reach `Ctx<C>`,
+`iss`, `aud` and `exp` are checked as above. The service holds no signing key,
+so `sign` refuses, and so do `sign_handshake` and `verify_handshake`: an OAuth
+flow's transaction cookie needs a key of this deployment's own. An issuer that stamps no `typ: at+jwt` on its access tokens
+also needs `<PREFIX>_AUTHN__EXPLICIT_TYPING=false` — read one token's header to
+know. [External identity provider](/security/authentication/external-identity-provider/)
+walks the whole setup with better-auth.
+
+**What a token may be signed with is the verifier's choice, never the
+token's** ([RFC 8725 §3.1](https://datatracker.ietf.org/doc/html/rfc8725#section-3.1)).
+Each key checks only an algorithm of its own type — an RSA key RS256 to RS512
+and PS256 to PS512, an EC P-256 key ES256, P-384 ES384, Ed25519 EdDSA — and
+only the `alg` it names when it names one. A key published with a `use` other
+than `sig` is ignored. No `HS*` or `none` token is ever accepted against a
+JWK Set, and such a token is refused before the set is fetched.
+`<PREFIX>_AUTHN__ALGORITHMS` narrows the list to what your issuer signs with —
+`EdDSA`, `RS256` — which also binds a key published without `alg` to that one
+algorithm.
+
+The token's `kid` picks the key. A token naming no `kid` is checked only when
+exactly one key of the set fits its algorithm, never tried against each.
+
+**The set is fetched when the first token needs it**, not at boot: an issuer
+down while the API deploys does not crash-loop the API. Tokens arriving during
+a fetch wait for that one fetch; a `kid` the set lacks earns one more, so a
+rotation is picked up with the first token signed by the new key. The bounds
+are constants of `nest_rs::authn`:
+
+| Constant | Value | What it bounds |
+|---|---|---|
+| `JWKS_FETCH_TIMEOUT` | 5 s (3 s to connect) | one fetch, body included — a token waits on one at most |
+| `JWKS_MAX_BYTES` | 128 KiB | the document read; a longer one is refused unread |
+| `JWKS_REFRESH_FLOOR` | 30 s | the least time between two fetches, whatever asks — a flood of forged `kid`s costs the issuer one request per floor |
+| `JWKS_DEFAULT_MAX_AGE` | 10 min | how long a set stays fresh when the answer states no `Cache-Control: max-age`; a stated one is honoured, net of `Age`, from the floor to `JWKS_MAX_AGE_CEILING` (1 h) |
+| `JWKS_STALE_CEILING` | 1 h | how long past its freshness the last good set still verifies while every refresh fails |
+
+A stale set keeps serving while it refreshes, and a refresh that fails is said
+once at `warn` on `nest_rs::authn` while the last good set is kept. A set that
+cannot be had — never fetched, past its stale ceiling, or failing while the
+key a token names is looked for — answers `503` with `Retry-After`, on a
+`#[public]` route too, never a `401`: the token was never checked. The
+endpoint must be `https`, and its certificate is verified against the system's
+authorities, or the ones `<PREFIX>_AUTHN__TLS_CA_CERT` names; an issuer that
+requires a client certificate gets the one `<PREFIX>_AUTHN__TLS_CERT` and
+`<PREFIX>_AUTHN__TLS_KEY` name. A handshake that fails answers that same
+opaque `503`, while the `authentication unavailable` event it logs at `error`
+names the setting that fixes it in its `detail` field; the fetch follows no
+redirect.
+
 ## Going further
 
 - [Split deployment](/security/authentication/split-deployment/)
   — the split-deploy pattern that pairs with EdDSA.
+- [External identity provider](/security/authentication/external-identity-provider/)
+  — the JWK Set path, end to end with better-auth.
 - [OAuth2](/security/authentication/oauth2/) — the JWT issuer is
   often the OAuth callback.
 - [Authorization](/security/authorization/) — once the claims land on

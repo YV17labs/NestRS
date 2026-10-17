@@ -1,9 +1,5 @@
 //! Layer registration — typed specs the builder uses to seed the global
 //! interceptor chain into the container.
-//!
-//! `InterceptorSpec` is a [`LayerSpec`](nest_rs_core::LayerSpec) alias — the
-//! shared shape and its `resolve` method live in `nest-rs-core`; only the typed
-//! constructor and the erased trait differ per family.
 
 use std::any::TypeId;
 use std::sync::Arc;
@@ -18,10 +14,29 @@ pub type InterceptorSpec = LayerSpec<dyn Interceptor>;
 
 /// Construct an [`InterceptorSpec`] for the given interceptor type.
 ///
-/// ```rust,ignore
+/// ```
+/// # use nest_rs_core::{App, Layer, injectable, module};
+/// # use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, async_trait, interceptor};
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct ServerTiming;
+/// # impl Layer for ServerTiming {}
+/// # #[async_trait]
+/// # impl Interceptor for ServerTiming {
+/// #     async fn intercept(&self, req: poem::Request, next: Next<'_>) -> poem::Result<poem::Response> {
+/// #         next.run(req).await
+/// #     }
+/// # }
+/// # #[module(providers = [ServerTiming])]
+/// # struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
 /// App::builder()
 ///     .use_interceptors_global([interceptor::<ServerTiming>()])
 ///     .module::<AppModule>()
+/// #   .build().await?;
+/// # Ok(())
+/// # }
 /// ```
 pub fn interceptor<I: Interceptor + 'static>() -> InterceptorSpec {
     LayerSpec::new(TypeId::of::<I>(), std::any::type_name::<I>(), |c| {

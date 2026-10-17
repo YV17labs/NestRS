@@ -1,0 +1,26 @@
+error[E0277]: `UnattestedGuard` does not declare that it checks `HttpView` units
+  --> tests/integration/diagnostics/http/unattested_guard_on_a_controller.rs:21:14
+   |
+21 | #[use_guards(UnattestedGuard)]
+   |              ^^^^^^^^^^^^^^^ bound at a site whose units are `HttpView`
+   |
+help: the trait `GuardFor<HttpView>` is not implemented for `UnattestedGuard`
+  --> tests/integration/diagnostics/http/unattested_guard_on_a_controller.rs:14:1
+   |
+14 | struct UnattestedGuard;
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
+   = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<HttpView> for UnattestedGuard {}`
+help: the trait `GuardFor<HttpView>` is implemented for `AbilityGuard<F>`
+  --> $WORKSPACE/crates/nest-rs-authz/src/guard.rs
+   |
+   | impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AbilityGuard<F> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `__nestrs_assert_guard_capability`
+  --> tests/integration/diagnostics/http/unattested_guard_on_a_controller.rs:20:1
+   |
+20 | #[controller(path = "/demo")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
+21 | #[use_guards(UnattestedGuard)]
+   |              --------------- required by a bound in this function
+   = note: this error originates in the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)

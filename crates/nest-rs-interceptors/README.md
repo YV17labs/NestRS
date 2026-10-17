@@ -2,7 +2,7 @@
 
 Transport-spanning interceptors for NestRS — one Layer System sub-trait wrapping handler execution on HTTP, GraphQL, and WS, declared globally via `use_interceptors_global` or per-scope through `#[use_interceptors]`.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features interceptors

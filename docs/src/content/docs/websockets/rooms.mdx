@@ -1,7 +1,6 @@
 ---
 title: Rooms
 description: The WsClient handle — join, leave, broadcast, scoped emit_to — and the room semantics behind them.
-tier: basics
 sidebar:
   order: 4
 ---
@@ -141,7 +140,7 @@ impl ChatGateway {
     #[public]
     async fn typing(&self, message: SendMessageDto, client: &WsClient) {
         if let Err(e) = client.broadcast("typing", &message) {
-            tracing::warn!(target: "features::chat", error = %e, "broadcast failed");
+            tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
         }
     }
 }

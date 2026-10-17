@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nest_rs::core::injectable;
+use nest_rs::core::{error_message, injectable};
 use nest_rs::events::listeners;
 use nest_rs::queue::{JobProducer, JobProducerExt};
 
@@ -21,16 +21,17 @@ impl NotificationsListener {
             org_id: event.org_id,
             message: format!("Post \"{}\" was published", event.post.title),
         };
-        match self.queue.push_to::<NotifyQueue>(command).await {
-            Ok(()) => tracing::debug!(
-                target: "features::notifications",
+        match self.queue.push(NotifyQueue, command, None).await {
+            Ok(receipt) => tracing::debug!(
+                target: crate::notifications::TARGET,
                 post_id = %event.post_id,
                 org_id = %event.org_id,
+                job_id = %receipt.id(),
                 "enqueued a publish notification for the worker",
             ),
             Err(error) => tracing::error!(
-                target: "features::notifications",
-                %error,
+                target: crate::notifications::TARGET,
+                error = %error_message(&error),
                 post_id = %event.post_id,
                 org_id = %event.org_id,
                 "failed to enqueue a publish notification",

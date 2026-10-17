@@ -4,43 +4,76 @@
 //! `#[inject]` deps. Importing [`ScheduleModule`] attaches the [`Scheduler`]
 //! to the app at boot.
 //!
-//! Triggers are validated **at compile time** (string literals) or **at
-//! boot** (`CronExpression` presets); a bad value fails the boot naming the
-//! offending job. `#[cron]`'s `tz` is in the first group with its expression:
-//! it is always a literal over the closed IANA name set, so both keys of that
-//! one attribute are refused at the line that wrote them.
+//! Triggers are validated **at compile time** (string literals, and `#[cron]`'s
+//! `tz`) or **at boot** (`CronExpression` presets); a bad value fails the boot
+//! naming the offending job.
+//!
+//! Every replica of an app fires every occurrence unless a job says otherwise:
+//! `replicas = "one"` on `#[every]` or `#[cron]` fires each occurrence on the one
+//! replica whose claim on it succeeds, through the [`OccurrenceLock`] a backend
+//! binds — at most once per occurrence, never at least once. A job is its crate,
+//! its host struct and its method, so moving its module inside the crate keeps
+//! it; `key = "…"` pins it across a rename of the type or the crate.
 
-// Opts OUT of the workspace `unsafe_code = "forbid"` lint (no `[lints]
-// workspace = true` in Cargo.toml): `tests/integration/module.rs` needs
-// `unsafe { std::env::set_var }` for setup, and a Cargo `[lints]` forbid also
-// covers test targets and can't be overridden. This lib-level forbid keeps the
-// production guarantee (the lib itself has no `unsafe`) without breaking the
-// integration test.
-#![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Cron and interval registration, and a tick that failed.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::schedule";
 
+mod error;
 mod inventory;
 mod module;
+mod occurrence;
+mod replicas;
 mod scheduler;
 mod trigger;
 pub mod unit;
 
+pub use error::OccurrenceLockError;
 pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
-// Re-exported so `#[every]` / `#[cron]` / `#[after]` emit their
-// `JobTransaction` through this crate's own root, the way every other path the
-// decorators name is routed.
-pub use nest_rs_worker;
+pub use occurrence::{BACKEND_REMEDY, LOCK_TIMEOUT, Occurrence, OccurrenceClaim, OccurrenceLock};
+pub use replicas::Replicas;
+// The path `#[every]` / `#[cron]` / `#[after]` emit their `TransactionPolicy`
+// through.
+pub use nest_rs_database;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};
 
+/// Orchestrator on a provider's `impl` block: each `#[every]`, `#[after]` or
+/// `#[cron]` method in it is a job the [`Scheduler`] fires.
+///
+/// ```
+/// # use std::time::Duration;
+/// use nest_rs_core::injectable;
+/// use nest_rs_schedule::{Replicas, ScheduledMethod, Trigger, scheduled};
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// pub struct ReportTasks;
+///
+/// #[scheduled]
+/// impl ReportTasks {
+///     #[cron("0 0 2 * * *", tz = "Europe/Paris")]
+///     async fn nightly(&self) -> anyhow::Result<()> {
+///         Ok(())
+///     }
+///
+///     #[every("30s", replicas = "one")]
+///     async fn refresh(&self) -> anyhow::Result<()> {
+///         Ok(())
+///     }
+/// }
+///
+/// let jobs: Vec<&ScheduledMethod> = nest_rs_core::inventory::iter::<ScheduledMethod>()
+///     .filter(|job| job.provider == "ReportTasks")
+///     .collect();
+/// assert!(jobs.iter().any(|job| job.method == "nightly"
+///     && job.replicas == Replicas::Each
+///     && matches!(job.trigger, Trigger::Cron { expr: "0 0 2 * * *", tz: Some("Europe/Paris") })));
+/// assert!(jobs.iter().any(|job| job.method == "refresh"
+///     && job.replicas == Replicas::One
+///     && matches!(job.trigger, Trigger::Interval(every) if every == Duration::from_secs(30))));
+/// ```
 pub use nest_rs_schedule_macros::scheduled;

@@ -32,7 +32,7 @@ Every `#[readiness]` / `#[liveness]` / `#[startup]` method returns
 
 ## Wire it in
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 
@@ -130,7 +130,7 @@ logs without walking a list, and a vocabulary (`status`, `info`,
 
 ## Configuration
 
-Two ceilings bound a probe response, read from `NESTRS_HEALTH__*` or
+Two ceilings bound a probe response, read from `<PREFIX>_HEALTH__*` or
 pinned through `HealthModule::for_root` — dual-path, like every other
 module's config. The kubelet's `timeoutSeconds` defaults to **1**, and a
 probe that has not answered by then is scored a *failure*; on a liveness
@@ -142,23 +142,23 @@ probe, that is a restart.
 | `PROBE_DEADLINE_MS` | ceiling on the **whole** response, whatever the indicator count; what answered is reported, the rest are `down` — default `900` |
 
 Milliseconds, not seconds: the only interval that matters here is one
-*inside* the orchestrator's second. `0` is refused at boot on both — an
-unbounded probe is what these fields exist to prevent, and a zero one
-fails every poll.
+*inside* the orchestrator's second. `0` is refused at boot on both, from the
+environment or pinned in code — an unbounded probe is what these fields exist
+to prevent, and a zero one fails every poll.
 
 Indicators run **concurrently**, so a probe costs the slowest check
 rather than their sum, and adding a fifth indicator does not move the
 response's worst case.
 
-```rust title="apps/api/src/module.rs (from the demo)"
-use std::time::Duration;
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::{HealthConfig, HealthModule};
 
 #[module(imports = [
-    HealthModule::for_root(
-        HealthConfig::default().with_probe_deadline(Duration::from_millis(400)),
-    ),
+    HealthModule::for_root(HealthConfig {
+        probe_deadline_ms: 400,
+        ..Default::default()
+    }),
 ])]
 pub struct ApiModule;
 ```
@@ -166,7 +166,7 @@ pub struct ApiModule;
 <Aside type="caution">
 **The probe paths follow `global_prefix`.** A probe path is a contract
 with your orchestrator, but the routes are ordinary controller routes:
-under `NESTRS_HTTP__GLOBAL_PREFIX=/api/v1` the kubelet must call
+under `<PREFIX>_HTTP__GLOBAL_PREFIX=/api/v1` the kubelet must call
 `GET /api/v1/health/live`, and a manifest written from the unqualified
 path gets a `404` — which reads as a failed probe. A prefixed app logs
 one `warn` at boot naming the exact paths its probes answer on; point the

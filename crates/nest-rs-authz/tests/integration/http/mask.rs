@@ -1,17 +1,13 @@
 //! Wire → model → mask → retain wire keys, driven through a real `#[routes]`
 //! handler and the `Authorize` response shaper — no live database.
 
-use std::sync::Arc;
-
 use nest_rs_authz::http::Authorize;
-use nest_rs_authz::{AbilityBuilder, Action, Read};
+use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
-use poem::Request;
 use serde::Serialize;
 
 mod widget {
@@ -22,7 +18,7 @@ mod widget {
         Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize, schemars::JsonSchema,
     )]
     #[sea_orm(table_name = "widgets")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub name: String,
@@ -30,7 +26,7 @@ mod widget {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -46,12 +42,13 @@ impl WireModelDefaults for widget::Entity {
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "name"])
     }
+
+    fn is_placeholdered(column: widget::Column) -> bool {
+        matches!(column, widget::Column::Secret)
+    }
 }
 
-// `JsonSchema` too: an `Authorize`-shaped route publishes its response schema
-// (OAPI-O5), so the bound `Json<T>` has always carried on an unshaped route now
-// applies uniformly — adding `#[authorize]` no longer silently drops a route's
-// documented shape.
+// `JsonSchema` too: an `Authorize`-shaped route publishes its response schema.
 #[derive(Serialize, schemars::JsonSchema)]
 struct WidgetDto {
     id: i32,
@@ -66,11 +63,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let admin = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let admin = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .map(|role| role == "admin")
             .unwrap_or(false);
         let mut b = AbilityBuilder::new();
@@ -82,13 +78,12 @@ impl Guard for AbilityInjector {
                 .when(|p| p.eq(widget::Column::Id, 1))
                 .fields([widget::Column::Name]);
         }
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 #[injectable]
 #[derive(Default)]
@@ -98,23 +93,22 @@ impl Layer for ListAbilityInjector {}
 
 #[async_trait]
 impl Guard for ListAbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for ListAbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for ListAbilityInjector {}
 
 #[controller(path = "/widgets")]
 struct WidgetController;
 
 #[routes]
 impl WidgetController {
-    #[get("/:id")]
+    #[get("/{id}")]
     async fn one(&self, _authz: Authorize<Read, widget::Entity>) -> Json<WidgetDto> {
         Json(WidgetDto {
             id: 1,
@@ -122,9 +116,7 @@ impl WidgetController {
         })
     }
 
-    // The decorator form: `#[authorize]` must arm exactly what the hand-written
-    // `Authorize<..>` parameter above arms — same gate, same response shaper —
-    // with nothing in the signature to delete by accident.
+    // The decorator form arms exactly what the hand-written `Authorize<..>` parameter arms.
     #[get("/decorated")]
     #[authorize(Read, widget::Entity)]
     async fn decorated(&self) -> Json<widget::Model> {
@@ -282,8 +274,8 @@ async fn an_unrestricted_grant_cannot_leak_skipped_columns() {
 
 #[tokio::test]
 async fn a_raw_model_handler_cannot_leak_unexposed_columns() {
-    // Regression: a handler returning `Json(Model)` instead of the wire DTO must
-    // not leak the unexposed `secret`, even under an unrestricted (admin) grant.
+    // A handler returning `Json(Model)` instead of the wire DTO must not leak the
+    // unexposed `secret`, even under an unrestricted (admin) grant.
     let app = boot().await;
     let resp = app
         .http()
@@ -309,10 +301,8 @@ async fn a_raw_model_handler_cannot_leak_unexposed_columns() {
 
 #[tokio::test]
 async fn the_authorize_decorator_arms_the_same_gate_and_mask() {
-    // API-1: `#[authorize(Read, Entity)]` with an empty signature must behave
-    // exactly like the hand-written `Authorize<..>` parameter — masked on a
-    // grant, 403 without one — so posture never depends on how an import was
-    // spelled.
+    // `#[authorize(Read, Entity)]` with an empty signature behaves exactly like
+    // the hand-written `Authorize<..>` parameter.
     let app = boot().await;
 
     let resp = app
@@ -342,9 +332,8 @@ async fn the_authorize_decorator_arms_the_same_gate_and_mask() {
 
 #[tokio::test]
 async fn a_dropped_row_does_not_leak_unexposed_columns() {
-    // Regression: when `mask_many` drops a row (id=2 denied) under an
-    // unrestricted grant on id=1, the survivor must still be stripped — the
-    // dropped-row branch previously skipped the wire-key strainer.
+    // When `mask_many` drops a row (id=2 denied) under an unrestricted grant on
+    // id=1, the survivor is still strained.
     let app = boot().await;
     let resp = app
         .http()
@@ -384,6 +373,108 @@ async fn a_list_masks_each_row_and_retains_wire_keys() {
     );
 }
 
+/// `narrow` holds a title-only grant beside a relational one; anyone else reads
+/// every post but those a relation denies.
+#[injectable]
+#[derive(Default)]
+struct PostAbilityInjector;
+
+impl Layer for PostAbilityInjector {}
+
+#[async_trait]
+impl Guard for PostAbilityInjector {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        use crate::post;
+
+        let narrow = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
+            .is_some_and(|role| role == "narrow");
+        let mut b = AbilityBuilder::new();
+        if narrow {
+            b.can(Action::Read, post::Entity)
+                .fields([post::Column::Title]);
+            b.can(Action::Read, post::Entity)
+                .when(|p| post::in_org(&p, 7));
+        } else {
+            b.can(Action::Read, post::Entity);
+            b.cannot(Action::Read, post::Entity)
+                .when(|p| post::in_org(&p, 9));
+        }
+        cx.attach(b.build().expect("valid test ability"));
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for PostAbilityInjector {}
+
+#[controller(path = "/posts")]
+struct PostController;
+
+#[routes]
+impl PostController {
+    /// The rows a `Repo` read under the caller's ability returns: its SQL
+    /// applied every rule, the relational ones included.
+    #[get("/")]
+    #[authorize(Read, crate::post::Entity)]
+    async fn list(&self) -> Json<Vec<crate::post::Post>> {
+        let row = |id: i32| {
+            crate::post::Post::from(&crate::post::Model {
+                id,
+                org_id: 7,
+                title: format!("post {id}"),
+                archived_at: None,
+                deleted: false,
+            })
+        };
+        Json(vec![row(1), row(2)])
+    }
+}
+
+#[module(providers = [PostAbilityInjector, PostController])]
+struct PostModule;
+
+async fn posts(role: &str) -> serde_json::Value {
+    let app = TestApp::builder()
+        .module::<PostModule>()
+        .use_guards_global([guard::<PostAbilityInjector>()])
+        .build()
+        .await
+        .expect("post harness boots");
+    let resp = app.http().get("/posts").header("x-role", role).send().await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("body");
+    serde_json::from_str(&body).expect("a JSON body")
+}
+
+/// The denial's relation was decided in SQL, which excluded what it denies:
+/// re-deciding it on a rebuilt row would drop every row SQL admitted.
+#[tokio::test]
+async fn a_relational_denial_keeps_every_row_the_read_admitted() {
+    let rows = posts("member").await;
+    assert_eq!(
+        rows.as_array().map(Vec::len),
+        Some(2),
+        "the read already left out what the denial names: {rows}",
+    );
+}
+
+/// A row the title-only grant decides takes that grant's fields; the
+/// relational grant cannot prove it matched this row, so it widens nothing.
+#[tokio::test]
+async fn a_relational_grant_widens_no_row_a_decided_grant_narrows() {
+    let rows = posts("narrow").await;
+    let rows = rows.as_array().expect("a list");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(
+            row.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+            Some(vec![&"title".to_owned()]),
+            "{row}",
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_non_json_response_passes_through() {
     #[controller(path = "/plain")]
@@ -417,14 +508,8 @@ async fn a_non_json_response_passes_through() {
     resp.assert_text("hello").await;
 }
 
-/// OAPI-O5: an ability shaper masks *fields*, so a route behind one publishes
-/// its full shape and flags it — it does not publish nothing.
-///
-/// Suppressing the schema was the honest reading of "the field set depends on
-/// the caller", and it typed every `#[crud]` response as `any` in a generated
-/// client, on exactly the surface `#[expose]` exists to serve. Asserted on the
-/// route metadata rather than on a rendered document so the contract is pinned
-/// where it is produced — `#[routes]` — and with no database in reach.
+/// An ability shaper masks *fields*, so a route behind one publishes its full
+/// shape and flags it — it does not publish nothing.
 #[tokio::test]
 async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked() {
     let app = boot().await;
@@ -436,11 +521,9 @@ async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked(
         .collect();
     assert!(!routes.is_empty(), "the controller is discovered at all");
 
-    // The media-type probes return a bare `poem::Response` precisely so they can
-    // set (or omit) a `Content-Type` no typed body would let them set. An opaque
-    // return type has no schema to publish, so they answer the `masked` half of
-    // this contract and are exempt from the `response` half — by name, so a route
-    // cannot drift out of the assertion by accident.
+    // The media-type probes return a bare `poem::Response` to set (or omit) a
+    // `Content-Type`; with no schema to publish they are exempt from the
+    // `response` half, by name.
     const OPAQUE_BY_CONSTRUCTION: &[&str] = &["vendor", "upper", "charset", "untyped", "csv"];
 
     for route in routes {
@@ -460,14 +543,8 @@ async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked(
     }
 }
 
-/// The mask is armed by the compiler and cannot be renamed out of — but what
-/// arming installs then decided *whether to run* by comparing the response's
-/// `Content-Type` against the literal prefix `application/json`. Three bodies
-/// that are JSON by the standard failed that test and shipped every unexposed
-/// column, at `200`, with the route armed and nothing logged.
-///
-/// Each case below is one of them, and each is a media type the standard says is
-/// JSON — not a near-miss.
+/// Each case is a media type the standard says is JSON — not a near-miss — so
+/// the armed mask must run on it.
 #[tokio::test]
 async fn a_json_media_type_is_masked_however_it_is_spelled() {
     let app = boot().await;
@@ -486,10 +563,8 @@ async fn a_json_media_type_is_masked_however_it_is_spelled() {
     }
 }
 
-/// A response that declares nothing cannot be classified, so the shaper must not
-/// guess. Passing it through is the only guess that leaks, which makes failing
-/// closed the answer here — the same one a body that will not reconcile with the
-/// entity already gets.
+/// A response that declares nothing cannot be classified, so the shaper fails
+/// closed rather than guess.
 #[tokio::test]
 async fn a_body_with_no_declared_media_type_fails_closed() {
     // Thread-local: `#[tokio::test]` is a current-thread runtime, so the
@@ -509,12 +584,7 @@ async fn a_body_with_no_declared_media_type_fails_closed() {
         "and it ships none of the entity on the way out: {body}",
     );
 
-    // The 500 is the same 500 a panicking handler gives, so the event is what
-    // separates "this route is broken" from "this route was refused a body it
-    // could not classify". Every fail-closed masking exit files this one line —
-    // which is what makes a branch that forgets it the visible omission — and
-    // nothing read it until a refusal that was never a masking failure stopped
-    // standing in for it.
+    // The 500 matches a panicking handler's; the event is what tells them apart.
     let event = logs.expect_one("nest_rs::authz", "response masking failed");
     assert_eq!(event.level, "warn");
     assert!(

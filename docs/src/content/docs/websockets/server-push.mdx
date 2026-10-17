@@ -1,12 +1,9 @@
 ---
 title: Server-side push
 description: Reach connected clients from outside a handler — inject WsServer in a service, a scheduled job, or an HTTP route.
-tier: all-options
 sidebar:
   order: 6
 ---
-
-import { Aside } from '@astrojs/starlight/components';
 
 A `WsClient` exists only inside a `#[subscribe_message]` (or a
 lifecycle hook). Anything that fires *without* a client message — a
@@ -69,6 +66,20 @@ outboxes that accepted the frame (`usize`) or whether the target
 connection still existed (`bool`). A serializer failure surfaces as
 `Err(serde_json::Error)`; a closed outbox is silently dropped — the
 writer task already moved on.
+
+## A push is not masked
+
+`#[authorize]` masks a reply for the caller who sent the message. A push has
+no such caller: `WsServer` serializes `data` as given, and every connection it
+reaches receives the same frame, whoever is behind it. Push only what every
+recipient may read — a notice that something changed, an id the client then
+fetches through a gated message or route.
+
+`nest_rs::authz::masked_reply` does not change that. It masks for the
+ability that is ambient where it runs — inside a handler, the sender's — and
+judges the value as a push, so a rule it cannot decide on the value refuses
+it ([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)).
+The framework does not mask a push per recipient.
 
 ## A scheduled push
 
@@ -143,21 +154,16 @@ The gateway handler is two lines; the service owns the side effect.
 
 ## Backpressure
 
-Each connection has a writer task draining an `unbounded_channel` into
-the `Sink`. A slow client backs up its own outbox; the read/dispatch
-loop on every other connection stays unaffected. Frames sent to a
-closed outbox are dropped silently — the registry returns the count of
-outboxes that accepted the frame, so a `broadcast(...)` to `N`
-connections may legitimately report `< N` while you race a slow
-disconnect.
-
-<Aside type="note">
-"Unbounded" here means the in-process channel is unbounded. Backpressure
-policy is yours to set, on purpose: the right answer differs per traffic
-shape — disconnect on outbox depth, drop on TTL, coalesce successive
-frames. The registry hands back the accepted-frame count, and
-`WsServer::connection_count` gives you the other half of the signal.
-</Aside>
+Each connection has a writer task draining a bounded outbox — 256 frames — into
+the socket, so a slow client backs up its own outbox and the read loop on every
+other connection stays unaffected. A push to a full outbox is shed, with a
+`warn` on `nest_rs::ws`: the registry returns the count of outboxes that
+accepted the frame, so a `broadcast(...)` to `N` connections may report `< N`
+while a slow client lags or a disconnect races it. A reply to a message that
+finds the outbox full closes the socket `1008`, and a client that takes nothing
+at all is dropped at the transport's send deadline,
+`<PREFIX>_HTTP__SEND_TIMEOUT_SECS` — see
+[When the server closes a socket](/websockets/#when-the-server-closes-a-socket).
 
 ## Reference
 

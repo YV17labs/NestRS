@@ -6,51 +6,57 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`Repo`, the ambient executor, the request layers). Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features."
+description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`SeaOrmUnitOfWork`, the unit of work every edge runs through, and `Repo` on its ambient executor); `#[expose]` and `#[wire_enum]` make an entity its wire DTO, inputs and GraphQL object. The HTTP route-model binder (`Bind`) lives behind the `http` feature."
 keywords = ["framework", "nestrs", "seaorm", "database", "orm"]
 categories = ["database"]
+
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
 
 
 [features]
 default = []
 # HTTP transport extractor: `Bind<S, A>` (poem extractor that loads + authorizes
-# through `CrudService::access`). Poem is already in the base deps; `uuid` is
-# pulled here because `Bind` validates UUID v7 path ids. `nest-rs-authz/http`
-# is forwarded because `src/http/shape.rs` uses `nest_rs_authz::http`; without
-# it, building this feature in isolation (or via `full`) fails to resolve that
-# module (it otherwise only compiles under workspace feature unification).
-http = ["dep:uuid", "dep:nest-rs-resource", "nest-rs-authz/http"]
-# GraphQL transport extractors: the `bind` resolver helper and `LoaderScope`
-# (the `BatchContext` that re-installs the request executor + ability around
-# each `#[dataloader]` batch).
-graphql = ["dep:nest-rs-graphql", "dep:uuid"]
-# WebSocket transport extractor: `WsDataContext` (the `SocketContext` that
-# re-installs the request executor + ability around each gateway message).
-ws = ["dep:nest-rs-ws"]
-# MCP transport extractor: `McpDataContext` (the `McpToolContext` that
-# re-installs the request executor + ability inside each tool dispatch).
-mcp = ["dep:nest-rs-mcp"]
+# through `CrudService::access`). Poem is already in the base deps.
+# `nest-rs-authz/http` is forwarded because `src/http/shape.rs` uses
+# `nest_rs_authz::http`; without it, building this feature in isolation (or via
+# `full`) fails to resolve that module (it otherwise only compiles under
+# workspace feature unification).
+http = ["nest-rs-authz/http"]
+# GraphQL transport extractors: the `bind` resolver helper, and what
+# `#[expose(…, graphql)]` emits: the object derives, the relation bridges and
+# their dataloaders.
+# `nest-rs-authz/graphql` is forwarded because `src/graphql/bind.rs` refuses
+# through `nest_rs_authz::graphql::forbidden`.
+graphql = [
+    "dep:nest-rs-graphql",
+    "dep:async-graphql",
+    "nest-rs-authz/graphql",
+    "nest-rs-seaorm-macros/graphql",
+]
 # Liveness/readiness pool ping (`SeaOrmHealthIndicator`) wired through
 # `nest-rs-health`'s `#[indicators]` registry. The connection's `ping`
 # round-trips a `SELECT 1`, so an unreachable DB drops the readiness probe
 # to `503`.
 health = ["dep:nest-rs-health"]
 # Convenience for tests and exemplars.
-full = ["http", "graphql", "ws", "mcp", "health"]
+full = ["http", "graphql", "health"]
 
 [dependencies]
 nest-rs-core.workspace = true
-# `WorkerDbContext` bridges the framework's worker seam (`JobContext`) to install
-# the job executor around every scheduler tick / queue job. The trait lives in
-# `nest-rs-worker` so neither scheduler nor queue has to depend on the other.
-nest-rs-worker.workspace = true
-# The ORM-agnostic ambient executor + scope seam. SeaORM's `Executor` enum
-# in this crate implements `nest_rs_database::Executor`; the task-local plumbing
-# lives in `nest-rs-database` so a third-party ORM can reuse it.
+# `#[expose]` and `#[wire_enum]`, re-exported at the root.
+nest-rs-seaorm-macros.workspace = true
+# The ORM-agnostic unit-of-work port: `SeaOrmUnitOfWork` implements
+# `nest_rs_database::UnitOfWork`, which every edge opens its units through, and
+# SeaORM's `Executor` enum implements `nest_rs_database::Executor`.
 nest-rs-database.workspace = true
 # `SeaOrmModule` owns the crate's one `#[config]`, `SeaOrmConfig` (namespace
 # `seaorm`), loaded from `NESTRS_SEAORM__*`; `validator` backs its `#[validate]` rules.
-nest-rs-config.workspace = true
+# `tls`: the boot proof tells a refused TLS negotiation through `ClientTls`.
+nest-rs-config = { workspace = true, features = ["tls"] }
 # `validation_details` — the one redaction policy for `ValidationErrors` on a
 # wire. `ServiceError::Validation` must inherit it, not restate it: a raw
 # `to_value` echoes `params.value`, i.e. the rejected input.
@@ -65,6 +71,8 @@ nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 poem.workspace = true
 sea-orm = { workspace = true, features = ["with-chrono"] }
+# The pool's TLS backend, selected here because sea-orm cannot select it.
+sqlx.workspace = true
 chrono.workspace = true
 # `PageParams` (the `?first&after` cursor query) derives `Deserialize` so the
 # generated `#[crud]` list handler can read it with poem's `Query<…>`.
@@ -77,30 +85,29 @@ serde_json.workspace = true
 schemars.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
-# `#[expose(..., soft_delete)]` submits its entity/service pair here at link
-# time, so `SoftDeleteAudit` can refuse boot on a half-wired tombstone.
+# `#[expose(..., soft_delete)]` registers its entity here at link time, so
+# every `Repo` read of it hides its tombstoned rows.
 inventory.workspace = true
+# `Bind` validates UUID v7 path ids, and an exposed entity's write DTO mints
+# its `Uuid` primary key.
+uuid.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 # The ambient executor is carried in a `tokio::task_local!`.
 tokio.workspace = true
+# A unit's settle runs on a task the driver tracks and drains before the pool
+# closes, so a dropped edge future never cuts a `COMMIT`.
+tokio-util.workspace = true
 
 # Optional deps for transport-binding features.
-uuid = { workspace = true, optional = true }
-nest-rs-resource = { workspace = true, optional = true }
+# `uuid` / `chrono`: `#[expose(…, graphql)]` puts `Uuid` and `DateTime*` columns
+# on GraphQL objects, so their scalar impls are this crate's requirement.
+async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono"] }
 nest-rs-graphql = { workspace = true, optional = true }
-nest-rs-ws = { workspace = true, optional = true }
-nest-rs-mcp = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Self dev-dependency: turn on every transport binding for this crate's own test
-# targets. Without it `cargo nextest run --workspace` builds this crate with
-# `default = []`, the `[[test]] e2e` target's `required-features` below are
-# never satisfied, and the whole Postgres suite is skipped in silence — the
-# opposite of what the Definition of done's `-E 'binary(e2e)'` step reads as.
-# Dev-deps do not propagate, so no consumer gains a feature from this, and a
-# path-only dev-dep is stripped from the published manifest.
+# Self dev-dependency: the suite runs with every transport binding on.
 nest-rs-seaorm = { path = ".", features = ["full"] }
 # The `public_visitor` e2e boots a real app: a `#[public]` controller behind
 # `AbilityGuard`, driven through the in-process harness. `#[routes]` expands to
@@ -109,7 +116,7 @@ nest-rs-seaorm = { path = ".", features = ["full"] }
 # `graphql` because the `federation` e2e writes a `#[resolver]`: `#[operations]`
 # expands to the per-site guard chain, which this crate only exposes with the
 # GraphQL edge compiled in.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
+nest-rs-guards = { path = "../nest-rs-guards" }
 # Same reason one layer up: the subgraph's operation guard is
 # `GraphqlAbilityBridge`, and the bridge lives behind authz's own `graphql`
 # feature. A dev-dep, so no consumer of this crate gains it.
@@ -118,21 +125,24 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 # `EphemeralDatabase` — the fixture that migrates against *this* crate.
 # Without it nothing in the root workspace enables `nest-rs-testing/orm`, so
 # `cargo clippy --workspace --all-targets` never saw those 176 published
-# lines and only `demo/` (a separate workspace) built them.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["orm"] }
-# The by-id binding's swapped-parameter diagnostic is an upgrade contract: the
-# `on_unimplemented` notes are the only thing that names the 1.1.x order, since
-# rustc reports the two bound failures against the `#[crud]` attribute rather
-# than the parameter. Snapshotted so a wording regression fails here.
-trybuild.workspace = true
-
-# The e2e suite imports feature-gated transport bridges: `DbContext` (`http`)
-# and `WsDataContext` (`ws`). Without this gate, a default-feature
-# `cargo test -p nest-rs-seaorm` fails to compile the test binary (E0432).
-# The `ws` module inside `tests/e2e/ws.rs` stays additionally `#[cfg]`-gated.
-[[test]]
-name = "e2e"
-required-features = ["http", "ws", "graphql"]
+# lines and only `demo/` (a separate workspace) built them. `tls` issues the
+# certificate of the Postgres double the pool must refuse to log in to.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["orm", "tls", "ws"] }
+# The pool's default budget is pinned below the authentication guard's net.
+nest-rs-authn = { path = "../nest-rs-authn" }
+# The `executor` e2e emits under a caller's own transaction: the bus dispatches
+# through this crate's `after_commit`, and only a live `BEGIN` makes a `Txn`.
+nest-rs-events = { path = "../nest-rs-events" }
+# The `ws` and `mcp` e2e boot a gateway and a tool host over the binding, which
+# their edges open each message's and each operation's unit through.
+nest-rs-ws = { path = "../nest-rs-ws" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+# The `worker` e2e runs a `#[processor]` attempt over the binding, where the
+# job's timeout meets its commit.
+nest-rs-queue = { path = "../nest-rs-queue" }
+# `test-util` (not part of tokio's `full`) pauses time, so the instant each
+# conflicting call retries at is read off the clock its backoff sleeps on.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

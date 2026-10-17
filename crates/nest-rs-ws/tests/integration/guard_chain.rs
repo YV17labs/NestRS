@@ -1,35 +1,17 @@
-//! Boot-time phase validation of a gateway's **upgrade** chain.
-//!
-//! `#[routes]` has refused a misordered controller chain since the phase
-//! declarations existed: an authorization guard listed before the
-//! authentication guard whose principal it reads is a wiring mistake nothing
-//! recovers from, so it fails the boot with a named error rather than answering
-//! every request the same way forever.
-//!
-//! A gateway's upgrade is that same chain. `#[gateway(...)]`'s `#[use_guards]`
-//! run on the HTTP `GET` that becomes the socket — `check_http`, the entry
-//! `produced_principal` and `expected_principal` describe — so the check
-//! transfers exactly, and it can run at boot because the mount is where a
-//! gateway resolves its guards.
-//!
-//! What made the absence quiet is that it fails *closed*: the ability guard
-//! finds no principal, installs nothing, and `Repo` denies every row. The socket
-//! connects, messages are accepted, and every one of them comes back empty —
-//! with nothing anywhere naming the order as the cause.
-//!
-//! **The per-message chains are not validated, and `guards-baseline.txt` records
-//! why**: those run `check_ws_message`, where the principal contract this check
-//! reads does not hold.
+//! Boot-time phase validation of a gateway's **upgrade** chain. The per-message
+//! chains are not validated: they run `check`, where the principal contract
+//! this check reads does not hold.
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardPhase, HttpGuard, PrincipalClaim, WsGuard};
+use nest_rs_core::{AmbientValue, Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_testing::TestApp;
-use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
-use nest_rs_ws::{WsClient, WsModule, async_trait, gateway, messages};
+use nest_rs_ws::{WsClient, WsConfig, WsModule, async_trait, gateway, messages};
 
 /// What the authentication guard attaches and the authorization guard reads.
 #[derive(Clone)]
 struct Caller;
+
+impl AmbientValue for Caller {}
 
 #[injectable]
 #[derive(Default)]
@@ -47,14 +29,14 @@ impl Guard for Authenticate {
         Some(PrincipalClaim::of::<Caller>())
     }
 
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        req.extensions_mut().insert(Caller);
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(Caller);
         Ok(())
     }
 }
 
-impl HttpGuard for Authenticate {}
-impl WsGuard for Authenticate {}
+impl GuardFor<nest_rs_http::HttpView> for Authenticate {}
+impl GuardFor<nest_rs_ws::WsView> for Authenticate {}
 
 #[injectable]
 #[derive(Default)]
@@ -73,14 +55,11 @@ impl Guard for Authorize {
     }
 }
 
-impl HttpGuard for Authorize {}
-impl WsGuard for Authorize {}
+impl GuardFor<nest_rs_http::HttpView> for Authorize {}
+impl GuardFor<nest_rs_ws::WsView> for Authorize {}
 
-/// The path deliberately carries no word the assertions below look for. Spelled
-/// `/ws/backwards` rather than `/ws/misordered-upgrade` because an earlier
-/// version asserted `err.contains("upgrade")` against a path containing
-/// "upgrade" — the assertion passed with the label removed entirely, which is a
-/// green cell with nothing behind it.
+/// The path carries no word the assertions below look for, so they cannot pass
+/// on the path alone.
 #[gateway(path = "/ws/backwards")]
 #[use_guards(Authorize, Authenticate)]
 struct BackwardsGateway;
@@ -109,8 +88,6 @@ async fn a_misordered_upgrade_chain_fails_the_boot_naming_both_guards_and_the_ga
         "the failure names both guards — the order is a property of the pair, \
          and one name sends the reader to a guard that is fine: {err}",
     );
-    // The label, and the path *inside* it. An app with several gateways gets one
-    // of these per misordered mount, and "a gateway" is not an address.
     assert!(
         err.contains("gateway upgrade") && err.contains("/ws/backwards"),
         "…and says which mount: {err}",
@@ -123,10 +100,7 @@ struct OrderedGateway;
 
 #[messages]
 impl OrderedGateway {
-    /// Message-scope guards in the *reverse* order, deliberately. The
-    /// per-message chain is not phase-validated, so this must still boot — and
-    /// if a future change starts validating it, this test is what says so
-    /// rather than a product failing to start.
+    /// Reverse order on purpose: the per-message chain is not phase-validated.
     #[subscribe_message("ping")]
     #[use_guards(Authorize, Authenticate)]
     #[public]
@@ -140,7 +114,6 @@ struct OrderedModule;
 
 #[tokio::test]
 async fn a_correct_upgrade_chain_boots_whatever_the_messages_declare() {
-    // The check is worth nothing if it refuses the ordering every app writes.
     TestApp::for_module::<OrderedModule>()
         .await
         .unwrap_or_else(|err| {
@@ -148,9 +121,6 @@ async fn a_correct_upgrade_chain_boots_whatever_the_messages_declare() {
         });
 }
 
-/// A gateway with no guards of its own, under a correctly ordered global pool —
-/// the shape most apps have, and the one a check reading the wrong list would
-/// refuse.
 #[gateway(path = "/ws/bare")]
 struct BareGateway;
 
@@ -171,4 +141,152 @@ async fn a_gateway_that_declares_no_guards_boots() {
     TestApp::for_module::<BareModule>()
         .await
         .unwrap_or_else(|err| panic!("a gateway need not declare guards: {err}"));
+}
+
+/// Listed by a message's `#[use_guards]`, provided by no module.
+#[injectable]
+#[derive(Default)]
+struct Unprovided;
+
+impl Layer for Unprovided {}
+
+#[async_trait]
+impl Guard for Unprovided {}
+
+impl GuardFor<nest_rs_http::HttpView> for Unprovided {}
+impl GuardFor<nest_rs_ws::WsView> for Unprovided {}
+
+#[gateway(path = "/ws/unprovided")]
+struct UnprovidedGateway;
+
+#[messages]
+impl UnprovidedGateway {
+    #[subscribe_message("ping")]
+    #[use_guards(Unprovided)]
+    #[public]
+    async fn ping(&self, _client: &WsClient) -> String {
+        "pong".into()
+    }
+}
+
+#[module(imports = [WsModule], providers = [UnprovidedGateway])]
+struct UnprovidedModule;
+
+#[tokio::test]
+async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_event() {
+    // Built by hand, so the access graph does not refuse first.
+    let container = nest_rs_core::Container::builder()
+        .provide(WsConfig::default())
+        .import::<UnprovidedModule>()
+        .build();
+    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::from_config(
+        &nest_rs_ws::nest_rs_http::HttpConfig::default(),
+    )
+    .expect("the defaults are in range");
+    let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
+        panic!("the event would run without the guard it declares");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("Unprovided") && chain.contains("ws ping"),
+        "the refusal names the guard and the event declaring it: {chain}",
+    );
+    assert!(
+        chain.contains("no imported module provides it"),
+        "…and the remedy: {chain}",
+    );
+}
+
+/// Gated by a guard no module provides.
+#[gateway(path = "/ws/unprovided-upgrade")]
+#[use_guards(Unprovided)]
+struct UnprovidedUpgradeGateway;
+
+#[messages]
+impl UnprovidedUpgradeGateway {
+    #[subscribe_message("ping")]
+    #[public]
+    async fn ping(&self, _client: &WsClient) -> String {
+        "pong".into()
+    }
+}
+
+#[module(imports = [WsModule], providers = [UnprovidedUpgradeGateway])]
+struct UnprovidedUpgradeModule;
+
+#[tokio::test]
+async fn an_upgrade_guard_no_module_provides_fails_the_boot_naming_it_and_the_gateway() {
+    let container = nest_rs_core::Container::builder()
+        .provide(WsConfig::default())
+        .import::<UnprovidedUpgradeModule>()
+        .build();
+    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::from_config(
+        &nest_rs_ws::nest_rs_http::HttpConfig::default(),
+    )
+    .expect("the defaults are in range");
+    let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
+        panic!("the upgrade would run without the guard it declares");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("Unprovided") && chain.contains("/ws/unprovided-upgrade"),
+        "the refusal names the guard and the gateway declaring it: {chain}",
+    );
+}
+
+static FORCED_CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts every message check, so a replay is seen.
+#[injectable]
+#[derive(Default)]
+struct CountingGuard;
+
+impl Layer for CountingGuard {}
+
+#[async_trait]
+impl Guard for CountingGuard {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        FORCED_CHECKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for CountingGuard {}
+impl GuardFor<nest_rs_ws::WsView> for CountingGuard {}
+
+#[gateway(path = "/ws/replayed")]
+struct ReplayedGateway;
+
+#[messages]
+impl ReplayedGateway {
+    #[subscribe_message("again")]
+    #[public]
+    #[force_guards(CountingGuard)]
+    async fn again(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(imports = [WsModule], providers = [ReplayedGateway, CountingGuard])]
+struct ReplayedModule;
+
+#[tokio::test]
+async fn a_guard_forced_alone_on_a_message_runs_again_after_the_global_pool() {
+    let app = TestApp::builder()
+        .module::<ReplayedModule>()
+        .use_guards_global([nest_rs_guards::guard::<CountingGuard>()])
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+
+    let mut socket = app.socket("/ws/replayed").connect().await;
+    socket.send("again", serde_json::Value::Null).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(reply["data"], "ok", "{reply}");
+    assert_eq!(
+        FORCED_CHECKS.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the pool's check, then the replay `#[force_guards]` binds on the message",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
 }

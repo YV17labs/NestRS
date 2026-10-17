@@ -3,38 +3,54 @@
 use nest_rs::core::injectable;
 use nest_rs::schedule::{CronExpression, scheduled};
 
-/// Minimal scheduled host.
 #[injectable]
 pub struct HygieneTasks;
 
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
 #[scheduled]
+#[meta(HygieneLimit(100))]
 impl HygieneTasks {
-    /// Interval form, carrying the shared `transactional` key so the trailing
-    /// named argument is proved on a trigger that takes one of its own — the
-    /// grammar `#[cron]` shares. A scheduled method returns
-    /// `anyhow::Result<()>` by contract, named here through the surface
-    /// re-export.
-    #[every("60s", transactional = false)]
+    /// Interval form, carrying every shared key.
+    #[every(
+        "60s",
+        timeout = "5m",
+        transactional = false,
+        replicas = "one",
+        key = "hygiene::HygieneTasks::tick"
+    )]
     async fn tick(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }
 
-    /// One-shot form, carrying the shared key too: the witness covered three
-    /// of the four sites `transactional` reaches, and the fourth is the one a
-    /// developer meets last.
+    /// One-shot form.
     #[after("1s", transactional = false)]
+    #[meta(HygieneLimit(10))]
     async fn warmup(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }
 
-    /// Cron form, with both of its named arguments — `tz` is the trigger's
-    /// own, `transactional` the shared one, and they parse through one list.
+    /// Cron form, with every named argument it takes.
     #[cron(
         CronExpression::EVERY_MINUTE,
         tz = "Europe/Paris",
-        transactional = true
+        transactional = true,
+        replicas = "each"
     )]
     async fn heartbeat(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
+    }
+
+    #[every("30s")]
+    fn sweep(&self) -> nest_rs::core::anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// A tick compiled out takes its schedule entry with it.
+    #[cfg(any())]
+    #[every("1m")]
+    async fn compiled_out(&self) -> crate::does_not_exist::Answer {
+        crate::does_not_exist::tick()
     }
 }

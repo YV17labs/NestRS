@@ -1,0 +1,90 @@
+name: Framework
+
+on:
+  push:
+    branches: [main, 'release/**']
+    paths: &tree
+      - '**'
+      - '!docs/**'
+      - '!demo/**'
+      - '!bench/**'
+      - '!**.md'
+      # Read by a build or a test all the same: a file under a crate's `src/`
+      # (the CLI compiles its rules template in), and the pages whose ACL rules
+      # nest-rs-redis's e2e runs as printed.
+      - 'crates/**/src/**'
+      - 'docs/src/content/docs/queue/delivery.mdx'
+      - 'docs/src/content/docs/rate-limiting/index.mdx'
+      - 'docs/src/content/docs/schedule/index.mdx'
+  pull_request:
+    paths: *tree
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: framework-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: lint
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: just@1,cargo-hack@0.6,cargo-deny@0.20,zizmor@1.30
+      # install-action does not carry actionlint: the release is fetched by
+      # version and checked against its digest. shellcheck is the runner's.
+      - name: Install actionlint
+        env:
+          VERSION: 1.7.12
+          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          archive="actionlint_${VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/$archive"
+          echo "$SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$HOME/.local/bin" actionlint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: just lint
+      - run: just doc
+
+  test:
+    name: test (unit, integration, doctests, e2e)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    # The dev container's services, as the runner reaches them: on TLS alone,
+    # trusting through the system's store the authority the dev-services
+    # action issues into CERTS.
+    env:
+      CERTS: /tmp/nestrs-certs
+      NESTRS_SEAORM__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
+      NESTRS_REDIS__URL: rediss://localhost:6379
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/dev-services
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: test
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest@0.9,just@1
+      - run: just test

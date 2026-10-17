@@ -1,0 +1,558 @@
+//! Rendering an error as the message an operator reads: its own sentence and
+//! every cause beneath it, each said once, and a driver's error as its driver
+//! says it ([`SafeLink`]).
+
+use std::any::Any;
+use std::error::Error;
+
+use tokio::task::JoinError;
+
+use crate::error::{DecodeError, Redactions};
+
+const NO_MESSAGE: &str = "an error with no message";
+
+/// `error`'s message, followed by each cause beneath it that the sentence so
+/// far does not already end with; a blank message is left out, and a chain
+/// saying nothing at all is said to be one.
+///
+/// **A decode failure anywhere in the chain is said without its value**, as its
+/// [`DecodeError`], a joined task's panic without its payload, and **a link a
+/// driver claims through a [`SafeLink`] as the driver says it**, with nothing
+/// below it; every other link is passed through [`DecodeError::redact`], which
+/// also says a claimed link wherever a wrapper spells it whole. A wrapper
+/// wording the value its own way (`{0:?}`, a `format!` of the field, part of a
+/// driver's message) is not caught.
+pub fn error_message(error: &(dyn Error + 'static)) -> String {
+    let redactions = Redactions::of(Some(error));
+    let mut sentence = String::new();
+    let mut link = Some(error);
+    while let Some(current) = link {
+        let (text, whole) = said(current, &redactions);
+        let inlined = sentence
+            .strip_suffix(text.as_str())
+            .is_some_and(|before| before.ends_with(": "));
+        let said = text.trim().is_empty() || sentence == text || inlined;
+        if !said {
+            if !sentence.is_empty() {
+                sentence.push_str(": ");
+            }
+            sentence.push_str(&text);
+        }
+        link = if whole { None } else { current.source() };
+    }
+    if sentence.is_empty() {
+        return NO_MESSAGE.to_owned();
+    }
+    sentence
+}
+
+/// What one link of a chain says, and whether that is the whole of what is
+/// left — a claimed link's driver says its causes too.
+fn said(link: &(dyn Error + 'static), redactions: &Redactions) -> (String, bool) {
+    if let Some(joined) = link.downcast_ref::<JoinError>() {
+        return (joined_task(joined), false);
+    }
+    if let Some(sentence) = SafeLink::said(link) {
+        return (sentence, true);
+    }
+    let text = match DecodeError::of(link) {
+        Some(report) => report.to_string(),
+        None => redactions.redact(&link.to_string()).into_owned(),
+    };
+    (text, false)
+}
+
+/// How a driver says one of its error types without the values it quotes,
+/// submitted once per driver crate with `nest_rs_core::inventory::submit!`.
+///
+/// A database server quotes the input it refused in its message, and a driver's
+/// error repeats that message in its own sentence and in its causes, so no
+/// renderer reading `Display` can keep it out of a log line, a dead letter or a
+/// reply. [`error_message`] and [`DecodeError::redact`] ask every sayer about
+/// each link before its `Display`: `say` answers `Some(sentence)` for a link of
+/// its own — its whole meaning, without a value — and the chain is said no
+/// further below it; `None` for any other, which is said as before.
+/// Identifiers — a code, a constraint, a table, a column — are schema, not
+/// payload, and stay in the sentence: they are what an operator searches for.
+///
+/// ```
+/// use std::error::Error;
+///
+/// use nest_rs_core::{SafeLink, error_message};
+///
+/// #[derive(Debug, thiserror::Error)]
+/// #[error("row refused: {value}")]
+/// struct Refused {
+///     code: &'static str,
+///     value: String,
+/// }
+///
+/// fn say(link: &(dyn Error + 'static)) -> Option<String> {
+///     link.downcast_ref::<Refused>()
+///         .map(|refused| format!("row refused {}", refused.code))
+/// }
+///
+/// nest_rs_core::inventory::submit! { SafeLink::new(say) }
+///
+/// # fn main() {
+/// let refused = Refused { code: "23505", value: "ada@example.com".into() };
+/// assert_eq!(error_message(&refused), "row refused 23505");
+/// # }
+/// ```
+pub struct SafeLink {
+    say: fn(&(dyn Error + 'static)) -> Option<String>,
+}
+
+impl SafeLink {
+    /// The entry whose `say` claims the driver's own error types.
+    pub const fn new(say: fn(&(dyn Error + 'static)) -> Option<String>) -> Self {
+        Self { say }
+    }
+
+    /// What the first sayer claiming `link` says of it.
+    pub(crate) fn said(link: &(dyn Error + 'static)) -> Option<String> {
+        inventory::iter::<Self>().find_map(|entry| (entry.say)(link))
+    }
+}
+
+inventory::collect!(SafeLink);
+
+/// How a joined task ended, as tokio says it of a panic whose payload is no
+/// string: the panic was filed, redacted, where it was raised.
+fn joined_task(error: &JoinError) -> String {
+    if error.is_panic() {
+        format!("task {} panicked", error.id())
+    } else {
+        error.to_string()
+    }
+}
+
+/// `error` boxed as the framework carries a developer's failure — every link of
+/// its chain kept as the type it is, so [`error_message`] reads each one.
+///
+/// anyhow's own `.into()` boxes a private wrapper whose `source()` skips the
+/// error it holds, hiding a decode failure from [`error_message`]; an
+/// `anyhow::Error` is unwrapped instead, dropping its backtrace. Every other
+/// error converts as `.into()` would.
+pub fn boxed_error<E>(error: E) -> Box<dyn Error + Send + Sync>
+where
+    E: Into<Box<dyn Error + Send + Sync>> + 'static,
+{
+    let mut slot = Some(error);
+    if let Some(anyhow) = (&mut slot as &mut dyn Any)
+        .downcast_mut::<Option<anyhow::Error>>()
+        .and_then(Option::take)
+    {
+        return anyhow.reallocate_into_boxed_dyn_error_without_backtrace();
+    }
+    // Unreachable fallback: `slot` is emptied only by the `take` that returned above.
+    slot.map_or_else(|| Box::from(NO_MESSAGE), Into::into)
+}
+
+/// `error_message` is public: its tier-2 items live here, reached only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::error::Error;
+
+    /// The first `T` in `error`'s chain, `error` itself first, down to an
+    /// opaque failure's cause: how an edge finds the framework vocabulary a
+    /// failure carries wherever it was wrapped.
+    pub fn find_in_chain<'e, T: Error + 'static>(
+        error: &'e (dyn Error + 'static),
+    ) -> Option<&'e T> {
+        answerable_links(error).find_map(|link| link.downcast_ref::<T>())
+    }
+
+    /// `error`'s chain, `error` itself first, ending at an
+    /// [`OpaqueCause`](crate::__private::OpaqueCause): what is beneath one is
+    /// the operator's to read, never the client's to be answered.
+    pub(crate) fn answerable_links<'e>(
+        error: &'e (dyn Error + 'static),
+    ) -> impl Iterator<Item = &'e (dyn Error + 'static)> {
+        std::iter::successors(Some(error), |&link| {
+            if link.is::<crate::__private::OpaqueCause>() {
+                None
+            } else {
+                link.source()
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct Wrapped {
+        message: &'static str,
+        cause: Option<Box<dyn Error + Send + Sync>>,
+    }
+
+    impl fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl Error for Wrapped {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.cause
+                .as_deref()
+                .map(|cause| cause as &(dyn Error + 'static))
+        }
+    }
+
+    fn io(message: &str) -> Box<dyn Error + Send + Sync> {
+        Box::new(std::io::Error::other(message.to_owned()))
+    }
+
+    #[test]
+    fn every_cause_is_appended_once() {
+        let error = Wrapped {
+            message: "the queue backend failed",
+            cause: Some(Box::new(Wrapped {
+                message: "pool timed out",
+                cause: Some(io("timed out")),
+            })),
+        };
+        assert_eq!(
+            error_message(&error),
+            "the queue backend failed: pool timed out: timed out"
+        );
+    }
+
+    /// `redis`'s io errors display as their source does.
+    #[test]
+    fn a_cause_a_parent_already_inlined_is_not_said_twice() {
+        let inlined = Wrapped {
+            message: "pool timed out: timed out",
+            cause: Some(io("timed out")),
+        };
+        assert_eq!(error_message(&inlined), "pool timed out: timed out");
+        let same = Wrapped {
+            message: "Connection refused (os error 111)",
+            cause: Some(io("Connection refused (os error 111)")),
+        };
+        assert_eq!(error_message(&same), "Connection refused (os error 111)");
+    }
+
+    #[test]
+    fn an_empty_message_is_left_out_rather_than_joined() {
+        let empty_top = Wrapped {
+            message: "",
+            cause: Some(io("boom")),
+        };
+        assert_eq!(error_message(&empty_top), "boom");
+        let empty_middle = Wrapped {
+            message: "the queue backend failed",
+            cause: Some(Box::new(Wrapped {
+                message: "",
+                cause: Some(io("timed out")),
+            })),
+        };
+        assert_eq!(
+            error_message(&empty_middle),
+            "the queue backend failed: timed out"
+        );
+        let empty_last = Wrapped {
+            message: "the queue backend failed",
+            cause: Some(io("")),
+        };
+        assert_eq!(error_message(&empty_last), "the queue backend failed");
+    }
+
+    #[test]
+    fn a_blank_message_is_nothing_and_a_silent_chain_says_so() {
+        let blank_top = Wrapped {
+            message: "  ",
+            cause: Some(io("boom")),
+        };
+        assert_eq!(error_message(&blank_top), "boom");
+        let silent = Wrapped {
+            message: "",
+            cause: Some(io(" ")),
+        };
+        assert_eq!(error_message(&silent), "an error with no message");
+    }
+
+    #[test]
+    fn a_cause_that_is_merely_a_substring_of_its_parent_is_kept() {
+        let error = Wrapped {
+            message: "the queue backend failed",
+            cause: Some(io("failed")),
+        };
+        assert_eq!(error_message(&error), "the queue backend failed: failed");
+    }
+
+    #[tokio::test]
+    async fn a_joined_task_s_panic_is_said_without_its_payload() {
+        let joined =
+            tokio::spawn(async { serde_json::from_str::<u64>(r#""sk_live_secret""#).unwrap() })
+                .await
+                .expect_err("a secret is not a number");
+        let task = joined.id();
+        assert!(
+            joined.to_string().contains("sk_live"),
+            "tokio's own sentence"
+        );
+
+        let wrapped = Wrapped {
+            message: "the writer stopped",
+            cause: Some(Box::new(joined)),
+        };
+        assert_eq!(
+            error_message(&wrapped),
+            format!("the writer stopped: task {task} panicked")
+        );
+
+        let cancelled = tokio::spawn(std::future::pending::<()>());
+        cancelled.abort();
+        let cancelled = cancelled.await.expect_err("it was aborted");
+        assert_eq!(error_message(&cancelled), cancelled.to_string());
+    }
+
+    #[test]
+    fn a_decode_failure_in_the_chain_is_said_without_its_value() {
+        let decode = || -> Box<dyn Error + Send + Sync> {
+            Box::new(serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("no number"))
+        };
+        assert_eq!(
+            error_message(&*decode()),
+            "invalid type: a string, expected u64 at line 1 column 16"
+        );
+        let wrapped = Wrapped {
+            message: "the queue value could not be converted",
+            cause: Some(decode()),
+        };
+        let said = error_message(&wrapped);
+        assert_eq!(
+            said,
+            "the queue value could not be converted: invalid type: a string, expected u64 at \
+             line 1 column 16"
+        );
+    }
+
+    fn secret() -> serde_json::Error {
+        serde_json::from_str::<u64>(r#""sk_live_51HsecretTOKEN""#).expect_err("not a number")
+    }
+
+    const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
+
+    #[test]
+    fn a_decode_failure_inside_an_anyhow_error_is_said_without_its_value() {
+        let bare = boxed_error(anyhow::Error::from(secret()));
+        assert!(
+            bare.downcast_ref::<serde_json::Error>().is_some(),
+            "the box holds the error anyhow held, not anyhow's wrapper",
+        );
+        assert_eq!(error_message(&*bare), REPORT);
+
+        let context = boxed_error(anyhow::Error::from(secret()).context("upstream reply"));
+        assert_eq!(
+            error_message(&*context),
+            format!("upstream reply: {REPORT}")
+        );
+
+        let hidden: Box<dyn Error + Send + Sync> = anyhow::Error::from(secret()).into();
+        assert!(hidden.downcast_ref::<serde_json::Error>().is_none());
+        assert_eq!(error_message(&*hidden), REPORT);
+    }
+
+    #[test]
+    fn the_first_link_of_a_type_is_found_wherever_it_was_wrapped() {
+        use super::__private::find_in_chain;
+
+        let error = Wrapped {
+            message: "the queue backend failed",
+            cause: Some(Box::new(Wrapped {
+                message: "pool timed out",
+                cause: Some(io("timed out")),
+            })),
+        };
+        let found = find_in_chain::<std::io::Error>(&error).map(ToString::to_string);
+        assert_eq!(found.as_deref(), Some("timed out"));
+        assert!(find_in_chain::<std::fmt::Error>(&error).is_none());
+        assert!(
+            find_in_chain::<Wrapped>(&error)
+                .is_some_and(|top| top.message.starts_with("the queue"))
+        );
+    }
+
+    #[test]
+    fn what_an_opaque_failure_keeps_is_said_and_never_found() {
+        use std::sync::Arc;
+
+        use super::__private::find_in_chain;
+        use crate::__private::OpaqueCause;
+
+        let opaque = Wrapped {
+            message: "internal error",
+            cause: Some(Box::new(OpaqueCause::new(
+                "the upstream reply did not decode",
+                Some(Arc::new(secret())),
+            ))),
+        };
+        let wrapped = boxed_error(anyhow::Error::new(opaque).context("syncing the ledger"));
+
+        assert_eq!(
+            error_message(&*wrapped),
+            format!(
+                "syncing the ledger: internal error: the upstream reply did not decode: {REPORT}"
+            )
+        );
+        assert!(find_in_chain::<serde_json::Error>(&*wrapped).is_none());
+        assert!(DecodeError::in_chain(&*wrapped).is_none());
+        assert!(
+            find_in_chain::<Wrapped>(&*wrapped).is_some(),
+            "above it, found"
+        );
+    }
+
+    #[test]
+    fn boxed_error_converts_any_other_error_as_into_does() {
+        let message = boxed_error("the queue backend failed");
+        assert_eq!(message.to_string(), "the queue backend failed");
+        let io = boxed_error(std::io::Error::other("timed out"));
+        assert!(io.downcast_ref::<std::io::Error>().is_some());
+    }
+
+    #[test]
+    fn a_wrapper_spelling_its_decode_failure_spells_the_report() {
+        #[derive(Debug, thiserror::Error)]
+        enum Feature {
+            #[error("could not read the profile: {0}")]
+            Inlined(#[source] serde_json::Error),
+            #[error(transparent)]
+            Transparent(serde_json::Error),
+            #[error("{0:?}")]
+            Debugged(serde_json::Error),
+        }
+        assert_eq!(
+            error_message(&Feature::Inlined(secret())),
+            format!("could not read the profile: {REPORT}")
+        );
+        assert_eq!(error_message(&Feature::Transparent(secret())), REPORT);
+        let debugged = error_message(&Feature::Debugged(secret()));
+        assert!(!debugged.contains("sk_live"), "{debugged}");
+
+        let whole = Wrapped {
+            message: "",
+            cause: Some(Box::new(secret())),
+        };
+        assert_eq!(error_message(&whole), REPORT);
+        let displays_its_cause = Displays(Box::new(secret()));
+        assert_eq!(error_message(&displays_its_cause), REPORT);
+    }
+
+    #[test]
+    fn a_custom_decode_message_a_wrapper_inlines_is_said_as_the_report() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("could not read the token: {0}")]
+        struct Token(#[source] serde_json::Error);
+
+        let custom = <serde_json::Error as serde::de::Error>::custom("bad token sk_live_51H");
+        assert_eq!(
+            error_message(&Token(custom)),
+            "could not read the token: a value its type does not accept"
+        );
+    }
+
+    /// A driver's error quoting a value in its sentence and again in its cause,
+    /// as a database server's message does.
+    #[derive(Debug, thiserror::Error)]
+    #[error("row rejected: {value}")]
+    struct Rejected {
+        code: &'static str,
+        value: &'static str,
+        #[source]
+        server: Quoted,
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("the server refused {0}")]
+    struct Quoted(&'static str);
+
+    fn rejected() -> Rejected {
+        Rejected {
+            code: "R42",
+            value: "\"secret\"",
+            server: Quoted("\"secret\""),
+        }
+    }
+
+    /// The driver's sayer: a code, never the value.
+    fn say_rejected(link: &(dyn Error + 'static)) -> Option<String> {
+        link.downcast_ref::<Rejected>()
+            .map(|rejected| format!("row rejected {}", rejected.code))
+    }
+
+    inventory::submit! { SafeLink::new(say_rejected) }
+
+    #[test]
+    fn a_link_a_driver_claims_is_said_by_its_sayer_and_nothing_below_it() {
+        let said = error_message(&rejected());
+        assert_eq!(said, "row rejected R42");
+
+        let wrapped = Wrapped {
+            message: "the import failed",
+            cause: Some(Box::new(rejected())),
+        };
+        assert_eq!(
+            error_message(&wrapped),
+            "the import failed: row rejected R42"
+        );
+    }
+
+    #[test]
+    fn a_wrapper_spelling_a_claimed_link_spells_what_its_driver_says() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("could not store the row: {0}")]
+        struct Inlined(#[source] Rejected);
+
+        assert_eq!(
+            error_message(&Inlined(rejected())),
+            "could not store the row: row rejected R42"
+        );
+        assert_eq!(
+            error_message(&Displays(Box::new(rejected()))),
+            "row rejected R42"
+        );
+        let hidden: Box<dyn Error + Send + Sync> = anyhow::Error::from(rejected())
+            .context("the job failed")
+            .into();
+        let said = error_message(&*hidden);
+        assert!(!said.contains("secret"), "{said}");
+        assert!(said.contains("row rejected R42"), "{said}");
+    }
+
+    #[test]
+    fn a_rendered_text_is_redacted_by_the_claimed_links_of_its_chain() {
+        let error = rejected();
+        let text = format!("upstream answered: {error}");
+        assert_eq!(
+            DecodeError::redact(&text, Some(&error)),
+            "upstream answered: row rejected R42"
+        );
+        assert_eq!(DecodeError::redact(&text, None), text, "no chain, no sayer");
+    }
+
+    /// Displays its cause whole and returns it as its source — the queue's
+    /// `JobError`.
+    #[derive(Debug)]
+    struct Displays(Box<dyn Error + Send + Sync>);
+
+    impl fmt::Display for Displays {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(&self.0, f)
+        }
+    }
+
+    impl Error for Displays {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            Some(&*self.0)
+        }
+    }
+}

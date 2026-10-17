@@ -1,15 +1,16 @@
 ---
 title: Writing a database driver
 description: "A backend-agnostic scaffold — the shape of a driver for any store with a handle and an optional transaction, SQL or NoSQL, with the framework seams filled in."
-tier: all-options
 sidebar:
   order: 12
 ---
 
 The [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database)
-crate is a seam: an object-safe `Executor` trait, two `tokio::task_local!`s,
-and the install helpers that thread "the request's current handle, optionally
-inside a transaction" across every layer. The seam names no store and no
+crate is a port: one `UnitOfWork` trait every edge runs its units of work
+through — an HTTP request, a WebSocket message, an MCP operation, a queue
+attempt, a scheduled tick — and an object-safe `Executor` trait for the handle
+each unit's body reads from the request's ambient context, which carries it
+across every layer. The seam names no store and no
 query API — a handle is a handle. The same scaffold fits a SQL pool, a
 document-store client, a key-value session, a graph driver, an in-memory
 map. This page gives you the **shape** of a driver, not its implementation:
@@ -21,35 +22,41 @@ read it once when a placeholder is unclear.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs --features database,worker
+cargo add nest-rs --features database,http,interceptors
 ```
 
-A driver implements the seam rather than consuming it, so it takes `database` without `seaorm` — the first-party integration is what you are replacing. `worker` carries the ambient job context, which is what makes the same handle reachable off a request.
+A driver implements the port rather than consuming it, so it takes `database` without `seaorm` — the first-party integration is what you are replacing. `http` and `interceptors` carry the request interceptor of Step 3.
 
 ## What you'll implement
 
 - An `Executor` enum holding your store's handles, with the trait impl.
-- A request interceptor that wraps mutating handlers in a transaction.
-- A `JobContext` that installs a handle per job attempt and settles it —
-  transactional by default, non-transactional on `transactional = false`.
+- A `UnitOfWork` that opens each unit an edge declares and settles it on the
+  edge's own outcome — one transaction per unit by default, the pool on
+  `transactional = false` and on a safe HTTP method.
+- A request interceptor that runs each HTTP request through it.
+- Optionally, the atomic block `nest_rs::database::atomic` runs on.
+- A `SafeLink` that says your store's errors without the values its server
+  quotes.
 
-A driver lives in a `nest-rs-<technology>` crate that depends on
-`nest-rs-core`, `nest-rs-database`, `nest-rs-http`, `nest-rs-interceptors`,
-`nest-rs-worker`, plus whatever your store needs. The app picks a driver by importing its module instead of
-`nest-rs-seaorm`.
+A driver lives in a crate of your own, `nestrs-<technology>`, depending on
+`nest-rs` with `default-features = false` and the features it binds —
+`database`, `http`, `interceptors` — plus whatever your store needs.
+The [naming rule](/semver/#naming-a-package) roots every name your driver owns
+at that crate. The app picks a driver by importing its module instead of
+`nest-rs-seaorm`'s.
 
 ## Step 1 — The Executor enum
 
-An enum is the right shape because the interceptor branches on it to
+An enum is the right shape because your unit of work branches on it to
 decide commit vs rollback, and a single query helper returns one type
-whichever mode the request is in. Two variants: one for ordinary work,
+whichever mode the unit is in. Two variants: one for ordinary work,
 one carrying a transaction. A store with no transaction primitive
 collapses to a single variant — the seam absorbs that too.
 
 ```rust title="crates/yourdb/src/executor.rs"
 use std::any::Any;
 
-/// Your driver's handle, threaded through the framework's task-local.
+/// Your driver's handle, carried in the request's ambient context.
 /// The framework only reaches it via the trait; the variants are yours.
 #[derive(Clone)]
 pub enum Executor {
@@ -65,175 +72,162 @@ pub enum Executor {
 
 impl nest_rs::database::Executor for Executor {
     fn as_any(&self) -> &dyn Any { self }
+
+    /// Work that must wait for the commit — every event emitted inside the
+    /// transaction. Keep it beside the transaction; the boundary that
+    /// settles it runs it after a commit and drops it otherwise.
+    fn after_commit(
+        &self,
+        work: nest_rs::database::Deferred,
+    ) -> Option<nest_rs::database::Deferred> {
+        match self {
+            Executor::Transactional(/* … */) => {
+                // Your code: push `work` onto a list your boundary drains.
+                None
+            }
+            // Nothing to wait for: hand it back, it runs at once.
+            Executor::Default(/* … */) => Some(work),
+        }
+    }
 }
 ```
 
 The `Arc<Mutex<_>>` around the transactional variant is the common pattern
 because most stores' transaction handles take `&mut` on their query
-methods, and the interceptor needs to keep one reference while the handler
-holds another.
+methods, and the unit needs to keep one reference while the body holds
+another.
 
-## Step 2 — The request interceptor
+`after_commit` is what makes an event wait for the write it announces. The
+trait's default hands the work back to run at once — right for a handle with
+no transaction, and wrong for one with: a driver that leaves it out dispatches
+every event emitted inside a transaction before that transaction has landed,
+and announces writes a rollback then undoes.
 
-This is the centerpiece. The interceptor classifies the HTTP method,
-installs the right executor in the task-local, and on the way out commits
-or rolls back. The framework owns the task-local install, the `Arc`
-lifecycle, and the response branching. The five numbered comments mark the
-five places you write store-specific code.
+Your boundary runs the held work where it settles, so take what the work
+needs where it is registered, inside `after_commit`: what the unit carries
+into its commit, `nest_rs::core::RequestContinuation::capture(Continuation::Commit)`
+— the ability, the trace, every value that crosses — and the scope it runs
+under, `nest_rs::database::current_executor_scope()`. The capture carries no
+executor of yours, and its scope goes with it, so re-install your
+non-transactional handle inside the capture under the scope you read:
+`with_request_executor`, `with_job_executor`, or `with_executor` when none was
+tagged — and for any other: `ExecutorScope` can grow within 7.x, so your `match`
+keeps a `_` arm, and `with_executor` is the one that fails closed. A job's held
+work installed untagged would fail closed like a request. Contain a panic in
+it: the commit already stood.
 
-```rust title="crates/yourdb/src/interceptor.rs"
-use std::sync::Arc;
-use nest_rs::core::async_trait;
-use nest_rs::core::{Layer, injectable};
-use nest_rs::interceptors::{Interceptor, Next};
-use nest_rs::http::poem::http::{Method, StatusCode};
-use nest_rs::http::poem::{Error, Request, Response, Result};
-use tokio::sync::Mutex;
+The other continuations — a streaming body, a DataLoader batch — run on a
+`TransactionPolicy::Pool` unit your binding opens on their first read: they
+never borrow a transaction that has settled.
 
-#[injectable]
-pub struct YourDbContext {
-    // #[inject] your pool / client here
-}
+## Step 2 — The unit of work
 
-#[async_trait]
-// `Interceptor` has `Layer` as a supertrait — an empty impl is enough
-// unless the layer needs a `priority`.
-impl Layer for YourDbContext {}
+This is the centerpiece. An edge declares each unit it runs as a `UnitSpec` —
+its operation-log unit (`ws.message`, `queue.job`, …), its scope, its
+`TransactionPolicy` — and hands it to `run_unit`, which asks your binding to
+`open` it, runs the body with your executor installed, and calls `settle` on
+the edge's own outcome. The framework owns the install and what each edge
+counts as a success; the numbered comments mark the places you write
+store-specific code.
 
-impl Interceptor for YourDbContext {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        let mutating = !matches!(
-            *req.method(),
-            Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE,
-        );
-
-        if !mutating {
-            // (1) Safe route — install the non-transactional handle.
-            //     Your code: clone your pool/client into Executor::Default(...).
-            return nest_rs::database::with_request_executor(
-                Arc::new(Executor::Default(/* your handle clone */)),
-                next.run(req),
-            ).await;
-        }
-
-        // (2) Mutating route — open a transaction in your store's terms.
-        //     Your code: `self.pool.begin().await?`, `client.start_session().await?`, ...
-        let tx = /* your store's transaction handle */;
-        let tx_arc = Arc::new(Mutex::new(tx));
-
-        // (3) Install it as the request executor and run the handler.
-        let result = nest_rs::database::with_request_executor(
-            Arc::new(Executor::Transactional(tx_arc.clone())),
-            next.run(req),
-        ).await;
-
-        // (4) Reclaim sole ownership. Failure means the executor escaped
-        //     into a spawned task — fail closed.
-        let tx = match Arc::try_unwrap(tx_arc) {
-            Ok(mutex) => mutex.into_inner(),
-            Err(_) => return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
-        };
-
-        // (5) Commit on 2xx/3xx, roll back otherwise.
-        //     Your code: tx.commit().await? / tx.rollback().await?
-        //     (or commit_transaction / abort_transaction, etc.)
-        match &result {
-            Ok(resp) if resp.status().is_success() || resp.status().is_redirection() => {
-                // commit using your store's API
-            }
-            _ => {
-                // roll back using your store's API
-            }
-        }
-        result
-    }
-}
-```
-
-The escape check at (4) is not paranoia — a handler that `tokio::spawn`s
-a task carrying the executor lets the spawned task outlive the request.
-Failing closed beats reporting committed data the spawned task may still
-write.
-
-## Step 3 — The worker context
-
-Cron jobs and queue processors run outside any HTTP request — no method
-to classify, no response to inspect. The `JobContext` seam installs your
-handle around each job and then **settles** what it opened. No caller
-means no ambient ability, which means a job runs unscoped: correct for
-system work.
-
-`scope` is handed the job's declared `JobTransaction` and an `inner` that
-yields **whether the job succeeded**, and answers with a `JobSettlement`:
-
-```rust title="crates/yourdb/src/worker/context.rs"
+```rust title="crates/yourdb/src/unit.rs"
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use nest_rs::core::injectable;
-use nest_rs::worker::{JobContext, JobSettlement, JobTransaction, Unhonoured};
+use std::time::Duration;
+use nest_rs::database::{
+    OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
+};
 
-#[injectable]
-pub struct YourWorkerContext {
-    // #[inject] your pool / client here
+pub struct YourUnitOfWork {
+    // your pool / client here
 }
 
-impl JobContext for YourWorkerContext {
-    fn scope<'a>(
-        &'a self,
-        transaction: JobTransaction,
-        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+impl UnitOfWork for YourUnitOfWork {
+    fn open(&self, spec: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
+        match spec.policy {
+            // (1) The pool: every statement stands alone, nothing to settle.
+            TransactionPolicy::Pool => Ok(Box::new(OnPool(/* your handle clone */))),
+            // (2) A unit of its own: a transaction opened on its first touch.
+            //     Opening sends nothing, so a unit a guard denies costs nothing.
+            TransactionPolicy::PerUnit => Ok(Box::new(InTransaction::new(/* … */))),
+            // A policy this driver does not know: refuse the unit unrun.
+            _ => Err(Unhonoured::deterministic(
+                "this driver does not support the unit's transaction policy",
+            )),
+        }
+    }
+
+    fn settle_net(&self) -> Duration {
+        // (6) Above every bound your store holds a statement to: its own
+        //     statement timeout, plus a second.
+        self.statement_timeout + Duration::from_secs(1)
+    }
+}
+
+impl OpenUnit for InTransaction {
+    fn executor(&self) -> Arc<dyn nest_rs::database::Executor> {
+        // (3) The handle the body reads: your transactional variant.
+        Arc::new(Executor::Transactional(/* a clone of the unit's handle */))
+    }
+
+    fn settle(self: Box<Self>, ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
+        // (7) Run what follows on a task your module tracks and drains, so a
+        //     dropped future never cuts a commit; answer within `settle_net`.
         Box::pin(async move {
-            match transaction {
-                // The opt-out: every statement stands alone, nothing to settle.
-                JobTransaction::Pool => {
-                    nest_rs::database::with_job_executor(/* pool handle */, inner).await;
-                    JobSettlement::Settled
-                }
-                // The default: one transaction per attempt.
-                JobTransaction::PerAttempt => {
-                    let txn = Arc::new(/* txn handle */);
-                    let succeeded =
-                        nest_rs::database::with_job_executor(txn.clone(), inner).await;
-                    if !succeeded {
-                        // The job failed on its own terms. Roll back using your
-                        // store's API and settle: the job's own error is what
-                        // the transport reports, and adding one would say the
-                        // same failure twice.
-                        return JobSettlement::Settled;
-                    }
-                    // It succeeded, so the attempt now stands or falls on the
-                    // commit. When a *successful* job cannot be honoured, say so
-                    // — and say whether repeating the attempt could end
-                    // differently.
-                    match /* commit using your store's API */ {
-                        Ok(()) => JobSettlement::Settled,
-                        // A serialization conflict or a deadlock is the one
-                        // shape another attempt could win.
-                        Err(err) if err.is_conflict() => {
-                            JobSettlement::Unhonoured(Unhonoured::retryable(
-                                "the job's transaction could not be committed",
-                            ))
-                        }
-                        Err(_) => JobSettlement::Unhonoured(Unhonoured::deterministic(
-                            "the job's transaction could not be committed",
-                        )),
-                    }
-                }
+            // (4) Reclaim sole ownership. A handle still held escaped into a
+            //     spawned task: nothing it wrote can be vouched for.
+            // (5) Commit on `ok`, roll back otherwise — then run the work
+            //     `after_commit` held, or drop it.
+            match /* commit using your store's API, when `ok` */ {
+                Ok(()) => Settlement::Settled,
+                // A serialization conflict or a deadlock is the one shape
+                // another attempt could win.
+                Err(err) if err.is_conflict() => Settlement::Unhonoured(Unhonoured::retryable(
+                    "the unit's transaction could not be committed",
+                )),
+                Err(_) => Settlement::Unhonoured(Unhonoured::deterministic(
+                    "the unit's transaction could not be committed",
+                )),
             }
         })
     }
 }
 ```
 
-Three things your impl owes:
+`OnPool`'s `settle` answers `Settlement::Settled` at once: there is nothing to
+commit, and a pool unit may be dropped unsettled — it is what a streaming body
+or a DataLoader batch runs on. The one exception is an atomic block's own
+commit its body was cut while waiting for (Step 6).
 
-- **Drive `inner` to completion.** It *is* the job. Returning without
-  awaiting it fails that one job loudly rather than silently skipping it.
-- **Honour `JobTransaction::Pool`.** It is the developer's
+What your binding owes:
+
+- **Settle on the outcome you are handed.** `ok` is the edge's own verdict —
+  a 2xx, a reply that is not an error frame, a tool answer without `isError`,
+  a job's `Ok`. `Settlement::Unhonoured` turns a *success* you could not
+  keep into the edge's failure; a failure stands whatever you answer, but
+  `Unhonoured::IN_DOUBT`, which says a commit the body set off before it was
+  cut may have landed.
+- **Never let a commit be cut.** An edge cuts a unit's *body* at its deadline
+  (`UnitSpec::deadline`) and drops the settle future when its client goes or
+  its operation is stopped: run the commit on a task of your own, tracked and
+  drained by your module's close before your pool's, so it always reaches its
+  answer.
+- **Answer within your settle net.** Past `settle_net` without your store's
+  answer to a commit, answer `Unhonoured::IN_DOUBT`: the commit may have
+  landed, so the unit is never retried. Wait for the work `after_commit` held
+  until the unit's deadline, then answer and let it run on: a slow listener
+  never fails a committed unit. A failed unit's rollback is waited for until
+  the deadline at most.
+- **Fail closed on an escaped handle.** `settle` is called once the body and
+  the executor `run_unit` installed are dropped, so a handle still alive was
+  carried off by a spawned task: answer `Unhonoured` on a success.
+- **Honour `TransactionPolicy::Pool`.** It is the developer's
   `transactional = false`, and ignoring it silently gives up the
   atomicity the default promises.
+- **Settle what `after_commit` held.** Run it once the unit's commit landed;
+  drop it when the unit failed or could not be committed. A retry then
+  announces only the attempt that stood.
 - **Classify an `Unhonoured` from what your backend said, not from a
   guess.** A retry replays the whole job body, side effects included, so
   `Unhonoured::retryable` is for a failure that could genuinely end
@@ -250,23 +244,109 @@ Three things your impl owes:
   `CommitError::is_retryable_conflict` (the commit), and yours should
   split them too.
 
-A worker transport (`#[scheduled]`, `#[processor]`) resolves
-`Arc<dyn JobContext>` from the container before each job; binding your
-context as that `dyn` target makes your driver's handle the ambient
-executor for every job in the binary.
+No caller means no ambient ability: a unit declared `ExecutorScope::Job` — a
+queue attempt, a tick — runs unscoped, which is correct for system work.
+
+## Step 3 — The request interceptor
+
+Every edge but HTTP opens its units through your binding on its own. Until the
+HTTP edge runs its request unit itself, your driver registers the interceptor
+that does, in the innermost band, so a guard that denies a request has run
+before anything opens:
+
+```rust title="crates/yourdb/src/interceptor.rs"
+use std::sync::Arc;
+use nest_rs::core::async_trait;
+use nest_rs::core::{Layer, injectable};
+use nest_rs::database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
+use nest_rs::http::poem::http::{Method, StatusCode};
+use nest_rs::http::RequestDeadline;
+use nest_rs::http::poem::{Error, Request, Response, Result};
+use nest_rs::interceptors::{Interceptor, Next};
+
+#[injectable]
+pub struct YourDbContext {
+    #[inject]
+    unit: Arc<dyn UnitOfWork>,
+}
+
+// `Interceptor` has `Layer` as a supertrait — an empty impl is enough
+// unless the layer needs a `priority`.
+impl Layer for YourDbContext {}
+
+#[async_trait]
+impl Interceptor for YourDbContext {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+        let policy = match *req.method() {
+            Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => TransactionPolicy::Pool,
+            _ => TransactionPolicy::PerUnit,
+        };
+        let mut spec = UnitSpec::new(nest_rs::http::unit::REQUEST, ExecutorScope::Request, policy);
+        // The request timeout cuts the handler alone, never the commit.
+        let deadline = req.extensions().get::<RequestDeadline>().cloned();
+        if let Some(deadline) = &deadline {
+            deadline.hand_to_unit(self.unit.settle_net());
+            spec = spec.with_deadline(deadline.at());
+        }
+        let handler = async move {
+            match deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline.at(), next.run(req))
+                    .await
+                    .unwrap_or_else(|_| Ok(deadline.timed_out().into())),
+                None => next.run(req).await,
+            }
+        };
+        run_unit(
+            Some(&self.unit),
+            spec,
+            handler,
+            |result| matches!(result, Ok(resp) if resp.status().is_success() || resp.status().is_redirection()),
+            |_| Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
+        )
+        .await
+    }
+}
+```
+
+The edge hands every request its `RequestDeadline` when a request timeout is
+set. Taking it over is what keeps the edge's own timer from cutting your
+commit: it then waits your settle net past the deadline, and answers `500`
+only for a commit that never answered. A handler you cut answers
+`deadline.timed_out()`, the `503` with `Retry-After` the edge gives itself,
+logged once at `warn`.
 
 ## Step 4 — The Module
 
 The activation seam an app imports. A `DynamicModule` that seeds the
-connection at the factory phase, registers the interceptor, and binds the
-worker context to `dyn JobContext`. Every field of the config is settable
-from both the environment (`NESTRS_<NAMESPACE>__<KEY>`) and a pinned
+connection at the factory phase, registers the interceptor, and binds your
+unit of work as `Arc<dyn UnitOfWork>` — a **declaration** carrying the port's
+`BACKEND_REMEDY`, so a second database driver imported beside yours fails the
+boot naming both. Every edge resolves that binding once, when it mounts or
+boots. Every field of the config is settable
+from both the environment (`<PREFIX>_<NAMESPACE>__<KEY>`) and a pinned
 struct — the framework-wide dual-path rule.
 
+A factory names the outputs it reads as its inputs, a tuple — the pool's is
+`(YourConfig,)` — so the boot runs it once they exist, wherever the imports
+fall. It reads the config with `ConfigModule::resolved`, whose refusal names
+the config when nothing resolved it: a factory returns it with `?`, a
+`register` files it with `builder.refuse(..)`.
+
+What the factory opens, the module closes. `provide_close` hands the kernel a
+close for the handle — a pool's goodbye to its server — which runs once the app
+ends, after every shutdown hook, last opened first, within what the hooks left
+of their five seconds; one still waiting then is abandoned at `warn`. Attach it
+in `collect`, beside its factory: a boot whose later factory fails still closes
+the handle, which a close attached in `register` would never reach. A handle
+the app seeded instead (a test's database) is the app's to close, and the
+kernel leaves it alone.
+
 ```rust title="crates/yourdb/src/module.rs"
+use std::any::TypeId;
 use std::sync::Arc;
 use nest_rs::config::ConfigModule;
-use nest_rs::core::{ContainerBuilder, DynamicModule};
+use nest_rs::core::{Collecting, ContainerBuilder, DynamicModule, Registering};
+use nest_rs::database::{BACKEND_REMEDY, UnitOfWork};
 
 pub struct YourDbModule;
 
@@ -281,25 +361,128 @@ pub struct YourDbSetup {
 }
 
 impl DynamicModule for YourDbSetup {
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = <YourDbContext as nest_rs::core::Discoverable>::register(builder);
-        let snapshot = builder.snapshot();
-        let worker = YourWorkerContext::from_container(&snapshot);
-        builder.provide_dyn::<dyn nest_rs::worker::JobContext>(Arc::new(worker))
+    fn module() -> TypeId {
+        TypeId::of::<YourDbModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <YourDbContext as nest_rs::core::Discoverable>::register(builder)
+    }
+
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        builder.provide_factory::</* YourHandle */, _, _>(|container| async move {
-            // Your code: build your pool / client from container.get::<YourConfig>().
+        builder
+            .provide_factory_after::</* YourHandle */, (YourConfig,), _, _>(|container| async move {
+                let config = ConfigModule::resolved::<YourConfig>(&container)?;
+                // Your code: build your pool / client from `config`.
+            })
+            .provide_close::</* YourHandle */, _, _>(|handle| async move {
+                // Your code: end every session the handle holds.
+            })
+            .provide_declared_factory_after::<Arc<dyn UnitOfWork>, (/* YourHandle */,), _, _>(
+                BACKEND_REMEDY,
+                |container| async move {
+                    let unit = YourUnitOfWork::new(/* the handle from `container` */);
+                    Ok(Arc::new(unit) as Arc<dyn UnitOfWork>)
+                },
+            )
+    }
+}
+```
+
+## Step 5 — Say your errors without their values
+
+A database server words its refusal around the input it refused —
+`invalid input syntax for type uuid: "…"` — and a driver's error repeats that
+sentence in its own `Display` and in its causes. Every framework log line, a
+dead letter's reason and a client's error frame read an error chain through
+`nest_rs::core::error_message`, which asks each `SafeLink` about a link before
+its `Display`: submit one, and your errors are said your way everywhere.
+
+```rust title="crates/yourdb/src/error.rs"
+use std::error::Error;
+
+use nest_rs::core::SafeLink;
+
+nest_rs::core::inventory::submit! { SafeLink::new(say) }
+
+fn say(link: &(dyn Error + 'static)) -> Option<String> {
+    let err = link.downcast_ref::<YourDbError>()?;
+    // Your code: the error's kind and server code, the schema names it carries.
+    Some(format!("yourdb error {}", err.code()))
+}
+```
+
+A link your sayer claims is said by its sentence alone, and nothing below it
+is read, so a cause repeating the server's message never reaches a line.
+Keep identifiers — a code, a constraint, a table, a column — which are schema
+an operator searches for, and drop every message. `nest-rs-seaorm` says a
+`DbErr` as `database error 23505 on constraint "users_email_key", table
+"users"`.
+
+## Step 6 — Atomic blocks (optional)
+
+`nest_rs::database::atomic(work)` asks the ambient executor for a block through
+`Executor::atomic`. The default answers `None`, and `atomic` then refuses with
+`AtomicError::Unsupported` without running the work — fail-closed, so a driver
+that offers no block loses nothing but the feature. To offer one, return an
+`AtomicBlock`: an executor of yours that the block runs on, settled once.
+
+```rust title="crates/yourdb/src/executor.rs"
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use nest_rs::database::{AtomicBlock, AtomicError};
+
+impl nest_rs::database::Executor for Executor {
+    // … as_any, after_commit …
+
+    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
+        // Your code: a block nested in this handle's transaction — or a
+        // transaction of its own when this handle holds none.
+        Some(Arc::new(YourBlock::nested_in(self.clone())))
+    }
+}
+
+impl AtomicBlock for YourBlock {
+    fn settle(
+        self: Arc<Self>,
+        ok: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), AtomicError>> + Send>> {
+        Box::pin(async move {
+            // Your code: release the savepoint and hand the held after-commit
+            // work to the enclosing handle when `ok`; roll it back and drop
+            // that work otherwise.
+            Ok(())
         })
     }
 }
 ```
 
+What a block owes, in order of how badly it goes wrong without it:
+
+- **The enclosing unit waits for it.** A statement the unit issues while the
+  block is open must not land inside the block's savepoint, or it rolls back
+  with the block.
+- **A failure inside poisons the block, not the unit.** Work that returns `Ok`
+  over a failed statement settles as `AtomicError::Poisoned`.
+- **A refused `RELEASE` or `ROLLBACK TO`, or a block dropped before it
+  settled, leaves the unit unable to commit.** Nothing can vouch for what it
+  writes next.
+- **Nothing is sent before the first statement**, so a block that never
+  queries costs no round trip.
+- **A block of its own on a pool unit commits on your settle task.** The
+  body's cut — a deadline, a stopped operation — must not drop its `COMMIT`
+  either: run it on the task your module drains, and when the body failed
+  before seeing that commit's answer, the pool unit's `settle` answers
+  `Unhonoured::IN_DOUBT`.
+
+`crates/nest-rs-seaorm/src/savepoint.rs` and `crates/nest-rs-seaorm/src/turn.rs`
+are the reference shape.
+
 ## A query helper (sketch)
 
-Services don't touch the task-local directly — they call a small helper
+Services don't read the ambient context directly — they call a small helper
 your driver ships. The helper reads the current executor, downcasts to
 your enum, and hands the caller a store-native handle.
 
@@ -325,24 +508,21 @@ mask, `Bind<A, S>`, `CrudService` — all read SeaORM's typed `Column` /
 store-native terms
 (e.g. Postgres RLS, an ability-derived filter document, a per-collection
 helper). What every driver does keep: transparent transactions on
-mutating requests, the ambient executor across HTTP and workers, the
+every edge's units of work, the ambient executor across HTTP and workers, the
 access graph and module wiring, structured observability under
 `nest_rs::orm`.
 
 ## Reference
 
 - [`crates/nest-rs-seaorm/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
-  the first-party driver; read its `executor.rs`, `interceptor.rs`,
-  `worker.rs`, and `module.rs` whenever a placeholder above needs a
-  concrete shape.
+  the first-party driver; read its `unit.rs`, `executor.rs`,
+  `http/interceptor.rs` and `database/module.rs` whenever a placeholder above
+  needs a concrete shape.
 - [`crates/nest-rs-database/README.md`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-database/README.md) —
-  the trait contract, the task-local seam, the install helpers in detail.
-- [`crates/nest-rs-redis/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) —
-  an analogous worker-side integration on the queue runtime, for a second
-  read on the `JobContext` pattern.
+  the trait contract, the ambient seam, the install helpers in detail.
 
 ## Going further
 
-- [Repo and executor](/database/repo-and-executor/) — the executor and task-local your driver installs.
-- [Transactions](/database/transactions/) — the commit/rollback boundary the interceptor drives.
+- [Repo and executor](/database/repo-and-executor/) — the ambient executor your driver installs.
+- [Transactions](/database/transactions/) — the commit/rollback boundary each unit settles.
 - [Database](/database/) — the module an app imports to pick a driver.

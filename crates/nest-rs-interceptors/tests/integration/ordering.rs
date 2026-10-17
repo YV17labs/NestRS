@@ -1,5 +1,4 @@
-//! `.interceptor()` composition order (HTTP-T2). Two properties a single-
-//! interceptor unit test can't show:
+//! `.interceptor()` composition order:
 //!
 //! 1. Interceptors **nest outermost-first**: `ep.interceptor(a).interceptor(b)`
 //!    runs `b` around `a` around the handler, so `b` sees the request first and
@@ -26,8 +25,7 @@ fn record(trace: &Trace, entry: impl Into<String>) {
     trace.lock().expect("trace lock").push(entry.into());
 }
 
-/// Records `enter:<name>` before delegating and `exit:<name>` after — so the
-/// trace shows the full nesting, not just entry order.
+/// Records `enter:<name>` before delegating and `exit:<name>` after.
 struct LogInterceptor {
     name: &'static str,
     trace: Trace,
@@ -60,7 +58,6 @@ impl Interceptor for ShortCircuit {
     }
 }
 
-/// A handler that records that it ran and returns a body.
 fn handler(trace: Trace) -> impl Endpoint<Output = Response> {
     make_sync(move |_req: Request| {
         record(&trace, "handler");
@@ -113,8 +110,6 @@ async fn a_short_circuit_skips_every_inner_link_and_the_handler() {
         trace: trace.clone(),
     };
 
-    // `short` is outermost; it answers without delegating, so neither `inner`
-    // nor the handler runs.
     let endpoint = handler(trace.clone()).interceptor(inner).interceptor(short);
     let resp = endpoint
         .call(Request::default())

@@ -1,5 +1,0 @@
-error: at most one `#[authorize(...)]` per operation
-  --> tests/integration/diagnostics/authorize_twice_on_an_operation.rs:20:5
-   |
-20 |     #[authorize(Read, users::Entity)]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

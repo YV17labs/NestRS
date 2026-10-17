@@ -1,0 +1,7 @@
+# actionlint 1.7.12 predates GitHub's self-repository syntax, `uses: $/<path>`
+# (.claude/decisions/self-repository-actions.md), and reads it as a remote
+# action missing its ref. Only that sentence, for a path under .github/actions.
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      - 'specifying action "\$/\.github/actions/[a-z-]+" in invalid format because ref is missing'

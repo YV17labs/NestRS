@@ -1,0 +1,37 @@
+name: Set up Rust
+description: >-
+  The toolchain rust-toolchain.toml pins, the mold linker .cargo/config.toml
+  selects on Linux, and a cargo cache keyed on what the calling job builds.
+
+inputs:
+  cache-key:
+    description: >-
+      What the job builds. Jobs that compile different things keep separate
+      caches, so one never restores another's artifacts.
+    required: true
+  workspaces:
+    description: The cargo workspaces whose target directories are cached (rust-cache's syntax).
+    required: false
+    default: '. -> target'
+
+runs:
+  using: composite
+  steps:
+    - name: Install the toolchain
+      shell: bash
+      run: rustup toolchain install --profile minimal
+
+    # .cargo/config.toml links with mold.
+    - name: Install mold
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mold
+
+    # Saved by the long-lived branches alone: a run restores its own branch's
+    # cache or the default branch's, a pull request its base's, and the
+    # repository holds 10 GB.
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        shared-key: ${{ inputs.cache-key }}
+        workspaces: ${{ inputs.workspaces }}
+        save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') }}

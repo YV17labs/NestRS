@@ -1,6 +1,6 @@
 //! `nestrs g feature <name>` — a transport-agnostic port under
 //! `crates/features/src/<name>/` (mod + module + service). Add transports
-//! afterwards with `g http|graphql|ws|queue|schedule|mcp <name>`.
+//! afterwards with `g http|graphql|ws|queue|schedule|mcp|events <name>`.
 
 use std::path::PathBuf;
 
@@ -12,13 +12,13 @@ use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, ensure_decl};
 use crate::templates::feature;
 
-pub struct FeatureOptions {
+pub(crate) struct FeatureOptions {
     pub name: String,
     pub path: Option<PathBuf>,
     pub dry_run: bool,
 }
 
-pub fn run(opts: FeatureOptions) -> CliResult<()> {
+pub(crate) fn run(opts: FeatureOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.ok_or(CliError::NotNestrsWorkspace)?;
 
@@ -57,14 +57,12 @@ fn print_next_steps(names: &Names) {
     println!("Next steps:");
     println!("  Add a transport:  nestrs g http {}", names.kebab);
     println!(
-        "                    nestrs g graphql|ws|queue|schedule|mcp {}",
+        "                    nestrs g graphql|ws|queue|schedule|mcp|events {}",
         names.kebab
     );
     println!("  DB-backed CRUD?   nestrs g resource {}", names.kebab);
-    // The exemplar lives in the *framework* repo, not in the workspace this
-    // just wrote — printing the bare `crates/features/src/users/` sent the
-    // reader to a path that does not exist on their disk. Same URL the
-    // scaffolded README cites (`templates::workspace::README`).
+    // The exemplar lives in the framework repo, not in the workspace this just
+    // wrote.
     println!(
         "  Reference:        https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users"
     );

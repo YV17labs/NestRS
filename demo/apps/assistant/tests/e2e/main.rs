@@ -1,13 +1,17 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 mod authorization;
 mod posts_tool;
 mod shared_endpoint;
 mod tool;
 
-use std::sync::Arc;
-use std::time::Duration;
-
 use assistant::AssistantModule;
-use nest_rs::authn::JwtConfig;
+use nest_rs::authn::AuthnConfig;
 use nest_rs::config::Config;
 use nest_rs::storage::{Storage, StorageConfig};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
@@ -28,7 +32,7 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     let app = TestApp::builder()
         .module::<AssistantModule>()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             audience: Some(AUDIENCE.into()),
             ..Default::default()
@@ -130,16 +134,9 @@ pub(crate) fn bearer() -> String {
     bearer_for(ORG_ID)
 }
 
-pub(crate) fn storage_client() -> Storage {
+pub(crate) async fn storage_client() -> Storage {
     let config = StorageConfig::load().expect("storage config parses from env");
-    Storage::new(Arc::new(config))
-}
-
-pub(crate) async fn ensure_bucket() {
-    if let Ok(url) = storage_client()
-        .presign_put("", Duration::from_secs(60))
+    Storage::connect(&config)
         .await
-    {
-        let _ = reqwest::Client::new().put(&url).send().await;
-    }
+        .expect("the dev container's bucket opens")
 }

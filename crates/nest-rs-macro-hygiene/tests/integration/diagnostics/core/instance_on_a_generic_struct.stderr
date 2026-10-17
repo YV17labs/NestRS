@@ -1,0 +1,5 @@
+error: #[instance] takes no generics: a marker names one instance, read off its ident
+ --> tests/integration/diagnostics/core/instance_on_a_generic_struct.rs:7:17
+  |
+7 | pub struct Cache<T>;
+  |                 ^^^

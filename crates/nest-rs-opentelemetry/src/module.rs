@@ -1,42 +1,23 @@
-use nest_rs_core::{container::ContainerBuilder, module::Module};
+use nest_rs_core::{Registering, container::ContainerBuilder, module::Module};
 
-#[cfg(feature = "otlp")]
-use crate::meter::OpenTelemetryMeter;
+use crate::OpenTelemetryError;
 
-/// Registers the global OTel [`OpenTelemetryMeter`] as a provider, under the
-/// `otlp` feature.
-///
-/// **It mounts no per-request layer, and that is the design.** Everything this
-/// crate adds to a span is seeded onto the framework's span constructor at
-/// `init` (see `linker`), so it reaches every edge — a queue job in a headless
-/// worker as much as an HTTP request — instead of the one transport an
-/// interceptor could have been attached to.
+/// Provides [`Metrics`](crate::Metrics) over the global meter, under the `otlp`
+/// feature; it mounts no per-request layer.
 ///
 /// **Ordering:** [`crate::OpenTelemetry::init`] must run before this module is
-/// registered, or the global tracer/meter are no-ops and signals are silently
-/// dropped — boot panics with a clear message.
+/// registered, or the boot fails with [`OpenTelemetryError::InitMissing`].
 pub struct OpenTelemetryModule;
 
 impl Module for OpenTelemetryModule {
-    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
-            return builder;
-        }
-        // Module::register has no Result to thread back, so a panic is the
-        // only way to surface the ordering contract before signals are lost.
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         if !crate::init::initialized() {
-            panic!(
-                "OpenTelemetryModule was imported without calling `OpenTelemetry::init` first — \
-                 the global tracer and meter are no-ops, so traces and metrics would be \
-                 silently dropped. Add `let _otel = \
-                 nest_rs::opentelemetry::OpenTelemetry::init(\"<service>\")?;` at the top of `main`, \
-                 before building the app."
-            );
+            return builder.refuse(OpenTelemetryError::InitMissing);
         }
         #[cfg(feature = "otlp")]
         let builder = {
             let meter = opentelemetry::global::meter("nestrs");
-            builder.provide_arc(std::sync::Arc::new(OpenTelemetryMeter(meter)))
+            builder.provide_arc(std::sync::Arc::new(crate::Metrics::new(meter)))
         };
         builder
     }

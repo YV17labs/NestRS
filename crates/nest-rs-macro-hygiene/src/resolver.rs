@@ -1,38 +1,14 @@
-//! `#[resolver]` + `#[operations]` — the GraphQL operation surface,
-//! witnessed through the umbrella alone.
+//! `#[resolver]` + `#[operations]`, through the umbrella alone.
 //!
-//! What this proves that nothing else does: **`#[operations]` wraps
-//! async-graphql's own `#[Object]`**, whose expansion roots its paths at
-//! whatever `proc-macro-crate` finds in the *call site's* manifest — falling
-//! back to a bare `::async_graphql` when it finds nothing. That fallback made
-//! the first snippet of `/graphql/` uncompilable for anyone who installed the
-//! documented `nest-rs = { features = ["graphql"] }` and nothing else. The
-//! `crate = ` override `#[operations]` now threads through is what pins the
-//! expansion to the umbrella's re-export, and this module is the compile that
-//! fails if it is ever dropped.
-
-//! `#[subscription]` widens that same claim: its expansion reaches
-//! async-graphql's `#[Subscription]` derive **and** `futures_util`'s
-//! `StreamExt` — two crates the developer's own source never names. Both are
-//! reached through the umbrella's re-export, so the manifest below stays at one
-//! line.
-
-//! `#[entity]` widens it once more, and for a reason nothing else here covers:
-//! it is the only role whose expansion emits an attribute *async-graphql's own
-//! derive* reads (`#[graphql(entity)]`). A federated resolver still names one
-//! crate.
+//! `#[operations]` wraps async-graphql's `#[Object]`, which roots its paths at
+//! the call site's manifest, falling back to a bare `::async_graphql`; this
+//! compile fails if the `crate = ` override is ever dropped.
 
 use nest_rs::graphql::async_graphql::SimpleObject;
 use nest_rs::graphql::async_graphql::futures_util::stream::{self, Stream};
 use nest_rs::graphql::{operations, resolver};
 
-/// The federated type. Its `@key` comes from the entity resolver's arguments,
-/// so nothing here declares one.
-///
-/// `crate = ` because this derive is the *developer's* own, not one a decorator
-/// emitted: async-graphql resolves its paths from the call site's manifest, and
-/// the call site declares `nest-rs`. Still one dependency, which is the claim
-/// this crate exists to keep.
+/// The federated type; its `@key` comes from the entity resolver's arguments.
 #[derive(SimpleObject)]
 #[graphql(crate = "::nest_rs::graphql::async_graphql")]
 pub struct Greeting {
@@ -40,7 +16,7 @@ pub struct Greeting {
     pub text: String,
 }
 
-/// The lead snippet of `/graphql/`, verbatim — one dependency, one decorator.
+/// The lead snippet of `/graphql/`, verbatim.
 #[resolver]
 pub struct GreetingResolver;
 
@@ -52,18 +28,12 @@ impl GreetingResolver {
         format!("Hello, {}!", name.as_deref().unwrap_or("World"))
     }
 
-    /// A subscription needs a stream type in its signature, and that is the one
-    /// place the developer *does* name something — reached here through the
-    /// umbrella, which is what proves no second manifest line is forced.
     #[subscription]
     #[public]
     async fn greetings(&self) -> impl Stream<Item = String> {
         stream::iter(["Hello, World!".to_string()])
     }
 
-    /// Resolved by reference, from the `_entities` field a router calls. The
-    /// posture is mandatory here as everywhere, and the decorator is what turns
-    /// this into an entity resolver — no `#[graphql(...)]` is written by hand.
     #[entity]
     #[public]
     async fn find_greeting_by_id(
@@ -74,5 +44,89 @@ impl GreetingResolver {
             id,
             text: "Hello, World!".to_owned(),
         })
+    }
+
+    #[query]
+    #[public]
+    fn farewell(&self) -> String {
+        "Goodbye!".to_owned()
+    }
+
+    #[query]
+    #[public]
+    fn steady(&self) -> Result<String, crate::never::Never> {
+        Ok("steady".to_owned())
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[query]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn note_count(&self) -> u64 {
+        0
+    }
+
+    /// An operation compiled out takes its root field and guard with it.
+    #[cfg(any())]
+    #[query]
+    #[public]
+    #[use_guards(crate::does_not_exist::Guard)]
+    async fn compiled_out(
+        &self,
+        input: crate::does_not_exist::Input,
+    ) -> crate::does_not_exist::Output {
+        crate::does_not_exist::answer(input)
+    }
+
+    /// async-graphql's `#[Object]` reads a plain `#[cfg]` only, so a
+    /// `#[cfg_attr]` must reach it unfolded.
+    #[cfg_attr(all(), cfg(any()))]
+    #[query]
+    #[public]
+    fn compiled_out_by_cfg_attr(&self) -> crate::does_not_exist::Output {
+        crate::does_not_exist::answer()
+    }
+
+    #[subscription]
+    #[public]
+    async fn farewells(&self) -> impl Stream<Item = String> {
+        stream::iter(["Goodbye!".to_string()])
+    }
+
+    /// A duplicate operation name under an excluding condition is not a duplicate field.
+    #[cfg(any())]
+    #[query]
+    #[public]
+    fn farewell_elsewhere(&self) -> String {
+        "Goodbye!".to_owned()
+    }
+}
+
+#[derive(SimpleObject)]
+#[graphql(complex, crate = "::nest_rs::graphql::async_graphql")]
+pub struct Parcel {
+    pub id: i32,
+}
+
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
+#[resolver]
+#[meta(HygieneLimit(100))]
+pub struct ParcelResolver;
+
+#[operations]
+impl ParcelResolver {
+    #[query]
+    #[public]
+    #[meta(HygieneLimit(10))]
+    fn parcel(&self) -> Parcel {
+        Parcel { id: 1 }
+    }
+
+    /// A field resolver compiled out through a `#[cfg_attr]`, likewise.
+    #[cfg_attr(all(), cfg(any()))]
+    #[field_resolver]
+    fn gone(&self, parent: &Parcel) -> crate::does_not_exist::Output {
+        crate::does_not_exist::answer(parent)
     }
 }

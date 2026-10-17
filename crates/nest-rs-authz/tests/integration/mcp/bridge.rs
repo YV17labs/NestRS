@@ -1,19 +1,11 @@
-//! Mirror test for `src/mcp/bridge.rs`.
-//!
-//! `McpAbilityBridge` is the MCP twin of `GraphqlAbilityBridge`: it runs the
-//! same authn→authz chain (`run_ability_chain`) and installs the caller's
-//! ambient `Ability` for the operation through `around`. These pin the two
-//! behaviours that used to differ from the GraphQL side — the denial's status
-//! survives, and the *guard* (not the data context) is what scopes a tool body.
-
-use std::sync::Arc;
+//! Mirror test for `src/mcp/bridge.rs`: the denial's status survives, and what
+//! the bridge attached is what scopes a tool body.
 
 use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, current_ability};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
 // The rmcp `#[tool_router]` / `#[tool_handler]` macros expand to bare `rmcp::`
 // paths resolved against this module's scope, so the re-export supplies the
 // name and the manifest needs no `rmcp` entry of its own.
@@ -37,8 +29,7 @@ impl Layer for PassGuard {}
 #[async_trait]
 impl Guard for PassGuard {}
 
-/// Stands in for a throttler sitting in the authn slot: it denies with a `429`,
-/// the status the bridge used to flatten to `401`.
+/// Stands in for a throttler sitting in the authn slot: it denies with a `429`.
 #[injectable]
 #[derive(Default)]
 struct RateLimitedGuard;
@@ -47,14 +38,14 @@ impl Layer for RateLimitedGuard {}
 
 #[async_trait]
 impl Guard for RateLimitedGuard {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::rate_limited(30, "slow down"))
     }
 }
 
-impl HttpGuard for RateLimitedGuard {}
+impl GuardFor<nest_rs_http::HttpView> for RateLimitedGuard {}
 
-impl HttpGuard for PassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 
 /// Stands in for the `AbilityGuard` slot: attaches a Read grant on widgets.
 #[injectable]
@@ -65,21 +56,20 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity)
             .when(|p| p.eq(widget::Column::Id, 1));
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 /// Reports whether the ambient `Ability` reached the tool body. No
-/// `McpToolContext` is registered anywhere in this suite — the guard's `around`
-/// is the only thing that could have installed it.
+/// `McpToolContext` is registered anywhere in this suite — what the bridge
+/// attached is the only thing that could have installed it.
 #[mcp]
 #[derive(Clone)]
 struct AbilityProbeTool;
@@ -126,10 +116,7 @@ struct ScopingMcpModule;
 )]
 struct ThrottledMcpModule;
 
-// D2: on GraphQL the bridge's `around` installs the ability; MCP now answers
-// the same way. Nothing here registers an `McpToolContext`, so before this the
-// tool body ran unscoped — fail-closed under `Repo`, but silently unscoped for
-// any non-`Repo` read.
+// No `McpToolContext` is registered: only what the bridge attached can scope the tool body.
 #[tokio::test]
 async fn the_bridge_scopes_a_tool_body_with_no_data_context_registered() {
     let app = TestApp::for_module::<ScopingMcpModule>()
@@ -140,14 +127,13 @@ async fn the_bridge_scopes_a_tool_body_with_no_data_context_registered() {
 
     assert!(
         body.contains("scoped") && !body.contains("unscoped"),
-        "the guard's `around` must install the caller's ability inside rmcp's \
-         dispatch, with or without an `McpToolContext`: {body}",
+        "the ability the bridge attached is ambient inside rmcp's dispatch, \
+         with or without an `McpToolContext`: {body}",
     );
 }
 
-// D3: the bridge maps the `Denial` it was given instead of answering a blanket
-// `401`, so a `429` raised anywhere in the chain reaches the client intact —
-// `Retry-After` included.
+// The bridge maps the `Denial`, so a `429` raised anywhere in the chain reaches
+// the client intact, `Retry-After` included.
 #[tokio::test]
 async fn a_rate_limited_denial_reaches_the_client_as_429() {
     let app = TestApp::for_module::<ThrottledMcpModule>()
@@ -163,66 +149,5 @@ async fn a_rate_limited_denial_reaches_the_client_as_429() {
             .map(|v| v.as_bytes()),
         Some(b"30".as_slice()),
         "the denial's own status and headers survive the bridge",
-    );
-}
-
-/// A capture the bridge does not recognise.
-///
-/// `McpOperationGuard::capture` hands back an opaque `Arc<dyn Any>` and
-/// `around` downcasts it. The pair is the framework's on both sides today, so a
-/// mismatch is a framework bug — but the trait is public, and what happens on a
-/// mismatch is what decides whether the tool body runs with the caller's
-/// ability or with none.
-///
-/// Running unscoped is the deliberate answer: `Repo` denies without an ambient
-/// ability, so the tool fails closed rather than the endpoint panicking. That
-/// makes the failure look exactly like an anonymous call, which is why the
-/// event exists — it is the only thing separating "this caller is anonymous"
-/// from "the bridge lost the caller's ability".
-#[tokio::test]
-async fn a_capture_the_bridge_does_not_recognise_runs_unscoped_and_says_so() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let container = nest_rs_core::Container::builder()
-        .provide_arc(Arc::new(PassGuard))
-        .build();
-    let bridge = McpAbilityBridge::<PassGuard, PassGuard>::from_container(&container);
-
-    let foreign: nest_rs_mcp::Captured = Arc::new("not an ability");
-    // `OperationValue` has no public constructor, so the body reports through
-    // the error half — which is enough: what is under test is whether the body
-    // ran at all, and with what ambient state.
-    let outcome = bridge
-        .around(
-            &foreign,
-            Box::pin(async {
-                let installed = if current_ability().is_some() {
-                    "an ability"
-                } else {
-                    "nothing"
-                };
-                Err(McpError::internal_error(installed.to_owned(), None))
-            }),
-        )
-        .await;
-
-    let ran_with = outcome
-        .err()
-        .expect("the body reported through the error half");
-    assert_eq!(
-        ran_with.message, "nothing",
-        "the operation still runs — `Repo` is what refuses it, not a panic \
-         taking the endpoint down — and it runs with no ability installed",
-    );
-
-    let event = logs.expect_one(
-        "nest_rs::authz",
-        "unexpected captured operation-guard state",
-    );
-    assert_eq!(event.level, "error");
-    assert_eq!(
-        event.field("reason").as_deref(),
-        Some("guard_capture_downcast_miss"),
-        "{:?}",
-        event.fields,
     );
 }

@@ -3,15 +3,15 @@ use std::sync::Arc;
 use nest_rs::authn::{AuthError, JwtService};
 use nest_rs::core::injectable;
 use nest_rs::oauth::client::AuthorizationRedirect;
-use nest_rs::oauth::server::{TokenError, authenticate_against_registry};
+use nest_rs::oauth::server::{AccessTokenResponse, TokenError, authenticate_against_registry};
 use nest_rs::social::{SocialProfile, SocialRegistry};
 use uuid::Uuid;
 
-use super::config::IssuerConfig;
-use super::scope::{role_from_db, roles_for_scope};
+use super::config::{ClientPayload, OAuthConfig};
+use super::scope::{granted_scopes, role_from_db};
+use crate::authz::constants;
 use crate::users::{SocialIdentity, UsersService};
 use crate::{Claims, Role};
-use nest_rs::oauth::server::AccessTokenResponse;
 
 #[derive(Debug, Clone)]
 pub struct Caller {
@@ -20,7 +20,9 @@ pub struct Caller {
     pub roles: Vec<Role>,
 }
 
-pub type AuthenticatedClient = nest_rs::oauth::server::AuthenticatedClient<Uuid>;
+pub type AuthenticatedClient = nest_rs::oauth::server::AuthenticatedClient<ClientPayload>;
+
+impl nest_rs::core::AmbientValue for Caller {}
 
 impl nest_rs::authn::PrincipalIdentity for Caller {
     fn actor_id(&self) -> Option<String> {
@@ -37,7 +39,7 @@ pub struct OAuthService {
     #[inject]
     users_svc: Arc<UsersService>,
     #[inject]
-    config: Arc<IssuerConfig>,
+    config: Arc<OAuthConfig>,
 }
 
 impl OAuthService {
@@ -45,7 +47,7 @@ impl OAuthService {
         jwt_svc: Arc<JwtService>,
         providers: Arc<SocialRegistry>,
         users_svc: Arc<UsersService>,
-        config: Arc<IssuerConfig>,
+        config: Arc<OAuthConfig>,
     ) -> Self {
         Self {
             jwt_svc,
@@ -61,7 +63,7 @@ impl OAuthService {
         org_id: Uuid,
         roles: Vec<Role>,
     ) -> Result<AccessTokenResponse, TokenError> {
-        issue_with_jwt(&self.jwt_svc, sub, org_id, roles)
+        issue_with_jwt(&self.jwt_svc, sub, org_id, roles, constants::all())
     }
 
     pub async fn grant_password(
@@ -145,29 +147,27 @@ pub(crate) fn issue_with_jwt(
     sub: Option<Uuid>,
     org_id: Uuid,
     roles: Vec<Role>,
+    scopes: Vec<String>,
 ) -> Result<AccessTokenResponse, TokenError> {
     let claims = Claims {
         sub,
         org_id,
-        roles: roles.clone(),
-        scopes: crate::authz::constants::all(),
+        roles,
+        scopes,
         exp: jwt_svc.expiry(),
     };
     let access_token = jwt_svc
         .sign(&claims)
         .map_err(|e| TokenError::Sign(e.into()))?;
     tracing::debug!(
-        target: "features::oauth",
+        target: crate::oauth::TARGET,
         ?sub,
         %org_id,
         roles = ?claims.roles,
+        scopes = ?claims.scopes,
         "issued access token"
     );
-    Ok(AccessTokenResponse {
-        access_token,
-        token_type: "Bearer".into(),
-        expires_in: jwt_svc.ttl_secs(),
-    })
+    Ok(AccessTokenResponse::bearer(access_token, jwt_svc.ttl_secs()).with_scope(claims.scopes))
 }
 
 pub(crate) fn grant_client_credentials_with_jwt(
@@ -177,23 +177,32 @@ pub(crate) fn grant_client_credentials_with_jwt(
     client: &AuthenticatedClient,
 ) -> Result<AccessTokenResponse, TokenError> {
     if grant_type != "client_credentials" {
-        tracing::warn!(target: "features::oauth", grant_type, "unsupported grant type");
+        tracing::warn!(
+            target: crate::oauth::TARGET,
+            reason = "unsupported_grant_type",
+            "token request refused"
+        );
         return Err(TokenError::UnsupportedGrant);
     }
-    let roles = roles_for_scope(scope, &client.scopes).ok_or_else(|| {
+    let scopes = granted_scopes(scope, &client.scopes).inspect_err(|_| {
         tracing::warn!(
-            target: "features::oauth",
-            requested_scope = ?scope,
-            allowed = ?client.scopes,
-            "requested scope not granted"
+            target: crate::oauth::TARGET,
+            org_id = %client.payload.org_id,
+            reason = "invalid_scope",
+            "token request refused"
         );
-        TokenError::InvalidScope
     })?;
-    issue_with_jwt(jwt_svc, None, client.payload, roles)
+    issue_with_jwt(
+        jwt_svc,
+        None,
+        client.payload.org_id,
+        client.payload.roles.clone(),
+        scopes,
+    )
 }
 
 fn token_error_from_auth(err: AuthError) -> TokenError {
-    if matches!(err, AuthError::Unavailable(_)) {
+    if matches!(err, AuthError::Unavailable { .. }) {
         TokenError::Server(err.into())
     } else {
         TokenError::InvalidClient
@@ -207,6 +216,8 @@ mod tests {
     use nest_rs::authn::{JwtOptions, JwtService};
     use std::time::Duration;
 
+    use crate::authz::constants::{POSTS_READ, POSTS_WRITE};
+
     fn jwt_with_ttl(ttl: Duration) -> JwtService {
         let mut opts = JwtOptions::new("test-secret-padded-to-thirty-two-b");
         opts.expires_in = ttl;
@@ -218,7 +229,8 @@ mod tests {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(900));
         let org = Uuid::now_v7();
         let sub = Uuid::now_v7();
-        let token = issue_with_jwt(&jwt_svc, Some(sub), org, vec![Role::User]).expect("issue");
+        let token = issue_with_jwt(&jwt_svc, Some(sub), org, vec![Role::User], constants::all())
+            .expect("issue");
 
         assert_eq!(
             token.token_type, "Bearer",
@@ -234,27 +246,42 @@ mod tests {
         );
     }
 
-    #[test]
-    fn issue_round_trips_user_subject_through_verify() {
+    #[tokio::test]
+    async fn issue_round_trips_user_subject_through_verify() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let sub = Uuid::now_v7();
         let org = Uuid::now_v7();
-        let token = issue_with_jwt(&jwt_svc, Some(sub), org, vec![Role::Admin]).expect("issue");
+        let token = issue_with_jwt(
+            &jwt_svc,
+            Some(sub),
+            org,
+            vec![Role::Admin],
+            constants::all(),
+        )
+        .expect("issue");
 
-        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
+        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
         assert_eq!(claims.sub, Some(sub));
         assert_eq!(claims.org_id, org);
         assert!(claims.is_admin());
     }
 
-    #[test]
-    fn issue_machine_grant_signs_with_no_subject() {
+    #[tokio::test]
+    async fn the_token_and_its_response_carry_the_scopes_granted() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let org = Uuid::now_v7();
-        let token = issue_with_jwt(&jwt_svc, None, org, vec![Role::User]).expect("issue");
-        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
+        let token = issue_with_jwt(
+            &jwt_svc,
+            None,
+            Uuid::now_v7(),
+            vec![Role::User],
+            vec![POSTS_READ.to_owned()],
+        )
+        .expect("issue");
+
+        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
         assert!(claims.sub.is_none(), "machine grant must omit sub");
-        assert_eq!(claims.org_id, org);
+        assert_eq!(claims.scopes, [POSTS_READ]);
+        assert_eq!(token.scope, [POSTS_READ]);
     }
 
     #[test]
@@ -266,6 +293,7 @@ mod tests {
             Some(Uuid::now_v7()),
             Uuid::now_v7(),
             vec![Role::User],
+            constants::all(),
         )
         .expect_err("sign without key ⇒ Sign(_)");
         assert!(matches!(err, TokenError::Sign(_)));
@@ -278,9 +306,12 @@ mod tests {
          -----END PUBLIC KEY-----\n"
     }
 
-    fn auth_client(scopes: &[&str]) -> AuthenticatedClient {
+    fn auth_client(roles: Vec<Role>, scopes: &[&str]) -> AuthenticatedClient {
         AuthenticatedClient {
-            payload: Uuid::now_v7(),
+            payload: ClientPayload {
+                org_id: Uuid::now_v7(),
+                roles,
+            },
             scopes: scopes.iter().map(|s| (*s).into()).collect(),
         }
     }
@@ -288,9 +319,13 @@ mod tests {
     #[test]
     fn grant_client_credentials_rejects_unknown_grant_type() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let err =
-            grant_client_credentials_with_jwt(&jwt_svc, "password", None, &auth_client(&["user"]))
-                .expect_err("non-CC grant rejected");
+        let err = grant_client_credentials_with_jwt(
+            &jwt_svc,
+            "password",
+            None,
+            &auth_client(vec![Role::User], &[POSTS_READ]),
+        )
+        .expect_err("non-CC grant rejected");
         assert!(matches!(err, TokenError::UnsupportedGrant));
         assert_eq!(err.to_string(), "unsupported_grant_type");
     }
@@ -301,32 +336,46 @@ mod tests {
         let err = grant_client_credentials_with_jwt(
             &jwt_svc,
             "client_credentials",
-            Some("admin"),
-            &auth_client(&["user"]),
+            Some(POSTS_WRITE),
+            &auth_client(vec![Role::User], &[POSTS_READ]),
         )
         .expect_err("scope mismatch rejected");
         assert!(matches!(err, TokenError::InvalidScope));
     }
 
-    #[test]
-    fn grant_client_credentials_issues_a_bearer_token_with_the_clients_org() {
+    #[tokio::test]
+    async fn grant_client_credentials_issues_the_requested_subset_with_the_clients_org_and_roles() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let client = auth_client(&["user", "admin"]);
-        let org = client.payload;
+        let client = auth_client(vec![Role::Admin], &[POSTS_READ, POSTS_WRITE]);
         let token = grant_client_credentials_with_jwt(
             &jwt_svc,
             "client_credentials",
-            Some("user"),
+            Some(POSTS_READ),
             &client,
         )
         .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
-        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
+        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
         assert!(
             claims.sub.is_none(),
             "client_credentials token must carry no sub",
         );
-        assert_eq!(claims.org_id, org);
+        assert_eq!(claims.org_id, client.payload.org_id);
+        assert_eq!(claims.roles, [Role::Admin]);
+        assert_eq!(claims.scopes, [POSTS_READ]);
+    }
+
+    #[tokio::test]
+    async fn an_absent_scope_is_granted_the_registered_set_and_says_so() {
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
+        let client = auth_client(vec![Role::User], &[POSTS_READ]);
+        let token =
+            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &client)
+                .expect("absent scope ok");
+        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
+        assert_eq!(claims.scopes, [POSTS_READ]);
+        assert_eq!(claims.roles, [Role::User]);
+        assert_eq!(token.scope, [POSTS_READ]);
     }
 
     use nest_rs::oauth::server::RegisteredClient;
@@ -342,12 +391,15 @@ mod tests {
     fn oauth_service(ttl: Duration) -> OAuthService {
         let jwt_svc = Arc::new(jwt_with_ttl(ttl));
         let providers = Arc::new(SocialRegistry::default());
-        let config = Arc::new(IssuerConfig {
+        let config = Arc::new(OAuthConfig {
             clients: vec![RegisteredClient {
                 client_id: "ci".into(),
                 client_secret: "s3cret".into(),
-                scopes: vec!["user".into()],
-                payload: Uuid::now_v7(),
+                scopes: vec![POSTS_READ.into()],
+                payload: ClientPayload {
+                    org_id: Uuid::now_v7(),
+                    roles: vec![Role::User],
+                },
             }],
             default_org_id: Uuid::now_v7(),
         });
@@ -355,12 +407,13 @@ mod tests {
     }
 
     #[test]
-    fn oauth_service_issue_builds_a_usable_token() {
+    fn a_first_party_login_is_delegated_every_scope() {
         let svc = oauth_service(Duration::from_secs(60));
         let token = svc
             .issue(Some(Uuid::now_v7()), Uuid::now_v7(), vec![Role::User])
             .expect("issue");
         assert_eq!(token.token_type, "Bearer");
+        assert_eq!(token.scope, constants::all());
     }
 
     #[test]
@@ -377,7 +430,7 @@ mod tests {
     fn oauth_service_grant_client_credentials_rejects_non_cc_grant() {
         let svc = oauth_service(Duration::from_secs(60));
         let err = svc
-            .grant_client_credentials("password", None, &auth_client(&["user"]))
+            .grant_client_credentials("password", None, &auth_client(vec![Role::User], &[]))
             .expect_err("password grant on CC endpoint ⇒ unsupported");
         assert!(matches!(err, TokenError::UnsupportedGrant));
     }
@@ -385,7 +438,7 @@ mod tests {
     #[test]
     fn oauth_service_grant_client_credentials_issues_with_the_authenticated_org() {
         let svc = oauth_service(Duration::from_secs(60));
-        let client = auth_client(&["user"]);
+        let client = auth_client(vec![Role::User], &[POSTS_READ]);
         let token = svc
             .grant_client_credentials("client_credentials", None, &client)
             .expect("happy CC path");
@@ -407,7 +460,8 @@ mod tests {
         let auth = svc
             .authenticate_client("ci", "s3cret")
             .expect("matching pair");
-        assert_eq!(auth.scopes, vec!["user".to_string()]);
+        assert_eq!(auth.scopes, [POSTS_READ]);
+        assert_eq!(auth.payload.roles, [Role::User]);
     }
 
     #[test]
@@ -423,25 +477,17 @@ mod tests {
     fn token_error_from_auth_maps_a_store_outage_to_server_error_not_invalid_credentials() {
         assert!(
             matches!(
-                token_error_from_auth(AuthError::Unavailable("store down".into())),
+                token_error_from_auth(AuthError::Unavailable {
+                    detail: "store down".into(),
+                    retry_after: None,
+                }),
                 TokenError::Server(_),
             ),
-            "a store outage during login must be server_error (500), never invalid_credentials (401)",
+            "a store outage during login must be server_error (503), never invalid_credentials (401)",
         );
         assert!(matches!(
             token_error_from_auth(AuthError::Failed("invalid credentials".into())),
             TokenError::InvalidClient,
         ));
-    }
-
-    #[test]
-    fn grant_client_credentials_falls_back_to_the_full_grant_when_scope_blank() {
-        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let client = auth_client(&["admin"]);
-        let token =
-            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &client)
-                .expect("blank scope ok");
-        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
-        assert!(claims.is_admin(), "blank scope should grant the full set");
     }
 }

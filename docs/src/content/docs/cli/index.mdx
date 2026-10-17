@@ -31,7 +31,7 @@ Requires **Rust 1.97+** (edition 2024). That single install is all you need: the
 first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
 toolchain it drives — `just`, `bacon`, `cargo-nextest`, `cargo-llvm-cov` — once.
 Run **`nestrs doctor`** after install to check the Rust toolchain and list
-optional `NESTRS_*` environment variables.
+optional `<PREFIX>_*` environment variables.
 
 ## Layout detection
 
@@ -76,6 +76,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
   - compose.yml
   - .env
   - .env.development
+  - .env.test
   - .env.example
   - .gitignore
   - rust-toolchain.toml
@@ -103,7 +104,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
         - e2e/main.rs
 </FileTree>
 
-The `e2e` suite is scaffolded **empty**. It has to exist: `nestrs run test unit`
+The `e2e` suite is scaffolded **empty**. It has to exist: `nestrs run test integration`
 filters on `not binary(e2e)` and `nestrs run test e2e` on `binary(e2e)`, and
 nextest rejects a filterset naming a binary the workspace does not have.
 
@@ -149,7 +150,7 @@ feature already exists, rather than overwriting it.
 
 Ports: the CLI scans existing `apps/*/src/module.rs` and pins the next free one
 in code (same pattern as `auth` → 3001, `api` → 3002, …). Workspace `.env` files
-do **not** set `NESTRS_HTTP__PORT` — ports live in each app's `module.rs`:
+do **not** set `<PREFIX>_HTTP__PORT` — ports live in each app's `module.rs`:
 
 ```rust title="apps/api/src/module.rs"
 HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
@@ -180,10 +181,10 @@ door. It forwards the recipe and its arguments verbatim to
 scaffolder wrote:
 
 ```bash
-nestrs run dev          # watch mode (rebuild + restart on save)
-nestrs run test unit         # unit + integration
-nestrs run db up        # apply migrations
-nestrs run              # list the available recipes
+nestrs run dev               # watch mode (rebuild + restart on save)
+nestrs run test integration  # in process, no database
+nestrs run db up             # apply migrations
+nestrs run                   # list the available recipes
 ```
 
 The recipes are yours to edit. Add your own to the `Justfile` and they run the
@@ -199,8 +200,10 @@ then fails with the manual install command instead of fetching anything.
 ## Build
 
 Release binaries land in `target/release/`. **`nestrs run start`** compiles and
-starts the server; use **`nestrs run build`** when you only need the artifact
-(Docker, CI, or copying the binary elsewhere).
+starts the server under the production profile, so it reads no
+`.env.development`: the database and queue URLs are the deployment's to set.
+Use **`nestrs run build`** when you only need the artifact (Docker, CI, or
+copying the binary elsewhere).
 
 ```bash
 nestrs run build              # default app (hello)
@@ -240,7 +243,11 @@ nestrs g entity posts/comment     # → Comment
 
 # The app's authn/authz adapter — Claims, AuthnGuard, AuthzAbility, AuthzGuard.
 # Run it *before* the first `g resource`, or not at all: it refuses when
-# `crates/features/src/authz/` already exists.
+# `crates/features/src/authz/` already exists. It draws a random HS256 secret
+# into the git-ignored `.env.local` and another into `.env.test`, read only by
+# the test suites; the committed `.env` gets no secret. Neither is written where
+# a file of the same runs, `.env` included, already sets a `<PREFIX>_AUTHN__`
+# variable: a secret beside your own key would fail the boot.
 nestrs g auth
 
 # A SeaORM migration, registered in lib.rs and migrator.rs
@@ -253,14 +260,15 @@ nestrs g ws posts          # gateway
 nestrs g queue posts       # processor
 nestrs g schedule posts    # scheduled tasks
 nestrs g mcp posts         # MCP tool
+nestrs g events posts      # event listener, with its event at the port
 ```
 
 `g graphql`, `g ws` and `g mcp` also write that transport's **authz bridge**
 under `crates/features/src/authz/` when the workspace has a policy to enforce,
 and wire it into the app. It is not optional wiring: `/graphql` and `/mcp` gate
 in band, per operation, so without the bridge `/mcp` denies every call and
-`/graphql` runs operations with no ability installed. A gateway's bridge carries
-the socket data context that scopes its rows.
+`/graphql` runs operations with no ability installed. A gateway's bridge brings
+the guards whose ability crosses the connection and scopes its rows.
 
 <Aside type="note">
 Generated entities default to wire-only `#[expose]` (no GraphQL tokens) — see
@@ -328,11 +336,13 @@ controller together.
 ### `g graphql` over a resource carries the same guarantee
 
 The GraphQL adapter for a resource port is the `#[crud]` resolver behind the
-same two guards, and it comes with the per-operation bridge it is enforced
-through: `crates/features/src/authz/graphql/` plus the `AuthzGraphqlModule`
-import in the adapter's `module.rs`. That folder is not optional decoration —
-`/graphql` runs no guard at the HTTP edge, so the bridge is the only thing that
-authenticates the caller and installs the ability the resolvers read. Over a
+ability guard — `#[use_guards(AuthzGuard)]` alone, since `AuthnGuard` checks
+HTTP requests only and a resolver refuses it at compile time — and it comes with
+the per-operation bridge that authenticates each operation:
+`crates/features/src/authz/graphql/` plus the `AuthzGraphqlModule` import in the
+adapter's `module.rs`. That folder is not optional decoration — `/graphql` runs
+no guard at the HTTP edge, so the bridge is the only thing that authenticates the
+caller and installs the ability the resolvers read. Over a
 plain `g feature` port there are no rows to guard, so the resolver stays the
 `#[public]` stand-in and nothing else is generated.
 
@@ -346,7 +356,12 @@ Checks:
 
 - `rustc` ≥ 1.97 and `cargo` on `PATH`
 - whether the current directory sits inside a nestrs workspace
-- optional env vars (`NESTRS_SEAORM__URL`, `NESTRS_REDIS__URL`, …)
+- optional env vars (`<PREFIX>_SEAORM__URL`, `<PREFIX>_REDIS__URL`, …), read as an
+  app started in the same shell and directory would read them — the real
+  environment over the `.env` cascade, inline or through `<NAME>_FILE`. A value
+  the app would refuse at boot — a `_FILE` naming a file it cannot read, a
+  variable given both ways — is a blocking issue, and a `_FILE` naming a file
+  that holds nothing is `not set`.
 
 Use it after install and before running DB- or Redis-backed apps.
 

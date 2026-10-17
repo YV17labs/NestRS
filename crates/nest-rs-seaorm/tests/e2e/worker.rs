@@ -1,19 +1,18 @@
-//! `WorkerDbContext` installs a live executor around a job so a
-//! `#[scheduled]`/`#[processor]` queries through `Repo` without an injected
-//! connection — and settles what that job wrote. Driven against the dev
-//! Postgres, because the settling is the part no in-process double can show.
+//! `SeaOrmUnitOfWork` installs a live executor around a job's unit of work, so
+//! a `#[scheduled]`/`#[processor]` reaches `Repo`, and settles what the job
+//! wrote.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nest_rs_core::Container;
-use nest_rs_seaorm::{Executor, WorkerDbContext, current_executor};
-use nest_rs_worker::{JobContext, JobSettlement, JobTransaction};
+use nest_rs_database::{
+    ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
+};
+use nest_rs_seaorm::{Executor, SeaOrmConfig, SeaOrmUnitOfWork, current_executor};
 use sea_orm::{ConnectionTrait, Statement};
 
-/// A table this file owns, dropped and recreated per test so a rollback is
-/// observable as row count rather than inferred from a log.
+/// A table recreated per test, so a rollback is observable as a row count.
 async fn scratch_table(conn: &sea_orm::DatabaseConnection, name: &str) {
     for sql in [
         format!("DROP TABLE IF EXISTS {name}"),
@@ -37,9 +36,45 @@ async fn row_count(conn: &sea_orm::DatabaseConnection, name: &str) -> i64 {
     .expect("the count is an integer")
 }
 
-fn context(conn: Arc<sea_orm::DatabaseConnection>) -> Arc<dyn JobContext> {
-    let container = Container::builder().provide_arc(conn).build();
-    Arc::new(WorkerDbContext::from_container(&container))
+/// A queue attempt's unit of work, as the queue edge declares it.
+const JOB: nest_rs_core::operation_log::Unit = nest_rs_core::__private::declare_unit(
+    "nest-rs-queue",
+    "nest_rs::queue",
+    nest_rs_core::operation_log::Kind::Consumer,
+    "queue.job",
+);
+
+/// The binding, run the way the queue edge runs an attempt: the job's `bool`
+/// is its outcome, and the answer is how its unit settled.
+struct Attempts(Arc<dyn UnitOfWork>);
+
+impl Attempts {
+    async fn scope(
+        &self,
+        policy: TransactionPolicy,
+        job: Pin<Box<dyn Future<Output = bool> + Send + '_>>,
+    ) -> Settlement {
+        let spec = UnitSpec::new(JOB, ExecutorScope::Job, policy);
+        let ran = run_unit(
+            Some(&self.0),
+            spec,
+            async move { if job.await { Ok(()) } else { Err(None) } },
+            Result::is_ok,
+            |why| Err(Some(why)),
+        )
+        .await;
+        match ran {
+            Err(Some(why)) => Settlement::Unhonoured(why),
+            Ok(()) | Err(None) => Settlement::Settled,
+        }
+    }
+}
+
+fn context(conn: Arc<sea_orm::DatabaseConnection>) -> Attempts {
+    Attempts(Arc::new(SeaOrmUnitOfWork::new(
+        conn,
+        &SeaOrmConfig::default(),
+    )))
 }
 
 #[tokio::test]
@@ -66,8 +101,8 @@ async fn a_job_runs_in_a_transaction_by_default_and_its_writes_commit() {
         true
     });
     assert_eq!(
-        ctx.scope(JobTransaction::PerAttempt, job).await,
-        JobSettlement::Settled
+        ctx.scope(TransactionPolicy::PerUnit, job).await,
+        Settlement::Settled
     );
 
     assert_eq!(
@@ -87,8 +122,6 @@ async fn a_failed_job_leaves_nothing_for_the_retry_to_repeat() {
     scratch_table(&conn, "worker_rollback_probe").await;
     let ctx = context(conn.clone());
 
-    // The whole point of the default: the job wrote, then failed. Before this,
-    // the row survived and the retry inserted a second one.
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
         current_executor()
             .expect("ambient executor")
@@ -98,8 +131,8 @@ async fn a_failed_job_leaves_nothing_for_the_retry_to_repeat() {
         false
     });
     assert_eq!(
-        ctx.scope(JobTransaction::PerAttempt, job).await,
-        JobSettlement::Settled
+        ctx.scope(TransactionPolicy::PerUnit, job).await,
+        Settlement::Settled
     );
 
     assert_eq!(
@@ -115,8 +148,6 @@ async fn the_opt_out_runs_on_the_pool_and_each_statement_stands_alone() {
     scratch_table(&conn, "worker_pool_probe").await;
     let ctx = context(conn.clone());
 
-    // `transactional = false` is what every job did before the default changed:
-    // the write is already committed when the job goes on to fail.
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
         let executor = current_executor().expect("ambient executor");
         assert!(
@@ -130,8 +161,8 @@ async fn the_opt_out_runs_on_the_pool_and_each_statement_stands_alone() {
         false
     });
     assert_eq!(
-        ctx.scope(JobTransaction::Pool, job).await,
-        JobSettlement::Settled
+        ctx.scope(TransactionPolicy::Pool, job).await,
+        Settlement::Settled
     );
 
     assert_eq!(
@@ -151,10 +182,8 @@ async fn a_job_that_swallows_a_db_error_and_returns_ok_is_not_reported_as_succee
         .expect("the row the job will collide with");
     let ctx = context(conn.clone());
 
-    // The commonest job shape there is: loop, log what fails, carry on. Postgres
-    // aborts the whole transaction on the first failed statement and then
-    // *succeeds* the `COMMIT` while rolling back — so before the poison flag
-    // this job reported `Ok`, wrote nothing, and said nothing about it.
+    // Postgres aborts the transaction on the first failed statement, then
+    // succeeds the `COMMIT` while rolling back.
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
         let executor = current_executor().expect("ambient executor");
         let collided = executor
@@ -168,8 +197,8 @@ async fn a_job_that_swallows_a_db_error_and_returns_ok_is_not_reported_as_succee
         true
     });
 
-    let settlement = ctx.scope(JobTransaction::PerAttempt, job).await;
-    let JobSettlement::Unhonoured(why) = settlement else {
+    let settlement = ctx.scope(TransactionPolicy::PerUnit, job).await;
+    let Settlement::Unhonoured(why) = settlement else {
         panic!("a job whose transaction was aborted cannot be reported as having succeeded");
     };
     assert!(
@@ -185,11 +214,8 @@ async fn a_job_that_swallows_a_db_error_and_returns_ok_is_not_reported_as_succee
     );
 }
 
-/// The failure that motivated classifying at all: a constraint checked at
-/// `COMMIT`. Every statement succeeds, the job succeeds, and the commit is
-/// refused — identically on every attempt, because the two rows the job writes
-/// are what collide. Retrying it replays the whole body, side effects and all,
-/// once per unit of retry budget, and dead-letters anyway.
+/// A constraint checked at `COMMIT`, refused identically on every attempt: the
+/// two rows the job writes are what collide.
 #[tokio::test]
 async fn a_commit_the_next_attempt_would_lose_too_is_not_retried() {
     let conn = crate::harness::connect_arc().await;
@@ -215,7 +241,7 @@ async fn a_commit_the_next_attempt_would_lose_too_is_not_retried() {
         true
     });
 
-    let JobSettlement::Unhonoured(why) = ctx.scope(JobTransaction::PerAttempt, job).await else {
+    let Settlement::Unhonoured(why) = ctx.scope(TransactionPolicy::PerUnit, job).await else {
         panic!("a commit that failed cannot be reported as a successful attempt");
     };
     assert!(
@@ -231,14 +257,8 @@ async fn a_commit_the_next_attempt_would_lose_too_is_not_retried() {
     );
 }
 
-/// The other half, and the reason "abort everything" is not the answer either:
-/// a transient conflict. Two `SERIALIZABLE` transactions read each other's
-/// predicate and then write into it; the second to commit is refused with
-/// `40001`, and running the attempt again is exactly what clears it.
-///
-/// Postgres may raise the conflict at the write or at the `COMMIT` — which is
-/// the point of reading its SQLSTATE rather than the site: the classification
-/// is the same wherever it surfaces.
+/// A `40001` serialization conflict, which the next attempt clears; Postgres
+/// may raise it at the write or at the `COMMIT`, classified the same.
 #[tokio::test]
 async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
     let conn = crate::harness::connect_arc().await;
@@ -256,8 +276,7 @@ async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
 
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async move {
         let executor = current_executor().expect("ambient executor");
-        // First statement on the attempt's transaction, before any query has
-        // fixed its snapshot — which is the only point Postgres accepts it.
+        // Postgres accepts it only before a query has fixed the snapshot.
         executor
             .execute_unprepared("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             .await
@@ -286,7 +305,7 @@ async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
         true
     });
 
-    let JobSettlement::Unhonoured(why) = ctx.scope(JobTransaction::PerAttempt, job).await else {
+    let Settlement::Unhonoured(why) = ctx.scope(TransactionPolicy::PerUnit, job).await else {
         panic!("the losing transaction wrote nothing, so the attempt is a failure");
     };
     assert!(
@@ -296,14 +315,7 @@ async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
     );
 }
 
-/// A job whose `COMMIT` the database refuses.
-///
-/// The queue's whole promise is "an attempt that fails leaves nothing for the
-/// retry to write again", and a commit-time constraint is where that promise is
-/// either kept or silently broken: the job body succeeded, so a context that
-/// reported the body's answer would ack a job that wrote nothing. The event is
-/// also what carries `retryable`, and a schedule reports it while a queue spends
-/// its budget on it — so getting it wrong either wastes a budget or drops work.
+/// A job whose `COMMIT` the database refuses, though its body succeeded.
 #[tokio::test]
 async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -319,12 +331,11 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
             )
             .await
             .expect("a deferred constraint lets the statement through");
-        // The job body itself succeeded. Everything after this is the boundary.
         true
     });
 
-    let settlement = ctx.scope(JobTransaction::PerAttempt, job).await;
-    let JobSettlement::Unhonoured(why) = settlement else {
+    let settlement = ctx.scope(TransactionPolicy::PerUnit, job).await;
+    let Settlement::Unhonoured(why) = settlement else {
         panic!("a job whose transaction never committed has not been settled");
     };
     assert!(
@@ -339,7 +350,7 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
         "and nothing was written",
     );
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "job transaction commit failed");
+    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "transaction commit failed");
     assert_eq!(event.level, "error");
     assert_eq!(
         event.field("retryable").as_deref(),
@@ -355,4 +366,239 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
         "…and the database's own reason, got {:?}",
         event.fields,
     );
+}
+
+/// Work held for the commit of a job attempt runs after it, on the pool, and
+/// sees what the attempt committed.
+#[tokio::test]
+async fn work_held_for_the_commit_runs_once_the_attempt_committed() {
+    use crate::harness::{Sighting, Sightings, after_commit_table, sighted, write_and_hold};
+    const TABLE: &str = "after_commit_worker_commit";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, TABLE).await;
+    let sightings = Sightings::default();
+    let ctx = context(conn.clone());
+
+    let (observer, record) = (conn.clone(), sightings.clone());
+    let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async move {
+        write_and_hold(TABLE, observer, record).await;
+        true
+    });
+    assert_eq!(
+        ctx.scope(TransactionPolicy::PerUnit, job).await,
+        Settlement::Settled
+    );
+    assert_eq!(
+        sighted(&sightings),
+        [Sighting {
+            committed: 1,
+            on_pool: true
+        }],
+    );
+}
+
+/// A failed attempt rolls back, and what waited for its commit never runs — so
+/// the retry that follows is the only one that announces anything.
+#[tokio::test]
+async fn work_held_by_an_attempt_that_failed_never_runs() {
+    use crate::harness::{Sightings, after_commit_table, committed_rows, sighted, write_and_hold};
+    const TABLE: &str = "after_commit_worker_rollback";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, TABLE).await;
+    let sightings = Sightings::default();
+    let ctx = context(conn.clone());
+
+    let (observer, record) = (conn.clone(), sightings.clone());
+    let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async move {
+        write_and_hold(TABLE, observer, record).await;
+        false
+    });
+    assert_eq!(
+        ctx.scope(TransactionPolicy::PerUnit, job).await,
+        Settlement::Settled
+    );
+    assert_eq!(committed_rows(&conn, TABLE).await, 0);
+    assert!(sighted(&sightings).is_empty());
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct DeadlineProbe {
+    id: i32,
+}
+
+#[nest_rs_queue::queue(name = "worker-deadline", job = DeadlineProbe)]
+struct DeadlineQueue;
+
+/// How many times the listener on the job's committed write ran.
+static LISTENER_RUNS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+struct DeadlineProcessor;
+
+impl nest_rs_core::ProviderResidency for DeadlineProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[nest_rs_queue::processor]
+impl DeadlineProcessor {
+    /// Writes and returns within its timeout; what listens to the write
+    /// outlives it.
+    #[process(queue = DeadlineQueue, retries = 1, timeout = "1s")]
+    async fn write(&self, _job: DeadlineProbe) -> anyhow::Result<()> {
+        current_executor()
+            .expect("the attempt runs with an ambient executor")
+            .execute_unprepared("INSERT INTO worker_deadline_probe DEFAULT VALUES")
+            .await?;
+        nest_rs_database::after_commit(async {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            LISTENER_RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        Ok(())
+    }
+}
+
+static BARE: nest_rs_queue::QueueBackend =
+    nest_rs_queue::QueueBackend::new("bare", nest_rs_queue::Capabilities::NONE);
+
+/// The timeout bounds the body: a job that answered in time is never retried
+/// because what listens to its commit outlives it, so its write lands once and
+/// its listener runs once.
+#[tokio::test]
+async fn a_job_whose_listener_outlives_its_timeout_is_not_retried() {
+    use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
+
+    let conn = crate::harness::connect_arc().await;
+    scratch_table(&conn, "worker_deadline_probe").await;
+    let unit: Arc<dyn UnitOfWork> = Arc::new(SeaOrmUnitOfWork::new(
+        conn.clone(),
+        &SeaOrmConfig::default(),
+    ));
+    let method = nest_rs_core::inventory::iter::<nest_rs_queue::ProcessMethod>()
+        .find(|method| method.name() == "DeadlineProcessor::write")
+        .expect("the processor's method is submitted");
+    let mut delivery = Delivery::new(
+        &BARE,
+        nest_rs_queue::QueueName::new("worker-deadline").expect("a valid name"),
+        serde_json::json!({
+            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
+            "payload": { "id": 1 },
+        }),
+    );
+
+    let outcome = consume::attempt(
+        method,
+        &mut delivery,
+        nest_rs_core::Container::builder()
+            .provide(DeadlineProcessor)
+            .build(),
+        Some(unit),
+    )
+    .await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Ok),
+        "a commit whose listener outlives the timeout is no timeout: {outcome:?}"
+    );
+    assert_eq!(row_count(&conn, "worker_deadline_probe").await, 1);
+    nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+        LISTENER_RUNS.load(std::sync::atomic::Ordering::SeqCst) == 1
+    })
+    .await;
+    assert_eq!(
+        LISTENER_RUNS.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the listener ran once, on the driver's task"
+    );
+}
+
+#[nest_rs_queue::queue(name = "worker-atomic-in-doubt", job = DeadlineProbe)]
+struct AtomicInDoubtQueue;
+
+struct AtomicInDoubtProcessor;
+
+impl nest_rs_core::ProviderResidency for AtomicInDoubtProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[nest_rs_queue::processor]
+impl AtomicInDoubtProcessor {
+    /// On the pool, its one write in an atomic block of its own, whose
+    /// `COMMIT` outlives the timeout.
+    #[process(queue = AtomicInDoubtQueue, retries = 1, timeout = "1s", transactional = false)]
+    async fn write(&self, _job: DeadlineProbe) -> anyhow::Result<()> {
+        nest_rs_database::atomic(async {
+            current_executor()
+                .expect("the block runs with an ambient executor")
+                .execute_unprepared("INSERT INTO worker_atomic_in_doubt DEFAULT VALUES")
+                .await?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+    }
+}
+
+/// A deadline cutting the body while its atomic block commits never cuts that
+/// `COMMIT`: it lands on the driver's task, and the attempt is in doubt —
+/// dead-lettered, never retried into a second write.
+#[tokio::test]
+async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_lands() {
+    use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
+
+    let conn = crate::harness::connect_arc().await;
+    scratch_table(&conn, "worker_atomic_in_doubt").await;
+    // A deferred trigger runs at `COMMIT`, which then outlives the timeout.
+    for sql in [
+        "CREATE OR REPLACE FUNCTION worker_atomic_in_doubt_slow() RETURNS trigger \
+         LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(2); RETURN NULL; END $$",
+        "CREATE CONSTRAINT TRIGGER worker_atomic_in_doubt_slow AFTER INSERT ON \
+         worker_atomic_in_doubt DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION \
+         worker_atomic_in_doubt_slow()",
+    ] {
+        conn.execute_unprepared(sql)
+            .await
+            .expect("the slow commit is set up");
+    }
+    let unit: Arc<dyn UnitOfWork> = Arc::new(SeaOrmUnitOfWork::new(
+        conn.clone(),
+        &SeaOrmConfig::default(),
+    ));
+    let method = nest_rs_core::inventory::iter::<nest_rs_queue::ProcessMethod>()
+        .find(|method| method.name() == "AtomicInDoubtProcessor::write")
+        .expect("the processor's method is submitted");
+    let mut delivery = Delivery::new(
+        &BARE,
+        nest_rs_queue::QueueName::new("worker-atomic-in-doubt").expect("a valid name"),
+        serde_json::json!({
+            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
+            "payload": { "id": 1 },
+        }),
+    );
+
+    let started = std::time::Instant::now();
+    let outcome = consume::attempt(
+        method,
+        &mut delivery,
+        nest_rs_core::Container::builder()
+            .provide(AtomicInDoubtProcessor)
+            .build(),
+        Some(unit),
+    )
+    .await;
+    let took = started.elapsed();
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("a commit the cut left running may have landed: {outcome:?}");
+    };
+    assert!(
+        error.to_string().ends_with("its writes may have landed"),
+        "{error}"
+    );
+    assert!(
+        took < std::time::Duration::from_millis(1900),
+        "answered at the deadline, not after the commit, took {took:?}",
+    );
+    nest_rs_testing::wait_for(std::time::Duration::from_secs(5), || {
+        let conn = Arc::clone(&conn);
+        async move { row_count(&conn, "worker_atomic_in_doubt").await == 1 }
+    })
+    .await;
 }

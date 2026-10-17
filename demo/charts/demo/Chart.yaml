@@ -9,8 +9,8 @@ type: application
 
 # Chart version, bumped on chart changes. `appVersion` tracks the demo
 # workspace's own version (demo/Cargo.toml) and supplies the default image tag.
-version: 0.1.0
-appVersion: "6.1.0"
+version: 0.2.0
+appVersion: "7.0.0"
 
 # The honest floor, read off the API versions this chart writes: autoscaling/v2
 # (1.23), policy/v1 (1.21), networking.k8s.io/v1 (1.19). `helm template` renders

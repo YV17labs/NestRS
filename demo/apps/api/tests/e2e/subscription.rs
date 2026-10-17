@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nest_rs::authn::JwtConfig;
-use nest_rs::http::HttpTransport;
+use nest_rs::authn::AuthnConfig;
 use nest_rs::http::poem::http::header;
+use nest_rs::http::{HttpConfig, HttpTransport};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
@@ -17,7 +17,8 @@ use crate::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, token_for, token_with_sub};
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-const BIND: &str = "127.0.0.1:13372";
+const HOST: &str = "127.0.0.1";
+const PORT: u16 = 13372;
 
 const SUBSCRIBE: &str = "subscription { postPublished { id title orgId status } }";
 
@@ -91,17 +92,17 @@ async fn next_item(socket: &mut Socket, within: Duration) -> Option<Value> {
 
 async fn wait_ready() {
     for _ in 0..200 {
-        if tokio::net::TcpStream::connect(BIND).await.is_ok() {
+        if tokio::net::TcpStream::connect((HOST, PORT)).await.is_ok() {
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("the api never bound {BIND}");
+    panic!("the api never bound {HOST}:{PORT}");
 }
 
 async fn post_json(path: &str, token: &str, body: Value) -> Value {
     let response = reqwest::Client::new()
-        .post(format!("http://{BIND}{path}"))
+        .post(format!("http://{HOST}:{PORT}{path}"))
         .bearer_auth(token)
         .json(&body)
         .send()
@@ -132,7 +133,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
     let served = TestApp::builder()
         .module::<ApiModule>()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             audience: Some(AUDIENCE.into()),
             ..Default::default()
@@ -140,12 +141,20 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         .build_headless()
         .await
         .expect("ApiModule boots against the throwaway database");
-    served
-        .init()
-        .await
-        .expect("the init phases register the event listeners");
+    served.init().await.expect("the init hooks run");
+    let config = served
+        .container()
+        .get::<HttpConfig>()
+        .expect("ApiModule configures its HTTP transport");
     let transport = served
-        .spawn_transport(HttpTransport::new().bind(BIND))
+        .spawn_transport(
+            HttpTransport::from_config(&HttpConfig {
+                host: HOST.into(),
+                port: PORT,
+                ..(*config).clone()
+            })
+            .expect("the api's own config builds its transport"),
+        )
         .await
         .expect("the api serves on a real port");
 
@@ -184,7 +193,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         .expect("a post id")
         .to_owned();
 
-    let url = format!("ws://{BIND}/graphql");
+    let url = format!("ws://{HOST}:{PORT}/graphql");
     let mut reader = subscribe(&url, &author, "in").await;
     let mut stranger = subscribe(&url, &stranger_token, "out").await;
     tokio::time::sleep(Duration::from_millis(200)).await;

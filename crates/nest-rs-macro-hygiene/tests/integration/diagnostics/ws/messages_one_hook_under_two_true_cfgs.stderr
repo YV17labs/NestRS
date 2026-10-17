@@ -1,0 +1,13 @@
+error[E0201]: duplicate definitions with name `on_connect`:
+  --> tests/integration/diagnostics/ws/messages_one_hook_under_two_true_cfgs.rs:17:7
+   |
+13 |     #[on_connect]
+   |       ---------- previous definition here
+...
+17 |     #[on_connect]
+   |       ^^^^^^^^^^ duplicate definition
+   |
+  ::: $WORKSPACE/crates/nest-rs-ws/src/gateway.rs
+   |
+   | #[async_trait]
+   | -------------- item in trait

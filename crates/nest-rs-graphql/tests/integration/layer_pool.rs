@@ -1,21 +1,14 @@
-//! The layer-pool contract on the `/graphql` self-mount.
-//!
-//! `/graphql` is `EdgePosture::Exempt`: no guard runs at the HTTP edge. The
-//! per-operation seam is the **only** guard site — the registered
-//! `GraphqlOperationGuard` when the app binds one, otherwise the global-pool
-//! fallback `use_guards_global` seeds. These tests pin the two halves of
-//! that contract: a global guard runs **exactly once** per GraphQL request
-//! (the historical double-run — edge + in-band — must never come back), and
-//! a registered operation guard **replaces** the fallback (the real bridge
-//! runs the same guards itself; a second site would double-run). The
-//! transport-edge interceptor pool still covers the POST.
+//! The layer-pool contract on the `/graphql` self-mount: a global guard runs
+//! **exactly once** per request, and a registered operation guard **adds to**
+//! the global pool, which leaves it only the guards it covers.
 
+use std::any::TypeId;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::async_trait;
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
@@ -40,13 +33,16 @@ impl Layer for CountingPassGuard {}
 
 #[async_trait]
 impl Guard for CountingPassGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         GUARD_RUNS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl HttpGuard for CountingPassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for CountingPassGuard {}
 
 /// Counts every HTTP interception, then forwards.
 #[injectable]
@@ -63,19 +59,53 @@ impl Interceptor for CountingInterceptor {
     }
 }
 
-/// A registered operation guard that runs nothing — stands in for an app
-/// bridge that owns the chain itself.
+/// A registered operation guard that runs nothing and covers nothing.
 #[injectable]
 #[derive(Default)]
 struct NoopOpGuard;
 
 impl GraphqlOperationGuard for NoopOpGuard {
-    fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
+    fn before<'a>(
+        &'a self,
+        _req: &'a mut nest_rs_http::Request,
+    ) -> BoxFuture<'a, Result<(), nest_rs_http::Response>> {
         Box::pin(async move { Ok(()) })
     }
 
-    fn around<'a>(&'a self, _req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
+    fn around<'a>(
+        &'a self,
+        _req: &'a nest_rs_http::Request,
+        inner: BoxFuture<'a, ()>,
+    ) -> BoxFuture<'a, ()> {
         inner
+    }
+}
+
+/// A registered operation guard claiming [`CountingPassGuard`] as its own, as
+/// a bridge does the guards it runs.
+#[injectable]
+#[derive(Default)]
+struct CoveringOpGuard;
+
+impl GraphqlOperationGuard for CoveringOpGuard {
+    fn before<'a>(
+        &'a self,
+        _req: &'a mut nest_rs_http::Request,
+    ) -> BoxFuture<'a, Result<(), nest_rs_http::Response>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn around<'a>(
+        &'a self,
+        _req: &'a nest_rs_http::Request,
+        inner: BoxFuture<'a, ()>,
+    ) -> BoxFuture<'a, ()> {
+        inner
+    }
+
+    fn covers(&self) -> &[TypeId] {
+        const COVERS: [TypeId; 1] = [TypeId::of::<CountingPassGuard>()];
+        &COVERS
     }
 }
 
@@ -102,6 +132,12 @@ struct FallbackModule;
     providers = [CountingPassGuard, NoopOpGuard as dyn GraphqlOperationGuard, PingResolver],
 )]
 struct BridgedModule;
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [CountingPassGuard, CoveringOpGuard as dyn GraphqlOperationGuard, PingResolver],
+)]
+struct CoveringModule;
 
 async fn post_ping(app: &TestApp) {
     let resp = app
@@ -145,7 +181,7 @@ async fn global_guard_runs_exactly_once_per_graphql_request() {
 }
 
 #[tokio::test]
-async fn a_registered_operation_guard_replaces_the_fallback() {
+async fn a_registered_operation_guard_adds_to_the_pool() {
     let _gate = GATE.lock().await;
     reset_counters();
 
@@ -159,9 +195,29 @@ async fn a_registered_operation_guard_replaces_the_fallback() {
     post_ping(&app).await;
     assert_eq!(
         GUARD_RUNS.load(Ordering::SeqCst),
+        1,
+        "a registered GraphqlOperationGuard joins the global pool — a pooled guard it does \
+         not cover still runs, once",
+    );
+}
+
+#[tokio::test]
+async fn the_pool_leaves_a_covered_guard_to_the_operation_guard() {
+    let _gate = GATE.lock().await;
+    reset_counters();
+
+    let app = TestApp::builder()
+        .module::<CoveringModule>()
+        .use_guards_global([guard::<CountingPassGuard>()])
+        .build()
+        .await
+        .expect("boots");
+
+    post_ping(&app).await;
+    assert_eq!(
+        GUARD_RUNS.load(Ordering::SeqCst),
         0,
-        "a registered GraphqlOperationGuard owns the chain — the fallback must not also run \
-         the global pool (the real bridge runs the same guards itself)",
+        "the guard the operation guard covers is its to run — the pool does not run it again",
     );
 }
 

@@ -1,27 +1,30 @@
-//! CORS settings for the HTTP transport, settable both via `NESTRS_HTTP__CORS_*`
-//! env vars and pinned in code as `HttpConfig.cors`. The [`HttpModule`](crate::HttpModule)
-//! translates a [`CorsConfig`] into poem's [`Cors`](poem::middleware::Cors)
-//! middleware at boot.
+//! CORS settings for the HTTP transport, read from `<PREFIX>_HTTP__CORS_*` or
+//! pinned as `HttpConfig.cors`, and checked at boot by the transport, which
+//! answers the policy around every route.
 
-use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use nest_rs_config::ConfigService;
-use poem::http::{HeaderName, Method};
-use poem::middleware::Cors;
 
 /// Cross-Origin Resource Sharing policy. `origins` empty ⇒ no CORS layer
 /// installed (the default). Lists are comma-separated in env vars.
+///
+/// The same `origins` decide which browser origins open a WebSocket gateway's
+/// socket or a graphql-ws socket and call `/mcp`, which a browser never asks
+/// CORS about; the CORS layer answers first and admits only what they list,
+/// the server's own origin included.
 #[derive(Clone, Debug, Default)]
-pub struct CorsConfig {
-    /// Allowed origins; empty ⇒ no CORS layer installed.
+pub struct HttpCors {
+    /// Allowed origins; empty ⇒ no CORS layer installed. Also the browser
+    /// origins the socket upgrades and `/mcp` admit.
     pub origins: Vec<String>,
     /// Allowed request methods (`Access-Control-Allow-Methods`).
     pub methods: Vec<String>,
     /// Allowed request headers (`Access-Control-Allow-Headers`).
     pub headers: Vec<String>,
-    /// Response headers exposed to the browser (`Access-Control-Expose-Headers`).
+    /// Response headers exposed to the browser (`Access-Control-Expose-Headers`),
+    /// beside the ones the framework itself sends, which are always exposed.
     pub exposed_headers: Vec<String>,
     /// Whether to allow credentialed requests (`Access-Control-Allow-Credentials`).
     pub credentials: bool,
@@ -30,25 +33,30 @@ pub struct CorsConfig {
 }
 
 /// The wildcard, as the four lists spell it.
-const WILDCARD: &str = "*";
+pub(crate) const WILDCARD: &str = "*";
 
-/// The four lists a `*` may appear in, paired with the response header each one
-/// renders into. One table, so the refusal below is worded once and a fifth list
-/// joins it by growing this array rather than by copying a check.
+/// The response headers the framework sends on a route's behalf. None is
+/// CORS-safelisted, so a cross-origin client reads them only when exposed.
+pub(crate) const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
+
+/// Whether a list holds the wildcard, which admits every value.
+pub(crate) fn holds_wildcard(values: &[String]) -> bool {
+    values.iter().any(|value| value == WILDCARD)
+}
+
+/// The values a list admits one by one: none when it holds the wildcard, which
+/// admits them all.
+pub(crate) fn listed(values: &[String]) -> &[String] {
+    if holds_wildcard(values) { &[] } else { values }
+}
+
+/// A list a `*` may appear in, paired with the response header it renders into.
 type WildcardList<'a> = (&'a str, &'a str, &'a [String]);
 
-impl CorsConfig {
+impl HttpCors {
     /// Every list where `*` is a literal once the request's credentials mode is
-    /// `include` — WHATWG Fetch, *CORS protocol*.
-    ///
-    /// The rule is one rule and it binds four headers, not one:
-    /// `Access-Control-Allow-Origin`, `-Headers`, `-Methods` and
-    /// `-Expose-Headers` all lose their wildcard meaning for a credentialed
-    /// request, and `*` is read as the literal origin / header name / method
-    /// named `*`. `*` is a valid `tchar`, so nothing refuses it: the header is
-    /// emitted, every browser drops the response, and there is nothing
-    /// server-side to point at. Only the origin list was checked here, and the
-    /// other three were accepted in silence.
+    /// `include` — WHATWG Fetch, *CORS protocol*. `*` is a valid `tchar`, so
+    /// nothing else refuses it: the header is emitted and every browser drops it.
     fn wildcard_lists(&self) -> [WildcardList<'_>; 4] {
         [
             ("origins", "Access-Control-Allow-Origin", &self.origins),
@@ -62,15 +70,13 @@ impl CorsConfig {
         ]
     }
 
-    /// One check, one sentence, four lists. A per-key refusal multiplies with
-    /// the table and what multiplies is what gets skipped — which is how three
-    /// of these four came to be unchecked.
-    fn reject_wildcards_with_credentials(&self) -> Result<()> {
+    /// Refuse a `*` that credentials turn into a literal no browser honours.
+    pub(crate) fn reject_wildcards_with_credentials(&self) -> Result<()> {
         if !self.credentials {
             return Ok(());
         }
         for (field, header, values) in self.wildcard_lists() {
-            if values.iter().any(|value| value == WILDCARD) {
+            if holds_wildcard(values) {
                 anyhow::bail!(
                     "invalid CORS config: `{WILDCARD}` in `{field}` with `credentials` — for a \
                      request whose credentials mode is `include`, WHATWG Fetch reads \
@@ -83,69 +89,30 @@ impl CorsConfig {
         Ok(())
     }
 
-    /// Overlay the `NESTRS_HTTP__CORS_*` keys onto `base` (the policy pinned in
+    /// Overlay the `<PREFIX>_HTTP__CORS_*` keys onto `base` (the policy pinned in
     /// code, if any). Returns `Ok(None)` when neither the environment nor `base`
-    /// supplies an origin — no origins means no CORS layer.
-    ///
-    /// Every sub-key overlays independently, so a deployment can widen the
-    /// origins of a policy pinned in code without restating its methods and
-    /// headers.
-    pub fn from_env(env: &ConfigService, base: Option<Self>) -> Result<Option<Self>> {
+    /// supplies an origin — no origins means no CORS layer. Each sub-key
+    /// overlays independently.
+    pub fn from_env(
+        env: &ConfigService,
+        base: Option<Self>,
+    ) -> nest_rs_config::Result<Option<Self>> {
         let base = base.unwrap_or_default();
-        let origins = env.list("CORS_ORIGINS", base.origins);
+        let origins = env.list("CORS_ORIGINS", base.origins)?;
         if origins.is_empty() {
             return Ok(None);
         }
         Ok(Some(Self {
             origins,
-            methods: env.list("CORS_METHODS", base.methods),
-            headers: env.list("CORS_HEADERS", base.headers),
-            exposed_headers: env.list("CORS_EXPOSED", base.exposed_headers),
-            credentials: env
-                .flag("CORS_CREDENTIALS", base.credentials)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            methods: env.list("CORS_METHODS", base.methods)?,
+            headers: env.list("CORS_HEADERS", base.headers)?,
+            exposed_headers: env.list("CORS_EXPOSED", base.exposed_headers)?,
+            credentials: env.flag("CORS_CREDENTIALS", base.credentials)?,
             max_age: env
-                .parse::<u64>("CORS_MAX_AGE")
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                .parse::<u64>("CORS_MAX_AGE")?
                 .map(Duration::from_secs)
                 .or(base.max_age),
         }))
-    }
-
-    /// Translate to poem's middleware. `origins: ["*"]` becomes the
-    /// wildcard; explicit origins map one-to-one.
-    pub fn into_middleware(self) -> Result<Cors> {
-        self.reject_wildcards_with_credentials()?;
-        let mut cors = Cors::new();
-        for origin in &self.origins {
-            cors = cors.allow_origin(origin);
-        }
-        for m in &self.methods {
-            let method = Method::from_bytes(m.as_bytes())
-                .with_context(|| format!("invalid HTTP method in CORS config: `{m}`"))?;
-            cors = cors.allow_method(method);
-        }
-        for h in &self.headers {
-            let header = HeaderName::from_str(h)
-                .with_context(|| format!("invalid header name in CORS allow-list: `{h}`"))?;
-            cors = cors.allow_header(header);
-        }
-        for h in &self.exposed_headers {
-            let header = HeaderName::from_str(h)
-                .with_context(|| format!("invalid header name in CORS expose-list: `{h}`"))?;
-            cors = cors.expose_header(header);
-        }
-        if self.credentials {
-            cors = cors.allow_credentials(true);
-        }
-        if let Some(age) = self.max_age {
-            let secs: i32 = age
-                .as_secs()
-                .try_into()
-                .context("CORS max_age overflows i32 seconds (~68 years); pick a smaller value")?;
-            cors = cors.max_age(secs);
-        }
-        Ok(cors)
     }
 }
 
@@ -153,148 +120,10 @@ impl CorsConfig {
 mod tests {
     use super::*;
 
-    fn cfg(origins: &[&str]) -> CorsConfig {
-        CorsConfig {
-            origins: origins.iter().map(|s| (*s).to_owned()).collect(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn into_middleware_accepts_an_empty_config() {
-        cfg(&[]).into_middleware().expect("empty config builds");
-    }
-
-    #[test]
-    fn into_middleware_accepts_a_basic_origin_list() {
-        cfg(&["https://app.example.com"])
-            .into_middleware()
-            .expect("valid config");
-    }
-
-    fn err_string(result: Result<Cors>) -> String {
-        match result {
-            Ok(_) => panic!("expected an error"),
-            Err(err) => err.to_string(),
-        }
-    }
-
-    #[test]
-    fn into_middleware_rejects_an_invalid_method() {
-        // Spaces aren't token characters in RFC 9110 §9 — `Method::from_bytes`
-        // refuses them.
-        let cfg = CorsConfig {
-            origins: vec!["*".into()],
-            methods: vec!["BAD METHOD".into()],
-            ..Default::default()
-        };
-        let err = err_string(cfg.into_middleware());
-        assert!(err.contains("invalid HTTP method"), "got: {err}");
-    }
-
-    #[test]
-    fn into_middleware_rejects_an_invalid_header_name() {
-        let cfg = CorsConfig {
-            origins: vec!["*".into()],
-            headers: vec!["bad header!".into()],
-            ..Default::default()
-        };
-        let err = err_string(cfg.into_middleware());
-        assert!(err.contains("invalid header name"), "got: {err}");
-    }
-
-    #[test]
-    fn into_middleware_rejects_a_max_age_that_overflows_i32_seconds() {
-        let cfg = CorsConfig {
-            origins: vec!["*".into()],
-            max_age: Some(Duration::from_secs(u64::MAX)),
-            ..Default::default()
-        };
-        let err = err_string(cfg.into_middleware());
-        assert!(err.contains("max_age overflows"), "got: {err}");
-    }
-
-    #[test]
-    fn into_middleware_accepts_credentials_and_max_age_and_exposed_headers() {
-        let cfg = CorsConfig {
-            origins: vec!["https://app.example.com".into()],
-            methods: vec!["GET".into(), "POST".into()],
-            headers: vec!["content-type".into(), "x-trace-id".into()],
-            exposed_headers: vec!["x-trace-id".into()],
-            credentials: true,
-            max_age: Some(Duration::from_secs(60 * 60)),
-        };
-        cfg.into_middleware()
-            .expect("a fully-specified config builds");
-    }
-
-    #[test]
-    fn into_middleware_rejects_an_invalid_exposed_header() {
-        let cfg = CorsConfig {
-            origins: vec!["*".into()],
-            exposed_headers: vec!["bad header!".into()],
-            ..Default::default()
-        };
-        let err = err_string(cfg.into_middleware());
-        assert!(err.contains("invalid header name"), "got: {err}");
-        assert!(err.contains("expose-list"), "must name the list: {err}");
-    }
-
-    // WHATWG Fetch's credentials rule binds four lists, not one. Each is
-    // asserted on its own: a shared check that silently stopped covering one of
-    // them would still pass a test that only ever looked at `origins`.
-    #[test]
-    fn credentials_refuse_a_wildcard_in_every_list_the_rule_binds() {
-        /// One case: the field a `*` is planted in, the header it renders
-        /// into, and the plant itself.
-        type Case = (&'static str, &'static str, fn(&mut CorsConfig));
-        let cases: [Case; 4] = [
-            ("origins", "Access-Control-Allow-Origin", |c| {
-                c.origins = vec![WILDCARD.into()]
-            }),
-            ("headers", "Access-Control-Allow-Headers", |c| {
-                c.headers = vec![WILDCARD.into()]
-            }),
-            ("methods", "Access-Control-Allow-Methods", |c| {
-                c.methods = vec![WILDCARD.into()]
-            }),
-            ("exposed_headers", "Access-Control-Expose-Headers", |c| {
-                c.exposed_headers = vec![WILDCARD.into()]
-            }),
-        ];
-        for (field, header, wildcard) in cases {
-            let mut cfg = CorsConfig {
-                origins: vec!["https://app.example.com".into()],
-                credentials: true,
-                ..Default::default()
-            };
-            wildcard(&mut cfg);
-            let err = err_string(cfg.into_middleware());
-            assert!(err.contains(field), "must name the list: {err}");
-            assert!(err.contains(header), "must name the header: {err}");
-        }
-    }
-
-    // The refusal is about the *pair*: a wildcard without credentials is the
-    // ordinary public-API policy and must keep building.
-    #[test]
-    fn a_wildcard_without_credentials_still_builds() {
-        CorsConfig {
-            origins: vec![WILDCARD.into()],
-            headers: vec![WILDCARD.into()],
-            methods: vec![WILDCARD.into()],
-            exposed_headers: vec![WILDCARD.into()],
-            credentials: false,
-            ..Default::default()
-        }
-        .into_middleware()
-        .expect("a wildcard policy with no credentials is legal");
-    }
-
     #[test]
     fn from_env_returns_none_when_origins_unset() {
         let cfg =
-            CorsConfig::from_env(&ConfigService::with_vars("http", []), None).expect("no error");
+            HttpCors::from_env(&ConfigService::with_vars("http", []), None).expect("no error");
         assert!(cfg.is_none(), "unset origins ⇒ CORS off");
     }
 
@@ -308,7 +137,7 @@ mod tests {
                 ("CORS_HEADERS", "content-type"),
             ],
         );
-        let cfg = CorsConfig::from_env(&service, None)
+        let cfg = HttpCors::from_env(&service, None)
             .expect("no error")
             .expect("Some when origins set");
         assert_eq!(
@@ -331,7 +160,7 @@ mod tests {
                 ("CORS_MAX_AGE", "600"),
             ],
         );
-        let cfg = CorsConfig::from_env(&service, None)
+        let cfg = HttpCors::from_env(&service, None)
             .expect("no error")
             .expect("Some");
         assert!(cfg.credentials);

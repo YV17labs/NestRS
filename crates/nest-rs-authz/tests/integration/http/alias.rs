@@ -1,24 +1,16 @@
 //! A **renamed** `Authorize` alias (`use Authorize as Az`) arms the response
 //! shaper exactly like the canonical spelling.
 //!
-//! `#[routes]` no longer scans parameter *names*: it hands each parameter type
-//! to `nest_rs_http::ShaperProbe` and the compiler answers whether that type is
-//! a `RouteResponseShaper`. A rename changes the spelling, not the type — so
-//! the class gate, the ambient ability and the field mask all land under an
-//! alias, and the `MaskProbe` `500` these tests used to pin is unreachable from
-//! here.
-
-use std::sync::Arc;
+//! `#[routes]` hands each parameter type to `nest_rs_http::__private::ShaperProbe`, so a
+//! rename changes the spelling, not the type.
 
 use nest_rs_authz::http::Authorize as Az;
-use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability};
+use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults, current_ability};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
-use poem::Request;
 
 mod gadget {
     use sea_orm::entity::prelude::*;
@@ -28,7 +20,7 @@ mod gadget {
         Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize, schemars::JsonSchema,
     )]
     #[sea_orm(table_name = "gadgets")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub name: String,
@@ -36,7 +28,7 @@ mod gadget {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -50,6 +42,10 @@ impl WireModelDefaults for gadget::Entity {
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "name"])
     }
+
+    fn is_placeholdered(column: gadget::Column) -> bool {
+        matches!(column, gadget::Column::Secret)
+    }
 }
 
 /// Grants `Read` on the entity when `x-grant: yes`, denies otherwise — the
@@ -62,24 +58,22 @@ impl Layer for GrantInjector {}
 
 #[async_trait]
 impl Guard for GrantInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let granted = req
-            .headers()
-            .get("x-grant")
-            .and_then(|v| v.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let granted = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-grant")
             .map(|v| v == "yes")
             .unwrap_or(false);
         let mut b = AbilityBuilder::new();
         if granted {
             b.can(Action::Read, gadget::Entity);
         }
-        req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+        cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for GrantInjector {}
+impl GuardFor<nest_rs_http::HttpView> for GrantInjector {}
 
 #[controller(path = "/gadgets")]
 struct GadgetController;
@@ -138,16 +132,12 @@ async fn boot() -> TestApp {
 
 #[tokio::test]
 async fn an_aliased_authorize_still_gates_at_class_level() {
-    // Extraction resolves the *type*, not its written name, so the 403 gate
-    // survives a rename.
     let logs = nest_rs_testing::LogCapture::install();
     let app = boot().await;
     let denied = app.http().get("/gadgets/aliased/probe").send().await;
     assert_eq!(denied.0.status(), poem::http::StatusCode::FORBIDDEN);
 
-    // The 403 is what the caller sees; this is what the operator sees, and it
-    // is the half an incident queries. A denial emitted bare — or at `debug` —
-    // is a security gap rather than a style nit.
+    // The operator's half: the denial event an incident queries.
     let event = logs
         .find("nest_rs::authz", "authorization denied")
         .into_iter()
@@ -163,9 +153,6 @@ async fn an_aliased_authorize_still_gates_at_class_level() {
 
 #[tokio::test]
 async fn an_aliased_authorize_installs_the_ambient_ability() {
-    // Arming is type-directed, so the alias and the canonical spelling reach
-    // the same shaper and both install the ambient ability the data layer
-    // scopes its queries by.
     let app = boot().await;
 
     for path in ["/gadgets/aliased/probe", "/gadgets/literal/probe"] {
@@ -185,9 +172,6 @@ async fn an_aliased_authorize_installs_the_ambient_ability() {
 
 #[tokio::test]
 async fn an_aliased_authorize_masks_a_raw_model_body() {
-    // The case that used to be the known gap: under a rename the shaper was not
-    // armed, and the run-time probe turned the response into a `500` rather
-    // than ship `secret`. It now masks and returns a `200`.
     let app = boot().await;
     let resp = app
         .http()

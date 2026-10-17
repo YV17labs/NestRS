@@ -1,73 +1,62 @@
-//! Surface-agnostic nestrs decorators (`#[injectable]`, `#[module]`,
-//! `#[hooks]`, `#[input]`), re-exported by `nest-rs-core`. Each
-//! `#[proc_macro_attribute]` entry below is a thin delegation to its
-//! implementation module.
+//! Surface-agnostic nestrs decorators (`#[injectable]`, `#[interceptor]`,
+//! `#[module]`, `#[hooks]`, `#[input]`, `#[instance]`, `#[main]`), re-exported
+//! by `nest-rs-core`.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
+mod entry;
 mod hooks;
 mod injectable;
 mod input;
+mod instance;
+mod interceptor;
 mod module;
 
-/// Mark a struct as a DI provider built from the container.
+/// Declares a struct as a provider: `#[inject]` fields resolve via
+/// `container.get()` (or `get_dyn` for `Arc<dyn Trait>`), other fields fall
+/// back to `Default::default()`; with no `#[inject]` field, the struct's own
+/// `Default` impl builds it.
 ///
-/// `#[inject]` fields resolve via `container.get()` (or `get_dyn` for
-/// `Arc<dyn Trait>`); other fields fall back to `Default::default()`. A struct
-/// with no `#[inject]` field uses `<Self as Default>::default()` so a custom
-/// `Default` impl is preserved.
+/// Emits `impl Discoverable` (so the struct can sit in
+/// `#[module(providers = [...])]`) and `impl ProviderResidency` (`true` for a
+/// singleton, `false` for `request` and `transient`).
 ///
-/// Emits `impl Discoverable for Self` so the struct can appear directly in
-/// `#[module(providers = [...])]`.
+/// One key, `scope = singleton | request | transient` (default `singleton`):
 ///
-/// `#[injectable(scope = request)]` registers a per-request factory built once
-/// per request (and resolved through a `RequestScope` — e.g. the HTTP
-/// `Scoped<T>` extractor). A request-scoped provider may depend on singletons
-/// but not on other request-scoped providers.
-///
-/// `#[injectable(scope = transient)]` registers a factory rebuilt on every
-/// resolution: each `container.get::<T>()` (or `Scoped<T>` extraction) yields
-/// a fresh instance. A transient may depend on singletons and request-scoped
-/// providers; a transient depending (transitively) on itself panics with a
-/// cycle diagnostic at resolution time.
-///
-/// # Expands to
-///
-/// Illustrative sketch (singleton scope):
-///
-/// ```ignore
-/// struct Foo { /* … */ }                       // the item, unchanged
-///
-/// impl Foo {
-///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* resolve #[inject] fields */ }
-/// }
-///
-/// impl ::nest_rs_core::Discoverable for Foo {
-///     fn dependencies() -> Vec<TypeId> { /* required #[inject] keys */ }
-///     fn dependency_names() -> Vec<&'static str> { /* … */ }
-///     fn optional_dependencies() -> Vec<TypeId> { /* Option<Arc<…>> keys */ }
-///     fn injected() -> Vec<TypeId> { /* every #[inject] key, for the access graph */ }
-///     fn register(b: ContainerBuilder) -> ContainerBuilder {
-///         b.provide(Self::from_container(&b.snapshot()))   // singleton: eager value
-///     }
-/// }
-/// ```
-///
-/// `scope = request` / `scope = transient` keep the same shape but `register`
-/// installs a factory (`provide_scoped` / `provide_transient`) instead of an
-/// eager value, and report no register-phase `dependencies` (the factory builds
-/// lazily); `injected` is still reported for the access graph.
+/// - `request` builds once per request, resolved through a `RequestScope` (e.g.
+///   the HTTP `Scoped<T>` extractor); it may depend on singletons and on other
+///   request-scoped providers, one instance each per request, and no singleton
+///   may depend on it.
+/// - `transient` builds a fresh instance on every resolution; it may depend on
+///   singletons and request-scoped providers, and one depending (transitively)
+///   on itself panics with a cycle diagnostic at resolution time.
 #[proc_macro_attribute]
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(injectable::injectable(args, input).into()).into()
 }
 
-/// Declare application lifecycle hooks on a provider's impl block, for the
-/// module/application init and shutdown phases.
+/// Declares a struct as an interceptor a module brings for every unit it
+/// serves: a singleton provider, built like an `#[injectable]` one, that each
+/// site composes from the container once.
 ///
-/// Each method tagged with a phase attribute is invoked by
-/// `App`:
+/// One key, `stage = handler | unit` (default `handler`):
+///
+/// - `handler` runs it after the guards and the class gate, after the
+///   interceptors the app lists, in module import order.
+/// - `unit` runs it around the guards, so it sees a denial too — an opening,
+///   written in the source.
+///
+/// Its order within its stage is its `Layer::priority`; a type the app also
+/// lists runs once.
+#[proc_macro_attribute]
+pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(interceptor::interceptor(args, input).into()).into()
+}
+
+/// Registers a provider's lifecycle hooks; `App` invokes each method tagged
+/// with a phase attribute:
 ///
 /// - `#[on_module_init]` / `#[on_application_bootstrap]` — after wiring,
 ///   before serving. An error aborts boot.
@@ -75,137 +64,79 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   `#[on_application_shutdown]` — after transports stop, best-effort.
 ///
 /// A hook is `async fn(&self)` returning `()` or
-/// `Result<(), E: Into<anyhow::Error>>`. Hooks are submitted to a link-time
-/// registry, so the provider keeps its single `impl Discoverable`.
-///
-/// # Expands to
-///
-/// The impl block is re-emitted with the phase attributes stripped; each tagged
-/// method gains a free `run` fn plus an `inventory::submit!`. Illustrative
-/// sketch for one `#[on_module_init] async fn ready(&self)`:
-///
-/// ```ignore
-/// impl Foo { async fn ready(&self) { /* … */ } }   // phase attr removed
-///
-/// fn __nestrs_hook_Foo_ready(c: &::nest_rs_core::Container)
-///     -> Pin<Box<dyn Future<Output = ::nest_rs_core::anyhow::Result<()>> + Send + '_>>
-/// {
-///     Box::pin(async move {
-///         match ::nest_rs_core::Container::get::<Foo>(c) {
-///             Some(p) => { p.ready().await; Ok(()) }   // Result methods map_err(Into::into)
-///             None => Ok(()),
-///         }
-///     })
-/// }
-///
-/// ::nest_rs_core::inventory::submit! {
-///     ::nest_rs_core::LifecycleHook {
-///         phase: ::nest_rs_core::LifecyclePhase::OnModuleInit,
-///         provider: "Foo", method: "ready",
-///         present: |c| Container::get::<Foo>(c).is_some(),
-///         run: __nestrs_hook_Foo_ready,
-///     }
-/// }
-/// ```
+/// `Result<(), E: Into<anyhow::Error>>`; one phase per method, and the phase
+/// attribute takes no argument. `#[hooks]` itself takes none.
 #[proc_macro_attribute]
 pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(hooks::hooks(args, input).into()).into()
 }
 
-/// `#[module(imports = [...], providers = [...])]`.
+/// Declares a module, with two keys, each taking a list, each written once:
+/// `imports` holds types (a static `Module`) or call expressions (a configured
+/// `DynamicModule`, e.g. `HttpModule::for_root(None)`); `providers` holds
+/// `Foo` (a `Discoverable` type) or `Foo as dyn Trait` (a trait-object binding).
 ///
-/// `imports` is either a type (a static `Module`) or a
-/// call expression (a configured `DynamicModule`
-/// built at its import site). `providers` lists what this module
-/// declares.
+/// A binding takes a singleton — an edge host, or a `scope = request` or
+/// `scope = transient` provider, bound so is a compile error — and holds one
+/// `Foo` under its own type and each trait it is listed with. A provider is
+/// listed once: a bare `Foo` beside its binding, or an entry written twice, is
+/// a compile error.
 ///
-/// Each provider entry is `Foo` (a `Discoverable` type) or
-/// `Foo as dyn Trait` (a trait-object binding stored via `provide_dyn`).
+/// A diamond import builds its providers once; a dynamic import is not
+/// deduplicated, and its expression is evaluated once. Providers register in
+/// dependency order, whatever their order in the list. A missing dependency
+/// fails the boot with a `MissingDependencyError` / `AccessGraphError`, a
+/// provider cycle with a `ProviderCycleError`, and a provider whose
+/// dependency nothing had registered yet when its module built it — across an
+/// import cycle, or registered later by a hand-written module — with an
+/// `UnbuiltProviderError`.
 ///
-/// Registration is idempotent: a diamond import builds its providers exactly
-/// once. Dynamic imports carry their own config and are not deduplicated — but
-/// each import expression is **evaluated once**, in the collect phase, and the
-/// value it produced is what the register phase installs.
-///
-/// Imports register first, then providers register via a fixpoint pass — each
-/// declares its dependencies through `Discoverable::dependencies` and the
-/// macro registers whatever is resolvable, repeating until done. A provider
-/// whose dependencies never resolve fails the boot — a **missing** dependency is
-/// deferred to the access-graph check and surfaces as a named
-/// `MissingDependencyError` / `AccessGraphError` through the same `Result` every
-/// other wiring failure takes, and only a true provider **cycle**, invisible to
-/// that graph, still panics.
-///
-/// # Expands to
-///
-/// `impl Module` (a `register` fixpoint loop + a `collect` async-factory pass)
-/// plus a link-time `ModuleDescriptor` for the access graph. Illustrative
-/// sketch:
-///
-/// ```text
-/// struct AppModule;                                  // the item, unchanged
-///
-/// impl ::nest_rs_core::Module for AppModule {
-///     fn register(mut b: ContainerBuilder) -> ContainerBuilder {
-///         if !b.mark_registered(TypeId::of::<AppModule>()) { return b; }   // dedup diamonds
-///         b = <SomeImport as Module>::register(b);                          // imports first
-///         // fixpoint: each provider registers once its deps are present —
-///         //   <Foo as Discoverable>::register(b)            (concrete)
-///         //   b.provide_dyn::<Trait>(Arc::new(Foo::from_container(&b.snapshot())))  (`as dyn Trait`)
-///         // stalls panic naming the unprovided / cyclic provider
-///         ::nest_rs_core::__module_registered("AppModule");
-///         b
-///     }
-///     fn collect(mut b: ContainerBuilder) -> ContainerBuilder {
-///         /* queue each import's async factories */ b
-///     }
-/// }
-///
-/// ::nest_rs_core::inventory::submit! {
-///     ::nest_rs_core::ModuleDescriptor { module, name, imports: &[…], providers: &[…] }
-/// }
-/// ```
+/// Emits `impl Module` and a hidden link-time descriptor the boot's
+/// access-graph check reads.
 #[proc_macro_attribute]
 pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(module::module(args, input).into()).into()
 }
 
-/// `#[input]` — the wire-DTO shorthand. Appends `Serialize`, `Deserialize`,
-/// `Validate` and `JsonSchema`, each **routed through the framework** rather
-/// than named at the call site, plus `#[serde(deny_unknown_fields)]` so an
-/// unknown field on the wire (e.g. `is_admin: true`) is rejected at parse time
-/// instead of silently dropped, and the DTO documents itself in the OpenAPI
-/// document without a second derive to remember.
+/// The wire-DTO shorthand: derives `Serialize`, `Deserialize`, `Validate` and
+/// `JsonSchema` through the framework (the DTO's crate needs no `serde`,
+/// `validator` or `schemars` line), plus `#[serde(deny_unknown_fields)]`, so an
+/// unknown field on the wire (e.g. `is_admin: true`) is rejected at parse time.
 ///
-/// The routing is the whole point and it used to be missing from this page: a
-/// derive expands against the **call site's** prelude, so a derive path rooted
-/// there would oblige the DTO's crate to declare `serde`, `validator` and
-/// `schemars` — the three manifest lines this decorator exists to absorb. Each
-/// derive therefore carries its `crate = ` override to the same framework path.
-///
-/// `Serialize` is in the list because a wire DTO travels both ways: the same
-/// type is returned as `Json<T>` from a handler. Adding a manual
-/// `#[derive(serde::Serialize)]` next to `#[input]` is therefore a conflicting
-/// impl (`E0119`), not a top-up — the shorthand already carries it.
-///
-/// # Expands to
-///
-/// The struct, with the derives + serde attribute prepended (stacking with any
-/// existing `#[derive(...)]`):
-///
-/// ```ignore
-/// #[derive(
-///     ::nest_rs::core::serde::Serialize,
-///     ::nest_rs::core::serde::Deserialize,
-///     ::nest_rs::core::validator::Validate,
-///     ::nest_rs::core::schemars::JsonSchema,
-/// )]
-/// #[serde(crate = "::nest_rs::core::serde", deny_unknown_fields)]
-/// #[validate(crate = ::nest_rs::core::validator)]
-/// #[schemars(crate = "::nest_rs::core::schemars")]
-/// struct CreateUser { /* … */ }
-/// ```
+/// Takes no argument, and only a struct with named fields. Other derives
+/// (`Debug`, `Clone`) may be added beside it; deriving one of the four again is
+/// a conflicting impl (`E0119`).
 #[proc_macro_attribute]
 pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(input::input(args, item).into()).into()
+}
+
+/// Declares a unit struct as an `Instance` marker: one instance of a resource
+/// an app opens more than once, told apart by this type.
+///
+/// Its name is the ident in snake case (`ReadReplica` reads `read_replica`),
+/// inserted after its config's vendor (`<PREFIX>_REDIS__READ_REPLICA__*`).
+/// Takes no argument; refuses a struct with fields or generics, `Unnamed`, a
+/// name holding `__` and the layout's reserved words. Emits the `Instance`
+/// impl and a link-time declaration, so two markers reading one name are
+/// refused at first use.
+#[proc_macro_attribute]
+pub fn instance(args: TokenStream, input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(instance::instance(args.into(), input.into())).into()
+}
+
+/// The binary's entry point, on an `async fn`: runs the body on tokio's
+/// multi-threaded runtime (every driver enabled, sized by
+/// `TOKIO_WORKER_THREADS`), then shuts the runtime down within what is left of
+/// the shutdown hooks' budget, abandoning and logging a blocking task still
+/// running rather than waiting on it.
+///
+/// It installs the `SIGINT` / `SIGTERM` handlers before the body runs, so the
+/// first signal stops the boot at its next await or drains the serving app,
+/// and one received before any app exists exits at once with 130 / 143.
+///
+/// Takes no argument. The app's manifest needs no `tokio` line for it.
+#[proc_macro_attribute]
+pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(entry::main(args, input).into()).into()
 }

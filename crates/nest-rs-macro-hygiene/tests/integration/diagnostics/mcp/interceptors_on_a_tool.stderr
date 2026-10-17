@@ -1,0 +1,5 @@
+error: `#[use_interceptors]` does not run on MCP yet, so on a `#[tools]` method it would be a silent no-op. Remove it, or bind the layer on an HTTP `#[controller]` / `#[routes]`, where it runs
+  --> tests/integration/diagnostics/mcp/interceptors_on_a_tool.rs:17:5
+   |
+17 |     #[use_interceptors(SomeInterceptor)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

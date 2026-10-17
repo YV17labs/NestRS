@@ -2,26 +2,12 @@
 //! the ceiling on how many references one call may carry.
 //!
 //! `_service` and `_entities` are resolved by async-graphql's own `QueryRoot`,
-//! *above* [`DiscoveredQuery`](crate::resolver): the guard chain `#[operations]`
-//! emits inside a resolver body never sees them. For `_entities` that showed as
-//! a chain running once **per representation**, inside whichever member the
-//! router's reference happened to match; for `_service` it showed as nothing at
-//! all — a `check_graphql` deny-all pool returned the endpoint's entire SDL,
-//! `NESTRS_GRAPHQL__DISABLE_INTROSPECTION` notwithstanding, since that switch
-//! covers `__schema` and not this.
+//! *above* [`DiscoveredQuery`](crate::resolver::DiscoveredQuery), so no
+//! resolver's chain sees them. A schema [`Extension`] is the one seam in front of
+//! a root field: the chain runs on `resolve`, the ceiling on `parse_query`.
 //!
-//! A schema [`Extension`] is the one seam async-graphql leaves in front of a
-//! root field, so both live here — the chain on `resolve`, once per field and
-//! before `QueryRoot` resolves anything, and the ceiling on `parse_query`,
-//! before a document with a hundred thousand references is executed at all.
-//!
-//! **Which chain, and why the app-wide one is the whole answer here.** A
-//! federation field belongs to no resolver: the router calls it on the schema,
-//! not on a provider, so there is no `#[use_guards]` scope to compose and no
-//! posture to read. What is left is exactly the pool `use_guards_global`
-//! declared — and that is what an `#[entity]`'s own site therefore stops
-//! composing, since every `#[entity]` is reached through `_entities` and would
-//! otherwise run the same pooled guard a second time, once per representation.
+//! A federation field belongs to no resolver, so its chain is the app-wide pool
+//! alone, which an `#[entity]`'s own site therefore stops composing.
 
 use std::sync::{Arc, Mutex};
 
@@ -31,14 +17,20 @@ use async_graphql::extensions::{
     ResolveInfo,
 };
 use async_graphql::parser::types::{ExecutableDocument, OperationType, Selection, SelectionSet};
-use async_graphql::{
-    Error as GraphqlError, Name, Positioned, Request, ServerError, ServerResult, Value, Variables,
+use async_graphql::{Name, Positioned, Request, ServerError, ServerResult, Value, Variables};
+use std::any::TypeId;
+
+use nest_rs_core::__private::{
+    HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler, install_pending,
+    new_unit_context,
 };
-use nest_rs_core::Container;
+use nest_rs_core::{Container, Handler, Posture};
+use nest_rs_guards::__private::{failure_chain, resolve_global_chain, run_stage};
+use nest_rs_guards::{Guard, GuardSpecs};
 
 use crate::config::GraphqlConfig;
-use crate::context::BoxFuture;
-use crate::operation::GraphqlOperationContext;
+use crate::error::denial_to_graphql_error;
+use crate::view::{FieldRole, GraphqlView};
 
 /// The `Query`-root field a router calls to read a subgraph's SDL.
 pub(crate) const SERVICE_FIELD: &str = "_service";
@@ -47,52 +39,48 @@ pub(crate) const ENTITIES_FIELD: &str = "_entities";
 /// Its one argument, whose length is the fan-out.
 const REPRESENTATIONS_ARG: &str = "representations";
 
-/// Gate the two federation root fields carry — the seam `nest-rs-guards` fills
-/// with the app-wide guard pool.
-///
-/// Defined here and implemented there for the same reason
-/// [`GraphqlOperationGuard`](crate::GraphqlOperationGuard) is: guards depends on
-/// this crate, not the reverse.
-pub trait GraphqlFederationGuard: Send + Sync + 'static {
-    /// Run the app-wide chain against a federation root field.
-    fn check<'a>(
-        &'a self,
-        operation: &'a GraphqlOperationContext<'a>,
-    ) -> BoxFuture<'a, Result<(), GraphqlError>>;
+/// Whether the federation root fields run the app-wide guard pool: whenever
+/// the app lists one, an empty list included.
+pub(crate) fn gate_runs(container: &Container) -> bool {
+    container.get::<GuardSpecs>().is_some()
 }
 
-/// Factory slot for the [`GraphqlFederationGuard`]. `nest-rs-guards`'
-/// `use_guards_global` seeds one (a fn pointer — the container does not exist
-/// yet at builder time); the schema build invokes it at mount.
-///
-/// **Internal ABI** — a seeded fn-pointer wired by the framework crates
-/// (lockstep with `nest-rs-guards`); not a user-constructed type.
-#[doc(hidden)]
-pub struct FederationGate(pub fn(&Container) -> Arc<dyn GraphqlFederationGuard>);
+/// The site `_service` runs as.
+static SERVICE: Handler = federation_field(SERVICE_FIELD);
+/// The site `_entities` runs as.
+static ENTITIES: Handler = federation_field(ENTITIES_FIELD);
+
+/// A federation root field's declaration: a field no resolver declares, gated
+/// by the app-wide pool alone.
+const fn federation_field(field: &'static str) -> Handler {
+    declare_handler(HandlerDeclaration {
+        unit: crate::unit::FIELD,
+        host: TypeId::of::<FederationExtension>(),
+        host_name: "FederationExtension",
+        method: "",
+        address: field,
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    })
+}
 
 /// Installs [`FederationExtension`] on the served schema.
 pub(crate) struct FederationExtensionFactory {
-    guard: Option<Arc<dyn GraphqlFederationGuard>>,
+    pool: Option<Arc<[ResolvedLayer<dyn Guard>]>>,
     max_representations: Option<usize>,
 }
 
 impl FederationExtensionFactory {
     /// `None` when the app declared no global guards **and** left the ceiling
-    /// unlimited — there is nothing for the extension to do, and an extension
-    /// that does nothing still costs every field the boxed indirection
-    /// `Fields::add_set` takes when the chain is non-empty.
+    /// unlimited: an idle extension still costs every field a boxed indirection.
     pub(crate) fn from_container(container: &Container, config: &GraphqlConfig) -> Option<Self> {
-        let guard = container
-            .get::<FederationGate>()
-            .map(|gate| (gate.0)(container));
-        // `0` is this field's documented "unlimited" sentinel, and it has to mean
-        // that on **both** paths. `ConfigService::count` maps it from the
-        // environment; a `Some(0)` pinned in a `GraphqlConfig` never passes
-        // through `count` at all, and reached the comparison as a ceiling of zero
-        // — refusing every `_entities` call, with an error naming `0` as the fix.
+        let pool = gate_runs(container)
+            .then(|| resolve_global_chain(container, "POST /graphql (federation)").into());
+        // A pinned `Some(0)` never passes through `ConfigService::count`, which
+        // maps the environment's `0` to unlimited.
         let max_representations = config.max_representations.filter(|max| *max > 0);
-        (guard.is_some() || max_representations.is_some()).then_some(Self {
-            guard,
+        (pool.is_some() || max_representations.is_some()).then_some(Self {
+            pool,
             max_representations,
         })
     }
@@ -101,7 +89,7 @@ impl FederationExtensionFactory {
 impl ExtensionFactory for FederationExtensionFactory {
     fn create(&self) -> Arc<dyn Extension> {
         Arc::new(FederationExtension {
-            guard: self.guard.clone(),
+            pool: self.pool.clone(),
             max_representations: self.max_representations,
             operation_name: Mutex::new(None),
         })
@@ -109,7 +97,9 @@ impl ExtensionFactory for FederationExtensionFactory {
 }
 
 struct FederationExtension {
-    guard: Option<Arc<dyn GraphqlFederationGuard>>,
+    /// The app-wide pool, the whole chain of a field that belongs to no
+    /// resolver.
+    pool: Option<Arc<[ResolvedLayer<dyn Guard>]>>,
     max_representations: Option<usize>,
     /// The operation this request selected, captured in `prepare_request` — the
     /// one hook that carries it — so the ceiling can be charged to the operation
@@ -127,8 +117,7 @@ impl Extension for FederationExtension {
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
         let request = next.run(ctx, request).await?;
-        // A poisoned lock must not deny service: the value is advisory — losing
-        // it only widens the ceiling's reading back to the first operation.
+        // A poisoned lock must not deny service: the value is advisory.
         *self
             .operation_name
             .lock()
@@ -145,8 +134,6 @@ impl Extension for FederationExtension {
     ) -> ServerResult<ExecutableDocument> {
         let document = next.run(ctx, query, variables).await?;
         if let Some(max) = self.max_representations {
-            // The guard is held across the call and not cloned out of: the
-            // refusal is synchronous, so there is no await to hold a lock over.
             let selected = self
                 .operation_name
                 .lock()
@@ -162,47 +149,41 @@ impl Extension for FederationExtension {
         info: ResolveInfo<'_>,
         next: NextResolve<'_>,
     ) -> ServerResult<Option<Value>> {
-        // `parent_type` narrows it to the two root fields the federation spec
-        // adds: nothing else in a schema may carry a leading underscore, but a
-        // *nested* field is a different operation with its own chain already.
-        let field = match (info.parent_type, info.name) {
-            ("Query", SERVICE_FIELD) => Some(SERVICE_FIELD),
-            ("Query", ENTITIES_FIELD) => Some(ENTITIES_FIELD),
+        // A nested `_entities` is an app's own field, with its own chain.
+        let site = match (info.parent_type, info.name) {
+            ("Query", SERVICE_FIELD) => Some(&SERVICE),
+            ("Query", ENTITIES_FIELD) => Some(&ENTITIES),
             _ => None,
         };
-        if let (Some(field), Some(guard)) = (field, self.guard.as_ref()) {
-            let operation = GraphqlOperationContext::federation(ctx, field);
-            if let Err(err) = guard.check(&operation).await {
-                return Err(err.into_server_error(info.field.name.pos));
-            }
-        }
-        next.run(ctx, info).await
+        let (Some(site), Some(pool)) = (site, self.pool.as_deref()) else {
+            return next.run(ctx, info).await;
+        };
+        let mut view =
+            GraphqlView::new(site.address(), OperationType::Query, FieldRole::Federation);
+        let mut cx = new_unit_context(site, &mut view, None, None);
+        let attached = run_stage(pool, &mut cx).await.map_err(|(guard, denial)| {
+            // Same structural floor as a resolver site's chain.
+            tracing::warn!(
+                target: nest_rs_core::target::LAYERS,
+                guard,
+                route = "POST /graphql (federation)",
+                field = site.address(),
+                status = denial.http_status(),
+                error = failure_chain(&denial),
+                "guard denied the federation field",
+            );
+            denial_to_graphql_error(denial).into_server_error(info.field.name.pos)
+        })?;
+        install_pending(attached, next.run(ctx, info)).await
     }
 }
 
-/// Refuse an operation whose `_entities` calls carry more references, **in
-/// total**, than `max`.
+/// Refuse the selected operation when its `_entities` calls carry more
+/// references, **in total** across aliases, than `max`.
 ///
-/// Read off the parsed document rather than the resolved argument, because this
-/// is the last place the whole list is one value: by the time `find_entity`
-/// runs, async-graphql has already launched one future per element.
-///
-/// **The total, not each field.** `_entities` may be aliased without limit, and
-/// counting per field left the fan-out exactly where it was — a 29 KB document
-/// of five hundred aliases each at the ceiling resolved fifty thousand
-/// references and raised no error. The number that has to be bounded is what one
-/// operation asks the schema to resolve.
-///
-/// **The operation that will run, not every operation in the document.**
-/// `operation_name` is captured in `prepare_request`, which is the only hook
-/// carrying it; without it a document holding a cheap selected operation beside
-/// a fat unselected one was refused for the one it never executed.
-///
-/// One deliberate over-count remains: a `_entities` the executor would strip
-/// under `@skip(if: true)` is still counted. Reproducing async-graphql's skip
-/// rule here would be a second implementation of it — the drift this repo names
-/// as a defect class — and the error is the safe direction, refusing a request
-/// that would have cost less than it said.
+/// Read off the parsed document: by the time `find_entity` runs, async-graphql
+/// has launched one future per element. A `_entities` under `@skip(if: true)`
+/// is still counted, the safe direction.
 fn refuse_oversized_entity_calls(
     document: &ExecutableDocument,
     variables: &Variables,
@@ -215,9 +196,8 @@ fn refuse_oversized_entity_calls(
             .iter()
             .find(|(key, _)| key.map(|k| k.as_str()) == Some(name))
             .map(|(_, operation)| operation),
-        // Unnamed: async-graphql runs the single operation, whatever it is
-        // called. With several and no name the request is an error of its own —
-        // counting them all is the safe reading of a document that will not run.
+        // Unnamed: async-graphql runs the single operation; several without a
+        // name is an error of its own.
         None => document.operations.iter().next().map(|(_, op)| op),
     };
     let Some(operation) = selected else {
@@ -261,18 +241,12 @@ fn refuse_oversized_entity_calls(
     ))
 }
 
-/// How many references one `_entities` field carries.
+/// How many references one `_entities` field carries; a router's bare
+/// `$representations` takes the cheap path.
 ///
-/// The cheap path first, because it is the one a router takes: a bare
-/// `$representations` clones only the variable's *name* before the lookup. An
-/// inline list, or a list whose elements are variables, falls through to the
-/// full resolve — the only spelling that counts `[$a, $b]` correctly — and pays
-/// a copy bounded by the transport's body cap.
-///
-/// `into_const_with` rather than a match on the AST value's own variants: that
-/// enum is `async_graphql_value`'s, and async-graphql re-exports only its *const*
-/// half (`Value` here), so naming the unresolved one would mean a second direct
-/// dependency pinned in lockstep with the first.
+/// `into_const_with` rather than a match on the AST value: async-graphql
+/// re-exports only the *const* `Value`, and naming the other would add a second
+/// dependency pinned in lockstep.
 fn representation_count(
     field: &Positioned<async_graphql::parser::types::Field>,
     variables: &Variables,
@@ -285,22 +259,17 @@ fn representation_count(
     else {
         return 0;
     };
-    // Neither a list nor a variable bound to one is async-graphql's own coercion
-    // error to report; a ceiling breach here would name the wrong defect.
+    // A non-list is async-graphql's coercion error to report, not a ceiling breach.
     let len_of = |value: &Value| match value {
         Value::List(items) => Some(items.len()),
         _ => None,
     };
-    // Cloned once, then consumed by whichever branch runs. A bare
-    // `$representations` copies only the variable's `Name` (an `Arc<str>`); an
-    // inline list copies its elements, bounded by the transport's body cap.
     let owned = value.node.clone();
     match owned.clone().into_const_with::<Name>(Err) {
         Ok(resolved) => len_of(&resolved).unwrap_or(0),
         Err(name) => match variables.get(&name).and_then(len_of) {
             Some(len) => len,
-            // A variable somewhere *inside* the value rather than the value
-            // itself — `[$a, $b]`. Resolving is the only spelling that counts it.
+            // `[$a, $b]`: only a full resolve counts it.
             None => owned
                 .into_const_with::<()>(|name| variables.get(&name).cloned().ok_or(()))
                 .ok()
@@ -311,13 +280,8 @@ fn representation_count(
 }
 
 /// Walk an operation's **root** selection set, following fragments, and hand
-/// every field to `visit`.
-///
-/// Root only: `_entities` is a `Query`-root field, and a same-named field on
-/// some other type is an app's own, with its own chain. `seen` breaks the cycle
-/// a self-referential fragment would otherwise make — the document is
-/// unvalidated at this point, so the parser's output is not yet known to be
-/// acyclic.
+/// every field to `visit`. `seen` breaks a self-referential fragment's cycle:
+/// the document is not validated yet.
 fn visit_root_fields(
     document: &ExecutableDocument,
     selection_set: &Positioned<SelectionSet>,

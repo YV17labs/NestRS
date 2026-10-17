@@ -2,14 +2,14 @@ import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
+import starlightLinksValidator from 'starlight-links-validator';
 import mermaid from 'astro-mermaid';
-import remarkGfm from 'remark-gfm';
 import rehypeExternalLinks from 'rehype-external-links';
 import { REDIRECTS } from './src/redirects.mjs';
 import { DEFAULT_DESCRIPTION } from './src/brand.mjs';
 
 // GitHub Pages: nestrs.dev (custom domain, base /). Local dev defaults match.
-// CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
+// CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs.yml.
 const base = process.env.ASTRO_BASE || '/';
 const site = process.env.ASTRO_SITE || 'https://nestrs.dev';
 const asset = (path) => `${base}${path.replace(/^\//, '')}`;
@@ -80,9 +80,6 @@ export default defineConfig({
   base,
   // One entry per moved/deleted/renamed page (audit §2.8.B). No 404 for a URL
   // that ever shipped.
-  // Declared in `src/redirects.mjs` so the docs linter's `link` rule reads the
-  // same list: a retired route is resolvable exactly because it redirects, and
-  // a second copy would make that true for one reader and false for the other.
   redirects: REDIRECTS,
   // GFM tables/strikethrough/task-lists must be enabled for .mdx. Since
   // @astrojs/mdx@7 the processor carries that — the top-level `markdown.gfm`
@@ -90,7 +87,6 @@ export default defineConfig({
   markdown: {
     processor: unified({
       gfm: true,
-      remarkPlugins: [remarkGfm],
       // External links open in a new tab (with rel="noopener noreferrer") so a
       // reader following e.g. the SeaORM link keeps the docs open. Internal links
       // are left untouched.
@@ -148,6 +144,7 @@ export default defineConfig({
         { tag: 'meta', attrs: { name: 'twitter:image:alt', content: ogImageAlt } },
       ],
       plugins: [
+        starlightLinksValidator({ errorOnLocalLinks: false }),
         starlightLlmsTxt({
           projectName: 'NestRS',
           description:
@@ -261,6 +258,11 @@ export default defineConfig({
             { label: 'Getting started', slug: 'getting-started' },
             { label: 'CLI', slug: 'cli' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
+            { label: 'Semver policy', slug: 'semver' },
+            // Last in the group a returning reader opens first: the one page a
+            // 6.x project follows to 7.0, beside the orientation it no longer
+            // needs, rather than under Reference, three screens down.
+            { label: 'Upgrading from 6.x', slug: 'upgrading' },
           ],
         },
         { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
@@ -281,6 +283,9 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'http' } },
             { label: 'OpenAPI', slug: 'openapi' },
+            { label: 'OpenAPI operations', slug: 'openapi/operations' },
+            { label: 'OpenAPI configuration', slug: 'openapi/configuration' },
+            { label: 'Typed TypeScript clients', slug: 'openapi/clients' },
           ],
         },
         { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },

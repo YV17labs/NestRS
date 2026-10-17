@@ -1,12 +1,9 @@
 //! `nestrs g resource <name>` — a DB-backed CRUD slice: an `#[expose]` entity,
 //! a `CrudService`, and a `#[crud]` HTTP controller behind the app's guards.
 //!
-//! **Guards are not optional here, by construction.** Every read `Repo` runs is
-//! filtered by the caller's ambient `Ability`, and an HTTP request has no
-//! ability unless an `AbilityGuard` installed one — so an unguarded DB-backed
-//! controller compiles, mounts, and then serves nothing. The generator
-//! therefore emits the guarded shape and bootstraps the `g auth` adapter when
-//! the workspace has none.
+//! **Guards are not optional**: `Repo` filters every read by the ambient
+//! `Ability` only an `AbilityGuard` installs, so the generator emits the guarded
+//! shape and bootstraps `g auth` when the workspace has none.
 
 use std::path::PathBuf;
 
@@ -20,13 +17,13 @@ use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, ensure_lines};
 use crate::templates::resource;
 
-pub struct ResourceOptions {
+pub(crate) struct ResourceOptions {
     pub name: String,
     pub path: Option<PathBuf>,
     pub dry_run: bool,
 }
 
-pub fn run(opts: ResourceOptions) -> CliResult<()> {
+pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
 
@@ -44,18 +41,18 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     let mut s = Scaffold::new();
 
     // The guards the controller binds have to exist before it names them.
-    let scaffolded_auth = !auth::exists(&ws);
-    if scaffolded_auth {
-        auth::queue(&mut s, &ws, Vec::new());
-    }
+    let bootstrapped = if auth::exists(&ws) {
+        None
+    } else {
+        Some(auth::queue(&mut s, &ws, Vec::new())?)
+    };
+    let scaffolded_auth = bootstrapped.is_some();
 
-    // DB-backed port.
     s.create(root.join("entity.rs"), r.render(resource::ENTITY));
     s.create(root.join("service.rs"), r.render(resource::SERVICE));
     s.create(root.join("module.rs"), r.render(resource::MODULE));
     s.create(root.join("mod.rs"), r.render(resource::MOD));
 
-    // HTTP adapter — `#[crud]` behind AuthnGuard + AuthzGuard.
     s.create(root.join("http/mod.rs"), r.render(resource::HTTP_MOD));
     s.create(root.join("http/module.rs"), r.render(resource::HTTP_MODULE));
     s.create(
@@ -63,9 +60,8 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
         r.render(resource::HTTP_CONTROLLER),
     );
 
-    // Dependencies + feature registration. Exactly one `edit` per path,
-    // folding in the auth adapter's when this run bootstrapped it: a second
-    // `edit` on the same file re-reads it from disk and clobbers the first.
+    // Exactly one `edit` per path: a second re-reads the file from disk and
+    // clobbers the first.
     let mut deps = resource_deps();
     let mut decls = Vec::new();
     if scaffolded_auth {
@@ -80,10 +76,8 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     s.edit(ws.features_cargo(), ensure_features_deps(deps));
     s.edit(ws.features_lib(), ensure_lines(decls));
 
-    // Wire the HTTP module into the current app — but only when it has a DB,
-    // since the resource module needs `SeaOrmDatabaseModule` at boot. The auth roots
-    // ride along in the same edit when this run scaffolded them, so the
-    // composition site stays the inventory `g auth` would have written.
+    // Only into an app with a DB: the resource module needs
+    // `SeaOrmDatabaseModule` at boot.
     let use_path = format!("features::{}::{}", names.snake, names.http_module());
     let http_module = names.http_module();
     let mut imports = vec![(use_path.as_str(), http_module.as_str())];
@@ -98,7 +92,7 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
         &ws.root,
         &format!("resource `{}`", names.snake),
     )?;
-    print_next_steps(&ctx, &names, wired_app, scaffolded_auth);
+    print_next_steps(&ctx, &names, wired_app, bootstrapped.as_ref());
     Ok(())
 }
 
@@ -106,17 +100,17 @@ fn print_next_steps(
     ctx: &Context,
     names: &Names,
     wired_app: Option<PathBuf>,
-    scaffolded_auth: bool,
+    bootstrapped: Option<&auth::Secrets>,
 ) {
     let snake = &names.snake;
     println!();
     println!("Next steps:");
     println!("  1. Fill in `entity.rs` columns, then:  nestrs g migration create_{snake}");
-    println!("  2. Grant the ability in `crates/features/src/authz/ability.rs` — until you");
-    println!("     do, every route answers 403 and no row crosses the data layer:");
+    println!("  2. Grant the ability in `define`, in `crates/features/src/authz/ability.rs`, its");
+    println!("     `_ab` parameter becoming `ab` — until you do, every route answers 403 and no");
+    println!("     row crosses the data layer:");
     println!();
-    println!("       use crate::{snake} as {snake}_entity;");
-    println!("       ab.can(Action::Manage, {snake}_entity::Entity);");
+    println!("       ab.can(nest_rs::authz::Action::Manage, crate::{snake}::Entity);");
     println!();
     if wired_app.is_some() {
         println!(
@@ -138,18 +132,7 @@ fn print_next_steps(
         );
     }
     println!("  4. Add transports:  nestrs g graphql|ws {}", names.kebab);
-    if scaffolded_auth {
-        println!();
-        println!("Also created the auth adapter (authn/, authz/) the guards need,");
-        println!("plus a development HS256 secret in `.env` — replace it before deploying.");
-        println!();
-        // The adapter includes a route that mints bearer tokens with no
-        // credential — announced here because `g resource` writes it as a side
-        // effect, so a reader who never ran `g auth` would meet it only in a
-        // boot warning whose remedy is to import it.
-        println!("It includes `POST /auth/dev-token`, which mints a token with no credential so");
-        println!("your guarded routes are callable at once. It refuses to boot outside");
-        println!("development and test. Import `features::authn::AuthnHttpModule` to serve it,");
-        println!("or delete `crates/features/src/authn/http/` and write the real login route.");
+    if let Some(secrets) = bootstrapped {
+        auth::print_bootstrapped(secrets);
     }
 }

@@ -1,49 +1,49 @@
-//! [`Repo`] — the query entry point that makes security and transactions
-//! transparent. Every call runs against the ambient
-//! [`Executor`](crate::Executor) (the request's transaction when open) and is
-//! filtered by the caller's [`Ability`](nest_rs_authz::Ability): reads via
-//! `condition_for(Read)`, by-id writes via `condition_for(Update/Delete)` ANDed
-//! with the primary key — so a caller cannot mutate a row outside its scope
-//! even by id. Only a worker/system (`Job`) executor runs unscoped (no ability
-//! ⇒ TRUE); every other path without an ability — request-scoped or untagged —
-//! denies every row (fail-closed).
-//! A call outside the executor scope errors rather than silently reaching a
-//! connection it does not have.
-
 use std::marker::PhantomData;
 
 use nest_rs_authz::{Action, current_ability};
 use sea_orm::sea_query::{Condition, Expr};
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, ConnectionTrait, DbErr, Delete, DeleteResult,
-    EntityTrait, IntoActiveModel, PrimaryKeyTrait, QueryFilter, Select, Update, Value,
+    ActiveModelBehavior, ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, Delete,
+    DeleteResult, EntityTrait, IntoActiveModel, Iterable, ModelTrait, PrimaryKeyToColumn,
+    PrimaryKeyTrait, QueryFilter, Select, SelectExt, Update, Value,
 };
 
 use crate::executor::{Executor, ExecutorScope, current_executor, current_executor_scope};
+use crate::soft_delete::live_condition_of;
 
-/// Row-level filter for `action` on `E` from the ambient ability. A worker/system
-/// (`Job`) executor is the sole unscoped path; every other path without an ability
-/// — request-scoped or untagged — denies all rows (fail-closed).
+/// Row-level filter for `action` on `E`: the ambient ability's condition, and,
+/// for every action but [`Create`](Action::Create) and
+/// [`Delete`](Action::Delete), the one hiding the tombstones of an entity
+/// declared `#[expose(..., soft_delete)]`. A worker/system (`Job`) executor is
+/// the sole path without an ability that the ability leaves unscoped; every
+/// other one — request-scoped or untagged — denies all rows (fail-closed).
+///
+/// `Create` checks a fresh row against the ability alone, so a row inserted
+/// already deleted (an archive import) is no denial. `Delete` reaches a
+/// tombstoned row: [`Repo::delete`] is the hard purge, and
+/// [`Repo::soft_delete`] stays idempotent.
 pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
+    let scope = ability_scope::<E>(action);
+    if matches!(action, Action::Create | Action::Delete) {
+        return scope;
+    }
+    match live_condition_of::<E>() {
+        Some(live) => Condition::all().add(scope).add(live),
+        None => scope,
+    }
+}
+
+/// The ambient ability's condition for `action` on `E`, alone.
+pub(crate) fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
     match current_ability() {
         Some(ability) => ability.condition_for::<E>(action),
-        // No ambient ability. A tagged `Job` executor is the *sole* unscoped path
-        // (no principal ⇒ system work ⇒ `TRUE`). A request-scoped executor OR an
-        // untagged one (unset scope — e.g. a bare `with_executor` install) fails
-        // closed: an untagged executor must never silently read unscoped, so it
-        // denies exactly like a request. `Job` is the only unscoped tag.
         None if current_executor_scope() == Some(ExecutorScope::Job) => Condition::all(),
         None => {
-            // Read once: the match guard above already consulted it, and the
-            // event below wants the same answer.
             let scope = current_executor_scope();
-            // The hint travels with the event, because the *symptom* does
-            // not: a route in this state answers `200 []`, which reads as a
-            // business bug and sends the developer to their query. The two
-            // fixes are the only two ways an ability is installed, so naming
-            // both is naming the whole answer.
+            // The route answers `200 []`, which reads as a business bug: the
+            // event is the only place the cause shows.
             tracing::warn!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 entity = std::any::type_name::<E>(),
                 ?action,
                 scope = ?scope,
@@ -60,35 +60,27 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
 pub struct Repo<E: EntityTrait>(PhantomData<fn() -> E>);
 
 impl<E: EntityTrait> Repo<E> {
-    /// The ambient executor (transaction when open, else the pool). Prefer the
-    /// scoped helpers ([`all`](Self::all), [`find_by_id`](Self::find_by_id),
-    /// [`scoped`](Self::scoped)), which apply the ambient ability filter; reach
-    /// for the raw executor only for a **custom read** you then filter yourself,
-    /// e.g. `Repo::<E>::scoped(Action::Read).one(&Repo::<E>::conn()?)`.
+    /// The ambient executor (transaction when open, else the pool), to run a
+    /// custom read you filter yourself, e.g.
+    /// `Repo::<E>::scoped(Action::Read).one(&Repo::<E>::conn()?)`.
     ///
     /// A **write** must go through the service write path
     /// ([`create_from_active`](crate::Creatable::create_from_active) or the
     /// `Creatable`/`Updatable`/`Deletable` traits), never
     /// `active.insert(&Repo::<E>::conn()?)`: a raw insert skips the ability
-    /// pre-filter, committing an out-of-scope row (DATA-S4).
+    /// pre-filter, committing an out-of-scope row.
     pub fn conn() -> Result<Executor, DbErr> {
         current_executor().ok_or_else(|| {
-            // Logged, not only returned. This error travels as
-            // `ServiceError::Db`, whose wire form is the constant
-            // `"database error"` — right for the client, useless for whoever
-            // has to fix it. On a GraphQL relation it was the *only* symptom:
-            // an error with no `DbErr`, nothing at `RUST_LOG=trace`, and no
-            // statement reaching the database, because the query failed before
-            // execution. The message names every context that installs an
-            // executor, so the missing one is the answer.
-            const HINT: &str = "a Repo query runs against the executor its transport installs: \
-                 HTTP through SeaOrmDatabaseModule's DbContext interceptor, a WS message through \
-                 `WsDataContext as dyn SocketContext`, an MCP tool through \
-                 `McpDataContext as dyn McpToolContext`, a dataloader batch through \
-                 `LoaderScope as dyn GraphqlBatchContext`, and worker/cron jobs through \
-                 SeaOrmDatabaseModule's JobContext — none of those is bound on this path";
+            // Logged: on the wire it is the constant `"internal error"`.
+            const HINT: &str = "a Repo query runs against the executor of the unit of work its \
+                 edge runs it in — an HTTP request, a WS message or hook, an MCP operation, a \
+                 queue attempt, a scheduled tick — which each edge opens through the bound \
+                 `dyn UnitOfWork`, SeaOrmDatabaseModule's; a dataloader batch, a streaming body \
+                 and after-commit work run on the pool of the unit they continue, and a task \
+                 spawned off a unit carries none, so it opens its own — no unit of work runs on \
+                 this path";
             tracing::error!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 entity = std::any::type_name::<E>(),
                 hint = HINT,
                 "no ambient database executor",
@@ -97,7 +89,8 @@ impl<E: EntityTrait> Repo<E> {
         })
     }
 
-    /// Every row of `E` the caller may [`Read`](Action::Read).
+    /// Every row of `E` the caller may [`Read`](Action::Read), soft-deleted rows
+    /// left out.
     pub async fn all() -> Result<Vec<E::Model>, DbErr> {
         let conn = Self::conn()?;
         E::find()
@@ -119,66 +112,85 @@ impl<E: EntityTrait> Repo<E> {
             .await
     }
 
-    /// A [`Select`] pre-filtered to what the caller may `action`, for a custom
-    /// query. Chain further constraints and execute against [`Repo::conn`].
+    /// A [`Select`] pre-filtered to what the caller may `action` ([`scope_for`]),
+    /// for a custom query. Chain further constraints and execute against
+    /// [`Repo::conn`].
     pub fn scoped(action: Action) -> Select<E> {
         E::find().filter(scope_for::<E>(action))
     }
 
-    /// A [`Select`] that **bypasses the ambient ability filter** — for the
-    /// three sanctioned ability-less query paths (a fourth is reserved but
-    /// unbuilt — see below):
+    /// A [`Select`] filtered to what the caller may `action` **with its
+    /// soft-deleted rows**, which every other read hides: the one way to read a
+    /// tombstone. In a job it reads every row, as [`scoped`](Self::scoped)
+    /// does.
     ///
-    /// 1. **Pre-authentication** credential lookup, which runs before any
-    ///    principal (hence any ability) exists — routing it through
-    ///    [`scoped`](Self::scoped) on a request-scoped executor would deny every
-    ///    row (`scope_for` fail-closed), making login impossible.
-    /// 2. **Access binding** (`CrudService::access`), which is deliberately
-    ///    unscoped so a denied-but-existing row reports `Denied` rather than
-    ///    `Missing`; the ability check is then applied explicitly per row.
-    /// 3. **Global uniqueness probes**
-    ///    ([`resolve_unique_slug`](crate::resolve_unique_slug)) — uniqueness
-    ///    is a property of *every* live row, including ones the caller cannot
-    ///    see; an ability-scoped probe would allocate colliding values.
-    ///
-    /// A fourth path — **signature-authenticated ingress** (a public webhook
-    /// endpoint trusting a verified payload signature, not a principal) — is
-    /// **reserved but NOT implemented**: no webhook route, signature check, or
-    /// webhook DB access exists in this codebase. Do **not** ship a
-    /// `#[public]` + `Repo::unscoped` webhook citing it. A correct
-    /// implementation first requires raw-body → HMAC-SHA256 verification in a
-    /// `Guard`, a constant-time compare (`subtle::ct_eq`), a replay window,
-    /// fail-closed secret handling, and a denial `warn!` — build that exemplar
-    /// before relying on this pattern.
-    ///
-    /// Still runs against the ambient [`Repo::conn`] executor, so it participates
-    /// in the request transaction — only the row-level scope is dropped. Reach
-    /// for this **only** in the two live cases above; every other read must use
-    /// [`scoped`](Self::scoped).
-    pub fn unscoped() -> Select<E> {
-        E::find()
+    /// Bar: the deleted row is what the caller is after — an administrator's
+    /// view of deleted records, a retention job — never a read that means to
+    /// show live rows. It reads a tombstone only: no `Repo` write un-deletes
+    /// one, since [`update`](Self::update) hides it too; a restore write is
+    /// planned for 7.x.
+    pub fn with_tombstones(action: Action) -> Select<E> {
+        E::find().filter(ability_scope::<E>(action))
     }
 
-    /// The by-primary-key analog of [`unscoped`](Self::unscoped) — a
-    /// `find_by_id` [`Select`] with **no** ability filter, for `CrudService::access`
-    /// (see the second sanctioned case in [`unscoped`](Self::unscoped)). Chain
-    /// the soft-delete / live filter and execute against [`Repo::conn`].
+    /// Whether the caller may `action` this row, decided in SQL: one query on
+    /// its primary key under the action's own condition, which decides a
+    /// relational rule [`Ability::can`](nest_rs_authz::Ability::can) cannot
+    /// see on the model alone.
+    ///
+    /// The instance check for a model read for another action — `Update` on a
+    /// row read for `Read`. A row gone since it was read answers `false`, and
+    /// so does every row when the scope denies all of them
+    /// ([`scope_for`]).
+    pub async fn can(action: Action, model: &E::Model) -> Result<bool, DbErr> {
+        let conn = Self::conn()?;
+        let allowed = Self::scoped(action)
+            .filter(pk_condition::<E>(model))
+            .exists(&conn)
+            .await?;
+        tracing::trace!(
+            target: crate::target::ORM,
+            entity = E::default().table_name(),
+            ?action,
+            allowed,
+            "instance check",
+        );
+        Ok(allowed)
+    }
+
+    /// A [`Select`] that **bypasses the ambient ability filter**, for the three
+    /// sanctioned ability-less reads only; every other read uses
+    /// [`scoped`](Self::scoped):
+    ///
+    /// 1. **Pre-authentication** credential lookup, before any principal exists.
+    /// 2. **Access binding** (`CrudService::access`), which must tell `Denied`
+    ///    from `Missing` and applies the ability check itself.
+    /// 3. **Global uniqueness probes**
+    ///    ([`resolve_unique_slug`](crate::resolve_unique_slug)), over rows the
+    ///    caller cannot see too.
+    ///
+    /// **Not** a signature-authenticated webhook: none exists, and one first
+    /// needs raw-body HMAC-SHA256 verification in a `Guard`, a constant-time
+    /// compare, a replay window, fail-closed secret handling and a denial `warn`.
+    ///
+    /// Soft-deleted rows stay hidden: hiding them is no authorization filter,
+    /// and a deleted account must not sign in.
+    pub fn unscoped() -> Select<E> {
+        live_rows(E::find())
+    }
+
+    /// The by-primary-key analog of [`unscoped`](Self::unscoped), under the same
+    /// bar.
     pub fn unscoped_by_id(id: <E::PrimaryKey as PrimaryKeyTrait>::ValueType) -> Select<E> {
-        E::find_by_id(id)
+        live_rows(E::find_by_id(id))
     }
 
     /// System **write** — the write pendant of [`unscoped`](Self::unscoped): a
-    /// raw insert with no ability filter, on an **explicit** connection so the
-    /// caller composes it into a transaction it already holds.
+    /// raw insert with no ability filter, on an explicit connection.
     ///
-    /// Bar: **pre-principal provisioning** (social-login user/identity
-    /// inserts — no principal ⇒ no ability ⇒ nothing to scope) and
-    /// principal-less system work. Nothing else: every authorized create goes
-    /// through the service write path
-    /// ([`Creatable::create_from_active`](crate::Creatable), which re-checks
-    /// the fresh row against the ambient ability in SQL). No post-insert
-    /// re-check happens here — there is deliberately no ability that could
-    /// predicate one.
+    /// Bar: **pre-principal provisioning** (a social-login user) and
+    /// principal-less system work. Every authorized create goes through
+    /// [`Creatable::create_from_active`](crate::Creatable).
     pub async fn insert_unscoped<C>(active: E::ActiveModel, conn: &C) -> Result<E::Model, DbErr>
     where
         C: ConnectionTrait,
@@ -186,7 +198,7 @@ impl<E: EntityTrait> Repo<E> {
         E::Model: IntoActiveModel<E::ActiveModel>,
     {
         tracing::trace!(
-            target: crate::TARGET,
+            target: crate::target::ORM,
             entity = E::default().table_name(),
             "insert unscoped",
         );
@@ -194,9 +206,9 @@ impl<E: EntityTrait> Repo<E> {
     }
 
     /// Update a row, gated by `condition_for(Update)` ANDed with the primary
-    /// key: a row outside the caller's scope is never touched and surfaces as
-    /// [`DbErr::RecordNotUpdated`], so a caller cannot mutate by id past its
-    /// scope.
+    /// key: a row outside the caller's scope, or soft-deleted, is never touched
+    /// and surfaces as [`DbErr::RecordNotUpdated`], so a caller cannot mutate by
+    /// id past its scope.
     ///
     /// Runs [`ActiveModelBehavior`] — see `scoped_save`.
     pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
@@ -207,17 +219,9 @@ impl<E: EntityTrait> Repo<E> {
         Self::scoped_save(active, Action::Update).await
     }
 
-    /// The one query-builder write: hooks, validate, scope filter, execute.
-    ///
-    /// The scope filter forces sea-orm's **query-builder** path (`Update::one`),
-    /// which — unlike `ActiveModelTrait::insert` on the create side — does not
-    /// run [`ActiveModelBehavior`]. Driving the hooks here rather than per
-    /// method is what makes the invariant "`Repo` runs the behaviour on every
-    /// write path" instead of "`Repo::update` does": without it the
-    /// `timestamps` flag stamped `created_at` on insert and **never moved
-    /// `updated_at`**, silently freezing the column every downstream cache
-    /// invalidation, incremental sync and ETag trusts — and a soft delete,
-    /// which is also an `Update::one`, froze it in exactly the same way.
+    /// The scope filter forces sea-orm's `Update::one`, which does not run
+    /// [`ActiveModelBehavior`]: the hooks are driven here, or `updated_at` never
+    /// moves.
     async fn scoped_save<A>(active: A, action: Action) -> Result<E::Model, DbErr>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
@@ -254,10 +258,9 @@ impl<E: EntityTrait> Repo<E> {
     /// gated by `condition_for(Delete)` ANDed with the primary key. Idempotent
     /// when the row is already tombstoned. Hard purge stays on [`Self::delete`].
     ///
-    /// Goes through `scoped_save`, so a tombstone also
-    /// moves `updated_at` — a scaffolded resource declares `soft_delete` and
-    /// `timestamps` together, and a delete that left the audit column behind
-    /// would be the same silent freeze one method over.
+    /// The row is then hidden from every read but
+    /// [`with_tombstones`](Self::with_tombstones) when `E` is declared
+    /// `#[expose(..., soft_delete)]` and `col` is its `deleted_at`.
     pub async fn soft_delete<A, M>(model: M, col: E::Column) -> Result<(), DbErr>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
@@ -269,6 +272,24 @@ impl<E: EntityTrait> Repo<E> {
         Self::scoped_save(active, Action::Delete).await?;
         Ok(())
     }
+}
+
+/// `select`, without the tombstones of a soft-deletable `E`.
+fn live_rows<E: EntityTrait>(select: Select<E>) -> Select<E> {
+    match live_condition_of::<E>() {
+        Some(live) => select.filter(live),
+        None => select,
+    }
+}
+
+/// Equality over **all** of a model's primary-key columns, composite included.
+pub(crate) fn pk_condition<E: EntityTrait>(model: &E::Model) -> Condition {
+    let mut cond = Condition::all();
+    for pk in E::PrimaryKey::iter() {
+        let col = pk.into_column();
+        cond = cond.add(col.eq(model.get(col)));
+    }
+    cond
 }
 
 #[cfg(test)]
@@ -288,7 +309,7 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "widgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub org_id: i32,
@@ -296,7 +317,7 @@ mod tests {
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -304,26 +325,110 @@ mod tests {
     mod tombstone {
         use sea_orm::entity::prelude::*;
 
-        use crate::soft_delete::SoftDeletable;
+        use crate::soft_delete::{SoftDeletable, SoftDeleteDeclared};
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "tombstones")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub deleted_at: Option<chrono::DateTime<chrono::FixedOffset>>,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
+
+        impl SoftDeleteDeclared for Entity {}
 
         impl SoftDeletable for Entity {
             fn deleted_at_column() -> Column {
                 Column::DeletedAt
             }
         }
+    }
+
+    inventory::submit! {
+        crate::soft_delete::SoftDeleteRegistration {
+            entity: || std::any::TypeId::of::<tombstone::Entity>(),
+            column: || sea_orm::IdenStatic::as_str(&tombstone::Column::DeletedAt),
+        }
+    }
+
+    const LIVE: &str = r#""tombstones"."deleted_at" IS NULL"#;
+
+    fn tombstone_sql(select: Select<tombstone::Entity>) -> String {
+        select.build(DatabaseBackend::Postgres).to_string()
+    }
+
+    #[tokio::test]
+    async fn every_action_but_create_and_delete_hides_a_soft_deletable_entitys_tombstones() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_job_executor(pool, async {
+            for action in [Action::Read, Action::Update, Action::Manage] {
+                let s = tombstone_sql(Repo::<tombstone::Entity>::scoped(action));
+                assert!(s.contains(LIVE), "{action:?} hides tombstones: {s}");
+            }
+            let s = tombstone_sql(Repo::<tombstone::Entity>::scoped(Action::Create));
+            assert!(
+                !s.contains("IS NULL"),
+                "a row inserted already deleted (an archive import) passes the create check: {s}",
+            );
+            let s = tombstone_sql(Repo::<tombstone::Entity>::scoped(Action::Delete));
+            assert!(
+                !s.contains("IS NULL"),
+                "the hard purge and the soft delete reach a tombstoned row: {s}",
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_entity_without_tombstones_carries_no_live_condition() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_job_executor(pool, async {
+            let s = sql(scope_for::<widget::Entity>(Action::Read));
+            assert!(!s.contains("deleted_at"), "{s}");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn the_live_condition_is_anded_after_the_abilitys() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_request_executor(pool, async {
+            let s = tombstone_sql(Repo::<tombstone::Entity>::scoped(Action::Read));
+            assert!(
+                s.contains("1 = 0") && s.contains(LIVE),
+                "hiding tombstones never widens a denial: {s}",
+            );
+        })
+        .await;
+    }
+
+    #[test]
+    fn the_ability_less_escapes_hide_tombstones_too() {
+        let s = tombstone_sql(Repo::<tombstone::Entity>::unscoped());
+        assert!(s.contains(LIVE), "unscoped: {s}");
+        let s = tombstone_sql(Repo::<tombstone::Entity>::unscoped_by_id(7));
+        assert!(s.contains(LIVE) && s.contains('7'), "unscoped_by_id: {s}");
+    }
+
+    #[tokio::test]
+    async fn with_tombstones_keeps_the_ability_and_drops_the_live_condition() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_job_executor(pool.clone(), async {
+            let s = tombstone_sql(Repo::<tombstone::Entity>::with_tombstones(Action::Read));
+            assert!(!s.contains("IS NULL"), "a job reads every row: {s}");
+        })
+        .await;
+        with_request_executor(pool, async {
+            let s = tombstone_sql(Repo::<tombstone::Entity>::with_tombstones(Action::Read));
+            assert!(s.contains("1 = 0"), "still scoped by the ability: {s}");
+            assert!(!s.contains("IS NULL"), "{s}");
+        })
+        .await;
     }
 
     fn sql(cond: Condition) -> String {
@@ -333,15 +438,6 @@ mod tests {
             .to_string()
     }
 
-    // A message handler on a gateway whose module skipped `AuthzWsModule`
-    // (no `SocketContext` registered) runs with no ambient executor at all.
-    // The WS-auth fail-secure carry-over rests on this erroring, never
-    // falling back to some default connection.
-    /// The wire form of this failure is the constant `"database error"` — no
-    /// `DbErr`, and (on a dataloader batch) not a single statement reaching the
-    /// database, because the query fails before execution. Whoever has to fix
-    /// it gets nothing from the response, so the detail has to be in the log,
-    /// and it has to name the binding that is missing.
     #[tokio::test]
     async fn a_missing_executor_is_logged_with_the_binding_that_would_supply_it() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -352,11 +448,11 @@ mod tests {
         let detail = err.to_string();
         assert!(detail.contains("no ambient database executor"), "{detail}");
         assert!(
-            detail.contains("LoaderScope as dyn GraphqlBatchContext"),
-            "the dataloader binding is one of the ones named: {detail}",
+            detail.contains("SeaOrmDatabaseModule"),
+            "the binding every edge opens its units through is named: {detail}",
         );
 
-        let event = logs.expect_one(crate::TARGET, "no ambient database executor");
+        let event = logs.expect_one(crate::target::ORM, "no ambient database executor");
         assert_eq!(event.level, "error");
         assert!(
             event.field("entity").is_some_and(|e| e.contains("widget")),
@@ -365,9 +461,37 @@ mod tests {
         assert!(
             event
                 .field("hint")
-                .is_some_and(|h| h.contains("LoaderScope as dyn GraphqlBatchContext")),
+                .is_some_and(|h| h.contains("a task spawned off a unit carries none")),
             "…and the bindings that would supply one: {event:#?}",
         );
+    }
+
+    #[tokio::test]
+    async fn a_task_spawned_off_a_unit_fails_closed_for_want_of_an_executor() {
+        let ability = Arc::new(AbilityBuilder::new().build().expect("an empty ability"));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        let carried = with_request_executor(
+            pool,
+            with_ability(ability, async {
+                assert!(Repo::<widget::Entity>::conn().is_ok(), "the unit has one");
+                nest_rs_core::TaskContext::current()
+            }),
+        )
+        .await;
+
+        let (opened, scoped) = tokio::spawn(carried.carry(async {
+            (
+                Repo::<widget::Entity>::conn().is_ok(),
+                nest_rs_authz::current_ability().is_some(),
+            )
+        }))
+        .await
+        .expect("the task runs");
+        assert!(
+            !opened,
+            "a task that may outlive its unit opens its own, never borrows its spawner's",
+        );
+        assert!(scoped, "the caller's ability still travels with it");
     }
 
     #[tokio::test]
@@ -381,27 +505,16 @@ mod tests {
         }
     }
 
-    // `Condition` carries an opaque builder; build SQL from a stub query to
-    // peek at the rendered shape without a real DB. Reusing the same trick
-    // the scope/e2e tests use, but here against a freshly-installed
-    // task-local — no Postgres needed.
     #[tokio::test]
     async fn no_ambient_state_denies_by_default() {
-        // Outside any executor scope: ambient ability is absent and scope is
-        // `None` (untagged, not `Job`). Only a `Job` executor is unscoped, so an
-        // untagged path fails closed — the engine returns the deny-all clause.
         let s = sql(scope_for::<widget::Entity>(Action::Read));
         assert!(s.contains("1 = 0"), "untagged ⇒ deny-all: {s}");
     }
 
-    // The audited footgun: an executor installed *untagged* (a bare
-    // `with_executor`, scope left unset) with no ambient ability must fail
-    // closed, never read unscoped. `Job` is the only unscoped tag.
     #[tokio::test]
     async fn untagged_executor_without_ability_denies_all_rows() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         with_executor(pool, async {
-            // Sanity: the scope really is untagged (unset), not `Job`.
             assert_eq!(current_executor_scope(), None);
             let s = sql(scope_for::<widget::Entity>(Action::Read));
             assert!(s.contains("1 = 0"), "untagged executor fails closed: {s}");
@@ -409,8 +522,6 @@ mod tests {
         .await;
     }
 
-    // A request-scoped executor with NO ambient ability must fail closed.
-    // A bug that defaults to `TRUE` here leaks every row to every caller.
     #[tokio::test]
     async fn request_scope_without_ability_denies_all_rows() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
@@ -421,13 +532,6 @@ mod tests {
         .await;
     }
 
-    /// Failing closed is only half the promise. The row-level-filtering page
-    /// leans on the *other* half to justify the design: a missing authz module
-    /// "shows up as an empty (and noisy) endpoint in the first manual test,
-    /// never as a cross-tenant leak". On a transport with no status code and no
-    /// response envelope — a WebSocket message, a queue job — the empty array
-    /// *is* the whole signal, indistinguishable from an empty table, so the
-    /// `warn` is what makes the miswiring findable at all.
     #[tokio::test]
     async fn denying_all_rows_is_loud() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -438,7 +542,7 @@ mod tests {
         .await;
 
         let event = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "no ambient Ability outside a worker job — denying all rows",
         );
         assert_eq!(event.level, "warn");
@@ -449,8 +553,6 @@ mod tests {
         assert_eq!(event.field("action").as_deref(), Some("Read"));
     }
 
-    /// …and the unscoped path stays quiet: a warning on every system query
-    /// would train an operator to ignore the one that matters.
     #[tokio::test]
     async fn the_unscoped_job_path_is_silent() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -460,13 +562,11 @@ mod tests {
         })
         .await;
         logs.expect_none(
-            crate::TARGET,
+            crate::target::ORM,
             "no ambient Ability outside a worker job — denying all rows",
         );
     }
 
-    // System work (workers, schedule, shutdown hooks) runs unscoped — that's
-    // the documented invariant, and the regression check is paranoid.
     #[tokio::test]
     async fn job_scope_without_ability_remains_unscoped() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
@@ -496,22 +596,16 @@ mod tests {
         .await;
     }
 
-    // The `Repo::conn` error message names the interceptor, so a developer
-    // reading the failure trail knows *why* the call was outside scope —
-    // pinning the message is a cheap teaching invariant.
     #[test]
-    fn repo_conn_outside_scope_names_the_interceptor() {
+    fn repo_conn_outside_scope_names_the_port() {
         let msg = match Repo::<widget::Entity>::conn() {
             Ok(_) => panic!("expected error outside the executor scope"),
             Err(err) => err.to_string(),
         };
         assert!(msg.contains("ambient"), "missing 'ambient': {msg}");
-        assert!(msg.contains("DbContext"), "missing 'DbContext': {msg}");
+        assert!(msg.contains("UnitOfWork"), "missing 'UnitOfWork': {msg}");
     }
 
-    // Sanity: `Condition::all().add(Expr::cust("1 = 0"))` (the deny-all clause)
-    // serializes with the literal substring `1 = 0` — this is what the e2e
-    // test asserts on, pinned here so a sea_query rename surfaces immediately.
     #[test]
     fn deny_all_condition_serializes_as_one_equals_zero() {
         let s = sql(Condition::all().add(Expr::cust("1 = 0")));
@@ -522,19 +616,12 @@ mod tests {
         select.build(DatabaseBackend::Postgres).to_string()
     }
 
-    // `Repo::scoped` is the entry point for a custom query: a `Select<E>`
-    // already filtered by the ambient ability. With no scope installed (an
-    // untagged path, not a `Job`), the deny-all guard applies — a custom query
-    // built off `scoped` cannot accidentally read unscoped.
     #[tokio::test]
     async fn scoped_denies_by_default_outside_a_job() {
         let s = select_sql(Repo::<widget::Entity>::scoped(Action::Read));
         assert!(s.contains("1 = 0"), "untagged ⇒ deny-all: {s}");
     }
 
-    // `Repo::scoped` inside a request scope without an ability must inherit
-    // the deny-all guard from `scope_for` — a developer that builds a custom
-    // query off `scoped` cannot accidentally bypass row-level security.
     #[tokio::test]
     async fn scoped_in_request_without_ability_renders_deny_all() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
@@ -545,8 +632,6 @@ mod tests {
         .await;
     }
 
-    // An ability that grants the action unconditionally renders as a `TRUE`
-    // predicate — the canonical "admin" shape.
     #[tokio::test]
     async fn scoped_with_unconditional_grant_renders_unrestricted() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
@@ -557,7 +642,6 @@ mod tests {
         with_request_executor(pool, async move {
             with_ability(ability, async {
                 let s = select_sql(Repo::<widget::Entity>::scoped(Action::Read));
-                // No deny-all clause: an unconditional grant lets every row through.
                 assert!(!s.contains("1 = 0"), "admin should not be denied: {s}");
             })
             .await;
@@ -565,9 +649,6 @@ mod tests {
         .await;
     }
 
-    // The four actions are independent rule keys: a per-action predicate must
-    // appear on its own action and not leak to the others. A bug that keyed
-    // all actions to one bucket would surface as identical SQL across calls.
     #[tokio::test]
     async fn scope_for_per_action_uses_distinct_predicates() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
@@ -594,8 +675,6 @@ mod tests {
                 assert!(update.contains('3'), "Update keyed to org_id = 3: {update}");
                 assert!(delete.contains('4'), "Delete keyed to org_id = 4: {delete}");
 
-                // And the four must not collapse to the same SQL — a regression
-                // that lost the action discriminator would fail here.
                 assert_ne!(read, create);
                 assert_ne!(read, update);
                 assert_ne!(read, delete);
@@ -606,9 +685,6 @@ mod tests {
         .await;
     }
 
-    // An action the ability does not mention falls through to the deny-all
-    // clause on a request-scoped executor: silently allowing it would be a
-    // privilege-escalation regression.
     #[tokio::test]
     async fn scope_for_denies_an_unmentioned_action_inside_request() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
@@ -618,8 +694,6 @@ mod tests {
 
         with_request_executor(pool, async move {
             with_ability(ability, async {
-                // The ability grants only `Read`; `Delete` is not mentioned,
-                // so the ambient condition for `Delete` must deny every row.
                 let s = sql(scope_for::<widget::Entity>(Action::Delete));
                 assert!(s.contains("1 = 0"), "missing action denies: {s}");
             })
@@ -628,9 +702,6 @@ mod tests {
         .await;
     }
 
-    // `Repo::conn` returns the installed executor when one is present. The
-    // request and job variants take separate code paths in `current_executor_scope`;
-    // both must observe the same executor under `Repo::conn`.
     #[tokio::test]
     async fn repo_conn_returns_the_installed_request_executor() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
@@ -667,12 +738,6 @@ mod tests {
         );
     }
 
-    // A by-id write ANDs the ambient ability's row condition with the primary
-    // key, so a caller cannot mutate a row outside its scope even by id.
-    // `Repo::update` builds exactly `Update::one(active).filter(scope_for(
-    // Update))`; rendered here (no DB) the WHERE must carry both the PK filter
-    // and the ability predicate, joined by AND. The live counterpart is the api
-    // suite's `writes_are_scoped_to_the_callers_ability`.
     #[tokio::test]
     async fn update_by_id_ands_the_pk_with_the_ability_scope() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
@@ -715,9 +780,6 @@ mod tests {
         .await;
     }
 
-    // The delete-by-id analog: `Repo::delete` builds `Delete::one(model).filter(
-    // scope_for(Delete))`, and the rendered WHERE must AND the PK with the
-    // ability's `Delete` predicate — an out-of-scope delete touches no row.
     #[tokio::test]
     async fn delete_by_id_ands_the_pk_with_the_ability_scope() {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());

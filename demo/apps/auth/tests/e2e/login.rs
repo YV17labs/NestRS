@@ -19,6 +19,8 @@ async fn login_issues_a_token_the_public_key_verifies() {
         .send()
         .await;
     resp.assert_status_is_ok();
+    resp.assert_header("cache-control", "no-store");
+    resp.assert_header("pragma", "no-cache");
 
     let json = resp.json().await;
     let token = json
@@ -29,6 +31,7 @@ async fn login_issues_a_token_the_public_key_verifies() {
         .to_owned();
     let claims: Claims = resource_server_verifier()
         .verify(&token)
+        .await
         .expect("the public key verifies the privately-signed token");
     assert_eq!(claims.org_id.to_string(), ORG_ID);
     assert!(claims.sub.is_some());

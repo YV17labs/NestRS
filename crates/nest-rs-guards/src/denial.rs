@@ -1,11 +1,16 @@
 //! [`Denial`] — transport-agnostic guard rejection.
 //!
-//! A guard returns `Err(Denial::...)`; each transport's shaper converts it
-//! to that transport's native error (HTTP `Response`, GraphQL error frame,
-//! WS error message). The dev never reaches for a transport-specific error
-//! type.
+//! A guard returns `Err(Denial::...)`; each edge renders it in its native
+//! error form.
 
 use std::borrow::Cow;
+use std::error::Error;
+use std::fmt;
+use std::sync::Arc;
+
+/// RFC 6750 §3.1's code for a token too narrow for the operation — the one
+/// `nest_rs_http::challenge::INSUFFICIENT_SCOPE` writes on the challenge.
+const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
 
 /// What a [`Guard`](crate::Guard) returns on rejection.
 #[derive(Clone, Debug)]
@@ -17,11 +22,8 @@ pub enum Denial {
     /// 401 — a credential was **presented and rejected**, carrying the RFC 6750
     /// §3.1 code that says why.
     ///
-    /// Distinct from [`Unauthorized`](Self::Unauthorized) because §3 draws the
-    /// same line: a request that "lacks any authentication information" is told
-    /// no reason, while a rejected credential names one — which is what lets a
-    /// client tell "refresh and retry" from "start discovery" instead of
-    /// re-walking discovery on every token expiry.
+    /// A request with no credential is told no reason (RFC 6750 §3), so a client
+    /// can tell "refresh and retry" from "start discovery".
     InvalidCredential {
         /// Human-readable reason, rendered as the problem envelope's `detail`.
         reason: Cow<'static, str>,
@@ -37,11 +39,8 @@ pub enum Denial {
     /// 403 — the token is valid but too narrow: the operation is gated behind
     /// scopes the credential does not carry (RFC 6750 §3.1).
     ///
-    /// Distinct from [`Forbidden`](Self::Forbidden) because the remedy is
-    /// different, and only the client can apply it: a plain `403` says "you may
-    /// not", this says "come back with a wider token, here is which one". The
-    /// transports carry `required` to the edge so the OAuth challenge naming
-    /// those scopes is written in exactly one place.
+    /// The transports carry `required` to the edge, where the OAuth challenge
+    /// naming those scopes is written.
     InsufficientScope {
         /// Scopes that would have granted the operation. Empty is legal — a
         /// deployment may refuse without naming its internals — and then this
@@ -57,6 +56,25 @@ pub enum Denial {
         retry_after_secs: u32,
         /// Human-readable reason for the denial.
         reason: Cow<'static, str>,
+    },
+
+    /// 503 — the request could not be evaluated because something the guard
+    /// depends on did not answer: an identity store, an identity provider. The
+    /// caller did nothing wrong, so it is no `401` (RFC 9110 §15.6.4), and it
+    /// is told when to come back when that is known.
+    ///
+    /// Built by [`unavailable`](Denial::unavailable) or, with what failed,
+    /// [`unavailable_because`](Denial::unavailable_because).
+    #[non_exhaustive]
+    Unavailable {
+        /// Seconds until a retry may succeed (the `Retry-After` value), when
+        /// the failing party said so.
+        retry_after_secs: Option<u32>,
+        /// Human-readable reason for the denial.
+        reason: Cow<'static, str>,
+        /// What failed, read through [`Error::source`]: its chain is the
+        /// operator's, never the client's.
+        source: Option<Arc<dyn Error + Send + Sync>>,
     },
 
     /// 500 — a wiring bug surfaced at request time (e.g. an authz guard ran
@@ -96,6 +114,48 @@ impl Denial {
         }
     }
 
+    /// A `503 Service Unavailable` denial — something the guard depends on did
+    /// not answer — with the `Retry-After` hint when it is known.
+    pub fn unavailable(
+        retry_after_secs: Option<u32>,
+        reason: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        Self::Unavailable {
+            retry_after_secs,
+            reason: reason.into(),
+            source: None,
+        }
+    }
+
+    /// [`unavailable`](Self::unavailable), keeping what failed as the denial's
+    /// [`source`](Error::source). A source never quotes a value the caller sent:
+    /// its chain reaches a log line.
+    pub fn unavailable_because(
+        retry_after_secs: Option<u32>,
+        reason: impl Into<Cow<'static, str>>,
+        source: impl Into<Box<dyn Error + Send + Sync>>,
+    ) -> Self {
+        Self::Unavailable {
+            retry_after_secs,
+            reason: reason.into(),
+            source: Some(Arc::from(source.into())),
+        }
+    }
+
+    /// The `Retry-After` value this denial carries, in seconds: a rate limit's
+    /// always, an unavailable dependency's when it is known, nothing else's.
+    pub fn retry_after_secs(&self) -> Option<u32> {
+        match self {
+            Self::RateLimited {
+                retry_after_secs, ..
+            } => Some(*retry_after_secs),
+            Self::Unavailable {
+                retry_after_secs, ..
+            } => *retry_after_secs,
+            _ => None,
+        }
+    }
+
     /// A `500` denial — a guard wiring bug surfaced at request time.
     pub fn internal(reason: impl Into<Cow<'static, str>>) -> Self {
         Self::Internal(reason.into())
@@ -115,13 +175,10 @@ impl Denial {
     /// The RFC 6750 §3.1 error code this denial reports on the
     /// `WWW-Authenticate` challenge, or `None` when the specification says to
     /// report none.
-    ///
-    /// One accessor rather than a `match` per transport, for the same reason
-    /// [`required_scopes`](Self::required_scopes) is one.
     pub fn bearer_error(&self) -> Option<&'static str> {
         match self {
             Self::InvalidCredential { code, .. } => Some(code),
-            Self::InsufficientScope { .. } => Some(nest_rs_http::challenge::INSUFFICIENT_SCOPE),
+            Self::InsufficientScope { .. } => Some(INSUFFICIENT_SCOPE),
             _ => None,
         }
     }
@@ -133,16 +190,13 @@ impl Denial {
             Self::Forbidden(_) | Self::InsufficientScope { .. } => 403,
             Self::RateLimited { .. } => 429,
             Self::Internal(_) => 500,
+            Self::Unavailable { .. } => 503,
         }
     }
 
     /// The scopes that would have granted the refused operation — empty for
     /// every denial that is not about scope, and for an
     /// [`InsufficientScope`](Self::InsufficientScope) that names none.
-    ///
-    /// One accessor rather than a `match` per transport: "an empty set carries
-    /// no challenge" is the rule each renderer would otherwise re-encode, and a
-    /// transport added later gets it for free.
     pub fn required_scopes(&self) -> &[String] {
         match self {
             Self::InsufficientScope { required, .. } => required,
@@ -155,8 +209,85 @@ impl Denial {
         match self {
             Self::Unauthorized(s) | Self::Forbidden(s) | Self::Internal(s) => s.as_ref(),
             Self::RateLimited { reason, .. }
+            | Self::Unavailable { reason, .. }
             | Self::InsufficientScope { reason, .. }
             | Self::InvalidCredential { reason, .. } => reason.as_ref(),
         }
+    }
+}
+
+/// What failed behind `denial`, as the `error` field of the line an edge files
+/// for it: the whole chain, its reason first, when the denial keeps a cause, and
+/// nothing otherwise. The client never reads it.
+pub fn failure_chain(denial: &Denial) -> Option<String> {
+    Error::source(denial).map(|_| nest_rs_core::error_message(denial))
+}
+
+/// The reason, as a log line or a failure chain reads it.
+impl fmt::Display for Denial {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl Error for Denial {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Unavailable {
+                source: Some(source),
+                ..
+            } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct StoreDown;
+
+    impl fmt::Display for StoreDown {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("the identity store refused the connection")
+        }
+    }
+
+    impl Error for StoreDown {}
+
+    #[test]
+    fn an_unavailable_denial_keeps_what_failed_as_its_source() {
+        let denial = Denial::unavailable_because(Some(30), "the identity store is down", StoreDown);
+        assert_eq!(denial.http_status(), 503);
+        assert_eq!(denial.retry_after_secs(), Some(30));
+        assert_eq!(denial.message(), "the identity store is down");
+        assert_eq!(
+            nest_rs_core::error_message(&denial),
+            "the identity store is down: the identity store refused the connection",
+        );
+        assert!(
+            Denial::unavailable(None, "down").source().is_none(),
+            "a denial built without a cause has none",
+        );
+    }
+
+    #[test]
+    fn only_a_denial_keeping_its_cause_has_a_chain_to_file() {
+        let sourced = Denial::unavailable_because(None, "the identity store is down", StoreDown);
+        assert_eq!(
+            failure_chain(&sourced).as_deref(),
+            Some("the identity store is down: the identity store refused the connection"),
+        );
+        assert_eq!(failure_chain(&Denial::unavailable(None, "down")), None);
+        assert_eq!(failure_chain(&Denial::forbidden("no")), None);
+    }
+
+    #[test]
+    fn a_scope_denial_names_rfc_6750s_code() {
+        let denial = Denial::insufficient_scope(["posts:write"], "a narrower token");
+        assert_eq!(denial.bearer_error(), Some("insufficient_scope"));
+        assert_eq!(denial.required_scopes(), ["posts:write".to_owned()]);
     }
 }

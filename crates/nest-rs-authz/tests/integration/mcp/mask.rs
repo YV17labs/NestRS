@@ -7,17 +7,15 @@
 //! escape the way GraphQL does: with no selection set to acquit it, a mask that
 //! strips a *required* field fails the operation rather than serving the row.
 
-use std::sync::Arc;
-
 use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, input, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
-use nest_rs_http::poem::Request;
 use nest_rs_mcp::{Json, McpError, McpOperationGuard, mcp, tools};
 
 use super::{PassGuard, widget};
+use crate::post;
 
 /// The wire shape: `name` optional so a field-restricted mask yields `null`
 /// rather than an irreconcilable value.
@@ -35,8 +33,28 @@ struct StrictWidgetDto {
     name: String,
 }
 
+/// A post as a tool returns it; `title` is required.
+#[input]
+struct PostDto {
+    id: i32,
+    org_id: i32,
+    title: String,
+}
+
+impl PostDto {
+    fn new(id: i32, org_id: i32) -> Self {
+        Self {
+            id,
+            org_id,
+            title: format!("post {id}"),
+        }
+    }
+}
+
 /// `admin` reads widgets unrestricted; `viewer` reads them but only the `id`
-/// field; `auditor` reads only widget 1, and only its `id`.
+/// field; `auditor` reads only widget 1, and only its `id`. `member` reads every
+/// post but those a relation denies; `org_member` reads the `id` and `org_id`
+/// of posts a relation grants.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -45,11 +63,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let role = req
-            .headers()
-            .get("x-role")
-            .and_then(|value| value.to_str().ok())
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let role = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
             .unwrap_or_default()
             .to_owned();
         let mut builder = AbilityBuilder::new();
@@ -68,15 +85,26 @@ impl Guard for AbilityInjector {
                     .when(|p| p.eq(widget::Column::Id, 1))
                     .fields([widget::Column::Id]);
             }
+            "member" => {
+                builder.can(Action::Read, post::Entity);
+                builder
+                    .cannot(Action::Read, post::Entity)
+                    .when(|p| post::in_org(&p, 9));
+            }
+            "org_member" => {
+                builder
+                    .can(Action::Read, post::Entity)
+                    .when(|p| post::in_org(&p, 7))
+                    .fields([post::Column::Id, post::Column::OrgId]);
+            }
             _ => {}
         }
-        req.extensions_mut()
-            .insert(Arc::new(builder.build().expect("valid test ability")));
+        cx.attach(builder.build().expect("valid test ability"));
         Ok(())
     }
 }
 
-impl HttpGuard for AbilityInjector {}
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 #[mcp(path = "/mcp/mask")]
 #[derive(Clone, Default)]
@@ -100,10 +128,8 @@ impl MaskTool {
         ]))
     }
 
-    /// A prose summary. rmcp accepts a `String` as tool output, and the mask
-    /// runs over it as a scalar — nothing entity-shaped to strip, so the value
-    /// passes through untouched. Kept as a witness that arming the posture on a
-    /// non-entity shape is harmless rather than a compile error.
+    /// A prose summary: a scalar, so the mask passes it through untouched — a
+    /// witness that arming the posture on a non-entity shape is harmless.
     #[tool]
     #[authorize(Read, widget::Entity)]
     async fn widget_summary(&self) -> Result<String, McpError> {
@@ -118,6 +144,21 @@ impl MaskTool {
             id: 1,
             name: "first".to_owned(),
         }))
+    }
+
+    /// The rows a `Repo` read under the caller's ability returns: posts of
+    /// orgs 7 and 8.
+    #[tool]
+    #[authorize(Read, post::Entity)]
+    async fn posts(&self) -> Result<Json<Vec<PostDto>>, McpError> {
+        Ok(Json(vec![PostDto::new(1, 7), PostDto::new(2, 8)]))
+    }
+
+    /// One post the read admitted.
+    #[tool]
+    #[authorize(Read, post::Entity)]
+    async fn post(&self) -> Result<Json<PostDto>, McpError> {
+        Ok(Json(PostDto::new(1, 7)))
     }
 
     /// The opt-out: no gate, no mask.
@@ -211,17 +252,8 @@ async fn a_stripped_required_field_fails_the_operation_closed() {
         "…and it refuses loudly, never as a silent passthrough: {body}",
     );
 
-    // The caller — a language model here — is handed an opaque refusal, which
-    // is the same answer a gate denial gives it. So the log is the only thing
-    // that separates "you may not read this" from "this operation's return type
-    // and this grant cannot both be satisfied", and the second is a bug in the
-    // schema that a developer has to fix.
-    //
-    // It is filed as the *denial* it is, under the one event and the one
-    // `reason` value GraphQL files for the same decision. Named for the
-    // mechanism instead — "response masking failed", with the remedy sentence
-    // as its `reason` — it was a refusal an incident query by `reason` never
-    // returned.
+    // The model gets an opaque refusal; the log, filed as a denial under
+    // GraphQL's event and `reason`, is what tells a grant refusal from a schema bug.
     let event = logs.expect_one("nest_rs::authz", "authorization denied");
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("transport").as_deref(), Some("mcp"));
@@ -261,5 +293,39 @@ async fn public_opts_out_of_masking() {
         body.contains("first"),
         "`#[public]` declares no gate and no mask — the operation is responsible \
          for its own output: {body}",
+    );
+}
+
+/// The read behind the tool already left out what a relational denial names,
+/// so the mask keeps every row it was handed.
+#[tokio::test]
+async fn a_relational_denial_keeps_every_row_the_read_admitted() {
+    let body = call("member", "posts").await;
+    assert!(
+        body.contains(r#""id":1"#) && body.contains(r#""id":2"#),
+        "{body}"
+    );
+}
+
+/// The read admitted the post through the relational grant, so the fields
+/// it permits are the ones refused: `title` alone, never the whole subject.
+#[tokio::test]
+async fn a_relational_grant_names_the_one_field_it_withholds() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let body = call("org_member", "post").await;
+    assert!(!body.contains("post 1"), "{body}");
+
+    let event = logs.expect_one("nest_rs::authz", "authorization denied");
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("field_not_granted"),
+        "{:?}",
+        event.fields,
+    );
+    assert_eq!(
+        event.field("fields").as_deref(),
+        Some("title"),
+        "{:?}",
+        event.fields
     );
 }

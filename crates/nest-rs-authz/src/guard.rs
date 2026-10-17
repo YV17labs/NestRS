@@ -1,72 +1,28 @@
 //! [`AbilityGuard<F>`] — request-scoped bridge from the authenticated actor to
-//! the [`Ability`](crate::Ability) the enforcement layers read. Generic over
+//! the [`Ability`] the enforcement layers read. Generic over
 //! the app's [`AbilityFactory`].
-//!
-//! **At the crate root, beside [`gate`](crate::gate) and
-//! [`chain`](crate::chain), because it answers every transport.** It implements
-//! four of `Guard`'s entries — `check_http`, `check_graphql`,
-//! `check_ws_message`, `check_mcp` — and carries the matching four marker
-//! traits, so a transport folder would have named one quarter of it. It sat in
-//! `http/` until 5.2, and the cost was not only the path: `graphql`, `ws` and
-//! `mcp` each had to turn on the `http` feature to reach their own guard, and
-//! the WS entry compiled under `http` rather than `ws`, which is why that
-//! feature forwarded `nest-rs-ws` for a file that is no longer there.
 
 use std::sync::Arc;
 
-use nest_rs_core::{Layer, injectable};
+use nest_rs_core::{Edge, Layer, Posture, UnitContext, injectable};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
-use nest_rs_http::HandlerMetadata;
-use nest_rs_http::{Reflector, async_trait};
-use poem::Request;
+use nest_rs_http::async_trait;
 
-use crate::{AbilityBuilder, AbilityFactory};
-
-// The three in-band entries only. `check_http` *builds* the ability rather than
-// reading one back, so under `http` alone none of this is reachable — which is
-// the shape the crate root makes visible and `http/` hid.
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-use crate::current_ability;
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-use crate::gate::{Refusal, reason, transport};
-
-#[cfg(feature = "graphql")]
-use nest_rs_graphql::GraphqlOperationContext;
-#[cfg(feature = "mcp")]
-use nest_rs_mcp::McpOperationContext;
-#[cfg(feature = "ws")]
-use nest_rs_ws::WsClient;
-#[cfg(feature = "ws")]
-use serde_json::Value;
-
-/// The refusal every in-band entry files: no ambient ability, so nothing
-/// decided what this caller may do.
-///
-/// Through [`warn_denied`](crate::gate::warn_denied) rather than beside it. The
-/// three entries below refuse for one reason on three edges, and a 401 is the
-/// same 401 whichever installed nothing — so the line an operator greps under
-/// incident has to be the same line, with the same machine reason, or a query
-/// that finds a broken GraphQL bridge misses the identical MCP one.
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-fn deny_unscoped(refusal: Refusal<'_>) {
-    crate::gate::warn_denied(Refusal {
-        reason: Some(reason::NO_AMBIENT_ABILITY),
-        ..refusal
-    });
-}
+use crate::gate::{Refusal, reason};
+use crate::{Ability, AbilityBuilder, AbilityFactory};
 
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AuthzAbility>)]`.
-/// `F::Actor` is read from request extensions; its absence on a non-public
-/// route is a `500` (an authn guard must run first). On a `#[public]`
-/// route the guard builds an Ability for the anonymous (visitor) actor —
-/// see the dev's `AbilityFactory` to define visitor rules.
+/// `F::Actor` is the principal the authentication guard attached; its absence
+/// on a non-public route is a `500` (an authn guard must run first). On a
+/// `#[public]` route, and on an in-band endpoint (`/graphql`) whose operations
+/// gate themselves, the guard builds an Ability for the anonymous (visitor)
+/// actor — see the dev's `AbilityFactory` to define visitor rules.
 ///
-/// **`AuthzGuard` is not a framework type.** Apps define a project alias once
-/// in their authz adapter, e.g. `pub type AuthzGuard = AbilityGuard<AuthzAbility>;`
-/// in `features/authz/guard.rs` — at the module root, not under an edge folder,
-/// because this guard answers every transport. Import that alias from your
-/// feature crate,
-/// not from `nest_rs_authz`.
+/// The ability is attached for the rest of the request: on a route, the reads
+/// it scopes run where the route's response mask arms them, and nowhere else.
+///
+/// `AuthzGuard` is not a framework type: an app aliases it once at its authz
+/// module root, `pub type AuthzGuard = AbilityGuard<AuthzAbility>;`.
 #[injectable]
 pub struct AbilityGuard<F: AbilityFactory> {
     #[inject]
@@ -79,57 +35,41 @@ impl<F: AbilityFactory> Layer for AbilityGuard<F> {}
 /// `use_guards_global([..., guard::<AuthzGuard>()])` is the canonical path.
 #[async_trait]
 impl<F: AbilityFactory> Guard for AbilityGuard<F> {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        // Build against a *borrowed* actor: the rules are read from it and never
-        // outlive this block, so cloning the principal (claims, role list, …)
-        // on every request bought nothing. The borrow ends before the insert.
-        // What the credential was granted, published by the authn guard. Absent
-        // ⇒ the principal is not scope-aware and no rule is scope-gated; the
-        // overwhelmingly common case, and the reason this costs a non-OAuth app
-        // nothing.
-        let granted = req
-            .extensions()
-            .get::<GrantedScopes>()
-            .map(GrantedScopes::shared);
-        let built = match req.extensions().get::<F::Actor>() {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        // Absent ⇒ the principal is not scope-aware and no rule is scope-gated.
+        let granted = cx
+            .ambient::<GrantedScopes>()
+            .map(|granted| granted.shared());
+        let built = match cx.ambient::<F::Actor>() {
             Some(actor) => {
                 let mut builder = AbilityBuilder::new().with_granted_scopes(granted);
-                self.factory.define(actor, &mut builder);
+                self.factory.define(&actor, &mut builder);
                 Some(builder.build())
             }
-            // `#[public]`: no authenticated actor, so the factory's *visitor*
-            // branch decides. It grants nothing unless the app overrode
-            // `define_visitor`, which keeps an anonymous read fail-closed by
-            // default while making a genuinely public resource expressible.
-            // The result flows through the same match as the authenticated
-            // branch: a malformed visitor rule denies rather than degrading.
-            None if Reflector::new(req).is_public() => {
-                // The anonymous caller holds no credential, so it carries no
-                // scopes — `Some(empty)`, not `None`. A `define_visitor` rule
-                // gated on a scope is therefore withheld rather than granted to
-                // everyone, which is the fail-closed reading of the pair.
+            // `#[public]` or in band: no authenticated actor, so the factory's
+            // visitor branch decides.
+            None if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) => {
+                // No credential, so no scopes — `Some(empty)`, not `None`: a
+                // scope-gated visitor rule is withheld, never granted to everyone.
                 let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
                 self.factory.define_visitor(&mut builder);
-                // `build_visitor`, not `build`: the ability carries the fact
-                // that no principal backs it, so a transport declaring posture
-                // *per operation* rather than per route (GraphQL) can refuse an
-                // `#[authorize]` operation it would otherwise let a visitor
-                // grant satisfy.
+                // `build_visitor` marks the ability anonymous, so a per-operation
+                // gate (GraphQL) can refuse an `#[authorize]` operation.
                 Some(builder.build_visitor())
             }
             None => None,
         };
         match built {
             // A malformed rule fails construction (fail-closed): deny the
-            // request rather than install an ability whose denial evaporates.
+            // request rather than attach an ability whose denial evaporates.
             Some(Ok(ability)) => {
-                req.extensions_mut().insert(Arc::new(ability));
+                cx.attach(ability);
                 Ok(())
             }
             Some(Err(err)) => {
                 tracing::error!(
                     target: crate::TARGET,
-                    error = %err,
+                    error = %nest_rs_core::error_message(&err),
                     "ability construction failed — denying the request",
                 );
                 Err(Denial::internal("authorization rules are misconfigured"))
@@ -147,52 +87,26 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         }
     }
 
-    #[cfg(feature = "graphql")]
-    async fn check_graphql(&self, _op: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
-        if current_ability().is_none() {
-            deny_unscoped(Refusal::on(transport::GRAPHQL));
-            return Err(Denial::unauthorized(
-                "no ambient ability — authentication did not run on the GraphQL operation",
-            ));
+    /// Refuse a unit no ability reaches: the request that carried it did not
+    /// authenticate, or nothing re-established the ability for it.
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        if cx.ambient::<Ability>().is_some() {
+            return Ok(());
         }
-        Ok(())
-    }
-
-    #[cfg(feature = "ws")]
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        event: &str,
-        _data: &Value,
-    ) -> Result<(), Denial> {
-        if current_ability().is_none() {
-            deny_unscoped(Refusal {
-                event: Some(event),
-                ..Refusal::on(transport::WS)
-            });
-            return Err(Denial::unauthorized(
-                "no ambient ability — WS connection did not authenticate",
-            ));
-        }
-        Ok(())
-    }
-
-    /// The MCP twin of the two above, and it was missing while both markers
-    /// were declared: a guard attested for three edges of four, so a host
-    /// binding it met `McpGuard`'s note telling it to move an *authorization*
-    /// guard onto HTTP. What contained that was the bridge running
-    /// `check_http` in band and [`crate::mcp::authorize`] re-reading the
-    /// ambient ability itself — neither of which is this check, and neither of
-    /// which a `#[use_guards(AuthzGuard)]` on a host is asking for.
-    #[cfg(feature = "mcp")]
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
-        if current_ability().is_none() {
-            deny_unscoped(Refusal::on(transport::MCP));
-            return Err(Denial::unauthorized(
-                "no ambient ability — the MCP operation did not authenticate",
-            ));
-        }
-        Ok(())
+        let edge = cx.edge();
+        crate::gate::warn_denied(Refusal {
+            reason: Some(reason::NO_AMBIENT_ABILITY),
+            event: (edge == Some(Edge::Ws)).then(|| cx.handler().address()),
+            ..Refusal::on(edge.map_or("unit", Edge::as_str))
+        });
+        Err(Denial::unauthorized(match edge {
+            Some(Edge::Graphql) => {
+                "no ambient ability — authentication did not run on the GraphQL operation"
+            }
+            Some(Edge::Ws) => "no ambient ability — WS connection did not authenticate",
+            Some(Edge::Mcp) => "no ambient ability — the MCP operation did not authenticate",
+            _ => "no ambient ability — the unit's request did not authenticate",
+        }))
     }
 
     fn phase(&self) -> GuardPhase {
@@ -204,72 +118,74 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     }
 }
 
-/// `AbilityGuard` checks HTTP: [`check_http`](Guard::check_http) installs the
-/// caller's ability on the request. Declared so a `#[controller]` may bind it —
-/// and so may a `#[gateway]` struct, whose guards run on the upgrade.
-impl<F: AbilityFactory> nest_rs_guards::HttpGuard for AbilityGuard<F> {}
+/// `AbilityGuard` checks HTTP: [`check_http`](Guard::check_http) attaches the
+/// caller's ability. Declared under every transport feature, since each one
+/// runs it on an HTTP request: a `#[controller]` binds it, a `#[gateway]`
+/// struct on its upgrade, `/graphql` and `/mcp` on theirs.
+impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AbilityGuard<F> {}
 
-/// `AbilityGuard` checks GraphQL: [`check_graphql`](Guard::check_graphql) refuses
-/// an operation no bridge installed an ability for. Declared so a resolver may
-/// bind it — the marker is what a `#[use_guards]` on a `#[resolver]` requires.
+/// `AbilityGuard` checks GraphQL: [`check`](Guard::check) refuses an operation
+/// no ability reaches. Declared so a resolver may bind it.
 #[cfg(feature = "graphql")]
-impl<F: AbilityFactory> nest_rs_guards::GraphqlGuard for AbilityGuard<F> {}
+impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_graphql::GraphqlView> for AbilityGuard<F> {}
 
-/// And WebSocket messages, for the same reason: `check_ws_message` refuses a
-/// message whose connection never authenticated.
+/// And WebSocket messages, for the same reason: `check` refuses a message
+/// whose connection never authenticated.
 #[cfg(feature = "ws")]
-impl<F: AbilityFactory> nest_rs_guards::WsGuard for AbilityGuard<F> {}
+impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_ws::WsView> for AbilityGuard<F> {}
 
-/// And MCP operations: [`check_mcp`](Guard::check_mcp) refuses an operation no
-/// bridge installed an ability for. Declared so an `#[mcp]` host — or one of
-/// its `#[tool]` / `#[prompt]` operations — may bind it, which is the same
-/// symmetric `#[use_guards(AuthnGuard, AuthzGuard)]` its HTTP, GraphQL and WS
-/// siblings carry.
+/// And MCP operations: [`check`](Guard::check) refuses an operation no ability
+/// reaches.
 #[cfg(feature = "mcp")]
-impl<F: AbilityFactory> nest_rs_guards::McpGuard for AbilityGuard<F> {}
+impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_mcp::McpView> for AbilityGuard<F> {}
 
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs_http::Public;
+    use nest_rs_core::__private::{
+        HandlerDeclaration, MetaLevels, declare_handler, declare_unit, new_unit_context,
+    };
+    use nest_rs_core::operation_log::Kind;
+    use nest_rs_core::{AmbientValue, Handler, UnitView, with_ambient};
+    use nest_rs_http::__private::{attached, check_request};
+    use nest_rs_http::Request;
 
     use super::*;
-    use crate::{Ability, AbilityBuilder, Action, with_ability};
+    use crate::{AbilityBuilder, Action, with_ability};
 
     mod post {
         use sea_orm::entity::prelude::*;
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "posts")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub published: bool,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
 
-    // A second entity so a rule can carry a *malformed* relation predicate: the
-    // relation `Post` points at `post::Entity`, so naming `comment::Entity` as
-    // the related side trips the `Deny` sentinel `build` refuses.
+    // `Post` points at `post::Entity`, so naming `comment::Entity` as the
+    // related side trips the `Deny` sentinel `build` refuses.
     mod comment {
         use sea_orm::entity::prelude::*;
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "comments")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub post_id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {
+        pub(super) enum Relation {
             #[sea_orm(
                 belongs_to = "super::post::Entity",
                 from = "Column::PostId",
@@ -281,11 +197,17 @@ mod tests {
         impl ActiveModelBehavior for ActiveModel {}
     }
 
+    /// The principal an authentication guard would have attached.
+    #[derive(Clone)]
+    struct Caller;
+
+    impl AmbientValue for Caller {}
+
     struct NoRules;
 
     impl AbilityFactory for NoRules {
-        type Actor = ();
-        fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+        type Actor = Caller;
+        fn define(&self, _actor: &Caller, _builder: &mut AbilityBuilder) {}
     }
 
     fn guard() -> AbilityGuard<NoRules> {
@@ -294,29 +216,45 @@ mod tests {
         }
     }
 
-    fn public_request() -> Request {
-        let mut req = Request::default();
-        req.extensions_mut().insert(Public);
-        req
+    struct Routes;
+
+    static PUBLIC_ROUTE: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: TypeId::of::<Routes>(),
+        host_name: "Routes",
+        method: "list",
+        address: "/posts",
+        posture: Posture::Public,
+        meta: MetaLevels::default,
+    });
+
+    static GATED_ROUTE: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: TypeId::of::<Routes>(),
+        host_name: "Routes",
+        method: "create",
+        address: "/posts",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    /// Run `guard`'s HTTP entry on a request to `route`: the ability it
+    /// attached, or its denial.
+    async fn ability_on<F: AbilityFactory>(
+        guard: &AbilityGuard<F>,
+        route: &'static Handler,
+    ) -> Result<Option<Arc<Ability>>, Denial> {
+        let mut req = Request::builder().finish();
+        check_request(route, [("AbilityGuard", guard as &dyn Guard)], &mut req).await?;
+        Ok(attached::<Ability>(&req))
     }
 
-    /// The ability the guard attached, or `None` when it attached nothing.
-    fn attached(req: &Request) -> Option<Arc<Ability>> {
-        req.extensions().get::<Arc<Ability>>().cloned()
-    }
-
-    // The fail-closed floor of `define_visitor`: a factory that does not
-    // override it must leave the visitor with nothing granted, so opening a
-    // route with `#[public]` can never widen what the app declared.
     #[tokio::test]
     async fn the_default_visitor_branch_grants_nothing() {
-        let mut req = public_request();
-        guard()
-            .check_http(&mut req)
+        let ability = ability_on(&guard(), &PUBLIC_ROUTE)
             .await
-            .expect("a public route admits the anonymous caller");
-
-        let ability = attached(&req).expect("the guard attaches an ability");
+            .expect("a public route admits the anonymous caller")
+            .expect("the guard attaches an ability");
         assert!(
             !ability.can_class(Action::Read, TypeId::of::<post::Entity>()),
             "the default `define_visitor` must grant nothing",
@@ -328,8 +266,8 @@ mod tests {
         struct PublicReads;
 
         impl AbilityFactory for PublicReads {
-            type Actor = ();
-            fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+            type Actor = Caller;
+            fn define(&self, _actor: &Caller, _builder: &mut AbilityBuilder) {}
             fn define_visitor(&self, ability: &mut AbilityBuilder) {
                 ability
                     .can(Action::Read, post::Entity)
@@ -337,15 +275,13 @@ mod tests {
             }
         }
 
-        let mut req = public_request();
-        AbilityGuard {
+        let guard = AbilityGuard {
             factory: Arc::new(PublicReads),
-        }
-        .check_http(&mut req)
-        .await
-        .expect("a public route admits the anonymous caller");
-
-        let ability = attached(&req).expect("the guard attaches an ability");
+        };
+        let ability = ability_on(&guard, &PUBLIC_ROUTE)
+            .await
+            .expect("a public route admits the anonymous caller")
+            .expect("the guard attaches an ability");
         assert!(
             ability.can_class(Action::Read, TypeId::of::<post::Entity>()),
             "the visitor branch's grant must reach the request",
@@ -359,31 +295,31 @@ mod tests {
 
     #[tokio::test]
     async fn an_authenticated_ability_is_not_a_visitors() {
-        let mut req = Request::default();
-        req.extensions_mut().insert(());
-        guard()
-            .check_http(&mut req)
+        let ability = with_ambient(Arc::new(Caller), ability_on(&guard(), &GATED_ROUTE))
             .await
-            .expect("an authenticated actor builds an ability");
-
+            .expect("an authenticated actor builds an ability")
+            .expect("the guard attaches an ability");
         assert!(
-            !attached(&req)
-                .expect("the guard attaches an ability")
-                .is_visitor(),
+            !ability.is_visitor(),
             "an actor-backed ability is never the visitor's",
         );
     }
 
-    // The visitor branch flows through the same fail-closed match as the
-    // authenticated one: a malformed rule denies with a 500 instead of
-    // degrading to a deny-all ability that reads as an ordinary empty result.
+    #[tokio::test]
+    async fn a_gated_route_with_no_actor_is_a_wiring_500() {
+        let Err(denial) = ability_on(&guard(), &GATED_ROUTE).await else {
+            panic!("no authentication guard ran, so the route is refused");
+        };
+        assert_eq!(denial.http_status(), 500);
+    }
+
     #[tokio::test]
     async fn a_malformed_visitor_rule_denies_instead_of_degrading() {
         struct MalformedVisitor;
 
         impl AbilityFactory for MalformedVisitor {
-            type Actor = ();
-            fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+            type Actor = Caller;
+            fn define(&self, _actor: &Caller, _builder: &mut AbilityBuilder) {}
             fn define_visitor(&self, ability: &mut AbilityBuilder) {
                 ability.can(Action::Read, comment::Entity).when(|p| {
                     p.related::<comment::Entity, _>(comment::Relation::Post, |c| {
@@ -393,45 +329,53 @@ mod tests {
             }
         }
 
-        let mut req = public_request();
-        let denial = AbilityGuard {
+        let mut req = Request::builder().finish();
+        let guard = AbilityGuard {
             factory: Arc::new(MalformedVisitor),
-        }
-        .check_http(&mut req)
+        };
+        let denial = check_request(
+            &PUBLIC_ROUTE,
+            [("AbilityGuard", &guard as &dyn Guard)],
+            &mut req,
+        )
         .await
         .expect_err("a malformed visitor rule must deny");
-
         assert_eq!(denial.http_status(), 500);
         assert!(
-            attached(&req).is_none(),
+            attached::<Ability>(&req).is_none(),
             "a denied request must carry no ability at all",
         );
     }
 
-    // The WS-auth fail-secure carry-over: a gateway module that imported
-    // `AuthzHttpModule` instead of `AuthzWsModule` boots (the upgrade guards
-    // resolve) but registers no `SocketContext`, so no ability is re-seeded
-    // around message handlers. The per-message guard must then deny — not
-    // silently pass an unauthenticated message through.
+    struct Gateway;
+
+    static PING: Handler = declare_handler(HandlerDeclaration {
+        unit: declare_unit("nest-rs-ws", "nest_rs::ws", Kind::Server, "ws.message"),
+        host: TypeId::of::<Gateway>(),
+        host_name: "Gateway",
+        method: "ping",
+        address: "ping",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    struct Message;
+
+    impl UnitView for Message {}
+
+    // A gateway importing `AuthzHttpModule` instead of `AuthzWsModule` seeds no
+    // ability around messages: the per-message guard must deny.
     #[tokio::test]
     async fn ws_message_without_ambient_ability_is_denied() {
         let logs = nest_rs_testing::LogCapture::install();
-        let client = WsClient::for_test();
+        let mut view = Message;
+        let mut cx = new_unit_context(&PING, &mut view, None, None);
         let denial = guard()
-            .check_ws_message(&client, "ping", &Value::Null)
+            .check(&mut cx)
             .await
             .expect_err("missing ambient ability must deny");
         assert_eq!(denial.http_status(), 401);
 
-        // The 401 says the caller was refused; only the event says *why*, and
-        // which transport asked. A data-context that stopped installing the
-        // ability would produce this same 401 on every message, so the line an
-        // operator greps under incident is the one that has to carry the reason.
-        //
-        // It is the shared denial line, not one of this guard's own: the three
-        // in-band entries refuse for one reason, and a query that finds a
-        // broken WS data context has to find the identical GraphQL and MCP
-        // conditions too.
         let event = logs.expect_one("nest_rs::authz", "authorization denied");
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("transport").as_deref(), Some("ws"));
@@ -446,12 +390,13 @@ mod tests {
 
     #[tokio::test]
     async fn ws_message_with_ambient_ability_passes() {
-        let client = WsClient::for_test();
         let ability: Arc<Ability> =
             Arc::new(AbilityBuilder::new().build().expect("empty ability builds"));
         with_ability(ability, async {
+            let mut view = Message;
+            let mut cx = new_unit_context(&PING, &mut view, None, None);
             guard()
-                .check_ws_message(&client, "ping", &Value::Null)
+                .check(&mut cx)
                 .await
                 .expect("seeded ability admits the message");
         })

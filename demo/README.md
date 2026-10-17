@@ -30,7 +30,7 @@ list every recipe.
 | Command | What it does |
 |---------|--------------|
 | `nestrs run dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `nestrs run dev api` |
-| `nestrs run start <app>` | Run an app in release mode, e.g. `nestrs run start api` |
+| `nestrs run start <app>` | Run an app in release mode, under the production profile, e.g. `nestrs run start api`. The assistant's resource URL is a loopback one, accepted only in development: `NESTRS_ENV=development nestrs run start assistant` |
 | `nestrs run build <app>` | Build one app in release (default `api`), e.g. `nestrs run build live` |
 | `nestrs run build --all` | Build release binaries for every app in the workspace |
 | `nestrs run test unit` | Run unit + integration + doctests (no DB) |
@@ -59,11 +59,12 @@ other. Full map: [nestrs.dev/publish](https://nestrs.dev/publish/).
 | `api` | REST + GraphQL + OpenAPI, persisted & authorized | 3002 |
 | `assistant` | Model Context Protocol server | 3003 |
 | `live` | Real-time WebSocket gateway | 3004 |
-| `worker` | Background jobs & scheduling (headless) | — |
+| `worker` | Background jobs & scheduling (health only over HTTP) | 3005 |
 
-`api` and `auth` need Postgres; `worker` needs Redis — run `nestrs run db up`
-once first (or `nestrs run db reset` to also load demo users). `assistant` and
-`live` need neither.
+Every app opens Postgres — run `nestrs run db up` once first (or
+`nestrs run db reset` to also load demo users). `api`, `assistant` and `worker`
+also open Redis, and their audio routes and jobs read and write the object
+store.
 
 The richest reference is `api`. Read it before inventing a second pattern —
 copy it to start a new feature.
@@ -140,7 +141,7 @@ behind a Service, or a job that runs to completion before them:
 ```bash
 helm install demo charts/demo \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="redis://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379"
 ```
 
 Set `apps.<name>.host` rather than the cross-app URLs: the issuer, the audience,
@@ -148,6 +149,7 @@ the RFC 9728 resource identifier and the MCP `Host` allowlist are each some
 app's public origin, and the chart derives them from the hostnames.
 
 The queue worker scales on queue depth through [KEDA](https://keda.sh), shipped
-disabled — its processors are I/O-bound and it runs one job at a time per
-`#[process]` method, so CPU stays flat however deep the backlog gets. The
-chart's [README](charts/demo/README.md) carries that trade-off and the rest.
+disabled — its processors are I/O-bound and each `#[process]` method runs at
+most its `concurrency` jobs at once per replica, so CPU stays flat however deep
+the backlog gets. The chart's [README](charts/demo/README.md) carries that
+trade-off and the rest.

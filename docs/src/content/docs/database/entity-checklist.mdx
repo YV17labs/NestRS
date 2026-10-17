@@ -1,7 +1,6 @@
 ---
 title: Entity checklist
 description: "Every decision one #[expose]d entity asks of you, one line each, each pointing at the page that explains it."
-tier: basics
 sidebar:
   order: 3
 ---
@@ -54,10 +53,9 @@ and the difference matters when you are deciding what to test:
   and deliberately emits nothing for a hidden `Uuid`, timestamp, `Decimal` or
   enum without `Default`, so `wire_to_model` fails closed. Give those an explicit
   [`#[wire_default(…)]`](/security/authorization/response-masking/).
-- **A half-wired soft delete fails the boot**, naming the entity and the
-  service — in one direction. The entity flag without
-  `CrudService::soft_delete_column` is caught; the service opting in without the
-  entity flag registers nothing and is not. See [CRUD](/database/crud/).
+- **A unique column on a `soft_delete` table** answers `409` for a value every
+  read calls free, when its index is a full one: index it `WHERE deleted_at IS
+  NULL`. See [CRUD](/database/crud/#soft-delete-and-timestamps).
 
 ## The two you carry yourself
 
@@ -66,11 +64,13 @@ opt-in, so a column added by a later migration never leaks by omission — the
 failure direction is the safe one. The remaining risk is the reverse: an
 `#[expose]` written by habit on a column that should not travel.
 
-**Does any ability rule predicate on a column you did not expose?** Masking
+**Does a rule a push depends on read a column you did not expose?** Masking
 rebuilds the row from the wire body and fills unexposed columns with a
-placeholder, so such a rule is evaluated against the placeholder rather than the
-value and masks the wrong fields. Nothing catches this — see
-[Response masking](/security/authorization/response-masking/).
+placeholder, which the mask never decides a rule on: on a reply it trusts the
+`Repo` read, and on a subscription item or a `masked_reply` value it refuses the
+row. A feed whose policy reads a hidden column delivers nothing; expose that
+column, read-only — see
+[What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see).
 
 ## Going further
 

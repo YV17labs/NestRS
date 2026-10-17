@@ -2,10 +2,13 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
+use nest_rs_seaorm::SeaOrmConfig;
+use sea_orm::{
+    ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement,
+};
 use sea_orm_migration::MigratorTrait;
 
 use crate::env::load_project_env;
@@ -14,9 +17,11 @@ use crate::env::load_project_env;
 /// when this guard drops**. Seed `db.connection()` into a `TestApp` and the
 /// real connection short-circuits `SeaOrmDatabaseModule`'s `for_root` factory.
 ///
-/// Each run uses a unique `nest_rs_e2e_*` name; orphans from crashed runs are
-/// reaped (age-gated) on the next [`create`](Self::create). Admin URL comes
-/// from `<PREFIX>_SEAORM__URL`.
+/// Every connection it opens is the app's pool's
+/// ([`SeaOrmConfig::connect_options`]): TLS verified or off, as the URL says,
+/// and a URL asking for TLS without verification refused.
+///
+/// Orphans from crashed runs are reaped on the next [`create`](Self::create).
 pub struct EphemeralDatabase {
     admin_url: String,
     name: String,
@@ -26,31 +31,28 @@ pub struct EphemeralDatabase {
 
 impl EphemeralDatabase {
     /// Create and migrate a fresh database, taking the admin URL from
-    /// `<PREFIX>_SEAORM__URL` (loading the project `.env` first). The usual
-    /// entry point; errors if the URL is unset.
+    /// `<PREFIX>_SEAORM__URL`; errors if it is unset.
     pub async fn create<M: MigratorTrait>() -> Result<Self> {
-        // The admin URL is read before any `App` boots, so load `.env` first.
         load_project_env();
-        let var = nest_rs_config::var_name("seaorm", "URL");
-        let admin_url = std::env::var(&var).map_err(|_| {
+        // Through the reader, so `<PREFIX>_SEAORM__URL_FILE` answers too.
+        let env = nest_rs_config::ConfigService::for_namespace("seaorm");
+        let admin_url = env.get("URL")?.ok_or_else(|| {
             anyhow!(
-                "{var} is unset and no `.env` was found above the test's working \
-                 directory — point it at a reachable Postgres for e2e"
+                "{} is unset in the environment and the `.env` cascade — point it at a \
+                 reachable Postgres for e2e",
+                env.spellings("URL"),
             )
         })?;
         Self::create_with::<M>(&admin_url).await
     }
 
-    /// Create and migrate a fresh database against an explicit admin URL, for
-    /// callers that resolve the connection string themselves rather than via
-    /// the environment.
+    /// Create and migrate a fresh database against an explicit admin URL.
     pub async fn create_with<M: MigratorTrait>(admin_url: &str) -> Result<Self> {
-        let admin = Database::connect(admin_url).await?;
+        let admin = Database::connect(options(admin_url)?).await?;
         let name = unique_name();
 
-        // `CREATE DATABASE` reads `template1`; concurrent CREATEs fail with
-        // "source database template1 is being accessed by other users", so
-        // serialise creation (cheap — migration runs unlocked).
+        // Concurrent CREATEs fail with "source database template1 is being
+        // accessed by other users".
         {
             let _guard = CREATE_LOCK.lock().await;
             reap_stale(&admin).await;
@@ -59,8 +61,10 @@ impl EphemeralDatabase {
                 .await?;
         }
 
-        let url = swap_database(admin_url, &name);
-        let connection = Database::connect(&url).await?;
+        let url = crate::url_on(admin_url, &name);
+        let mut options = options(&url)?;
+        options.statement_timeout(STATEMENT_BOUND);
+        let connection = Database::connect(options).await?;
         M::up(&connection, None).await?;
 
         Ok(Self {
@@ -71,14 +75,13 @@ impl EphemeralDatabase {
         })
     }
 
-    /// The live connection to the ephemeral database — seed this into a
-    /// [`TestApp`] to short-circuit `SeaOrmDatabaseModule`'s `for_root` factory.
+    /// The live connection to the ephemeral database, to seed into a
+    /// [`TestApp`](crate::TestApp).
     pub fn connection(&self) -> Arc<DatabaseConnection> {
         self.connection.clone()
     }
 
-    /// The full connection URL of the ephemeral database (admin URL with the
-    /// database name swapped in), for callers wiring their own pool.
+    /// The full connection URL of the ephemeral database.
     pub fn url(&self) -> &str {
         &self.url
     }
@@ -86,12 +89,14 @@ impl EphemeralDatabase {
 
 impl Drop for EphemeralDatabase {
     fn drop(&mut self) {
-        // `DROP DATABASE` is async but `drop` is sync — run on a dedicated
-        // current-thread runtime, blocking until done, so teardown works
-        // whatever the test runtime flavour. WITH (FORCE) terminates any
-        // pool connection still held elsewhere.
+        // A dedicated runtime on its own thread, so teardown works whatever the
+        // test runtime's flavour.
         let admin_url = std::mem::take(&mut self.admin_url);
         let name = std::mem::take(&mut self.name);
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "teardown is best-effort: the next create's reaper drops what a failed one leaves"
+        )]
         let _ = std::thread::spawn(move || {
             let Ok(rt) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -100,7 +105,9 @@ impl Drop for EphemeralDatabase {
                 return;
             };
             rt.block_on(async move {
-                if let Ok(admin) = Database::connect(&admin_url).await {
+                if let Ok(options) = options(&admin_url)
+                    && let Ok(admin) = Database::connect(options).await
+                {
                     let _ = admin
                         .execute_unprepared(&format!(
                             "DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"
@@ -115,20 +122,16 @@ impl Drop for EphemeralDatabase {
 
 static CREATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Five minutes — past this a [`PREFIX`]`*` database is an orphan, not in use
-/// by a concurrent sibling.
+/// How long a statement on the fixture's pool runs before Postgres cancels it:
+/// the app pool's default.
+const STATEMENT_BOUND: Duration = Duration::from_secs(15);
+
+/// Past this a [`PREFIX`]`*` database is an orphan, not a concurrent sibling's.
 const STALE_AFTER_NANOS: u128 = 5 * 60 * 1_000_000_000;
 
 /// The namespace every ephemeral database is created under, and the one the
-/// reaper sweeps.
-///
-/// A constant because two sites *interpret* it and must agree: `unique_name`
-/// writes it, `reap_stale` matches it, and `created_nanos` reads a timestamp
-/// out of what follows it. Spelled apart, a rename that looks cosmetic
-/// silently either strands every orphan forever or — if the new spelling holds
-/// a different number of `_` — makes the reaper misread the timestamp,
-/// classify every database as stale, and `DROP` a concurrently running
-/// sibling's live database.
+/// reaper sweeps: the reaper reads the creation time after it, so a mismatch
+/// drops a concurrent sibling's live database.
 const PREFIX: &str = "nest_rs_e2e";
 
 async fn reap_stale(admin: &DatabaseConnection) {
@@ -144,12 +147,15 @@ async fn reap_stale(admin: &DatabaseConnection) {
         let Ok(name) = row.try_get::<String>("", "datname") else {
             continue;
         };
-        // An unexpected shape is an older (unknown) format, treated as stale.
         let stale = match created_nanos(&name) {
             Some(created) => now.saturating_sub(created) > STALE_AFTER_NANOS,
             None => true,
         };
         if stale {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "the reaper is best-effort: an orphan it cannot drop is retried by the next run"
+            )]
             let _ = admin
                 .execute_unprepared(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
                 .await;
@@ -157,9 +163,7 @@ async fn reap_stale(admin: &DatabaseConnection) {
     }
 }
 
-/// The `<nanos>` of a [`unique_name`], read by stripping the prefix rather than
-/// by counting `_` across it — the count was derived by hand and a rename would
-/// have silently shifted it.
+/// The `<nanos>` of a [`unique_name`].
 fn created_nanos(name: &str) -> Option<u128> {
     name.strip_prefix(PREFIX)?
         .split('_')
@@ -169,7 +173,6 @@ fn created_nanos(name: &str) -> Option<u128> {
 }
 
 fn now_nanos() -> u128 {
-    // A clock before the epoch is not a thing a test fixture should panic over.
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -177,57 +180,23 @@ fn now_nanos() -> u128 {
 }
 
 fn unique_name() -> String {
-    // Process-wide counter for uniqueness even when two callers read the same
-    // coarse-resolution timestamp; reaper still recovers the time from nanos.
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{PREFIX}_{}_{}_{}", std::process::id(), now_nanos(), seq)
 }
 
-/// The admin URL with its database name replaced.
-///
-/// RFC 3986 §3.2: the authority is introduced by `//` and terminated by the
-/// next `/`, `?` or `#` — so the path starts at the *first* slash after the
-/// scheme, never the last. Splitting on the last one dropped the host of any
-/// path-less URL (`postgres://host:5432` yielded `postgres://<db>`), surfacing
-/// much later as a connection error naming a URL the developer never wrote.
-fn swap_database(url: &str, db: &str) -> String {
-    let (base, query) = match url.split_once('?') {
-        Some((b, q)) => (b, Some(q)),
-        None => (url, None),
-    };
-    let authority_at = base.find("//").map_or(0, |i| i + 2);
-    let prefix = match base[authority_at..].find('/') {
-        Some(offset) => &base[..authority_at + offset],
-        None => base,
-    };
-    match query {
-        Some(q) => format!("{prefix}/{db}?{q}"),
-        None => format!("{prefix}/{db}"),
+/// `url`'s connect options, as the app's pool opens its connections.
+fn options(url: &str) -> Result<ConnectOptions> {
+    Ok(SeaOrmConfig {
+        url: url.to_owned(),
+        ..SeaOrmConfig::default()
     }
+    .connect_options()?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn swapping_the_database_keeps_the_authority() {
-        assert_eq!(
-            swap_database("postgres://u:p@host:5432/postgres", "tmp"),
-            "postgres://u:p@host:5432/tmp",
-        );
-        // The regression: no path at all. The last `/` is the second one of
-        // `//`, so the host used to vanish.
-        assert_eq!(
-            swap_database("postgres://host:5432", "tmp"),
-            "postgres://host:5432/tmp",
-        );
-        assert_eq!(
-            swap_database("postgres://host/postgres?sslmode=require", "tmp"),
-            "postgres://host/tmp?sslmode=require",
-        );
-    }
 
     #[test]
     fn a_name_round_trips_through_the_reaper() {

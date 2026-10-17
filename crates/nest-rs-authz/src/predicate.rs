@@ -1,7 +1,14 @@
 //! Single condition AST shared by the query pre-filter
 //! ([`Predicate::to_condition`] → SQL `WHERE`) and the response check
-//! ([`Predicate::matches`] → in-memory). Sharing one AST keeps the rows a
-//! query returns and the rows the response check accepts from drifting apart.
+//! ([`Predicate::matches`] → in-memory).
+//!
+//! The in-memory side answers only what the row in hand shows, as the SQL
+//! `to_condition` renders would: an `eq` or `ne` against `NULL` is `IS NULL` or
+//! `IS NOT NULL`, as sea-orm renders it, and any other comparison with `NULL`
+//! is `UNKNOWN`, SQL's third truth value. What the row cannot show at all — a
+//! relation, a column the wire never carried, two value types only the
+//! database compares — is left undecided, and the mask says what that means
+//! for the row.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -11,9 +18,7 @@ use sea_orm::{
     ColumnTrait, EntityTrait, Identity, ModelTrait, RelationDef, RelationTrait, RelationType, Value,
 };
 
-/// Scalar comparison operator for [`Predicate::Cmp`]. Equality already has its
-/// own variant ([`Predicate::Eq`]); this covers the remaining ordered/inequality
-/// comparisons. Deliberately minimal — extend on demand, not speculatively.
+/// Scalar comparison operator for [`Predicate::Cmp`]; equality is [`Predicate::Eq`].
 #[derive(Clone, Copy, Debug)]
 pub enum CmpOp {
     Ne,
@@ -29,17 +34,9 @@ pub enum Predicate<E: EntityTrait> {
     /// Unconditional match — an unrestricted grant/denial over every row.
     #[default]
     Always,
-    /// Malformation sentinel: renders an always-false SQL condition (`1 = 0`)
-    /// and matches no row in memory. Produced when [`PredicateBuilder::related`]
-    /// rejects an invalid relation predicate (composite key or a relation not
-    /// pointing at `R`). A rule carrying this sentinel fails
-    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build) with a
-    /// [`MalformedRuleError`](crate::MalformedRuleError) — the misconfiguration
-    /// surfaces loudly at ability construction. This matters most on the
-    /// *denial* side: a `cannot(...)` lowering to `1 = 0` would combine as
-    /// `grant AND NOT(1 = 0)`, i.e. fail-*open*; failing construction closes
-    /// that hole. On the grant side the same sentinel is fail-closed (deny-all),
-    /// but a silent developer error is still worth surfacing.
+    /// Malformation sentinel: renders `1 = 0` and matches no row in memory.
+    /// Produced when [`PredicateBuilder::related`] rejects a relation; a rule
+    /// carrying it fails [`AbilityBuilder::build`](crate::AbilityBuilder::build).
     Deny,
     /// Column equals a bound value — `col = value`.
     Eq(E::Column, Value),
@@ -67,14 +64,10 @@ pub enum Predicate<E: EntityTrait> {
 /// A condition that scopes `E` by a sub-condition on a *related* entity `R`,
 /// reached through a typed SeaORM relation. Type-erased over `R`: the
 /// sub-condition is pre-lowered to SQL (over `R`'s columns) at rule-definition
-/// time, and the join metadata comes from the [`RelationDef`]. Nothing here is
-/// generic over `R`, so it lives inside the monomorphic [`Predicate<E>`] without
-/// a type parameter.
+/// time, and the join metadata comes from the [`RelationDef`].
 ///
-/// The in-memory interpreter cannot traverse the relation without loading the
-/// parent, so [`Predicate::matches`] defers to SQL for relational row
-/// visibility (returns `true`); the by-id / create paths re-check against the
-/// same lowered condition in SQL instead (one source of truth).
+/// The in-memory check cannot traverse the relation without loading the
+/// parent, so it leaves the rule to SQL.
 #[derive(Clone)]
 pub struct RelatedPredicate {
     /// `E -> R` relation: yields the from-column (on `E`), the to-column (on
@@ -92,11 +85,8 @@ impl RelatedPredicate {
     /// widened past the join.
     fn to_condition(&self) -> Condition {
         let def = &self.relation;
-        // v1 supports single-column keys only. A composite key is rejected in
-        // `PredicateBuilder::related` (which returns `Predicate::Deny` rather
-        // than building a `Related`), so this path is unreachable in practice;
-        // it stays as fail-closed defense-in-depth — deny every row rather than
-        // panic the request.
+        // Unreachable: `PredicateBuilder::related` rejects a composite key. Fail
+        // closed rather than panic the request.
         let (Some(from_col), Some(to_col)) = (unary_iden(&def.from_col), unary_iden(&def.to_col))
         else {
             tracing::error!(
@@ -188,59 +178,148 @@ impl<E: EntityTrait> Predicate<E> {
         }
     }
 
-    /// Reads each column with [`ModelTrait::get`], which returns the same
-    /// [`Value`] the SQL side compares against — so the in-memory check and
-    /// the SQL filter cannot disagree.
+    /// Whether SQL's filter certainly admits this row, read off its own columns.
+    ///
+    /// Each column is read with [`ModelTrait::get`], which returns the same
+    /// [`Value`] the SQL side compares against. A relation, or a comparison
+    /// between two value types only the database can compare, is not decided
+    /// here and reads `false`.
     pub fn matches(&self, model: &E::Model) -> bool {
+        self.decide(model, &nothing_invented) == Truth::True
+    }
+
+    /// What this predicate is on `model`, as SQL would compute it from the row's
+    /// columns. `invented` names the columns whose value the row was given
+    /// rather than read, so a rule on one is undecided.
+    pub(crate) fn decide(&self, model: &E::Model, invented: &dyn Fn(E::Column) -> bool) -> Truth {
         match self {
-            Predicate::Always => true,
+            Predicate::Always => Truth::True,
             // Fail-closed: a denied predicate accepts no row.
-            Predicate::Deny => false,
-            Predicate::Eq(col, value) => &model.get(*col) == value,
-            Predicate::In(col, values) => {
-                let actual = model.get(*col);
-                values.iter().any(|v| v == &actual)
+            Predicate::Deny => Truth::False,
+            Predicate::Related(_) => Truth::Undecidable,
+            Predicate::Eq(col, _)
+            | Predicate::In(col, _)
+            | Predicate::Cmp(col, _, _)
+            | Predicate::IsNull(col, _)
+                if invented(*col) =>
+            {
+                Truth::Undecidable
             }
-            Predicate::Cmp(col, op, value) => {
-                let actual = model.get(*col);
-                match op {
-                    // `Value: PartialEq`, so inequality needs no ordering.
-                    CmpOp::Ne => &actual != value,
-                    // Ordered comparisons fail closed when the two values are
-                    // not orderable (mismatched variants, or a NULL column):
-                    // an undecidable comparison never reports a match.
-                    _ => match value_ordering(&actual, value) {
-                        Some(ord) => match op {
-                            CmpOp::Lt => ord == Ordering::Less,
-                            CmpOp::Lte => ord != Ordering::Greater,
-                            CmpOp::Gt => ord == Ordering::Greater,
-                            CmpOp::Gte => ord != Ordering::Less,
-                            CmpOp::Ne => unreachable!("Ne handled above"),
-                        },
-                        None => false,
-                    },
-                }
+            // sea-orm renders `eq` and `ne` against a `NULL` value as `IS NULL`
+            // and `IS NOT NULL` (`ColumnTrait::eq`), never as `= NULL`.
+            Predicate::Eq(col, value) if !value.is_some() => Truth::of(!model.get(*col).is_some()),
+            Predicate::Cmp(col, CmpOp::Ne, value) if !value.is_some() => {
+                Truth::of(model.get(*col).is_some())
             }
-            Predicate::IsNull(col, want_null) => model.get(*col).is_some() != *want_null,
-            Predicate::And(parts) => parts.iter().all(|p| p.matches(model)),
-            Predicate::Or(parts) => parts.iter().any(|p| p.matches(model)),
-            Predicate::Not(inner) => !inner.matches(model),
-            // Row visibility for a relational rule is decided in SQL (system 2):
-            // the list filter already excluded out-of-scope rows, and the
-            // by-id/create paths re-check against the same lowered condition.
-            // The in-memory check cannot traverse the relation without loading
-            // the parent (it would have to be async and would load rows on the
-            // fly), so it defers rather than guessing. Field masking still runs.
-            Predicate::Related(_) => true,
+            Predicate::Eq(col, value) => compare(&model.get(*col), value, |a, b| Some(a == b)),
+            Predicate::In(col, values) => one_of(&model.get(*col), values),
+            Predicate::Cmp(col, op, value) => compare(&model.get(*col), value, |a, b| match op {
+                // `Value: PartialEq`, so inequality needs no ordering.
+                CmpOp::Ne => Some(a != b),
+                CmpOp::Lt => value_ordering(a, b).map(Ordering::is_lt),
+                CmpOp::Lte => value_ordering(a, b).map(Ordering::is_le),
+                CmpOp::Gt => value_ordering(a, b).map(Ordering::is_gt),
+                CmpOp::Gte => value_ordering(a, b).map(Ordering::is_ge),
+            }),
+            Predicate::IsNull(col, want_null) => Truth::of(model.get(*col).is_some() != *want_null),
+            Predicate::And(parts) => Truth::all(parts.iter().map(|p| p.decide(model, invented))),
+            Predicate::Or(parts) => Truth::any(parts.iter().map(|p| p.decide(model, invented))),
+            Predicate::Not(inner) => inner.decide(model, invented).not(),
         }
     }
 }
 
-/// Order two [`Value`]s of the same variant. `Value` derives `PartialEq` but not
-/// `PartialOrd`, so the ordered `Cmp` operators need this. Returns `None` for
-/// `NULL` operands or mismatched variants — the in-memory `Cmp` arm treats that
-/// as "no match" (fail closed). Covers the scalar and temporal column types a
-/// row-level rule realistically orders; equality/`Ne` does not route through here.
+/// What a predicate is on one row, as far as the row shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Truth {
+    /// SQL's `TRUE`: the filter admits the row.
+    True,
+    /// SQL's `FALSE`.
+    False,
+    /// SQL's `UNKNOWN`, from a comparison with `NULL`: the filter admits the
+    /// row neither under it nor under its negation.
+    Unknown,
+    /// The row cannot show it: a relation, an invented column, or two value
+    /// types only the database compares.
+    Undecidable,
+}
+
+impl Truth {
+    fn of(holds: bool) -> Self {
+        if holds { Truth::True } else { Truth::False }
+    }
+
+    fn not(self) -> Self {
+        match self {
+            Truth::True => Truth::False,
+            Truth::False => Truth::True,
+            other => other,
+        }
+    }
+
+    /// SQL's `AND`: one `FALSE` decides it whatever the others are.
+    fn all(parts: impl Iterator<Item = Truth>) -> Self {
+        let mut out = Truth::True;
+        for part in parts {
+            match part {
+                Truth::False => return Truth::False,
+                Truth::Undecidable => out = Truth::Undecidable,
+                Truth::Unknown if out == Truth::True => out = Truth::Unknown,
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// SQL's `OR`: one `TRUE` decides it whatever the others are.
+    fn any(parts: impl Iterator<Item = Truth>) -> Self {
+        let mut out = Truth::False;
+        for part in parts {
+            match part {
+                Truth::True => return Truth::True,
+                Truth::Undecidable => out = Truth::Undecidable,
+                Truth::Unknown if out == Truth::False => out = Truth::Unknown,
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// The `invented` of a row read whole: every column holds what was read.
+pub(crate) fn nothing_invented<C>(_column: C) -> bool {
+    false
+}
+
+/// SQL's verdict on `actual <op> bound` for a bound the SQL side binds as a
+/// value: `UNKNOWN` with a `NULL` operand, and undecided across two value
+/// types, or where `test` cannot order the two.
+fn compare(
+    actual: &Value,
+    bound: &Value,
+    test: impl FnOnce(&Value, &Value) -> Option<bool>,
+) -> Truth {
+    if !actual.is_some() || !bound.is_some() {
+        return Truth::Unknown;
+    }
+    if std::mem::discriminant(actual) != std::mem::discriminant(bound) {
+        return Truth::Undecidable;
+    }
+    test(actual, bound).map_or(Truth::Undecidable, Truth::of)
+}
+
+/// SQL's `actual IN (values)`: an empty list matches nothing, and a list that
+/// misses the value but holds a `NULL` is `UNKNOWN`.
+fn one_of(actual: &Value, values: &[Value]) -> Truth {
+    Truth::any(
+        values
+            .iter()
+            .map(|value| compare(actual, value, |a, b| Some(a == b))),
+    )
+}
+
+/// Order two [`Value`]s of the same variant (`Value` is not `PartialOrd`);
+/// `None` for a variant it cannot order, which leaves the comparison undecided.
 fn value_ordering(a: &Value, b: &Value) -> Option<Ordering> {
     use Value::*;
     match (a, b) {
@@ -347,7 +426,45 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     /// (a variant of `E`'s SeaORM `Relation` enum). The closure builds the
     /// sub-condition using `R`'s own typed columns.
     ///
-    /// ```ignore
+    /// ```
+    /// # use nest_rs_authz::{AbilityBuilder, Action};
+    /// # use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
+    /// # mod conversation {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[sea_orm(table_name = "conversations")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub org_id: i32,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// # mod message {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[sea_orm(table_name = "messages")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub conversation_id: i32,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {
+    /// #         #[sea_orm(
+    /// #             belongs_to = "super::conversation::Entity",
+    /// #             from = "Column::ConversationId",
+    /// #             to = "super::conversation::Column::Id"
+    /// #         )]
+    /// #         Conversation,
+    /// #     }
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// # fn main() -> Result<(), nest_rs_authz::MalformedRuleError> {
+    /// # let org_id = 7;
+    /// # let mut ab = AbilityBuilder::new();
     /// // `message` has no `org_id`; its tenant is the parent conversation's.
     /// ab.can(Action::Read, message::Entity).when(|p| {
     ///     p.related::<conversation::Entity, _>(
@@ -355,19 +472,22 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     ///         |c| c.eq(conversation::Column::OrgId, org_id),
     ///     )
     /// });
+    /// # let ability = ab.build()?;
+    ///
+    /// let sql = message::Entity::find()
+    ///     .filter(ability.condition_for::<message::Entity>(Action::Read))
+    ///     .build(DatabaseBackend::Postgres)
+    ///     .to_string();
+    /// assert!(sql.ends_with(
+    ///     r#"WHERE "messages"."conversation_id" IN (SELECT "conversations"."id" FROM "conversations" WHERE "conversations"."org_id" = 7)"#
+    /// ));
+    /// # Ok(())
+    /// # }
     /// ```
     ///
-    /// Two runtime checks close the gap that type erasure opens. `related()`
-    /// runs inside `AbilityFactory::define` — i.e. per authenticated request —
-    /// so a violation never panics the request: each check logs an `error!`
-    /// (target `nest_rs::authz`) and returns [`Predicate::Deny`]. A rule that
-    /// carries that sentinel then fails
-    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build), so the
-    /// misconfiguration is rejected loudly rather than silently going fail-open
-    /// on the denial side. Both cases are a developer misconfiguration:
-    /// - the relation must point at `R` (its `to_tbl` must be `R`'s table);
-    /// - the relation must be single-column (composite keys are unsupported in
-    ///   v1).
+    /// A relation not pointing at `R`, or a composite key, logs an `error!` and
+    /// returns [`Predicate::Deny`], which fails
+    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build).
     pub fn related<R, F>(&self, relation: E::Relation, build: F) -> Predicate<E>
     where
         R: EntityTrait,
@@ -412,7 +532,7 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "widgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub org_id: i32,
@@ -422,7 +542,7 @@ mod tests {
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -445,22 +565,20 @@ mod tests {
         }
     }
 
-    // A parent/child pair for relational tests: `child` belongs_to `parent`,
-    // and the tenant key (`org_id`) lives only on the parent — exactly the
-    // shape the relational filter exists for.
+    // `child` belongs_to `parent`; the tenant key lives only on the parent.
     mod parent {
         use sea_orm::entity::prelude::*;
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "parents")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub org_id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -470,14 +588,14 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "children")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub parent_id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {
+        pub(super) enum Relation {
             #[sea_orm(
                 belongs_to = "super::parent::Entity",
                 from = "Column::ParentId",
@@ -506,10 +624,6 @@ mod tests {
     fn b() -> PredicateBuilder<widget::Entity> {
         PredicateBuilder::new()
     }
-
-    // The SQL pre-filter and the in-memory check must agree row-by-row —
-    // tests pin both branches per variant on the same models so a future
-    // refactor of one can't silently diverge from the other.
 
     #[test]
     fn always_matches_every_row_in_memory_and_renders_unconstrained_sql() {
@@ -657,11 +771,8 @@ mod tests {
 
     #[test]
     fn ordered_cmp_on_a_null_column_fails_closed() {
-        // `tag IS NULL`, so the ordered comparison is undecidable — the
-        // in-memory check must report no match, never silently admit the row.
         let p = b().lt(widget::Column::Tag, "m");
         assert!(!p.matches(&tagged(1, 7, "a", None)));
-        // A present value still orders normally.
         assert!(p.matches(&tagged(1, 7, "a", Some("abc"))));
         assert!(!p.matches(&tagged(1, 7, "a", Some("zzz"))));
     }
@@ -718,21 +829,193 @@ mod tests {
     }
 
     #[test]
-    fn related_defers_row_visibility_to_sql_in_memory() {
-        // The in-memory check cannot traverse the relation, so it returns true
-        // and lets the SQL filter (and the by-id/create re-check) decide.
+    fn a_relation_is_left_to_sql() {
         let p = PredicateBuilder::<child::Entity>::new()
             .related::<parent::Entity, _>(child::Relation::Parent, |c| {
                 c.eq(parent::Column::OrgId, 7)
             });
-        assert!(p.matches(&child::Model {
+        let row = child::Model {
             id: 1,
-            parent_id: 99
-        }));
-        assert!(p.matches(&child::Model {
-            id: 2,
-            parent_id: 1
-        }));
+            parent_id: 99,
+        };
+        assert_eq!(p.decide(&row, &nothing_invented), Truth::Undecidable);
+        assert!(!p.matches(&row), "a row shows nothing of its parent");
+    }
+
+    #[test]
+    fn a_rule_on_an_invented_column_is_undecided() {
+        let invented = |col: widget::Column| matches!(col, widget::Column::Tag);
+        let row = tagged(1, 7, "a", Some("x"));
+        for p in [
+            b().eq(widget::Column::Tag, "x"),
+            b().is_in(widget::Column::Tag, ["x"]),
+            b().ne(widget::Column::Tag, "y"),
+            b().gte(widget::Column::Tag, "a"),
+            b().is_not_null(widget::Column::Tag),
+        ] {
+            assert_eq!(p.decide(&row, &invented), Truth::Undecidable);
+            assert_eq!(
+                p.decide(&row, &nothing_invented),
+                Truth::True,
+                "read, it is decided"
+            );
+        }
+        assert_eq!(
+            b().eq(widget::Column::OrgId, 7).decide(&row, &invented),
+            Truth::True,
+            "a column the row was not given stays decided",
+        );
+    }
+
+    #[test]
+    fn an_undecided_part_decides_only_what_the_others_leave_open() {
+        let undecided = || PredicateBuilder::<widget::Entity>::new().is_null(widget::Column::Tag);
+        let invented = |col: widget::Column| matches!(col, widget::Column::Tag);
+        let row = model(1, 7, "a");
+        let decide = |p: Predicate<widget::Entity>| p.decide(&row, &invented);
+
+        assert_eq!(decide(undecided()), Truth::Undecidable);
+        assert_eq!(
+            decide(b().all([b().eq(widget::Column::OrgId, 8), undecided()])),
+            Truth::False,
+        );
+        assert_eq!(
+            decide(b().all([b().eq(widget::Column::OrgId, 7), undecided()])),
+            Truth::Undecidable,
+        );
+        assert_eq!(
+            decide(b().any([b().eq(widget::Column::OrgId, 7), undecided()])),
+            Truth::True,
+        );
+        assert_eq!(
+            decide(b().any([b().eq(widget::Column::OrgId, 8), undecided()])),
+            Truth::Undecidable,
+        );
+        assert_eq!(decide(b().not(undecided())), Truth::Undecidable);
+    }
+
+    /// SQL's `tag <> 'x'` and `NOT (tag < 'm')` are `UNKNOWN` on a `NULL` tag,
+    /// and its filter admits neither row.
+    #[test]
+    fn a_comparison_with_null_is_unknown_and_so_is_its_negation() {
+        let row = tagged(1, 7, "a", None);
+        for p in [
+            b().ne(widget::Column::Tag, "x"),
+            b().not(b().lt(widget::Column::Tag, "m")),
+            b().not(b().eq(widget::Column::Tag, "x")),
+        ] {
+            assert_eq!(p.decide(&row, &nothing_invented), Truth::Unknown);
+            assert!(!p.matches(&row));
+        }
+        assert_eq!(
+            b().any([
+                b().ne(widget::Column::Tag, "x"),
+                b().eq(widget::Column::OrgId, 7)
+            ])
+            .decide(&row, &nothing_invented),
+            Truth::True,
+        );
+    }
+
+    /// sea-orm renders `eq(col, None)` as `IS NULL` and `ne(col, None)` as
+    /// `IS NOT NULL`, which the row decides, negated or not.
+    #[test]
+    fn an_eq_or_ne_against_null_is_a_nullness_test() {
+        let eq = || b().eq(widget::Column::Tag, None::<String>);
+        let ne = || b().ne(widget::Column::Tag, None::<String>);
+        assert!(sql(&eq()).contains(r#""tag" IS NULL"#), "{}", sql(&eq()));
+        assert!(
+            sql(&ne()).contains(r#""tag" IS NOT NULL"#),
+            "{}",
+            sql(&ne())
+        );
+
+        let untagged = tagged(1, 7, "a", None);
+        let labelled = tagged(2, 7, "a", Some("x"));
+        let decide =
+            |p: Predicate<widget::Entity>, row: &widget::Model| p.decide(row, &nothing_invented);
+        assert_eq!(decide(eq(), &untagged), Truth::True);
+        assert_eq!(decide(eq(), &labelled), Truth::False);
+        assert_eq!(decide(ne(), &untagged), Truth::False);
+        assert_eq!(decide(ne(), &labelled), Truth::True);
+        assert_eq!(decide(b().not(eq()), &labelled), Truth::True);
+        assert_eq!(decide(b().not(ne()), &untagged), Truth::True);
+        assert!(eq().matches(&untagged) && ne().matches(&labelled));
+    }
+
+    /// Only `eq` and `ne` turn a `NULL` value into a nullness test; an ordering
+    /// against one compares with `NULL`.
+    #[test]
+    fn an_ordering_against_null_stays_unknown() {
+        let row = tagged(1, 7, "a", Some("x"));
+        assert!(sql(&b().lt(widget::Column::Tag, None::<String>)).contains(r#""tag" < NULL"#));
+        for p in [
+            b().lt(widget::Column::Tag, None::<String>),
+            b().not(b().gte(widget::Column::Tag, None::<String>)),
+        ] {
+            assert_eq!(p.decide(&row, &nothing_invented), Truth::Unknown);
+        }
+    }
+
+    /// A row cannot show a relation, nor its negation; its own columns still
+    /// decide what they can around one.
+    #[test]
+    fn a_relation_is_undecided_and_the_rows_columns_decide_around_it() {
+        let p = || PredicateBuilder::<child::Entity>::new();
+        let in_org = || {
+            p().related::<parent::Entity, _>(child::Relation::Parent, |c| {
+                c.eq(parent::Column::OrgId, 7)
+            })
+        };
+        let row = child::Model {
+            id: 1,
+            parent_id: 99,
+        };
+        let decide = |p: Predicate<child::Entity>| p.decide(&row, &nothing_invented);
+        assert_eq!(decide(in_org()), Truth::Undecidable);
+        assert_eq!(decide(p().not(in_org())), Truth::Undecidable);
+        assert_eq!(
+            decide(p().all([p().eq(child::Column::Id, 2), in_org()])),
+            Truth::False
+        );
+        assert_eq!(
+            decide(p().any([p().eq(child::Column::Id, 1), in_org()])),
+            Truth::True
+        );
+    }
+
+    #[test]
+    fn a_list_holding_null_misses_as_unknown() {
+        let p = b().is_in(widget::Column::Tag, [Some("a"), None]);
+        assert_eq!(
+            p.decide(&tagged(1, 7, "a", Some("a")), &nothing_invented),
+            Truth::True
+        );
+        assert_eq!(
+            p.decide(&tagged(1, 7, "a", Some("b")), &nothing_invented),
+            Truth::Unknown
+        );
+        assert_eq!(
+            b().not(p)
+                .decide(&tagged(1, 7, "a", Some("b")), &nothing_invented),
+            Truth::Unknown,
+        );
+    }
+
+    #[test]
+    fn two_value_types_only_the_database_compares_are_undecided() {
+        let row = model(1, 7, "a");
+        assert_eq!(
+            b().eq(widget::Column::OrgId, 7_i64)
+                .decide(&row, &nothing_invented),
+            Truth::Undecidable,
+        );
+        assert_eq!(
+            b().not(b().eq(widget::Column::OrgId, 8_i64))
+                .decide(&row, &nothing_invented),
+            Truth::Undecidable,
+            "negated, a guess would admit the row",
+        );
     }
 
     #[test]
@@ -763,9 +1046,7 @@ mod tests {
 
     #[test]
     fn related_rejects_a_relation_not_pointing_at_r() {
-        // The relation targets `parent`, but R is declared as `child` — the
-        // mismatch type erasure would hide must be rejected fail-closed
-        // (deny-all), not panic the per-request `AbilityFactory::define`.
+        // The relation targets `parent`, but `R` is declared as `child`.
         let p = PredicateBuilder::<child::Entity>::new()
             .related::<child::Entity, _>(child::Relation::Parent, |c| c.eq(child::Column::Id, 1));
         assert!(matches!(p, Predicate::Deny));

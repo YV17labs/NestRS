@@ -1,0 +1,5 @@
+error: #[meta] declares one `Limit` here, and this is a second — a read takes the first value of a type, so this one would be read by nothing. Keep one; a method's own value already overrides its host's
+  --> tests/integration/diagnostics/events/meta_of_one_type_twice.rs:18:1
+   |
+18 | #[meta(Limit(20))]
+   | ^^^^^^^^^^^^^^^^^^

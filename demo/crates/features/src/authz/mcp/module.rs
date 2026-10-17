@@ -1,6 +1,5 @@
 use nest_rs::core::module;
-use nest_rs::mcp::{McpOperationGuard, McpToolContext};
-use nest_rs::seaorm::mcp::McpDataContext;
+use nest_rs::mcp::McpOperationGuard;
 
 use super::bridge::AuthzMcpBridge;
 use crate::authz::AuthzModule;
@@ -9,7 +8,6 @@ use crate::authz::AuthzModule;
     imports = [AuthzModule],
     providers = [
         AuthzMcpBridge as dyn McpOperationGuard,
-        McpDataContext as dyn McpToolContext,
     ],
 )]
 pub struct AuthzMcpModule;

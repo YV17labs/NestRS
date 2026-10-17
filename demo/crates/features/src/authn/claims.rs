@@ -1,4 +1,4 @@
-use nest_rs::resource::wire_enum;
+use nest_rs::seaorm::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -30,6 +30,8 @@ impl Claims {
         self.roles.contains(&Role::Admin)
     }
 }
+
+impl nest_rs::core::AmbientValue for Claims {}
 
 impl nest_rs::authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {

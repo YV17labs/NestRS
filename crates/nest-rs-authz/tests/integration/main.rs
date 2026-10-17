@@ -1,14 +1,17 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md).
-//!
-//! Transport-binding tests are gated on the same feature that exposes them in
-//! `src/`: run with `cargo test -p nest-rs-authz --features full` to exercise
-//! every bridge in this crate.
+//! Integration tests mirroring `src/`; run with `--features full` to exercise
+//! every transport binding.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod ability;
 mod builder;
 
-// `src/guard.rs` is transport-agnostic, so its mirror is here and not under an
-// edge; the files inside carry the per-entry feature gates.
+// `src/guard.rs` is transport-agnostic, so its mirror sits here, not under an edge.
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
 
@@ -24,27 +27,94 @@ mod mcp;
 #[cfg(feature = "ws")]
 mod ws;
 
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod wire_mask;
+
+/// An org, for a post's relational rules to reach.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+pub(crate) mod org {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[sea_orm(table_name = "orgs")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(crate) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// A post through the real `#[expose]`: it belongs to an org, keeps a
+/// server-only `deleted` flag, and exposes an `archived_at` a wire row may
+/// leave out — three things a mask rebuilt from the wire cannot see.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+pub(crate) mod post {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Post")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[sea_orm(table_name = "posts")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key)]
+        #[expose]
+        pub id: i32,
+        #[expose]
+        pub org_id: i32,
+        #[expose]
+        pub title: String,
+        #[expose]
+        pub archived_at: Option<i64>,
+        pub deleted: bool,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(crate) enum Relation {
+        #[sea_orm(
+            belongs_to = "super::org::Entity",
+            from = "Column::OrgId",
+            to = "super::org::Column::Id"
+        )]
+        Org,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    /// A post of org `id`: a rule only the relation decides.
+    pub(crate) fn in_org(
+        p: &nest_rs_authz::PredicateBuilder<Entity>,
+        id: i32,
+    ) -> nest_rs_authz::Predicate<Entity> {
+        p.related::<super::org::Entity, _>(Relation::Org, |o| o.eq(super::org::Column::Id, id))
+    }
+
+    /// The wire row of post `id` in org `org_id`, as a reply or a push carries
+    /// it when its type leaves `archived_at` out.
+    pub(crate) fn wire(id: i32, org_id: i32) -> serde_json::Value {
+        serde_json::json!({ "id": id, "org_id": org_id, "title": format!("post {id}") })
+    }
+}
+
 /// A parent/child pair whose one job is to be the *wrong* relation: `child`
 /// belongs_to `parent`, so a `related` call naming any other entity is the
 /// mismatch that trips the fail-closed `Deny` sentinel.
-///
-/// At the suite root for the reason [`widget`] is: two modules assert on that
-/// sentinel — the builder's own rejection and the `warn` `AbilityGuard` emits —
-/// and with a copy each they could drift into testing different mismatches
-/// while both reporting the rule holds.
 pub(crate) mod parent {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "parents")]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub org_id: i32,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(crate) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -54,14 +124,14 @@ pub(crate) mod child {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "children")]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub parent_id: i32,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {
+    pub(crate) enum Relation {
         #[sea_orm(
             belongs_to = "super::parent::Entity",
             from = "Column::ParentId",
@@ -75,12 +145,8 @@ pub(crate) mod child {
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`, with a
 /// server-only column (`secret`) the wire DTOs never carry —
-/// [`WireModelDefaults`](nest_rs_resource::WireModelDefaults) reconstructs it so
+/// [`WireModelDefaults`](nest_rs_authz::WireModelDefaults) reconstructs it so
 /// policy can read it, and the exposed-key strainer drops it again.
-///
-/// At the suite root because the `mcp` and `ws` mirrors both mask against it: one
-/// `widget` per test binary, so the two suites cannot drift into masking
-/// different shapes and reporting the same conclusion.
 #[cfg(any(feature = "mcp", feature = "ws"))]
 pub(crate) mod widget {
     use sea_orm::entity::prelude::*;
@@ -88,7 +154,7 @@ pub(crate) mod widget {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
     #[sea_orm(table_name = "widgets")]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub name: String,
@@ -96,13 +162,13 @@ pub(crate) mod widget {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(crate) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
 
 #[cfg(any(feature = "mcp", feature = "ws"))]
-impl nest_rs_resource::WireModelDefaults for widget::Entity {
+impl nest_rs_authz::WireModelDefaults for widget::Entity {
     fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
         map.entry("secret")
             .or_insert(serde_json::Value::String(String::new()));
@@ -110,5 +176,9 @@ impl nest_rs_resource::WireModelDefaults for widget::Entity {
 
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "name"])
+    }
+
+    fn is_placeholdered(column: widget::Column) -> bool {
+        matches!(column, widget::Column::Secret)
     }
 }

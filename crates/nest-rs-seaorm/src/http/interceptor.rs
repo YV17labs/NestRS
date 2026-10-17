@@ -1,78 +1,44 @@
-//! [`DbContext`] — request boundary that installs the ambient executor.
-//!
-//! Auto-installed by [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule), it wraps the
-//! routing tree (band `DATA_CONTEXT`, the innermost transport wrap), so it
-//! covers controller routes and self-mounted surfaces alike. The guard pool
-//! runs *inside* it (in the per-route shaper, post-routing). The executor a
-//! mutating method gets is **lazy**: `BEGIN` is deferred to the first
-//! data-layer touch, so a request a guard denies — or one that never queries
-//! — costs no transaction at all (no pool connection, no Postgres transaction
-//! slot; an unauthenticated POST flood cannot amplify into `BEGIN`/`ROLLBACK`
-//! round-trips). Guards and handlers resolve the same ambient
-//! [`Executor`](crate::Executor) via [`Repo`](crate::Repo). Safe methods
-//! (GET/HEAD/OPTIONS/TRACE) run on the pool; mutating methods run in a
-//! transaction committed on 2xx/3xx and rolled back otherwise — a failed
-//! mutation never half-persists, and a response tagged
-//! [`MappedError`](nest_rs_http::MappedError) (an error a filter mapped)
-//! rolls back even when its status reads as success.
-//!
-//! The safe/mutating split is the HTTP **method**, which is all this layer
-//! knows. A transport that can prove more about the operation steps back out
-//! of the transaction itself through
-//! [`Executor::non_transactional`](nest_rs_database::Executor::non_transactional):
-//! every GraphQL operation is a POST, so the `/graphql` endpoint routes a batch
-//! whose every operation parses as a `query` onto the pool for its duration
-//! (DATA-S5). The lazy transaction installed here is then never opened and
-//! finalizes as a no-op.
-//!
-//! ### Serialization conflict observability
-//!
-//! This interceptor does **not** retry — it cannot: a poem `Request` is
-//! consumed by `next.run` and is not replayable at this layer. When
-//! [`SeaOrmConfig::observe_serialization_conflicts`] is on, a commit that fails
-//! with a SQLSTATE the [`retry`](crate::retry) module recognizes is merely
-//! *tagged* — logged at `warn` as a serialization conflict for observability —
-//! then the request still fails closed (`500`). To actually retry a conflicting
-//! transaction, wrap the work in the [`retry_on_conflict`] primitive at the
-//! service's programmatic transaction boundary (where the body *is* replayable);
-//! the knob here only controls whether the conflict is surfaced distinctly in
-//! the logs.
-//!
-//! [`retry_on_conflict`]: crate::retry::retry_on_conflict
+//! Safe or mutating is read off the HTTP method alone; `/graphql` steps a
+//! query-only batch back onto the pool through `Executor::non_transactional`.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
+use nest_rs_http::RequestDeadline;
 use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use sea_orm::DatabaseConnection;
 
-use crate::SeaOrmConfig;
-use crate::executor::{
-    CommitError, Executor, FinalizeOutcome, LazyTransaction, with_request_executor,
-};
+use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
-/// The request interceptor that installs the ambient [`Executor`] — the pool for
-/// a safe method, a **lazily opened** per-request transaction (committed on
-/// 2xx/3xx, rolled back otherwise; never opened when nothing touches the data
-/// layer) for a mutating one. Auto-mounted at band −10 by importing
+/// The request interceptor that runs each HTTP request as one unit of work
+/// through the bound [`UnitOfWork`]: the pool for a safe method, a **lazily
+/// opened** transaction (committed on 2xx/3xx, rolled back otherwise; never
+/// opened when nothing touches the data layer) for a mutating one.
+/// Auto-mounted at band −10 by importing
 /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule).
+///
+/// It takes the request timeout over from the edge: the handler alone is cut
+/// at the deadline, answered `503` with `Retry-After` since nothing it ran
+/// committed, and a commit is never cut — one past the deadline answers the
+/// handler's status, and one that never answers is a `500`.
 #[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
-    db: Arc<DatabaseConnection>,
-    #[inject]
-    config: Arc<SeaOrmConfig>,
+    unit: Arc<dyn UnitOfWork>,
 }
 
 impl DbContext {
-    /// Construct the interceptor from a pool and config — the honest constructor
-    /// tests use in place of container resolution.
+    /// The interceptor over SeaORM's unit of work on `db`, configured by
+    /// `config`.
     pub fn new(db: Arc<DatabaseConnection>, config: Arc<SeaOrmConfig>) -> Self {
-        Self { db, config }
+        Self {
+            unit: Arc::new(SeaOrmUnitOfWork::new(db, &config)),
+        }
     }
 }
 
@@ -81,66 +47,44 @@ impl Layer for DbContext {}
 #[async_trait]
 impl Interceptor for DbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        if is_safe(req.method()) {
-            return with_request_executor(Executor::Pool((*self.db).clone()), next.run(req)).await;
-        }
-
-        // Lazy: `BEGIN` runs on the first data-layer touch, inside the
-        // executor itself. A guard denial (or a handler that never queries)
-        // leaves the cell empty and this request costs no transaction.
-        let lazy = Arc::new(LazyTransaction::new((*self.db).clone(), "http"));
-
-        let result = with_request_executor(Executor::Lazy(lazy.clone()), next.run(req)).await;
-
-        let success = should_commit(&result);
-        match lazy.finalize(success).await {
-            FinalizeOutcome::NoTransaction
-            | FinalizeOutcome::Committed
-            | FinalizeOutcome::RolledBack => result,
-            // The escape invariant (logged by `finalize`): a handle outliving
-            // the handler cannot be committed, so an otherwise-successful
-            // response is silent data loss — fail it loud.
-            FinalizeOutcome::Escaped => {
-                if success {
-                    Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
-                } else {
-                    result
-                }
-            }
-            FinalizeOutcome::CommitFailed(err) => Err(commit_failure(
-                err,
-                self.config.observe_serialization_conflicts,
-            )),
-            // A statement failed and the handler answered 2xx anyway, so the
-            // transaction is aborted and nothing it wrote can land. Same
-            // reading as the escape above: a success that lost its writes is
-            // worse than a 500.
-            FinalizeOutcome::Poisoned { .. } => {
-                Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
-            }
-        }
+        let policy = if is_safe(req.method()) {
+            TransactionPolicy::Pool
+        } else {
+            TransactionPolicy::PerUnit
+        };
+        let spec = UnitSpec::new(nest_rs_http::unit::REQUEST, ExecutorScope::Request, policy);
+        let Some(deadline) = req.extensions().get::<RequestDeadline>().cloned() else {
+            return run_unit(
+                Some(&self.unit),
+                spec,
+                next.run(req),
+                should_commit,
+                unhonoured,
+            )
+            .await;
+        };
+        deadline.hand_to_unit(self.unit.settle_net());
+        let at = deadline.at();
+        let cut = async move {
+            tokio::time::timeout_at(at, next.run(req))
+                .await
+                .unwrap_or_else(|_| Ok(deadline.timed_out().into()))
+        };
+        run_unit(
+            Some(&self.unit),
+            spec.with_deadline(at),
+            cut,
+            should_commit,
+            unhonoured,
+        )
+        .await
     }
 }
 
-/// Classify a commit-time failure. When `observe_conflicts` is on, a typed
-/// SQLSTATE matched by [`CommitError::is_retryable_conflict`] is tagged at
-/// `warn` for observability — the interceptor does **not** retry (the handler
-/// body is not replayable here; use `retry::retry_on_conflict` at a
-/// programmatic transaction boundary); anything else logs at `error`. Either
-/// way the response fails closed.
-fn commit_failure(err: CommitError, observe_conflicts: bool) -> Error {
-    if observe_conflicts && err.is_retryable_conflict() {
-        tracing::warn!(
-            target: crate::TARGET,
-            error = %err,
-            hint = "not retried here (handler is not replayable from the interceptor); \
-                    use `retry::retry_on_conflict` at a programmatic transaction boundary",
-            "serialization conflict at commit",
-        );
-    } else {
-        tracing::error!(target: crate::TARGET, error = %err, "transaction commit failed");
-    }
-    Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)
+/// A success the unit could not honour reports writes that were never
+/// committed, or may have been: the driver logged why.
+fn unhonoured(_: nest_rs_database::Unhonoured) -> Result<Response> {
+    Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
 fn is_safe(method: &Method) -> bool {
@@ -150,11 +94,8 @@ fn is_safe(method: &Method) -> bool {
     )
 }
 
-/// 2xx and 3xx commit; any other status or an `Err` rolls back. A response
-/// tagged [`MappedError`](nest_rs_http::MappedError) also rolls back whatever
-/// its status: it was produced by a route-site `Filter` / `ExceptionFilter`
-/// mapping a handler **error** — the mapping shapes the client answer, it
-/// does not bless the failed handler's writes.
+/// 2xx and 3xx commit, unless tagged [`MappedError`](nest_rs_http::MappedError):
+/// a filter mapping a handler error does not bless its writes.
 fn should_commit(result: &Result<Response>) -> bool {
     matches!(
         result,
@@ -219,11 +160,167 @@ mod tests {
 
     #[test]
     fn a_mapped_error_rolls_back_even_with_a_success_status() {
-        // A route-site Filter / ExceptionFilter that maps a handler error to
-        // a 2xx tags the response `MappedError` — the handler failed, so its
-        // writes must not persist behind the mapped status.
         let mut resp = StatusCode::OK.into_response();
         resp.extensions_mut().insert(nest_rs_http::MappedError);
         assert!(!should_commit(&Ok(resp)));
+    }
+
+    use std::time::Duration;
+
+    use nest_rs_database::{Executor, OpenUnit, Settlement, Unhonoured};
+    use nest_rs_http::RequestDeadline;
+    use nest_rs_interceptors::InterceptorExt;
+    use poem::Endpoint;
+    use poem::endpoint::make;
+    use tokio::time::Instant;
+
+    /// A unit of work settling on a task of its own after `takes`, answering
+    /// `answer`.
+    struct Settling {
+        takes: Duration,
+        answer: Settlement,
+    }
+
+    struct Nowhere;
+
+    impl Executor for Nowhere {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    impl UnitOfWork for Settling {
+        fn open(&self, _: &UnitSpec) -> std::result::Result<Box<dyn OpenUnit>, Unhonoured> {
+            Ok(Box::new(Self {
+                takes: self.takes,
+                answer: self.answer,
+            }))
+        }
+
+        fn settle_net(&self) -> Duration {
+            Duration::from_secs(16)
+        }
+    }
+
+    impl OpenUnit for Settling {
+        fn executor(&self) -> Arc<dyn Executor> {
+            Arc::new(Nowhere)
+        }
+
+        fn settle(
+            self: Box<Self>,
+            _ok: bool,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Settlement> + Send>> {
+            let Self { takes, answer } = *self;
+            let settling = tokio::spawn(async move {
+                tokio::time::sleep(takes).await;
+                answer
+            });
+            Box::pin(async move { settling.await.unwrap_or(Settlement::Settled) })
+        }
+    }
+
+    impl Settling {
+        fn interceptor(takes: Duration, answer: Settlement) -> DbContext {
+            DbContext {
+                unit: Arc::new(Self { takes, answer }),
+            }
+        }
+    }
+
+    /// A `POST` whose edge set its deadline one second from now.
+    fn posted_under_a_deadline() -> (Request, RequestDeadline) {
+        let deadline = RequestDeadline::new(
+            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        let mut req = Request::builder().method(Method::POST).finish();
+        req.extensions_mut().insert(deadline.clone());
+        (req, deadline)
+    }
+
+    fn answering_after(after: Duration) -> impl Endpoint<Output = Response> {
+        make(move |_req: Request| async move {
+            tokio::time::sleep(after).await;
+            StatusCode::CREATED.into_response()
+        })
+    }
+
+    fn status_of(result: Result<Response>) -> StatusCode {
+        match result {
+            Ok(resp) => resp.status(),
+            Err(err) => err.into_response().status(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_commit_past_the_deadline_answers_the_handlers_status() {
+        let started = Instant::now();
+        let (req, deadline) = posted_under_a_deadline();
+        let ctx = Settling::interceptor(Duration::from_secs(2), Settlement::Settled);
+        let answered = answering_after(Duration::from_millis(500))
+            .interceptor(ctx)
+            .call(req)
+            .await;
+        assert_eq!(
+            status_of(answered),
+            StatusCode::CREATED,
+            "never a 503 for a write that landed"
+        );
+        assert_eq!(started.elapsed(), Duration::from_millis(2500));
+        assert_eq!(
+            deadline.unit_net(),
+            Some(Duration::from_secs(16)),
+            "the edge waits the unit's net past the deadline"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_body_past_the_deadline_is_cut_and_answered_503_with_a_retry_after() {
+        let started = Instant::now();
+        let (req, _) = posted_under_a_deadline();
+        let ctx = Settling::interceptor(Duration::from_secs(5), Settlement::Settled);
+        let answered = answering_after(Duration::from_secs(30))
+            .interceptor(ctx)
+            .call(req)
+            .await
+            .expect("a cut body is an answer");
+        assert_eq!(answered.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            answered
+                .headers()
+                .get(poem::http::header::RETRY_AFTER)
+                .map(|v| v.as_bytes()),
+            Some(b"1".as_slice()),
+            "honest now: nothing it ran committed"
+        );
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(1),
+            "answered at the deadline, its rollback left to the driver"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_commit_in_doubt_answers_500_without_a_retry_after() {
+        let (req, _) = posted_under_a_deadline();
+        let ctx = Settling::interceptor(
+            Duration::from_millis(100),
+            Settlement::Unhonoured(Unhonoured::IN_DOUBT),
+        );
+        let answered = answering_after(Duration::from_millis(100))
+            .interceptor(ctx)
+            .call(req)
+            .await;
+        let resp = match answered {
+            Ok(resp) => resp,
+            Err(err) => err.into_response(),
+        };
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            resp.headers()
+                .get(poem::http::header::RETRY_AFTER)
+                .is_none()
+        );
     }
 }

@@ -17,14 +17,73 @@ back on you.
 
 | Layer | Catches | Does not catch |
 |-------|---------|----------------|
-| [`AuthnGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens | Stolen-but-unexpired tokens, replay before expiry, key compromise |
-| [`OAuthClient`](/security/authentication/oauth2/) | CSRF (state cookie), code-interception (PKCE), SSRF on token exchange (no redirects) | Phishing the provider, malicious provider, callback URL takeover |
+| [`AuthnGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens; against a JWK Set, a token naming an algorithm its key was not published for (`HS*`, `none`, another key type) | Stolen-but-unexpired tokens, replay before expiry, key compromise; a key an issuer withdrew from its JWK Set, until the set is refreshed — within about an hour while the issuer answers, an hour more while it does not |
+| [`OAuthClient`](/security/authentication/oauth2/) | CSRF (state cookie), a cookie planted from a sibling subdomain (`__Host-`), code-interception (PKCE), SSRF on token exchange (no redirects) | Phishing the provider, malicious provider, callback URL takeover |
 | [`hash_password` + `burn_verify`](/security/authentication/password/) | Timing-based account enumeration via login | Slow GPU farms cracking dumped hashes, weak passwords, password reuse |
 | [`AbilityGuard`](/security/authorization/) | Missing or malformed `Ability` (500), unauthenticated GraphQL/WS (403) | Logic bugs in your `AbilityFactory` itself |
 | [`Repo::scoped`](/security/authorization/row-level-filtering/) | Scope leakage on every read — handler cannot forget the filter | Custom queries that ignore `Scope<E, A>` |
 | [`Bind<A, S>`](/security/authorization/by-id-binding/) | Cross-tenant by-id reads (403) and missing rows (404) | Handlers that fetch by id outside `Bind` and skip `access` |
 | [`Authorize` shaper](/security/authorization/response-masking/) | Leak of unexposed columns, field-restricted grants | A handler returning a hand-built `serde_json::Value` shape that does not match `Model` (500) |
 | [`ThrottlerGuard`](/rate-limiting/) | Brute-force login, naïve enumeration scrapes | DDoS at network or HTTP layer (use a CDN / edge throttler) |
+| [Browser-origin check](/http/configuration/#cors) | Cross-site WebSocket hijacking and a cross-site call to MCP: a page on another origin opening a gateway or GraphQL socket, or posting to `/mcp`, under its visitor's credentials — `403`, CORS on or off; once CORS is set, any origin it does not list, the server's own included | A client that is no browser, which sends no `Origin` and authenticates like any other; DNS rebinding, which `<PREFIX>_MCP__ALLOWED_HOSTS` covers for MCP |
+| [Connection deadlines](/http/configuration/#connection-deadlines) | A client holding connections it does not use: a head sent a byte at a time, a TLS handshake never finished, an idle socket, a peer that stops reading | Many clients each staying inside the deadlines (the connection cap holds them back; a CDN sheds them) |
+| [MCP session cap](/mcp/configuration/#sessions) | A client opening MCP sessions in a loop, each holding a worker until it idles out — `503` with `Retry-After` past the cap, an idle session closed after its timeout | Many callers sharing the cap, which is per endpoint and not per caller (a throttler holds one caller back) |
+
+## What the framework dials
+
+Every URL a framework client dials follows one plaintext rule: plaintext
+where the protocol's own URL declares it, refused where the governing
+standard requires TLS. The rule is held where the client is built, so a
+call site cannot open a door the configuration kept shut.
+
+| Client | Where its URL comes from | Plaintext |
+|--------|--------------------------|-----------|
+| Postgres pool and `EphemeralDatabase` | `<PREFIX>_SEAORM__URL` | only with `sslmode=disable` written in the URL; any other mode short of `verify-full` is refused |
+| Redis, all three topologies | `<PREFIX>_REDIS__URL` | only a `redis://` URL; a `#insecure` fragment is refused |
+| Storage | `<PREFIX>_STORAGE__ENDPOINT` | only with `<PREFIX>_STORAGE__ALLOW_HTTP=true`, which a declared development or test profile alone turns on |
+| JWK Set | `<PREFIX>_AUTHN__JWKS_URI` | refused when the module is built, and by the client on every fetch |
+| OAuth token and userinfo endpoints | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL`, `USERINFO_URL` | refused when the client is built (RFC 6749 §3.2), and by the client on every call |
+| `OAuthClient::fetch` | a provider's code, at run time | refused before the call (RFC 6750 §5.3), and by the client whatever path reaches it |
+| OAuth authorize and redirect URLs | `<PREFIX>_OAUTH__CLIENT__AUTH_URL`, `REDIRECT_URL`; followed by the browser, never dialled | the authorize URL never (RFC 6749 §3.1); the redirect only on a loopback address (RFC 8252 §7.3) |
+| GitHub and Google sign-in | the providers' own constants | none: every endpoint is `https` |
+| OTLP exporter | `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | an `http://` endpoint declares it, as OTLP/HTTP allows; TLS material set beside it is refused |
+
+A provider package building a URL at run time inherits the same rule: the
+OAuth client speaks `https` alone, so a URL that slipped past every check
+still never leaves the process in plaintext with a token on it.
+
+## Every client the framework opens verifies TLS
+
+An encrypted connection the framework opens checks the server's
+certificate, every time: it chains to an authority the system's store
+holds, or to the ones a `TLS_CA_CERT` setting names in place of them,
+and it names the host dialled. No setting, URL parameter or code path
+turns the check off — the framework's lints refuse the libraries' own
+switches in its code — and each client below has a test that dials a
+server whose certificate a private authority signed and sees it refused
+before any request, login or credential crosses.
+
+| Client | Trusts | Private authority |
+|--------|--------|-------------------|
+| Postgres pool, `connect_from_env`, `EphemeralDatabase` | the system's store, `verify-full` by default | the file `sslrootcert` names in `<PREFIX>_SEAORM__URL` |
+| Redis, all three topologies | the system's store, for a `rediss://` URL | `<PREFIX>_REDIS__TLS_CA_CERT` |
+| Storage | the system's store, for an `https://` endpoint | `<PREFIX>_STORAGE__TLS_CA_CERT` |
+| JWK Set | the system's store | `<PREFIX>_AUTHN__TLS_CA_CERT` |
+| OAuth client | the system's store | `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` |
+| GitHub and Google sign-in | the system's store | none: both serve publicly trusted certificates |
+| OTLP exporter | the system's store, for an `https://` endpoint | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` |
+
+A client certificate goes to Postgres through the URL's `sslcert` and
+`sslkey`, which sqlx presents. The everyday development Postgres and CI's
+sign in by password, so the suite presenting one — and one omitting it,
+refused at once — runs in a dev container environment of its own,
+`postgres-mutual-tls`, by hand when the connection's TLS changes.
+
+A refused certificate fails the call or the boot — never a fallback to
+an unverified connection. Redis, the JWK Set and the client
+`OAuthClientModule` builds say which setting fixes it; a sign-in
+provider's client, whose URLs and trust no variable sets, keeps rustls's
+reason alone.
 
 ## What the framework does **not** do
 
@@ -45,19 +104,28 @@ consults on verify, read through the same `Repo` as everything else.
 
 The framework's posture is **bearer tokens**, which are immune to
 CSRF by construction (the browser does not auto-attach an
-`Authorization` header). Cookie-based sessions are not supported as
-a first-party credential. If you bridge to one (an SSR layer that
-forwards cookies), add CSRF protection at the bridge — it is not
-the framework's job.
+`Authorization` header). No nestrs credential rides a cookie, so the
+framework ships no CSRF middleware. The one cookie it writes is the
+OAuth transaction, read on the provider's `GET` callback and held by
+the `state` comparison (RFC 6749 §10.12), PKCE and its binding to one
+provider; its `__Host-` prefix keeps a sibling subdomain from planting
+it. Cookie-based sessions are not supported as a first-party
+credential. If you bridge to one (an SSR layer that forwards cookies),
+add CSRF protection at the bridge — `Sec-Fetch-Site` and `Origin`
+checks, OWASP's Fetch Metadata defence, are the current standard.
 
 ### Key management
 
 EdDSA splits the issuer's private key from every verifier's public
 key — see [Split deployment](/security/authentication/split-deployment/).
 Rotation, HSM integration, and secret-store wiring are not the
-framework's job. Treat `NESTRS_AUTHN__PRIVATE_KEY` as you would
+framework's job. Treat `<PREFIX>_AUTHN__PRIVATE_KEY` as you would
 treat any production secret: load it from a real secret store, never
-commit it, rotate on a schedule.
+commit it, rotate on a schedule. Against an external issuer's JWK Set
+(`<PREFIX>_AUTHN__JWKS_URI`), rotation is the issuer's: a token signed by a
+new key earns one refetch of the set, and a withdrawn key stops verifying once
+the set is refreshed — see the
+[bounds](/security/authentication/jwt/#verifying-another-issuers-tokens).
 
 ### TLS
 
@@ -97,7 +165,7 @@ For a production app:
    masker is the second line for columns you *do* expose but restrict,
    covering them only when the field rule is `.fields([...])`.
 5. **CDN / WAF** in front for DDoS and bot defense.
-6. **Real secret store** for `NESTRS_AUTHN__PRIVATE_KEY`, OAuth secrets, DB
+6. **Real secret store** for `<PREFIX>_AUTHN__PRIVATE_KEY`, OAuth secrets, DB
    credentials.
 7. **TLS terminated** at the edge or at the app (`HttpConfig`).
 8. **Logging at the right level.** `nest_rs::authn` and `nest_rs::orm`

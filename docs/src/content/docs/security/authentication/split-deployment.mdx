@@ -1,7 +1,6 @@
 ---
 title: Split deployment
 description: A single signer issues tokens, every API verifies them — split the deployment, keep the keys asymmetric, never RPC across the boundary.
-tier: all-options
 sidebar:
   order: 5
 ---
@@ -97,15 +96,26 @@ export NESTRS_AUTHN__PUBLIC_KEY="$(cat jwt.pub)"
 # NESTRS_AUTHN__PRIVATE_KEY is unset — the boot picks `eddsa_verify`
 ```
 
-`JwtConfig::into_options` walks the three key env vars and chooses
+Each key also reads from a file: `<PREFIX>_AUTHN__PUBLIC_KEY_FILE=/run/secrets/jwt.pub`
+names the path instead of carrying the PEM, which is the form a mounted secret
+takes.
+
+`AuthnConfig::into_options` walks the three key env vars and chooses
 verify-only mode when only the public key is set. `JwtService::sign`
 on a verify-only service returns `AuthError::Failed("this JwtService
 is verify-only — no signing key configured")` — even a buggy resource
 server cannot mint a token.
 
 A misconfiguration (`PRIVATE_KEY` set, `PUBLIC_KEY` missing) fails the
-boot loudly with `"NESTRS_AUTHN__PRIVATE_KEY is set without
-NESTRS_AUTHN__PUBLIC_KEY"`.
+boot loudly with `"<PREFIX>_AUTHN__PRIVATE_KEY (or <PREFIX>_AUTHN__PRIVATE_KEY_FILE),
+or private_key in an AuthnConfig or JwtOptions built in code, is set without
+<PREFIX>_AUTHN__PUBLIC_KEY (or <PREFIX>_AUTHN__PUBLIC_KEY_FILE), or public_key in an
+AuthnConfig or JwtOptions built in code"`,
+and so does a private key beside the public key of another pair. A
+`<PREFIX>_AUTHN__SECRET` left beside either key fails the boot as well, naming
+both — whether both come from the environment, from a `.env` file or from code,
+or the environment beside code; a config pinned in code stops `.env` being read
+for the namespace — so moving a service to EdDSA means removing its secret.
 
 ## Two `main` files, one feature set
 
@@ -122,6 +132,8 @@ NESTRS_AUTHN__PUBLIC_KEY"`.
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
         AuthnModule::for_root(None),
         SocialModule,
+        GithubSocialModule,
+        GoogleSocialModule,
         OAuthHttpModule,
     ],
 )]
@@ -231,11 +243,18 @@ pub struct ApiModule;
 ```
 
 ```bash
-NESTRS_OAUTH_RESOURCE__RESOURCE=https://api.example.com
-NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
+NESTRS_OAUTH__RESOURCE__RESOURCE=https://api.example.com
+NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
 NESTRS_AUTHN__AUDIENCE=https://api.example.com
-NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED=users:read,users:write
+NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=users:read,users:write
 ```
+
+The resource and each issuer are absolute `https` URIs naming a host, with
+no userinfo and no fragment; anything else fails the boot, naming the variable
+and never the value. Plain `http` is spared on `localhost`, `127.0.0.1` or `[::1]` in a
+declared development or test profile (`<PREFIX>_ENV`) alone, so a local loop
+runs without a certificate while staging and production speak `https`,
+loopback included.
 
 Three optional members of the RFC 9728 document round out the deployment's
 description of itself. Each is omitted from the served JSON when unset, as
@@ -243,11 +262,14 @@ description of itself. Each is omitted from the served JSON when unset, as
 
 | Env var | Document member | What it says |
 |---|---|---|
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_NAME` | `resource_name` | a human-readable name for this resource (§2 RECOMMENDs it) |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION` | `resource_documentation` | where a developer reads about it |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
-| `NESTRS_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
+| `<PREFIX>_OAUTH__RESOURCE__RESOURCE_NAME` | `resource_name` | a human-readable name for this resource (§2 RECOMMENDs it) |
+| `<PREFIX>_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION` | `resource_documentation` | where a developer reads about it |
+| `<PREFIX>_OAUTH__RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
+| `<PREFIX>_OAUTH__RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
+| `<PREFIX>_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
+
+The documentation, policy and terms URLs are published as they are set, so
+one carrying userinfo fails the boot as the resource does.
 
 §2 defines fourteen members and the framework serves eight. The other six are refused in writing on `ProtectedResourceMetadata`, each
 naming the fact that makes it impossible here: nothing signs a response, so
@@ -298,8 +320,8 @@ see [OAuth scopes](/security/authorization/scopes/). Make sure every
 scope your rules gate on appears in `SCOPES_SUPPORTED`, or you are
 telling clients to request something discovery never names.
 
-**`NESTRS_AUTHN__AUDIENCE` stops being optional.** On its own,
-`JwtConfig` treats it as a nice-to-have; under this module boot fails
+**`<PREFIX>_AUTHN__AUDIENCE` stops being optional.** On its own,
+`AuthnConfig` treats it as a nice-to-have; under this module boot fails
 without it, naming the variable. The confused-deputy defence itself is
 not what the module adds — `JwtService` applies RFC 7519 §4.1.3 on every
 path, so a token minted *for another named service* is refused even by an
@@ -307,11 +329,11 @@ app that pins no audience. What pinning adds is the token that carries no
 `aud` at all: without a pinned audience such a token is accepted, and a
 resource server cannot afford that. RFC 8707 makes the resource
 identifier *be* the audience — keep the two strings identical, and the
-framework warns at boot when they drift.
+framework warns at boot when they drift, naming both variables.
 
 ## Going further
 
-- [JWT](/security/authentication/jwt/) — `JwtConfig`, `JwtKey`,
+- [JWT](/security/authentication/jwt/) — `AuthnConfig`, `JwtKey`,
   EdDSA vs HS256.
 - [OAuth2](/security/authentication/oauth2/) — the flow the issuer
   exposes upstream.

@@ -1,31 +1,24 @@
-//! Load the project's `.env` cascade for e2e — the harness reads backend URLs
-//! via `std::env::var` before any `App` (hence `ConfigModule`) exists, and
-//! tests run from a crate dir, not the project root that holds `.env`.
+//! Load the project's `.env` cascade for e2e: the harness reads backend URLs
+//! before any `ConfigModule` exists, from a crate dir rather than the root.
 
 use std::sync::Once;
 
 use nest_rs_config::{Environment, load_cascade};
 
-/// Load the nearest project `.env` once per process. Set-if-absent (real env /
-/// CI wins); bounded to the git repo so the framework's own `.env`-less tests
-/// stay hermetic.
+/// Load the nearest project `.env` once per process, set-if-absent and bounded
+/// to the git repo, defaulting `<PREFIX>_ENV=test` first.
 ///
-/// This `Once` is the guardian of the whole invariant: **the environment is
-/// decided before any cascade read**, whichever harness entry point runs
-/// first (`EphemeralDatabase::create`, `TestApp::builder`, `HeadlessApp`, …).
-/// Defaulting `<PREFIX>_ENV=test` anywhere later would be a no-op on an already
-/// consumed `Once` — the bug that made `.env.local` load (hermeticity broken)
-/// and `.env.test.local` never load when a harness touched the database
-/// first.
+/// Every harness entry point calls it first: `<PREFIX>_ENV` defaulted after
+/// this `Once` ran would select the wrong cascade.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the harness defaults the variable the cascade selects on, set-if-absent"
+)]
 pub fn load_project_env() {
     static LOADED: Once = Once::new();
     LOADED.call_once(|| {
-        // Before the `.env` lookup — even with no file found, env-aware
-        // defaults (GraphQL playground, SDL emit) must see `test`. An explicit
-        // value wins (e.g. CI asserting prod behaviour). The name comes from
-        // `Environment` rather than a literal: under a custom prefix a hardcoded
-        // `NESTRS_ENV` here would set a variable the app never reads, and every
-        // test would silently run as `development`.
+        // Before the `.env` lookup: env-aware defaults must see `test` even
+        // with no file found.
         let env_var = Environment::var_name();
         if std::env::var_os(&env_var).is_none() {
             // SAFETY: not discharged by a single-threaded-bootstrap claim,
@@ -42,14 +35,14 @@ pub fn load_project_env() {
             // spawns can read the environment, and it never runs again. The
             // residual race is with a reader spawned by an *earlier* test in
             // the same process, which nextest's process-per-test model rules
-            // out (see `.claude/rules/testing.md`).
+            // out.
             //
             // The write is what `<PREFIX>_LOG` and `OpenTelemetry::init` read
             // through bare `std::env::var`, which is the whole reason a
             // resolution-only cascade is not enough. `load_cascade` below does
             // one further `unsafe set_var` per key under its own note — so
             // this is not the crate's only unsafe, only its first.
-            #[allow(unsafe_code)]
+            #[expect(unsafe_code, reason = "set_var before any thread reads the environment, per the SAFETY note above")]
             unsafe {
                 std::env::set_var(&env_var, "test")
             };

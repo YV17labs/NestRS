@@ -1,0 +1,5 @@
+error: `#[use_interceptors(...)]` belongs on the controller struct beside `#[controller]`, not on this `#[routes]` block — the struct half declares the host's layers, and this half declares its #[get] / #[post] / #[put] / #[patch] / #[delete]. A layer scoped to one operation goes on that operation's method.
+  --> tests/integration/diagnostics/http/interceptors_on_a_routes_block.rs:13:1
+   |
+13 | #[use_interceptors(Timing)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^

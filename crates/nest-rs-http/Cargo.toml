@@ -14,10 +14,14 @@ categories = ["web-programming::http-server", "asynchronous"]
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-http-macros.workspace = true
-# `TlsConfig::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
+# The edge runs its guards itself: a route's, a self-mount's request. The guard
+# contract names no HTTP type, so the dependency points this way.
+nest-rs-guards.workspace = true
+# `HttpTls::from_env` reads the `<PREFIX>_HTTP__TLS_*` keys through the
 # framework-wide env scheme (`env_var`, empty-as-unset), like every other
-# per-crate `from_env` shortcut.
-nest-rs-config.workspace = true
+# per-crate `from_env` shortcut; `tls` brings the process's crypto provider
+# and the one check that a certificate is its key's.
+nest-rs-config = { workspace = true, features = ["tls"] }
 # The pipes themselves are transport-agnostic; this crate only adapts them to
 # poem (the `Valid`/`Piped` extractors). `validator` is needed for the `Validate`
 # bound on `Valid`; `serde_json` renders a `PipeError` as a JSON 400.
@@ -48,39 +52,50 @@ bytes.workspace = true
 # public `From<Body>` / `From<BoxBody>` impls convert through.
 http-body.workspace = true
 http-body-util.workspace = true
-# TLS material is handed to poem's listener as a *stream* of configs, so a
-# renewed certificate swaps in without rebuilding the listener; `stream::unfold`
-# + `chain` is what turns the watched PEM pair into one.
+# The vocabulary's head, status, method and headers are the `http` crate's own,
+# re-exported as their one path.
+http.workspace = true
+thiserror.workspace = true
 futures-util.workspace = true
-# A renewed pair is checked before it is published: poem's own parser is private
-# and its `with_cert_resolver` never verifies that the two halves correspond, so
-# a mismatched or empty pair would install cleanly and fail every handshake.
+# The accept loop is the transport's own: hyper serves each connection, and
+# hyper-util's `auto` builder tells HTTP/1 from HTTP/2 and drives both on tokio.
+# hyper also puts an upgrade request's `OnUpgrade` in its extensions; the poem
+# bridge clones it by type so both sides of a crossing can take the upgraded
+# socket.
+hyper.workspace = true
+hyper-util.workspace = true
+# The TLS listener: a handshake per accepted socket, the certificate read from a
+# resolver a renewal swaps without rebuilding the listener.
+tokio-rustls.workspace = true
 rustls.workspace = true
 
 [dev-dependencies]
 # `LogCapture`: several transport refusals answer one status code for two very
 # different causes (an unreadable version header and a malformed one both give
 # `400`), so the event is what separates them for an operator.
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
 # the `Json<T>` extractor in `from_request` test paths.
 serde.workspace = true
-# `#[routes]` macro emits paths to `::nest_rs_guards::GuardsRouteInterceptor`
-# and `::nest_rs_interceptors::InterceptorExt`, so any test using `#[routes]`
-# needs both crates in scope. Allowed as dev-deps despite the cycle through
-# `nest-rs-graphql → nest-rs-http` — Cargo permits cycles that go through
-# dev-dependencies.
-nest-rs-guards = { path = "../nest-rs-guards" }
+# `#[routes]` composes a route's response-side layers through
+# `nest-rs-interceptors`, so any test using `#[routes]` needs it in scope. An
+# allowed dev-dependency cycle: the interceptors depend on this crate.
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `tests/global_prefix.rs` drives an in-process server through poem's
-# `TestClient`, gated behind poem's `test` feature.
-poem = { workspace = true, features = ["test"] }
-tokio.workspace = true
+# `TestClient`, gated behind poem's `test` feature. `websocket` lets
+# `tests/integration/transport.rs` hold a real WebSocket open across a shutdown —
+# an upgraded connection is the one the shutdown window neither waits for nor
+# closes, and the transport's report has to say so.
+poem = { workspace = true, features = ["test", "websocket"] }
+# `test-util` (not part of tokio's `full`) pauses time, so the shutdown window is
+# proved at its default length without the suite waiting it out.
+tokio = { workspace = true, features = ["test-util"] }
+# The client half of that WebSocket — the same crate poem's server half runs on,
+# so it adds no crate to the graph.
+tokio-tungstenite.workspace = true
 # `tests/global_prefix.rs` env-path test isolates the process env via
 # `figment::Jail`, matching how `nest-rs-config` itself tests env reads.
 figment = { workspace = true, features = ["test"] }
-# Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
-trybuild.workspace = true
 # Dev-only, and deliberately so: the version grammar is worded once in
 # `nest_rs_codegen`, but that crate pulls `syn`, which must never reach an app's
 # dependency graph. So the runtime half carries its own copy of the predicate and
@@ -96,6 +111,9 @@ reqwest.workspace = true
 # against the composition that defeated it rather than against a hand-set header.
 flate2.workspace = true
 futures-util.workspace = true
+# An HTTP/2 client that reads the server's SETTINGS frame, which no higher-level
+# client exposes.
+h2.workspace = true
 
 [lints]
 workspace = true

@@ -18,10 +18,17 @@ nest-rs-core.workspace = true
 # `HttpEndpointWrap`. Safe direction (nest-rs-http depends on no
 # trait crate any more).
 nest-rs-http.workspace = true
+# A route's response-side layers compose here, interceptors outermost: the
+# filters and the exception filters it wraps. Neither depends on this crate.
+nest-rs-filters.workspace = true
+nest-rs-exception-filters.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 async-trait.workspace = true
+# `LogCapture`: a route whose layer resolves to nothing answers an opaque `500`,
+# and the `error` naming the layer is the operator's only record of why.
+nest-rs-testing = { path = "../nest-rs-testing" }
 
 [lints]
 workspace = true

@@ -38,8 +38,6 @@ struct ScopeController;
 
 #[routes]
 impl ScopeController {
-    /// Two extractions in one request: if scope caches, both Arcs point to the
-    /// same instance (same id, ptr_eq true).
     #[get("/id")]
     async fn id(&self, a: Scoped<RequestId>, b: Scoped<RequestId>) -> String {
         format!("{}-{}-{}", a.id(), b.id(), Arc::ptr_eq(&a.0, &b.0))

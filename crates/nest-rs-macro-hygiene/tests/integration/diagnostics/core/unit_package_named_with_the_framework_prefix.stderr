@@ -1,0 +1,37 @@
+error[E0080]: evaluation panicked: the `nest-rs-` prefix is the framework's: a package is named `nestrs-<subject>` and declares `<its crate>.<unit>`
+  --> tests/integration/diagnostics/core/unit_package_named_with_the_framework_prefix.rs:7:21
+   |
+ 7 |   const PROBE: Unit = nest_rs::core::unit!(
+   |  _____________________^
+ 8 | |     "nest_rs_macro_hygiene_tests.probe",
+ 9 | |     target: "nest_rs_macro_hygiene_tests",
+10 | |     kind: Internal
+11 | | );
+   | |_^ evaluation of `PROBE::__UNIT` failed inside this call
+   |
+note: inside `nest_rs::nest_rs_core::__private::declare_unit`
+  --> $RUST/core/src/panic.rs
+   |
+   |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+   |
+  ::: $WORKSPACE/crates/nest-rs-core/src/operation_log.rs
+   |
+   | /                 panic!(
+   | |                     "the `nest-rs-` prefix is the framework's: a package is named \
+   | |                      `nestrs-<subject>` and declares `<its crate>.<unit>`"
+   | |                 );
+   | |_________________- in this macro invocation
+
+note: erroneous constant encountered
+  --> tests/integration/diagnostics/core/unit_package_named_with_the_framework_prefix.rs:7:21
+   |
+ 7 |   const PROBE: Unit = nest_rs::core::unit!(
+   |  _____________________^
+ 8 | |     "nest_rs_macro_hygiene_tests.probe",
+ 9 | |     target: "nest_rs_macro_hygiene_tests",
+10 | |     kind: Internal
+11 | | );
+   | |_^
+   |
+   = note: this note originates in the macro `nest_rs::core::unit` (in Nightly builds, run with -Z macro-backtrace for more info)

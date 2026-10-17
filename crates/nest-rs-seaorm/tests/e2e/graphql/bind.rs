@@ -1,45 +1,32 @@
-//! `src/graphql/bind.rs`: what a by-id load says when the database refuses it.
-//!
-//! HTTP has a choke point — every opaque `ServiceError` logs once as it renders
-//! — and GraphQL has none, so `bind` logs the real `DbErr` itself and hands the
-//! client a bare `internal error`. That asymmetry is the whole reason the event
-//! exists, and it means the log line is the *only* copy of the cause: schema,
-//! column and constraint names never reach the wire, deliberately, so an
-//! operator with no line here has nothing at all.
-//!
-//! Against live Postgres rather than in-process because the failure under test
-//! is a driver error on a real statement — a hand-made `DbErr` would prove the
-//! branch and not that the branch is reachable.
+//! `src/graphql/bind.rs`: a by-id load the database refuses logs the `DbErr`
+//! and answers a bare `internal error`, GraphQL having no rendering choke point.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait};
-use nest_rs_resource::WireModelDefaults;
+use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
 
-/// An entity whose table is never created. Every read against it is a driver
-/// error, which is the point: the failure comes from Postgres rather than from
-/// a stub, so what the test exercises is the path a real outage takes.
+/// An entity whose table is never created, so every read is a driver error.
 mod ghost {
     use sea_orm::entity::prelude::*;
     use serde::{Deserialize, Serialize};
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
     #[sea_orm(table_name = "bind_probe_table_that_does_not_exist")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
         pub title: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -81,9 +68,9 @@ impl CrudService for GhostsService {
 struct ReadEverything;
 
 impl AbilityFactory for ReadEverything {
-    type Actor = ();
+    type Actor = crate::Anyone;
 
-    fn define(&self, _actor: &(), ab: &mut AbilityBuilder) {
+    fn define(&self, _actor: &crate::Anyone, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, ghost::Entity);
     }
 }
@@ -98,13 +85,13 @@ impl Layer for AlwaysAuthenticated {}
 
 #[async_trait]
 impl Guard for AlwaysAuthenticated {
-    async fn check_http(&self, req: &mut poem::Request) -> Result<(), Denial> {
-        req.extensions_mut().insert(());
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(crate::Anyone);
         Ok(())
     }
 }
 
-impl HttpGuard for AlwaysAuthenticated {}
+impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
 type Bridge = GraphqlAbilityBridge<AlwaysAuthenticated, GhostAbilityGuard>;
 
@@ -113,9 +100,8 @@ struct GhostsResolver;
 
 #[operations]
 impl GhostsResolver {
-    /// Calls `bind` rather than a service method: it is `bind` that owns the
-    /// three-way `Found`/`Denied`/`Missing` answer *and* the error branch under
-    /// test, and a resolver written any other way would not reach it.
+    /// Calls `bind`, which owns the `Found`/`Denied`/`Missing` answer and the
+    /// error branch under test.
     #[query]
     #[authorize(Read, ghost::Entity)]
     async fn ghost(&self, ctx: &Context<'_>, id: String) -> GqlResult<Option<Ghost>> {
@@ -151,10 +137,7 @@ const QUERY: &str = r#"query($id: String!) { ghost(id: $id) { id title } }"#;
 
 #[tokio::test]
 async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
-    // Thread-local: `#[tokio::test]` is a current-thread runtime, so the
-    // endpoint's task and every resolver it drives run on this thread. The
-    // global capture is permanent and one per process — spending it where the
-    // ordinary one works is a cost with nothing bought.
+    // Thread-local suffices: `#[tokio::test]` runs every resolver on this thread.
     let logs = LogCapture::install();
 
     let app = TestApp::for_module::<GhostModule>()
@@ -177,22 +160,25 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
         .await
         .expect("a GraphQL response body");
 
-    // What the client is told, and what it is not. A `DbErr` `Display` here
-    // would name the table and, on a constraint violation, the values in it.
-    assert!(
-        body.contains("internal error") && body.contains("INTERNAL_SERVER_ERROR"),
-        "the client gets a generic error with a programmable code: {body}",
+    // A `DbErr` `Display` would name the table and, on a constraint, its values.
+    let body_json: serde_json::Value = serde_json::from_str(&body).expect("a JSON body");
+    assert_eq!(
+        body_json["errors"][0]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "the client gets a generic error: {body}",
+    );
+    assert_eq!(
+        body_json["errors"][0]["extensions"]["code"],
+        nest_rs_core::problem::code::INTERNAL.as_str(),
+        "under the one code every opaque failure carries: {body}",
     );
     assert!(
         !body.contains("bind_probe_table_that_does_not_exist"),
         "and nothing about the schema behind it: {body}",
     );
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "by-id access load failed");
+    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "by-id access load failed");
     assert_eq!(event.level, "error");
-    // The service, because the resolver's name is not in the error and one
-    // schema binds many: without it an operator has a driver error and no
-    // subject.
     assert!(
         event.field("service").is_some_and(|s| s.contains("Ghosts")),
         "the event names the bound service, got {:?}",
@@ -201,8 +187,8 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
     assert!(
         event
             .field("error")
-            .is_some_and(|e| e.contains("bind_probe_table_that_does_not_exist")),
-        "…and carries the driver's own message, which is the half the client \
+            .is_some_and(|e| e.contains("database error 42P01")),
+        "…and carries the database's SQLSTATE, which is the half the client \
          never sees, got {:?}",
         event.fields,
     );

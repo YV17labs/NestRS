@@ -9,41 +9,91 @@
 //! `<PREFIX>` is `NESTRS` out of the box. A deployment that wants its own brand
 //! on its variables sets `NESTRS_ENV_PREFIX=ACME` on the process, and every name
 //! here follows, `ACME_SEAORM__URL` through `ACME_ENV`.
+//!
+//! A resource an app opens more than once reads one namespace per instance:
+//! `ConfigModule::provide_feature` takes a [`ForInstance`], and a named
+//! instance's variables carry its name after the vendor
+//! (`<PREFIX>_REDIS__CACHE__URL`, [`instance_namespace`]).
+//!
+//! A variable set under the prefix that no config reads is reported rather than
+//! ignored — a misspelled key, or a near miss of a namespace the binary links:
+//! other separators, another case, one misspelled segment ([`unclaimed`]).
 
-#![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — The `.env` cascade, resolved namespaces, and refused values.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::config";
 
+mod authorities;
+mod bounds;
 mod config;
 mod dotenv;
+mod endpoint;
 mod environment;
 mod error;
+mod for_instance;
+mod material;
 mod module;
+mod namespace;
 mod service;
+mod setting;
 mod source;
+#[cfg(test)]
+mod testing;
+#[cfg(feature = "tls")]
+mod tls;
+pub mod unclaimed;
 
+pub use authorities::system_authorities;
+pub use bounds::{Bound, BoundedDuration, DurationBounds, DurationUnit, Floor};
 pub use config::{Config, Namespaced, read};
 pub use dotenv::load_cascade;
+pub use endpoint::endpoint_shown;
 pub use environment::Environment;
-pub use error::{ConfigError, Result};
+pub use error::{ConfigError, ConfigNotResolvedError, Result};
+pub use for_instance::ForInstance;
+pub use material::{Material, read_material};
 pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
-pub use service::{ConfigService, var_name};
+pub use namespace::instance_namespace;
+pub use service::{ConfigService, spellings, var_name};
+pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
+#[cfg(feature = "tls")]
+pub use tls::{ClientTls, TlsIdentity};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
-/// injectable [`Config`]. Re-exported from `nest-rs-config-macros` so apps write
-/// `nest_rs_config::config`.
+/// injectable [`Config`].
+///
+/// ```
+/// # use validator::Validate as _;
+/// use nest_rs_config::{Namespaced, config};
+///
+/// #[config(namespace = "seaorm")]
+/// #[derive(Clone, Debug, serde::Deserialize)]
+/// pub struct SeaOrmConfig {
+///     pub url: String,
+///     #[validate(range(min = 1))]
+///     pub max_connections: u32,
+/// }
+///
+/// assert_eq!(<SeaOrmConfig as Namespaced>::NAMESPACE, "seaorm");
+/// let config = SeaOrmConfig { url: "postgres://localhost/app".into(), max_connections: 0 };
+/// assert!(config.validate().is_err());
+/// ```
 pub use nest_rs_config_macros::config;
 
-// `#[config]` injects the `Validate` derive and its `crate = ` override, so a
-// `#[config]` struct needs no `validator` line and no version to align.
 #[doc(hidden)]
-pub use validator;
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::namespace::ConfigNamespace;
+    #[cfg(feature = "tls")]
+    pub use crate::tls::{PairRefusal, certified_key, crypto_provider};
+    #[cfg(feature = "reqwest")]
+    pub use crate::tls::{ReqwestTls, reqwest_tls};
+
+    pub use nest_rs_core::inventory;
+    pub use validator;
+}

@@ -1,5 +1,7 @@
 //! Covers `src/service.rs` — `JwtService` sign/verify and decode error mapping.
 
+use std::time::Duration;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, get_current_timestamp};
@@ -26,8 +28,8 @@ struct TestClaims {
 }
 
 fn service(label: &str) -> JwtService {
-    // Pad to ≥ 32 bytes so the HS256 min-secret guard (SEC-F3) passes, while the
-    // label keeps each test's secret distinct.
+    // Pad to ≥ 32 bytes for the HS256 min-secret guard; the label keeps each
+    // test's secret distinct.
     let secret = format!("{label}-padding-to-thirty-two-bytes-minimum");
     JwtService::new(JwtOptions::new(secret)).expect("HMAC service")
 }
@@ -43,11 +45,8 @@ fn claims(exp: u64, nbf: Option<u64>) -> TestClaims {
 
 #[test]
 fn short_hmac_secret_is_rejected_by_the_service_constructor() {
-    // SEC-F3: the ≥256-bit rule must hold at the derivation point
-    // (`JwtService::new`), not only on the config-env path — so the documented
-    // honest-API constructor `JwtOptions::new` can't mint a forgeable-key service.
-    // `JwtService` has no `Debug` (secrets must not leak), so match rather than
-    // `.expect_err`.
+    // The ≥256-bit rule holds at `JwtService::new`, for `JwtOptions::new` too.
+    // `JwtService` has no `Debug`, so match rather than `.expect_err`.
     let err = match JwtService::new(JwtOptions::new("too-short")) {
         Ok(_) => panic!("a sub-32-byte HS256 secret must be refused"),
         Err(e) => e,
@@ -63,45 +62,92 @@ fn short_hmac_secret_is_rejected_by_the_service_constructor() {
     JwtService::new(JwtOptions::new(ok)).expect("a 32-byte secret is accepted");
 }
 
+/// A key and an algorithm that cannot work together are refused when the
+/// service is built, not on the first sign or verify — which on a verifier is
+/// the first request.
 #[test]
-fn sign_and_verify_round_trip() {
+fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
+    let secret = "0123456789abcdef0123456789abcdef";
+    let with = |mut options: JwtOptions, algorithm: nest_rs_authn::Algorithm| {
+        options.algorithms = vec![algorithm];
+        options
+    };
+    let cases = [
+        (
+            "an HMAC secret with RS256",
+            with(JwtOptions::new(secret), nest_rs_authn::Algorithm::RS256),
+        ),
+        (
+            "an EdDSA pair with HS256",
+            with(
+                JwtOptions::eddsa(crate::DEV_PRIVATE_KEY, crate::DEV_PUBLIC_KEY),
+                nest_rs_authn::Algorithm::HS256,
+            ),
+        ),
+        (
+            "a verify-only EdDSA key with ES256",
+            with(
+                JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY),
+                nest_rs_authn::Algorithm::ES256,
+            ),
+        ),
+    ];
+    for (label, options) in cases {
+        let Err(AuthError::Failed(message)) = JwtService::new(options) else {
+            panic!("{label} must be refused at construction")
+        };
+        assert!(
+            message.contains("algorithm cannot be used"),
+            "{label}: {message}"
+        );
+    }
+    // RFC 7518 §3.2: HS512 takes a key of at least its 64-byte hash.
+    JwtService::new(with(
+        JwtOptions::new(secret.repeat(2)),
+        nest_rs_authn::Algorithm::HS512,
+    ))
+    .expect("another HMAC algorithm fits an HMAC secret of its hash's size");
+}
+
+#[tokio::test]
+async fn sign_and_verify_round_trip() {
     let jwt = service("round-trip-secret");
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
-    let decoded: TestClaims = jwt.verify(&token).expect("verify");
+    let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert_eq!(decoded.sub, "alice");
 }
 
-#[test]
-fn expired_token_is_rejected() {
+#[tokio::test]
+async fn expired_token_is_rejected() {
     let jwt = service("expired-secret");
     let past = get_current_timestamp().saturating_sub(3600);
     let token = jwt.sign(&claims(past, None)).expect("sign");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&token).await,
         Err(AuthError::Expired)
     ));
 }
 
-#[test]
-fn not_yet_valid_token_is_rejected() {
+#[tokio::test]
+async fn not_yet_valid_token_is_rejected() {
     let jwt = service("nbf-secret");
     let now = get_current_timestamp();
     let token = jwt
         .sign(&claims(now + 7200, Some(now + 3600)))
         .expect("sign");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&token).await,
         Err(AuthError::NotYetValid)
     ));
 }
 
-#[test]
-fn invalid_signature_is_rejected() {
+#[tokio::test]
+async fn invalid_signature_is_rejected() {
     let issuer = service("issuer-secret");
     let verifier = service("other-secret");
     let token = issuer.sign(&claims(issuer.expiry(), None)).expect("sign");
     assert!(matches!(
-        verifier.verify::<TestClaims>(&token),
+        verifier.verify::<TestClaims>(&token).await,
         Err(AuthError::InvalidSignature)
     ));
 }
@@ -124,38 +170,34 @@ fn invalid_pem_fails_at_construction() {
     ));
 }
 
-#[test]
-fn audience_must_match_when_configured() {
+#[tokio::test]
+async fn audience_must_match_when_configured() {
     let mut options = JwtOptions::new("aud-secret-padded-to-thirty-two-bytes");
     options.audience = Some("api".into());
     let jwt = JwtService::new(options).expect("service");
     let mut ok = claims(jwt.expiry(), None);
     ok.aud = Some("api".into());
     let token = jwt.sign(&ok).expect("sign");
-    assert!(jwt.verify::<TestClaims>(&token).is_ok());
+    assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
 
     let mut bad = claims(jwt.expiry(), None);
     bad.aud = Some("other".into());
     let token = jwt.sign(&bad).expect("sign");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&token).await,
         Err(AuthError::InvalidToken)
     ));
 }
 
-#[test]
-fn audience_omitted_is_rejected_when_configured() {
-    // Regression: a configured audience must be *mandatory*. A validly-signed
-    // token that omits `aud` entirely was silently accepted (set_audience only
-    // compares when the claim is present); it must now fail closed.
+#[tokio::test]
+async fn audience_omitted_is_rejected_when_configured() {
+    // A configured audience is mandatory: a validly-signed token omitting `aud` fails closed.
     let secret = "aud-required-secret-padded-to-32-bytes";
     let mut options = JwtOptions::new(secret);
     options.audience = Some("api".into());
     let jwt = JwtService::new(options).expect("service");
 
-    // Forged with the raw encoder — another holder of the shared key minting a
-    // token that omits `aud`. `set_audience` alone only *compares* a present
-    // claim, so this is the case that must fail closed.
+    // Forged with the raw encoder by another holder of the shared key.
     let omitted = claims(jwt.expiry(), None);
     assert!(omitted.aud.is_none());
     let forged = jsonwebtoken::encode(
@@ -165,26 +207,24 @@ fn audience_omitted_is_rejected_when_configured() {
     )
     .expect("encode");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&forged),
+        jwt.verify::<TestClaims>(&forged).await,
         Err(AuthError::InvalidToken)
     ));
 
-    // Our own signer stamps the configured audience, so a claims struct that
-    // leaves `aud` unset still mints a token this service accepts — the app
-    // never has to restate the scoping its config already declares.
+    // The signer stamps the configured audience onto claims that leave `aud` unset.
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
-    let round_tripped: TestClaims = jwt.verify(&token).expect("stamped aud verifies");
+    let round_tripped: TestClaims = jwt.verify(&token).await.expect("stamped aud verifies");
     assert_eq!(round_tripped.aud.as_deref(), Some("api"));
 
     // An explicit audience in the claims is never overwritten.
     let mut present = claims(jwt.expiry(), None);
     present.aud = Some("api".into());
     let token = jwt.sign(&present).expect("sign");
-    assert!(jwt.verify::<TestClaims>(&token).is_ok());
+    assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
 }
 
-#[test]
-fn a_configured_issuer_is_stamped_and_required() {
+#[tokio::test]
+async fn a_configured_issuer_is_stamped_and_required() {
     let secret = "iss-required-secret-padded-to-32-bytes";
     let mut options = JwtOptions::new(secret);
     options.issuer = Some("auth".into());
@@ -204,7 +244,7 @@ fn a_configured_issuer_is_stamped_and_required() {
         iss: None,
     };
     let token = jwt.sign(&minted).expect("sign");
-    let back: IssClaims = jwt.verify(&token).expect("stamped iss verifies");
+    let back: IssClaims = jwt.verify(&token).await.expect("stamped iss verifies");
     assert_eq!(back.iss.as_deref(), Some("auth"));
 
     // The same claims encoded without the stamp are refused.
@@ -215,33 +255,28 @@ fn a_configured_issuer_is_stamped_and_required() {
     )
     .expect("encode");
     assert!(matches!(
-        jwt.verify::<IssClaims>(&forged),
+        jwt.verify::<IssClaims>(&forged).await,
         Err(AuthError::InvalidToken)
     ));
 }
 
-#[test]
-fn invalid_algorithm_is_rejected() {
+#[tokio::test]
+async fn invalid_algorithm_is_rejected() {
     let jwt = service("alg-secret");
     let header = at_jwt_header(Algorithm::HS384);
     let key = EncodingKey::from_secret(b"alg-secret");
     let token = jsonwebtoken::encode(&header, &claims(jwt.expiry(), None), &key)
         .expect("encode with mismatched alg");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&token).await,
         Err(AuthError::InvalidAlgorithm)
     ));
 }
 
-#[test]
-fn unsigned_alg_none_token_is_rejected() {
-    // The classic alg-confusion / "unsecured JWT" attack: an attacker forges a
-    // token whose header declares `alg: none` and ships an empty signature,
-    // hoping the verifier skips signature checking. `JwtService` must reject it
-    // — an unsigned token is never authentic. jsonwebtoken has no `none` in its
-    // `Algorithm` enum and its encoder cannot emit one, so we hand-craft the
-    // token (base64url header + payload + empty signature) to prove the service
-    // refuses it rather than relying on the encoder to produce the attack.
+#[tokio::test]
+async fn unsigned_alg_none_token_is_rejected() {
+    // `alg: none` with an empty signature. jsonwebtoken cannot emit one, so the
+    // token is hand-crafted.
     let jwt = service("alg-none-secret");
     // A valid, non-expired `exp` so rejection can only be due to `alg: none`,
     // never an incidental claim failure.
@@ -251,31 +286,51 @@ fn unsigned_alg_none_token_is_rejected() {
     // `header.payload.` — three segments with an empty signature (RFC 7519 §6.1).
     let token = format!("{header}.{payload}.");
     assert!(
-        jwt.verify::<TestClaims>(&token).is_err(),
+        jwt.verify::<TestClaims>(&token).await.is_err(),
         "an alg=none unsigned token must never verify",
     );
 }
 
-#[test]
-fn eddsa_sign_and_verify_round_trip() {
+#[tokio::test]
+async fn eddsa_sign_and_verify_round_trip() {
     let jwt = JwtService::new(JwtOptions::eddsa(
         crate::DEV_PRIVATE_KEY,
         crate::DEV_PUBLIC_KEY,
     ))
     .expect("EdDSA service");
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
-    let decoded: TestClaims = jwt.verify(&token).expect("verify");
+    let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert_eq!(decoded.sub, "alice");
 }
 
+/// A private key beside the public key of another pair signs tokens its own
+/// service refuses, and verifies the tokens that other pair's private key signs
+/// — so the service is refused before anything is served.
 #[test]
-fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
-    // The confused deputy, and the regression this file exists to hold: the
-    // default path (`AuthnModule::for_root(None)` with no audience configured)
-    // switched jsonwebtoken's `validate_aud` off, so a token the shared issuer
-    // minted *for a sibling service* verified here. RFC 7519 §4.1.3 says a
-    // principal that does not identify itself with a value in a present `aud`
-    // MUST reject the JWT — and it binds a verifier naming no audience too.
+fn a_private_key_beside_another_pairs_public_key_is_refused() {
+    const ANOTHER_PAIRS_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\n\
+         MCowBQYDK2VwAyEAK0Be2/q0Wt0AT7wXt1zGeT9ViWrp+Z2uMwAofcgKlnk=\n\
+         -----END PUBLIC KEY-----\n";
+    let refused = JwtService::new(JwtOptions::eddsa(
+        crate::DEV_PRIVATE_KEY,
+        ANOTHER_PAIRS_PUBLIC_KEY,
+    ));
+    let Err(nest_rs_authn::AuthError::Failed(message)) = refused else {
+        panic!("keys from two pairs must not build a service")
+    };
+    assert!(message.contains("not one pair"), "{message}");
+    for setting in ["PRIVATE_KEY_FILE", "PUBLIC_KEY_FILE"] {
+        assert!(
+            message.contains(&nest_rs_config::var_name("authn", setting)),
+            "names the pair as either spelling may have set it: {message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
+    // The confused deputy: with no audience configured, a token the shared
+    // issuer minted for a sibling service is still refused (RFC 7519 §4.1.3).
     let secret = "no-aud-configured-secret-padded-32b";
     let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
     assert!(
@@ -294,29 +349,26 @@ fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
 
     assert!(
         matches!(
-            jwt.verify::<TestClaims>(&token),
+            jwt.verify::<TestClaims>(&token).await,
             Err(AuthError::InvalidToken)
         ),
         "a validly-signed token minted for another audience must not verify here",
     );
 }
 
-#[test]
-fn an_audience_less_token_still_verifies_when_no_audience_is_configured() {
-    // The other half of §4.1.3, and why the clause costs nothing: it fires only
-    // when the claim is *present*. A deployment that names no audience and whose
-    // issuer stamps none is untouched.
+#[tokio::test]
+async fn an_audience_less_token_still_verifies_when_no_audience_is_configured() {
+    // §4.1.3 fires only when the claim is present: no audience configured and
+    // none stamped verifies.
     let jwt = service("no-aud-anywhere-secret");
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
-    let decoded: TestClaims = jwt.verify(&token).expect("verify");
+    let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert!(decoded.aud.is_none());
 }
 
-#[test]
-fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
-    // The permissive behaviour survives, but only as something a deployment
-    // wrote down — and it says so once per boot, naming the variable, so an
-    // operator can find who disabled the check.
+#[tokio::test]
+async fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
+    // The opt-out is written down and reported once per boot, naming the variable.
     let logs = nest_rs_testing::LogCapture::install();
     let secret = "any-aud-opt-in-secret-padded-32-by";
     let mut options = JwtOptions::new(secret);
@@ -344,15 +396,13 @@ fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
     )
     .expect("encode");
     assert!(
-        jwt.verify::<TestClaims>(&token).is_ok(),
+        jwt.verify::<TestClaims>(&token).await.is_ok(),
         "the opt-out is what restores the old permissive reading",
     );
 }
 
 #[test]
 fn allow_any_audience_beside_a_configured_audience_is_refused() {
-    // Two fields stating opposite policies. Letting either win silently is how a
-    // deployment comes to believe the stricter one is in force.
     let mut options = JwtOptions::new("contradiction-secret-padded-to-32b");
     options.audience = Some("api".into());
     options.allow_any_audience = true;
@@ -384,11 +434,9 @@ fn a_minted_token_carries_the_rfc9068_media_type() {
 
 /// RFC 9068 §4: the resource server "MUST verify that the `typ` header value is
 /// `at+jwt` or `application/at+jwt` and reject tokens carrying any other
-/// value". §2.1 names the attack this closes: an OpenID Connect ID Token,
-/// signed by the same issuer with the same key, must not be spendable as an
-/// access token here.
-#[test]
-fn a_token_typed_as_anything_else_is_refused() {
+/// value". An ID Token signed by the same issuer and key must not be spendable here.
+#[tokio::test]
+async fn a_token_typed_as_anything_else_is_refused() {
     let secret = "typ-fixture-secret-padded-32-byte";
     let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
 
@@ -403,7 +451,7 @@ fn a_token_typed_as_anything_else_is_refused() {
         .expect("encode");
         assert!(
             matches!(
-                jwt.verify::<TestClaims>(&token),
+                jwt.verify::<TestClaims>(&token).await,
                 Err(nest_rs_authn::AuthError::InvalidToken)
             ),
             "typ={typ} must not verify as an access token",
@@ -413,8 +461,8 @@ fn a_token_typed_as_anything_else_is_refused() {
 
 /// §4 names both spellings, and RFC 9110 §8.3.1 makes a media type
 /// case-insensitive — so the long form and an odd casing both verify.
-#[test]
-fn the_long_media_type_and_odd_casing_both_verify() {
+#[tokio::test]
+async fn the_long_media_type_and_odd_casing_both_verify() {
     let secret = "typ-fixture-secret-padded-32-byte";
     let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
 
@@ -427,14 +475,14 @@ fn the_long_media_type_and_odd_casing_both_verify() {
             &EncodingKey::from_secret(secret.as_bytes()),
         )
         .expect("encode");
-        assert!(jwt.verify::<TestClaims>(&token).is_ok(), "typ={typ}");
+        assert!(jwt.verify::<TestClaims>(&token).await.is_ok(), "typ={typ}");
     }
 }
 
 /// The opt-out exists for an issuer that predates the profile, and it is the
 /// only way a plain `typ: JWT` verifies.
-#[test]
-fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
+#[tokio::test]
+async fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
     let secret = "typ-fixture-secret-padded-32-byte";
     let mut options = JwtOptions::new(secret);
     options.explicit_typing = false;
@@ -446,5 +494,51 @@ fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
         &EncodingKey::from_secret(secret.as_bytes()),
     )
     .expect("encode");
-    assert!(jwt.verify::<TestClaims>(&token).is_ok());
+    assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
+}
+
+/// A `JwtOptions` built in code is held to the variables' ranges too, or the
+/// lifetime and leeway arithmetic overflows.
+#[test]
+fn a_lifetime_or_a_leeway_built_in_code_outside_its_range_is_refused_at_construction() {
+    let secret = "this-is-a-32-byte-test-secret!!!";
+    for (expires_in, leeway, field) in [
+        (
+            Duration::ZERO,
+            Duration::from_secs(30),
+            "JwtOptions::expires_in",
+        ),
+        (
+            Duration::from_secs(u64::MAX),
+            Duration::from_secs(30),
+            "JwtOptions::expires_in",
+        ),
+        (
+            Duration::from_secs(3600),
+            Duration::from_secs(301),
+            "JwtOptions::leeway",
+        ),
+        (
+            Duration::from_secs(3600),
+            Duration::from_secs(u64::MAX),
+            "JwtOptions::leeway",
+        ),
+    ] {
+        let mut options = JwtOptions::new(secret);
+        options.expires_in = expires_in;
+        options.leeway = leeway;
+        let Err(AuthError::Failed(refused)) = JwtService::new(options) else {
+            panic!("{field} out of range must be refused");
+        };
+        assert!(refused.contains(field), "{refused}");
+    }
+}
+
+/// The one arithmetic a caller controls saturates: a wrapped sum would mint a
+/// token already expired.
+#[test]
+fn an_expiry_past_the_end_of_time_saturates() {
+    let jwt = service("saturate");
+    assert_eq!(jwt.expiry_in(u64::MAX), u64::MAX);
+    assert!(jwt.expiry() > get_current_timestamp());
 }

@@ -1,6 +1,6 @@
-//! `#[injectable]`-style construction: build a struct's `from_container`
-//! constructor from its `#[inject]` fields plus the `Discoverable` method
-//! bodies every decorator emits.
+//! `#[injectable]`-style construction: build a struct's hidden
+//! `__nestrs_from_container` constructor from its `#[inject]` fields, plus the
+//! `Discoverable` method bodies every decorator emits.
 
 use std::collections::HashSet;
 
@@ -8,6 +8,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, quote};
 use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Signature};
 
+use crate::attrs::Conditional;
 use crate::ty::{arc_inner, nth_generic_type, type_label};
 
 /// The constructor expression plus, per `#[inject]` dependency, its `TypeId`
@@ -21,9 +22,12 @@ pub struct InjectableBody {
     /// Human-readable label for each entry in `dep_keys`, in the same order.
     pub dep_names: Vec<TokenStream2>,
     /// `TypeId` of each `#[inject] Option<Arc<…>>`. Kept apart from `dep_keys`
-    /// — optionals must not gate the register fixpoint, but are still used to
-    /// order a consumer after an optional provider the same module supplies.
+    /// — an optional gates the register fixpoint only while a provider of the
+    /// same module would supply it, and the access graph lets one no reached
+    /// module provides be absent.
     pub opt_keys: Vec<TokenStream2>,
+    /// Human-readable label for each entry in `opt_keys`, in the same order.
+    pub opt_names: Vec<TokenStream2>,
     /// One `::nest_rs_core::KeyedDependency { … }` expression per
     /// `#[inject(key = "…")]` field, for the access-graph keyed check. Kept
     /// apart from `dep_keys`: a keyed dependency resolves via `get_keyed`, is
@@ -33,9 +37,9 @@ pub struct InjectableBody {
 }
 
 /// Strip `#[inject]` attributes from `item`'s fields and build its
-/// `from_container` constructor. `Arc<dyn Trait>` resolves via `get_dyn`,
-/// `Arc<Concrete>` via `get`. `Option<Arc<…>>` is an optional dependency
-/// (lenient, excluded from `dependencies`/`injected`). An `#[inject]` field
+/// `__nestrs_from_container` constructor. `Arc<dyn Trait>` resolves via `get_dyn`,
+/// `Arc<Concrete>` via `get`. `Option<Arc<…>>` is an optional dependency,
+/// reported apart from `dependencies`/`injected`. An `#[inject]` field
 /// that is neither errors; a non-`#[inject]` field falls back to
 /// `Default::default()`.
 pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBody> {
@@ -45,6 +49,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             dep_keys: Vec::new(),
             dep_names: Vec::new(),
             opt_keys: Vec::new(),
+            opt_names: Vec::new(),
             keyed_dep_keys: Vec::new(),
         }),
         Fields::Named(fields) => {
@@ -53,16 +58,18 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             let mut dep_keys = Vec::new();
             let mut dep_names = Vec::new();
             let mut opt_keys = Vec::new();
+            let mut opt_names = Vec::new();
             let mut keyed_dep_keys = Vec::new();
 
             for field in fields.named.iter_mut() {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "a compile-time invariant of the parse above; a panic in a proc macro is a compile error"
+                )]
                 let field_name = field.ident.clone().expect("named field has an ident");
-                let inject_idx = field.attrs.iter().position(|a| a.path().is_ident("inject"));
-                let Some(idx) = inject_idx else {
-                    // CORE-I5: an `Arc<…>` (or `Option<Arc<…>>`) field with no
-                    // `#[inject]` is almost always a *forgotten* injection.
-                    // Silently `Default::default()`-ing it — an empty config, a
-                    // no-op guard/strategy — is a security footgun, so reject it.
+                let Some(inject_attr) = crate::take_single_attr(&mut field.attrs, "inject")? else {
+                    // A forgotten `#[inject]` would default to an empty config or
+                    // a no-op guard — a security footgun.
                     let is_arc = arc_inner(&field.ty).is_some();
                     let is_opt_arc = nth_generic_type(&field.ty, "Option", 0)
                         .is_some_and(|inner| arc_inner(inner).is_some());
@@ -80,15 +87,11 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                     });
                     continue;
                 };
-                let inject_attr = field.attrs.remove(idx);
                 has_inject = true;
 
                 let field_ty = &field.ty;
 
-                // A keyed `#[inject(key = "…")]` field resolves a keyed
-                // singleton via `get_keyed`. Singleton-only, concrete `Arc<T>`
-                // only — a key on an `Option<…>` or `Arc<dyn Trait>` field is a
-                // compile error (no keyed optional/dyn resolution exists).
+                // No keyed optional/dyn resolution exists: concrete `Arc<T>` only.
                 if let Some(key) = parse_inject_key(&inject_attr)? {
                     if nth_generic_type(field_ty, "Option", 0).is_some() {
                         return Err(syn::Error::new_spanned(
@@ -130,8 +133,9 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 }
 
                 // Optional `#[inject] Option<Arc<…>>`: lenient resolution,
-                // out of `dependencies`/`injected` so a missing provider
-                // neither stalls the register fixpoint nor fails access check.
+                // out of `dependencies`/`injected` so a provider no reached
+                // module supplies neither stalls the register fixpoint nor
+                // fails the access check.
                 if let Some(opt_inner) = nth_generic_type(field_ty, "Option", 0) {
                     let Some(arc_inner_ty) = arc_inner(opt_inner) else {
                         return Err(syn::Error::new_spanned(
@@ -140,6 +144,8 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                              (the optional-dependency form)",
                         ));
                     };
+                    let label = type_label(arc_inner_ty);
+                    opt_names.push(quote! { #label });
                     if matches!(arc_inner_ty, syn::Type::TraitObject(_)) {
                         field_inits.push(quote! {
                             #field_name: container.get_dyn::<#arc_inner_ty>()
@@ -192,6 +198,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 dep_keys,
                 dep_names,
                 opt_keys,
+                opt_names,
                 keyed_dep_keys,
             })
         }
@@ -202,6 +209,9 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
     }
 }
 
+/// `#[inject]`'s one key.
+const INJECT: crate::Grammar = crate::Grammar::new("inject", &["key"]);
+
 /// Parse the optional `key = "…"` argument of an `#[inject]` attribute.
 /// `#[inject]` (bare) yields `None`; `#[inject(key = "github")]` yields the
 /// literal. Any other argument is a spanned compile error.
@@ -210,24 +220,9 @@ fn parse_inject_key(attr: &syn::Attribute) -> syn::Result<Option<syn::LitStr>> {
         return Ok(None);
     }
     let mut key: Option<syn::LitStr> = None;
-    attr.parse_nested_meta(|meta| {
-        if meta.path.is_ident("key") {
-            crate::reject_duplicate_argument(key.is_some(), &meta.path, "inject", "key")?;
-            // `meta.value()` on a bare `#[inject(key)]` is syn's `` expected `=` ``,
-            // which names the grammar and not the key — the silence
-            // `needs_a_value` exists to end.
-            if !meta.input.peek(syn::Token![=]) {
-                return Err(meta.error(crate::needs_a_value("inject", "key")));
-            }
-            key = Some(meta.value()?.parse()?);
-            Ok(())
-        } else {
-            Err(meta.error(crate::unknown_argument(
-                "inject",
-                &crate::key_as_written(&meta.path),
-                &["key"],
-            )))
-        }
+    INJECT.parse_attr(attr, |arg| {
+        key = Some(arg.str_lit("github")?);
+        Ok(())
     })?;
     Ok(key)
 }
@@ -242,34 +237,26 @@ pub fn injected_keyed_method(keyed_dep_keys: &[TokenStream2]) -> TokenStream2 {
     }
 }
 
-/// The `from_container` constructor emitted by every decorator macro.
+/// The hidden `__nestrs_from_container` constructor emitted by every decorator
+/// macro: the macro ABI its own expansions call, never an API of the type.
 pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {
-        /// Construct this provider by resolving its `#[inject]` fields from the
-        /// container. Emitted by the decorator; called by the register phase,
-        /// not by hand.
-        pub fn from_container(container: &::nest_rs_core::Container) -> Self {
+        #[doc(hidden)]
+        pub fn __nestrs_from_container(container: &::nest_rs_core::Container) -> Self {
             let _ = container;
             #ctor
         }
     }
 }
 
-/// The scope-aware constructor emitted by `#[injectable(scope = request)]`.
-/// Identical body to [`from_container_method`], but the parameter is a
-/// `&RequestScope` — so a `#[inject]` dep that is itself request-scoped
-/// resolves through the per-request cache (and is shared with the rest of the
-/// request), while singleton / keyed / `dyn` deps forward to the root. The
-/// binding is named `container` so the shared `ctor` tokens
-/// (`container.get()`, `container.get_dyn()`, `container.get_keyed()`) compile
-/// unchanged against `RequestScope`'s matching
-/// resolution methods.
+/// The hidden `__nestrs_from_scope` constructor emitted by
+/// `#[injectable(scope = request)]` and `(scope = transient)`:
+/// [`from_container_method`] over a `&RequestScope`, still bound as
+/// `container` so the shared `ctor` tokens compile unchanged.
 pub fn from_scope_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {
-        /// Construct this request-scoped provider from the per-request scope,
-        /// so request-scoped `#[inject]` deps share the request's instances.
-        /// Emitted by `#[injectable(scope = request)]`; called per request.
-        pub fn from_scope(container: &::nest_rs_core::RequestScope) -> Self {
+        #[doc(hidden)]
+        pub fn __nestrs_from_scope(container: &::nest_rs_core::RequestScope) -> Self {
             let _ = container;
             #ctor
         }
@@ -287,18 +274,12 @@ pub fn forwarded_arg_idents(sig: &Signature) -> syn::Result<Vec<Ident>> {
 /// `#[resolver]`'s `#[field_resolver]` path drops the parent before forwarding.
 ///
 /// A **destructuring pattern** resolves to the identifier it binds:
-/// `Path(name): Path<String>` forwards as `name`, `Valid(Json(input))` as
-/// `input`. That is poem's own idiom and the first shape a reader writes, so the
-/// decorators accept it rather than making the developer un-destructure for the
-/// macro's benefit. The developer's method keeps the pattern (it is valid Rust
-/// there, and the macro re-emits the method unchanged); only the generated
-/// wrapper's parameter list is rewritten, by
-/// [`normalize_forwarded_args`] — a wrapper that destructured too would hand the
-/// inner value (`String`) to a method expecting the extractor (`Path<String>`).
+/// `Path(name): Path<String>` forwards as `name`. Only the wrapper's parameter
+/// list is rewritten ([`normalize_forwarded_args`]), so the method still
+/// receives the extractor.
 ///
-/// A pattern binding **no** name or **several** is still an error: there is no
-/// single name to forward under, and on GraphQL the wrapper's parameter name is
-/// the SDL argument name, so a synthesized one would leak into the schema.
+/// A pattern binding no name or several is an error: on GraphQL the wrapper's
+/// parameter name is the SDL argument name, so a synthesized one would leak.
 pub fn forwarded_idents<'a>(
     inputs: impl IntoIterator<Item = &'a FnArg>,
 ) -> syn::Result<Vec<Ident>> {
@@ -316,19 +297,10 @@ pub fn forwarded_idents<'a>(
 /// `Span::mixed_site()` — the span that resolves local variables at the macro's
 /// *definition* site instead of the call site.
 ///
-/// Reach for this for every `let` a wrapper introduces alongside identifiers the
-/// developer chose. A wrapper that binds `req`/`body` on `Span::call_site()` and
-/// then extracts a handler parameter the developer spelled `body` produces two
-/// bindings of the *same* name: the second masks the first, and every later
-/// statement silently reads the wrong one. The compiler blames the attribute,
-/// never the parameter — see the `#[routes]` regression in
-/// `nest-rs-http/tests/integration/route_decorators.rs`.
-///
-/// A prefix convention (`__nestrs_body`) only narrows the window; hygiene closes
-/// it, and lets the emitted code keep readable names under `cargo expand`.
-///
-/// Struct fields and method names are matched by spelling, not hygiene — keep
-/// those on `Span::call_site()`.
+/// Use it for every `let` a wrapper introduces: a call-site `body` beside a
+/// developer's parameter named `body` silently masks one with the other.
+/// Struct fields and method names are matched by spelling — keep those on
+/// `Span::call_site()`.
 pub fn mixed_site_ident(name: &str) -> Ident {
     Ident::new(name, proc_macro2::Span::mixed_site())
 }
@@ -338,8 +310,7 @@ pub fn mixed_site_ident(name: &str) -> Ident {
 /// Returns those identifiers in order, index-aligned with the value arguments.
 ///
 /// Types are untouched: `Path(name): Path<String>` becomes `name:
-/// Path<String>`, which is what lets the wrapper pass the whole extractor on to
-/// a method that destructures it itself. See [`forwarded_idents`] for the why.
+/// Path<String>` (see [`forwarded_idents`]).
 pub fn normalize_forwarded_args<'a>(
     inputs: impl IntoIterator<Item = &'a mut FnArg>,
 ) -> syn::Result<Vec<Ident>> {
@@ -366,7 +337,6 @@ pub fn normalize_forwarded_args<'a>(
 /// The single identifier a parameter pattern binds — the name a generated
 /// wrapper declares it under and forwards it by.
 fn binder_of(pat: &Pat) -> syn::Result<Ident> {
-    // The common case, and the only one that needs no rewrite.
     if let Pat::Ident(pat_ident) = pat
         && pat_ident.subpat.is_none()
     {
@@ -421,14 +391,9 @@ fn collect_binders(pat: &Pat, out: &mut Vec<Ident>) {
 /// from the container outside its `#[inject]` fields — guards, filters,
 /// interceptors, resolver `#[field_resolver]` `&Service` deps.
 ///
-/// Both halves come out of **one** walk, deduplicated by token text once, so
-/// they are index-aligned by construction. That alignment is load-bearing: the
-/// access graph pairs `injected()[i]` with `injected_names()[i]` to name a
-/// dependency no module provides. Two independent walks over the same list
-/// would have to dedupe on the byte-identical rule forever, and a divergence
-/// would not fail — it would silently make the boot error name the *wrong*
-/// type, which is worse than the `<unnamed dependency>` placeholder it
-/// replaces.
+/// One walk, so the halves are index-aligned: the access graph pairs
+/// `injected()[i]` with `injected_names()[i]`, and a misalignment would name
+/// the wrong type silently.
 pub struct LayerDeps {
     /// `TypeId::of::<P>()` per layer, for `Discoverable::injected`.
     pub keys: Vec<TokenStream2>,
@@ -438,25 +403,38 @@ pub struct LayerDeps {
 
 /// Walk `items` once, yielding [`LayerDeps`]. Feeding its `keys` into
 /// `Discoverable::injected` is what puts a layer under the access contract.
-pub fn layer_deps<'a, T: ToTokens + 'a>(items: impl IntoIterator<Item = &'a T>) -> LayerDeps {
+///
+/// An item on a `#[cfg]`-gated method is emitted under its [`Conditional`]
+/// conditions, unless it is also declared unconditionally.
+pub fn layer_deps<'a, T: ToTokens + 'a>(
+    items: impl IntoIterator<Item = impl Into<Conditional<'a, T>>>,
+) -> LayerDeps {
+    let items: Vec<Conditional<'a, T>> = items.into_iter().map(Into::into).collect();
+    let unconditional: HashSet<String> = items
+        .iter()
+        .filter(|entry| entry.cfgs.is_empty())
+        .map(|entry| entry.item.to_token_stream().to_string())
+        .collect();
     let mut seen = HashSet::new();
     let mut keys = Vec::new();
     let mut labels = Vec::new();
-    for item in items {
-        if !seen.insert(quote!(#item).to_string()) {
+    for Conditional { cfgs, item } in items {
+        let rendered = item.to_token_stream().to_string();
+        if !cfgs.is_empty() && unconditional.contains(&rendered) {
             continue;
         }
-        keys.push(quote! { ::core::any::TypeId::of::<#item>() });
+        if !seen.insert(format!("{} {rendered}", quote!(#(#cfgs)*))) {
+            continue;
+        }
+        keys.push(quote! { #(#cfgs)* ::core::any::TypeId::of::<#item>() });
         let label = layer_label(item);
-        labels.push(quote! { #label });
+        labels.push(quote! { #(#cfgs)* #label });
     }
     LayerDeps { keys, labels }
 }
 
-/// Short diagnostic name for a layer, through the crate's one labeller. Routed
-/// via `Type` rather than `Path` so a `&Service` or `Arc<dyn Trait>` field
-/// dependency — which `#[resolver]` passes here — reads as `dyn Trait` instead
-/// of raw token text.
+/// Short diagnostic name for a layer, read as a `Type` so `Arc<dyn Trait>`
+/// reads as `dyn Trait`.
 fn layer_label(item: &impl ToTokens) -> String {
     match syn::parse2::<syn::Type>(item.to_token_stream()) {
         Ok(ty) => type_label(&ty),
@@ -482,43 +460,66 @@ pub fn injected_keys_with_layers(dep_keys: &[TokenStream2], layers: &LayerDeps) 
 
 /// The name half of [`injected_keys_with_layers`], index-aligned with it —
 /// body for the inherent `__nestrs_injected_names()` a struct decorator emits.
-/// Both take the same [`LayerDeps`], so the alignment is not a convention the
-/// call site has to honour.
 pub fn injected_names_with_layers(dep_names: &[TokenStream2], layers: &LayerDeps) -> TokenStream2 {
     let mut names = dep_names.to_vec();
     names.extend(layers.labels.iter().cloned());
     injected_keys_expr(&names)
 }
 
+/// The inherent `__nestrs_injected_optional()` and
+/// `__nestrs_injected_optional_names()` an edge's struct half emits beside
+/// `__nestrs_injected()`, read back by its impl half through
+/// [`injected_methods_with_layers`].
+pub fn injected_optional_fns(
+    opt_keys: &[TokenStream2],
+    opt_names: &[TokenStream2],
+) -> TokenStream2 {
+    quote! {
+        #[doc(hidden)]
+        pub fn __nestrs_injected_optional() -> ::std::vec::Vec<::core::any::TypeId> {
+            ::std::vec![ #(#opt_keys),* ]
+        }
+
+        #[doc(hidden)]
+        pub fn __nestrs_injected_optional_names() -> ::std::vec::Vec<&'static str> {
+            ::std::vec![ #(#opt_names),* ]
+        }
+    }
+}
+
 /// `Discoverable::injected` **and** `injected_names` for an impl-block macro:
 /// take the struct's `__nestrs_injected()` / `__nestrs_injected_names()` and
-/// extend each with the per-route / per-message layers.
+/// extend each with the per-route / per-message layers; the optional
+/// dependencies come from the struct's [`injected_optional_fns`] as they are.
 ///
-/// One function emitting both, over one [`LayerDeps`] — so an impl-block
-/// decorator cannot append a key without its label, and adding a seventh layer
-/// family to a call site's selector cannot misalign the two. The fixed-size,
-/// explicitly-typed arrays keep `extend` unambiguous when no per-method layers
-/// are present.
+/// One function over one [`LayerDeps`], so a key never goes without its label.
 pub fn injected_methods_with_layers(
     self_ty: &impl quote::ToTokens,
     layers: &LayerDeps,
 ) -> TokenStream2 {
-    let count = proc_macro2::Literal::usize_unsuffixed(layers.keys.len());
     let keys = &layers.keys;
     let labels = &layers.labels;
     quote! {
         fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
             let mut __keys = <#self_ty>::__nestrs_injected();
-            let __layers: [::core::any::TypeId; #count] = [ #(#keys),* ];
+            let __layers: ::std::vec::Vec<::core::any::TypeId> = ::std::vec![ #(#keys),* ];
             __keys.extend(__layers);
             __keys
         }
 
         fn injected_names() -> ::std::vec::Vec<&'static str> {
             let mut __names = <#self_ty>::__nestrs_injected_names();
-            let __layers: [&'static str; #count] = [ #(#labels),* ];
+            let __layers: ::std::vec::Vec<&'static str> = ::std::vec![ #(#labels),* ];
             __names.extend(__layers);
             __names
+        }
+
+        fn injected_optional() -> ::std::vec::Vec<::core::any::TypeId> {
+            <#self_ty>::__nestrs_injected_optional()
+        }
+
+        fn injected_optional_names() -> ::std::vec::Vec<&'static str> {
+            <#self_ty>::__nestrs_injected_optional_names()
         }
     }
 }
@@ -545,6 +546,27 @@ pub fn dependency_names_method(dep_names: &[TokenStream2]) -> TokenStream2 {
     }
 }
 
+/// `Discoverable::injected_optional` — each `#[inject] Option<Arc<…>>` field,
+/// emitted for every scope, as [`injected_method`] is.
+pub fn injected_optional_method(opt_keys: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        fn injected_optional() -> ::std::vec::Vec<::core::any::TypeId> {
+            ::std::vec![ #(#opt_keys),* ]
+        }
+    }
+}
+
+/// `Discoverable::injected_optional_names` — index-aligned with
+/// [`injected_optional_method`], so the access graph can name an optional
+/// dependency it refuses.
+pub fn injected_optional_names_method(opt_names: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        fn injected_optional_names() -> ::std::vec::Vec<&'static str> {
+            ::std::vec![ #(#opt_names),* ]
+        }
+    }
+}
+
 /// `Discoverable::optional_dependencies` — orders an eager provider after an
 /// optional dep the same module supplies, while still building it (with
 /// `None`) when no provider supplies one.
@@ -556,8 +578,19 @@ pub fn optional_dependencies_method(opt_keys: &[TokenStream2]) -> TokenStream2 {
     }
 }
 
+/// `Discoverable::optional_dependency_names` — index-aligned with
+/// [`optional_dependencies_method`], so the boot can name an optional
+/// dependency a provider waited on.
+pub fn optional_dependency_names_method(opt_names: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        fn optional_dependency_names() -> ::std::vec::Vec<&'static str> {
+            ::std::vec![ #(#opt_names),* ]
+        }
+    }
+}
+
 /// `Discoverable::injected_names` — index-aligned with
-/// [`injected_method`](injected_method), so the access graph can name a
+/// [`injected_method`], so the access graph can name a
 /// dependency no module provides. Every provider that emits `injected` should
 /// emit this too; one that does not falls back to a placeholder name.
 pub fn injected_names_method(dep_names: &[TokenStream2]) -> TokenStream2 {

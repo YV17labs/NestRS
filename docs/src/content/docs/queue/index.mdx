@@ -10,10 +10,10 @@ import { Aside } from '@astrojs/starlight/components';
 Background work shares the rest of the framework's shape. A queue
 handler is a method on any `#[injectable]` provider, tagged
 `#[process(queue = <Name>Queue, retries)]` inside a
-`#[processor]` impl block. Importing `RedisWorkerModule` in the worker app
-activates the runtime at boot, drains the discovered methods, and spawns
-one worker per method. A producer-only app skips that import and only
-gets the connection — same crate, same types, one less module.
+`#[processor]` impl block. Importing `QueueModule` in the worker app
+attaches the port's worker at boot, which discovers the reachable methods
+and runs each with permits of its own. A producer-only app skips that
+import and only pushes — same crate, same types, one less module.
 
 A queue is named by a **type**, not a string. `#[queue(name = "...", job =
 <Payload>)]` on a unit struct at the feature port declares the wire name
@@ -25,27 +25,27 @@ Read this section, then start from the working reference: the
 [`worker`](/publish/) app in Publish — audio transcoding jobs, with the
 `api` app as the producer.
 
-The abstractions — `Job`, `Processor`, `ProcessMethod`, the `#[processor]`
-macro — ship in **`nest-rs-queue`**. The first-class storage, **Redis**,
-ships in **`nest-rs-redis`** (built on
-[`apalis`](https://docs.rs/apalis)): the `RedisQueueProducer` producer binding,
-the `RedisWorker` transport, and the `RedisQueueModule` / `RedisWorkerModule`
-activation seams. Both are compilation units, not lines you write: the
-`redis` feature below pulls them together, and an app's manifest names
-neither.
+The contract — `Queue`, `JobProducer`, `PushOptions`, the `#[processor]`
+macro, what one attempt at a job is, and the `QueueWorker` that runs them —
+ships in **`nest-rs-queue`**. The first-class storage, **Redis**, ships in
+**`nest-rs-redis`**, written on Redis Streams: `RedisQueueModule` binds its
+`RedisQueueProducer` and the consumer the worker runs jobs through. Both are
+compilation units, not lines you write: the `redis-queue` feature below pulls
+them together, and an app's manifest names neither.
 
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs --features redis
+cargo add nest-rs --features redis-queue
 ```
 
-One line in the feature crate's manifest: `redis` implies `queue` — the
-Redis-bound types, the macros, the worker-context seam and the pipe fold
-`#[process]` expands to, together.
+One line in the feature crate's manifest: `redis-queue` implies `queue` and
+`redis` — the Redis connection and the queue's binding over it, the macros, the
+job timeout and the pipe fold `#[process]` expands to, together. `redis`
+alone is the connection, and compiles no queue.
 
 A job payload declares `serde` itself; `anyhow` and `tracing` come through
-`nest_rs::core::anyhow` and `nest_rs::queue::tracing`.
+`nest_rs::core::anyhow` and `nest_rs::core::tracing`.
 `nestrs g queue <feature>` writes the stanza for you.
 
 ## The queue's identity
@@ -55,7 +55,7 @@ the `queue/` adapter. The producer is usually the port's own service, so
 this is the artifact both sides reach for:
 
 ```rust title="crates/features/src/audio/command.rs (from the demo)"
-use nest_rs::queue::{QueueName, queue};
+use nest_rs::queue::{Queue, queue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,12 +66,15 @@ pub struct TranscodeCommand {
 #[queue(name = "audio", job = TranscodeCommand)]
 pub struct AudioQueue;
 
-pub const AUDIO_QUEUE: &str = <AudioQueue as QueueName>::NAME;
+pub const AUDIO_QUEUE: &str = <AudioQueue as Queue>::NAME;
 ```
 
 Re-export both from the feature's `mod.rs`. A marker that is not reachable
-from the port leaves the untyped `push(name, job)` escape hatch as the only
-way to enqueue — which loses the check `QueueName` exists to provide.
+from the port leaves the untyped `push_json(name, payload, None)` escape hatch
+as the only way to enqueue — which loses the check `Queue` exists to provide.
+
+The name is 1 to 128 of `A-Z a-z 0-9 _ . -`, checked when the macro expands:
+`:` separates the levels of a key, and whitespace would reach a log field.
 
 ## A first queue handler
 
@@ -79,10 +82,10 @@ A regular `#[injectable]` service with one decorated method. The
 `#[processor]` attribute marks the impl block; `#[process]` marks the
 method as a queue consumer.
 
-```rust title="crates/features/src/audio/queue/processor.rs (from the demo)"
+```rust title="crates/features/src/audio/queue/processor.rs (from the demo, abridged)"
 use std::sync::Arc;
 
-use nest_rs::core::anyhow::Result;
+use anyhow::Result;
 use nest_rs::core::injectable;
 use nest_rs::queue::processor;
 
@@ -96,9 +99,10 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = AudioQueue, retries = 3)]
+    #[process(queue = AudioQueue, retries = 3, concurrency = 4)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-        self.svc.transcode(&job.file).await
+        self.svc.transcode(&job.file).await?;
+        Ok(())
     }
 }
 ```
@@ -113,56 +117,76 @@ Adapters carry transport mechanics; the service carries intent.
 - **`#[processor]`** on the impl block orchestrates the per-method
   `#[process]` attributes and submits one queue consumer per decorated
   method.
-- **`#[process(queue, retries)]`** binds the method to a `QueueName`
-  **type** and gives it a retry budget. The job type is read from the
+- **`#[process(queue, retries, concurrency)]`** binds the method to a
+  `Queue` **type**, gives it a retry budget, and lets `concurrency`
+  attempts run side by side on each replica — see
+  [How many at once](#how-many-at-once-and-how-fast). The job type is read from the
   method's first parameter after `&self`, and the macro asserts it is
   `AudioQueue::Job` — a handler consuming the wrong payload is a compile
-  error naming both types.
+  error naming both types. A queue is drained by one method: a second
+  `#[process]` on the same queue fails the boot naming both.
 
 The job argument also binds a [pipe](/fundamentals/pipes/):
 `Piped<P, T>` / `Valid<T>` expose the wire payload `T`, run the pipe
 after deserialization, and hand the handler the transformed value — a
 rejection is a job error, so the queue's retry/failure policy applies.
 
-## One job at a time
+Beside the job, a method may take what the port hands one attempt, recognised
+by its type, once each and in any order: an `Attempt` — the job's id, the one
+its push's receipt returned and the same on every attempt, and the attempt's
+number from 1 — and a `Checkpoint<S>`, the job's saved progress
+([Retries and failure](/queue/retries-and-failure/)).
 
-A `#[process]` method processes **one job at a time**, and there is no
-knob to change that. Throughput comes from running more replicas of the
-worker app:
+```rust
+use nest_rs::queue::Attempt;
 
-```bash frame="terminal"
-$ kubectl scale deploy/worker --replicas=6   # six jobs in flight, not one
+#[process(queue = NotifyQueue, retries = 3)]
+async fn notify(&self, job: NotifyCommand, attempt: Attempt) -> Result<()> {
+    self.svc.send(&job, &attempt.job_id().to_string()).await
+}
 ```
 
-That is a deliberate division of labour. nestrs targets the container, and
-the container platform already schedules, meters and restarts the unit that
-decides how much work runs at once. A per-method ceiling would be a second
-scheduler competing with the first, and the number that makes it correct
-depends on the pod's CPU share — something the source cannot know.
-Serialized-per-method is instead a property you can read off the code:
-every replica carries an identical load, and a handler that guards a
-connection pool or a rate-limited third-party API needs no ceiling of its
-own to stay within its budget.
+## How many at once, and how fast
 
-Two consequences worth knowing:
-
-- **A slow handler is head-of-line blocking for its own queue** — but only
-  its own. Methods on other queues, and other replicas on the same queue,
-  keep draining. Split a long tail onto its own queue rather than reaching
-  for parallelism inside one.
-- **The consumer prefetches nothing.** Each poll fetches a single job, so a
-  job waiting behind a busy worker stays in Redis where a peer replica can
-  take it — scaling out actually redistributes work instead of shuffling it
-  between in-memory buffers.
+A `#[process]` method runs **one attempt at a time** per worker replica unless
+it declares more — `concurrency = 4` lets four run side by side in each
+replica — and throughput beyond that comes from running more replicas. A
+`throttle(limit = 120, window = "1m")` caps how many attempts **start** per
+window across every replica together, which is the key for a provider's rate
+limit. Both, the pool they draw on, and scaling replicas on queue depth, are on
+[Concurrency and scaling](/queue/scaling/).
 
 <Aside type="caution">
-**Write `#[process]` handlers to be idempotent.** Two replicas never receive
-the same job from the queue — the Redis fetch claims ids atomically — but
-*starting* a replica while another holds a job puts that job back on the queue,
-and it runs again. Scaling the worker up mid-flight therefore re-runs in-flight
-work, not only failed work. The measurement and the cause are in
-[Retries and failure](/queue/retries-and-failure/#limits).
+**Delivery is at least once, so a handler is idempotent.** Two replicas never
+receive the same job from the queue: each delivery holds a lease on its job,
+renewed while the attempt runs, and every write it makes is fenced on that
+lease. A job runs again only once a lease lapses — its replica crashed, froze,
+or was cut off from Redis for longer than the lease — so a handler whose effects
+leave the process keys them on `attempt.job_id()`, the one name its job keeps
+across every attempt and redelivery. See
+[Delivery on Redis](/queue/delivery/#at-least-once-and-the-fence).
 </Aside>
+
+## What a backend supports
+
+Every backend owes three things, and none of them is a capability: the retry
+budget and its backoff, which the port counts; one transaction per attempt,
+which the worker's context owns; and each method's `concurrency`. Beyond them a
+backend declares the capabilities it honours, and the port refuses a
+declaration the backend lacks at the first site that sees both — the push for a
+push option, the call for a cancel, the worker's boot for a `#[process]` key —
+naming the backend.
+
+| Capability | What declares it | Redis |
+|---|---|---|
+| `DelayedPush` | `PushOptions::with_delay` | yes — the job waits off the stream, due on Redis's clock |
+| `UniquePush` | `PushOptions::with_unique` | yes — the key is claimed in the script that files the job |
+| `Cancellation` | `cancel(&receipt)`, `cancel_unique(queue, key)` | yes — a waiting job is removed; a running one runs to its outcome |
+| `Throttle` | `#[process(throttle(..))]` | yes — one fixed window per queue, across every replica |
+| `Checkpoint` | a `Checkpoint<_>` parameter | yes — one field beside the job, gone with its outcome |
+
+Redis is the one backend the framework ships; a driver you write declares its
+own row — see [Writing a queue driver](/queue/writing-a-driver/).
 
 ## One attempt, one transaction
 
@@ -180,8 +204,8 @@ job that brackets long work that is not the database's. Such a job owns its
 own idempotency.
 
 The transaction bounds what a **retry** repeats, never what a
-**redelivery** does: a durable backend delivers at least once, so a worker
-that dies between the commit and the acknowledgement runs a job whose
+**redelivery** does: a worker that dies between the commit and the job's
+outcome leaves the job to its lease, and the next delivery runs it again — its
 writes already landed. See
 [Repo and the executor](/database/repo-and-executor/) and
 [Retries and failure](/queue/retries-and-failure/).
@@ -190,10 +214,8 @@ writes already landed. See
 
 The pattern the framework is built for: one `#[injectable]` declares
 the deps once, multiple decorated methods share them. Different queues,
-same service:
-
-Three queues, so three `#[queue]` declarations at the port — each pairing
-a wire name with the payload it carries:
+same service. Three queues, so three `#[queue]` declarations at the port —
+each pairing a wire name with the payload it carries:
 
 ```rust title="crates/features/src/audio/command.rs"
 #[queue(name = "audio", job = TranscodeCommand)]
@@ -206,7 +228,7 @@ pub struct AudioPreviewQueue;
 pub struct AudioCleanupQueue;
 ```
 
-```rust title="crates/features/src/audio/queue/processor.rs (from the demo)"
+```rust title="crates/features/src/audio/queue/processor.rs"
 #[injectable]
 pub struct AudioProcessor {
     #[inject] audio_svc: Arc<AudioService>,
@@ -251,45 +273,59 @@ same block — same convention as `#[routes]` and `#[scheduled]`.
 
 Three modules, three roles:
 
-- **`RedisModule::for_root(None)`** — opens the one Redis connection every
-  Redis binding shares (`NESTRS_REDIS__URL`). Every app that touches Redis
-  needs it.
-- **`RedisQueueModule`** — binds the producer over that connection, as
-  `Arc<dyn JobProducer>`. Every app that enqueues imports it.
-- **`RedisWorkerModule`** — activates the consumer runtime. At boot the
-  framework drains the discovered `#[process]` methods, spawns one
-  apalis worker per method, and shuts them down with the app. A
-  producer-only app does NOT import this.
+- **`RedisModule::for_root(None)`** — opens the Redis connection every Redis
+  binding shares (`<PREFIX>_REDIS__URL`). Every app that touches Redis needs
+  it; a [second Valkey](/queue/topologies/#a-second-valkey) is a named
+  instance beside it.
+- **`RedisQueueModule`** — binds the queue port over that connection: the
+  producer, as `Arc<dyn JobProducer>`, and the consumer the worker runs jobs
+  through. Every app that enqueues or runs jobs imports it.
+- **`QueueModule::for_root(None)`** — from `nest_rs::queue`, attaches the
+  port's `QueueWorker` transport. At boot it discovers the reachable
+  `#[process]` methods, runs each over the bound consumer, and drains them
+  with the app. A producer-only app does NOT import this.
 
-```rust title="apps/worker/src/module.rs (from the demo)"
+```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
+// …
+use nest_rs::queue::QueueModule;
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
+// …
 
 use features::audio::AudioQueueModule;
+// …
 
-#[module(imports = [
-    ConfigModule::for_root(),
-    RedisModule::for_root(None),
-    RedisQueueModule,
-    RedisWorkerModule::for_root(None),
-    AudioQueueModule,
-])]
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        // …
+        RedisModule::for_root(None),
+        RedisQueueModule,
+        QueueModule::for_root(None),
+        // …
+        AudioQueueModule,
+        // …
+    ],
+)]
 pub struct WorkerModule;
 ```
 
-`AudioQueueModule` imports the `AudioModule` port itself, so the app
-lists only the adapter — registration is idempotent.
+The demo's worker also opens the database — its notifications job writes a
+row — runs the notifications purge on a schedule, and serves health probes on
+HTTP. `AudioQueueModule` imports the
+`AudioModule` port itself, so the app lists only the adapter — registration is
+idempotent.
 
 `main` is the universal skeleton:
 
 ```rust title="apps/worker/src/main.rs (from the demo)"
-use nest_rs::core::anyhow::Result;
+use anyhow::Result;
 use nest_rs::core::App;
 
 use worker::WorkerModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     App::builder()
         .module::<WorkerModule>()
@@ -307,28 +343,39 @@ $ nestrs run dev worker
 ```
 
 ```text frame="terminal"
- INFO nest_rs::app: attached module-contributed transport transport="RedisWorker"
- INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
- INFO features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
- INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" job_id="01M0ATJ9C2YN8NJX3GVTA911X6" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+ INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
+ INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=4
+DEBUG features::audio: transcoded file="track-1787069801760.mp3" derived_key="transcoded/track-1787069801760.mp3" trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
+ INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf87-732d-9226-abd166aa514c backend_id="1790442131336-0" attempt=1 outcome="ok" duration_ms=32.129 trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
 ```
 
-The last two lines share the job's `trace_id`, and it is the producer's — see [Observability](/queue/observability/) for the
-full field set.
+The last two lines share the job's `trace_id`, and it is the producer's; the
+`job_id` is the one the push returned — see
+[Observability](/queue/observability/) for the full field set.
 
 ## In this section
 
 ### Basics
 
 - [Producing jobs](/queue/producing-jobs/) — typing payloads, the publisher
-  handle, and the rule that keeps `push_to::<Q>` behind a service.
+  handle, the rule that keeps a push behind a service, and a delay, a unique
+  key or a cancel.
 - [Wiring](/queue/wiring/) — `RedisModule`, `RedisQueueModule` and
-  `RedisWorkerModule`, and module-gating across a shared features crate.
+  `QueueModule`, and module-gating across a shared features crate.
 
 ### All options
 
+- [Valkey topologies](/queue/topologies/) — one server, Sentinel or Cluster,
+  the URL of each, a failover under a running queue, and the ACL each adds.
 - [Retries and failure](/queue/retries-and-failure/) — what an `Err` means,
-  the apalis retry shape, panics, dead-lettering.
+  the retry budget and its backoff, checkpoints, panics, dead-lettering.
+- [Concurrency and scaling](/queue/scaling/) — `concurrency`, `throttle`, the
+  database pool, and replicas on queue depth with KEDA.
+- [Delivery on Redis](/queue/delivery/) — where a queue's keys live, leases
+  and redeliveries, a crash, a timeout, shutdown, and what each capability
+  keeps.
+- [Upgrading queues from 6.x](/queue/upgrading/) — draining 6.x jobs before
+  7.0 takes over, and the calls a producer changes.
 - [Observability](/queue/observability/) — the span, its fields, and the
   lines a worker emits per job.
 - [Writing a queue driver](/queue/writing-a-driver/) — the scaffold for a
@@ -336,11 +383,12 @@ full field set.
 
 ## Reference
 
-- `crates/nest-rs-queue/` — the abstractions: `#[processor]`,
-  `#[process]`, `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
+- `crates/nest-rs-queue/` — the contract: `#[queue]`, `#[processor]`,
+  `#[process]`, `Queue`, `JobProducer`, `PushOptions`, `PushReceipt`,
+  `Checkpoint`, `Capability`, and `QueueModule` with its `QueueWorker`.
 - `crates/nest-rs-redis/` — the Redis storage: `RedisModule` and its
-  `RedisConnection`, `RedisQueueModule` and its `RedisQueueProducer`,
-  `RedisWorkerModule` and its `RedisWorker`.
+  `RedisConnection`, `RedisQueueModule` with its `RedisQueueProducer` and the
+  consumer it binds.
 
 ## Going further
 

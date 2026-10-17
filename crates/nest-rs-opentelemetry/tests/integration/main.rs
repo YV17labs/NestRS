@@ -1,6 +1,17 @@
-//! `OpenTelemetryModule` must not be imported without `OpenTelemetry::init` first — that would
-//! register no-op telemetry providers and drop traces/metrics silently, so it
-//! panics at boot instead. This runs as its own test binary so no sibling test
-//! initialises OpenTelemetry and sets the global flag.
+//! `OpenTelemetryModule`'s boot contract, and the OTLP exporters' client.
+//! nextest runs every test in a process of its own, so a test that initialises
+//! OpenTelemetry never does it for another.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
+mod init;
+#[cfg(feature = "otlp")]
+mod metrics;
 mod module;
+#[cfg(feature = "otlp")]
+mod otlp;

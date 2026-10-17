@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "OAuth 2.0 authorization-server vocabulary for NestRS: RFC 6749 §5.2's token-endpoint error set, and §2.3.1 client authentication against a static registry in constant time."
+description = "OAuth 2.0 authorization-server vocabulary for NestRS: RFC 6749 §5.1's access token response, §5.2's token-endpoint error set, and §2.3.1 client authentication against a static registry in constant time."
 keywords = ["framework", "nestrs", "oauth", "rfc6749", "authorization-server"]
 categories = ["authentication", "web-programming"]
 
@@ -16,10 +16,13 @@ categories = ["authentication", "web-programming"]
 # uses authn's vocabulary, so a worker that only verifies a JWT links `authn`
 # and never compiles this crate.
 nest-rs-authn.workspace = true
+# `AuthenticatedClient` is what the authentication guard attaches for the rest
+# of the request, so it is an ambient value.
+nest-rs-core.workspace = true
 # `TokenError` renders itself as the §5.2 JSON envelope, and marks the response
 # `NoBearerChallenge` so a token refusal is never dressed up as a
 # oauth-resource challenge.
-nest-rs-guards.workspace = true
+nest-rs-http.workspace = true
 poem.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -30,15 +33,16 @@ schemars.workspace = true
 thiserror.workspace = true
 # Constant-time secret comparison for the registry — a client id that exists and
 # one that does not must be indistinguishable by timing.
-subtle.workspace = true
+aws-lc-rs.workspace = true
 # `TokenError::Sign`/`Server` keep the real cause attached for tracing while
 # `Display` stays the opaque `server_error`.
 anyhow.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
-nest-rs-core = { path = "../nest-rs-core" }
-nest-rs-http = { path = "../nest-rs-http" }
+# The suite mounts a token endpoint through `#[controller]` / `#[routes]`,
+# whose expansion binds the route's guards and wraps its response layers.
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 tokio = { workspace = true }
 

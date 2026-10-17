@@ -20,7 +20,7 @@ pub struct UsersController {
 
 #[routes]
 impl UsersController {
-    #[get("/:id")]
+    #[get("/{id}")]
     async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
@@ -43,7 +43,8 @@ resolver — carries across intact.
 | `@Injectable()` | `#[injectable]` |
 | `@Controller('users')` | `#[controller(path = "/users")]` |
 | `@Get()` / `@Post()` methods | `#[get("/")]` / `#[post("/")]` in a `#[routes] impl` |
-| `CanActivate` guard | `Guard` trait (`check_http`) + `#[use_guards(...)]` |
+| `@Get(':id')`, `@Get('files/*path')` | `#[get("/{id}")]`, `#[get("/files/{*path}")]` — OpenAPI's [path templating](/http/controllers/#route-templates), the spelling the document prints |
+| `CanActivate` guard | `Guard` trait (`check_http`, `check`) + `#[use_guards(...)]`; `ExecutionContext` is the `UnitContext` both entries take |
 | DTO + `class-validator` | entity `#[expose]` + `validate(...)` (the `validator` crate) |
 | `@Param('id')` / `@Query()` / `@Body()` | the parameter type: `Path<Uuid>`, `Query<F>`, `Json<T>` |
 | `@ApiProperty()` / `@Field()` per property | one `#[expose]` on the column, schemas derived |
@@ -53,8 +54,12 @@ resolver — carries across intact.
 | `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]` — `#[use_filters(...)]` is the *unconditional* mapper, not the typed catch |
 | `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
 | `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
-| `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `NESTRS_<NS>__<KEY>` |
+| Hooks run by DI level, each level at once (`Promise.all`) | dependencies first, one hook at a time, and shutdown in exact reverse ([order](/fundamentals/lifecycle/#ordering-and-failure)) |
+| `onApplicationShutdown(signal)` | `#[on_application_shutdown]`; the signal is `cause()` on an injected `Arc<AppLifecycle>` (`StopCause::Terminate`, `Interrupt`, …) |
+| `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
+| `ServeStaticModule.forRoot({ rootPath })` | `StaticFilesModule::for_root(StaticFilesConfig { root, .. })` — or `for_root(Embedded::of::<WebAssets>())` for a folder embedded in the binary |
 | `Test.createTestingModule(...)` | `TestApp` booting the real `AppModule` |
+| `NestFactory.createApplicationContext(...)`, then `app.close()` | `App::builder()…build()`, `init()`, then `close()` ([running without serving](/fundamentals/lifecycle/#running-without-serving)) |
 | `nest g resource users` | `nestrs g resource users` |
 | Runtime DI resolution | access graph checked at boot, with a named error |
 
@@ -136,12 +141,12 @@ module config is reachable both ways:
 
 1. **Pinned in code** — `Module::for_root(MyConfig { .. })`, type-checked by
    the compiler.
-2. **`NESTRS_<NAMESPACE>__<KEY>`** — one explicit line per variable in
+2. **`<PREFIX>_<NAMESPACE>__<KEY>`** — one explicit line per variable in
    `from_env`, so the file lists exactly which variables exist.
 
 The two compose **per field, not per struct**: the pinned struct is the *base*
 the environment overlays. Pinning `port` in `HttpConfig` leaves
-`NESTRS_HTTP__COMPRESSION` free to move, and neither path erases the other.
+`<PREFIX>_HTTP__COMPRESSION` free to move, and neither path erases the other.
 
 "The environment" here is the **real process environment only**. A `for_root`
 pin outranks a `.env` file committed beside the code; it does not outrank a
@@ -198,18 +203,31 @@ defer one side of a cycle it cannot see until it runs. Rust does not offer the
 tie in the first place. Cargo refuses a dependency cycle **between crates**
 outright, so the layering you drew is the layering you get.
 
-Inside a module, two providers waiting on each other fail the register phase by
-name, and the panic carries the remedy:
+Two modules of one crate may still import each other. That cycle is harmless
+until a provider crosses it: one of the two modules registers before the other's
+providers exist, so a provider injecting across the cycle has nothing to be
+built from. The boot refuses it by name (`UnbuiltProviderError`), with the edit
+to make:
 
 ```text
-module `PostsModule`: dependency cycle among provider(s) ["PostsService", "UsersService"] — each waits on another provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete type
+module `UsersModule`: `UsersService` was never built — it needs `PostsService`, which nothing had registered when `UsersModule`'s providers were built; `UsersModule` and `PostsModule` import each other, so one registers before the other's providers exist: move what both need into a module both import
 ```
 
-That remedy is the point. A cycle is a design signal — two things that should
-meet at an interface are reaching for each other's concrete type. Injecting
-`Arc<dyn Trait>` puts the seam back, and the cycle disappears instead of being
-deferred. There is nothing to wrap in a thunk, and no runtime resolution order
-to reason about.
+When the providers also wait on each other — `PostsService` injecting
+`UsersService` back — no layout of modules can order them, and the boot names
+the cycle instead (`ProviderCycleError`). It does so whichever modules list
+them and whatever their scope, a request-scoped or transient cycle included,
+before any request would resolve it, and the error carries the remedy:
+
+```text
+module `PostsModule`: singleton provider cycle `PostsService` → `UsersService` → `PostsService` — break it by moving what both need into a third provider both inject, by passing the value as a method argument, or by publishing an event one side listens to
+```
+
+That remedy is the point. A cycle is a design signal — each side owns half of
+what the other needs. Moving that half into a provider both inject, passing the
+value at the call, or turning one direction into an event removes the cycle
+instead of deferring it. There is nothing to wrap in a thunk, and no runtime
+resolution order to reason about.
 
 ## Other things you will reach for and not find
 

@@ -24,6 +24,9 @@ anyhow.workspace = true
 # `g migration` stamps the migration filename with today's date.
 chrono.workspace = true
 clap.workspace = true
+# `g auth` draws each development signing secret from the OS's CSPRNG: one read,
+# no generator to seed.
+getrandom.workspace = true
 # `lint` pairs a file's stem against the types it declares, and reads them with
 # Rust's own parser: a `pub struct` inside a template string is what a text scan
 # counts and a parser does not, and this crate ships such a string.
@@ -33,6 +36,21 @@ toml_edit.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The doctor's parity tests run the loader it mirrors beside it. Path-only
+# dev-dependencies: they never reach `cargo install`, so the command still links
+# no framework crate, and publishing strips them.
+nest-rs-config = { path = "../nest-rs-config" }
+# The selector and the prefix a cascade may not name, from the kernel's own
+# constants rather than a literal.
+nest-rs-core = { path = "../nest-rs-core" }
+# `#[instance]` refuses the reserved vocabulary from a list of its own, which
+# a test holds to the one this crate scrapes from `architecture.md`.
+nest-rs-codegen = { path = "../nest-rs-codegen" }
+# A generated binary's console lines, read back as the JSON they are.
+serde_json.workspace = true
+# `figment::Jail` sets and restores the working directory and the environment
+# the loader reads, as `nest-rs-config`'s own suite does.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

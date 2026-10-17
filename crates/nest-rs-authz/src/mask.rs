@@ -1,12 +1,6 @@
-//! Ambient (context-free) field-level masking.
-//!
-//! The transport bindings ([`crate::graphql::masked_value_for`],
-//! [`crate::http::mask_entity_response`]) read the [`Ability`](crate::Ability)
-//! from a transport handle. Some paths have none: a `#[dataloader]` batch runs
-//! on a task async-graphql spawned off-request, and an MCP tool emits arbitrary
-//! JSON-RPC content. Those read the ability from the ambient task-local instead
-//! ([`current_ability`]), which [`crate::with_ability`] installs around the
-//! batch / handler.
+//! Ambient (context-free) field-level masking, for paths with no transport
+//! handle — a `#[dataloader]` batch, an MCP tool's JSON-RPC content — which
+//! read the ability from [`current_ability`].
 
 use crate::ability::mask_reason;
 use sea_orm::EntityTrait;
@@ -30,13 +24,6 @@ where
     let masked = match current_ability() {
         Some(ability) => ability.mask::<E>(A::ACTION, model),
         None => {
-            // Fail closed *and* say so. `warn_mask_failure`'s own doc names this
-            // branch — "HTTP, GraphQL, and the ambient `Ability::mask`" — and
-            // adds that "a fail-closed branch that forgets to log is then the
-            // visible omission". This was that branch: an empty object went out
-            // with nothing on `nest_rs::authz` to say masking had degraded, so a
-            // wire type whose fields are all optional deserialized clean and the
-            // operator had no event to find.
             crate::ability::warn_mask_failure(
                 std::any::type_name::<E>(),
                 A::ACTION,

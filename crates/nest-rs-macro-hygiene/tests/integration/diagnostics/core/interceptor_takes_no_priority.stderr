@@ -1,0 +1,5 @@
+error: #[interceptor] takes no `priority`: an interceptor orders itself within its stage through `Layer::priority` — override it on the struct's `Layer` impl
+ --> tests/integration/diagnostics/core/interceptor_takes_no_priority.rs:6:15
+  |
+6 | #[interceptor(priority = 1)]
+  |               ^^^^^^^^

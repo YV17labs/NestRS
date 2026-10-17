@@ -1,7 +1,7 @@
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, WsGuard};
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::ws::serde_json::Value;
-use nest_rs::ws::{WsClient, async_trait};
+use nest_rs::ws::{WsView, async_trait};
 
 #[injectable]
 #[derive(Default)]
@@ -11,16 +11,25 @@ impl Layer for ModerationGuard {}
 
 #[async_trait]
 impl Guard for ModerationGuard {
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        event: &str,
-        data: &Value,
-    ) -> Result<(), Denial> {
-        match data.get("author").and_then(Value::as_str) {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let view = cx
+            .switch_to::<WsView>()
+            .ok_or_else(|| Denial::internal("ModerationGuard checks WebSocket messages only"))?;
+        Self::decide(view.event(), view.data())
+    }
+}
+
+impl GuardFor<WsView> for ModerationGuard {}
+
+impl ModerationGuard {
+    fn decide(event: &str, data: Option<&Value>) -> Result<(), Denial> {
+        match data
+            .and_then(|data| data.get("author"))
+            .and_then(Value::as_str)
+        {
             Some(author @ "banned") => {
                 tracing::warn!(
-                    target: "features::chat",
+                    target: crate::chat::TARGET,
                     action = "post",
                     subject = event,
                     author,
@@ -33,41 +42,20 @@ impl Guard for ModerationGuard {
     }
 }
 
-impl WsGuard for ModerationGuard {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-
-    use nest_rs::ws::{Global, WsServer};
     use serde_json::json;
 
-    fn client() -> WsClient {
-        WsClient::new(0, Arc::new(WsServer::<Global>::default()))
+    #[test]
+    fn rejects_a_banned_author() {
+        let data = json!({ "author": "banned", "text": "x" });
+        assert!(ModerationGuard::decide("message", Some(&data)).is_err());
     }
 
-    #[tokio::test]
-    async fn rejects_a_banned_author() {
-        let denied = ModerationGuard
-            .check_ws_message(
-                &client(),
-                "message",
-                &json!({ "author": "banned", "text": "x" }),
-            )
-            .await;
-        assert!(denied.is_err());
-    }
-
-    #[tokio::test]
-    async fn allows_everyone_else() {
-        let ok = ModerationGuard
-            .check_ws_message(
-                &client(),
-                "message",
-                &json!({ "author": "ada", "text": "x" }),
-            )
-            .await;
-        assert!(ok.is_ok());
+    #[test]
+    fn allows_everyone_else() {
+        let data = json!({ "author": "ada", "text": "x" });
+        assert!(ModerationGuard::decide("message", Some(&data)).is_ok());
     }
 }

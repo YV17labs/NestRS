@@ -1,7 +1,6 @@
 ---
 title: Streaming responses
 description: Return a chunked body or a Server-Sent Events stream from a handler — poem's response types pass straight through.
-tier: all-options
 sidebar:
   order: 9
 ---
@@ -14,9 +13,10 @@ decorator, `#[sse]`.
 
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {6-8}
 #[get("/download")]
+// … #[meta(…)], #[api(…)]
 async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
     let file = query.into_inner().file;
-    match self.svc.open_result(&file).await.map_err(internal)? {
+    match self.svc.open_result(&file).await? {
         Some(stream) => Ok(Response::builder()
             .content_type("audio/mpeg")
             .body(Body::from_bytes_stream(stream))),
@@ -36,6 +36,18 @@ object-storage client's [`get_stream`](/storage/) hands back the S3
 `GetObject` chunks directly, so a large download proxies through the
 server without ever sitting whole in process memory.
 
+The stream is polled after the handler returned, and it runs under what the
+handler ran under: the request's trace and actor, every ambient value a layer
+added, and the caller's ability on a route a response mask shapes. A service
+the stream calls reads on the **pool**, never on the route's transaction —
+that one has settled by the time the body is written — so a read in the stream
+of a `POST` sees what the route committed.
+
+A route no mask shapes withholds the ability, so a scoped read there fails
+closed rather than answering rows a mask would have narrowed. An `#[sse]`
+stream is one — it takes no shaper parameter — so what it emits comes from
+reads that need no scope.
+
 ## Server-Sent Events
 
 `#[sse("/path")]` is a `GET` that answers a long-lived `text/event-stream`.
@@ -44,11 +56,30 @@ decorator owns the response, the keep-alive and the connection ceiling.
 
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
 #[sse("/events")]
-async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SseStream {
-    let stream = /* a Stream<Item = SseEvent> polling the job */;
-    SseStream::new(stream)
+// … #[meta(…)], #[api(…)]
+async fn events(
+    &self,
+    query: Valid<Query<TranscodeDto>>,
+    resume: Header<StreamResumeDto>,
+) -> SseStream {
+    let file = query.into_inner().file;
+    let seen = resume.into_inner().last_event_id;
+    let events = self
+        .svc
+        .clone()
+        .transcode_events(file)
+        // … drop the progress ticks `seen` says the browser already showed
+        .map(|payload| {
+            // … `body` is the payload as JSON, `id` its poll attempt
+            SseEvent::message(body).event_type("transcode").id(id)
+        });
+    SseStream::new(events)
 }
 ```
+
+Each event carries an `id`, so a browser that reconnects sends the last one
+back as `Last-Event-ID`; `Header<StreamResumeDto>` reads it, and the stream
+resumes rather than replays.
 
 `SseEvent` and `SseStream` come from `nest_rs::http`, which also re-exports
 `futures_util` — so a controller that streams declares no transport crate of
@@ -64,7 +95,7 @@ something the route never sends.
 
 ### Configuration
 
-Two `NESTRS_HTTP__*` keys, both defaulting to something usable:
+Two `<PREFIX>_HTTP__*` keys, both defaulting to something usable:
 
 | Key | Default | What it does |
 |---|---|---|
@@ -79,10 +110,10 @@ framework's doing, not the decorator's: the same holds for any streaming body a
 handler returns.
 
 The ceiling is a **security** control, and the same one
-`NESTRS_WS__MAX_MESSAGE_BYTES` bounds an inbound frame at the protocol
+`<PREFIX>_WS__MAX_MESSAGE_BYTES` bounds an inbound frame at the protocol
 layer — 64 KiB by default, so buffering stops before a giant frame is
-fully read. `NESTRS_WS__MAX_CONNECTION_SECS` and
-`NESTRS_GRAPHQL__MAX_CONNECTION_SECS` carry, at the same default. A stream
+fully read. `<PREFIX>_WS__MAX_CONNECTION_SECS` and
+`<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` carry, at the same default. A stream
 is authenticated once, when the request arrives, then emits with those
 privileges for as long as it lives — so without a ceiling it outlives an
 expired token, a logout, or a revoked grant. Reconnecting re-runs the guard
@@ -92,21 +123,34 @@ It bounds **emission**: the deadline is evaluated whenever the response body is
 polled, so no event is produced past the ceiling at any rate the client reads
 at. Reconnecting re-runs the guard chain, which is the window that matters.
 
-**What it does not bound is the socket**, and that is reported rather than
-quietly closed. A peer that stops reading parks the write, hyper stops polling
-the body, and the connection — its task, its buffers, everything the stream
-holds — outlives the ceiling until that peer reads again. Two attempts to close
-it inside the framework were both wrong, in opposite directions, and both looked
-right: the only thing still polled while a write is parked is the *socket*, and
-a socket does not know which response its bytes belong to. Bounding it there
-truncated unrelated traffic — a full-speed client downloading 4 MB over a
-connection that had carried a stream received 1.4 MB under a declared
-`content-length` — and HTTP/2 multiplexes an origin's whole traffic onto that
-one socket.
+**A peer that stops reading is cut by the transport**, not the ceiling: once it
+has taken nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s by default), its
+connection is dropped — on HTTP/2 its stream is reset, and the connection serves
+its other streams on — and the task and buffers the stream held go with it. The
+deadline runs only while a write waits, so a slow reader that keeps taking bytes
+is never cut. See [Connection deadlines](/http/configuration/#connection-deadlines).
 
-Bound idle sockets at the server or the reverse proxy until the transport can
-express "this response is stalled": that is the shape enforceable without
-knowing whose bytes are queued.
+**At shutdown a stream ends at the signal.** A stream never finishes on its
+own, so holding it open would only spend the whole shutdown window
+(`<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s by default) waiting for an end that
+is not coming. The transport ends it the moment shutdown is asked for —
+cleanly, its last chunk written, so the client's `EventSource` reads an end and
+reconnects, to a replica still in the load balancer. Its `http.request` line
+carries the head's `status`, the `bytes` written, and `outcome="cancelled"`: the
+transport ended it, not the stream. A peer that stopped reading parks the write,
+so its stream ends at the send deadline or with the window, whichever comes
+first. See [Shutdown](/http/configuration/#shutdown).
+
+`#[sse]` marks its response as having no end of its own. A handler that streams
+events some other way marks its own, so it ends at the signal too:
+
+```rust title="crates/features/src/chat/http/controller.rs"
+use nest_rs::http::OpenEndedBody;
+use nest_rs::http::poem::{IntoResponse, Response};
+
+let mut response: Response = events.into_response();
+response.extensions_mut().insert(OpenEndedBody);
+```
 
 Gate a stream with a **capability-only guard**
 (`#[use_guards(TranscodeGuard)]`), never `#[authorize]`: the posture masks

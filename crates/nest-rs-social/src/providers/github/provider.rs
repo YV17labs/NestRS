@@ -3,12 +3,11 @@ use nest_rs_oauth_client::{OAuthClient, TokenSet};
 use serde::Deserialize;
 
 use super::config::GithubSocialConfig;
+use super::module::GithubSocialModule;
 use crate::provider::{ProfileFuture, SocialProfile, SocialProvider};
 use crate::registry::{SocialProviderEntry, resolve_provider};
 
-/// The GitHub social provider. Holds the shared [`OAuthClient`] and overrides
-/// only [`SocialProvider::profile`] — the redirect and code-exchange legs use
-/// the trait defaults.
+/// The GitHub social provider; overrides only [`SocialProvider::profile`].
 pub struct GithubSocialProvider {
     client: OAuthClient,
 }
@@ -21,19 +20,18 @@ impl GithubSocialProvider {
         Self { client }
     }
 
-    /// GitHub's `GET /user` does not attest email verification (and often
-    /// omits the email entirely), so prefer the primary **verified** address
-    /// from the dedicated emails endpoint. Fall back to the profile email as
-    /// *unverified* when the emails endpoint is unavailable (scope not granted)
-    /// or yields nothing verified.
+    /// GitHub's `GET /user` does not attest verification: prefer the primary
+    /// verified address from the emails endpoint at `emails_url`, else the
+    /// profile email, unverified.
     async fn resolve_email(
         &self,
+        emails_url: &str,
         profile_email: Option<String>,
         access_token: &str,
     ) -> (Option<String>, bool) {
         match self
             .client
-            .fetch::<Vec<GithubEmail>>(Self::EMAILS_URL, access_token)
+            .fetch::<Vec<GithubEmail>>(emails_url, access_token)
             .await
         {
             Ok(emails) => {
@@ -45,12 +43,15 @@ impl GithubSocialProvider {
                     return (Some(entry.email.clone()), true);
                 }
             }
+            // A documented default, so said at `warn`: only a verified email may
+            // link a login to an existing account, and a returning user on the
+            // fallback cannot reach theirs.
             Err(err) => {
-                tracing::debug!(
+                tracing::warn!(
                     target: crate::TARGET,
                     provider = Self::KEY,
-                    error = %err,
-                    "github emails endpoint unavailable; falling back to unverified profile email",
+                    error = %nest_rs_core::error_message(&err),
+                    "github verified-email lookup failed; the profile email is used unverified",
                 );
             }
         }
@@ -87,11 +88,11 @@ impl SocialProvider for GithubSocialProvider {
 
     fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
         Box::pin(async move {
-            // `/user` is the configured `userinfo_url` — go through `userinfo`
-            // so the endpoint has a single home (the config), like Google.
             let user: GithubUser = self.client.userinfo(&tokens.access_token).await?;
             let display_name = user.name.or(user.login);
-            let (email, verified) = self.resolve_email(user.email, &tokens.access_token).await;
+            let (email, verified) = self
+                .resolve_email(Self::EMAILS_URL, user.email, &tokens.access_token)
+                .await;
             Ok::<_, AuthError>(
                 SocialProfile::new(Self::KEY, user.id.to_string())
                     .with_email(email, verified)
@@ -108,11 +109,12 @@ nest_rs_core::inventory::submit! {
         config_namespace: <GithubSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
         build: |container| {
             resolve_provider::<GithubSocialProvider, GithubSocialConfig>(container, |config| {
-                let client = OAuthClient::new(config.oauth2_config())
+                let client = OAuthClient::new(config.oauth2_config()?)
                     .map_err(|e| anyhow::anyhow!("invalid GitHub OAuth2 client config: {e}"))?;
                 Ok(GithubSocialProvider::new(client))
             })
         },
+        module: || std::any::TypeId::of::<GithubSocialModule>(),
     }
 }
 
@@ -160,10 +162,97 @@ mod tests {
         );
     }
 
+    /// GitHub's three sequential calls must fit inside `AuthnGuard`'s net, or it
+    /// would replace the client's sentence naming the endpoint with its own.
+    #[test]
+    fn a_login_s_provider_calls_fit_inside_the_guard_s_net() {
+        const CALLS: u32 = 3;
+        let login = OAuthClient::CALL_TIMEOUT * CALLS;
+        assert!(
+            login < nest_rs_authn::AUTHENTICATE_TIMEOUT,
+            "{login:?} vs {:?}",
+            nest_rs_authn::AUTHENTICATE_TIMEOUT,
+        );
+    }
+
+    /// A GitHub whose emails endpoint fails: the login falls back to the
+    /// profile email, unverified, and says so at `warn` with the chain — a
+    /// returning user on that fallback cannot reach their account.
+    #[tokio::test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the double answers best-effort; the test asserts what the client made of it"
+    )]
+    async fn a_failed_verified_email_lookup_is_said_at_warn_and_falls_back_unverified() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let authority = nest_rs_testing::TestAuthority::new();
+        let acceptor = authority.server(&["127.0.0.1"]).acceptor(None);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let Ok(mut tls) = acceptor.accept(stream).await else {
+                    continue;
+                };
+                let mut head = Vec::new();
+                let mut buf = [0_u8; 4096];
+                while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match tls.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => head.extend_from_slice(&buf[..read]),
+                    }
+                }
+                let _ = tls
+                    .write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\
+                          connection: close\r\n\r\n",
+                    )
+                    .await;
+                let _ = tls.shutdown().await;
+            }
+        });
+        let client = OAuthClient::new(nest_rs_oauth_client::OAuthClientConfig {
+            userinfo_url: format!("https://{addr}/user"),
+            tls: authority.client_tls(),
+            ..GithubSocialConfig {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                redirect_url: "https://app.example/social/github/callback".into(),
+                scopes: Vec::new(),
+            }
+            .oauth2_config()
+            .expect("an https redirect composes")
+        })
+        .expect("the client builds");
+        let provider = GithubSocialProvider::new(client);
+        let logs = nest_rs_testing::LogCapture::install();
+
+        let (email, verified) = provider
+            .resolve_email(
+                &format!("https://{addr}/user/emails"),
+                Some("ada@example.com".into()),
+                "gho_access-token",
+            )
+            .await;
+
+        assert_eq!(email.as_deref(), Some("ada@example.com"));
+        assert!(!verified, "the profile email is never taken as verified");
+        let event = logs.expect_one(
+            crate::TARGET,
+            "github verified-email lookup failed; the profile email is used unverified",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("provider").as_deref(), Some("github"));
+        let error = event.field("error").expect("the chain is filed");
+        assert!(error.contains("answered 503"), "{error}");
+        assert!(!error.contains("gho_access-token"), "{error}");
+    }
+
     #[test]
     fn profile_email_maps_to_unverified_when_it_is_the_only_source() {
-        // The `resolve_email` fallback path: an email the emails endpoint never
-        // confirmed is reported unverified, so it can never silently link.
         let profile = SocialProfile::new(GithubSocialProvider::KEY, "42")
             .with_email(Some("ada@example.com".into()), false);
         assert_eq!(profile.email.as_deref(), Some("ada@example.com"));

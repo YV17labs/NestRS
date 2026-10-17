@@ -1,7 +1,5 @@
-//! WI-8 GraphQL bridge: a request-scoped provider reached from a resolver via
-//! [`Scoped<T>`] is one instance per operation (shared across the operation's
-//! fields) and a fresh instance per operation — end-to-end through a real boot
-//! and two `/graphql` POSTs.
+//! A request-scoped provider reached via [`Scoped<T>`] is one instance per
+//! operation, shared across its fields.
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -12,9 +10,7 @@ use nest_rs_graphql::async_graphql::Context;
 use nest_rs_graphql::{GraphqlModule, Scoped, operations, resolver};
 use nest_rs_testing::TestApp;
 
-/// A singleton source of monotonic stamps — shared across every request, so a
-/// per-request instance that pulls one stamp gets a value distinct from the
-/// next request's instance.
+/// A singleton source of monotonic stamps, shared across every request.
 #[injectable]
 #[derive(Default)]
 struct Ticker {
@@ -27,12 +23,8 @@ impl Ticker {
     }
 }
 
-/// Request-scoped: built once per operation and cached. `id()` stamps from the
-/// singleton [`Ticker`] on first read and memoizes it, so within one operation
-/// every field observing this instance reads the same id, while a fresh
-/// operation builds a fresh `Probe` that stamps a new id. `stamp` is a
-/// non-`#[inject]` field, so `#[injectable]` default-initializes it (an empty
-/// `OnceLock`).
+/// Request-scoped; `id()` stamps from the singleton [`Ticker`] on first read and
+/// memoizes it.
 #[injectable(scope = request)]
 struct Probe {
     #[inject]
@@ -114,9 +106,6 @@ async fn two_fields_of_one_operation_share_one_request_scoped_instance() {
     let first = data.get("first").string();
     let second = data.get("second").string();
 
-    // One `Probe` per operation: the second field observes the same instance
-    // the first stamped, so it reads back the memoized id rather than pulling a
-    // new stamp from the singleton ticker.
     assert_eq!(
         first, second,
         "both fields resolve the same request-scoped instance within one operation",
@@ -130,8 +119,6 @@ async fn a_fresh_operation_builds_a_new_request_scoped_instance() {
     let a = query_field(&app, "first").await;
     let b = query_field(&app, "first").await;
 
-    // Two operations, two request scopes, two `Probe`s — each stamps its own id
-    // from the shared singleton ticker.
     assert_ne!(
         a, b,
         "a request-scoped instance must not carry across operations",

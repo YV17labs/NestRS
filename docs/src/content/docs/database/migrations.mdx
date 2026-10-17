@@ -1,7 +1,6 @@
 ---
 title: Migrations
 description: SeaORM migrations in the migrations crate — write one, register it, run it with nestrs run db.
-tier: basics
 sidebar:
   order: 5
 ---
@@ -96,10 +95,13 @@ pub use migrator::{Migrator, migrate};
 `migrator.rs` is **regenerated** from that `mod` list on every
 `g migration`, so the vec can never fall behind the files:
 
-```rust title="crates/migrations/src/migrator.rs (from the demo)"
+```rust title="crates/migrations/src/migrator.rs (from the demo, abridged)"
 use sea_orm_migration::prelude::*;
 
-use super::{m20260526_000000_create_org, m20260526_000001_create_user};
+use super::{
+    m20260526_000000_create_org, m20260526_000001_create_user, m20260609_000000_create_post,
+    // …
+};
 
 pub struct Migrator;
 
@@ -109,6 +111,8 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20260526_000000_create_org::Migration),
             Box::new(m20260526_000001_create_user::Migration),
+            Box::new(m20260609_000000_create_post::Migration),
+            // …
         ]
     }
 }
@@ -129,10 +133,27 @@ nestrs run db fresh    # drop every table, then re-apply from scratch
 Each verb shells out to the crate's `migrate` binary at
 `crates/migrations/src/bin/migrate.rs`. It connects through
 **`nest_rs::seaorm::connect_from_env()`** — the single connector for tools
-outside the DI container, which resolves `NESTRS_SEAORM__*` through the same
-`.env` cascade the apps use. Reaching for `std::env::var("NESTRS_SEAORM__URL")`
+outside the DI container, which resolves `<PREFIX>_SEAORM__*` through the same
+`.env` cascade the apps use. Reaching for `std::env::var("<PREFIX>_SEAORM__URL")`
 in a tool of your own works only when the variable is really in the process
 environment; `connect_from_env` works either way.
+
+The binary runs no `App`, so it installs the console an app would have — the
+same filter, format and source location, from `<PREFIX>_LOG`,
+`<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION` — with one line at the
+top of `main`. A tool of your own does the same:
+
+```rust title="crates/migrations/src/bin/migrate.rs (from the demo, abridged)"
+use nest_rs::core::logging::{LogSettings, install_console};
+
+#[nest_rs::main]
+async fn main() -> Result<()> {
+    install_console(&LogSettings::from_env()?);
+
+    let conn = nest_rs::seaorm::connect_from_env().await?;
+    // …
+}
+```
 
 ## Going further
 

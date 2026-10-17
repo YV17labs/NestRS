@@ -1,18 +1,13 @@
-//! A `#[public]` route serving real rows to an anonymous caller, end to end
-//! against live Postgres: `AbilityGuard` asks the app's
-//! `AbilityFactory::define_visitor`, the resulting ability scopes `Repo`'s
-//! `SELECT` and masks the response. Four apps over one probe table, differing
-//! only in what the visitor branch grants — nothing else about the route
-//! changes, so each assertion isolates the grant.
+//! A `#[public]` route serving rows to an anonymous caller: the ability from
+//! `AbilityFactory::define_visitor` scopes `Repo`'s `SELECT` and masks the response.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::http::Authorize;
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::module;
 use nest_rs_guards::guard;
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{controller, routes};
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
 use nest_rs_testing::TestApp;
 use sea_orm::DatabaseConnection;
@@ -24,7 +19,7 @@ mod post {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
     #[sea_orm(table_name = "visitor_probe_posts")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: i32,
         pub title: String,
@@ -33,13 +28,12 @@ mod post {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-// Stands in for what `#[expose]` emits on a real entity: `secret` carries no
-// exposure, so the masker strains it out of every body regardless of the grant.
+// Stands in for what `#[expose]` emits: `secret` carries no exposure.
 impl WireModelDefaults for post::Entity {
     fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
         map.entry(String::from("secret"))
@@ -49,10 +43,13 @@ impl WireModelDefaults for post::Entity {
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "title", "published"])
     }
+
+    fn is_placeholdered(column: post::Column) -> bool {
+        matches!(column, post::Column::Secret)
+    }
 }
 
-// `JsonSchema` is only needed by the un-shaped route below: a route with no
-// response shaper advertises its payload in the OpenAPI document.
+// `JsonSchema`: a route with no response shaper advertises its payload in OpenAPI.
 #[derive(Serialize, schemars::JsonSchema)]
 struct PostDto {
     id: i32,
@@ -76,9 +73,7 @@ impl CrudService for PostsService {
     type Entity = post::Entity;
 }
 
-/// The three rows every app in this file reads. Fixed ids and `ON CONFLICT DO
-/// NOTHING`, so the nextest processes that race on the DDL converge on the same
-/// data instead of each seeding its own.
+/// The three rows every app in this file reads, seeded idempotently.
 async fn seeded_db() -> DatabaseConnection {
     let conn = crate::harness::connect().await;
     crate::harness::setup_shared_table(
@@ -100,9 +95,7 @@ async fn seeded_db() -> DatabaseConnection {
     conn
 }
 
-/// One controller, reused by every app below. `#[public]` is the posture; the
-/// `Authorize` parameter is the enforcement plumbing it needs — the ambient
-/// ability `Repo` scopes on, and the response mask.
+/// One app per visitor grant, over the same controller.
 macro_rules! visitor_app {
     ($name:ident, $factory:ident, $define_visitor:item) => {
         mod $name {
@@ -110,21 +103,21 @@ macro_rules! visitor_app {
 
             #[nest_rs_core::injectable]
             #[derive(Default)]
-            pub struct $factory;
+            pub(super) struct $factory;
 
             impl AbilityFactory for $factory {
-                type Actor = ();
+                type Actor = crate::Anyone;
 
-                fn define(&self, _actor: &(), _ab: &mut AbilityBuilder) {}
+                fn define(&self, _actor: &crate::Anyone, _ab: &mut AbilityBuilder) {}
 
                 $define_visitor
             }
 
-            pub type VisitorGuard = AbilityGuard<$factory>;
+            pub(super) type VisitorGuard = AbilityGuard<$factory>;
 
             #[controller(path = "/posts")]
             #[use_guards(VisitorGuard)]
-            pub struct PostsController;
+            pub(super) struct PostsController;
 
             #[routes]
             impl PostsController {
@@ -138,8 +131,7 @@ macro_rules! visitor_app {
                     Ok(Json(rows.into_iter().map(PostDto::from).collect()))
                 }
 
-                // The same route without the shaper parameter. `#[public]`
-                // attaches the visitor ability to the *request*; only a shaper
+                // `#[public]` attaches the ability to the request; only a shaper
                 // installs it as the ambient one `Repo` reads.
                 #[get("/unshaped")]
                 #[public]
@@ -159,9 +151,9 @@ macro_rules! visitor_app {
                     ],
                 providers = [$factory, VisitorGuard, PostsController],
             )]
-            pub struct AppModule;
+            pub(super) struct AppModule;
 
-            pub async fn boot() -> TestApp {
+            pub(super) async fn boot() -> TestApp {
                 TestApp::builder()
                     .module::<AppModule>()
                     .use_guards_global([guard::<VisitorGuard>()])
@@ -184,8 +176,7 @@ visitor_app!(
 visitor_app!(
     closed,
     ClosedToVisitors,
-    // Nothing: the default body, spelled out so the app differs from `open` in
-    // exactly one rule.
+    // The default body, spelled out so the app differs from `open` in one rule.
     fn define_visitor(&self, _ab: &mut AbilityBuilder) {}
 );
 
@@ -233,10 +224,7 @@ async fn without_a_visitor_grant_a_public_route_is_forbidden() {
     let _conn = seeded_db().await;
     let app = closed::boot().await;
 
-    // The fail-closed default: `#[public]` opens the route to anonymous
-    // callers, it does not grant them anything. `Authorize`'s class gate is
-    // what answers — a legible 403, never an empty 200 the caller has to
-    // interpret.
+    // `#[public]` opens the route, it grants nothing.
     let resp = app.http().get("/posts").send().await;
     resp.assert_status(poem::http::StatusCode::FORBIDDEN);
 }
@@ -281,11 +269,8 @@ async fn a_field_restricted_visitor_grant_masks_the_response() {
     }
 }
 
-// The trap the visitor grant does *not* remove: a `#[public]` route with no
-// shaper parameter never installs the ambient ability, so `Repo` fails the read
-// closed on the request-scoped executor. Granting the visitor more cannot make
-// this route serve a row — the fix widens what an app can declare, never what a
-// mis-wired route can reach.
+// No shaper parameter, no ambient ability: `Repo` fails the read closed,
+// whatever the visitor is granted.
 #[tokio::test]
 async fn a_public_route_without_the_shaper_still_reads_nothing() {
     let _conn = seeded_db().await;

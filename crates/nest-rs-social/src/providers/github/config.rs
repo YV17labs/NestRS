@@ -1,28 +1,24 @@
-use nest_rs_config::{Config, ConfigService, config};
-use nest_rs_oauth_client::OAuthClientConfig;
+use nest_rs_authn::AuthError;
+use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, config, spellings};
+use nest_rs_oauth_client::{OAuthClientConfig, refuse_plaintext_redirect};
 
 use crate::registry::SocialProviderConfig;
 
-/// GitHub OAuth deployment config. Only credentials, redirect, and scopes are
-/// deployment config — the auth/token/userinfo endpoint URLs are provider
-/// constants (see `GithubSocialConfig::oauth2_config`).
-///
-/// Dual-path (env `NESTRS_SOCIAL__GITHUB__*` **and** the pinned struct). No
+/// GitHub OAuth deployment config; the endpoint URLs are provider constants. No
 /// `Debug`: `client_secret` must not leak through a derived format.
 #[config(namespace = "social__github")]
 #[derive(Clone, Default)]
 pub struct GithubSocialConfig {
     /// The GitHub OAuth app's client id.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub client_id: String,
     /// The GitHub OAuth app's client secret.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub client_secret: String,
     /// The registered redirect URL the callback returns to.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub redirect_url: String,
-    /// Defaults to `read:user user:email` (the canonical login set) when unset
-    /// — see `GithubSocialConfig::scopes_or_default`.
+    /// Defaults to `read:user user:email` when unset.
     pub scopes: Vec<String>,
 }
 
@@ -44,9 +40,17 @@ impl GithubSocialConfig {
     }
 
     /// Compose the transport-level [`OAuthClientConfig`] the shared client needs:
-    /// deployment credentials + provider-constant endpoints.
-    pub(crate) fn oauth2_config(&self) -> OAuthClientConfig {
-        OAuthClientConfig {
+    /// deployment credentials + provider-constant endpoints, the redirect refused
+    /// under this config's own variable when the client would refuse it.
+    pub(crate) fn oauth2_config(&self) -> Result<OAuthClientConfig, AuthError> {
+        refuse_plaintext_redirect(
+            &self.redirect_url,
+            &format!(
+                "{}, or `GithubSocialConfig::redirect_url` in code",
+                spellings(Self::NAMESPACE, "REDIRECT_URL")
+            ),
+        )?;
+        Ok(OAuthClientConfig {
             client_id: self.client_id.clone(),
             client_secret: self.client_secret.clone(),
             auth_url: Self::AUTH_URL.to_owned(),
@@ -54,17 +58,18 @@ impl GithubSocialConfig {
             redirect_url: self.redirect_url.clone(),
             userinfo_url: Self::USERINFO_URL.to_owned(),
             scopes: self.scopes_or_default(),
-        }
+            tls: ClientTls::default(),
+        })
     }
 }
 
 impl Config for GithubSocialConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            client_id: env.get("CLIENT_ID").unwrap_or(base.client_id),
-            client_secret: env.get("CLIENT_SECRET").unwrap_or(base.client_secret),
-            redirect_url: env.get("REDIRECT_URL").unwrap_or(base.redirect_url),
-            scopes: env.list("SCOPES", base.scopes),
+            client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
+            client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
+            redirect_url: env.get("REDIRECT_URL")?.unwrap_or(base.redirect_url),
+            scopes: env.list("SCOPES", base.scopes)?,
         })
     }
 }
@@ -91,6 +96,25 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_only_credentials_are_refused_like_a_partial_set() {
+        use validator::Validate;
+
+        type Setter = fn(&mut GithubSocialConfig);
+        let setters: [(Setter, &str); 3] = [
+            (|c| c.client_id = "  ".into(), "client_id"),
+            (|c| c.client_secret = "\t".into(), "client_secret"),
+            (|c| c.redirect_url = "\n".into(), "redirect_url"),
+        ];
+        for (mutate, field) in setters {
+            let mut cfg = complete();
+            mutate(&mut cfg);
+            assert!(!cfg.is_unconfigured(), "{field}: blank is not unconfigured");
+            let err = cfg.validate().expect_err("blank is refused");
+            assert!(err.field_errors().contains_key(field), "{field}: {err:?}");
+        }
+    }
+
+    #[test]
     fn scopes_default_to_the_canonical_login_set_when_unset() {
         assert_eq!(
             complete().scopes_or_default(),
@@ -109,10 +133,52 @@ mod tests {
 
     #[test]
     fn oauth2_config_carries_provider_constant_endpoints() {
-        let oauth = complete().oauth2_config();
+        let oauth = complete()
+            .oauth2_config()
+            .expect("an https redirect composes");
         assert_eq!(oauth.auth_url, GithubSocialConfig::AUTH_URL);
         assert_eq!(oauth.token_url, GithubSocialConfig::TOKEN_URL);
         assert_eq!(oauth.userinfo_url, GithubSocialConfig::USERINFO_URL);
         assert_eq!(oauth.client_id, "id");
+    }
+
+    /// The deployment set `<PREFIX>_SOCIAL__GITHUB__REDIRECT_URL`, so a refused
+    /// redirect names that variable, never the OAuth client's, nor the URL.
+    #[test]
+    fn a_refused_redirect_names_the_providers_own_variable() {
+        for (redirect, why) in [
+            (
+                "http://u:s3cr3t@app.example/social/github/callback",
+                "RFC 8252 §7.3",
+            ),
+            ("http://u:s3cr3t@[::1", "does not parse as a URL"),
+        ] {
+            let Err(AuthError::Failed(sentence)) = GithubSocialConfig {
+                redirect_url: redirect.into(),
+                ..complete()
+            }
+            .oauth2_config() else {
+                panic!("{redirect} is refused");
+            };
+            assert!(
+                sentence.contains(&nest_rs_config::var_name("social__github", "REDIRECT_URL"))
+                    && sentence.contains("`GithubSocialConfig::redirect_url` in code")
+                    && sentence.contains(why),
+                "{sentence}"
+            );
+            assert!(
+                !sentence.contains("OAUTH__CLIENT") && !sentence.contains("s3cr3t"),
+                "{sentence}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_loopback_redirect_composes() {
+        let config = GithubSocialConfig {
+            redirect_url: "http://localhost:3000/social/github/callback".into(),
+            ..complete()
+        };
+        assert!(config.oauth2_config().is_ok());
     }
 }

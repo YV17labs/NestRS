@@ -69,8 +69,7 @@ pub(crate) fn run_ok(dir: &Path, args: &[&str]) -> String {
 }
 
 /// The scaffolded `.env.example` sends a test override to a file the cascade
-/// actually loads under `NESTRS_ENV=test` (see `templates::shared::ENV_EXAMPLE`
-/// for why the wrong answer fails silently).
+/// loads under `NESTRS_ENV=test`.
 pub(crate) fn assert_env_example_points_test_overrides_somewhere_loaded(root: &Path) {
     let example = fs::read_to_string(root.join(".env.example")).unwrap();
     assert!(
@@ -99,22 +98,36 @@ pub(crate) fn write_fake_migrations_crate(root: &Path) {
     fs::write(dir.join("m20260101_000000_init.rs"), "// init\n").unwrap();
 }
 
-/// The framework variable name the *generated* project will carry, built the
-/// way the CLI builds it.
-///
-/// **The CLI is a binary crate**, so its suite cannot call
-/// `context::var_name` / `context::env_prefix` the way every other crate here
-/// calls the thing it tests — there is no `[lib]` to import. So the mirror is
-/// mirrored once more, here, rather than at each assertion: a literal
-/// `"NESTRS_AUTHN__SECRET"` in a test asserts the *default* prefix and fails
-/// the moment the suite runs under `NESTRS_ENV_PREFIX=ACME`, which is the run
-/// that proves a rename reaches everything. Third copy of one join, and it is
-/// reported as such — `context::ENV_PREFIX_VAR` is spelled here because it is
-/// the one name no prefix renames, which `CLAUDE.md` sanctions per crate.
-pub fn scaffolded_var(namespace: &str, key: &str) -> String {
-    let prefix = std::env::var("NESTRS_ENV_PREFIX")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "NESTRS".to_owned());
-    format!("{prefix}_{}__{key}", namespace.to_uppercase())
+/// The one value of `var` that `file` assigns, read the way the cascade reads it.
+pub(crate) fn assigned(file: &Path, var: &str) -> Option<String> {
+    let body = fs::read_to_string(file).ok()?;
+    let mut values = body
+        .lines()
+        .filter_map(|line| line.strip_prefix(var)?.strip_prefix('='))
+        .map(str::to_owned);
+    let value = values.next();
+    assert!(
+        values.next().is_none(),
+        "{} assigns {var} twice",
+        file.display()
+    );
+    value
 }
+
+/// RFC 7518 §3.2: an HS256 key carries at least the hash's 256 bits.
+pub(crate) fn assert_256_bit_hex(secret: &str) {
+    assert!(
+        secret.len() == 64
+            && secret
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+        "a secret is 64 lowercase hex characters: {secret:?}",
+    );
+}
+
+/// The bootstrap variable that renames every other, as the CLI spells it.
+pub(crate) use nest_rs_cli::ENV_PREFIX_VAR;
+
+/// The framework variable name the *generated* project will carry — the CLI's
+/// own derivation, read from its library rather than mirrored here.
+pub(crate) use nest_rs_cli::scaffolded_var;

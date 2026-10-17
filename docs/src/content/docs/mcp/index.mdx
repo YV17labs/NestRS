@@ -32,8 +32,8 @@ cargo add nest-rs --features mcp
 ```
 
 The `mcp` feature pulls the HTTP transport the endpoint mounts on and the guard
-surface that gates it — including the fallback operation guard that lets a
-registered global pool gate `/mcp` instead of the endpoint staying deny-all.
+surface that gates it: the endpoint runs a registered global pool itself, so
+`/mcp` is gated by it instead of staying deny-all.
 None of that is a line you write.
 
 `rmcp` is not a dependency either, and it is not an import: `#[tools]` emits
@@ -74,11 +74,11 @@ nobody thought about does not compile, rather than shipping ungated to a model.
 [Authorization](/mcp/authorization/) covers the other form.
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
-default**. The endpoint gates through the app's `dyn McpOperationGuard`; with
-none registered it falls back to the global guard pool
-(`App::builder().use_guards_global(...)`), and with no pool either it is
-**deny-all** — every request answers `401`, so a schema-added tool can never
-leak unauthenticated.
+default**. The endpoint runs the global guard pool
+(`App::builder().use_guards_global(...)`) with the app's
+`dyn McpOperationGuard` added to it, either one alone when the other is
+missing, and with neither it is **deny-all** — every request answers `401`, so
+a schema-added tool can never leak unauthenticated.
 
 Which posture you got is in the boot line: `mode="deny_all"` with nothing
 registered, `mode="global_guard_pool"` once a pool is.
@@ -98,8 +98,9 @@ use crate::hello::tool::HelloTool;
 pub struct HelloModule;
 ```
 
-`#[mcp]` mounts it on the existing HTTP transport — same port, same CORS, no
-second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
+`AllowAllMcpGuard` opens what the app's own pool admits, never past it: a
+pooled guard still runs first. `#[mcp]` mounts it on the existing HTTP
+transport — same port, same CORS, no second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
 tool called `hello` and can invoke it. (To authenticate instead of opening it,
 see [Authorization](/mcp/authorization/).)
 
@@ -114,11 +115,18 @@ Two decorators, one per item shape:
   derived from the roles present — you cannot serve a tool you forgot to
   declare. An operation declares the same request layers a `#[query]` does:
   `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`, and a pipe on its
-  arguments.
+  arguments. Each of those refuses by returning, so an operation answers a
+  `Result` an `McpError` converts into — known by its type, so
+  `type Answered<T> = Result<T, McpError>` serves as well as the spelled one,
+  and a `String` is refused at the return type. A *masked* operation spells it
+  `Result<…>`: the mask reads `Json<T>` off that spelling.
 - **The description is `#[tool(description = "…")]`** — the sentence the model
   reads to pick this tool, so it is a value the decorator compiles in rather
   than commentary. Write a doc comment instead and it is used as a fallback, so
   the prose is never written twice; write **neither and it does not compile**.
+  A blank one is none: `description = "  "`, and a doc line or a stated value
+  the compiler evaluates — `include_str!` of an empty file, a `concat!` of
+  spaces, a constant — fails the build with the same sentence.
 
 The struct can take `#[inject]` fields like any other provider — `HelloTool` has
 none, real servers usually do.
@@ -135,7 +143,7 @@ $ nestrs run dev assistant
 ```text frame="terminal"
 INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
 DEBUG nest_rs::mcp: mcp operations gated mode="operation_guard"
-INFO nest_rs::http: transport listening addr=0.0.0.0:3003 tls=false
+INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3003"
 ```
 
 Point an MCP-aware client at `http://localhost:3003/mcp`. With Claude Code, add
@@ -201,9 +209,15 @@ reads to decide when to call each.
 ## A validated tool
 
 Tool inputs are deserialized to a typed struct, so the schema the client reads
-is already typed. For extra checks beyond shape — ranges, enums, mutual
-exclusion — add `validate(...)` attributes: `#[input]` already carries the
-`validator` derive, so no extra import and no extra manifest line.
+is already typed. Arguments that do not decode are refused before the body runs
+as a tool error the model can correct — `failed to deserialize parameters:
+invalid type: a string, expected f64` — naming where and what kind and never the
+value, which would otherwise land in the model's transcript. `Parameters` is the
+framework's own for that reason, with rmcp's shape and schema.
+
+For extra checks beyond shape — ranges, enums, mutual exclusion — add
+`validate(...)` attributes: `#[input]` already carries the `validator` derive,
+so no extra import and no extra manifest line.
 
 ```rust title="crates/features/src/weather/coords.rs"
 use nest_rs::mcp::input;
@@ -267,11 +281,18 @@ per-operation span; the model gets a constant `internal error`. A *deliberate*
 error is the opposite case — `McpError::invalid_params(...)` exists to be read,
 so return it directly and never route it through `opaque`.
 
+A tool that **panics** is answered the same way: rmcp runs it on a task of its
+own, so the panic is contained where the operation is dispatched, the client
+gets `internal error` instead of waiting out its own timeout, the
+`mcp.operation` line files `outcome="panic"`, and the panic's text goes to
+`nest_rs::mcp` at `error` — never to the model.
+
 ## Trait-based DI
 
 Injecting `Arc<dyn WeatherService>` keeps the concrete provider
-module-private — a test app can swap in a stub by overriding the provider via
-`AppBuilder::override_dyn`. Same hexagonal pattern as the rest of the
+module-private — a test app swaps in a stub with
+`override_dyn::<dyn WeatherService>(…)`, which every consumer then injects,
+the tool host and any service built at boot alike. Same hexagonal pattern as the rest of the
 framework: the tool depends on the trait, the impl lives behind the module,
 the access graph rejects accidental coupling at boot.
 

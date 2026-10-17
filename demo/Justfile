@@ -1,9 +1,10 @@
 _default:
     @just --list
 
+# `NESTRS_ENV` goes on the process: it picks the `.env` cascade, so no file can set it.
 # Run an app in watch mode (default: api). Usage: nestrs run dev live
 dev app="api":
-    bacon run-long -- --bin {{app}}
+    NESTRS_ENV=development bacon run-long -- --bin {{app}}
 
 # Run an app in release mode (default: api). Usage: nestrs run start live
 start app="api":
@@ -13,11 +14,6 @@ start app="api":
 # Usage: nestrs run build live   |   nestrs run build --all
 build app="api":
     cargo build --release {{ if app == "--all" { "--workspace" } else { "-p " + app } }}
-
-# The row-level + masking "magic moment" in three curls (needs `db reset`
-# done and the `auth` + `api` apps running). Usage: nestrs run demo
-demo:
-    bash scripts/magic-moment.sh
 
 # Database lifecycle — migrations + seeding. Usage: nestrs run db up|down|fresh|status|seed|reset
 mod db

@@ -1,12 +1,15 @@
 {
+	// The everyday environment, the services CI runs. Each backend shape a driver
+	// is built against is one of its own, a folder beside this file, picked with
+	// "Dev Containers: Reopen in Container". A configuration inherits nothing, so
+	// each one is this file but for its name and its compose files.
 	"name": "nestrs",
-	"dockerComposeFile": "docker-compose.yml",
+	"dockerComposeFile": "compose/base.yml",
 	"service": "dev",
 	"workspaceFolder": "/workspaces/nestrs",
-	"postCreateCommand": "cargo install --locked --path crates/nest-rs-cli",
-	// Extensions are installed in the container; every setting lives in the
-	// committed `.vscode/settings.json`, which the container mounts with the
-	// workspace. Keep this list in sync with `.vscode/extensions.json`.
+	"postCreateCommand": "bash .devcontainer/scripts/post-create.sh",
+	"postStartCommand": "bash .devcontainer/scripts/post-start.sh",
+	// Keep in sync with .vscode/extensions.json.
 	"customizations": {
 		"vscode": {
 			"extensions": [

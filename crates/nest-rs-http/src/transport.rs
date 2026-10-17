@@ -1,31 +1,37 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use nest_rs_core::{Container, Discovery, Transport};
-use poem::endpoint::BoxEndpoint;
-use poem::http::header::{HeaderName, HeaderValue, SERVER};
-use poem::listener::{Listener, TcpListener};
-use poem::middleware::{Compression, Cors};
-use poem::{EndpointExt, IntoEndpoint, Response, Route, Server};
+use http::header::{HeaderName, HeaderValue, SERVER};
+use nest_rs_core::{Container, Discovery, Listening, Transport};
 use tokio_util::sync::CancellationToken;
 
-use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
+use crate::boot_check::HttpBootCheck;
 use crate::controller::HttpControllerMeta;
-use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
+use crate::detached::DetachedWork;
+use crate::drain::Drain;
+use crate::edge::EdgeEndpoint;
+use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta};
+use crate::error::RouteError;
+use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
+use crate::guard_stage::GuardedEndpoint;
 use crate::interceptor::HttpEndpointWrap;
-use crate::tls::TlsConfig;
+use crate::poem_adapter::{CorsPolicy, PoemAdapter};
+use crate::problem::{Normalized, ResolvedErrors};
+use crate::route_template::RouteTemplate;
+use crate::routes::{HttpRoutes, Wrap};
+use crate::server::Server;
+use crate::tls::{HttpTls, ListenerTls};
 use crate::versioning::VersionedEndpoint;
 
-type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
-/// Imperative mount paired with its path — kept so the fail-secure boot
-/// check can name the endpoints that bypass the layer pool.
-type NamedMount = (String, MountFn);
+/// The `Server` value a transport sends when [`HttpConfig::server_header`](crate::HttpConfig::server_header) is on.
+const SERVER_VALUE: &str = concat!("nestrs/", env!("CARGO_PKG_VERSION"));
 
 /// Join a controller prefix with a route path the way poem's nesting does:
-/// `("/health", "/live") -> "/health/live"`. Public so `nest-rs-openapi`
-/// composes paths identically to how this transport mounts them — the served
-/// path and the documented path must not drift.
+/// `("/health", "/live") -> "/health/live"`.
 pub fn join_path(prefix: &str, rest: &str) -> String {
     let p = prefix.trim_end_matches('/');
     let r = rest.trim_start_matches('/');
@@ -37,10 +43,7 @@ pub fn join_path(prefix: &str, rest: &str) -> String {
     }
 }
 
-/// Apply URI API versioning: `Some("1"), "/users"` → `"/v1/users"`. The single
-/// place the URI strategy lives — `#[routes]`, the boot route log, and the
-/// OpenAPI document all route through it so the served/logged/documented paths
-/// can never drift.
+/// Apply URI API versioning: `Some("1"), "/users"` → `"/v1/users"`.
 pub fn version_path(version: Option<&str>, path: &str) -> String {
     match version {
         Some(v) => join_path(&format!("/v{v}"), path),
@@ -50,15 +53,8 @@ pub fn version_path(version: Option<&str>, path: &str) -> String {
 
 /// Does `declared` contain every version in `named`?
 ///
-/// `#[routes]` emits this as a `const` assertion per `#[version("…")]` route,
-/// because the alternative is worse than a bad error message: the mount loops
-/// over the controller's versions, so a route naming one the controller never
-/// declared would simply never be reached by the loop — a handler that compiles,
-/// registers, documents itself and answers nothing. Silence on a typo is the one
-/// outcome this framework does not ship.
-///
-/// A `const fn` rather than a boot check so the answer arrives where the mistake
-/// is, at the route.
+/// `#[routes]` asserts it in `const` per `#[version("…")]` route: the mount loops
+/// over the controller's versions, so an undeclared one would compile and answer nothing.
 pub const fn versions_declare(declared: &[&str], named: &[&str]) -> bool {
     let mut i = 0;
     while i < named.len() {
@@ -95,36 +91,63 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
     true
 }
 
-/// HTTP [`Transport`] backed by poem. At [`Transport::configure`] time, runs
-/// every discovered [`HttpBootCheck`], mounts every
-/// `#[module(providers = [...])]`-declared [`HttpControllerMeta`] and
-/// [`HttpEndpointMeta`], then any imperative [`HttpTransport::mount`], then
-/// folds every discovered [`HttpEndpointWrap`] wrap around the assembled
-/// endpoint. Transport-edge wraps (the global interceptor / filter pools,
-/// infra `#[interceptor]`s like `DbContext`) attach themselves through
-/// [`HttpEndpointWrap`] from their own crates — this transport stays free
-/// of the cross-transport trait crates and only knows about poem. Guards
-/// and pipes never wrap here: they execute in the per-route shaper
-/// (post-routing) or at a `Guarded` self-mount's edge.
+/// HTTP [`Transport`]: every discovered controller and self-mounted endpoint,
+/// under the discovered transport-level wraps, routed and served by the
+/// transport's own accept loop.
+///
+/// [`from_config`](Self::from_config) is its one constructor, the call
+/// [`HttpModule::for_root`](crate::HttpModule::for_root) makes:
+///
+/// ```
+/// use nest_rs_http::{HttpConfig, HttpTransport};
+///
+/// let transport = HttpTransport::from_config(&HttpConfig {
+///     compression: true,
+///     ..Default::default()
+/// })?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// Nothing configures it a second way — no `new`:
+///
+/// ```compile_fail
+/// let transport = nest_rs_http::HttpTransport::new();
+/// ```
+///
+/// and no `Default`:
+///
+/// ```compile_fail
+/// let transport = nest_rs_http::HttpTransport::default();
+/// ```
 pub struct HttpTransport {
     bind: String,
-    mounts: Vec<NamedMount>,
-    cors: Option<Cors>,
-    tls: Option<TlsConfig>,
-    server_header: Option<&'static str>,
+    cors: Option<CorsPolicy>,
+    tls: Option<HttpTls>,
+    server_header: bool,
     global_prefix: Option<String>,
-    max_body_bytes: Option<usize>,
-    request_timeout: Option<std::time::Duration>,
-    fail_secure_strict: bool,
-    security_headers: crate::SecurityHeadersConfig,
+    max_body_bytes: usize,
+    request_timeout: Option<Duration>,
+    shutdown_timeout: Duration,
+    max_concurrent_connections: usize,
+    deadlines: crate::server::Deadlines,
+    security_headers: crate::HttpSecurityHeaders,
     compression: bool,
-    version_selector: Option<crate::VersionSelector>,
-    endpoint: Option<BoxEndpoint<'static, Response>>,
+    version_selector: Option<crate::versioning::VersionSelector>,
+    /// What each self-mount runs off its connections, by mount path.
+    detached: Vec<(String, DetachedWork)>,
+    /// Shared with the edge, whose response bodies read it.
+    drain: Arc<Drain>,
+    endpoint: Option<BoxEndpoint>,
+    /// What [`listen`](Transport::listen) took, for `serve` to run on.
+    listening: Option<Listened>,
 }
 
-/// Normalize a global prefix: trim whitespace, drop empty/`"/"` to `None`,
-/// prepend a leading `/`, strip a trailing one. `Some("/api/v1")` is the
-/// canonical form.
+/// The socket `listen` bound and the TLS material it checked.
+struct Listened {
+    listener: tokio::net::TcpListener,
+    tls: Option<ListenerTls>,
+}
+
 fn normalize_global_prefix(raw: &str) -> Option<String> {
     let trimmed = raw.trim().trim_matches('/');
     if trimmed.is_empty() {
@@ -135,14 +158,8 @@ fn normalize_global_prefix(raw: &str) -> Option<String> {
 
 /// The canonical form of a mount path: `"/x"`, with the root as `"/"`.
 ///
-/// **A mount path is compared as a string before it is served.**
-/// `claim_exclusive_path` and the cross-family check key on it to report a
-/// collision by owner, and `Route::nest` appends a trailing `/` internally — so
-/// `"/x"` and `"/x/"` are two distinct owners here and one key inside poem. Left
-/// raw they pass the check that exists to catch exactly that, and poem panics
-/// during route assembly instead. Applied by [`HttpEndpointMeta::new`], so every
-/// self-mount — MCP, GraphQL (whose path is `NESTRS_GRAPHQL__PATH`, i.e.
-/// deployment input), WS, OpenAPI — is canonical before anything compares it.
+/// The collision checks compare mount paths as strings, while `Route::nest` makes
+/// `"/x"` and `"/x/"` one key: left raw, the pair slips past and poem panics.
 pub fn normalize_mount_path(raw: &str) -> String {
     match normalize_global_prefix(raw) {
         Some(path) => path,
@@ -150,34 +167,143 @@ pub fn normalize_mount_path(raw: &str) -> String {
     }
 }
 
-/// Claim `path` for `owner`, or fail boot naming both claimants.
-///
-/// A controller prefix and a self-mounted endpoint path are one rule in two
-/// vocabularies: each `nest`s under its own path, so two mounts sharing one make
-/// poem panic deep in route assembly (`duplicate path: <prefix>/*--poem-rest`).
-/// Both callers claim through here so the two boot diagnostics stay worded alike
-/// by construction, and neither reaches the opaque poem internal.
+/// `raw` as [`normalize_mount_path`] writes it, when every segment is a
+/// literal the router matches as written: none empty, `.` or `..`, none
+/// holding route-template syntax (`{name}`, a brace) or what the router would
+/// read as a parameter (`:`, `*`, `<`), nor `%`, `?`, `#`, `\`, whitespace or
+/// a control character. `None` otherwise.
+pub fn literal_mount_path(raw: &str) -> Option<String> {
+    let path = normalize_mount_path(raw);
+    let literal = path.split('/').skip(1).all(|segment| {
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && !segment.contains(['{', '}', ':', '*', '<', '%', '?', '#', '\\'])
+            && !segment.chars().any(|c| c.is_whitespace() || c.is_control())
+    });
+    (path == "/" || literal).then_some(path)
+}
+
+/// Claim the address `template` names for `owner`, or fail boot naming both
+/// claimants. Keyed by the address, so two spellings of one (`/x/{a}`,
+/// `/x/{b}`) are one claim.
 fn claim_exclusive_path(
     owners: &mut HashMap<String, String>,
-    kind: &str,
-    path: String,
+    kind: &'static str,
+    template: &RouteTemplate,
     owner: String,
     remedy: &str,
-) -> anyhow::Result<()> {
-    if let Some(first) = owners.insert(path.clone(), owner.clone()) {
-        anyhow::bail!(
-            "duplicate {kind} {path:?}: {first} and {owner} both mount there — a {kind} is its \
-             exclusive namespace; {remedy}",
-        );
+) -> Result<(), RouteError> {
+    if let Some(first) = owners.insert(template.identity().to_owned(), owner.clone()) {
+        return Err(RouteError::Exclusive {
+            kind,
+            template: template.as_str().to_owned(),
+            first,
+            owner,
+            remedy: remedy.to_owned(),
+        });
     }
     Ok(())
 }
 
-/// What to do about two controllers claiming one mount prefix. The remedy is
-/// not the same sentence in both cases, and saying "give each one a distinct
-/// path" to someone running two versions of one resource is advice against the
-/// layout the docs prescribe: their paths are identical *by design*, and the
-/// string in the message (`/v2/posts`) is one neither of them wrote.
+/// A route mounted on an address, and the handler that declared it.
+struct RouteClaim {
+    template: String,
+    controller: &'static str,
+    handler: &'static str,
+}
+
+/// Claim `template`'s address for one controller's route, or fail boot naming
+/// both handlers. Several verbs of one controller share an address.
+fn claim_route(
+    owners: &mut HashMap<String, RouteClaim>,
+    template: &RouteTemplate,
+    controller: &'static str,
+    handler: &'static str,
+) -> Result<(), RouteError> {
+    match owners.entry(template.identity().to_owned()) {
+        Entry::Vacant(slot) => {
+            slot.insert(RouteClaim {
+                template: template.as_str().to_owned(),
+                controller,
+                handler,
+            });
+        }
+        Entry::Occupied(first) if first.get().controller == controller => {}
+        Entry::Occupied(first) => {
+            let first = first.get();
+            return Err(RouteError::OneAddress {
+                first: format!("{}::{}", first.controller, first.handler),
+                first_template: first.template.clone(),
+                second: format!("{controller}::{handler}"),
+                second_template: template.as_str().to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Mount the router's fallback, or fail the boot when its path lies under a
+/// prefix someone owns, where the router would answer everything first.
+fn mount_fallback(
+    container: &Container,
+    meta: &HttpFallbackMeta,
+    claims: Claims,
+    get_routes: &[(String, &'static str)],
+) -> Result<Fallback, RouteError> {
+    RouteTemplate::literal(meta.path()).map_err(|refused| RouteError::FallbackPath {
+        owner: meta.owner().to_owned(),
+        refused,
+    })?;
+    if let Some((prefix, owner)) = claims.owner_of(meta.path()) {
+        return Err(RouteError::FallbackUnder {
+            owner: meta.owner().to_owned(),
+            path: meta.path().to_owned(),
+            prefix: prefix.to_owned(),
+            prefix_owner: owner.to_owned(),
+        });
+    }
+    if let Some((_, controller)) = get_routes.iter().find(|(path, _)| path == meta.path()) {
+        tracing::warn!(
+            target: crate::target::ROUTES,
+            path = meta.path(),
+            controller,
+            fallback = meta.owner(),
+            "a route answers GET at the router fallback's own path, which the fallback never \
+             answers",
+        );
+    }
+    tracing::info!(
+        target: crate::target::ROUTES,
+        kind = "fallback",
+        path = meta.path(),
+        "mounted endpoint",
+    );
+    Ok(Fallback::new(
+        meta.path().to_owned(),
+        claims,
+        meta.build(container),
+    ))
+}
+
+/// `path`, a controller's prefix or one of its routes, read as a template; the
+/// macros read both halves, so a refusal here is a hand-built controller's.
+fn template_of(path: &str, controller: &str) -> Result<RouteTemplate, RouteError> {
+    RouteTemplate::parse(path).map_err(|refused| RouteError::Template {
+        owner: controller.to_owned(),
+        refused,
+    })
+}
+
+/// Who owns the global prefix, as a refusal names it.
+fn global_prefix_owner() -> String {
+    format!(
+        "the global prefix ({})",
+        nest_rs_config::var_name("http", "GLOBAL_PREFIX"),
+    )
+}
+
+/// What to do about two controllers claiming one mount prefix.
 fn prefix_remedy(version: Option<&str>) -> String {
     match version {
         Some(version) => format!(
@@ -188,195 +314,71 @@ fn prefix_remedy(version: Option<&str>) -> String {
     }
 }
 
-impl Default for HttpTransport {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl HttpTransport {
-    /// A transport with framework defaults — bind `0.0.0.0:3000`, no TLS/CORS,
-    /// fail-secure strict. [`HttpModule`](crate::HttpModule) configures it from
-    /// [`HttpConfig`](crate::HttpConfig); apps rarely build it directly.
-    pub fn new() -> Self {
-        Self {
-            bind: "0.0.0.0:3000".into(),
-            mounts: Vec::new(),
-            cors: None,
-            tls: None,
-            server_header: None,
-            global_prefix: None,
-            max_body_bytes: None,
-            request_timeout: None,
-            // Fail-secure by default: when global guards are active, an
-            // endpoint the transport cannot shape fails boot instead of
-            // mounting unguarded. Opt out via `fail_secure_strict(false)` /
-            // `NESTRS_HTTP__FAIL_SECURE_STRICT=false`.
-            fail_secure_strict: true,
-            security_headers: crate::SecurityHeadersConfig::default(),
-            compression: false,
-            // `None` is the URI strategy: the version is already in the path a
-            // controller mounts at, so there is nothing to resolve per request.
-            version_selector: None,
-            endpoint: None,
-        }
-    }
-
-    /// Build the transport an [`HttpConfig`](crate::HttpConfig) describes.
-    ///
-    /// The one place a config becomes a transport. `HttpModule`'s
-    /// `TransportContribution` calls it, and so does `nest_rs_testing::TestApp`
-    /// — which is the point: a harness that built its own bare transport was
-    /// asserting against something the deployment never runs, silently ignoring
-    /// the global prefix, the versioning strategy, the body cap, the timeout,
-    /// CORS and the security headers.
+    /// The transport `cfg` describes, each bounded field held to the range its
+    /// variable is: a config built in code never met the environment.
     pub fn from_config(cfg: &crate::HttpConfig) -> anyhow::Result<Self> {
-        let mut http = Self::new().bind(format!("{}:{}", cfg.host, cfg.port));
-        if let Some(tls) = cfg.tls.clone() {
-            http = http.tls(tls);
-        }
-        if let Some(cors) = cfg.cors.clone() {
-            http = http.cors(cors.into_middleware()?);
-        }
-        if cfg.server_header {
-            http = http.server_header(concat!("nestrs/", env!("CARGO_PKG_VERSION")));
-        }
-        if let Some(prefix) = cfg.global_prefix.clone() {
-            http = http.global_prefix(prefix);
-        }
-        if let Some(selector) = cfg.version_selector() {
-            http = http.api_versioning(selector);
-        }
-        // Install the per-request cap as a request-data entry — the `RawBody`
-        // extractor reads it back from the extensions.
-        http = http.max_body_bytes(cfg.max_body_bytes.unwrap_or(crate::RawBody::DEFAULT_LIMIT));
-        if let Some(timeout) = cfg.request_timeout {
-            http = http.request_timeout(timeout);
-        }
-        http = http.fail_secure_strict(cfg.fail_secure_strict);
-        http = http.security_headers(cfg.security_headers.clone());
-        http = http.compression(cfg.compression);
-        // `trusted_proxies` is deliberately not handed to the transport: it is a
-        // boot-time constant, so `ClientOrigin` reads it off the `HttpConfig` in
-        // the container rather than through per-request state.
-        Ok(http)
+        let transport = Self {
+            bind: format!("{}:{}", cfg.host, cfg.port),
+            cors: cfg
+                .cors
+                .as_ref()
+                .map(PoemAdapter::cors_policy)
+                .transpose()?,
+            tls: cfg.tls.clone(),
+            server_header: cfg.server_header,
+            global_prefix: cfg
+                .global_prefix
+                .as_deref()
+                .and_then(normalize_global_prefix),
+            max_body_bytes: cfg.max_body_bytes.unwrap_or(crate::RawBody::DEFAULT_LIMIT),
+            request_timeout: cfg.request_budget()?,
+            shutdown_timeout: cfg.shutdown_window()?,
+            max_concurrent_connections: cfg.connection_cap()?,
+            deadlines: cfg.deadlines()?,
+            security_headers: cfg.security_headers.clone(),
+            compression: cfg.compression,
+            // `None` is the URI strategy: the version is already in the mount path.
+            version_selector: cfg.version_selector()?,
+            detached: Vec::new(),
+            drain: Arc::default(),
+            endpoint: None,
+            listening: None,
+        };
+        cfg.warn_when_requests_outlast_the_window();
+        cfg.warn_when_the_body_gap_reaches_the_budget();
+        Ok(transport)
     }
 
-    /// Resolve each request's API version through `selector` instead of from
-    /// its path. [`HttpModule`](crate::HttpModule) passes what `HttpConfig`
-    /// describes; the URI strategy passes nothing.
-    pub fn api_versioning(mut self, selector: crate::VersionSelector) -> Self {
-        self.version_selector = Some(selector);
-        self
-    }
-
-    /// Pin the default security-header policy. [`HttpModule`](crate::HttpModule)
-    /// passes `HttpConfig.security_headers`; defaults are safe (nosniff +
-    /// `X-Frame-Options: DENY` + HSTS under TLS).
-    pub fn security_headers(mut self, cfg: crate::SecurityHeadersConfig) -> Self {
-        self.security_headers = cfg;
-        self
-    }
-
-    /// `true` (the default) makes `configure` **fail** when global guards are
-    /// registered and an imperative [`mount`](Self::mount) endpoint would
-    /// bypass the guard pool; `false` downgrades the violation to a `warn`.
-    pub fn fail_secure_strict(mut self, strict: bool) -> Self {
-        self.fail_secure_strict = strict;
-        self
-    }
-
-    /// Mount every controller under a shared prefix (e.g. `/api`). Useful
-    /// behind a reverse proxy that hands off a sub-path. Empty / `"/"`
-    /// collapse to no-op; a missing leading `/` is added; a trailing `/` is
-    /// stripped.
-    pub fn global_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.global_prefix = normalize_global_prefix(&prefix.into());
-        self
-    }
-
-    /// Emit `Server: <value>` on every response — off by default
-    /// (production-safe). [`HttpModule`](crate::HttpModule) sets this when
-    /// `HttpConfig.server_header` is `true`, using `nestrs/<crate version>`.
-    pub fn server_header(mut self, value: &'static str) -> Self {
-        self.server_header = Some(value);
-        self
-    }
-
-    /// Set the listen address (`host:port`).
-    pub fn bind(mut self, addr: impl Into<String>) -> Self {
-        self.bind = addr.into();
-        self
-    }
-
-    /// Cap each request's raw body to `limit` bytes. Read back by the
-    /// [`RawBody`](crate::RawBody) extractor via the ambient request
-    /// context ([`current_body_limit`](crate::current_body_limit)).
-    pub fn max_body_bytes(mut self, limit: usize) -> Self {
-        self.max_body_bytes = Some(limit);
-        self
-    }
-
-    /// Abort any request that runs longer than `timeout`, answering the client
-    /// with `503 Service Unavailable` and a `Retry-After`. Bounds connection
-    /// hold time against slow or stuck handlers. Without this call no timeout is
-    /// enforced.
-    pub fn request_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.request_timeout = Some(timeout);
-        self
-    }
-
-    /// Enable CORS with a configured poem [`Cors`] middleware. Wraps the route
-    /// tree outermost so a preflight (`OPTIONS`) is answered before any guard
-    /// or interceptor runs.
-    pub fn cors(mut self, cors: Cors) -> Self {
-        self.cors = Some(cors);
-        self
-    }
-
-    /// Negotiate response compression from each request's `Accept-Encoding`
-    /// (poem's [`Compression`] middleware — gzip / deflate / brotli / zstd).
-    /// Off by default; [`HttpModule`](crate::HttpModule) turns it on when
-    /// `HttpConfig.compression` is set.
-    pub fn compression(mut self, on: bool) -> Self {
-        self.compression = on;
-        self
-    }
-
-    /// Serve HTTPS directly from [`TlsConfig`] (poem's `rustls` listener)
-    /// instead of plain HTTP. Without this call the transport stays plaintext.
-    pub fn tls(mut self, tls: TlsConfig) -> Self {
-        self.tls = Some(tls);
-        self
-    }
-
-    /// Mount an extra endpoint at `path`. The builder closure runs at
-    /// [`Transport::configure`] time with the live container, so it can
-    /// resolve services to construct framework-specific endpoints.
-    pub fn mount<F, E>(mut self, path: impl Into<String>, build: F) -> Self
-    where
-        F: Fn(&Container) -> E + Send + Sync + 'static,
-        E: IntoEndpoint,
-        E::Endpoint: 'static,
-        <E::Endpoint as poem::Endpoint>::Output: poem::IntoResponse,
-    {
-        let path = path.into();
-        let mount_path = path.clone();
-        self.mounts.push((
-            path,
-            Box::new(move |container, route| {
-                let endpoint = build(container).into_endpoint().map_to_response().boxed();
-                route.nest(mount_path.clone(), endpoint)
-            }),
-        ));
-        self
-    }
-
-    /// Take the assembled endpoint for in-process testing (drive with poem's
-    /// `TestClient`). Returns `None` before `configure` has run, and leaves
-    /// the transport without an endpoint (so it must not also be `serve`d).
-    pub fn take_endpoint(&mut self) -> Option<BoxEndpoint<'static, Response>> {
+    /// Take the assembled endpoint for in-process testing. Returns `None`
+    /// before `configure` has run, and leaves the transport without an endpoint
+    /// (so it must not also be `serve`d).
+    pub fn take_endpoint(&mut self) -> Option<BoxEndpoint> {
         self.endpoint.take()
+    }
+
+    /// `inner` behind the edge, held to the transport's settings: generic, so
+    /// the fast path calls its router without a second boxed future.
+    fn edge(
+        &self,
+        inner: impl Endpoint,
+        container: &Container,
+        timeout: Option<Duration>,
+        headers: Vec<(HeaderName, HeaderValue)>,
+        normalize: bool,
+    ) -> BoxEndpoint {
+        BoxEndpoint::new(EdgeEndpoint::new(
+            inner,
+            container.clone(),
+            timeout,
+            self.max_body_bytes,
+            self.deadlines.body_read,
+            headers,
+            normalize,
+            // Compression replaces the request body but not its `Content-Length`.
+            self.compression,
+            Arc::clone(&self.drain),
+        ))
     }
 }
 
@@ -384,55 +386,55 @@ impl HttpTransport {
 impl Transport for HttpTransport {
     async fn configure(&mut self, container: &Container) -> Result<()> {
         let discovery = Discovery::new(container);
-        // Boot checks first — a misconfigured global layer pool (a spec whose
-        // provider was never registered) must fail boot before anything
-        // mounts; resolved-at-configure means dropped-silently otherwise.
+        // Before anything mounts: an unresolvable global layer spec would
+        // otherwise be dropped silently.
         for d in discovery.meta::<HttpBootCheck>() {
             d.meta.run(container).map_err(|msg| anyhow::anyhow!(msg))?;
         }
-        let mut route = Route::new();
+        // Applied at registration, so every address the table holds is the one
+        // a client calls.
+        let prefix = self.global_prefix.take();
+        if let Some(prefix) = &prefix {
+            RouteTemplate::literal(prefix).map_err(|refused| RouteError::Prefix {
+                owner: global_prefix_owner(),
+                refused,
+            })?;
+        }
+        let mut routes = HttpRoutes::new(prefix.as_deref());
 
-        // A global guard pool shapes every controller route (it runs post-routing
-        // on all of them), so per-route coverage only matters when no pool is
-        // registered — then a route is covered iff it declares a controller/method
-        // guard or is explicitly `#[public]`. Anything else is an *implicit*
-        // access decision: fail-secure asks the developer to make it explicit.
-        let global_guards = container.get::<GlobalGuardsActive>().is_some();
+        let global_guards = nest_rs_guards::__private::global_guards_active(container);
         let mut unguarded: Vec<String> = Vec::new();
-        // Each controller `nest`s under its own prefix, so a prefix is a
-        // controller's exclusive namespace — two controllers sharing one make
-        // poem panic deep in route assembly ("duplicate path: <prefix>/*--poem-rest").
-        // Catch it here instead, naming both controllers, so it reads like every
-        // other nestrs boot failure rather than an opaque poem internal.
         let mut prefix_owner: HashMap<String, String> = HashMap::new();
-        // Controllers mount their routes FLAT (`.at("<prefix>/<path>")`), so
-        // two controllers whose prefix+path combine to the same full path
-        // would hit poem's opaque duplicate-path panic even though their
-        // prefixes differ. Claim full paths too — same-controller duplicates
-        // (several verbs on one path) are legal and share one entry.
-        let mut route_owner: HashMap<String, String> = HashMap::new();
+        // Routes mount flat (`<prefix>/<path>`), so distinct prefixes can still
+        // collide on a full path.
+        let mut route_owner: HashMap<String, RouteClaim> = HashMap::new();
 
-        // Which prefixes carry a version, for the non-URI strategies. Collected
-        // here rather than guessed per request: a rewrite that fired on every
-        // path would send `/graphql`, `/mcp` and `/health` to `/v1/…` the
-        // moment a deployment named a default version.
-        // Routes, not controller prefixes: a prefix of `/` matches nothing
-        // segment-wise and a prefix of `/posts` matches a *different*
-        // controller's `/posts/drafts`. Both were real defects; the question
-        // that was always meant is "does a versioned route answer here".
+        // Full routes, not prefixes, for the non-URI rewrite: a `/` prefix matches
+        // nothing segment-wise, and `/posts` would claim another controller's `/posts/drafts`.
         let mut versioned_routes: Vec<String> = Vec::new();
-        // Addresses answered with no version, kept apart because they yield
-        // differently: a self-mount is neutral against anything, an unversioned
-        // controller route only against a *default* version.
-        let mut self_mounts: Vec<String> = Vec::new();
+        // Kept apart from the self-mounts' because they yield differently: a
+        // self-mount is neutral against anything, an unversioned controller route
+        // only against a *default* version.
         let mut unversioned_routes: Vec<String> = Vec::new();
+        // What the router's fallback never answers. A controller's prefix is its
+        // namespace although its routes mount flat; one at `/` owns its routes alone.
+        let mut claims = Claims::default();
+        let mut get_routes: Vec<(String, &'static str)> = Vec::new();
         for d in discovery.meta::<HttpControllerMeta>() {
+            let at_root = literal_prefix(d.meta.path) == "/";
+            if !at_root {
+                // The address a non-URI version selector is called at.
+                claims.prefix(d.meta.path, d.meta.controller);
+            }
             for version in d.meta.mounted_versions() {
                 let prefix = d.meta.effective_prefix(version);
+                if !at_root {
+                    claims.prefix(&prefix, d.meta.controller);
+                }
                 claim_exclusive_path(
                     &mut prefix_owner,
                     "controller prefix",
-                    prefix.clone(),
+                    &template_of(&prefix, d.meta.controller)?,
                     d.meta.controller.to_owned(),
                     &prefix_remedy(version),
                 )?;
@@ -441,25 +443,27 @@ impl Transport for HttpTransport {
                         continue;
                     }
                     let path = join_path(&prefix, r.path);
+                    let template = template_of(&path, d.meta.controller)?;
+                    // Under a non-URI selector a versioned route is called unversioned.
+                    let addresses = match version {
+                        Some(_) => vec![path.clone(), join_path(d.meta.path, r.path)],
+                        None => vec![path.clone()],
+                    };
+                    for address in addresses {
+                        if r.verb == crate::HttpVerb::Get {
+                            get_routes.push((address.clone(), d.meta.controller));
+                        }
+                        if at_root {
+                            claims.route(address);
+                        }
+                    }
                     match version.is_some() {
                         true => versioned_routes.push(path.clone()),
                         false => unversioned_routes.push(path.clone()),
                     }
-                    if let Some(first) =
-                        route_owner.insert(path.clone(), d.meta.controller.to_owned())
-                        && first != d.meta.controller
-                    {
-                        anyhow::bail!(
-                            "duplicate route path {path:?}: {first} and {} both mount there — \
-                             give each controller route a distinct full path",
-                            d.meta.controller,
-                        );
-                    }
-                    // Log the address a *client* uses. Under a non-URI strategy
-                    // the `/v{n}` prefix is where the route is mounted, not where
-                    // it is called, so the version moves out of the path and into
-                    // its own field rather than teaching the log a URL nobody can
-                    // request.
+                    claim_route(&mut route_owner, &template, d.meta.controller, r.handler)?;
+                    // Under a non-URI strategy `/v{n}` is where the route mounts, not
+                    // what a client calls, so the version is logged as its own field.
                     let (logged, version) = match &self.version_selector {
                         Some(_) => (join_path(d.meta.path, r.path), version),
                         None => (path.clone(), None),
@@ -478,18 +482,13 @@ impl Transport for HttpTransport {
                     }
                 }
             }
-            route = d.meta.mount(container, route);
+            routes.for_controller(d.meta.controller);
+            d.meta.mount(container, &mut routes);
+            routes.settle()?;
         }
 
-        // A `DEFAULT_VERSION` naming a version nothing declares is a silent
-        // misconfiguration, and a bad one: every caller that states no version
-        // resolves to a path that does not exist, falls through, and is served
-        // the unversioned route or a 404 — with nothing said. Refuse at boot,
-        // naming the versions that do exist.
-        //
-        // Here rather than in `nest-rs-openapi`, which had this check first: it
-        // is HTTP's config, and an app that publishes no document deserves the
-        // same answer as one that does.
+        // Unchecked, an undeclared default would silently send every caller that
+        // states no version to the unversioned route or a 404.
         if let Some(selector) = &self.version_selector
             && selector.rewrites()
             && let Some(default) = selector.default_version()
@@ -521,68 +520,51 @@ impl Transport for HttpTransport {
                 "unguarded routes detected",
             );
         }
-        // Provided by `use_guards_global` (which can see the `Guard` trait);
-        // absent when no global guard is registered. Applied below to every
-        // `Guarded` self-mount — they have no per-route shaper to carry the
-        // global guard pool, so the transport runs it at their edge.
-        let self_mount_guard = discovery
-            .meta::<SelfMountGuardWrap>()
-            .into_iter()
-            .next()
-            .map(|d| d.meta);
-        // A `Guarded` self-mount (a WS gateway upgrade) expects the transport
-        // to run the global guard chain at its edge; with no global guard pool
-        // that chain is empty — the self-mount analog of an implicitly-accessible
-        // controller route (the scan above). The gateway may still bind its own
-        // `#[use_guards]` inside its opaque mount closure, so this is a boot
-        // diagnostic to confirm the edge is guarded on purpose, not a
-        // fail-secure stop (the `Guarded` posture already gets the pool wrap
-        // below whenever one exists).
+        // Empty without a global guard pool. A self-mount guarded at the edge
+        // has no route shaper, so the transport runs the pool there.
+        let edge_pool =
+            nest_rs_guards::__private::resolve_global_chain(container, "self-mount edge");
+        // A warning, not a fail-secure stop: a gateway may bind its own
+        // `#[use_guards]` inside its opaque mount closure.
         let mut unguarded_edges: Vec<String> = Vec::new();
-        // Same exclusivity rule as a controller prefix, same failure mode: two
-        // self-mounts on one path make poem panic in route assembly. Catch it
-        // here so a second `#[mcp(path = "/mcp")]` reads as a named boot error
-        // naming both endpoints, not an opaque poem internal.
         let mut endpoint_owner: HashMap<String, String> = HashMap::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
-            // Cross-family too: a self-mount nests its whole subtree, so a
-            // controller already holding that path is the same poem panic by
-            // another route. The two maps above only ever compared a family
-            // against itself, which let `#[controller(path = "/chat")]` beside
-            // `#[gateway(path = "/chat")]` through to route assembly.
-            if let Some(first) = prefix_owner
-                .get(d.meta.path())
-                .or_else(|| route_owner.get(d.meta.path()))
-            {
-                anyhow::bail!(
-                    "duplicate mount path {:?}: controller {first} and {} endpoint {} both mount \
-                     there — a mount path is its owner's exclusive namespace; give each one a \
-                     distinct path",
-                    d.meta.path(),
-                    d.meta.label(),
-                    d.meta.owner(),
-                );
+            let owner = format!("{} endpoint {}", d.meta.label(), d.meta.owner());
+            // Nested whole at its path; what it routes below is its own template.
+            let mut templates = Vec::new();
+            for (index, path) in d.meta.paths().enumerate() {
+                let read = match index {
+                    0 => RouteTemplate::literal(path),
+                    _ => RouteTemplate::parse(path),
+                };
+                templates.push(read.map_err(|refused| RouteError::Template {
+                    owner: format!("the {owner}"),
+                    refused,
+                })?);
             }
-            // A self-mount owns the paths it declares, and owns them without a
-            // version: `/graphql`, `/mcp`, `/api-json`, a gateway. Recording
-            // them here is what stops a versioned catch-all controller from
-            // swallowing them.
-            //
-            // Every declared path, not the path plus an assumed `/*rest`
-            // subtree: the assumption was wrong in both directions at once. It
-            // missed `/api-json` — which `OpenApiModule` mounts and which is not
-            // under `/api` — so a root catch-all swallowed the document; and it
-            // claimed the whole subtree under every self-mount, so a versioned
-            // controller mounted beneath one was unreachable with no boot error
-            // to say why. A surface that genuinely owns a subtree now says so,
-            // through `also_mounts`.
-            for path in d.meta.paths() {
-                self_mounts.push(path.to_owned());
+            let identity = templates[0].identity();
+            // A self-mount owns what lies below its path too, so a controller there
+            // would split its subtree.
+            if let Some(first) = prefix_owner
+                .get(identity)
+                .map(String::as_str)
+                .or_else(|| route_owner.get(identity).map(|claim| claim.controller))
+            {
+                return Err(RouteError::MountPath {
+                    path: d.meta.path().to_owned(),
+                    controller: first.to_owned(),
+                    label: d.meta.label().to_owned(),
+                    owner: d.meta.owner().to_owned(),
+                }
+                .into());
+            }
+            for template in &templates {
+                claims.prefix(template.as_str(), owner.clone());
                 claim_exclusive_path(
                     &mut endpoint_owner,
                     "self-mounted endpoint path",
-                    path.to_owned(),
-                    format!("{} endpoint {}", d.meta.label(), d.meta.owner()),
+                    template,
+                    owner.clone(),
                     "give each one a distinct path",
                 )?;
             }
@@ -592,26 +574,24 @@ impl Transport for HttpTransport {
                 path = d.meta.path(),
                 "mounted endpoint",
             );
+            if let Some(work) = d.meta.detached() {
+                self.detached.push((d.meta.path().to_owned(), work.clone()));
+            }
             if d.meta.edge_access_is_implicit(global_guards) {
                 unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
             }
-            match (d.meta.posture(), &self_mount_guard) {
-                (EdgePosture::Guarded, Some(wrap)) => {
-                    // Isolate this self-mount into a fresh sub-route, wrap it
-                    // with the global guard chain, and nest it back without
-                    // stripping its own path (so the inner route still matches).
-                    let isolated: BoxEndpoint<'static, Response> =
-                        d.meta.mount(container, Route::new()).boxed();
-                    let wrapped = wrap.apply(container, isolated);
-                    route = route.nest_no_strip(d.meta.path(), wrapped);
-                }
-                _ => {
-                    // `Exempt` surfaces gate in-band (GraphQL operation guard,
-                    // MCP per-request guard) or are deliberately public
-                    // (OpenAPI docs) — no edge wrap.
-                    route = d.meta.mount(container, route);
-                }
-            }
+            // Each entry runs the pool once routed, so a guard reads the template it
+            // matched; gated in band (GraphQL, MCP), public by design (OpenAPI), or
+            // with no pool to run, an entry is registered as it is.
+            let wrap = (d.meta.guarded_at_the_edge() && !edge_pool.is_empty()).then(|| {
+                let (handler, pool) = (d.meta.handler(), edge_pool.clone());
+                Arc::new(move |inner| {
+                    BoxEndpoint::new(GuardedEndpoint::new(handler, pool.clone(), inner))
+                }) as Wrap
+            });
+            routes.for_self_mount(format!("the {owner}"), templates, wrap);
+            d.meta.mount(container, &mut routes);
+            routes.settle()?;
         }
         if !unguarded_edges.is_empty() {
             tracing::warn!(
@@ -622,93 +602,58 @@ impl Transport for HttpTransport {
                 "unguarded self-mount edges detected",
             );
         }
-        // Fail-secure completeness check: every controller route is shaped
-        // (its `RouteShaper` runs the global guard pool) and every self-mount
-        // declares an `EdgePosture`, but an imperative `mount(...)` is an
-        // opaque poem endpoint the transport can neither shape nor introspect.
-        // When global guards are active, those endpoints bypass the pool —
-        // strict mode (the default) fails boot, the same posture as the
-        // access graph; opting out downgrades to a warn.
-        if !self.mounts.is_empty() && container.get::<GlobalGuardsActive>().is_some() {
-            let paths: Vec<&str> = self.mounts.iter().map(|(p, _)| p.as_str()).collect();
-            if self.fail_secure_strict {
-                anyhow::bail!(
-                    "fail-secure: imperative mount(...) endpoints bypass the global guard pool: \
-                     {} — route them through a #[controller], guard them explicitly, or opt out \
-                     with HttpTransport::fail_secure_strict(false) / {}=false",
-                    paths.join(", "),
-                    nest_rs_config::var_name("http", "FAIL_SECURE_STRICT"),
-                );
-            }
-            tracing::warn!(
-                target: crate::target::HTTP,
-                paths = paths.join(", ").as_str(),
-                hint = "route through a #[controller] or guard explicitly",
-                "imperative mounts bypass the global guard pool",
-            );
-        }
-        for (_, mount) in self.mounts.drain(..) {
-            route = mount(container, route);
-        }
-
-        // Header / media-type versioning is a rewrite in front of routing:
-        // fold it back into a `Route` at the root so the no-layer fast path
-        // below stays monomorphized, and keep it *inside* the global prefix so
-        // the path it rewrites is the one controllers mount at.
-        // `rewrites()` and not merely `Some`: the URI strategy is resolved by
-        // routing, so wrapping it would refuse every `/v{n}/…` path it is
-        // supposed to serve. Unreachable through `HttpModule`, which hands over
-        // `None` for `uri` — the public builder can hit it.
+        // What the self-mounts registered, not what they declared: an entry below
+        // a mount's path needs no declaration, and a versioned catch-all must not
+        // swallow it.
+        let self_mounts = routes.take_self_mounted();
+        let mut router = PoemAdapter::router(routes.into_addresses())?;
+        // In front of routing, after the global prefix: it rewrites the path a
+        // controller's route is registered at. `rewrites()`, not `Some`: wrapping
+        // the URI strategy would refuse every `/v{n}/…`.
         if let Some(selector) = self.version_selector.take().filter(|s| s.rewrites()) {
-            let selector = selector.with_routes(
-                versioned_routes,
-                self_mounts,
-                unversioned_routes,
-                crate::declared_versions(container),
-            );
-            // An inert selector — a non-URI strategy with nothing versioned to
-            // select — would pass every request straight through, at the cost of
-            // a whole extra routing layer. Measured at +57% on the hot path, for
-            // an outcome it can never change.
+            let selector = selector
+                .with_routes(
+                    versioned_routes,
+                    self_mounts,
+                    unversioned_routes,
+                    crate::declared_versions(container),
+                )
+                .under(prefix.as_deref());
+            // An inert selector changes nothing and costs a layer on the hot path.
             if !selector.is_inert() {
-                route = Route::new().nest_no_strip("/", VersionedEndpoint::new(route, selector));
+                router = BoxEndpoint::new(VersionedEndpoint::new(router, selector));
             }
         }
 
-        // Apply the global prefix once around the fully-assembled tree so
-        // every controller, every self-mounting endpoint, and every imperative
-        // `mount(...)` lands under it.
-        if let Some(prefix) = self.global_prefix.take() {
-            route = Route::new().nest(prefix, route);
+        if let Some(prefix) = prefix {
+            claims.only(prefix, global_prefix_owner());
+            // Every route answers under the prefix, never at a path of its own.
+            get_routes.clear();
         }
+        let fallback = match discovery.meta::<HttpFallbackMeta>().as_slice() {
+            [] => None,
+            [only] => Some(mount_fallback(container, &only.meta, claims, &get_routes)?),
+            [first, second, ..] => {
+                return Err(RouteError::TwoFallbacks {
+                    first: first.meta.owner().to_owned(),
+                    second: second.meta.owner().to_owned(),
+                }
+                .into());
+            }
+        };
+        let router = WithFallback::new(router, fallback);
 
-        // Layer-System globals (guards / interceptors / filters / pipes /
-        // exception filters) attach a `HttpEndpointWrap` from their own
-        // crate. The transport sorts by priority ascending so the
-        // documented HTTP order is enforced regardless of AppBuilder call
-        // sequence: Guards (innermost) → Filters → Interceptors
-        // (outermost). Insertion order is the tiebreaker within a band.
+        // Ascending priority, whatever the registration order; the stable sort
+        // keeps insertion order within a band.
         let mut metas: Vec<std::sync::Arc<HttpEndpointWrap>> = discovery
             .meta::<HttpEndpointWrap>()
             .into_iter()
             .map(|d| d.meta)
             .collect();
         metas.sort_by_key(|m| m.priority());
-        // The four per-request edge concerns — request scope, body cap,
-        // request timeout, default response headers (security + `Server`) —
-        // fuse into ONE layer (`EdgeEndpoint`) instead of one boxed wrap
-        // each: same semantics and relative order (scope outermost, body cap
-        // before the timer, the timer bounding guards/interceptors/handler,
-        // headers stamped on the way out — so a `413`/`503` still carries
-        // them), a single dispatch on the hot path. CORS / compression stay
-        // poem middlewares outside it; a preflight is answered before any of
-        // this runs, and without the timer.
         let mut edge_headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
         for (name, value) in self.security_headers.headers(self.tls.is_some()) {
-            // Values are boot-validated (HTTP-S4) and the names are the `http`
-            // crate's own constants, so a failure here is a framework bug, not
-            // a config error — log it loudly rather than silently drop a
-            // security header.
+            // Values are boot-validated: a failure here is a framework bug.
             match HeaderValue::from_str(&value) {
                 Ok(header_value) => edge_headers.push((name, header_value)),
                 Err(_) => tracing::error!(
@@ -718,109 +663,40 @@ impl Transport for HttpTransport {
                 ),
             }
         }
-        if let Some(value) = self.server_header.take() {
-            edge_headers.push((SERVER, HeaderValue::from_static(value)));
+        if self.server_header {
+            edge_headers.push((SERVER, HeaderValue::from_static(SERVER_VALUE)));
         }
-        // Transport-edge error boundary — outermost, so it normalizes
-        // whatever escapes the whole stack. Any `>= 400` response poem
-        // rendered as raw `text/plain` (an unmounted-route 404, a 413, a 405,
-        // an extractor's bad-path-id 400, a timeout 503) is lifted onto the
-        // single RFC-9457 `application/problem+json` envelope; a response
-        // already in `problem+json` (a `ServiceError`, a `ProblemDetails`, a
-        // guard denial, a domain exception filter) passes through untouched.
-        // `map_to_response` on the route tree collapses handler/extractor
-        // `Err`s into `Ok` responses before here, so the seam inspects the
-        // response, not `Err`. Without CORS / compression the edge is the
-        // outermost layer and runs the normalizer itself; with them the
-        // boundary stays a separate wrap outside both.
+        // The problem normalizer must be outermost: without CORS or compression
+        // that is the edge itself, otherwise a wrap outside both.
         let fuse_normalize = !self.compression && self.cors.is_none();
         let timeout = self.request_timeout.take();
-        let body_limit = self.max_body_bytes.take();
 
-        let endpoint: BoxEndpoint<'static, Response> = if metas.is_empty() && fuse_normalize {
-            // Fast path — no global wrap, no CORS, no compression: the edge
-            // sits directly on the (unboxed) route tree, monomorphized, and
-            // the whole transport stack is a single boxed endpoint.
-            crate::edge::EdgeEndpoint::new(
-                route.map_to_response(),
-                container.clone(),
-                timeout,
-                body_limit,
-                edge_headers,
-                true,
-                // This shape is only mounted when neither CORS nor compression
-                // is configured, so nothing outside can rewrite the body.
-                false,
-            )
-            .boxed()
+        let endpoint = if metas.is_empty() && fuse_normalize {
+            self.edge(router, container, timeout, edge_headers, true)
         } else {
-            // Render whatever is still an `Err` into its response once the
-            // global filter pool has had its turn, so the interceptor bands
-            // above genuinely see 404s and 405s (the router answers an
-            // unmatched path with `Err`, which short-circuits the documented
-            // `next.run(req).await?` body).
-            //
-            // `metas` is sorted ascending, so the insertion point is a
-            // partition — and `to_response` subsumes `map_to_response`, so when
-            // nothing sits below the band (the common case: an app with only
-            // the interceptor pool and infra wraps) the resolution is *free*,
-            // folded into the base layer instead of stacked on top of it.
-            // Kept out of the meta list so it stays un-registerable.
+            // The router answers 404/405 with an `Err`, which would short-circuit an
+            // interceptor's `next.run(req).await?`; rendering at `ERROR_RESOLVE` lets them see it.
             let split = metas
-                .partition_point(|m| m.priority() < crate::endpoint_wrap_priority::ERROR_RESOLVE);
+                .partition_point(|m| m.priority() < crate::interceptor::priority::ERROR_RESOLVE);
             let (below, above) = metas.split_at(split);
-            let mut endpoint: BoxEndpoint<'static, Response> = if below.is_empty() {
-                route.to_response().boxed()
-            } else {
-                let mut inner: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
-                for meta in below {
-                    inner = meta.wrap(container, inner);
-                }
-                inner.to_response().boxed()
-            };
-            for meta in above {
-                endpoint = meta.wrap(container, endpoint);
-            }
-            let mut endpoint: BoxEndpoint<'static, Response> = crate::edge::EdgeEndpoint::new(
-                endpoint,
-                container.clone(),
-                timeout,
-                body_limit,
-                edge_headers,
-                fuse_normalize,
-                // Compression wraps outside this endpoint and replaces the
-                // request body without touching `Content-Length`, so a declared
-                // length stops bounding anything.
-                self.compression,
-            )
-            .boxed();
-            // Response compression, negotiated from `Accept-Encoding`. Inside
-            // CORS (a preflight carries no body to compress) and outside the
-            // handler / header layers so the encoded bytes are what leaves
-            // the process.
-            if self.compression {
-                endpoint = endpoint.with(Compression::new()).map_to_response().boxed();
-            }
-            // CORS wraps outermost, so a preflight is handled before guards
-            // run — and before the edge layer, so a preflight carries no
-            // request scope (nothing reads one: no extractor or guard runs on
-            // a preflight).
-            if let Some(cors) = self.cors.take() {
-                endpoint = endpoint.with(cors).map_to_response().boxed();
-            }
+            let inner = below.iter().fold(BoxEndpoint::new(router), |inner, meta| {
+                meta.wrap(container, inner)
+            });
+            let endpoint = above
+                .iter()
+                .fold(BoxEndpoint::new(ResolvedErrors(inner)), |endpoint, meta| {
+                    meta.wrap(container, endpoint)
+                });
+            let endpoint = self.edge(endpoint, container, timeout, edge_headers, fuse_normalize);
             if fuse_normalize {
                 endpoint
             } else {
-                endpoint
-                    .around(|ep, req| async move {
-                        let resp = match ep.call(req).await {
-                            Ok(resp) => resp,
-                            Err(err) => err.into_response(),
-                        };
-                        Ok(crate::problem::normalize_error_response(resp).await)
-                    })
-                    .map_to_response()
-                    .boxed()
+                // Outside the edge, so a preflight carries no request scope.
+                BoxEndpoint::new(Normalized(PoemAdapter::around(
+                    endpoint,
+                    self.cors.take(),
+                    self.compression,
+                )))
             }
         };
 
@@ -828,32 +704,80 @@ impl Transport for HttpTransport {
         Ok(())
     }
 
+    /// Check the TLS material, then bind: material that cannot serve fails the
+    /// boot with the port never taken, and a port taken fails it before any
+    /// transport serves.
+    async fn listen(&mut self) -> Result<Listening> {
+        let tls = self
+            .tls
+            .take()
+            .map(HttpTls::into_listener)
+            .transpose()
+            .context("the configured TLS material cannot serve")?;
+        let listener = tokio::net::TcpListener::bind(&self.bind)
+            .await
+            .with_context(|| format!("the HTTP transport cannot listen on {}", self.bind))?;
+        let local = listener.local_addr()?;
+        tracing::debug!(
+            target: crate::target::HTTP,
+            addr = %local,
+            tls = tls.is_some(),
+            idle_timeout_secs = self.deadlines.idle.as_secs(),
+            "transport listening",
+        );
+        self.listening = Some(Listened { listener, tls });
+        Ok(Listening::on([local]))
+    }
+
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()> {
+        #[expect(
+            clippy::expect_used,
+            reason = "the transport lifecycle runs configure before serve"
+        )]
         let endpoint = self
             .endpoint
             .expect("HttpTransport::configure must run before serve");
-        let bind = self.bind;
-        let listener = match self.tls {
-            Some(tls) => {
-                // Built before the listener binds, and fallible on purpose: a
-                // stream of configs takes poem's unchecked blanket impl, so
-                // unusable material would otherwise leave a process that boots,
-                // reports healthy, binds and drops every connection.
-                let stream = tls
-                    .into_rustls_stream()
-                    .context("the configured TLS material cannot serve")?;
-                tracing::debug!(target: crate::target::HTTP, addr = %bind, tls = true, "transport listening");
-                TcpListener::bind(bind).rustls(stream).boxed()
-            }
-            None => {
-                tracing::debug!(target: crate::target::HTTP, addr = %bind, tls = false, "transport listening");
-                TcpListener::bind(bind).boxed()
+        let Listened { listener, tls } = self
+            .listening
+            .context("HttpTransport::listen must run before serve")?;
+        let window = self.shutdown_timeout;
+        let drain = self.drain;
+        let server = Server::new(
+            listener,
+            endpoint,
+            Arc::clone(&drain),
+            self.max_concurrent_connections,
+            self.deadlines,
+            tls,
+        )?;
+        let detached = self.detached;
+        // `begin` runs before the loop stops accepting, so every socket the
+        // window cuts drops after the instant it records.
+        let signal = {
+            let drain = Arc::clone(&drain);
+            let leaving: Vec<DetachedWork> =
+                detached.iter().map(|(_, work)| work.clone()).collect();
+            async move {
+                cancel.cancelled().await;
+                drain.begin(window);
+                for work in &leaving {
+                    work.go_away();
+                }
             }
         };
-        Server::new(listener)
-            .run_with_graceful_shutdown(endpoint, async move { cancel.cancelled().await }, None)
-            .await?;
+        server.run(signal).await;
+        // Last, so nothing a connection carried still runs when the shutdown
+        // hooks start; within the settle the cut streams used, never one more.
+        DetachedWork::stop_at(&detached, drain.bound()).await;
+        drain.report(window);
         Ok(())
+    }
+
+    /// The window, then the one settle `serve` gives what it cut — the HTTP/2
+    /// streams and what its self-mounts ran off their connections — to
+    /// unwind.
+    fn stop_bound(&self) -> Duration {
+        self.shutdown_timeout + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
     }
 }
 
@@ -861,13 +785,10 @@ impl Transport for HttpTransport {
 mod tests {
     use super::*;
 
-    // `join_path` is the single source of truth shared with `nest-rs-openapi`
-    // and the boot route log — a drift here means the served path and the
-    // documented path disagree, so the cases are exhaustive on purpose.
     #[test]
     fn join_path_concatenates_clean_segments() {
         assert_eq!(join_path("/health", "/live"), "/health/live");
-        assert_eq!(join_path("/users", "/:id"), "/users/:id");
+        assert_eq!(join_path("/users", "/{id}"), "/users/{id}");
     }
 
     #[test]
@@ -889,8 +810,7 @@ mod tests {
     #[test]
     fn version_path_prefixes_when_a_version_is_supplied() {
         assert_eq!(version_path(Some("1"), "/users"), "/v1/users");
-        assert_eq!(version_path(Some("2"), "/users/:id"), "/v2/users/:id");
-        // Version + root.
+        assert_eq!(version_path(Some("2"), "/users/{id}"), "/v2/users/{id}");
         assert_eq!(version_path(Some("1"), "/"), "/v1");
     }
 
@@ -901,40 +821,253 @@ mod tests {
     }
 
     #[test]
-    fn http_transport_defaults_match_an_empty_new() {
-        let d = HttpTransport::default();
-        let n = HttpTransport::new();
-        assert_eq!(d.bind, n.bind);
-        assert_eq!(d.bind, "0.0.0.0:3000");
-        assert!(d.mounts.is_empty());
-        assert!(d.cors.is_none());
-        assert!(d.tls.is_none());
-        assert!(d.server_header.is_none());
-        assert!(d.endpoint.is_none());
+    fn a_literal_mount_path_is_kept_canonical() {
+        assert_eq!(literal_mount_path("").as_deref(), Some("/"));
+        assert_eq!(literal_mount_path("assets/").as_deref(), Some("/assets"));
+        assert_eq!(
+            literal_mount_path("/.well-known").as_deref(),
+            Some("/.well-known")
+        );
+        assert_eq!(literal_mount_path("/app/v2").as_deref(), Some("/app/v2"));
     }
 
     #[test]
-    fn bind_overrides_the_default_address() {
-        let t = HttpTransport::new().bind("127.0.0.1:9000");
+    fn a_mount_path_the_router_would_read_as_a_template_is_refused() {
+        for raw in [
+            "/assets/*rest",
+            "/:id",
+            "/{id}",
+            "/assets/{*rest}",
+            "/a{{b",
+            "/files/<\\d+>",
+            "/a//b",
+            "/a/../b",
+            "/a%2fb",
+            "/a b",
+            "/a?b",
+            "/a\\b",
+        ] {
+            assert_eq!(literal_mount_path(raw), None, "{raw}");
+        }
+    }
+
+    /// The transport a default config describes.
+    fn defaults() -> HttpTransport {
+        HttpTransport::from_config(&crate::HttpConfig::default())
+            .expect("the defaults are in range")
+    }
+
+    #[test]
+    fn a_default_config_builds_a_plaintext_transport_on_every_interface() {
+        let d = defaults();
+        assert_eq!(d.bind, "0.0.0.0:3000");
+        assert!(d.cors.is_none());
+        assert!(d.tls.is_none());
+        assert!(!d.server_header, "no framework fingerprint by default");
+        assert!(d.global_prefix.is_none());
+        assert_eq!(d.max_body_bytes, crate::RawBody::DEFAULT_LIMIT);
+        assert!(
+            d.version_selector.is_none(),
+            "the URI strategy routes by path"
+        );
+        assert!(d.endpoint.is_none());
+        assert_eq!(
+            d.shutdown_timeout,
+            crate::HttpConfig::default().shutdown_timeout
+        );
+    }
+
+    #[test]
+    fn a_built_config_takes_its_connection_cap_and_is_held_to_its_range() {
+        let capped = HttpTransport::from_config(&crate::HttpConfig {
+            max_concurrent_connections: 64,
+            ..Default::default()
+        })
+        .expect("a cap inside the range");
+        assert_eq!(capped.max_concurrent_connections, 64);
+        for cap in [0, 1_048_577] {
+            let refused = HttpTransport::from_config(&crate::HttpConfig {
+                max_concurrent_connections: cap,
+                ..Default::default()
+            })
+            .err()
+            .expect("a cap outside the range never reaches the loop")
+            .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name(
+                    "http",
+                    "MAX_CONCURRENT_CONNECTIONS"
+                )),
+                "{cap}: {refused}"
+            );
+        }
+    }
+
+    /// The one constructor holds the window and the budget to the ranges their
+    /// variables are, for a config that never met the environment.
+    #[test]
+    fn a_built_config_holds_its_shutdown_window_and_request_budget_to_their_ranges() {
+        const WINDOW: (&str, &str) = ("SHUTDOWN_TIMEOUT_SECS", "HttpConfig::shutdown_timeout");
+        const BUDGET: (&str, &str) = ("REQUEST_TIMEOUT_SECS", "HttpConfig::request_timeout");
+        let window = |shutdown_timeout| crate::HttpConfig {
+            shutdown_timeout,
+            ..Default::default()
+        };
+        let budget = |budget| crate::HttpConfig {
+            request_timeout: Some(budget),
+            ..Default::default()
+        };
+        for (config, (key, field)) in [
+            (window(Duration::MAX), WINDOW),
+            (window(Duration::ZERO), WINDOW),
+            (budget(Duration::ZERO), BUDGET),
+            (budget(Duration::MAX), BUDGET),
+        ] {
+            let refused = HttpTransport::from_config(&config)
+                .err()
+                .expect("a value outside the range never reaches the transport")
+                .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("http", key)),
+                "{field}: {refused}"
+            );
+            assert!(refused.contains(field), "{field}: {refused}");
+        }
+        let off = HttpTransport::from_config(&crate::HttpConfig {
+            request_timeout: None,
+            ..Default::default()
+        })
+        .expect("`None` turns the budget off");
+        assert_eq!(off.request_timeout, None);
+    }
+
+    /// A config built in code naming no header is refused, never served the
+    /// URI strategy in place of the header one it declares.
+    #[test]
+    fn a_built_config_holds_its_version_header_to_a_header_name() {
+        let header = |version_header: &str| crate::HttpConfig {
+            versioning: crate::ApiVersioning::Header,
+            version_header: version_header.into(),
+            ..Default::default()
+        };
+        let refused = HttpTransport::from_config(&header("X Version"))
+            .err()
+            .expect("an invalid header never reaches the transport")
+            .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("http", "VERSION_HEADER")),
+            "{refused}"
+        );
+        assert!(refused.contains("HttpConfig::version_header"), "{refused}");
+        let served = HttpTransport::from_config(&header("X-Version")).expect("a header name");
+        assert!(
+            served.version_selector.is_some(),
+            "the header strategy rewrites"
+        );
+    }
+
+    #[test]
+    fn the_stop_bound_is_the_configured_window_then_the_settle() {
+        let window = Duration::from_secs(3);
+        let t = HttpTransport::from_config(&crate::HttpConfig {
+            shutdown_timeout: window,
+            ..Default::default()
+        })
+        .expect("a window in range");
+        assert_eq!(
+            t.stop_bound(),
+            window + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn the_listen_address_is_the_configured_host_and_port() {
+        let t = HttpTransport::from_config(&crate::HttpConfig {
+            host: "127.0.0.1".into(),
+            port: 9000,
+            ..Default::default()
+        })
+        .expect("in range");
         assert_eq!(t.bind, "127.0.0.1:9000");
     }
 
     #[test]
-    fn tls_pins_the_supplied_config() {
-        // TlsConfig is opaque, so just check the option flips on.
-        let t = HttpTransport::new().tls(TlsConfig::new(b"cert".to_vec(), b"key".to_vec()));
+    fn configured_tls_material_is_kept_for_listen_to_check() {
+        let t = HttpTransport::from_config(&crate::HttpConfig {
+            tls: Some(HttpTls::new(b"cert".to_vec(), b"key".to_vec())),
+            ..Default::default()
+        })
+        .expect("material is checked when listen binds, not here");
         assert!(t.tls.is_some());
     }
 
+    #[tokio::test]
+    async fn listen_binds_and_reports_the_real_address() {
+        let mut t = HttpTransport::from_config(&crate::HttpConfig {
+            host: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        })
+        .expect("in range");
+        let listening = t.listen().await.expect("a loopback port");
+        let [address] = listening.addresses[..] else {
+            panic!("one address: {listening:?}");
+        };
+        assert!(address.ip().is_loopback());
+        assert_ne!(address.port(), 0);
+        assert!(t.listening.is_some(), "the bound socket is kept for serve");
+    }
+
+    #[tokio::test]
+    async fn serve_without_listen_is_an_error_not_a_bind() {
+        let mut t = defaults();
+        t.endpoint = Some(BoxEndpoint::new(crate::endpoint_fn(|_| async {
+            Ok(crate::Response::builder().body(""))
+        })));
+        let refused = Box::new(t)
+            .serve(CancellationToken::new())
+            .await
+            .expect_err("nothing was bound");
+        assert_eq!(
+            refused.to_string(),
+            "HttpTransport::listen must run before serve"
+        );
+    }
+
     #[test]
-    fn server_header_pins_the_supplied_static_str() {
-        let t = HttpTransport::new().server_header("nestrs/0.1.0");
-        assert_eq!(t.server_header, Some("nestrs/0.1.0"));
+    fn the_server_header_names_this_nestrs_version() {
+        let t = HttpTransport::from_config(&crate::HttpConfig {
+            server_header: true,
+            ..Default::default()
+        })
+        .expect("in range");
+        assert!(t.server_header);
+        assert_eq!(
+            SERVER_VALUE,
+            format!("nestrs/{}", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn a_global_prefix_is_kept_in_its_canonical_form() {
+        for (raw, kept) in [
+            ("api", Some("/api")),
+            ("/api/", Some("/api")),
+            ("/", None),
+            ("  ", None),
+        ] {
+            let t = HttpTransport::from_config(&crate::HttpConfig {
+                global_prefix: Some(raw.into()),
+                ..Default::default()
+            })
+            .expect("in range");
+            assert_eq!(t.global_prefix.as_deref(), kept, "{raw:?}");
+        }
     }
 
     #[test]
     fn take_endpoint_returns_none_before_configure_has_run() {
-        let mut t = HttpTransport::new();
+        let mut t = defaults();
         assert!(t.take_endpoint().is_none(), "no endpoint before configure");
     }
 }

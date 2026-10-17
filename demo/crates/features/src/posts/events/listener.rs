@@ -17,7 +17,7 @@ impl PostsListener {
     async fn on_post_published(&self, event: PostPublishedEvent) {
         self.feed.publish(event.post);
         tracing::debug!(
-            target: "features::posts",
+            target: crate::posts::TARGET,
             post_id = %event.post_id,
             org_id = %event.org_id,
             "fanned a published post out to subscribers",

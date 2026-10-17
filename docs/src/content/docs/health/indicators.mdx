@@ -16,7 +16,9 @@ method's name becomes the indicator's key.
 **The probe body carries a fixed reason, never your error.** A failed check
 reports `"check failed"` (or `"timed out"`), and the `anyhow` chain goes to
 the log instead: `warn` on `nest_rs::health`, with `indicator`, `kind` and
-`error` as fields. That is deliberate — `/health/*` is routinely
+`error` as fields. A check that panics reports `"check failed"` too, its panic
+filed once at `error`, `health indicator panicked`, and the probe still answers
+for every other indicator. That is deliberate — `/health/*` is routinely
 unauthenticated, and an error from a connection check carries a DSN, an
 internal hostname or a driver message. Triage is one filtered log query;
 it is not a value anyone can read off an open port.
@@ -55,7 +57,7 @@ use crate::upstream::health::indicator::UpstreamHealthIndicator;
 pub struct UpstreamHealthModule;
 ```
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use features::upstream::UpstreamHealthModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
@@ -97,7 +99,7 @@ indicator. The SeaORM pool ping is the first one to ship.
 both `#[readiness]` and `#[startup]` — exactly what most apps want and
 zero code in the app:
 
-```toml title="apps/api/Cargo.toml (from the demo)"
+```toml title="apps/api/Cargo.toml"
 nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "health"] }
 ```
 
@@ -128,8 +130,8 @@ The orchestrator decorator walks the impl block, finds each method
 tagged with exactly one probe attribute, strips the attribute, and
 submits one `HealthIndicator` entry per method to the link-time
 inventory `HealthService` drains at probe time. The method stays on
-the impl block unchanged — still a regular `async fn` you can call
-from anywhere.
+the impl block unchanged — still a regular method you can call from
+anywhere.
 
 - **`#[injectable]`** makes the indicator an ordinary DI provider —
   same `#[inject]` shape as any other service.
@@ -138,9 +140,10 @@ from anywhere.
 - **`#[liveness]` / `#[readiness]` / `#[startup]`** route the method
   to its probe. Exactly one per method — the macro rejects two at
   compile time.
-- Methods must be `async fn` returning `anyhow::Result<()>` (or any
-  `Result<(), E: Into<anyhow::Error>>`). A bare `async fn` with no
-  return is treated as infallible — always `up`.
+- Methods take `&self` and return `anyhow::Result<()>` (or any
+  `Result<(), E: Into<anyhow::Error>>`); an `async fn` is awaited, a
+  plain `fn` is called. A method with no return is treated as
+  infallible — always `up`.
 
 Multiple decorated methods on the same impl block share the
 provider's `#[inject]` dependencies — pool a DB ping, a Redis ping,
@@ -153,7 +156,7 @@ pub struct AppHealth {
     #[inject]
     db: Arc<DatabaseConnection>,
     #[inject]
-    redis: Arc<RedisPool>,
+    redis: Arc<RedisConnection>,
 }
 
 #[indicators]
@@ -164,8 +167,10 @@ impl AppHealth {
     }
 
     #[readiness]
-    async fn redis(&self) -> anyhow::Result<()> {
-        self.redis.ping().await
+    async fn redis(&self) -> redis::RedisResult<()> {
+        redis::cmd("PING")
+            .query_async(&mut RedisConnection::clone(&self.redis))
+            .await
     }
 
     #[startup]
@@ -175,6 +180,16 @@ impl AppHealth {
     }
 }
 ```
+
+`RedisConnection` is the connection every Redis binding over its instance
+shares, so a command sent on a clone of it answers or fails within that
+instance's budget — `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, or
+`<PREFIX>_REDIS__CACHE__CONNECT_TIMEOUT_SECS` for
+[a second Valkey](/queue/topologies/#a-second-valkey) injected as
+`RedisConnection<Cache>` — like the framework's own. Sending one
+names the `redis` crate in your source, so your manifest carries it — on the
+line `nest-rs-redis` builds against, 0.32, whose `ConnectionLike` the connection
+implements.
 
 A worker app or an MCP app that imports the feature's data layer
 without its `HealthModule` ships no probe surface for that feature —

@@ -1,57 +1,88 @@
-//! Per-request resolution for request-scoped providers.
+//! Per-request resolution for request-scoped providers, cached per request by
+//! a [`RequestScope`]; non-scoped types fall through to the singleton container.
 //!
-//! The container is a flat singleton store; a `#[injectable(scope = request)]`
-//! provider is the exception — built fresh per request and cached for that
-//! request by a [`RequestScope`]. Non-scoped types fall through to the
-//! singleton container.
-//!
-//! A request-scoped provider may depend on singletons **and** on other
-//! request-scoped providers (resolved through this scope, so they share one
-//! per-request instance). The reverse is structurally impossible: a singleton
-//! cannot depend on a request-scoped provider (singletons are built before any
-//! request exists). Reach a request-scoped provider through the request
-//! boundary (`Scoped<T>`), never a `#[inject]` field on a singleton.
+//! A request-scoped provider may depend on singletons and on other
+//! request-scoped providers (sharing the request's instance); a singleton never
+//! depends on one — reach it through the request boundary (`Scoped<T>`).
 
 use std::any::{Any, TypeId, type_name};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use parking_lot::Mutex;
+use tokio::task::futures::TaskLocalFuture;
 
 use crate::Container;
+use crate::ambient::{Continuation, Entries};
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
 /// The ambient per-request context a transport edge installs around its
-/// inner tree. A task-local instead of request extensions: an extension
-/// costs one boxed insert each — and the first insert allocates the whole
-/// per-request anymap — while a task-local scope is a stack cell. Guards,
-/// extractors and handlers all run inside the transport's endpoint task, so
-/// the scope provably covers them (the same pattern as the ambient executor
-/// and ability).
+/// inner tree, as a task-local.
 pub(crate) struct RequestCtx {
-    /// The DI scope, when the edge had a container to open one over. `None` is
-    /// a real answer rather than a degenerate one: an edge may accept a unit of
-    /// work with no container in hand (an MCP endpoint mounted outside the
-    /// transport edge, a WS gateway on a bare upgrade), and the correlation is
-    /// the primitive that cannot be optional — so it is installed either way and
-    /// only `Scoped<T>` goes without.
+    /// The DI scope, when the edge had a container to open one over; without
+    /// one only `Scoped<T>` goes without.
     scope: Option<Arc<RequestScope>>,
     /// What this unit of work is filed under — its id, and who, once
-    /// authentication has resolved anyone. Ambient for the same reason the
-    /// scope is: the queue producer that copies it into a job envelope, the
-    /// access log that files the line and a service stamping `created_by` are
-    /// unrelated call sites, and threading an argument through all of them is
-    /// how a field ends up missing at the fourth.
-    pub(crate) correlation: crate::Correlation,
+    /// authentication has resolved anyone. `None` where values were added with
+    /// no unit running.
+    pub(crate) correlation: Option<crate::Correlation>,
+    /// What the unit carries for the code it calls.
+    pub(crate) ambient: Entries,
+    /// The unit this one runs nested in — a GraphQL field inside its request —
+    /// so a batch they share carries the outer unit's values alone.
+    parent: Option<Arc<RequestCtx>>,
+}
+
+impl RequestCtx {
+    fn opened(scope: Option<Arc<RequestScope>>, correlation: crate::Correlation) -> Self {
+        Self {
+            scope,
+            correlation: Some(correlation),
+            ambient: Entries::default(),
+            parent: None,
+        }
+    }
+
+    /// The outermost unit this one is nested in, itself when it is not.
+    fn unit_root(self: &Arc<Self>) -> &Arc<Self> {
+        let mut unit = self;
+        while let Some(parent) = &unit.parent {
+            unit = parent;
+        }
+        unit
+    }
+
+    /// What crosses into `into`: never the nested unit's own values on a
+    /// `Batch`, never the DI scope where the continuation opens its own, and
+    /// each value through its `carry`. Flat, so nothing it did not carry stays
+    /// reachable through a parent.
+    fn captured(self: &Arc<Self>, into: Continuation) -> Arc<Self> {
+        let (unit, keeps_scope) = match into {
+            Continuation::Batch => (self.unit_root(), false),
+            Continuation::Connection | Continuation::Envelope => (self, false),
+            Continuation::Body | Continuation::Task | Continuation::Commit => (self, true),
+        };
+        let ambient = unit.ambient.carried(into);
+        if ambient.is_none() && (keeps_scope || unit.scope.is_none()) && unit.parent.is_none() {
+            return Arc::clone(unit);
+        }
+        Arc::new(Self {
+            scope: unit.scope.clone().filter(|_| keeps_scope),
+            correlation: unit.correlation.clone(),
+            ambient: ambient.unwrap_or_else(|| unit.ambient.clone()),
+            parent: None,
+        })
+    }
 }
 
 tokio::task_local! {
-    /// Behind an `Arc` so re-installing it is one refcount bump rather than a
-    /// deep clone of every handle it holds — a streaming response body does that
-    /// on every poll, for as long as the stream runs.
+    /// Behind an `Arc`: a streaming response body re-installs it on every poll.
     static REQUEST_CTX: Arc<RequestCtx>;
 }
 
@@ -60,128 +91,200 @@ pub(crate) fn current_request_ctx<T>(read: impl FnOnce(&Arc<RequestCtx>) -> T) -
     REQUEST_CTX.try_with(read).ok()
 }
 
+/// Read the running unit's correlation, or `None` where no unit is running.
+pub(crate) fn current_correlation_with<T>(
+    read: impl FnOnce(&crate::Correlation) -> T,
+) -> Option<T> {
+    current_request_ctx(|ctx| ctx.correlation.as_ref().map(read)).flatten()
+}
+
+/// Run `fut` with what `added` returns merged into what the running unit
+/// carries where `fut` first runs, in one install — none when every value is
+/// already the one carried.
+pub(crate) fn install<F: Future>(
+    added: impl FnOnce() -> Entries,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    Install::new(move || extended(added()), fut)
+}
+
+pin_project_lite::pin_project! {
+    /// `fut` under the context `derive` returns at its first poll, so an install
+    /// built as another's argument merges into what the outer one installed.
+    ///
+    /// Not an `async fn`: one keeps `fut` beside the future it builds from it,
+    /// and a debug build copies `fut` into a poll frame that stays on the stack
+    /// while `fut` runs — one more copy for every install nested around it.
+    #[project = InstallProj]
+    #[project_replace = InstallOwned]
+    enum Install<D, F> {
+        Unpolled { derive: D, fut: F },
+        Scoped { #[pin] fut: TaskLocalFuture<Arc<RequestCtx>, F> },
+        Unchanged { #[pin] fut: F },
+        Deriving,
+    }
+}
+
+impl<D, F> Install<D, F>
+where
+    D: FnOnce() -> Option<Arc<RequestCtx>>,
+    F: Future,
+{
+    fn new(derive: D, fut: F) -> Self {
+        Self::Unpolled { derive, fut }
+    }
+
+    /// Derive the context and move `fut` under it, in a frame of its own: the
+    /// copies of `fut` this makes are off the stack before `fut` is polled.
+    #[inline(never)]
+    fn start(mut self: Pin<&mut Self>) {
+        if let InstallOwned::Unpolled { derive, fut } =
+            self.as_mut().project_replace(Self::Deriving)
+        {
+            self.set(match derive() {
+                Some(ctx) => Self::Scoped {
+                    fut: REQUEST_CTX.scope(ctx, fut),
+                },
+                None => Self::Unchanged { fut },
+            });
+        }
+    }
+}
+
+impl<D, F> Future for Install<D, F>
+where
+    D: FnOnce() -> Option<Arc<RequestCtx>>,
+    F: Future,
+{
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        if let InstallProj::Unpolled { .. } = self.as_mut().project() {
+            self.as_mut().start();
+        }
+        match self.project() {
+            InstallProj::Scoped { fut } => fut.poll(cx),
+            InstallProj::Unchanged { fut } => fut.poll(cx),
+            InstallProj::Unpolled { .. } | InstallProj::Deriving => {
+                unreachable!("an install is polled again after deriving its context panicked")
+            }
+        }
+    }
+}
+
+/// The running context with `added` merged in, or `None` when it would change
+/// nothing.
+fn extended(added: Entries) -> Option<Arc<RequestCtx>> {
+    if added.is_empty() {
+        return None;
+    }
+    let Some(current) = current_request_ctx(Arc::clone) else {
+        return Some(Arc::new(RequestCtx {
+            scope: None,
+            correlation: None,
+            ambient: added,
+            parent: None,
+        }));
+    };
+    if added.iter().all(|entry| current.ambient.holds(entry)) {
+        return None;
+    }
+    let mut ambient = current.ambient.clone();
+    for entry in added.iter() {
+        ambient.set(entry.clone());
+    }
+    Some(Arc::new(RequestCtx {
+        scope: current.scope.clone(),
+        correlation: current.correlation.clone(),
+        ambient,
+        parent: current.parent.clone(),
+    }))
+}
+
 /// The current request's [`RequestScope`], installed by the transport edge.
 /// `None` off the request task (or before the edge — a transport wiring bug).
 pub fn current_request_scope() -> Option<Arc<RequestScope>> {
     current_request_ctx(|ctx| ctx.scope.clone()).flatten()
 }
 
-/// Run `fut` under an ambient request context — the transport edges' installer,
-/// and the seam for driving handlers outside a transport (in-process test
-/// harnesses, a transport's mirror of the edge).
+/// Run `fut` as a unit of work — the transport edges' installer, and the seam
+/// for driving handlers outside a transport (in-process test harnesses, a
+/// transport's mirror of the edge).
 ///
-/// **`scope` is an `Option` and `correlation` is not**, and the asymmetry is the
-/// whole contract. An edge may accept a unit of work with no container to open a
-/// scope over — an MCP endpoint mounted outside the transport edge, a gateway on
-/// a bare upgrade — and only `Scoped<T>` goes without. The correlation has no
-/// default: **whoever accepts a unit of work decides its identity**, by
-/// continuing one that arrived with the work or by starting one
-/// ([`Correlation`](crate::Correlation)). A default would let an edge install a
-/// scope while quietly leaving its events uncorrelated, which is the failure this
-/// seam exists to make impossible.
-///
-/// The `Option` lives here rather than at the edges because it used to be two
-/// installers, and every edge whose scope was optional re-derived the same match
-/// — one of them dropping the correlation on the scope-less arm, which made
-/// `current_trace_id()`'s answer depend on how the endpoint happened to be
-/// mounted.
-pub async fn with_request_scope<F: std::future::Future>(
+/// `scope` is optional — an edge may have no container to open one over — and
+/// `correlation` is not: whoever accepts a unit of work decides its identity
+/// ([`Correlation`](crate::Correlation)). Opened inside another unit, the new
+/// one is nested in it: it carries what the outer unit carries, and a batch
+/// they share carries the outer unit's values alone.
+pub fn with_request_scope<F: Future>(
     scope: Option<Arc<RequestScope>>,
     correlation: crate::Correlation,
     fut: F,
-) -> F::Output {
-    RequestContinuation::new(scope, correlation)
-        .scope(fut)
-        .await
+) -> impl Future<Output = F::Output> {
+    Install::new(
+        move || {
+            Some(Arc::new(match current_request_ctx(Arc::clone) {
+                Some(outer) => RequestCtx {
+                    scope,
+                    correlation: Some(correlation),
+                    ambient: outer.ambient.clone(),
+                    parent: Some(outer),
+                },
+                None => RequestCtx::opened(scope, correlation),
+            }))
+        },
+        fut,
+    )
 }
 
-/// The ambient request context, held so work that continues the **same** unit
-/// after the future that accepted it has returned can re-install it.
+/// The ambient request context, held so work that continues the unit after the
+/// future that accepted it has returned — a streaming response body, written
+/// after the handler with its task-locals unwound — can re-install it.
 ///
-/// # Why a unit of work outlives its handler
-///
-/// An `async fn` returning is not the work ending. An HTTP handler returns a
-/// *response*, and a response with a streaming body — Server-Sent Events, a
-/// download, anything built on a `Stream` — is written afterwards, by the
-/// transport's connection task, with every task-local the edge installed already
-/// unwound. Code inside that stream is still serving the request the handler was
-/// serving, so `current_trace_id()` answering `None` there is the framework
-/// contradicting itself: the id is the framework's primitive precisely so that
-/// "which request is this?" has one answer everywhere the framework carries
-/// work, and a body being written is work being carried.
-///
-/// [`enter`](Self::enter) is synchronous because that is the shape a body has:
-/// a `poll` is not a future, so the context is re-installed around each poll —
-/// the same thing [`crate::tracing::Instrument`] does with
-/// a span, for the same reason.
-///
-/// **Identity, not resources.** What continues here is the whole ambient
-/// context, and that is sound only because the continuation is the *same*
-/// request: the scope's cache is this request's, and the response ends when the
-/// request does. An edge whose continuation genuinely outlives the request — a
-/// WebSocket that stays open for hours after its upgrade answered `101` —
-/// inherits the [`Correlation`](crate::Correlation) alone and opens its own
-/// scope — which is what a gateway does by calling [`with_request_scope`] again
-/// with the upgrade's correlation and a scope of its own, rather than
-/// continuing this one.
+/// One the edge [builds](Self::new) carries the unit's scope and identity; one
+/// [captured](Self::capture) carries what crosses the continuation it was
+/// captured for, and nothing else.
 #[derive(Clone)]
 pub struct RequestContinuation(Arc<RequestCtx>);
 
 impl RequestContinuation {
-    /// Build the context an edge is about to install, so the same edge can
-    /// re-install it around the response body it hands back.
-    ///
-    /// The arguments are [`with_request_scope`]'s, deliberately: an edge builds
-    /// one value and uses it twice — [`scope`](Self::scope) around the handler,
-    /// [`enter`](Self::enter) around the body — rather than assembling the
-    /// context twice and having the two spellings drift.
+    /// Build the context an edge is about to install — [`scope`](Self::scope)
+    /// around the handler, [`enter`](Self::enter) around the body.
     pub fn new(scope: Option<Arc<RequestScope>>, correlation: crate::Correlation) -> Self {
-        Self(Arc::new(RequestCtx { scope, correlation }))
+        Self(Arc::new(RequestCtx::opened(scope, correlation)))
     }
 
-    /// Capture whatever context is ambient, to re-install around work that
-    /// continues this same unit on another task.
-    ///
-    /// This is the shape a **task boundary** wants — a spawned dataloader batch,
-    /// any `spawn` the framework adds later — because it takes no arguments and
-    /// therefore cannot drift from the install it mirrors. `None` off a request
-    /// task, where there is nothing to continue.
-    pub fn current() -> Option<Self> {
-        current_request_ctx(|ctx| Self(Arc::clone(ctx)))
+    /// Capture what the running unit carries into `into`, to re-install around
+    /// the work that continues it there; `None` where no unit is running.
+    pub fn capture(into: Continuation) -> Option<Self> {
+        current_request_ctx(|ctx| Self(ctx.captured(into)))
     }
 
-    /// Run `fut` under this context — the async installer every edge reaches
-    /// through [`with_request_scope`].
-    pub async fn scope<F: std::future::Future>(&self, fut: F) -> F::Output {
-        REQUEST_CTX.scope(Arc::clone(&self.0), fut).await
+    /// Run `fut` under this context.
+    pub fn scope<F: Future>(&self, fut: F) -> impl Future<Output = F::Output> + use<F> {
+        REQUEST_CTX.scope(Arc::clone(&self.0), fut)
     }
 
     /// Run `f` under this context — `current_trace_id()`, `current_actor_id()`
-    /// and [`current_request_scope`] all answer exactly what they answered
-    /// inside the handler.
-    ///
-    /// Synchronous because that is the shape a response body has: a `poll` is not
-    /// a future. One refcount bump per poll, which is what the `Arc` is for — a
-    /// streaming response polls this once per chunk for as long as it runs.
+    /// and [`current_request_scope`] answer what they answered inside the
+    /// handler. Synchronous, since a body's `poll` is not a future.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
         REQUEST_CTX.sync_scope(Arc::clone(&self.0), f)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
 /// Everything a unit of work has to carry across a **task boundary**, captured
 /// where the work is handed off and re-installed where it runs.
 ///
-/// **Both halves cross, and neither substitutes for the other.** The span is
-/// what puts `trace_id` on the events the spawned work emits; the ambient
-/// context is what makes [`current_trace_id`](crate::current_trace_id) answer
-/// inside it, and a queue push from that work seal the right envelope. Carrying
-/// only the span leaves the events *looking* correlated while every accessor
-/// below answers `None` — the more expensive of the two failures, because it
-/// reads as covered.
-///
-/// Capture and application are separate steps on purpose: a guard that spawns
-/// its cleanup from `Drop` must capture at construction, since a dropped future
-/// is not guaranteed to be dropped on the task that owned it.
+/// Both the span and the request context cross: the span alone leaves
+/// [`current_trace_id`](crate::current_trace_id) answering `None` in the
+/// spawned work. A guard spawning from `Drop` captures at construction, since a
+/// dropped future may be dropped on another task.
 #[derive(Clone)]
 pub struct TaskContext {
     span: tracing::Span,
@@ -189,51 +292,42 @@ pub struct TaskContext {
 }
 
 impl TaskContext {
-    /// Capture whatever span and request context are ambient right now.
+    /// Capture the span, and what the running unit carries into a task that
+    /// may outlive it: [`capture`](Self::capture) for a
+    /// [`Task`](Continuation::Task).
     pub fn current() -> Self {
+        Self::capture(Continuation::Task)
+    }
+
+    /// Capture the span, and what the running unit carries into `into`.
+    pub fn capture(into: Continuation) -> Self {
         Self {
             span: tracing::Span::current(),
-            request: RequestContinuation::current(),
+            request: RequestContinuation::capture(into),
         }
     }
 
     /// The captured span, for the events a hand-off point emits synchronously
-    /// before it spawns — those belong to the same unit of work as the spawned
-    /// half, and `enter`ing it is how they get there.
+    /// before it spawns.
     pub fn span(&self) -> &tracing::Span {
         &self.span
     }
 
-    /// Wrap `fut` so it runs under the captured span and request context.
-    ///
-    /// The returned future is what goes to `spawn`: a bare `tokio::spawn`
-    /// starts with an empty span stack *and* empty task-locals, so work handed
-    /// to one without this is rooted at nothing.
-    pub async fn carry<F: std::future::Future>(self, fut: F) -> F::Output {
+    /// Wrap `fut` so it runs under the captured span and request context — what
+    /// goes to `spawn`, which starts with neither.
+    pub fn carry<F: Future>(self, fut: F) -> impl Future<Output = F::Output> {
         let Self { span, request } = self;
-        let carried = async move {
-            match request {
-                Some(request) => request.scope(fut).await,
-                None => fut.await,
-            }
-        };
-        tracing::Instrument::instrument(carried, span).await
+        tracing::Instrument::instrument(
+            Install::new(move || request.map(|request| request.0), fut),
+            span,
+        )
     }
 }
 
 thread_local! {
-    /// Re-entrancy guard for request-scoped resolution: a scoped provider that
-    /// (transitively) depends on itself would recurse forever. We catch the
-    /// second entry for the same `TypeId` and panic with a chain naming every
-    /// type on the cycle (`A → B → A`).
-    ///
-    /// This is a **thread-local** (not a per-scope stack) on purpose: a scoped
-    /// build chain is synchronous on one thread (`factory(scope)` calls
-    /// `scope.get::<Dep>()` inline), so the cycle is always same-thread
-    /// recursion — whereas a *legitimate* concurrent resolution of the same
-    /// provider (two async-graphql fields polled on different worker threads)
-    /// must not be mistaken for a cycle. A shared stack would raise a false
-    /// positive there; a thread-local cannot.
+    /// Re-entrancy guard for request-scoped resolution. Thread-local, not per
+    /// scope: a build chain is synchronous on one thread, while two fields
+    /// resolving the same provider on two threads is no cycle.
     static SCOPED_BUILDING: BuildStack = const { RefCell::new(Vec::new()) };
 }
 
@@ -264,59 +358,46 @@ impl RequestScope {
     pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         let id = TypeId::of::<T>();
         if let Some(factory) = self.root.scoped_factory(id) {
-            // Fast path: already built for this request.
             if let Some(any) = self.cache.lock().get(&id).cloned() {
                 return any.downcast::<T>().ok();
             }
-            // Build the provider *outside* the lock. The factory may
-            // transitively resolve another request-scoped provider through
-            // `self`, which re-enters this method; `cache` is a non-reentrant
-            // `parking_lot::Mutex`, so building under the lock would deadlock
-            // the request rather than resolve it. The re-entrancy guard turns a
-            // genuine *self*-cycle (a scoped provider that transitively depends
-            // on itself) into a clear panic instead of an unbounded recursion.
+            // Built outside the lock: the factory may re-enter `get` through
+            // `self`, and `cache` is a non-reentrant `parking_lot::Mutex`.
+            #[expect(
+                clippy::panic,
+                reason = "a provider cycle is a wiring defect, and resolving from a scope has no Result to report it through"
+            )]
             let _guard = CycleGuard::push(&SCOPED_BUILDING, id, type_name::<T>()).unwrap_or_else(
                 |Cycle { chain }| {
                     panic!(
-                        "request-scoped provider cycle: {chain} — break the cycle by injecting \
-                         `Arc<dyn Trait>` or picking a different scope"
+                        "{}",
+                        crate::error::cycle_panic_message(crate::ProviderScope::Request, &chain)
                     )
                 },
             );
-            // Pass the scope (not the bare root): a request-scoped dep of this
-            // provider resolves through the same cache and is shared for the
-            // request.
             let built = factory(self);
             drop(_guard);
-            // Double-checked insert: if a concurrent resolution beat us to it,
-            // keep the already-cached instance and drop ours (a rare extra
-            // build, never a divergent cached instance).
+            // A concurrent resolution may have won: keep its instance.
             let any = self.cache.lock().entry(id).or_insert(built).clone();
             return any.downcast::<T>().ok();
         }
-        // Transient: rebuilt on every call, but resolved through **this** scope
-        // (not the bare root) so its `#[inject]` deps see the request — a
-        // request-scoped dep resolves to the request's shared instance rather
-        // than panicking or building a request-of-one. The shared re-entrancy
-        // guard inside `build_transient` still catches a self-cycle.
+        // Through this scope, not the root, so a transient's request-scoped
+        // deps resolve to the request's instance.
         if let Some(factory) = self.root.transient_factory(id) {
             let any = crate::container::build_transient(id, type_name::<T>(), &factory, self);
             return any.downcast::<T>().ok();
         }
-        // Neither scoped nor transient: a plain singleton falls through.
         self.root.get::<T>()
     }
 
-    /// Resolve a trait-object provider (`Arc<dyn Trait>`). Trait-object
-    /// bindings are singleton-only, so this forwards straight to the root —
-    /// the scope-aware constructor (`from_scope`) calls it for
-    /// `#[inject] Arc<dyn Trait>` fields on a request-scoped provider.
+    /// Resolve a trait-object provider (`Arc<dyn Trait>`) — singleton-only, so
+    /// forwarded to the root.
     pub fn get_dyn<T: ?Sized + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.root.get_dyn::<T>()
     }
 
-    /// Resolve a **keyed** singleton (`#[inject(key = "…")]`). Keyed providers
-    /// are singleton-only, so this forwards to the root.
+    /// Resolve a **keyed** singleton (`#[inject(key = "…")]`), forwarded to
+    /// the root.
     pub fn get_keyed<T: Any + Send + Sync>(&self, name: &'static str) -> Option<Arc<T>> {
         self.root.get_keyed::<T>(name)
     }
@@ -331,18 +412,12 @@ mod tests {
     struct Counter(u32);
     struct Greeter(&'static str);
 
-    /// The rule the response body rests on: a *synchronous* continuation of the
-    /// same unit of work reads the same ambient answers the handler read.
-    ///
-    /// Without it a `#[sse]` stream — polled by the connection task long after
-    /// the handler returned — logs under no trace at all, which is the one thing
-    /// the correlation primitive exists to make impossible.
     #[tokio::test]
     async fn a_continuation_reinstalls_the_context_the_handler_ran_under() {
         let scope = Arc::new(RequestScope::new(
             Container::builder().provide(Greeter("hi")).build(),
         ));
-        let correlation = crate::Correlation::mint();
+        let correlation = crate::Correlation::minted(None);
         let trace_id = correlation.trace_id();
 
         let continuation =
@@ -351,7 +426,6 @@ mod tests {
             })
             .await;
 
-        // Off the request task entirely — exactly where a body is polled.
         assert!(crate::current_trace_id().is_none());
 
         continuation.enter(|| {
@@ -362,28 +436,128 @@ mod tests {
             );
         });
 
-        // And it is scoped to the closure: nothing leaks onto the task after.
         assert!(crate::current_trace_id().is_none());
     }
 
-    /// The actor is shared state on the [`Correlation`](crate::Correlation), so
-    /// a principal the guard resolved *after* the continuation was built is
-    /// still what the continuation reports — which is what lets the access line
-    /// name who was served.
     #[tokio::test]
     async fn a_continuation_sees_an_actor_resolved_after_it_was_built() {
         let scope = Arc::new(RequestScope::new(Container::builder().build()));
-        let correlation = crate::Correlation::mint();
+        let correlation = crate::Correlation::minted(None);
         let continuation = RequestContinuation::new(Some(scope.clone()), correlation.clone());
 
         with_request_scope(Some(scope), correlation, async {
-            crate::set_actor_id("alice-42");
+            crate::__private::set_actor_id("alice-42");
         })
         .await;
 
         continuation.enter(|| {
             assert_eq!(crate::current_actor_id().as_deref(), Some("alice-42"));
         });
+    }
+
+    /// Bytes a unit holds across an await: enough that a copy of it shows.
+    const HELD: usize = 32 * 1024;
+
+    /// What an install may add around the unit it runs, its own fields and
+    /// frames, never a second copy of the unit.
+    const INSTALL_OVERHEAD: usize = 1024;
+
+    /// Where the stack stands in the frame that calls it.
+    #[inline(never)]
+    fn stack_mark() -> usize {
+        let mark = 0u8;
+        std::hint::black_box(&mark) as *const u8 as usize
+    }
+
+    /// A unit holding [`HELD`] bytes across an await, answering where the
+    /// stack stood once it resumed.
+    async fn heavy() -> usize {
+        let held = [0u8; HELD];
+        tokio::task::yield_now().await;
+        std::hint::black_box(&held);
+        stack_mark()
+    }
+
+    struct Marker;
+    impl crate::AmbientValue for Marker {}
+
+    struct Other;
+    impl crate::AmbientValue for Other {}
+
+    fn pending_other() -> crate::ambient::Pending {
+        let mut pending = crate::ambient::Pending::default();
+        pending.attach(Arc::new(Other));
+        pending
+    }
+
+    #[test]
+    fn an_install_holds_the_unit_it_runs_once() {
+        let alone = std::mem::size_of_val(&heavy());
+        let continuation = RequestContinuation::new(None, crate::Correlation::minted(None));
+        let installed = [
+            (
+                "with_request_scope",
+                std::mem::size_of_val(&with_request_scope(
+                    None,
+                    crate::Correlation::minted(None),
+                    heavy(),
+                )),
+            ),
+            (
+                "with_ambient",
+                std::mem::size_of_val(&crate::with_ambient(Arc::new(Marker), heavy())),
+            ),
+            (
+                "install_pending",
+                std::mem::size_of_val(&crate::ambient::install_pending(pending_other(), heavy())),
+            ),
+            (
+                "RequestContinuation::scope",
+                std::mem::size_of_val(&continuation.scope(heavy())),
+            ),
+            (
+                "TaskContext::carry",
+                std::mem::size_of_val(&TaskContext::current().carry(heavy())),
+            ),
+        ];
+        for (installer, size) in installed {
+            assert!(
+                size < alone + INSTALL_OVERHEAD,
+                "{installer} weighs {size} bytes around a {alone}-byte unit",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_installs_reach_no_deeper_than_bare_task_local_scopes() {
+        let opened = || Arc::new(RequestCtx::opened(None, crate::Correlation::minted(None)));
+        let bare = REQUEST_CTX
+            .scope(
+                opened(),
+                REQUEST_CTX.scope(
+                    opened(),
+                    REQUEST_CTX.scope(opened(), REQUEST_CTX.scope(opened(), heavy())),
+                ),
+            )
+            .await;
+
+        let continuation = RequestContinuation::new(None, crate::Correlation::minted(None));
+        let installed = with_request_scope(
+            None,
+            crate::Correlation::minted(None),
+            crate::with_ambient(
+                Arc::new(Marker),
+                crate::ambient::install_pending(pending_other(), continuation.scope(heavy())),
+            ),
+        )
+        .await;
+
+        let deeper = bare.saturating_sub(installed);
+        assert!(
+            deeper < 4 * INSTALL_OVERHEAD,
+            "four installs reach {deeper} bytes deeper than four bare scopes around a \
+             {HELD}-byte unit",
+        );
     }
 
     #[test]
@@ -400,17 +574,12 @@ mod tests {
         let first: Arc<Counter> = scope.get().expect("scoped provider resolves");
         let second: Arc<Counter> = scope.get().expect("scoped provider resolves again");
 
-        // Built once for the request, then served from cache: the double-checked
-        // insert must still return the *same* instance and run the factory once.
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(builds.load(Ordering::SeqCst), 1);
     }
 
     #[test]
     fn scoped_factory_resolves_singleton_deps() {
-        // The factory reads a singleton from the root container while the scope
-        // lock is not held (the fix builds outside the lock) — a dependency
-        // resolve inside the factory therefore never contends the cache mutex.
         let container = Container::builder()
             .provide(Greeter("hello"))
             .provide_scoped::<Counter, _>(|c| {
@@ -437,11 +606,6 @@ mod tests {
 
     #[test]
     fn a_scoped_dep_of_a_scoped_provider_is_shared_within_one_request() {
-        // WI-8: request→request deps. `Outer` (scoped) depends on `Inner`
-        // (scoped), resolved through the scope. Building `Outer` then resolving
-        // `Inner` directly must yield the *same* `Inner` — one per request,
-        // built exactly once — proving the scoped factory resolves its deps
-        // through the per-request cache, not the bare root.
         let builds = Arc::new(AtomicU32::new(0));
         let builds_factory = builds.clone();
         let container = Container::builder()
@@ -474,10 +638,6 @@ mod tests {
 
     #[test]
     fn a_transient_can_depend_on_a_request_scoped_provider() {
-        // B-CORE: a transient whose `#[inject]` dep is request-scoped must
-        // resolve through the scope — not panic on a missing provider. Two
-        // resolutions in one request rebuild the transient but SHARE the single
-        // request-scoped instance (the transient's factory runs against `self`).
         struct Dep;
         struct Trans(Arc<Dep>);
 
@@ -518,7 +678,6 @@ mod tests {
 
     #[test]
     fn scoped_instances_differ_across_requests() {
-        // A fresh `RequestScope` is a fresh request: nothing carries over.
         let builds = Arc::new(AtomicU32::new(0));
         let builds_factory = builds.clone();
         let container = Container::builder()
@@ -545,8 +704,6 @@ mod tests {
     fn scoped_self_dependency_panics_with_cycle_diagnostic() {
         let container = Container::builder()
             .provide_scoped::<Counter, _>(|scope| {
-                // Resolving the same scoped provider inside its own factory
-                // loops; the re-entrancy guard catches the second entry.
                 let _self: Arc<Counter> = scope.get().expect("re-entrant resolution");
                 Counter(0)
             })
@@ -557,9 +714,6 @@ mod tests {
 
     #[test]
     fn scoped_transitive_cycle_diagnostic_lists_full_chain() {
-        // A two-step cycle (A → B → A) must name BOTH types in order — a bug
-        // printing only the type currently being built would be useless for
-        // diagnosing which intermediate provider closes the loop.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let container = Container::builder()
                 .provide_scoped::<Greeter, _>(|scope| {
@@ -594,8 +748,6 @@ mod tests {
 
     #[test]
     fn a_panicking_scoped_factory_clears_the_reentrancy_stack() {
-        // A factory that panics must still pop its entry so the next resolution
-        // on this thread is not poisoned with a spurious cycle diagnostic.
         let container = Container::builder()
             .provide_scoped::<Counter, _>(|_| -> Counter { panic!("boom from scoped factory") })
             .provide_scoped::<Greeter, _>(|_| Greeter("recovered"))
@@ -607,8 +759,6 @@ mod tests {
         }));
         assert!(first.is_err(), "the factory panic propagates");
 
-        // A different scoped provider on the same thread resolves cleanly —
-        // proves the thread-local was not left poisoned by the prior panic.
         let resolved: Arc<Greeter> = scope
             .get()
             .expect("a different scoped provider resolves after a sibling factory panicked");

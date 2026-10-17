@@ -3,6 +3,7 @@
 
 use nest_rs_core::module;
 use nest_rs_http::{controller, routes};
+use poem::Result as PoemResult;
 use poem::error::ResponseError;
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
@@ -37,6 +38,41 @@ impl DecoratorProbeController {
         Err(ForbiddenError)
     }
 
+    /// The same refusal through a `Result` renamed on import.
+    #[post("/forbidden-by-import")]
+    #[http_code(201)]
+    #[response_header("x-created", "yes")]
+    async fn forbidden_by_import(&self) -> PoemResult<&'static str> {
+        Err(ForbiddenError.into())
+    }
+
+    /// Through a type alias whose error is only a `ResponseError`: no
+    /// `Result<T, E>: IntoResponse` bound is asked of it.
+    #[post("/forbidden-by-alias")]
+    #[http_code(201)]
+    async fn forbidden_by_alias(&self) -> Refusable<&'static str> {
+        Err(ForbiddenError)
+    }
+
+    #[post("/created-by-alias")]
+    #[http_code(201)]
+    #[response_header("x-created", "yes")]
+    async fn created_by_alias(&self) -> Refusable<&'static str> {
+        Ok("created")
+    }
+
+    /// The shapers written path-qualified, as an exported attribute macro may be.
+    #[post("/qualified")]
+    #[nest_rs_http::http_code(201)]
+    #[nest_rs_http::response_header("x-probe", "yes")]
+    async fn qualified(&self) -> &'static str {
+        "created"
+    }
+
+    #[get("/qualified-redirect")]
+    #[nest_rs_http::redirect("https://example.com", 301)]
+    async fn qualified_redirect(&self) {}
+
     #[get("/xml-as-json")]
     #[response_header("content-type", "application/json")]
     async fn xml_as_json(&self) -> Response {
@@ -48,6 +84,9 @@ impl DecoratorProbeController {
         resp
     }
 }
+
+/// A `Result` under another name.
+type Refusable<T> = Result<T, ForbiddenError>;
 
 #[derive(Debug)]
 struct ForbiddenError;
@@ -105,10 +144,38 @@ async fn http_code_does_not_override_the_status_of_err_responses() {
     resp.assert_status(StatusCode::FORBIDDEN);
 }
 
+/// A failure is known by its type, however it is spelled: an `Err` keeps its
+/// `ResponseError` status and gets none of the success path's headers.
+#[tokio::test]
+async fn http_code_does_not_override_an_err_whatever_its_result_is_called() {
+    let client = boot().await;
+    for path in ["/forbidden-by-import", "/forbidden-by-alias"] {
+        let resp = client.post(path).send().await;
+        resp.assert_status(StatusCode::FORBIDDEN);
+        resp.assert_header_is_not_exist("x-created");
+    }
+    let resp = client.post("/created-by-alias").send().await;
+    resp.assert_status(StatusCode::CREATED);
+    resp.assert_header("x-created", "yes");
+    resp.assert_text("created").await;
+}
+
 #[tokio::test]
 async fn response_header_overrides_a_handler_set_header() {
     let client = boot().await;
     let resp = client.get("/xml-as-json").send().await;
     resp.assert_status_is_ok();
     resp.assert_header_all("content-type", ["application/json"]);
+}
+
+#[tokio::test]
+async fn a_path_qualified_shaper_shapes_the_response() {
+    let client = boot().await;
+    let resp = client.post("/qualified").send().await;
+    resp.assert_status(StatusCode::CREATED);
+    resp.assert_header("x-probe", "yes");
+
+    let resp = client.get("/qualified-redirect").send().await;
+    resp.assert_status(StatusCode::MOVED_PERMANENTLY);
+    resp.assert_header(header::LOCATION, "https://example.com");
 }

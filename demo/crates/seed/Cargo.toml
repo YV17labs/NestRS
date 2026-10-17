@@ -9,12 +9,11 @@ nest-rs.workspace = true
 anyhow.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
-tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
-nest-rs.workspace = true
+nest-rs = { workspace = true, features = ["testing"] }
+tokio.workspace = true
 migrations.workspace = true
 
 [lints]

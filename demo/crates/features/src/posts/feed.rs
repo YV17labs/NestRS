@@ -21,6 +21,10 @@ impl Default for PostFeed {
 
 impl PostFeed {
     pub fn publish(&self, post: Post) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a feed nobody subscribes to has nobody to tell"
+        )]
         let _ = self.tx.send(post);
     }
 

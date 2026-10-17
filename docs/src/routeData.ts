@@ -16,9 +16,9 @@ export const onRequest = defineRouteMiddleware((context) => {
   // The docs home, whose content-collection id is the empty string — `index.mdx`
   // sits at the collection root, so the loader gives it no path segment. This
   // read `id !== 'index'`, which is true of every page including this one, so
-  // the block below shipped on none of them. Nothing catches that: the linter
-  // walks `src/content/docs/**` only, and a `head.push` that never runs
-  // renders as an absent tag rather than as an error.
+  // the block below shipped on none of them, and nothing caught it: a
+  // `head.push` that never runs renders as an absent tag rather than as an
+  // error.
   if (id !== '') return;
 
   // The origin is the build's, never a literal. `ASTRO_SITE` exists so a

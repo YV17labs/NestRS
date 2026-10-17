@@ -1,109 +1,139 @@
-use nest_rs_codegen::last_segment_ident;
+use nest_rs_codegen::path_label;
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Expr, Ident, ItemStruct, Path, Token, Type, bracketed, parse_macro_input};
+use syn::spanned::Spanned;
+use syn::{Expr, ItemStruct, Path, Token, Type, bracketed, parse_macro_input};
 
-pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as ModuleArgs);
     let item = parse_macro_input!(input as ItemStruct);
+    if !item.generics.params.is_empty() {
+        let refusal = syn::Error::new_spanned(
+            &item.generics,
+            "a #[module] is not generic: it submits one static descriptor for the access graph. \
+             A module generic over an `Instance` is written by hand — \
+             `impl<I: Instance> Module for RedisQueueModule<I>` — as adapter bindings are",
+        )
+        .to_compile_error();
+        return quote! { #item #refusal }.into();
+    }
     let name = item.ident.clone();
     let name_str = name.to_string();
+    let groups = match group_providers(&args.providers) {
+        Ok(groups) => groups,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
-    let import_calls = args
-        .imports
-        .iter()
-        .enumerate()
-        .map(|(i, import)| match import {
-            // Bare type path → static `Module`.
+    // `enter_import`/`leave_import` let a contested declaration's boot error
+    // name the module and position that imported it.
+    let import_calls = args.imports.iter().enumerate().map(|(i, import)| {
+        let at = proc_macro2::Literal::usize_unsuffixed(i);
+        let label = import_label(import);
+        let call = match import {
             Expr::Path(p) => {
                 let path = &p.path;
-                quote! { builder = <#path as ::nest_rs_core::Module>::register(builder); }
+                quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#path>(builder); }
             }
-            // Anything else → `DynamicModule` value (e.g. `Module::for_root(opts)`).
-            // The collect phase already built the value and parked it at this site,
-            // so register consumes *that* value; the fallback closure only runs on
-            // the synchronous `App::new` path, which has no collect phase. Either
-            // way the expression is evaluated exactly once (CORE-I9).
-            other => {
-                let idx = proc_macro2::Literal::usize_unsuffixed(i);
-                quote! {
-                    builder = ::nest_rs_core::ContainerBuilder::register_dynamic_import(
-                        builder,
-                        ::std::any::TypeId::of::<#name>(),
-                        #idx,
-                        || #other,
-                    );
-                }
-            }
-        });
+            // The collect phase built the value and parked it at this site, so the
+            // expression is evaluated once.
+            _ => quote! {
+                builder = ::nest_rs_core::__private::register_dynamic_import(
+                    builder,
+                    ::std::any::TypeId::of::<#name>(),
+                    #at,
+                );
+            },
+        };
+        quote! {
+            builder = ::nest_rs_core::__private::enter_import(builder, #name_str, #at, #label);
+            #call
+            builder = ::nest_rs_core::__private::leave_import(builder);
+        }
+    });
 
-    // Collect phase only queues async factories; providers untouched here. The
-    // dynamic import is constructed here and parked for the register phase.
-    let collect_calls = args
-        .imports
-        .iter()
-        .enumerate()
-        .map(|(i, import)| match import {
+    let collect_calls = args.imports.iter().enumerate().map(|(i, import)| {
+        let at = proc_macro2::Literal::usize_unsuffixed(i);
+        let label = import_label(import);
+        let call = match import {
             Expr::Path(p) => {
                 let path = &p.path;
-                quote! { builder = <#path as ::nest_rs_core::Module>::collect(builder); }
+                quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#path>(builder); }
             }
-            other => {
-                let idx = proc_macro2::Literal::usize_unsuffixed(i);
-                quote! {
-                    builder = ::nest_rs_core::ContainerBuilder::collect_dynamic_import(
-                        builder,
-                        ::std::any::TypeId::of::<#name>(),
-                        #idx,
-                        #other,
-                    );
-                }
-            }
-        });
+            other => quote! {
+                builder = ::nest_rs_core::__private::collect_dynamic_import(
+                    builder,
+                    ::std::any::TypeId::of::<#name>(),
+                    #at,
+                    #other,
+                );
+            },
+        };
+        quote! {
+            builder = ::nest_rs_core::__private::enter_import(builder, #name_str, #at, #label);
+            #call
+            builder = ::nest_rs_core::__private::leave_import(builder);
+        }
+    });
 
-    // Access-graph descriptor submitted to the link-time registry. Only
-    // statically-typed imports are recorded — a dynamic `for_root(...)`
-    // contributes only global infrastructure, never an injectable.
-    let import_type_ids = args.imports.iter().filter_map(|import| match import {
+    // A dynamic import is named by its value's type, without evaluating it.
+    let import_type_ids = args.imports.iter().map(|import| match import {
         Expr::Path(p) => {
             let path = &p.path;
-            Some(quote! { || ::std::any::TypeId::of::<#path>() })
+            quote! { || ::std::any::TypeId::of::<#path>() }
         }
-        _ => None,
+        other => quote! { || ::nest_rs_core::__private::dynamic_import_module(|| #other) },
     });
     let provider_descriptors = args.providers.iter().map(|binding| match binding {
         ProviderBinding::Concrete(p) => {
-            let name_lit = path_tail(p);
+            let name_lit = path_label(p);
             quote! {
-                ::nest_rs_core::ProviderDescriptor {
+                ::nest_rs_core::__private::ProviderDescriptor {
                     name: #name_lit,
                     provides: || ::std::any::TypeId::of::<#p>(),
+                    provider: || ::std::any::TypeId::of::<#p>(),
                     also_provides: <#p as ::nest_rs_core::Discoverable>::also_provides,
                     injects: <#p as ::nest_rs_core::Discoverable>::injected,
                     inject_names: <#p as ::nest_rs_core::Discoverable>::injected_names,
+                    injects_optional: <#p as ::nest_rs_core::Discoverable>::injected_optional,
+                    inject_optional_names:
+                        <#p as ::nest_rs_core::Discoverable>::injected_optional_names,
                     injects_keyed: <#p as ::nest_rs_core::Discoverable>::injected_keyed,
+                    injects_per_request:
+                        <#p as ::nest_rs_core::Discoverable>::injected_per_request,
                 }
             }
         }
         ProviderBinding::Dyn { provider, trait_ty } => {
             let name_lit = format!("dyn {}", path_tail_of_type(trait_ty));
+            let provider_lit = path_label(provider);
             quote! {
-                ::nest_rs_core::ProviderDescriptor {
+                ::nest_rs_core::__private::ProviderDescriptor {
                     name: #name_lit,
                     provides: || ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>(),
-                    also_provides: <#provider as ::nest_rs_core::Discoverable>::also_provides,
+                    provider: || ::std::any::TypeId::of::<#provider>(),
+                    also_provides: || {
+                        let mut __keys =
+                            <#provider as ::nest_rs_core::Discoverable>::also_provides();
+                        __keys.push((::std::any::TypeId::of::<#provider>(), #provider_lit));
+                        __keys
+                    },
                     injects: <#provider as ::nest_rs_core::Discoverable>::injected,
                     inject_names: <#provider as ::nest_rs_core::Discoverable>::injected_names,
+                    injects_optional: <#provider as ::nest_rs_core::Discoverable>::injected_optional,
+                    inject_optional_names:
+                        <#provider as ::nest_rs_core::Discoverable>::injected_optional_names,
                     injects_keyed: <#provider as ::nest_rs_core::Discoverable>::injected_keyed,
+                    injects_per_request:
+                        <#provider as ::nest_rs_core::Discoverable>::injected_per_request,
                 }
             }
         }
     });
     let descriptor_submission = quote! {
         ::nest_rs_core::inventory::submit! {
-            ::nest_rs_core::ModuleDescriptor {
+            ::nest_rs_core::__private::ModuleDescriptor {
                 module: || ::std::any::TypeId::of::<#name>(),
                 name: #name_str,
                 imports: &[ #(#import_type_ids),* ],
@@ -112,62 +142,119 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
-    let body = if args.providers.is_empty() {
+    let body = if groups.is_empty() {
         quote! {
             #(#import_calls)*
-            ::nest_rs_core::__module_registered(#name_str);
+            ::nest_rs_core::__private::module_registered(#name_str);
             builder
         }
     } else {
-        let count = proc_macro2::Literal::usize_unsuffixed(args.providers.len());
-        // Three token streams per provider: hot register attempt, its provided
-        // key, and a stall-time classification of why it is still pending.
+        let count = proc_macro2::Literal::usize_unsuffixed(groups.len());
+        // Per provider: its register attempt, the keys it provides, and what
+        // the stall reports of it.
         let parts: Vec<(
             proc_macro2::TokenStream,
             proc_macro2::TokenStream,
             proc_macro2::TokenStream,
-        )> = args
-            .providers
+        )> = groups
             .iter()
             .enumerate()
-            .map(|(i, binding)| {
+            .map(|(i, group)| {
                 let idx = proc_macro2::Literal::usize_unsuffixed(i);
-                let (provider, name_lit, provided_key, register_action) = match binding {
-                    ProviderBinding::Concrete(p) => (
-                        p,
-                        path_tail(p),
-                        quote! { ::std::any::TypeId::of::<#p>() },
+                let name_lit = path_label(match group {
+                    ProviderGroup::Concrete(p) => p,
+                    ProviderGroup::Dyn { provider, .. } => provider,
+                });
+                let (provider, provided_keys, register_action, overridden_action) = match group {
+                    ProviderGroup::Concrete(p) => (
+                        *p,
+                        vec![quote! { ::std::any::TypeId::of::<#p>() }],
                         quote! {
                             builder = <#p as ::nest_rs_core::Discoverable>::register(builder);
                         },
-                    ),
-                    ProviderBinding::Dyn { provider, trait_ty } => (
-                        provider,
-                        path_tail(provider),
-                        quote! { ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>() },
                         quote! {
-                            let __snapshot = builder.snapshot();
-                            let __provider = #provider::from_container(&__snapshot);
-                            let __dyn: ::std::sync::Arc<#trait_ty> =
-                                ::std::sync::Arc::new(__provider);
-                            builder = builder.provide_dyn::<#trait_ty>(__dyn);
+                            builder = <#p as ::nest_rs_core::Discoverable>::__nestrs_register_overridden(
+                                builder,
+                            );
                         },
                     ),
+                    ProviderGroup::Dyn { provider, traits } => {
+                        let keys: Vec<proc_macro2::TokenStream> =
+                            std::iter::once(quote! { ::std::any::TypeId::of::<#provider>() })
+                                .chain(traits.iter().map(|trait_ty| {
+                                    quote! {
+                                        ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>()
+                                    }
+                                }))
+                                .collect();
+                        let register = quote! {
+                            let __provider: ::std::sync::Arc<#provider> = ::std::sync::Arc::new(
+                                <#provider>::__nestrs_from_container(&builder.snapshot()),
+                            );
+                            builder = builder
+                                .provide_arc::<#provider>(::std::sync::Arc::clone(&__provider));
+                            #(
+                                builder = builder.provide_dyn::<#traits>(
+                                    ::std::sync::Arc::clone(&__provider)
+                                        as ::std::sync::Arc<#traits>,
+                                );
+                            )*
+                        };
+                        let named_keys = std::iter::once(quote! { #provider })
+                            .chain(traits.iter().map(|trait_ty| {
+                                quote! { ::std::sync::Arc<#trait_ty> }
+                            }))
+                            .map(|key| {
+                                quote! {
+                                    (
+                                        ::std::any::TypeId::of::<#key>(),
+                                        ::std::any::type_name::<#key>(),
+                                    )
+                                }
+                            });
+                        // One key overridden stands in for the whole binding.
+                        let overridden = quote! {
+                            builder = ::nest_rs_core::__private::claim_override(
+                                builder,
+                                ::std::any::TypeId::of::<#provider>(),
+                                #name_lit,
+                                ::nest_rs_core::ProviderScope::Singleton,
+                                &[ #(#named_keys),* ],
+                            );
+                        };
+                        (*provider, keys, register, overridden)
+                    }
                 };
                 let step = quote! {
+                    if !__done[#idx]
+                        && ::nest_rs_core::__private::overrides_any(&builder, &[ #(#provided_keys),* ])
+                    {
+                        // Never built: its dependencies need not exist.
+                        #overridden_action
+                        __done[#idx] = true;
+                        __progressed = true;
+                    }
                     if !__done[#idx] {
-                        // Ready when every required dep is present and every
-                        // optional dep is present or unsupplied by any pending
-                        // provider — keeps order irrelevant.
+                        // An optional dep waits only while a pending provider supplies it.
                         let __required_ready =
                             <#provider as ::nest_rs_core::Discoverable>::dependencies()
                                 .iter()
                                 .all(|__id| builder.contains(*__id));
-                        let __optional_ready =
-                            <#provider as ::nest_rs_core::Discoverable>::optional_dependencies()
-                                .iter()
-                                .all(|__id| builder.contains(*__id) || !__pending_keys.contains(__id));
+                        let __optional =
+                            <#provider as ::nest_rs_core::Discoverable>::optional_dependencies();
+                        let __optional_ready = __optional
+                            .iter()
+                            .all(|__id| builder.contains(*__id) || !__pending_keys.contains(__id));
                         if __required_ready && __optional_ready {
+                            builder = ::nest_rs_core::__private::record_absent_optional(
+                                builder,
+                                ::std::any::TypeId::of::<#name>(),
+                                #name_str,
+                                ::std::any::TypeId::of::<#provider>(),
+                                #name_lit,
+                                &__optional,
+                                &<#provider as ::nest_rs_core::Discoverable>::optional_dependency_names(),
+                            );
                             #register_action
                             __done[#idx] = true;
                             __progressed = true;
@@ -178,53 +265,37 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 };
                 let key_push = quote! {
                     if !__done[#idx] {
-                        __pending_keys.push(#provided_key);
+                        #( __pending_keys.push(#provided_keys); )*
                     }
                 };
-                let classify = quote! {
+                let stall = quote! {
                     if !__done[#idx] {
-                        let __deps = <#provider as ::nest_rs_core::Discoverable>::dependencies();
-                        let __dep_names =
-                            <#provider as ::nest_rs_core::Discoverable>::dependency_names();
-                        let mut __missing_ids: ::std::vec::Vec<::std::any::TypeId> =
-                            ::std::vec::Vec::new();
-                        let mut __missing_names: ::std::vec::Vec<&'static str> =
-                            ::std::vec::Vec::new();
-                        let mut __k = 0usize;
-                        while __k < __deps.len() {
-                            if !builder.contains(__deps[__k]) {
-                                __missing_ids.push(__deps[__k]);
-                                __missing_names.push(*__dep_names.get(__k).unwrap_or(&"?"));
-                            }
-                            __k += 1;
-                        }
-                        // Pure cycle: every missing dep is one another pending
-                        // provider would supply. Otherwise a dep is just absent.
-                        if !__missing_ids.is_empty()
-                            && __missing_ids.iter().all(|__id| __pending_keys.contains(__id))
-                        {
-                            __cyclic.push(#name_lit);
-                        } else {
-                            __unprovided.push(::std::format!(
-                                "{} (needs {})", #name_lit, __missing_names.join(", ")
-                            ));
-                        }
+                        __stalled.push(::nest_rs_core::__private::StalledProvider {
+                            name: #name_lit,
+                            provides: ::std::vec![ #(#provided_keys),* ],
+                            dependencies:
+                                <#provider as ::nest_rs_core::Discoverable>::dependencies(),
+                            dependency_names:
+                                <#provider as ::nest_rs_core::Discoverable>::dependency_names(),
+                            optional_dependencies:
+                                <#provider as ::nest_rs_core::Discoverable>::optional_dependencies(),
+                            optional_dependency_names:
+                                <#provider as ::nest_rs_core::Discoverable>::optional_dependency_names(),
+                        });
                     }
                 };
-                (step, key_push, classify)
+                (step, key_push, stall)
             })
             .collect();
 
         let steps = parts.iter().map(|p| &p.0);
         let key_pushes = parts.iter().map(|p| &p.1);
-        let classifies = parts.iter().map(|p| &p.2);
+        let stalls = parts.iter().map(|p| &p.2);
 
         quote! {
             #(#import_calls)*
             let mut __done = [false; #count];
             loop {
-                // Provided keys still pending this round — lets an optional dep
-                // wait for a same-module provider, and classifies failures.
                 let mut __pending_keys: ::std::vec::Vec<::std::any::TypeId> =
                     ::std::vec::Vec::new();
                 #(#key_pushes)*
@@ -235,61 +306,57 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     break;
                 }
                 if !__progressed {
-                    // Stalled: split the two failure modes. A genuinely-missing
-                    // dependency is *deferred* to the boot-time access-graph check
-                    // (`App::new` / `App::builder().build()`), which fails with a
-                    // named `MissingDependencyError` / `AccessGraphError` — so the
-                    // register phase no longer panics ahead of it, and every
-                    // wiring failure surfaces through the same `Result`. A true
-                    // cycle (no missing dep, providers only waiting on each other)
-                    // is invisible to the graph, so it still fails loudly here.
-                    let mut __cyclic: ::std::vec::Vec<&'static str> = ::std::vec::Vec::new();
-                    let mut __unprovided: ::std::vec::Vec<::std::string::String> =
+                    let mut __stalled: ::std::vec::Vec<::nest_rs_core::__private::StalledProvider> =
                         ::std::vec::Vec::new();
-                    #(#classifies)*
-                    if !__unprovided.is_empty() {
-                        // Leave the unbuilt providers out; the access-graph check
-                        // names the missing dependency and fails the boot cleanly.
-                        break;
-                    } else {
-                        ::std::panic!(
-                            "module `{}`: dependency cycle among provider(s) {:?} — each waits on another provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete type",
-                            #name_str, __cyclic
-                        );
-                    }
+                    #(#stalls)*
+                    builder = ::nest_rs_core::__private::record_stall(
+                        builder,
+                        ::std::any::TypeId::of::<#name>(),
+                        #name_str,
+                        __stalled,
+                    );
+                    break;
                 }
             }
-            ::nest_rs_core::__module_registered(#name_str);
+            ::nest_rs_core::__private::module_registered(#name_str);
             builder
         }
     };
 
+    // A const item, so `cargo check` evaluates it; spanned on the provider path
+    // the developer wrote, since `assert!` takes a literal naming no type.
+    let residency_checks = groups.iter().filter_map(|group| match group {
+        ProviderGroup::Dyn { provider, .. } => Some(quote_spanned! {provider.span()=>
+            const _: () = ::core::assert!(
+                <#provider as ::nest_rs_core::ProviderResidency>::SINGLETON,
+                "`as dyn Trait` binds one instance built at boot for the app's lifetime, so the \
+                 provider must be a singleton the container holds. This one is not: an edge host \
+                 (#[controller], #[gateway], #[resolver], #[mcp]) is built at mount, \
+                 `scope = request` builds one per request, and `scope = transient` one per \
+                 resolution. Bind a plain #[injectable] singleton; reach a scoped provider \
+                 through the edge's `Scoped<T>`.",
+            );
+        }),
+        ProviderGroup::Concrete(_) => None,
+    });
+
     quote! {
         #item
+
+        #(#residency_checks)*
 
         impl ::nest_rs_core::Module for #name {
             fn register(
                 mut builder: ::nest_rs_core::ContainerBuilder,
+                _: ::nest_rs_core::Registering<Self>,
             ) -> ::nest_rs_core::ContainerBuilder {
-                // Mark before recursing imports so a module cycle terminates.
-                if !::nest_rs_core::ContainerBuilder::mark_registered(
-                    &mut builder,
-                    ::std::any::TypeId::of::<#name>(),
-                ) {
-                    return builder;
-                }
                 #body
             }
 
             fn collect(
                 mut builder: ::nest_rs_core::ContainerBuilder,
+                _: ::nest_rs_core::Collecting<Self>,
             ) -> ::nest_rs_core::ContainerBuilder {
-                if !::nest_rs_core::ContainerBuilder::mark_collected(
-                    &mut builder,
-                    ::std::any::TypeId::of::<#name>(),
-                ) {
-                    return builder;
-                }
                 #(#collect_calls)*
                 builder
             }
@@ -300,12 +367,22 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Last path segment for readable boot-time panics.
-fn path_tail(p: &Path) -> String {
-    last_segment_ident(p).to_string()
+/// An import as a boot error names it — `HttpModule::for_root(..)`, the
+/// arguments left out, since a pinned config may hold a secret.
+fn import_label(import: &Expr) -> String {
+    let spelled = |tokens: proc_macro2::TokenStream| {
+        tokens.to_string().split_whitespace().collect::<String>()
+    };
+    match import {
+        Expr::Path(p) => spelled(quote!(#p)),
+        Expr::Call(call) => match &*call.func {
+            Expr::Path(func) => format!("{}(..)", spelled(quote!(#func))),
+            _ => "an import expression".to_owned(),
+        },
+        _ => "an import expression".to_owned(),
+    }
 }
 
-/// Last path segment of a `dyn Trait` for the access-graph descriptor label.
 fn path_tail_of_type(ty: &Type) -> String {
     if let Type::TraitObject(obj) = ty {
         for bound in &obj.bounds {
@@ -325,11 +402,105 @@ struct ModuleArgs {
     providers: Vec<ProviderBinding>,
 }
 
-/// `MyService` or `MyService as dyn MyTrait` (trait-object binding registered
-/// under the trait's `TypeId`).
+const IMPORTS_TAKE: &str =
+    "a list of modules, e.g. `imports = [UsersModule, HttpModule::for_root(None)]`";
+
+const PROVIDERS_TAKE: &str = "a list of provider types, e.g. `providers = [UsersService]`, or \
+     `Store as dyn Cache` to register one under a trait object";
+
+/// One provider type of a `providers` list, as written: listed bare, or bound
+/// under each trait it is listed `as dyn` with — never both, never twice.
+enum ProviderGroup<'a> {
+    Concrete(&'a Path),
+    Dyn {
+        provider: &'a Path,
+        traits: Vec<&'a Type>,
+    },
+}
+
+/// The list grouped by provider path as written, refusing at the second entry a
+/// provider listed twice or listed bare beside its `as dyn` binding.
+fn group_providers(bindings: &[ProviderBinding]) -> syn::Result<Vec<ProviderGroup<'_>>> {
+    let site = nest_rs_codegen::site("module", Some("providers"));
+    let mut groups: Vec<(String, ProviderGroup<'_>)> = Vec::new();
+    let mut refusal: Option<syn::Error> = None;
+    for binding in bindings {
+        let (provider, trait_ty) = match binding {
+            ProviderBinding::Concrete(p) => (p, None),
+            ProviderBinding::Dyn { provider, trait_ty } => (provider, Some(&**trait_ty)),
+        };
+        let spelled = written(provider);
+        let Some((_, group)) = groups.iter_mut().find(|(seen, _)| *seen == spelled) else {
+            let group = match trait_ty {
+                None => ProviderGroup::Concrete(provider),
+                Some(trait_ty) => ProviderGroup::Dyn {
+                    provider,
+                    traits: vec![trait_ty],
+                },
+            };
+            groups.push((spelled, group));
+            continue;
+        };
+        let message = match (group, trait_ty) {
+            (ProviderGroup::Dyn { traits, .. }, Some(trait_ty))
+                if !traits.iter().any(|seen| written(seen) == written(trait_ty)) =>
+            {
+                traits.push(trait_ty);
+                continue;
+            }
+            (ProviderGroup::Concrete(_), None) | (ProviderGroup::Dyn { .. }, Some(_)) => format!(
+                "{site}: `{}` is listed twice — a provider is listed once",
+                written(binding)
+            ),
+            (ProviderGroup::Concrete(_), Some(trait_ty)) => beside(&site, &spelled, trait_ty),
+            (ProviderGroup::Dyn { traits, .. }, None) => beside(&site, &spelled, traits[0]),
+        };
+        let error = syn::Error::new_spanned(binding, message);
+        match &mut refusal {
+            Some(first) => first.combine(error),
+            None => refusal = Some(error),
+        }
+    }
+    match refusal {
+        Some(error) => Err(error),
+        None => Ok(groups.into_iter().map(|(_, group)| group).collect()),
+    }
+}
+
+/// The refusal of a bare `provider` beside its binding `as trait_ty`.
+fn beside(site: &str, provider: &str, trait_ty: &Type) -> String {
+    format!(
+        "{site}: `{provider}` is listed beside `{provider} as {}`, which already holds it under \
+         its own type — remove the bare entry",
+        written(trait_ty)
+    )
+}
+
+/// Tokens as a developer wrote them: `crate::Store`, `Store as dyn Cache`.
+fn written(tokens: &impl ToTokens) -> String {
+    tokens
+        .to_token_stream()
+        .to_string()
+        .replace(" :: ", "::")
+        .replace(":: ", "::")
+        .replace(" < ", "<")
+        .replace(" >", ">")
+}
+
+/// `MyService` or `MyService as dyn MyTrait`.
 enum ProviderBinding {
     Concrete(Path),
     Dyn { provider: Path, trait_ty: Box<Type> },
+}
+
+/// The entry as written, for a refusal's words and span.
+impl ToTokens for ProviderBinding {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        match self {
+            Self::Concrete(p) => p.to_tokens(tokens),
+            Self::Dyn { provider, trait_ty } => tokens.extend(quote!(#provider as #trait_ty)),
+        }
+    }
 }
 
 impl Parse for ProviderBinding {
@@ -348,71 +519,98 @@ impl Parse for ProviderBinding {
     }
 }
 
+const MODULE: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("module", &["imports", "providers"]);
+
 impl Parse for ModuleArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut args = ModuleArgs::default();
-        let mut seen: Vec<String> = Vec::new();
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            // Judged **before** the value shape is parsed. Reading `= [` first
-            // meant the shared unknown-key sentence was reachable only when the
-            // wrong key happened to take a bracketed value: `#[module(exports =
-            // [Foo])]` named the key, `#[module(porviders = Foo)]` answered
-            // `expected square brackets` — and the snapshot pinned the reachable
-            // half, so the join read green over a refusal that fired on one
-            // value shape.
-            let name = key.to_string();
-            if !matches!(name.as_str(), "imports" | "providers") {
+        MODULE.parse(input, |arg| {
+            let name = arg.key();
+            let input = arg.value()?;
+            let takes = if name == "imports" {
+                IMPORTS_TAKE
+            } else {
+                PROVIDERS_TAKE
+            };
+            if !input.peek(syn::token::Bracket) {
                 return Err(syn::Error::new(
-                    key.span(),
-                    nest_rs_codegen::unknown_argument("module", &name, &["imports", "providers"]),
-                ));
-            }
-            // Refused rather than merged. The repeat is legible here — two
-            // `providers = [...]` lists concatenate — so nothing is *dropped*,
-            // which is why `duplicate_argument`'s own reasoning does not apply
-            // verbatim. What applies is that every other member of the
-            // `key = value` family refuses it, and a grammar the framework
-            // interprets accepting a spelling its siblings reject is the
-            // asymmetry a shared sentence exists to remove: one list is what a
-            // reader can see whole.
-            nest_rs_codegen::reject_duplicate_argument(
-                seen.contains(&name),
-                &key,
-                "module",
-                &name,
-            )?;
-            seen.push(name.clone());
-            if input.parse::<Token![=]>().is_err() {
-                return Err(syn::Error::new(
-                    key.span(),
-                    nest_rs_codegen::needs_a_value("module", &name),
+                    input.span(),
+                    nest_rs_codegen::takes_value("module", Some(name), takes),
                 ));
             }
             let content;
             bracketed!(content in input);
-
-            match name.as_str() {
-                "imports" => {
-                    let exprs: Punctuated<Expr, Token![,]> =
-                        Punctuated::parse_terminated(&content)?;
-                    args.imports.extend(exprs);
-                }
-                "providers" => {
-                    let bindings: Punctuated<ProviderBinding, Token![,]> =
-                        Punctuated::parse_terminated(&content)?;
-                    args.providers.extend(bindings);
-                }
-                // Unreachable: the key was judged above, before anything read
-                // the value. Kept as an exhaustive arm rather than a wildcard so
-                // adding a key here without adding it there does not compile.
-                other => unreachable!("`{other}` was refused before the value was read"),
+            if name == "imports" {
+                let exprs: Punctuated<Expr, Token![,]> = Punctuated::parse_terminated(&content)?;
+                args.imports.extend(exprs);
+            } else {
+                let bindings: Punctuated<ProviderBinding, Token![,]> =
+                    Punctuated::parse_terminated(&content).map_err(|stopped| {
+                        syn::Error::new(
+                            stopped.span(),
+                            nest_rs_codegen::takes_value("module", Some(name), takes),
+                        )
+                    })?;
+                args.providers.extend(bindings);
             }
-
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
-            }
-        }
+            Ok(())
+        })?;
         Ok(args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list(tokens: proc_macro2::TokenStream) -> Vec<ProviderBinding> {
+        let parse = Punctuated::<ProviderBinding, Token![,]>::parse_terminated;
+        syn::parse::Parser::parse2(parse, tokens)
+            .expect("a providers list")
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn one_provider_bound_as_two_traits_is_one_group_in_first_entry_order() {
+        let bindings = list(quote! { Store as dyn Cache, Users, Store as dyn Flush });
+        let groups = group_providers(&bindings).expect("two traits are no repeat");
+        assert_eq!(groups.len(), 2);
+        let ProviderGroup::Dyn { traits, .. } = &groups[0] else {
+            panic!("the binding keeps its first entry's slot");
+        };
+        assert_eq!(traits.len(), 2);
+        assert!(matches!(groups[1], ProviderGroup::Concrete(_)));
+    }
+
+    #[test]
+    fn a_repeat_is_refused_at_its_site_in_the_words_written() {
+        for (tokens, says) in [
+            (
+                quote! { crate::Store, crate::Store },
+                "`crate::Store` is listed twice — a provider is listed once",
+            ),
+            (
+                quote! { Store as dyn Cache<u8>, Store as dyn Cache<u8> },
+                "`Store as dyn Cache<u8>` is listed twice",
+            ),
+            (
+                quote! { Store as dyn Cache, Store },
+                "`Store` is listed beside `Store as dyn Cache`, which already holds it under \
+                 its own type — remove the bare entry",
+            ),
+            (
+                quote! { Store, Store as dyn Cache },
+                "`Store` is listed beside `Store as dyn Cache`",
+            ),
+        ] {
+            let refused = group_providers(&list(tokens))
+                .err()
+                .expect("a repeat is refused")
+                .to_string();
+            assert!(refused.starts_with("#[module] `providers`: "), "{refused}");
+            assert!(refused.contains(says), "{refused}");
+        }
     }
 }

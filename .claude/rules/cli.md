@@ -5,77 +5,62 @@ paths:
 
 # nestrs CLI — scaffolds mirror the exemplar
 
-Command surface: `new` (monorepo / workspace app),
-`generate`/`g` (`feature`, `resource`, `entity`, `auth`, `migration`, and the
-adapters `http` / `graphql` / `ws` / `queue` / `schedule` / `mcp`),
-`run` (forwards to `just` in the product workspace), `doctor`, `update`,
-`version`, `about`, `info`.
+The command surface is in `nestrs --help`. Two boundaries are decisions:
 
-**`about` is the framework; `info` is the project.** `about` prints seven
-static lines identical on every machine; `info` reads the tree it stands in
-(layout, root, apps, features, the pinned framework version, the env prefix,
-the toolchain) and says so plainly when there is no project. A line that would
-be the same everywhere belongs to `about`, and vice versa — that is the whole
-boundary, and it is what keeps the two from becoming one command with a flag.
+- **`generate` has one adapter generator per edge** of the closed vocabulary
+  (`architecture.md`), and a new edge is not shipped until its generator is.
+- **`about` is the framework; `info` is the project.** `about` prints static
+  lines identical on every machine; `info` reads the tree it stands in and says
+  plainly when there is no project. A line that would read the same everywhere
+  belongs to `about`, and the converse to `info` — which keeps the two from
+  becoming one command with a flag.
 
 ## One starter — locked, do not reopen
 
-**`nestrs new` has no template flag.** Every layout writes the same
-`hello` module (`src/templates/hello.rs`): a service with a greeting and
-one `#[public] GET /`. A freshly created project must prove it started,
-and a `404` proves nothing to the developer looking at a browser — so
-there is no routeless variant, and adding one back is a regression.
+**`nestrs new` has no template flag.** Every layout writes the same `hello`
+module: a service with a greeting and one `#[public] GET /`. A new project must
+prove it started, and a `404` proves nothing to the developer at a browser, so
+there is no routeless variant; adding one back is a regression.
 
 It is written as a **feature named after the app**
-(`crates/features/src/<app>/`), because the layout keeps no `service.rs`
-/ `controller.rs` in an app crate. `nestrs new <name>` refuses when a
-feature already owns that name.
+(`crates/features/src/<app>/`), because an app crate holds no `service.rs` or
+`controller.rs` (`apps.md`). `nestrs new <name>` refuses when a feature already
+owns that name.
 
-## Scaffold architecture
+## Templates
 
-Templates are `const` strings with `{{placeholder}}`s in
-`src/templates/` (`hello`, `feature`, `resource`, `auth`, `migration`,
-`adapter`, `workspace`, `shared`).
+Templates are `const` strings with `{{placeholder}}`s in `src/templates/`,
+rendered and wired by `src/scaffold/`, which rolls back a partial scaffold.
 
-**One exception, and the criterion is narrow:** a template becomes a
-*file* only when a second consumer must read the **same bytes**. Today
-there is exactly one — `src/templates/architecture.md`, the architecture
-model, which `shared.rs` embeds with `include_str!` and
-`.claude/rules/architecture.md` symlinks, so the rules this repo works
-under and the rules it ships are identical. Carrying no placeholder is a
-*consequence* of that (a raw reader would show `{{key}}` literally), not
-the reason: a placeholder-free template with one consumer stays a const.
+**A template becomes a file only when a second consumer must read the same
+bytes.** There is one: `src/templates/architecture.md`, embedded with
+`include_str!` into every scaffold's `AGENTS.md` and into `naming.rs`;
+`.claude/rules/architecture.md` is this repository's copy, edited with it.
+**Two readers parse it**: `naming.rs` derives the reserved words from the fence
+under `## Reserved vocabulary`, and the scaffold test asserts its headings; the
+`/architecture/` page restates its tables and that fence, kept in step by
+review. Change a table, a heading or the fence with them.
 
-**The real file is the build's side, the symlink is `.claude/`'s.** Not
-the reverse: under `core.symlinks=false` a link materializes as a text
-file holding its target path, so an inverted arrangement would embed a
-filename into every scaffolded `AGENTS.md` and still compile. Edit that
-file to change the rules; a second copy anywhere is the defect the
-arrangement exists to prevent.
+**A template is the developer's own repository, so it may teach in a comment**
+— the `// SECURITY:` note above a generated `#[public]` route is the case that
+decided it. Prose the framework compiles into behaviour is still an argument
+there, as in `demo/` (`demo.md`).
 
-Rendering and
-auto-wiring live in `src/scaffold/`: `render.rs` fills placeholders,
-`wiring.rs` performs the edits a copy can't (`features/src/lib.rs`
-`pub mod` line + the module entry in the serving app's `module.rs`),
-`transaction.rs` rolls back a partial scaffold.
+## Scaffolds emit exactly what the rules mandate
 
-**One `edit` per path per transaction.** `Scaffold::apply` resolves each
-`edit` against the file *on disk*, so two edits of the same path both
-read the original and the second write wins — fold the lines into a
-single `ensure_lines`/dep list instead (see `g resource` bootstrapping
-`g auth`). An `edit` on a file the same transaction `create`s fails: it
-is not on disk yet.
+Templates stay in lockstep with the `users/` exemplar and the layout rules
+(`features.md`, `apps.md`, `architecture.md`). Changing the exemplar or a
+naming rule updates the matching template in the same change, and the
+converse. A generator emitting a layout the rules forbid is a defect on a par
+with breaking the exemplar.
 
-## The lockstep obligation
+**Every generator is compiled, not only read.** The scaffold suite runs every
+adapter generator — every edge `Transport` carries — over both port shapes,
+from inside an app so the edits it makes to that app's `module.rs` and
+manifest compile too, plus `nestrs new`'s second app and `g migration`, and
+holds the result to the scaffold's own `clippy -D warnings`. The integration
+suite's text assertions are not that proof: they read a wrong import as
+readily as a right one.
 
-**A scaffold emits exactly what the rules mandate.** Templates must
-stay in lockstep with the `users/` exemplar and the layout rules
-(`features.md`, `apps.md`, naming in `architecture.md` — which is itself
-one of these templates). Changing the
-exemplar or a naming rule ⇒ update the matching template in the same
-task, and vice versa. A generator that emits a layout the rules forbid
-is a defect on par with breaking the exemplar itself.
-
-Scaffolded span targets use the app-name style (`features::<snake>`),
-not `nest_rs::*` — deliberate: generated code is app code, not
-framework code.
+**Scaffolded span targets are app-style** (`features::<snake>`), never
+`nest_rs::*`: generated code is the developer's, not the framework's.

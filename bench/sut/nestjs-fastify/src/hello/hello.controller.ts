@@ -1,12 +1,11 @@
-import { Controller, Get, Header } from '@nestjs/common';
-import { HelloService } from './hello.service';
+import { Controller, Get } from '@nestjs/common';
+import { HelloService } from './hello.service.js';
 
 @Controller()
 export class HelloController {
   constructor(private readonly helloService: HelloService) {}
 
   @Get('ping')
-  @Header('Content-Type', 'text/plain; charset=utf-8')
   ping(): string {
     return 'pong';
   }

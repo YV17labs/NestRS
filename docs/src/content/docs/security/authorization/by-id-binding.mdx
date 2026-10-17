@@ -1,14 +1,13 @@
 ---
 title: Route model binding
 description: Bind<A, S> turns a path id into the loaded, authorized model — 404 when the row is absent, 403 when it exists but the caller cannot see it.
-tier: basics
 sidebar:
   order: 4
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-`Bind<A, S>` is the handler argument that turns `/users/:id` into a
+`Bind<A, S>` is the handler argument that turns `/users/{id}` into a
 loaded, authorized model. It runs through the service's `access`
 method, which loads the row **under the caller's own grant** — one SQL
 lookup, filtered by the same condition a list query uses. Three outcomes,
@@ -27,11 +26,14 @@ there".
 
 ## What it looks like
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo)"
-use nest_rs::authz::Read;
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
+use nest_rs::authz::{Create, Read};
+// …
 use nest_rs::seaorm::Bind;
+// …
 
-#[get("/:id")]
+#[get("/{id}")]
+// … #[api(…)]
 async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
     Json(User::from(&*user))
 }
@@ -84,21 +86,20 @@ async fn access(&self, action: Action, id: Uuid)
     // Scoped load: the caller's own grant for `action`, in one lookup.
     if let Some(model) = Repo::<E>::unscoped_by_id(id)
         .filter(scope_for::<E>(action))
-        .filter(live_read_filter())
         .one(&conn).await?
     {
         return Ok(Access::Found(model));
     }
     // Only now, and only to tell "forbidden" from "absent".
     let exists = Repo::<E>::unscoped_by_id(id)
-        .filter(live_read_filter())
         .one(&conn).await?
         .is_some();
     if exists { Ok(Access::Denied) } else { Ok(Access::Missing) }
 }
 ```
 
-Two things to notice:
+A soft-deleted row is `Missing` for every action: both lookups hide it, as
+every `Repo` read does. Two things to notice:
 
 1. **The authorization is decided in SQL.** The scoped lookup filters the
    primary key by `scope_for(action)` — the exact `condition_for` the list
@@ -147,7 +148,7 @@ For mutating actions, `Bind<Update, S>` (or `Delete`) loads the row
 the caller is about to touch and refuses early if the policy says no:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-#[delete("/:id")]
+#[delete("/{id}")]
 async fn delete(&self, user: Bind<Delete, UsersService>) -> StatusCode {
     self.svc.delete_by_id(user.id).await?;
     StatusCode::NO_CONTENT
@@ -180,7 +181,7 @@ content, draft media), collapse the 403 path into a 404 in your
 handler:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[get("/:id")]
+#[get("/{id}")]
 async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>, Error> {
     match self.svc.access(Action::Read, id.0).await.map_err(ServiceError::from)? {
         Access::Found(post) => Ok(Json(Post::from(&post))),

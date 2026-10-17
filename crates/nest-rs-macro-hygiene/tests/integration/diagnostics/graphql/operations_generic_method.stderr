@@ -1,0 +1,5 @@
+error: a `#[operations]` method takes no type or const parameters, and `widget` declares const parameter `N`: the expansion calls it with only what its transport carries, so nothing supplies a value for it — name a concrete one, or call a generic function from the body
+  --> tests/integration/diagnostics/graphql/operations_generic_method.rs:13:21
+   |
+13 |     async fn widget<const N: usize>(&self) -> i32 {
+   |                     ^^^^^^^^^^^^^^

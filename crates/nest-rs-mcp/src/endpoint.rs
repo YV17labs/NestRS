@@ -344,27 +344,28 @@ fn host_admitted(req: &Request, allowed_hosts: &[String]) -> bool {
     let Some(authority) = authority else {
         return false;
     };
-    let host = admitted_name(authority.host());
+    let host = unbracketed(authority.host());
     let port = authority.port_u16();
+    let admits = |name: &str, entry_port: Option<u16>| {
+        unbracketed(name).eq_ignore_ascii_case(host)
+            && entry_port.is_none_or(|entry_port| port == Some(entry_port))
+    };
     allowed_hosts.is_empty()
         || allowed_hosts.iter().any(|allowed| {
             let allowed = allowed.trim();
             if allowed.is_empty() {
                 return false;
             }
-            let (name, allowed_port) = match Authority::try_from(allowed) {
-                Ok(authority) => (admitted_name(authority.host()), authority.port_u16()),
-                Err(_) => (admitted_name(allowed), None),
-            };
-            name == host && allowed_port.is_none_or(|allowed| port == Some(allowed))
+            match Authority::try_from(allowed) {
+                Ok(entry) => admits(entry.host(), entry.port_u16()),
+                Err(_) => admits(allowed, None),
+            }
         })
 }
 
-/// A host as rmcp compares it: without IPv6 brackets, lowercased.
-fn admitted_name(host: &str) -> String {
-    host.trim_matches('[')
-        .trim_matches(']')
-        .to_ascii_lowercase()
+/// A host as rmcp compares it, ASCII case aside: without IPv6 brackets.
+fn unbracketed(host: &str) -> &str {
+    host.trim_matches('[').trim_matches(']')
 }
 
 /// The JSON-RPC request in a body, as far as the schema lookup reads it.

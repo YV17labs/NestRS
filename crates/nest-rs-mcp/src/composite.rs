@@ -297,9 +297,8 @@ macro_rules! addressed_task {
             if let Some(only) = self.single() {
                 return only.host.$name(request, context).await;
             }
-            let task = request.task_id.clone();
             self.route_past(
-                |refusal| refuses_task(refusal, &task),
+                |refusal| refuses_task(refusal, &request.task_id),
                 |host| host.$name(request.clone(), context.clone()),
             )
             .await

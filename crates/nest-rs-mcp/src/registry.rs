@@ -90,6 +90,14 @@ impl DeclaredRoutes {
             complete,
         }
     }
+
+    fn tool_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.tools.iter().map(|tool| tool.name.to_string())
+    }
+
+    fn prompt_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.prompts.iter().map(|prompt| prompt.name.clone())
+    }
 }
 
 /// One `#[mcp]` host's contribution to the endpoint at its path.
@@ -320,8 +328,8 @@ fn resolve(container: &Container, path: &str) -> Vec<ResolvedHost> {
             let routes = meta.declared_routes();
             ResolvedHost {
                 name: meta.host(),
-                tools: tool_names(&routes).map(Cow::into_owned).collect(),
-                prompts: prompt_names(&routes).collect(),
+                tools: routes.tool_names().collect(),
+                prompts: routes.prompt_names().collect(),
                 complete: routes.complete,
                 instance: meta.build(container),
                 meta,
@@ -330,21 +338,13 @@ fn resolve(container: &Container, path: &str) -> Vec<ResolvedHost> {
         .collect()
 }
 
-fn tool_names(routes: &DeclaredRoutes) -> impl Iterator<Item = Cow<'static, str>> + '_ {
-    routes.tools.iter().map(|tool| tool.name.clone())
-}
-
-fn prompt_names(routes: &DeclaredRoutes) -> impl Iterator<Item = String> + '_ {
-    routes.prompts.iter().map(|prompt| prompt.name.clone())
-}
-
 fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &DetachedWork) {
     let hosts = hosts_on(container, path);
 
     let mut index = MountIndex::default();
     for (position, host) in hosts.iter().enumerate() {
         let declared = host.declared_routes();
-        let names: Vec<Cow<'static, str>> = tool_names(&declared).collect();
+        let names: Vec<String> = declared.tool_names().collect();
         tracing::info!(
             target: nest_rs_http::target::ROUTES,
             kind = MCP_LABEL,
@@ -353,14 +353,10 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
             tools = names.join(", ").as_str(),
             "mounted mcp host",
         );
-        index.tools.read(
-            position,
-            names.into_iter().map(Cow::into_owned),
-            declared.complete,
-        );
+        index.tools.read(position, names, declared.complete);
         index
             .prompts
-            .read(position, prompt_names(&declared), declared.complete);
+            .read(position, declared.prompt_names(), declared.complete);
     }
 
     // A contested or unbacked identity already failed the boot in `check_identity`.

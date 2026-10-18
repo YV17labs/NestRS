@@ -1,9 +1,9 @@
 ---
 title: Benchmarks
-description: "How NestRS is measured against NestJS 11 on Express and Fastify — the contract, the protocol, and how to reproduce every figure."
+description: "How NestRS is measured against NestJS 12 on Express and Fastify — the contract, the protocol, and how to reproduce every figure."
 ---
 
-NestRS is measured against **idiomatic NestJS 11 on both adapters** — Fastify
+NestRS is measured against **idiomatic NestJS 12 on both adapters** — Fastify
 (its best case) and Express (its default) — serving a **byte-identical HTTP
 contract** at the same stack depth. The harness ships in the repository; one
 command reproduces the table below on your hardware.
@@ -36,8 +36,11 @@ buys you, on either side. The static tier (T0, no service call) tells the
 same story as T1 on both sides, so what you see is framework overhead, not
 serialization cost.
 
-Measured 2026-07-25 on a 4-core aarch64 Linux host — rustc 1.96.1, Node
-24.18, `@nestjs/core` 11.1.28, [oha](https://github.com/hatoo/oha) 1.15; 64
+Measured 2026-07-25, with NestRS 4.0.0 against NestJS 11 — the harness has
+since moved its contestants to NestJS 12 and added the tiers below, and the
+next published run replaces this table whole — on a 4-core aarch64 Linux
+host — rustc 1.96.1, Node 24.18, `@nestjs/core` 11.1.28,
+[oha](https://github.com/hatoo/oha) 1.15; 64
 connections, discarded warmup, medians of 3 × 15 s runs; cold start is the
 median of repeated boots, the one figure the harness samples once per run.
 Absolute figures
@@ -60,7 +63,23 @@ measured:
   deliberately small enough to read.
 - **Same posture.** Each side is written the way its own CLI scaffolds it —
   release build vs `NODE_ENV=production`, framework defaults untouched, no
-  per-request telemetry on either side, no reverse proxy, no TLS.
+  per-request telemetry on either side, no reverse proxy, no TLS. Logging
+  stays as each ships it: NestRS writes its one access line per request.
+
+## The tiers
+
+| Tier | Route | What it adds |
+|---|---|---|
+| T0 | `GET /ping` | the transport floor: a static string |
+| T1 | `GET /hello` | router, DI-built controller, injected service, JSON |
+| T2 | `GET /layered` | T1 behind a guard and an interceptor bound on the route |
+| T3 | `GET /stream` | a body streamed in sixteen chunks |
+| T4 | `POST /echo` | a JSON request body read and decoded |
+| T5 | `GET /large` | a 35 KB JSON body |
+
+A contestant may declare variants of its own, measured in a boot of their own
+and never compared with a contestant that lacks them: NestRS declares T1 over
+HTTP/2 with prior knowledge, T1 with its access line off, and T5 compressed.
 
 ## The protocol
 
@@ -80,7 +99,10 @@ measured:
   does not claim your domain logic gets 1.5× faster — it claims the floor
   under it is lower and the ceiling higher.
 - Neither side ships per-request telemetry — measuring "telemetry on" vs
-  "telemetry absent" would compare features, not frameworks.
+  "telemetry absent" would compare features, not frameworks. NestRS's
+  access line is measured on, as it ships, and off in its `quiet` variant.
+- No database route, GraphQL, WebSocket, MCP or queue throughput, no TLS,
+  and no PHP or Go contestant yet.
 - Adding a contestant is a directory with a manifest — the harness knows no
   framework. The contract, the gate, and the how-to live in
   [`bench/`](https://github.com/YV17labs/NestRS/tree/main/bench).

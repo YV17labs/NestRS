@@ -9,7 +9,7 @@ lint:
 
 # Build every SUT (release / production build).
 build:
-    cd sut/nestrs && cargo build --release
+    cd sut/nestrs && cargo build --release --locked
     cd sut/nestjs-express && npm ci && npm run build
     cd sut/nestjs-fastify && npm ci && npm run build
 

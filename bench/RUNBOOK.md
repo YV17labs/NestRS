@@ -57,7 +57,30 @@ directory aside first (e.g. suffix `-percore`).
   something is wrong).
 - The fingerprint in the JSON matches the machine you think you ran on.
 
-## 5. Hand back
+## 5. Two commits, one session
+
+A change to the framework is judged by the same provider built from two
+commits, in one session on one host: the figures of two sessions are not
+comparable. Build the base in a worktree of its own and label each run, into
+one results directory:
+
+```bash
+dir="$PWD/results/$(date +%Y-%m-%d)-$(hostname -s)-ab"
+git worktree add ../../base <base-commit>
+BENCH_LABEL=base ./harness/run.sh ../../base/bench/sut/nestrs "$dir"
+BENCH_LABEL=head ./harness/run.sh sut/nestrs "$dir"
+./harness/report.sh "$dir"
+```
+
+This tree's harness and contract measure both. A base whose SUT predates a
+tier is measured on the tiers it serves, and so is the head beside it:
+`BENCH_TIERS=t0,t1` on both runs.
+
+Alternate the two (base, head, base, head) when the spread between runs of
+one commit is near the difference being judged, and state the spread beside
+every figure the report quotes.
+
+## 6. Hand back
 
 Return the complete `results/` directories from both regimes — JSON files
 and `REPORT.md`, nothing else. Do not edit anything outside `results/`.

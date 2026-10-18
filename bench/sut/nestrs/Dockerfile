@@ -7,7 +7,7 @@ WORKDIR /repo
 COPY crates crates
 COPY bench/sut/nestrs bench/sut/nestrs
 WORKDIR /repo/bench/sut/nestrs
-RUN cargo build --release
+RUN cargo build --release --locked
 
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 COPY --from=builder /repo/bench/sut/nestrs/target/release/sut-nestrs /usr/local/bin/app

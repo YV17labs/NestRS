@@ -2,5 +2,11 @@ name = "nestrs"
 variant = "poem"
 runtime = "rust"
 port = 3100
-build = "cargo build --release"
+build = "cargo build --release --locked"
 start = "target/release/sut-nestrs"
+# Variants (CONTRACT.md): the transport serves HTTP/2 with prior knowledge on a
+# cleartext port; the access line is on by default and `quiet_env` turns it
+# off; compression is opt-in, and `compressed_env` turns it on.
+h2c = "true"
+quiet_env = "NESTRS_LOG=warn"
+compressed_env = "NESTRS_HTTP__COMPRESSION=true"

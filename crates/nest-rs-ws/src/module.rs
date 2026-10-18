@@ -38,7 +38,8 @@ mod tests {
         let container = Container::builder()
             .provide(WsConfig::default())
             .import::<WsModule>()
-            .build();
+            .build()
+            .expect("the container builds");
         let server: Option<Arc<WsServer>> = container.get();
         assert!(server.is_some());
     }

@@ -409,7 +409,10 @@ mod tests {
     #[tokio::test]
     async fn a_continuation_reinstalls_the_context_the_handler_ran_under() {
         let scope = Arc::new(RequestScope::new(
-            Container::builder().provide(Greeter("hi")).build(),
+            Container::builder()
+                .provide(Greeter("hi"))
+                .build()
+                .expect("the container builds"),
         ));
         let correlation = crate::Correlation::minted(None);
         let trace_id = correlation.trace_id();
@@ -435,7 +438,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_continuation_sees_an_actor_resolved_after_it_was_built() {
-        let scope = Arc::new(RequestScope::new(Container::builder().build()));
+        let scope = Arc::new(RequestScope::new(
+            Container::builder().build().expect("the container builds"),
+        ));
         let correlation = crate::Correlation::minted(None);
         let continuation = RequestContinuation::new(Some(scope.clone()), correlation.clone());
 
@@ -562,7 +567,8 @@ mod tests {
             .provide_scoped::<Counter, _>(move |_| {
                 Counter(builds_factory.fetch_add(1, Ordering::SeqCst))
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let scope = RequestScope::new(container);
 
         let first: Arc<Counter> = scope.get().expect("scoped provider resolves");
@@ -580,7 +586,8 @@ mod tests {
                 let g: Arc<Greeter> = c.get().expect("singleton resolves inside factory");
                 Counter(g.0.len() as u32)
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let scope = RequestScope::new(container);
 
         let resolved: Arc<Counter> = scope.get().expect("scoped provider resolves");
@@ -589,7 +596,10 @@ mod tests {
 
     #[test]
     fn unscoped_types_fall_through_to_the_singleton_container() {
-        let container = Container::builder().provide(Greeter("hi")).build();
+        let container = Container::builder()
+            .provide(Greeter("hi"))
+            .build()
+            .expect("the container builds");
         let scope = RequestScope::new(container);
         let resolved: Arc<Greeter> = scope.get().expect("singleton falls through");
         assert_eq!(resolved.0, "hi");
@@ -613,7 +623,8 @@ mod tests {
                         .expect("scoped dep resolves through the scope"),
                 )
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let scope = RequestScope::new(container);
 
         let outer: Arc<Outer> = scope.get().expect("outer resolves");
@@ -649,7 +660,8 @@ mod tests {
                         .expect("the request-scoped dep resolves through the scope"),
                 )
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let scope = RequestScope::new(container);
 
         let a: Arc<Trans> = scope.get().expect("transient resolves");
@@ -678,7 +690,8 @@ mod tests {
             .provide_scoped::<Inner, _>(move |_| {
                 Inner(builds_factory.fetch_add(1, Ordering::SeqCst))
             })
-            .build();
+            .build()
+            .expect("the container builds");
 
         let scope_a = RequestScope::new(container.clone());
         let scope_b = RequestScope::new(container);
@@ -701,7 +714,8 @@ mod tests {
                 let _self: Arc<Counter> = scope.get().expect("re-entrant resolution");
                 Counter(0)
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let scope = RequestScope::new(container);
         let _ = scope.get::<Counter>();
     }
@@ -718,7 +732,8 @@ mod tests {
                     let _a: Arc<Greeter> = scope.get().expect("A resolves");
                     Counter(0)
                 })
-                .build();
+                .build()
+                .expect("the container builds");
             let scope = RequestScope::new(container);
             let _: Option<Arc<Greeter>> = scope.get();
         }));
@@ -745,7 +760,8 @@ mod tests {
         let container = Container::builder()
             .provide_scoped::<Counter, _>(|_| -> Counter { panic!("boom from scoped factory") })
             .provide_scoped::<Greeter, _>(|_| Greeter("recovered"))
-            .build();
+            .build()
+            .expect("the container builds");
         let scope = RequestScope::new(container);
 
         let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

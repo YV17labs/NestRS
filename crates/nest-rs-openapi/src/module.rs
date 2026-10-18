@@ -223,6 +223,7 @@ mod tests {
                 |_, _| {},
             ))
             .build()
+            .expect("the container builds")
     }
 
     fn selecting(strategy: nest_rs_http::ApiVersioning, default: Option<&str>) -> HttpConfig {

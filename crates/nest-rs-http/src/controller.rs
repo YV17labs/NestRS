@@ -432,7 +432,7 @@ mod tests {
                 CALLS.fetch_add(1, Ordering::SeqCst);
             },
         );
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         let mut routes = HttpRoutes::new(None);
 
         meta.mount(&container, &mut routes);

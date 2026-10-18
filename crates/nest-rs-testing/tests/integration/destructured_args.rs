@@ -212,7 +212,10 @@ async fn a_process_method_dispatches_to_a_destructured_job_argument() {
         .find(|m| m.name() == "NotesProcessor::record")
         .expect("the #[process] method is discovered");
 
-    let container = Container::builder().provide(NotesProcessor).build();
+    let container = Container::builder()
+        .provide(NotesProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = Delivery::new(
         &IN_PROCESS,
         QueueName::new(method.queue()).expect("the decorator checked the name"),

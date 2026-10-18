@@ -39,7 +39,8 @@ impl ServerHandler for ScopeProbeTool {}
 fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
     let container = Container::builder()
         .provide_scoped::<Probe, _>(|_| Probe)
-        .build();
+        .build()
+        .expect("the container builds");
     let inner = Arc::new(inner.into_endpoint().map_to_response());
     poem::endpoint::make(move |req| {
         let inner = Arc::clone(&inner);

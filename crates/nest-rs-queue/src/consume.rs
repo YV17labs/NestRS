@@ -929,7 +929,7 @@ mod tests {
 
     fn context() -> HandlerContext {
         HandlerContext {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             checkpoints: None,
             unit_of_work: None,
             attempt: Attempt::new(

@@ -111,7 +111,7 @@ use crate::unit_context::{UnitContext, take_pending};
 /// #     .provide(Arc::new(Audit))
 /// #     .provide(Arc::new(Arc::new(Audit)))
 /// #     .provide(Opaque)
-/// #     .build();
+/// #     .build()?;
 /// # let chains = SITE.chains(&container)?;
 /// # let unit = tokio::spawn(async move {
 /// #     let mut view = ChatView;

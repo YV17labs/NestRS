@@ -175,7 +175,9 @@ mod tests {
     #[tokio::test]
     async fn a_nested_request_scope_does_not_clear_the_edges_cap() {
         let scope = std::sync::Arc::new(nest_rs_core::RequestScope::new(
-            nest_rs_core::Container::builder().build(),
+            nest_rs_core::Container::builder()
+                .build()
+                .expect("the container builds"),
         ));
         let (req, mut body) = Request::builder().body(vec![b'x'; 64]).split();
 

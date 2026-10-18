@@ -8,7 +8,8 @@ fn registers_health_service() {
     let container = Container::builder()
         .provide(HealthConfig::default())
         .import::<HealthModule>()
-        .build();
+        .build()
+        .expect("the container builds");
     let svc: Option<Arc<HealthService>> = container.get();
     assert!(svc.is_some());
 }

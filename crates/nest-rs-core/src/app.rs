@@ -15,17 +15,16 @@ use tokio::time::Instant;
 use crate::access::{
     Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, dependency_order,
     provider_order, reachable_descriptors, reachable_provider_ids, scoped_cycle, singleton_cycle,
-    unbuilt_cause, validate_access_graph,
+    validate_access_graph,
 };
 use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::close::InstallRecord;
-use crate::container::{AbsentOptional, ProviderScope, Stall};
+use crate::container::ProviderScope;
 use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
-    AccessError, ContestedDeclarationError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    LateFactoryError, LateOptionalDependencyError, OverriddenDependencyError, UnbuiltProviderError,
-    UnclaimedOverrideError, UnregisteredModuleError, UnresolvedFactoryError,
+    AccessError, ContainerError, FactoryCycleError, FactoryFailedError, InitFailedError,
+    OverriddenDependencyError, UnclaimedOverrideError, UnresolvedFactoryError,
 };
 use crate::lifecycle::{HookFailure, HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
 use crate::millis::millis;
@@ -111,28 +110,13 @@ impl std::fmt::Display for BootStep {
     }
 }
 
-/// Fail the boot if any type was registered twice, in any two scopes,
-/// rather than let one registration silently replace the other.
-fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
-    match builder.duplicate_providers().first() {
-        Some(duplicate) => Err(duplicate.error().into()),
-        None => Ok(()),
-    }
-}
-
 /// Fail the boot when two import sites each declared a value for one type —
 /// neither may silently win on queue position.
 fn check_contested_declarations(builder: &ContainerBuilder) -> Result<()> {
-    if let Some(contested) = builder.contested().first() {
-        return Err(ContestedDeclarationError {
-            type_name: contested.type_name,
-            first: contested.first.clone(),
-            second: contested.second.clone(),
-            remedy: contested.remedy,
-        }
-        .into());
+    match builder.contested_refusal() {
+        Some(contested) => Err(contested.into()),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Fail the synchronous boot when a module queued an async factory: `App::new`
@@ -144,45 +128,12 @@ fn check_no_queued_factories(builder: &ContainerBuilder) -> Result<()> {
     Ok(())
 }
 
-/// What the register phase leaves the boot to refuse, on either path: what an
-/// import declared there twice first, then a module's own refusal — a late
-/// import's among them —, what a register queued that nothing drains, a module
-/// no register phase reached, then a type registered twice.
+/// What the register phase leaves the boot to refuse, on either path
+/// ([`ContainerBuilder::register_refusal`]).
 fn check_register_phase(builder: &mut ContainerBuilder) -> Result<()> {
-    // A module or dynamic import first reached in a `register` collects there,
-    // so it may declare there too; the contest survives every refusal's remedy
-    // (`.claude/decisions/boot-refusal-order.md`).
-    check_contested_declarations(builder)?;
-    if let Some(refusal) = builder.take_refusal() {
-        return Err(refusal);
-    }
-    if let Some(type_name) = builder.late_factory_name() {
-        return Err(LateFactoryError { type_name }.into());
-    }
-    if let Some(module) = builder.unregistered_module() {
-        return Err(UnregisteredModuleError { module }.into());
-    }
-    check_duplicate_providers(builder)
-}
-
-/// The providers `#[module]`s list that the register phase never built, in
-/// the order recorded. One whose keys are present by now is no longer missing.
-fn unbuilt(builder: &ContainerBuilder) -> impl Iterator<Item = &Stall> {
     builder
-        .stalls()
-        .iter()
-        .filter(|stall| !stall.provides.iter().any(|key| builder.contains(*key)))
-}
-
-/// The providers `#[module]`s built without an optional dependency the boot
-/// registered afterwards, each with the first such dependency.
-fn late_optionals(
-    builder: &ContainerBuilder,
-) -> impl Iterator<Item = (&AbsentOptional, (TypeId, &'static str))> {
-    builder.absent_optionals().iter().filter_map(|built| {
-        let late = built.absent.iter().find(|(key, _)| builder.contains(*key));
-        late.map(|late| (built, *late))
-    })
+        .register_refusal()
+        .map_err(ContainerError::into_anyhow)
 }
 
 /// Fail the boot on the first cycle among singletons that a provider never
@@ -197,11 +148,7 @@ fn check_singleton_cycles(
     scopes: &HashMap<TypeId, ProviderScope>,
     overridden: &HashSet<TypeId>,
 ) -> Result<()> {
-    let waiting: Vec<TypeId> = unbuilt(builder)
-        .filter_map(|stall| stall.provides.first().copied())
-        .chain(late_optionals(builder).map(|(built, _)| built.provider.0))
-        .collect();
-    match singleton_cycle(descriptors, roots, scopes, &waiting, overridden) {
+    match singleton_cycle(descriptors, roots, scopes, &builder.waiting(), overridden) {
         Some(cycle) => Err(cycle.into()),
         None => Ok(()),
     }
@@ -256,42 +203,6 @@ fn check_overridden_dependencies(
     Ok(())
 }
 
-/// Fail the boot on the first provider a `#[module]` lists and the register
-/// phase never built, naming why what it injects was absent.
-fn check_unbuilt_providers(
-    builder: &ContainerBuilder,
-    reached: &[&ModuleDescriptor],
-) -> Result<()> {
-    let Some(stall) = unbuilt(builder).next() else {
-        return Ok(());
-    };
-    let (module, module_name) = stall.module;
-    let (keys, missing): (Vec<TypeId>, _) = stall.missing.iter().copied().unzip();
-    Err(UnbuiltProviderError {
-        module: module_name,
-        provider: stall.provider,
-        missing,
-        cause: unbuilt_cause(reached, module, &keys),
-    }
-    .into())
-}
-
-/// Fail the boot on the first provider a `#[module]` built without an optional
-/// dependency the boot registered afterwards, naming why it was absent then.
-fn check_late_optionals(builder: &ContainerBuilder, reached: &[&ModuleDescriptor]) -> Result<()> {
-    let Some((built, (key, dependency))) = late_optionals(builder).next() else {
-        return Ok(());
-    };
-    let (module, module_name) = built.module;
-    Err(LateOptionalDependencyError {
-        module: module_name,
-        provider: built.provider.1,
-        dependency,
-        cause: unbuilt_cause(reached, module, &[key]),
-    }
-    .into())
-}
-
 impl App {
     /// Build the container from the root module synchronously.
     ///
@@ -301,8 +212,10 @@ impl App {
     /// [`MissingDependencyError`](crate::MissingDependencyError),
     /// [`DuplicateProviderError`](crate::DuplicateProviderError),
     /// [`ProviderCycleError`](crate::ProviderCycleError),
-    /// [`UnbuiltProviderError`] for a provider the register phase never built,
-    /// [`LateOptionalDependencyError`] for one built before an optional
+    /// [`UnbuiltProviderError`](crate::UnbuiltProviderError) for a provider the
+    /// register phase never built,
+    /// [`LateOptionalDependencyError`](crate::LateOptionalDependencyError) for
+    /// one built before an optional
     /// dependency the boot registered afterwards,
     /// [`UnresolvedFactoryError`] for a module that queued an async factory, a
     /// module's own refusal ([`ContainerBuilder::refuse`]), and
@@ -314,7 +227,7 @@ impl App {
         let lifecycle = booting();
         // `collect` runs first so a module queuing a factory is refused below.
         let root = std::any::type_name::<M>();
-        let builder = Container::builder()
+        let builder = ContainerBuilder::booting()
             .provide_arc(Arc::clone(&lifecycle))
             .enter_phase(Phase::Collect)
             .enter_root(root)
@@ -346,7 +259,7 @@ impl App {
             &global,
         )?;
         let installed = builder.install_record();
-        let container = sealed.provide(builder).build();
+        let container = sealed.provide(builder).freeze();
         crate::wiring::wire(&container)?;
         Ok(Self::assembled(container, lifecycle, installed))
     }
@@ -846,7 +759,7 @@ pub struct AppBuilder {
 impl AppBuilder {
     fn new() -> Self {
         Self {
-            builder: Container::builder(),
+            builder: ContainerBuilder::booting(),
             modules: Vec::new(),
             overrides: Vec::new(),
         }
@@ -1154,7 +1067,7 @@ async fn assemble(
 
     let sealed = seal(slot, &descriptors, &roots, &global)?;
     let installed = slot.install_record();
-    Ok((sealed.provide(std::mem::take(slot)).build(), installed))
+    Ok((sealed.provide(std::mem::take(slot)).freeze(), installed))
 }
 
 /// Close what a boot that never became an app opened, within the shutdown
@@ -1222,8 +1135,12 @@ fn seal(
     check_singleton_cycles(builder, descriptors, &ids, &scopes, &overridden)?;
     let reached = reachable_descriptors(descriptors, &ids);
     check_overridden_dependencies(builder, &reached, &overridden)?;
-    check_unbuilt_providers(builder, &reached)?;
-    check_late_optionals(builder, &reached)?;
+    if let Some(unbuilt) = builder.unbuilt_refusal(&reached) {
+        return Err(unbuilt.into());
+    }
+    if let Some(late) = builder.late_optional_refusal(&reached) {
+        return Err(late.into());
+    }
     check_budgets(builder, &reached, None)?;
     let order = provider_order(descriptors, &ids);
     let hook_order = HookOrder::new(dependency_order(descriptors, &ids, &overridden));
@@ -1334,6 +1251,7 @@ pub(crate) mod __private {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{ContestedDeclarationError, LateFactoryError, UnregisteredModuleError};
     use crate::module::{Collecting, Registering};
 
     struct Config(u32);

@@ -178,7 +178,8 @@ async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_eve
     let container = nest_rs_core::Container::builder()
         .provide(WsConfig::default())
         .import::<UnprovidedModule>()
-        .build();
+        .build()
+        .expect("the container builds");
     let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::from_config(
         &nest_rs_ws::nest_rs_http::HttpConfig::default(),
     )
@@ -219,7 +220,8 @@ async fn an_upgrade_guard_no_module_provides_fails_the_boot_naming_it_and_the_ga
     let container = nest_rs_core::Container::builder()
         .provide(WsConfig::default())
         .import::<UnprovidedUpgradeModule>()
-        .build();
+        .build()
+        .expect("the container builds");
     let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::from_config(
         &nest_rs_ws::nest_rs_http::HttpConfig::default(),
     )

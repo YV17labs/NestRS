@@ -447,7 +447,9 @@ mod tests {
             .provide(Recording::<Third>::new("host"))
             .provide(Recording::<Fourth>::new("method"));
         let builder = register_interceptor::<Recording<Second>>(builder, InterceptorStage::Handler);
-        let container = app_lists(builder, vec![interceptor::<Recording<First>>()]).build();
+        let container = app_lists(builder, vec![interceptor::<Recording<First>>()])
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SEND,
@@ -479,7 +481,9 @@ mod tests {
             .provide(Recording::<Third>::new("early module").with_priority(-5));
         let builder = register_interceptor::<Recording<Second>>(builder, InterceptorStage::Handler);
         let builder = register_interceptor::<Recording<Third>>(builder, InterceptorStage::Handler);
-        let container = app_lists(builder, vec![interceptor::<Recording<First>>()]).build();
+        let container = app_lists(builder, vec![interceptor::<Recording<First>>()])
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SEND,
@@ -499,8 +503,9 @@ mod tests {
             .provide(Recording::<Third>::new("third"));
         let builder = register_interceptor::<Recording<First>>(builder, InterceptorStage::Unit);
         let builder = register_interceptor::<Recording<Second>>(builder, InterceptorStage::Unit);
-        let container =
-            register_interceptor::<Recording<Third>>(builder, InterceptorStage::Unit).build();
+        let container = register_interceptor::<Recording<Third>>(builder, InterceptorStage::Unit)
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SEND,
@@ -527,7 +532,8 @@ mod tests {
                 interceptor::<Recording<Third>>(),
             ],
         )
-        .build();
+        .build()
+        .expect("the container builds");
         let layers = || SiteLayers {
             method_interceptors: vec![interceptor::<Recording<Third>>()],
             ..SiteLayers::default()
@@ -559,7 +565,9 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let builder = ContainerBuilder::default().provide(Recording::<First>::new("timing"));
         let builder = register_interceptor::<Recording<First>>(builder, InterceptorStage::Unit);
-        let container = app_lists(builder, vec![interceptor::<Recording<First>>()]).build();
+        let container = app_lists(builder, vec![interceptor::<Recording<First>>()])
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SEND,
@@ -603,7 +611,8 @@ mod tests {
                 interceptor::<Recording<First>>(),
             ],
         )
-        .build();
+        .build()
+        .expect("the container builds");
         let chains = composed(
             &container,
             &SEND,
@@ -641,7 +650,8 @@ mod tests {
             .provide(GlobalExceptionFilters(vec![
                 exception_filter::<Declines<First>>().0,
             ]))
-            .build();
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SEND,
@@ -671,6 +681,7 @@ mod tests {
                 exception_filter::<Declines<Third>>().0,
             ]))
             .build()
+            .expect("the container builds")
     }
 
     #[test]
@@ -777,7 +788,8 @@ mod tests {
 
         let provided = ContainerBuilder::default()
             .provide(Recording::<Fourth>::new("now provided"))
-            .build();
+            .build()
+            .expect("the container builds");
         let chains = UNRESOLVED
             .chains(&provided)
             .unwrap_or_else(|refused| panic!("a container providing it composes: {refused}"));
@@ -805,6 +817,7 @@ mod tests {
         ContainerBuilder::default()
             .provide(Recording::<First>::new("cached"))
             .build()
+            .expect("the container builds")
     }
 
     #[test]

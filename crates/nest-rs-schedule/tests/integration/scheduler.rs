@@ -92,7 +92,8 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler
@@ -169,7 +170,8 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler
@@ -237,7 +239,8 @@ async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancell
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -333,7 +336,8 @@ async fn invalid_cron_expression_fails_configure() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let err = Scheduler::new()
         .configure(&container)
@@ -367,7 +371,8 @@ async fn a_cron_jobs_boot_line_names_its_zone_and_the_database_release_it_read()
     let container = crate::hermetic()
         .attach_meta::<ZonedHost, CronJobMeta>(cron("ZonedHost", Some("america/vancouver")))
         .attach_meta::<UtcHost, CronJobMeta>(cron("UtcHost", None))
-        .build();
+        .build()
+        .expect("the container builds");
     let logs = nest_rs_testing::LogCapture::install();
 
     Scheduler::new()
@@ -469,7 +474,8 @@ async fn a_tick_runs_as_a_unit_of_work_of_the_bound_binding() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler
@@ -532,7 +538,8 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler
@@ -609,7 +616,8 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler
@@ -674,7 +682,8 @@ async fn a_failed_tick_says_a_decode_failure_without_its_value() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler
@@ -731,7 +740,8 @@ async fn a_tick_its_unit_could_not_settle_is_reported_as_failed() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler
@@ -802,7 +812,8 @@ async fn a_tick_past_its_timeout_is_cut_reported_and_the_schedule_goes_on() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler
@@ -871,7 +882,8 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let mut scheduler = Scheduler::new();
     scheduler.configure(&container).await.expect(
@@ -985,7 +997,8 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
                 replicas: Replicas::One,
                 key: None,
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let mut scheduler = Scheduler::new();
         scheduler
             .configure(&container)
@@ -1078,7 +1091,8 @@ async fn a_run_outlasting_its_period_leaves_the_next_occurrences_to_its_peers() 
                 replicas: Replicas::One,
                 key: None,
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let mut scheduler = Scheduler::new();
         scheduler
             .configure(&container)
@@ -1164,7 +1178,8 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -1207,7 +1222,8 @@ async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let err = Scheduler::new()
         .configure(&container)
@@ -1239,7 +1255,8 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let err = Scheduler::new()
         .configure(&container)
@@ -1266,7 +1283,8 @@ async fn a_zero_interval_fails_the_boot() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
 
     let err = Scheduler::new()
         .configure(&container)
@@ -1294,7 +1312,8 @@ async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
                 replicas,
                 key: None,
             })
-            .build();
+            .build()
+            .expect("the container builds");
 
         let err = Scheduler::new()
             .configure(&container)
@@ -1364,7 +1383,8 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -1475,7 +1495,8 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -1560,7 +1581,8 @@ async fn two_jobs_sharing_one_name_fail_the_boot_naming_both() {
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<FirstTasks, CronJobMeta>(meta())
         .attach_meta::<SecondTasks, CronJobMeta>(meta())
-        .build();
+        .build()
+        .expect("the container builds");
     let refusal = Scheduler::new()
         .configure(&container)
         .await
@@ -1594,7 +1616,8 @@ async fn boot_pinning(key: &'static str, replicas: Replicas) -> Result<(), Strin
             replicas,
             key: Some(key),
         })
-        .build();
+        .build()
+        .expect("the container builds");
     Scheduler::new()
         .configure(&container)
         .await
@@ -1687,7 +1710,8 @@ async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
             replicas: Replicas::One,
             key: Some(pinned),
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let refusal = Scheduler::new()
         .configure(&container)
         .await
@@ -1728,7 +1752,8 @@ async fn a_job_firing_once_names_its_identity_at_boot() {
             Some("billing::close"),
         ))
         .attach_meta::<EachTasks, CronJobMeta>(meta("EachTasks", Replicas::Each, None))
-        .build();
+        .build()
+        .expect("the container builds");
     Scheduler::new()
         .configure(&container)
         .await
@@ -1795,7 +1820,8 @@ async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -1863,7 +1889,8 @@ async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_tha
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -1975,7 +2002,8 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2054,7 +2082,8 @@ async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler.configure(&container).await.expect("configures");
     let cancel = CancellationToken::new();
@@ -2123,7 +2152,8 @@ async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler.configure(&container).await.expect("configures");
     let cancel = CancellationToken::new();
@@ -2225,7 +2255,8 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2283,7 +2314,8 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2377,7 +2409,8 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2489,7 +2522,8 @@ async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2555,7 +2589,8 @@ async fn a_run_panicking_before_its_future_keeps_its_schedule() {
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2631,7 +2666,8 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2685,7 +2721,8 @@ async fn serve_until_the_schedule_panicked(logs: &LogCapture) {
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2783,7 +2820,8 @@ async fn shut_down_while_a_claim_hangs(
             replicas: Replicas::One,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)
@@ -2965,7 +3003,8 @@ async fn one_timed_tick(run: RunFn, unit: Settling) -> Vec<nest_rs_testing::Capt
             replicas: Replicas::Each,
             key: None,
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut scheduler = Scheduler::new();
     scheduler
         .configure(&container)

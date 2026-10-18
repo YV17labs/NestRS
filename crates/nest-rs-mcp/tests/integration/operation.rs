@@ -501,7 +501,9 @@ async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_say
 
     // Built by hand, so the access graph does not refuse first; the request
     // scope stands in for the edge that installs it.
-    let container = nest_rs_core::Container::builder().build();
+    let container = nest_rs_core::Container::builder()
+        .build()
+        .expect("the container builds");
     let inner = Arc::new(
         nest_rs_mcp::__private::endpoint(nest_rs_mcp::__private::McpMount::new(), || OrphanTool)
             .into_endpoint()

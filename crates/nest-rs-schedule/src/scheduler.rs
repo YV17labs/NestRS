@@ -1586,7 +1586,7 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::new(PanicsAnswering)),
         };
@@ -1654,7 +1654,7 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::new(Granting)),
         };
@@ -1828,7 +1828,7 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::new(GrantingAfterAStall)),
         };
@@ -1959,7 +1959,7 @@ mod tests {
         }
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::new(PanicsWhenCalled)),
         };
@@ -2023,7 +2023,7 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
@@ -2075,7 +2075,7 @@ mod tests {
     async fn an_overrun_question_the_lock_never_answers_is_abandoned_and_counted_unanswered() {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
@@ -2125,7 +2125,7 @@ mod tests {
             claims: std::sync::atomic::AtomicUsize::new(0),
         });
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::clone(&lock) as Arc<dyn OccurrenceLock>),
         };
@@ -2206,7 +2206,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let shutdown = CancellationToken::new();
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::new(GrantingAtShutdown {
                 shutdown: shutdown.clone(),
@@ -2254,7 +2254,7 @@ mod tests {
     async fn overrun_questions_in_flight_at_shutdown_are_abandoned_at_once() {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build(),
+            container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),

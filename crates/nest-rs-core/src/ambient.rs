@@ -488,7 +488,9 @@ mod tests {
     #[tokio::test]
     async fn the_request_scope_crosses_into_a_body_a_task_and_a_commit_alone() {
         let scope = Arc::new(crate::RequestScope::new(
-            crate::Container::builder().build(),
+            crate::Container::builder()
+                .build()
+                .expect("the container builds"),
         ));
         for into in EVERY {
             let carried =
@@ -530,7 +532,9 @@ mod tests {
         let request_trace = request.trace_id();
         let request_span = request.span_id();
         let scope = Arc::new(crate::RequestScope::new(
-            crate::Container::builder().build(),
+            crate::Container::builder()
+                .build()
+                .expect("the container builds"),
         ));
         let batch = with_request_scope(Some(Arc::clone(&scope)), request.clone(), async {
             with_ambient(Arc::new(Handle::Transaction), async {

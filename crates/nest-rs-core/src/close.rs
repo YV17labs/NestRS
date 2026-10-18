@@ -200,7 +200,7 @@ mod tests {
             ],
             HashSet::from([TypeId::of::<Seeded>()]),
         );
-        let container = builder.build();
+        let container = builder.build().expect("the container builds");
 
         close_all(
             &container,
@@ -247,7 +247,8 @@ mod tests {
             .provide_close::<Seeded, _, _>(|_| async {
                 Err(anyhow::anyhow!("the server refused the goodbye"))
             })
-            .build();
+            .build()
+            .expect("the container builds");
 
         close_all(
             &container,

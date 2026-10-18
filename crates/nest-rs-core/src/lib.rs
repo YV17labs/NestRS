@@ -162,12 +162,12 @@ pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
-    AccessGraphError, BootInterruptedError, BudgetPastNetError, ContestedDeclarationError,
-    DecodeError, DuplicateProviderError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    LateFactoryError, LateOptionalDependencyError, MissingDependencyError,
-    OverriddenDependencyError, ProviderCycleError, ScopeViolationError, UnboundedTransportError,
-    UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError,
-    UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
+    AccessGraphError, BootInterruptedError, BudgetPastNetError, ContainerError,
+    ContestedDeclarationError, DecodeError, DuplicateProviderError, FactoryCycleError,
+    FactoryFailedError, InitFailedError, LateFactoryError, LateOptionalDependencyError,
+    MissingDependencyError, OverriddenDependencyError, ProviderCycleError, ScopeViolationError,
+    UnboundedTransportError, UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError,
+    UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};

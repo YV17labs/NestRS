@@ -269,7 +269,9 @@ mod tests {
                 interceptor::<Recording<AppListed>>().0,
             ]));
         let builder = register_interceptor::<Recording<UnitStage>>(builder, InterceptorStage::Unit);
-        register_interceptor::<Recording<ModuleBrought>>(builder, InterceptorStage::Handler).build()
+        register_interceptor::<Recording<ModuleBrought>>(builder, InterceptorStage::Handler)
+            .build()
+            .expect("the container builds")
     }
 
     fn bound_on_the_host_and_method() -> SiteLayers {
@@ -443,7 +445,8 @@ mod tests {
         let container = ContainerBuilder::default()
             .provide(Observing)
             .provide(Swallowing)
-            .build();
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SiteDeclaration {
@@ -519,7 +522,10 @@ mod tests {
 
     #[tokio::test]
     async fn pending_attachments_are_visible_inside_next_only() {
-        let container = ContainerBuilder::default().provide(Attaching).build();
+        let container = ContainerBuilder::default()
+            .provide(Attaching)
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SiteDeclaration {
@@ -598,7 +604,9 @@ mod tests {
         class_gate: Option<ClassGate>,
     ) -> UnitChains {
         let builder = ContainerBuilder::default().provide(Outside);
-        let container = register_interceptor::<Outside>(builder, InterceptorStage::Unit).build();
+        let container = register_interceptor::<Outside>(builder, InterceptorStage::Unit)
+            .build()
+            .expect("the container builds");
         composed(
             &container,
             &SiteDeclaration {
@@ -852,7 +860,8 @@ mod tests {
             .provide(GlobalExceptionFilters(vec![
                 exception_filter::<Declining>().0,
             ]))
-            .build();
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SiteDeclaration {
@@ -919,7 +928,8 @@ mod tests {
             .provide(GlobalExceptionFilters(vec![
                 exception_filter::<Answering>().0,
             ]))
-            .build();
+            .build()
+            .expect("the container builds");
         let chains = composed(
             &container,
             &SiteDeclaration {

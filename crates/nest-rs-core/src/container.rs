@@ -13,11 +13,16 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
 use crate::RequestScope;
+use crate::access::{
+    ModuleDescriptor, reachable_descriptors, scoped_cycle, singleton_cycle, unbuilt_cause,
+};
 use crate::close::InstallRecord;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
+use crate::error::FactoryKind;
 use crate::factory_inputs::FactoryInputs;
 use crate::layer_chain::__private::SiteChains;
 use crate::module::{Collecting, Module, Registering};
+use crate::net::check_budgets;
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
@@ -137,6 +142,9 @@ impl std::fmt::Display for ImportSite {
 pub(crate) enum Origin {
     /// Registered before any root is entered: a value `App::builder()` seeded.
     Seed,
+    /// Registered on a container built by hand outside any import a
+    /// `#[module]` entered: a call on the builder, or a module it imported.
+    Hand,
     /// Registered while this import's phase ran.
     Import(ImportSite),
     /// A factory's output, queued by this import — `None` at the app root.
@@ -149,6 +157,9 @@ impl std::fmt::Display for Origin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Seed => f.write_str("a seed (`App::builder().provide…`)"),
+            Self::Hand => {
+                f.write_str("a call on a container built by hand (`Container::builder()…`)")
+            }
             Self::Import(site) => site.fmt(f),
             Self::Factory(Some(site)) => write!(f, "a factory queued by {site}"),
             Self::Factory(None) => {
@@ -287,7 +298,8 @@ impl Container {
     /// Start an empty [`ContainerBuilder`] to register providers into.
     ///
     /// It drains no factory, so a module whose `collect` queues one is refused
-    /// there as [`ContainerBuilder::import`] says;
+    /// there as [`ContainerBuilder::import`] says, and
+    /// [`ContainerBuilder::build`] returns the refusal;
     /// [`App::builder`](crate::App::builder) is the boot that drains them.
     pub fn builder() -> ContainerBuilder {
         ContainerBuilder::default()
@@ -416,9 +428,12 @@ pub struct ContainerBuilder {
     /// Each transport type attached, with the import that attached it: an app
     /// runs one transport of each type.
     transports: HashMap<TypeId, String>,
-    /// The first error a `register` refused the boot with — see
-    /// [`refuse`](Self::refuse).
-    refusal: Option<anyhow::Error>,
+    /// The first refusal filed on the builder: a `register`'s own
+    /// ([`refuse`](Self::refuse)), or the kernel's for a module it left out.
+    refusal: Option<crate::ContainerError>,
+    /// Whether a boot drains this builder's factories and reads its refusals:
+    /// `false` for a container built by hand.
+    booting: bool,
     /// The imports whose phase is running, innermost last — what a declaration
     /// made now is named by.
     import_sites: Vec<ImportSite>,
@@ -431,7 +446,8 @@ pub struct ContainerBuilder {
     /// ([`install`](Self::install)): the registrations it makes are that
     /// factory's.
     installing: Option<Origin>,
-    /// Second registrations of one type ([`duplicate_providers`](Self::duplicate_providers)).
+    /// Second registrations of one type, refused once the register phase
+    /// ends.
     duplicates: Vec<DuplicateProvider>,
     /// Dynamic imports (`Foo::for_root(opts)`) the collect phase constructed,
     /// keyed by import site so the register phase consumes the same value.
@@ -550,6 +566,15 @@ impl DuplicateProvider {
 }
 
 impl ContainerBuilder {
+    /// A builder a boot drains and reads — [`App::new`](crate::App::new)'s and
+    /// [`AppBuilder`](crate::AppBuilder)'s.
+    pub(crate) fn booting() -> Self {
+        Self {
+            booting: true,
+            ..Self::default()
+        }
+    }
+
     /// Register a value, wrapped in `Arc` internally.
     ///
     /// A type has one provider whatever its scope: a second registration of
@@ -680,12 +705,14 @@ impl ContainerBuilder {
     }
 
     /// What is registering now: the factory being installed, else the import
-    /// whose phase runs, else — before any root is entered — a seed.
+    /// whose phase runs, else — before any root is entered — a seed, or a call
+    /// on a container built by hand.
     fn registration_origin(&self) -> Origin {
         match (self.installing, self.import_sites.last()) {
             (Some(factory), _) => factory,
             (None, Some(site)) => Origin::Import(*site),
-            (None, None) => Origin::Seed,
+            (None, None) if self.booting => Origin::Seed,
+            (None, None) => Origin::Hand,
         }
     }
 
@@ -702,11 +729,6 @@ impl ContainerBuilder {
             .chain(self.overrides.iter().map(|o| o.key))
             .collect();
         InstallRecord::new(&self.installed, handed_in)
-    }
-
-    /// Second registrations of one type, for the boot to refuse.
-    pub(crate) fn duplicate_providers(&self) -> &[DuplicateProvider] {
-        &self.duplicates
     }
 
     /// Run `steps` — a factory's output and the trait objects bound off it —
@@ -952,19 +974,40 @@ impl ContainerBuilder {
     }
 
     /// Refuse the boot from a `register`, which has no `Result` to return: the
-    /// boot fails with `error` once the register phase ends. The first refusal
-    /// is the one reported.
-    pub fn refuse(mut self, error: impl Into<anyhow::Error>) -> Self {
+    /// boot fails with `error` once the register phase ends, and a container
+    /// built by hand at [`build`](Self::build). The first refusal is the one
+    /// reported.
+    pub fn refuse(self, error: impl Into<anyhow::Error>) -> Self {
+        self.file(crate::ContainerError::Refused(error.into()))
+    }
+
+    /// File `refusal` unless one is filed already: the kernel's own, typed.
+    fn file(mut self, refusal: crate::ContainerError) -> Self {
         if self.refusal.is_none() {
-            self.refusal = Some(error.into());
+            self.refusal = Some(refusal);
         }
         self
     }
 
-    /// The refusal [`refuse`](Self::refuse) filed, taken by the boot as the
-    /// register phase ends.
-    pub(crate) fn take_refusal(&mut self) -> Option<anyhow::Error> {
+    /// The refusal filed first, taken as the register phase ends.
+    fn take_refusal(&mut self) -> Option<crate::ContainerError> {
         self.refusal.take()
+    }
+
+    /// The refusal of `queued`, which nothing drains, in the words of this
+    /// builder's remedy.
+    fn late_factory(&self, queued: &QueuedFactory) -> crate::LateFactoryError {
+        if self.booting {
+            return crate::LateFactoryError::in_boot(queued.name);
+        }
+        let kind = if queued.declared {
+            FactoryKind::Declaration
+        } else if queued.provides.len() > 1 {
+            FactoryKind::Binding
+        } else {
+            FactoryKind::Default
+        };
+        crate::LateFactoryError::by_hand(queued.name, kind)
     }
 
     /// Whether a provider for `id` has already been registered.
@@ -992,7 +1035,7 @@ impl ContainerBuilder {
     /// queues one registers there only over defaults whose types are already
     /// provided — a bare import's `#[config]`, seeded with
     /// [`provide`](Self::provide) — and never over a declaration, a pinned
-    /// `for_root` value.
+    /// `for_root` value; [`build`](Self::build) returns the refusal.
     #[must_use]
     pub fn import<M: Module>(mut self) -> Self {
         let id = TypeId::of::<M>();
@@ -1004,13 +1047,13 @@ impl ContainerBuilder {
             self = M::collect(self, Collecting::new());
             self.phase = phase;
             if phase == Phase::Register
-                && let Some(type_name) = self.late_factory_queued_from(collected_from)
+                && let Some(refusal) = self.late_factory_queued_from(collected_from)
             {
                 // Marked registered, so no later import runs a `register`
                 // whose factory never ran; refused here, since a later
                 // `register` providing the type would hide the late factory.
                 self.registered_modules.insert(id);
-                return self.refuse(crate::LateFactoryError { type_name });
+                return self.file(refusal.into());
             }
         }
         if self.phase == Phase::Register && self.registered_modules.insert(id) {
@@ -1274,14 +1317,6 @@ impl ContainerBuilder {
         self
     }
 
-    /// Types declared, or transport types attached, by more than one import
-    /// site, each naming both sites. Checked after the collect phase, before
-    /// any factory runs, and again after the register phase, on either boot
-    /// path.
-    pub(crate) fn contested(&self) -> &[crate::ContestedDeclarationError] {
-        &self.contested
-    }
-
     /// The innermost import whose phase is running, as a declaration names its
     /// site.
     fn declaring_site(&self) -> String {
@@ -1355,44 +1390,32 @@ impl ContainerBuilder {
         self.factories.iter().map(|queued| queued.name).collect()
     }
 
-    /// The first type a factory still queued would provide and nothing does,
-    /// read as the register phase ends. A declaration always counts: the value
-    /// present is not the one it chose.
-    pub(crate) fn late_factory_name(&self) -> Option<&'static str> {
+    /// The refusal of the first factory still queued that would provide a type
+    /// nothing does, read as the register phase ends. A declaration always
+    /// counts: the value present is not the one it chose.
+    fn late_factory_refusal(&self) -> Option<crate::LateFactoryError> {
         self.late_factory_queued_from(0)
     }
 
-    /// [`late_factory_name`](Self::late_factory_name) among the factories
-    /// queued from the `seq`-th on — what one late `collect` queued.
-    fn late_factory_queued_from(&self, seq: u64) -> Option<&'static str> {
+    /// [`late_factory_refusal`](Self::late_factory_refusal) among the
+    /// factories queued from the `seq`-th on — what one late `collect` queued.
+    fn late_factory_queued_from(&self, seq: u64) -> Option<crate::LateFactoryError> {
         self.factories
             .iter()
             .filter(|queued| queued.seq >= seq)
             .find(|queued| {
                 queued.declared || queued.provides.iter().any(|key| !self.contains(*key))
             })
-            .map(|queued| queued.name)
+            .map(|queued| self.late_factory(queued))
     }
 
     /// The first module collected that no register phase reached — imported in
     /// a collect alone — read as the register phase ends.
-    pub(crate) fn unregistered_module(&self) -> Option<&'static str> {
+    fn unregistered_module(&self) -> Option<&'static str> {
         self.collected_order
             .iter()
             .find(|(id, _)| !self.registered_modules.contains(id))
             .map(|&(_, name)| name)
-    }
-
-    /// The providers a `#[module]` could not build, root causes first —
-    /// [`__private::record_stall`].
-    pub(crate) fn stalls(&self) -> &[Stall] {
-        &self.stalls
-    }
-
-    /// The providers a `#[module]` built without some optional dependency —
-    /// [`__private::record_absent_optional`].
-    pub(crate) fn absent_optionals(&self) -> &[AbsentOptional] {
-        &self.absent_optionals
     }
 
     /// Every singleton `TypeId` registered so far — after the factory phase,
@@ -1444,14 +1467,193 @@ impl ContainerBuilder {
             .collect()
     }
 
-    /// Freeze the accumulated registrations into the immutable [`Container`].
+    /// Freeze the accumulated registrations into the immutable [`Container`],
+    /// or refuse them as the boot would.
     ///
-    /// A refusal filed on the builder — [`refuse`](Self::refuse), an
-    /// [`import`](Self::import)'s `LateFactoryError` — is read by the boot
-    /// before this, as [`App::builder`](crate::App::builder) and
-    /// [`App::new`](crate::App::new) do; this freezes what registered without
-    /// the refused module.
-    pub fn build(self) -> Container {
+    /// # Errors
+    ///
+    /// The first refusal the builder holds, in the boot's order
+    /// ([`ContainerError`](crate::ContainerError)): a declaration contested,
+    /// what a `register` filed with [`refuse`](Self::refuse), a factory
+    /// nothing drains — a module whose `collect` queued one is left out by
+    /// [`import`](Self::import) —, a module collected alone, a type registered
+    /// twice, then a cycle among request-scoped and transient providers, one
+    /// among singletons of modules importing each other, a provider a module
+    /// lists that was never built, one built before an optional dependency
+    /// registered after it, and a budget at or past a net reaching it.
+    ///
+    /// ```
+    /// use nest_rs_core::{Container, ContainerError};
+    ///
+    /// struct Counter(u32);
+    ///
+    /// let refused = Container::builder()
+    ///     .provide(Counter(1))
+    ///     .provide(Counter(2))
+    ///     .build();
+    /// assert!(matches!(refused, Err(ContainerError::DuplicateProvider(_))));
+    /// ```
+    pub fn build(mut self) -> Result<Container, crate::ContainerError> {
+        self.register_refusal()?;
+        self.seal_refusal()?;
+        Ok(self.freeze())
+    }
+
+    /// What the register phase leaves to refuse, on every path, in the boot's
+    /// order: a declaration contested first, then the refusal filed — a late
+    /// import's among them —, a factory still queued that nothing drains, a
+    /// module no register phase reached, then a type registered twice.
+    pub(crate) fn register_refusal(&mut self) -> Result<(), crate::ContainerError> {
+        // A module or dynamic import first reached in a `register` collects there,
+        // so it may declare there too; the contest survives every refusal's remedy
+        // (`.claude/decisions/boot-refusal-order.md`).
+        if let Some(contested) = self.contested_refusal() {
+            return Err(contested.into());
+        }
+        if let Some(refusal) = self.take_refusal() {
+            return Err(refusal);
+        }
+        if let Some(late) = self.late_factory_refusal() {
+            return Err(late.into());
+        }
+        if let Some(module) = self.unregistered_module() {
+            return Err(crate::UnregisteredModuleError { module }.into());
+        }
+        match self.duplicates.first() {
+            Some(duplicate) => Err(duplicate.error().into()),
+            None => Ok(()),
+        }
+    }
+
+    /// The first declaration contested, as the boot refuses it.
+    pub(crate) fn contested_refusal(&self) -> Option<crate::ContestedDeclarationError> {
+        self.contested
+            .first()
+            .map(|contested| crate::ContestedDeclarationError {
+                type_name: contested.type_name,
+                first: contested.first.clone(),
+                second: contested.second.clone(),
+                remedy: contested.remedy,
+            })
+    }
+
+    /// What the boot's seal would read off a container built by hand, which
+    /// has no root, its modules standing for the roots: a cycle among
+    /// request-scoped and transient providers first, then one among singletons
+    /// of modules importing each other, a provider never built, one built
+    /// before an optional dependency registered after it, and a budget at or
+    /// past a net reaching it.
+    fn seal_refusal(&self) -> Result<(), crate::ContainerError> {
+        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+        let roots: Vec<TypeId> = self.collected_order.iter().map(|(id, _)| *id).collect();
+        let overridden: HashSet<TypeId> = self
+            .overridden_providers
+            .iter()
+            .map(|o| o.provider.0)
+            .collect();
+        let scopes = self.dynamic_scopes();
+        if !scopes.is_empty()
+            && let Some(cycle) = scoped_cycle(&descriptors, &roots, &scopes, &overridden)
+        {
+            return Err(cycle.into());
+        }
+        let waiting = self.waiting();
+        if !waiting.is_empty()
+            && let Some(cycle) =
+                singleton_cycle(&descriptors, &roots, &scopes, &waiting, &overridden)
+        {
+            return Err(cycle.into());
+        }
+        let reached = reachable_descriptors(&descriptors, &roots);
+        if let Some(unbuilt) = self.unbuilt_refusal(&reached) {
+            return Err(unbuilt.into());
+        }
+        if let Some(late) = self.late_optional_refusal(&reached) {
+            return Err(late.into());
+        }
+        check_budgets(self, &reached, None).map_err(crate::ContainerError::from)
+    }
+
+    /// The providers a cycle among singletons may hold back: each one a
+    /// `#[module]` never built, then each built without an optional dependency
+    /// registered after it.
+    pub(crate) fn waiting(&self) -> Vec<TypeId> {
+        self.unbuilt()
+            .filter_map(|stall| stall.provides.first().copied())
+            .chain(self.late_optionals().map(|(built, _)| built.provider.0))
+            .collect()
+    }
+
+    /// The first provider a `#[module]` lists that the register phase never
+    /// built, naming why what it injects was absent.
+    pub(crate) fn unbuilt_refusal(
+        &self,
+        reached: &[&ModuleDescriptor],
+    ) -> Option<crate::UnbuiltProviderError> {
+        let stall = self.unbuilt().next()?;
+        let (module, module_name) = stall.module;
+        let (keys, missing): (Vec<TypeId>, _) = stall.missing.iter().copied().unzip();
+        Some(crate::UnbuiltProviderError {
+            module: module_name,
+            provider: stall.provider,
+            missing,
+            cause: self.absence_cause(reached, module, &keys),
+        })
+    }
+
+    /// The first provider a `#[module]` built without an optional dependency
+    /// registered afterwards, naming why it was absent then.
+    pub(crate) fn late_optional_refusal(
+        &self,
+        reached: &[&ModuleDescriptor],
+    ) -> Option<crate::LateOptionalDependencyError> {
+        let (built, (key, dependency)) = self.late_optionals().next()?;
+        Some(crate::LateOptionalDependencyError {
+            module: built.module.1,
+            provider: built.provider.1,
+            dependency,
+            cause: self.absence_cause(reached, built.module.0, &[key]),
+        })
+    }
+
+    /// Why `keys` were absent when `module` built its providers. On a container
+    /// built by hand, one registered later was registered after the call that
+    /// imported `module`.
+    fn absence_cause(
+        &self,
+        reached: &[&ModuleDescriptor],
+        module: TypeId,
+        keys: &[TypeId],
+    ) -> crate::UnbuiltCause {
+        match unbuilt_cause(reached, module, keys) {
+            crate::UnbuiltCause::RegisteredLater if !self.booting => {
+                crate::UnbuiltCause::ImportedFirst
+            }
+            cause => cause,
+        }
+    }
+
+    /// The providers `#[module]`s list that the register phase never built, in
+    /// the order recorded. One whose keys are present by now is no longer
+    /// missing.
+    fn unbuilt(&self) -> impl Iterator<Item = &Stall> {
+        self.stalls
+            .iter()
+            .filter(|stall| !stall.provides.iter().any(|key| self.contains(*key)))
+    }
+
+    /// The providers `#[module]`s built without an optional dependency
+    /// registered afterwards, each with the first such dependency.
+    fn late_optionals(&self) -> impl Iterator<Item = (&AbsentOptional, (TypeId, &'static str))> {
+        self.absent_optionals.iter().filter_map(|built| {
+            let late = built.absent.iter().find(|(key, _)| self.contains(*key));
+            late.map(|late| (built, *late))
+        })
+    }
+
+    /// Freeze the registrations into the immutable [`Container`], once the boot
+    /// has read every refusal.
+    pub(crate) fn freeze(self) -> Container {
         Container {
             id: next_container_id(),
             providers: Arc::new(self.providers),
@@ -1693,11 +1895,14 @@ pub(crate) mod __private {
             .collect();
         let cyclic = waiting_in_a_cycle(&stalled, &waits, &pending);
         if let Some(chain) = cycle_chain(&stalled, &waits, &cyclic) {
-            builder = builder.refuse(crate::ProviderCycleError {
-                module: module_name,
-                scope: crate::ProviderScope::Singleton,
-                chain,
-            });
+            builder = builder.file(
+                crate::ProviderCycleError {
+                    module: module_name,
+                    scope: crate::ProviderScope::Singleton,
+                    chain,
+                }
+                .into(),
+            );
         }
         let waits_outside = |i: &usize| waits[*i].iter().any(|(id, _)| !pending.contains(id));
         let off_cycle = (0..stalled.len()).filter(|i| !cyclic[*i]);
@@ -1805,7 +2010,10 @@ mod tests {
 
     #[test]
     fn resolves_a_provided_value() {
-        let container = Container::builder().provide(Greeter("hi")).build();
+        let container = Container::builder()
+            .provide(Greeter("hi"))
+            .build()
+            .expect("the container builds");
         let resolved: Arc<Greeter> = container.get().expect("greeter is registered");
         assert_eq!(resolved.0, "hi");
     }
@@ -1815,21 +2023,22 @@ mod tests {
         let container = Container::builder()
             .provide(Greeter("hi"))
             .provide(Counter(42))
-            .build();
+            .build()
+            .expect("the container builds");
         assert_eq!(container.get::<Greeter>().unwrap().0, "hi");
         assert_eq!(container.get::<Counter>().unwrap().0, 42);
     }
 
     #[test]
     fn missing_type_returns_none() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         assert!(container.get::<Greeter>().is_none());
     }
 
     /// The sentence the first duplicate `builder` kept would fail the boot with.
     fn first_duplicate(builder: &ContainerBuilder) -> crate::DuplicateProviderError {
         builder
-            .duplicate_providers()
+            .duplicates
             .first()
             .expect("a duplicate is kept")
             .error()
@@ -1845,7 +2054,7 @@ mod tests {
 
     #[test]
     fn a_seed_and_a_modules_registration_of_one_type_name_the_seed() {
-        let builder = Container::builder().provide(Counter(1));
+        let builder = ContainerBuilder::booting().provide(Counter(1));
         let builder =
             __private::enter_import(builder, "Root", 0, "CountersModule").provide(Counter(2));
         let sentence = first_duplicate(&builder).to_string();
@@ -1861,14 +2070,20 @@ mod tests {
     #[test]
     fn provide_arc_preserves_the_same_instance() {
         let shared = Arc::new(Counter(7));
-        let container = Container::builder().provide_arc(shared.clone()).build();
+        let container = Container::builder()
+            .provide_arc(shared.clone())
+            .build()
+            .expect("the container builds");
         let resolved: Arc<Counter> = container.get().unwrap();
         assert!(Arc::ptr_eq(&shared, &resolved));
     }
 
     #[test]
     fn container_is_cheap_to_clone() {
-        let container = Container::builder().provide(Greeter("hi")).build();
+        let container = Container::builder()
+            .provide(Greeter("hi"))
+            .build()
+            .expect("the container builds");
         let cloned = container.clone();
         assert_eq!(cloned.get::<Greeter>().unwrap().0, "hi");
     }
@@ -1892,7 +2107,10 @@ mod tests {
     #[test]
     fn provide_dyn_then_get_dyn_returns_the_impl() {
         let polite: Arc<dyn Hello + Send + Sync> = Arc::new(Polite);
-        let container = Container::builder().provide_dyn(polite).build();
+        let container = Container::builder()
+            .provide_dyn(polite)
+            .build()
+            .expect("the container builds");
 
         let resolved: Arc<dyn Hello + Send + Sync> =
             container.get_dyn().expect("dyn Hello provider");
@@ -1905,7 +2123,7 @@ mod tests {
         let curt: Arc<dyn Hello + Send + Sync> = Arc::new(Curt);
         let builder = Container::builder().provide_dyn(polite).provide_dyn(curt);
         let names: Vec<&str> = builder
-            .duplicate_providers()
+            .duplicates
             .iter()
             .map(|duplicate| duplicate.type_name)
             .collect();
@@ -1926,7 +2144,8 @@ mod tests {
             .attach_meta::<Host, _>(Marker("first"))
             .attach_meta::<Host, _>(Marker("second"))
             .attach_meta::<Host, _>(Marker("third"))
-            .build();
+            .build()
+            .expect("the container builds");
         let entries = container
             .metadata_entries(TypeId::of::<Marker>())
             .expect("Marker metadata present");
@@ -1942,21 +2161,25 @@ mod tests {
     fn attach_meta_records_provider_type_id() {
         let container = Container::builder()
             .attach_meta::<Host, _>(Marker("hi"))
-            .build();
+            .build()
+            .expect("the container builds");
         let entries = container.metadata_entries(TypeId::of::<Marker>()).unwrap();
         assert_eq!(entries[0].provider_type_id, Some(TypeId::of::<Host>()));
     }
 
     #[test]
     fn provide_meta_has_no_host() {
-        let container = Container::builder().provide_meta(Marker("free")).build();
+        let container = Container::builder()
+            .provide_meta(Marker("free"))
+            .build()
+            .expect("the container builds");
         let entries = container.metadata_entries(TypeId::of::<Marker>()).unwrap();
         assert_eq!(entries[0].provider_type_id, None);
     }
 
     #[test]
     fn metadata_returns_none_when_absent() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         assert!(container.metadata_entries(TypeId::of::<Marker>()).is_none());
     }
 
@@ -2007,7 +2230,6 @@ mod tests {
 
     #[test]
     fn a_module_first_imported_in_a_register_never_registers_over_a_factory_nothing_drains() {
-        struct Late;
         struct ReadsItsFactory;
         impl Module for ReadsItsFactory {
             fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
@@ -2017,47 +2239,238 @@ mod tests {
                 panic!("a register runs only once the factory its collect queued ran")
             }
         }
-        let mut builder = Container::builder()
+        let mut builder = ContainerBuilder::booting()
             .import::<ReadsItsFactory>()
             .import::<ReadsItsFactory>();
-        let refused = builder.take_refusal().expect("a refusal");
-        let late = refused
-            .downcast_ref::<crate::LateFactoryError>()
-            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        let Some(crate::ContainerError::LateFactory(late)) = builder.take_refusal() else {
+            panic!("not the late-factory refusal");
+        };
         assert_eq!(late.type_name, std::any::type_name::<Late>());
+        assert!(
+            late.to_string()
+                .contains("queued during the register phase"),
+            "{late}"
+        );
     }
 
     #[test]
     fn a_module_first_imported_in_a_register_answers_only_for_the_factories_its_collect_queued() {
-        struct Late;
-        struct QueuesLate;
-        impl Module for QueuesLate {
-            fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-                builder.provide_factory(|_| async { Ok(Late) })
-            }
-            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-                builder
-            }
-        }
         struct Greets;
         impl Module for Greets {
             fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
                 builder.provide(Greeter("hi"))
             }
         }
-        let mut builder = Container::builder()
+        let mut builder = ContainerBuilder::booting()
             .import::<QueuesLate>()
             .import::<Greets>();
-        let refused = builder.take_refusal().expect("a refusal");
-        let late = refused
-            .downcast_ref::<crate::LateFactoryError>()
-            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        let Some(crate::ContainerError::LateFactory(late)) = builder.take_refusal() else {
+            panic!("not the late-factory refusal");
+        };
         assert_eq!(late.type_name, std::any::type_name::<Late>());
         assert_eq!(
             builder.get::<Greeter>().map(|g| g.0),
             Some("hi"),
             "the factory pending is another module's"
         );
+    }
+
+    struct Late;
+
+    /// Queues a factory for [`Late`] in its `collect`, then registers a
+    /// greeter over it.
+    struct QueuesLate;
+
+    impl Module for QueuesLate {
+        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(Late) })
+        }
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.provide(Greeter("registered"))
+        }
+    }
+
+    #[test]
+    fn a_container_built_by_hand_returns_the_refusal_of_a_module_whose_factory_nothing_drains() {
+        let Err(crate::ContainerError::LateFactory(late)) =
+            Container::builder().import::<QueuesLate>().build()
+        else {
+            panic!("the container would be built without the module, and nothing would say why");
+        };
+        assert_eq!(late.type_name, std::any::type_name::<Late>());
+        let sentence = late.to_string();
+        assert!(
+            sentence.contains("which a container built by hand never runs")
+                && sentence.contains("provide `")
+                && sentence.contains("App::builder()"),
+            "the remedy is the hand-built builder's: {sentence}"
+        );
+    }
+
+    #[test]
+    fn a_container_built_by_hand_refuses_a_factory_queued_on_it() {
+        let Err(crate::ContainerError::LateFactory(late)) = Container::builder()
+            .provide_factory(|_| async { Ok(Late) })
+            .build()
+        else {
+            panic!("the factory's type would be absent, and nothing would say why");
+        };
+        assert_eq!(late.type_name, std::any::type_name::<Late>());
+    }
+
+    #[test]
+    fn a_container_built_by_hand_refuses_a_declaration_whatever_it_provides() {
+        let Err(crate::ContainerError::LateFactory(late)) = Container::builder()
+            .provide(Late)
+            .provide_declared_factory("pin it in one place", |_| async { Ok(Late) })
+            .build()
+        else {
+            panic!("the value provided would stand in for the one declared");
+        };
+        let sentence = late.to_string();
+        assert!(
+            sentence.contains("is declared by an async factory")
+                && sentence
+                    .contains("never stands in for a declaration: boot through `App::builder()`")
+                && !sentence.contains("provide `"),
+            "no seed clears a declaration, so the boot is the remedy: {sentence}"
+        );
+    }
+
+    #[test]
+    fn a_container_built_by_hand_names_the_trait_objects_a_factory_binds_off_its_value() {
+        trait Port: Send + Sync {}
+        #[derive(Clone)]
+        struct Bound;
+        impl Port for Bound {}
+        let queued = || {
+            Container::builder()
+                .provide(Bound)
+                .provide_factory_dyn::<Bound, dyn Port, _, _>(
+                    |_| async { Ok(Bound) },
+                    |bound| Arc::new(bound),
+                )
+        };
+        let Err(crate::ContainerError::LateFactory(late)) = queued().build() else {
+            panic!("the trait object would be absent, and nothing would say why");
+        };
+        let sentence = late.to_string();
+        assert!(
+            sentence.contains("and each trait object its factory binds off it (`provide_dyn`)"),
+            "the value alone leaves the trait object absent: {sentence}"
+        );
+        let container = queued()
+            .provide_dyn::<dyn Port>(Arc::new(Bound))
+            .build()
+            .expect("the value and its trait object stand in for the factory");
+        assert!(container.get_dyn::<dyn Port>().is_some());
+    }
+
+    #[test]
+    fn a_container_built_by_hand_refuses_a_budget_at_the_net_over_its_resource() {
+        struct Pool(std::time::Duration);
+        const NET: std::time::Duration = std::time::Duration::from_secs(20);
+        let pooled = |budget| {
+            Container::builder()
+                .provide(Pool(budget))
+                .provide_meta(crate::Budget::of::<Pool>(
+                    "the test pool",
+                    "TEST_POOL_WAIT",
+                    |pool| Some(pool.0),
+                ))
+                .provide_meta(crate::Net::over::<Pool>("the test port", NET))
+        };
+        let Err(crate::ContainerError::BudgetPastNet(refused)) = pooled(NET).build() else {
+            panic!("the port would cut a call the pool was still answering");
+        };
+        assert_eq!(
+            (refused.resource, refused.budget, refused.port, refused.net),
+            ("the test pool", NET, "the test port", NET)
+        );
+        pooled(NET / 2)
+            .build()
+            .expect("a budget under the net builds");
+    }
+
+    #[test]
+    fn a_container_built_by_hand_registers_a_module_whose_factory_a_seed_answers() {
+        let container = Container::builder()
+            .provide(Late)
+            .import::<QueuesLate>()
+            .build()
+            .expect("the seed answers the factory");
+        assert_eq!(container.get::<Greeter>().map(|g| g.0), Some("registered"));
+    }
+
+    #[test]
+    fn a_container_built_by_hand_refuses_a_type_registered_twice_naming_both_calls() {
+        let Err(crate::ContainerError::DuplicateProvider(duplicate)) = Container::builder()
+            .provide(Counter(1))
+            .provide(Counter(2))
+            .build()
+        else {
+            panic!("the second registration would replace the first in silence");
+        };
+        assert_eq!(duplicate.type_name, std::any::type_name::<Counter>());
+        let by_hand = "a call on a container built by hand (`Container::builder()…`)";
+        assert!(
+            duplicate
+                .to_string()
+                .contains(&format!("registered by {by_hand} and again by {by_hand}")),
+            "{duplicate}"
+        );
+    }
+
+    #[test]
+    fn a_container_built_by_hand_returns_the_first_refusal_a_register_filed_before_a_duplicate() {
+        let Err(crate::ContainerError::Refused(refused)) = Container::builder()
+            .provide(Counter(1))
+            .refuse(anyhow::anyhow!("the first refusal"))
+            .refuse(anyhow::anyhow!("a second refusal"))
+            .provide(Counter(2))
+            .build()
+        else {
+            panic!("the module's refusal would be dropped");
+        };
+        assert_eq!(refused.to_string(), "the first refusal");
+    }
+
+    #[test]
+    fn a_container_built_by_hand_refuses_a_contested_declaration_ahead_of_its_factory() {
+        let Err(crate::ContainerError::ContestedDeclaration(contested)) = Container::builder()
+            .provide_declared_factory("pick one", |_| async { Ok(Late) })
+            .provide_declared_factory("pick one", |_| async { Ok(Late) })
+            .build()
+        else {
+            panic!("one declaration would win on queue position");
+        };
+        assert_eq!(contested.type_name, std::any::type_name::<Late>());
+    }
+
+    #[test]
+    fn a_container_built_by_hand_refuses_a_module_its_imports_collected_alone() {
+        struct CollectedAlone;
+        impl Module for CollectedAlone {
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+                builder.provide(Greeter("never"))
+            }
+        }
+        struct ImportsInCollectAlone;
+        impl Module for ImportsInCollectAlone {
+            fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+                builder.import::<CollectedAlone>()
+            }
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+                builder
+            }
+        }
+        let Err(crate::ContainerError::UnregisteredModule(unregistered)) = Container::builder()
+            .import::<ImportsInCollectAlone>()
+            .build()
+        else {
+            panic!("the module's providers would be absent, and nothing would say why");
+        };
+        assert_eq!(unregistered.module, std::any::type_name::<CollectedAlone>());
     }
 
     #[test]
@@ -2085,7 +2498,8 @@ mod tests {
         let calls_factory = calls.clone();
         let container = Container::builder()
             .provide_transient(move |_| Counter(calls_factory.fetch_add(1, Ordering::SeqCst)))
-            .build();
+            .build()
+            .expect("the container builds");
 
         let first: Arc<Counter> = container.get().expect("first build");
         let second: Arc<Counter> = container.get().expect("second build");
@@ -2103,7 +2517,8 @@ mod tests {
                 let g: Arc<Greeter> = c.get().expect("singleton resolves");
                 Counter(g.0.len() as u32)
             })
-            .build();
+            .build()
+            .expect("the container builds");
 
         let a: Arc<Counter> = container.get().unwrap();
         let b: Arc<Counter> = container.get().unwrap();
@@ -2126,7 +2541,8 @@ mod tests {
                         .0,
                 )
             })
-            .build();
+            .build()
+            .expect("the container builds");
 
         let resolved: Arc<Trans> = container
             .get()
@@ -2142,7 +2558,8 @@ mod tests {
                 let _self: Arc<Counter> = c.get().expect("re-entrant resolution");
                 Counter(0)
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let _ = container.get::<Counter>();
     }
 
@@ -2158,7 +2575,8 @@ mod tests {
                     let _a: Arc<Greeter> = c.get().expect("A resolves");
                     Counter(0)
                 })
-                .build();
+                .build()
+                .expect("the container builds");
             let _: Option<Arc<Greeter>> = container.get();
         }));
 
@@ -2200,13 +2618,13 @@ mod tests {
     }
 
     fn holds_the_double_alone(builder: ContainerBuilder) {
-        assert!(builder.duplicate_providers().is_empty());
+        assert!(builder.duplicates.is_empty());
         assert_eq!(
             builder.unclaimed_override(),
             None,
             "the override is claimed"
         );
-        let container = builder.build();
+        let container = builder.build().expect("the container builds");
         assert!(!container.has_dynamic_scopes(), "no factory registered");
         assert_eq!(container.get::<Counter>().map(|c| c.0), Some(0));
     }
@@ -2228,9 +2646,13 @@ mod tests {
         let builder = Container::builder()
             .install_override::<Arc<dyn Hello>>(Arc::new(Arc::new(Curt) as Arc<dyn Hello>))
             .provide_dyn::<dyn Hello>(Arc::new(Polite));
-        assert!(builder.duplicate_providers().is_empty());
+        assert!(builder.duplicates.is_empty());
         assert_eq!(builder.unclaimed_override(), None);
-        let hello = builder.build().get_dyn::<dyn Hello>().expect("bound");
+        let hello = builder
+            .build()
+            .expect("the container builds")
+            .get_dyn::<dyn Hello>()
+            .expect("bound");
         assert_eq!(hello.say(), "hi");
     }
 
@@ -2265,7 +2687,7 @@ mod tests {
         let builder = overriding(Counter(0))
             .stand_down(TypeId::of::<Counter>())
             .stand_down(TypeId::of::<Counter>());
-        assert!(builder.duplicate_providers().is_empty());
+        assert!(builder.duplicates.is_empty());
         assert_eq!(builder.unclaimed_override(), None);
         let then_registered = overriding(Counter(0))
             .stand_down(TypeId::of::<Counter>())
@@ -2346,7 +2768,8 @@ mod tests {
         let container = Container::builder()
             .provide_transient(|_| -> Counter { panic!("boom from factory") })
             .provide_transient(|_| Greeter("recovered"))
-            .build();
+            .build()
+            .expect("the container builds");
 
         let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _: Option<Arc<Counter>> = container.get();
@@ -2423,11 +2846,7 @@ mod tests {
         }
 
         fn recorded(builder: &ContainerBuilder) -> Vec<&'static str> {
-            builder
-                .stalls()
-                .iter()
-                .map(|stall| stall.provider)
-                .collect()
+            builder.stalls.iter().map(|stall| stall.provider).collect()
         }
 
         #[test]
@@ -2447,13 +2866,10 @@ mod tests {
             assert!(builder.take_refusal().is_none(), "no cycle among them");
             assert_eq!(recorded(&builder), ["Second", "First"]);
             assert_eq!(
-                builder.stalls()[0].missing,
+                builder.stalls[0].missing,
                 [(TypeId::of::<Absent>(), "Absent")]
             );
-            assert_eq!(
-                builder.stalls()[0].module,
-                (TypeId::of::<Module>(), "Module")
-            );
+            assert_eq!(builder.stalls[0].module, (TypeId::of::<Module>(), "Module"));
         }
 
         #[test]
@@ -2475,10 +2891,9 @@ mod tests {
                     &[(TypeId::of::<Absent>(), "Absent")],
                 ),
             ]);
-            let refusal = builder.take_refusal().expect("the cycle is refused");
-            let cycle = refusal
-                .downcast_ref::<crate::ProviderCycleError>()
-                .unwrap_or_else(|| panic!("not the cycle: {refusal:#}"));
+            let Some(crate::ContainerError::ProviderCycle(cycle)) = builder.take_refusal() else {
+                panic!("the cycle is refused");
+            };
             assert_eq!(cycle.chain, ["First", "Second", "First"]);
             assert_eq!(cycle.scope, crate::ProviderScope::Singleton);
             assert_eq!(recorded(&builder), ["Third"]);
@@ -2500,7 +2915,7 @@ mod tests {
             assert!(builder.take_refusal().is_none());
             assert_eq!(recorded(&builder), ["Second", "First"]);
             assert_eq!(
-                builder.stalls()[1].missing,
+                builder.stalls[1].missing,
                 [(TypeId::of::<Second>(), "Second")],
                 "an optional no sibling provides is no wait"
             );
@@ -2516,7 +2931,7 @@ mod tests {
             unlabelled.dependency_names.clear();
             let builder = record(vec![unlabelled]);
             assert_eq!(
-                builder.stalls()[0].missing[0].1,
+                builder.stalls[0].missing[0].1,
                 crate::access::UNNAMED_DEPENDENCY
             );
         }

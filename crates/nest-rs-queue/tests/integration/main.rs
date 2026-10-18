@@ -101,4 +101,5 @@ fn reaching(providers: &[TypeId]) -> Container {
     Container::builder()
         .provide(ReachableProviders(providers.iter().copied().collect()))
         .build()
+        .expect("the container builds")
 }

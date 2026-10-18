@@ -293,10 +293,10 @@ mod tests {
     fn ten_containers_composing_one_site_leave_no_dead_entry_after_the_eleventh() {
         let cell = SiteChainCell::new();
         for _ in 0..10 {
-            let container = Container::builder().build();
+            let container = Container::builder().build().expect("the container builds");
             compose_on(&cell, &container);
         }
-        let eleventh = Container::builder().build();
+        let eleventh = Container::builder().build().expect("the container builds");
         let chain = compose_on(&cell, &eleventh);
 
         let primary = cell

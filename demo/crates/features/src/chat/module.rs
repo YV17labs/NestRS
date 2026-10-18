@@ -18,7 +18,8 @@ mod tests {
         let container = Container::builder()
             .provide(WsConfig::default())
             .import::<ChatModule>()
-            .build();
+            .build()
+            .expect("the container builds");
         let svc: Option<Arc<ChatService>> = container.get();
         assert!(svc.is_some());
     }

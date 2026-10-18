@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn an_unconfigured_provider_is_inert_rather_than_a_boot_failure() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         let built = resolve(&container).expect("an unconfigured provider must not fail boot");
         assert!(built.is_none(), "no credentials ⇒ no provider");
     }
@@ -351,7 +351,8 @@ mod tests {
                 client_id: "id".into(),
                 client_secret: String::new(),
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let Err(err) = resolve(&container) else {
             panic!("a half-configured provider must abort boot");
         };
@@ -367,7 +368,8 @@ mod tests {
                 client_id: "s3cr3t-id".into(),
                 client_secret: String::new(),
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let Err(err) = resolve(&container) else {
             panic!("a half-configured provider must abort boot");
         };
@@ -392,7 +394,8 @@ mod tests {
                 client_id: "id".into(),
                 client_secret: "secret".into(),
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let built = resolve(&container).expect("a complete config builds");
         assert_eq!(
             built.expect("a provider").key(),
@@ -409,7 +412,8 @@ mod tests {
                 client_id: "id".into(),
                 client_secret: "secret".into(),
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let built = resolve(&container).expect("the DI instance resolves");
         assert_eq!(
             built.expect("a provider").key(),

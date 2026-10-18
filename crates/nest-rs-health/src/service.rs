@@ -397,7 +397,8 @@ mod tests {
         let container = Container::builder()
             .provide(UpHost)
             .provide(DownHost)
-            .build();
+            .build()
+            .expect("the container builds");
         let svc = HealthService::default();
         svc.install_container(container);
 
@@ -456,7 +457,8 @@ mod tests {
             .provide(ReachableProviders(
                 [std::any::TypeId::of::<UpHost>()].into_iter().collect(),
             ))
-            .build();
+            .build()
+            .expect("the container builds");
 
         let logs = nest_rs_testing::LogCapture::install();
         let svc = HealthService::default();
@@ -543,7 +545,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn indicators_run_concurrently_so_the_probe_costs_the_slowest_one() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         let config = HealthConfig {
             indicator_timeout_ms: 30_000,
             probe_deadline_ms: 60_000,
@@ -577,7 +579,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_probe_deadline_bounds_a_check_that_would_outlive_the_kubelet() {
         let logs = nest_rs_testing::LogCapture::install();
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         let config = HealthConfig {
             indicator_timeout_ms: 300_000,
             probe_deadline_ms: 900,
@@ -621,7 +623,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_report_is_ordered_by_name_not_by_completion() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         let config = HealthConfig {
             probe_deadline_ms: 60_000,
             ..HealthConfig::default()
@@ -650,7 +652,8 @@ mod tests {
         let container = Container::builder()
             .provide(UpHost)
             .provide(DownHost)
-            .build();
+            .build()
+            .expect("the container builds");
         let svc = HealthService::default();
         svc.install_container(container);
 

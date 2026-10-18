@@ -77,3 +77,45 @@ module that is fine.
 **Refused:** reading the unclaimed override before the register phase runs.
 Only the register phase shows which module providers claim, so the refusal
 would fire on every override of a module's provider.
+
+## 2026-10-18 — a container built by hand refuses at its build, in the boot's order
+
+`ContainerBuilder::build` now returns what the builder holds that the boot
+would refuse, one fact at a time and in the boot's order: what the register
+phase leaves (a contested declaration, the refusal filed, a factory nothing
+drains, a module collected alone, a type registered twice), then what the seal
+reads off the builder's modules, which stand for the roots (a cycle among
+request-scoped and transient providers, one among singletons of modules
+importing each other, a provider never built, one built before an optional
+dependency registered after it, a budget at or past a net reaching it). It
+used to freeze what registered and drop the rest, so a unit test found a
+module's providers absent and no error saying why. The refusal is typed,
+`ContainerError`, one variant per refusal the kernel names and `Refused` for a
+`register`'s own; the boot flattens it back, so what a boot error downcasts to
+is unchanged. A budget is read last, where the seal reads it: the boot also
+reads it as soon as the resource exists, so that a factory's I/O does not fail
+on something else first, and a builder made by hand runs no factory.
+
+A builder made by hand also says so: a factory queued on it is refused with
+that builder's edit — provide the type first, and each trait object a binding
+derives from it, or boot through `App::builder()`; a declaration, which no
+value provided there stands in for, through the boot alone — rather than the
+late-import remedy a boot's register phase earns; a registration outside any
+import names the builder rather than `App::builder().provide…`; and a
+provider never built names the order of the builder's calls
+(`UnbuiltCause::ImportedFirst`).
+
+**Refused:**
+
+- **`anyhow::Result<Container>`**, the boot's own currency: a library returns a
+  typed error, and a caller matches the refusal by its variant.
+- **Reading the access graph at `build`**: it holds a provider to its
+  module's imports and to what is global — a seed or a factory's output — and
+  a builder made by hand cannot tell a seed from what its modules register,
+  both being calls on it in the order they are written. Read there, it would
+  either take every registration as global and check nothing, or take none
+  and refuse a test whose module reaches a value the test seeded. A container
+  built by hand stays the unchecked escape hatch for it; the boot reads it.
+- **Running the wirings at `build`**: a wiring fills its registry from the
+  reachable set and the provider order the boot's seal hands the container,
+  which a container built by hand never holds.

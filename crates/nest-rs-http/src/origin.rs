@@ -42,7 +42,8 @@ const X_FORWARDED_HOST: &str = "x-forwarded-host";
 /// use nest_rs_http::__private::OriginPolicy;
 /// use nest_rs_http::{HeaderValue, Request, header};
 ///
-/// let policy = OriginPolicy::from_container(&Container::builder().build());
+/// let container = Container::builder().build().expect("an empty container builds");
+/// let policy = OriginPolicy::from_container(&container);
 /// let browser = |origin: &'static str| {
 ///     Request::builder()
 ///         .header(header::HOST, HeaderValue::from_static("api.example"))

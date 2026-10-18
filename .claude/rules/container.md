@@ -37,7 +37,11 @@ framework half.
   module's phases, held by `Collecting` and `Registering`
   (`.claude/decisions/module-phases-by-import.md`); one queued later is
   refused (`LateFactoryError`), and a module imported in a collect alone
-  (`UnregisteredModuleError`).
+  (`UnregisteredModuleError`). A container built by hand
+  (`Container::builder()`) is in the register phase from the start and drains
+  no factory; `ContainerBuilder::build` returns the first refusal it holds, in
+  the boot's order (`ContainerError`), never a container without what it
+  refused.
 - **Providers are singletons unless scoped.** `scope = request` is built per
   request from the singleton root: it may inject singletons and other
   request-scoped providers (one instance each per request), never the reverse,

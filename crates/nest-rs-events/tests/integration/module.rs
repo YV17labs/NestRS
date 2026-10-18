@@ -96,7 +96,8 @@ async fn an_emit_on_a_bus_no_wiring_step_reached_is_dropped_with_a_warn() {
     // A container built by hand runs no kernel step, so its bus is never wired.
     let container = nest_rs_core::Container::builder()
         .import::<SeedingModule>()
-        .build();
+        .build()
+        .expect("the container builds");
     let bus = container.get::<EventBus>().expect("the bus is provided");
     let logs = nest_rs_testing::LogCapture::install();
 

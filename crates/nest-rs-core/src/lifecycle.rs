@@ -490,7 +490,8 @@ mod tests {
             .provide(Probe {
                 hits: AtomicUsize::new(0),
             })
-            .build();
+            .build()
+            .expect("the container builds");
         run_phase(
             &container,
             &AppLifecycle::new(),
@@ -510,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn phase_with_no_hooks_is_a_noop() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         run_phase(
             &container,
             &AppLifecycle::new(),
@@ -657,7 +658,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_hook_is_skipped_by_both_runners() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         run_phase(
             &container,
             &AppLifecycle::new(),

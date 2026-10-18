@@ -104,6 +104,68 @@ impl AccessError {
     }
 }
 
+/// What [`ContainerBuilder::build`](crate::ContainerBuilder::build) refuses a
+/// container built by hand with: the first refusal the builder holds, read in
+/// the boot's order — what its register phase left, then what the seal reads
+/// off its modules. The access graph is the boot's alone: it holds a provider
+/// to what is global, a seed or a factory's output, which a builder made by
+/// hand cannot tell from what its modules register, both being calls on it.
+/// So are the wirings, which fill their registries from the reachable set the
+/// boot's seal hands the container.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ContainerError {
+    /// Two import sites declared a value for one type.
+    #[error(transparent)]
+    ContestedDeclaration(#[from] ContestedDeclarationError),
+    /// What a `register` filed with
+    /// [`ContainerBuilder::refuse`](crate::ContainerBuilder::refuse), as it
+    /// filed it.
+    #[error(transparent)]
+    Refused(anyhow::Error),
+    /// A factory queued that nothing drains: the module whose `collect` queued
+    /// it was left out, or it was queued on the builder itself.
+    #[error(transparent)]
+    LateFactory(#[from] LateFactoryError),
+    /// Providers waiting on each other: singletons of one module or of modules
+    /// importing each other, or request-scoped and transient ones.
+    #[error(transparent)]
+    ProviderCycle(#[from] ProviderCycleError),
+    /// A module imported in a collect phase alone.
+    #[error(transparent)]
+    UnregisteredModule(#[from] UnregisteredModuleError),
+    /// A type registered twice.
+    #[error(transparent)]
+    DuplicateProvider(#[from] DuplicateProviderError),
+    /// A provider a module lists, never built.
+    #[error(transparent)]
+    UnbuiltProvider(#[from] UnbuiltProviderError),
+    /// A provider built without an optional dependency registered after it.
+    #[error(transparent)]
+    LateOptionalDependency(#[from] LateOptionalDependencyError),
+    /// A resource's budget at or past the net of a port that waits on it.
+    #[error(transparent)]
+    BudgetPastNet(#[from] BudgetPastNetError),
+}
+
+impl ContainerError {
+    /// Flatten into an `anyhow::Error` carrying the **concrete** refusal, as
+    /// every boot failure does, so it downcasts to it directly.
+    pub(crate) fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::ContestedDeclaration(e) => anyhow::Error::new(e),
+            Self::Refused(e) => e,
+            Self::LateFactory(e) => anyhow::Error::new(e),
+            Self::ProviderCycle(e) => anyhow::Error::new(e),
+            Self::UnregisteredModule(e) => anyhow::Error::new(e),
+            Self::DuplicateProvider(e) => anyhow::Error::new(e),
+            Self::UnbuiltProvider(e) => anyhow::Error::new(e),
+            Self::LateOptionalDependency(e) => anyhow::Error::new(e),
+            Self::BudgetPastNet(e) => anyhow::Error::new(e),
+        }
+    }
+}
+
 /// A type registered twice — a concrete type or a trait object, under any two
 /// scopes; names both registrations and, when they differ, their scopes. A
 /// test override is never one of the two: what would register its type stands
@@ -250,17 +312,87 @@ pub struct InitFailedError;
 ///
 /// The usual cause is a module or [`DynamicModule`](crate::DynamicModule)
 /// importing another in its `register` alone: that module is collected there,
-/// and refused before its `register` runs.
+/// and refused before its `register` runs. A container built by hand
+/// ([`Container::builder`](crate::Container::builder)) is in the register
+/// phase from the start and drains no factory, so its sentence prescribes
+/// that builder's edit: a seed for a default, the boot for a declaration.
 #[derive(Debug, Error)]
-#[error(
-    "`{type_name}` is provided by an async factory queued during the register phase, which no \
-     boot drains. Queue it in `collect` — a module imported in its importer's `register` alone \
-     collects there, so import it through `ContainerBuilder::import` in that importer's \
-     `collect` too."
-)]
+#[error("{}", late_factory_sentence(.type_name, *.queued_on))]
 pub struct LateFactoryError {
     /// The type whose factory was queued too late to run.
     pub type_name: &'static str,
+    /// The builder it was queued on, which decides the edit.
+    queued_on: QueuedOn,
+}
+
+/// The builder a [`LateFactoryError`]'s factory was queued on.
+#[derive(Clone, Copy, Debug)]
+enum QueuedOn {
+    /// A boot's, in its register phase.
+    Boot,
+    /// A container built by hand, which drains no factory, as the kind of
+    /// factory queued.
+    Hand(FactoryKind),
+}
+
+/// The kind of a factory a container built by hand never runs, which decides
+/// what stands in for it there.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FactoryKind {
+    /// A default, which a seed of its value answers.
+    Default,
+    /// A default binding trait objects off its value, which a seed of the value
+    /// alone leaves absent.
+    Binding,
+    /// A value an import site chose, which no seed stands in for.
+    Declaration,
+}
+
+impl LateFactoryError {
+    /// `type_name`'s factory, queued during a boot's register phase.
+    pub(crate) fn in_boot(type_name: &'static str) -> Self {
+        Self {
+            type_name,
+            queued_on: QueuedOn::Boot,
+        }
+    }
+
+    /// `type_name`'s factory of `kind`, queued on a container built by hand.
+    pub(crate) fn by_hand(type_name: &'static str, kind: FactoryKind) -> Self {
+        Self {
+            type_name,
+            queued_on: QueuedOn::Hand(kind),
+        }
+    }
+}
+
+/// What a [`LateFactoryError`] says of `type_name`'s factory, queued on `on`.
+fn late_factory_sentence(type_name: &str, on: QueuedOn) -> String {
+    match on {
+        QueuedOn::Boot => format!(
+            "`{type_name}` is provided by an async factory queued during the register phase, \
+             which no boot drains. Queue it in `collect` — a module imported in its importer's \
+             `register` alone collects there, so import it through `ContainerBuilder::import` in \
+             that importer's `collect` too."
+        ),
+        QueuedOn::Hand(FactoryKind::Declaration) => format!(
+            "`{type_name}` is declared by an async factory — a value an import site chose, a \
+             module's `for_root` value among them — which a container built by hand never \
+             runs, and a value provided there never stands in for a declaration: boot through \
+             `App::builder()`, `TestApp` in a test, which runs it."
+        ),
+        QueuedOn::Hand(kind) => format!(
+            "`{type_name}` is provided by an async factory, which a container built by hand \
+             never runs: provide `{type_name}`{} on the builder before what queues it — a \
+             `#[config]` a module's `collect` queues among them — or boot through \
+             `App::builder()`, `TestApp` in a test, which runs it.",
+            if matches!(kind, FactoryKind::Binding) {
+                ", and each trait object its factory binds off it (`provide_dyn`),"
+            } else {
+                ""
+            }
+        ),
+    }
 }
 
 /// A module was imported in a collect phase and in no register phase, so none
@@ -333,7 +465,8 @@ fn arrow_chain(chain: &[&str]) -> String {
 /// A provider a `#[module]` lists that the register phase never built: what it
 /// injects was not registered yet when its module's providers were built.
 /// Raised once the access graph passes, which names a missing dependency's
-/// owner more precisely.
+/// owner more precisely; on a container built by hand, which has no access
+/// graph, by [`ContainerBuilder::build`](crate::ContainerBuilder::build).
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
@@ -353,8 +486,7 @@ pub struct UnbuiltProviderError {
     pub cause: UnbuiltCause,
 }
 
-/// Why a dependency was absent when its consumer's module built its providers,
-/// though the same boot registered it.
+/// Why a dependency was absent when its consumer's module built its providers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnbuiltCause {
@@ -364,11 +496,17 @@ pub enum UnbuiltCause {
     /// Registered later in the boot, by a hand-written module or a `for_root`
     /// the consumer's module does not import.
     RegisteredLater,
+    /// The consumer's module was imported on a container built by hand while
+    /// nothing there provided it: the builder runs its calls in the order they
+    /// are written.
+    ImportedFirst,
 }
 
 /// A provider built without an optional dependency the same boot registered
 /// afterwards: it would run as if the capability were absent. Raised once the
-/// access graph passes.
+/// access graph passes, and by
+/// [`ContainerBuilder::build`](crate::ContainerBuilder::build) on a container
+/// built by hand.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
@@ -406,6 +544,14 @@ fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
              later: import that module in `{module}`'s `imports`",
             if count == 1 { "it" } else { "them" }
         ),
+        UnbuiltCause::ImportedFirst => {
+            let them = if count == 1 { "it" } else { "them" };
+            format!(
+                "`{module}` was imported on a container built by hand while nothing there \
+                 provided {them}: provide {them}, or import what provides {them}, before \
+                 `{module}`"
+            )
+        }
     }
 }
 

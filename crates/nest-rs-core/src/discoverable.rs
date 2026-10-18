@@ -124,8 +124,9 @@ pub trait Discoverable {
 /// impl ProviderResidency for MyHandWrittenProvider {
 ///     const SINGLETON: bool = true;
 /// }
-/// # let container = Container::builder().provide(MyHandWrittenProvider).build();
+/// # let container = Container::builder().provide(MyHandWrittenProvider).build()?;
 /// # assert!(container.get::<MyHandWrittenProvider>().is_some());
+/// # Ok::<(), nest_rs_core::ContainerError>(())
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a provider the container holds under its own type for the app's \

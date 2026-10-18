@@ -520,7 +520,8 @@ mod unresolvable {
                     .into_iter()
                     .collect(),
             ))
-            .build();
+            .build()
+            .expect("the container builds");
         let schema =
             nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default());
         let logs = LogCapture::install();

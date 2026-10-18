@@ -1,13 +1,14 @@
 //! Covers `src/container.rs` — one type has one provider whatever its scope, so
 //! a second registration fails the boot naming both; `Foo as dyn Trait` holds
-//! one `Foo` under its own type and each trait.
+//! one `Foo` under its own type and each trait; a container built by hand
+//! refuses at `build` what the seal reads off its modules.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    App, Collecting, ContainerBuilder, DuplicateProviderError, Module, ProviderScope, Registering,
-    injectable, module,
+    App, Collecting, Container, ContainerBuilder, ContainerError, DuplicateProviderError, Module,
+    ProviderScope, Registering, UnbuiltCause, UnbuiltProviderError, injectable, module,
 };
 
 fn duplicate(boot: anyhow::Result<App>) -> DuplicateProviderError {
@@ -384,4 +385,213 @@ struct TwoSpellingsModule;
 fn two_spellings_of_one_provider_in_one_list_are_a_duplicate_of_its_type() {
     let duplicate = duplicate(App::new::<TwoSpellingsModule>());
     assert_eq!(duplicate.type_name, std::any::type_name::<Hello>());
+}
+
+/// A type a test provides on a container built by hand, or does not.
+struct HandLedger;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandBookkeeper {
+    #[inject]
+    ledger: Arc<HandLedger>,
+}
+
+#[module(providers = [HandBookkeeper])]
+struct HandBookkeepingModule;
+
+/// The provider-never-built refusal `build` answered, checked to name what
+/// the bookkeeper needed and the builder's call order.
+fn unbuilt_bookkeeper(built: Result<Container, ContainerError>) -> UnbuiltProviderError {
+    let Err(ContainerError::UnbuiltProvider(unbuilt)) = built else {
+        panic!("the bookkeeper would be absent, and nothing would say why");
+    };
+    assert_eq!(unbuilt.module, "HandBookkeepingModule");
+    assert_eq!(unbuilt.provider, "HandBookkeeper");
+    assert_eq!(unbuilt.missing, ["HandLedger"]);
+    assert_eq!(unbuilt.cause, UnbuiltCause::ImportedFirst, "{unbuilt}");
+    assert!(
+        unbuilt.to_string().contains(
+            "`HandBookkeepingModule` was imported on a container built by hand while nothing \
+             there provided it: provide it, or import what provides it, before \
+             `HandBookkeepingModule`"
+        ),
+        "{unbuilt}"
+    );
+    unbuilt
+}
+
+#[test]
+fn a_container_built_by_hand_refuses_a_provider_whose_dependency_nothing_provides() {
+    unbuilt_bookkeeper(
+        Container::builder()
+            .import::<HandBookkeepingModule>()
+            .build(),
+    );
+}
+
+#[test]
+fn a_container_built_by_hand_refuses_a_provider_whose_dependency_it_provides_after_the_module() {
+    unbuilt_bookkeeper(
+        Container::builder()
+            .import::<HandBookkeepingModule>()
+            .provide(HandLedger)
+            .build(),
+    );
+    let container = Container::builder()
+        .provide(HandLedger)
+        .import::<HandBookkeepingModule>()
+        .build()
+        .expect("the ledger is provided before the module");
+    assert!(container.get::<HandBookkeeper>().is_some());
+}
+
+/// A type a provider reads when present.
+struct HandClock;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandScheduler {
+    #[inject]
+    clock: Option<Arc<HandClock>>,
+}
+
+#[module(providers = [HandScheduler])]
+struct HandSchedulerModule;
+
+#[test]
+fn a_container_built_by_hand_refuses_a_provider_built_before_its_optional_dependency() {
+    let Err(ContainerError::LateOptionalDependency(late)) = Container::builder()
+        .import::<HandSchedulerModule>()
+        .provide(HandClock)
+        .build()
+    else {
+        panic!("the scheduler would run as if the clock were absent");
+    };
+    assert_eq!(late.provider, "HandScheduler");
+    assert_eq!(late.dependency, "HandClock");
+    assert_eq!(late.cause, UnbuiltCause::ImportedFirst, "{late}");
+    let container = Container::builder()
+        .import::<HandSchedulerModule>()
+        .build()
+        .expect("an optional dependency nothing provides is absent");
+    assert!(container.get::<HandScheduler>().is_some());
+}
+
+#[injectable]
+#[derive(Default)]
+struct HandAtlas;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandCartographer {
+    #[inject]
+    atlas: Arc<HandAtlas>,
+}
+
+#[module(imports = [HandSurveyModule], providers = [HandAtlas])]
+struct HandAtlasModule;
+
+#[module(imports = [HandAtlasModule], providers = [HandCartographer])]
+struct HandSurveyModule;
+
+#[test]
+fn a_container_built_by_hand_names_the_import_cycle_a_provider_never_built_crosses() {
+    let Err(ContainerError::UnbuiltProvider(unbuilt)) =
+        Container::builder().import::<HandAtlasModule>().build()
+    else {
+        panic!("the cartographer would be absent, and nothing would say why");
+    };
+    assert_eq!(unbuilt.provider, "HandCartographer");
+    let UnbuiltCause::ImportCycle(modules) = &unbuilt.cause else {
+        panic!("not an import cycle: {unbuilt}");
+    };
+    for module in ["HandAtlasModule", "HandSurveyModule"] {
+        assert!(modules.contains(&module), "{unbuilt}");
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandAuthors {
+    #[inject]
+    books: Arc<HandBooks>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandBooks {
+    #[inject]
+    authors: Arc<HandAuthors>,
+}
+
+#[module(imports = [HandBooksModule], providers = [HandAuthors])]
+struct HandAuthorsModule;
+
+#[module(imports = [HandAuthorsModule], providers = [HandBooks])]
+struct HandBooksModule;
+
+#[test]
+fn a_container_built_by_hand_refuses_singletons_waiting_on_each_other_across_its_modules() {
+    let Err(ContainerError::ProviderCycle(cycle)) =
+        Container::builder().import::<HandAuthorsModule>().build()
+    else {
+        panic!("neither provider could be built, and nothing would say why");
+    };
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(cycle.chain, ["HandBooks", "HandAuthors", "HandBooks"]);
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct HandDraft {
+    #[inject]
+    review: Arc<HandReview>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct HandReview {
+    #[inject]
+    draft: Arc<HandDraft>,
+}
+
+#[module(providers = [HandDraft, HandReview])]
+struct HandRequestCycleModule;
+
+#[test]
+fn a_container_built_by_hand_refuses_request_scoped_providers_waiting_on_each_other() {
+    let Err(ContainerError::ProviderCycle(cycle)) = Container::builder()
+        .import::<HandRequestCycleModule>()
+        .build()
+    else {
+        panic!("the first request resolving either provider would panic");
+    };
+    assert_eq!(cycle.scope, ProviderScope::Request);
+    assert_eq!(cycle.chain, ["HandDraft", "HandReview", "HandDraft"]);
+    let Err(booted) = App::new::<HandRequestCycleModule>() else {
+        panic!("the boot refuses the cycle");
+    };
+    assert_eq!(cycle.to_string(), booted.to_string(), "the boot's refusal");
 }

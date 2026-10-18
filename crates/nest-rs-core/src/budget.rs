@@ -111,14 +111,21 @@ mod tests {
     fn a_budget_is_read_off_the_provider_the_container_holds() {
         let container = Container::builder()
             .provide(Pool(Some(Duration::from_secs(7))))
-            .build();
+            .build()
+            .expect("the container builds");
         assert_eq!(budget().wait(&container), Some(Duration::from_secs(7)));
     }
 
     #[test]
     fn a_budget_whose_provider_is_absent_or_holds_nothing_reads_none() {
-        assert_eq!(budget().wait(&Container::builder().build()), None);
-        let empty = Container::builder().provide(Pool(None)).build();
+        assert_eq!(
+            budget().wait(&Container::builder().build().expect("the container builds")),
+            None
+        );
+        let empty = Container::builder()
+            .provide(Pool(None))
+            .build()
+            .expect("the container builds");
         assert_eq!(budget().wait(&empty), None);
     }
 }

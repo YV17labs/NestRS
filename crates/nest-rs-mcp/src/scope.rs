@@ -124,6 +124,7 @@ mod tests {
         Container::builder()
             .provide_scoped::<Probe, _>(move |_| Probe(counter.fetch_add(1, Ordering::SeqCst)))
             .build()
+            .expect("the container builds")
     }
 
     #[tokio::test]

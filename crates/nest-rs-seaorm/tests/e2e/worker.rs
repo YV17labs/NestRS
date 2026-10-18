@@ -491,7 +491,8 @@ async fn a_job_whose_listener_outlives_its_timeout_is_not_retried() {
         &mut delivery,
         nest_rs_core::Container::builder()
             .provide(DeadlineProcessor)
-            .build(),
+            .build()
+            .expect("the container builds"),
         Some(unit),
     )
     .await;
@@ -580,7 +581,8 @@ async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_land
         &mut delivery,
         nest_rs_core::Container::builder()
             .provide(AtomicInDoubtProcessor)
-            .build(),
+            .build()
+            .expect("the container builds"),
         Some(unit),
     )
     .await;

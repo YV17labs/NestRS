@@ -1550,7 +1550,7 @@ mod tests {
 
     #[test]
     fn build_document_emits_openapi_3_1_with_info_and_no_paths_for_empty_discovery() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         let doc = build_document(
             &container,
             &info("Test API", "1.2.3", None),
@@ -1612,7 +1612,7 @@ mod tests {
 
     #[test]
     fn build_document_carries_description_when_supplied() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         let doc = build_document(
             &container,
             &info("X", "0", Some("a description")),
@@ -1659,7 +1659,7 @@ mod tests {
 
     #[test]
     fn the_server_is_the_origin_root_without_a_global_prefix() {
-        let container = Container::builder().build();
+        let container = Container::builder().build().expect("the container builds");
         let doc = build_document(
             &container,
             &info("X", "0", None),
@@ -1677,7 +1677,8 @@ mod tests {
                     global_prefix: Some(raw.into()),
                     ..HttpConfig::default()
                 })
-                .build();
+                .build()
+                .expect("the container builds");
             let doc = build_document(
                 &container,
                 &info("X", "0", None),
@@ -1702,7 +1703,8 @@ mod tests {
                 default_version: default_version.map(str::to_owned),
                 ..HttpConfig::default()
             })
-            .build();
+            .build()
+            .expect("the container builds");
         VersionSelection::resolve(&container, claims)
     }
 
@@ -1885,6 +1887,7 @@ mod tests {
                 builder.provide_meta(meta)
             })
             .build()
+            .expect("the container builds")
     }
 
     fn id_at<'a>(document: &'a Value, path: &str, method: &str) -> Option<&'a str> {
@@ -1977,7 +1980,8 @@ mod tests {
                 &["2"],
                 vec![route("list", "/")],
             ))
-            .build();
+            .build()
+            .expect("the container builds");
         let doc = build_document(
             &container,
             &info("X", "0", None),
@@ -2027,7 +2031,8 @@ mod tests {
                 &["2"],
                 vec![route("list", "/")],
             ))
-            .build();
+            .build()
+            .expect("the container builds");
         let doc = build_document(
             &container,
             &info("X", "0", None),

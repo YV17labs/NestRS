@@ -138,7 +138,10 @@ mod tests {
     #[tokio::test]
     async fn scoped_from_request_resolves_a_registered_provider() {
         // A singleton falls through `RequestScope::get`.
-        let container = Container::builder().provide(Marker("registered")).build();
+        let container = Container::builder()
+            .provide(Marker("registered"))
+            .build()
+            .expect("the container builds");
         let (req, mut body) = Request::builder().finish().split();
         let scoped = in_scope(container, Scoped::<Marker>::from_request(&req, &mut body))
             .await
@@ -157,7 +160,7 @@ mod tests {
         let logs = LogCapture::install();
         let (req, mut body) = Request::builder().finish().split();
         let Err(refused) = in_scope(
-            Container::builder().build(),
+            Container::builder().build().expect("the container builds"),
             Scoped::<Marker>::from_request(&req, &mut body),
         )
         .await

@@ -69,7 +69,8 @@ mod tests {
             .provide(QueueConfig::default())
             .import::<QueueModule>()
             .import::<QueueModule>()
-            .build();
+            .build()
+            .expect("the container builds");
         let contributions = Discovery::new(&container).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].meta.name(), "QueueWorker");

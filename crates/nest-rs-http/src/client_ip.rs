@@ -714,7 +714,9 @@ mod tests {
         if let Some(config) = config {
             builder = builder.provide(config);
         }
-        let scope = std::sync::Arc::new(nest_rs_core::RequestScope::new(builder.build()));
+        let scope = std::sync::Arc::new(nest_rs_core::RequestScope::new(
+            builder.build().expect("the container builds"),
+        ));
         nest_rs_core::with_request_scope(
             Some(scope),
             nest_rs_core::Correlation::minted(None),

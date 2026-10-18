@@ -117,7 +117,10 @@ fn delivery(queue: &str, store: &Arc<MemoryStore>) -> Delivery {
 #[tokio::test]
 async fn a_retry_resumes_from_what_the_failed_attempt_saved() {
     let store = Arc::new(MemoryStore::default());
-    let container = Container::builder().provide(ImportProcessor).build();
+    let container = Container::builder()
+        .provide(ImportProcessor)
+        .build()
+        .expect("the container builds");
     let import = method("ImportProcessor::import");
     assert!(import.options().checkpoint(), "the parameter declared it");
     let mut delivery = delivery("imports", &store);
@@ -143,7 +146,10 @@ async fn a_retry_resumes_from_what_the_failed_attempt_saved() {
 async fn a_checkpoint_that_does_not_decode_is_reported_without_its_value() {
     let store = Arc::new(MemoryStore::default());
     *store.saved.lock().expect("lock") = Some(json!("sk_live_51HsecretTOKEN"));
-    let container = Container::builder().provide(ImportProcessor).build();
+    let container = Container::builder()
+        .provide(ImportProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = delivery("one-shot-imports", &store);
 
     let outcome = consume::attempt(
@@ -214,7 +220,10 @@ async fn a_checkpoint_the_store_never_reads_or_saves_fails_the_attempt_retryably
     for call in ["load", "save"] {
         let logs = nest_rs_testing::LogCapture::install();
         let store = SilentStore::silent_on(call);
-        let container = Container::builder().provide(ImportProcessor).build();
+        let container = Container::builder()
+            .provide(ImportProcessor)
+            .build()
+            .expect("the container builds");
         let mut delivery = silent_delivery("imports", &store);
 
         let outcome = within_twice_the_net(consume::attempt(
@@ -286,7 +295,10 @@ impl nest_rs_database::OpenUnit for BoundUnit {
 async fn a_checkpoint_the_store_never_reads_within_the_timeout_is_a_retryable_timeout() {
     let logs = nest_rs_testing::LogCapture::install();
     let store = SilentStore::silent_on("load");
-    let container = Container::builder().provide(ImportProcessor).build();
+    let container = Container::builder()
+        .provide(ImportProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = silent_delivery("timed-imports", &store);
 
     let outcome = within_twice_the_net(consume::attempt(

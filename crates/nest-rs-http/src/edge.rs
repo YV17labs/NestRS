@@ -404,7 +404,7 @@ mod tests {
     ) -> EdgeEndpoint<E> {
         EdgeEndpoint::new(
             inner,
-            Container::builder().build(),
+            Container::builder().build().expect("the container builds"),
             timeout,
             body_limit.unwrap_or(crate::RawBody::DEFAULT_LIMIT),
             GAP,
@@ -423,7 +423,7 @@ mod tests {
     ) -> EdgeEndpoint<E> {
         EdgeEndpoint::new(
             inner,
-            Container::builder().build(),
+            Container::builder().build().expect("the container builds"),
             None,
             body_limit.unwrap_or(crate::RawBody::DEFAULT_LIMIT),
             GAP,
@@ -521,7 +521,8 @@ mod tests {
                 access_log: false,
                 ..crate::HttpConfig::default()
             })
-            .build();
+            .build()
+            .expect("the container builds");
         let ep = EdgeEndpoint::new(
             from_poem(panics_after_waiting),
             container,

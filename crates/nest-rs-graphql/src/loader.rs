@@ -202,7 +202,7 @@ mod tests {
     fn a_container_with_no_reachability_says_it_seeded_no_loaders() {
         let logs = nest_rs_testing::LogCapture::install();
         // `App::builder`/`App::new` always seed `ReachableProviders`.
-        let seeds = reachable_seeds(&Container::builder().build());
+        let seeds = reachable_seeds(&Container::builder().build().expect("the container builds"));
         assert!(seeds.is_empty(), "nothing is seeded without reachability");
 
         let event = logs.expect_one(
@@ -235,6 +235,7 @@ mod tests {
         Container::builder()
             .provide(ReachableProviders(types.iter().copied().collect()))
             .build()
+            .expect("the container builds")
     }
 
     #[test]

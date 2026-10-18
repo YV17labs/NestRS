@@ -37,7 +37,10 @@ fn transcode_delivery(file: &str) -> Delivery {
 
 #[tokio::test]
 async fn an_enveloped_job_reaches_its_method_through_an_attempt() {
-    let container = Container::builder().provide(TranscodeProcessor).build();
+    let container = Container::builder()
+        .provide(TranscodeProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = transcode_delivery("drained.wav");
 
     let outcome = consume::attempt(
@@ -58,7 +61,10 @@ async fn an_enveloped_job_reaches_its_method_through_an_attempt() {
 #[tokio::test]
 async fn an_unversioned_payload_runs_and_warns_naming_its_queue() {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(TranscodeProcessor).build();
+    let container = Container::builder()
+        .provide(TranscodeProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = Delivery::new(
         &BARE,
         QueueName::new("transcode").expect("a valid name"),
@@ -87,7 +93,10 @@ async fn an_unversioned_payload_runs_and_warns_naming_its_queue() {
         event.fields,
     );
 
-    let container = Container::builder().provide(TranscodeProcessor).build();
+    let container = Container::builder()
+        .provide(TranscodeProcessor)
+        .build()
+        .expect("the container builds");
     consume::attempt(
         method("TranscodeProcessor::transcode"),
         &mut delivery,
@@ -111,7 +120,7 @@ async fn a_missing_provider_and_an_undecodable_payload_dead_letter_without_panic
     let missing = consume::attempt(
         method("TranscodeProcessor::transcode"),
         &mut transcode_delivery("x.wav"),
-        Container::builder().build(),
+        Container::builder().build().expect("the container builds"),
         None,
     )
     .await;
@@ -131,7 +140,10 @@ async fn a_missing_provider_and_an_undecodable_payload_dead_letter_without_panic
     let undecodable = consume::attempt(
         method("TranscodeProcessor::transcode"),
         &mut drifted,
-        Container::builder().provide(TranscodeProcessor).build(),
+        Container::builder()
+            .provide(TranscodeProcessor)
+            .build()
+            .expect("the container builds"),
         None,
     )
     .await;
@@ -193,7 +205,10 @@ async fn an_undecodable_payload_is_dead_lettered_without_its_values() {
         let outcome = consume::attempt(
             method("ChargeProcessor::charge"),
             &mut delivery,
-            Container::builder().provide(ChargeProcessor).build(),
+            Container::builder()
+                .provide(ChargeProcessor)
+                .build()
+                .expect("the container builds"),
             None,
         )
         .await;
@@ -278,7 +293,10 @@ async fn receipt_attempt(
     let outcome = consume::attempt(
         method(method_name),
         &mut delivery,
-        Container::builder().provide(ReceiptProcessor).build(),
+        Container::builder()
+            .provide(ReceiptProcessor)
+            .build()
+            .expect("the container builds"),
         None,
     )
     .await;
@@ -370,7 +388,10 @@ async fn a_piped_job_argument_runs_its_pipe_before_the_handler() {
     let outcome = consume::attempt(
         method("TrimProcessor::trim"),
         &mut delivery,
-        Container::builder().provide(TrimProcessor).build(),
+        Container::builder()
+            .provide(TrimProcessor)
+            .build()
+            .expect("the container builds"),
         None,
     )
     .await;
@@ -415,7 +436,10 @@ async fn a_list_a_pipe_refuses_is_dead_lettered_without_the_refused_item() {
     let outcome = consume::attempt(
         method("IdListProcessor::ids"),
         &mut delivery,
-        Container::builder().provide(IdListProcessor).build(),
+        Container::builder()
+            .provide(IdListProcessor)
+            .build()
+            .expect("the container builds"),
         None,
     )
     .await;
@@ -473,7 +497,10 @@ impl SignupProcessor {
 #[tokio::test]
 async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_value() {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(SignupProcessor).build();
+    let container = Container::builder()
+        .provide(SignupProcessor)
+        .build()
+        .expect("the container builds");
     let sign_up = method("SignupProcessor::sign_up");
     let mut delivery = Delivery::new(
         &BARE,
@@ -547,7 +574,10 @@ impl nest_rs_database::OpenUnit for UnsettleableUnit {
 }
 
 async fn settle(why: nest_rs_database::Unhonoured) -> AttemptOutcome {
-    let container = Container::builder().provide(TranscodeProcessor).build();
+    let container = Container::builder()
+        .provide(TranscodeProcessor)
+        .build()
+        .expect("the container builds");
     consume::attempt(
         method("TranscodeProcessor::transcode"),
         &mut transcode_delivery("drained.wav"),
@@ -643,7 +673,10 @@ impl IdentifiedProcessor {
 
 #[tokio::test]
 async fn the_unit_an_attempt_opens_names_the_job_and_attempt_its_method_is_handed() {
-    let container = Container::builder().provide(IdentifiedProcessor).build();
+    let container = Container::builder()
+        .provide(IdentifiedProcessor)
+        .build()
+        .expect("the container builds");
     let recording = Arc::new(Recording::default());
     let mut delivery = transcode_delivery("x.wav");
     for _ in 1..=2 {
@@ -761,7 +794,10 @@ async fn timed_attempt(
     let outcome = consume::attempt(
         method("TimedProcessor::timed"),
         &mut transcode_delivery(file),
-        Container::builder().provide(TimedProcessor).build(),
+        Container::builder()
+            .provide(TimedProcessor)
+            .build()
+            .expect("the container builds"),
         Some(Arc::new(unit)),
     )
     .await;
@@ -848,7 +884,10 @@ impl FlakyProcessor {
 
 #[tokio::test]
 async fn a_retryable_failure_runs_again_while_the_budget_lasts_then_dead_letters() {
-    let container = Container::builder().provide(FlakyProcessor).build();
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
     let flaky = method("FlakyProcessor::flaky");
     let mut delivery = transcode_delivery("x.wav");
 
@@ -905,7 +944,10 @@ impl StuckProcessor {
 #[tokio::test]
 async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace() {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(StuckProcessor).build();
+    let container = Container::builder()
+        .provide(StuckProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = transcode_delivery("stuck.wav");
 
     {
@@ -968,7 +1010,10 @@ fn job_spans(logs: &nest_rs_testing::LogCapture) -> Vec<nest_rs_testing::Capture
 /// Two attempts at one delivery of `value`, both failing retryably.
 async fn two_attempts(value: serde_json::Value) -> nest_rs_testing::LogCapture {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(FlakyProcessor).build();
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
     let flaky = method("FlakyProcessor::flaky");
     let mut delivery = Delivery::new(
         &BARE,
@@ -1182,7 +1227,10 @@ async fn two_refiled_attempts(
     value: serde_json::Value,
 ) -> (nest_rs_testing::LogCapture, serde_json::Value) {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(FlakyProcessor).build();
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
     let flaky = method("FlakyProcessor::flaky");
     let queue = || QueueName::new("transcode").expect("a valid name");
     let mut first = Delivery::new(&FULL, queue(), value);
@@ -1309,7 +1357,10 @@ fn fresh_job_id() -> String {
 /// One attempt at `delivery` of the flaky method, which a newer release's job
 /// never reaches.
 async fn attempt_newer(delivery: &mut Delivery) -> AttemptOutcome {
-    let container = Container::builder().provide(FlakyProcessor).build();
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
     consume::attempt(method("FlakyProcessor::flaky"), delivery, container, None).await
 }
 
@@ -1667,7 +1718,10 @@ fn a_method_another_app_owns_is_not_this_apps_to_refuse() {
 #[tokio::test]
 async fn an_attempt_is_named_for_its_queue() {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(TranscodeProcessor).build();
+    let container = Container::builder()
+        .provide(TranscodeProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = transcode_delivery("named.wav");
 
     consume::attempt(
@@ -1732,7 +1786,10 @@ async fn an_undeliverable_record_is_one_unit_of_work_the_port_reports() {
 #[tokio::test]
 async fn the_job_id_is_the_envelopes_and_the_backends_own_id_rides_beside_it() {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(TranscodeProcessor).build();
+    let container = Container::builder()
+        .provide(TranscodeProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = Delivery::new(
         &BARE,
         QueueName::new("transcode").expect("a valid name"),
@@ -1763,7 +1820,10 @@ async fn the_job_id_is_the_envelopes_and_the_backends_own_id_rides_beside_it() {
 
 #[tokio::test]
 async fn a_record_naming_no_job_id_runs_under_one_minted_for_its_delivery() {
-    let container = Container::builder().provide(FlakyProcessor).build();
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = transcode_delivery("x.wav");
     let minted = delivery.id().clone();
     assert!(
@@ -1789,7 +1849,10 @@ async fn a_record_naming_no_job_id_runs_under_one_minted_for_its_delivery() {
 #[tokio::test]
 async fn a_retry_says_how_long_to_wait_before_the_next_attempt() {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(FlakyProcessor).build();
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
     let flaky = method("FlakyProcessor::flaky");
     let mut delivery = transcode_delivery("x.wav");
 
@@ -1824,7 +1887,10 @@ async fn a_retry_says_how_long_to_wait_before_the_next_attempt() {
 #[tokio::test]
 async fn an_envelope_re_filed_for_a_later_attempt_spends_the_budget_from_there() {
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder().provide(FlakyProcessor).build();
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
     let mut delivery = Delivery::new(
         &BARE,
         QueueName::new("transcode").expect("a valid name"),
@@ -1861,7 +1927,10 @@ async fn an_envelope_re_filed_for_a_later_attempt_spends_the_budget_from_there()
 async fn the_record_re_filed_after_a_retry_is_delivered_as_the_next_attempt() {
     let logs = nest_rs_testing::LogCapture::install();
     let enqueue = nest_rs_core::Correlation::minted(None);
-    let container = Container::builder().provide(FlakyProcessor).build();
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
     let flaky = method("FlakyProcessor::flaky");
     let mut first = Delivery::new(
         &BARE,
@@ -1957,7 +2026,8 @@ async fn relay(stored: serde_json::Value) -> (AttemptOutcome, Vec<serde_json::Va
         .provide(RelayProcessor {
             producer: producer.clone(),
         })
-        .build();
+        .build()
+        .expect("the container builds");
     let mut delivery = Delivery::new(
         &BARE,
         QueueName::new("relay").expect("a valid name"),

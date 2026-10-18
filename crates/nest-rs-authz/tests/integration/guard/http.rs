@@ -80,6 +80,7 @@ fn guard_over<F: AbilityFactory>(factory: F) -> Arc<AbilityGuard<F>> {
     let builder = Container::builder().provide_arc(Arc::new(factory));
     <AbilityGuard<F> as Discoverable>::register(builder)
         .build()
+        .expect("the container builds")
         .get::<AbilityGuard<F>>()
         .expect("the guard registers over its factory")
 }

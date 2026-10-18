@@ -505,7 +505,7 @@ mod tests {
 
         #[test]
         fn a_config_no_factory_resolved_is_refused_naming_it() {
-            let empty = Container::builder().build();
+            let empty = Container::builder().build().expect("the container builds");
             let Err(refused) = ConfigModule::resolved::<SeamConfig>(&empty) else {
                 panic!("an empty container resolved no config");
             };
@@ -527,7 +527,7 @@ mod tests {
 
         #[test]
         fn a_named_instance_s_config_no_factory_resolved_is_refused_naming_the_instance() {
-            let empty = Container::builder().build();
+            let empty = Container::builder().build().expect("the container builds");
             let Err(refused) = ConfigModule::resolved_for::<Archive, SeamConfig>(&empty) else {
                 panic!("an empty container resolved no config");
             };
@@ -549,7 +549,8 @@ mod tests {
                         bucket: "archived".into(),
                     },
                 ))
-                .build();
+                .build()
+                .expect("the container builds");
             let held = ConfigModule::resolved_for::<Archive, SeamConfig>(&container)
                 .unwrap_or_else(|refused| panic!("{refused}"));
             assert_eq!(held.bucket, "archived");
@@ -565,7 +566,8 @@ mod tests {
                 .provide(SeamConfig {
                     bucket: "held".into(),
                 })
-                .build();
+                .build()
+                .expect("the container builds");
             let resolved = ConfigModule::resolved::<SeamConfig>(&container)
                 .unwrap_or_else(|refused| panic!("{refused}"));
             assert_eq!(resolved.bucket, "held");

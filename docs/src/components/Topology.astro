@@ -17,7 +17,7 @@ interface Tier {
   bins: Binary[];
 }
 
-const modules = ['users', 'orgs', 'posts', 'audio', 'chat', 'notifications', 'authn', 'authz', 'oauth'];
+const modules = ['users', 'orgs', 'posts', 'audio', 'chat', 'notifications', 'audit', 'authn', 'authz', 'oauth'];
 
 const split: Tier[] = [
   {
@@ -28,7 +28,7 @@ const split: Tier[] = [
       {
         app: 'api',
         edges: 'HTTP · GraphQL · events · schedule',
-        modules: ['users', 'orgs', 'posts', 'audio', 'notifications', 'authn', 'authz'],
+        modules: ['users', 'orgs', 'posts', 'audio', 'notifications', 'audit', 'authn', 'authz'],
       },
       { app: 'live', edges: 'WebSocket', modules: ['users', 'chat', 'notifications', 'authn'] },
       { app: 'assistant', edges: 'MCP', modules: ['users', 'posts', 'audio'] },

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod audit;
 pub mod authn;
 pub mod authz;
 pub mod chat;

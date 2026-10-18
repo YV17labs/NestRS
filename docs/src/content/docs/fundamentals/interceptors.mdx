@@ -124,13 +124,32 @@ For infrastructure a module brings with its import, write `#[interceptor]` on
 the struct instead of `#[injectable]`. The struct is a singleton provider like
 any other, and importing its module adds it to every route's handler stage —
 after the app's global list, in import order, no `#[use_interceptors]`
-anywhere.
+anywhere. The demo's API audits every write it admits that way: its
+`ApiModule` imports `AuditHttpModule`, and nothing else names the interceptor.
 
-```rust title="crates/features/src/audit/interceptor.rs"
+```rust title="crates/features/src/audit/http/interceptor.rs (from the demo, abridged)"
 #[interceptor]
 #[derive(Default)]
-pub struct Audit;
+pub struct AuditInterceptor;
+
+impl Layer for AuditInterceptor {
+    fn serves(&self, unit: Unit) -> bool {
+        unit.edge() == Some(Edge::Http)
+    }
+}
+
+#[async_trait]
+impl Interceptor for AuditInterceptor {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        // …
+        outcome
+    }
+}
 ```
+
+`serves` is read once, as the app-wide list is composed for a site: a unit of
+another edge never runs it.
 
 ## The unit stage: `#[interceptor(stage = unit)]`
 

@@ -11,6 +11,7 @@ use nest_rs::server_timing::ServerTimingModule;
 use nest_rs::throttler::ThrottlerModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
+use features::audit::AuditHttpModule;
 use features::authn::AuthnModule;
 use features::authz::{AuthzGraphqlModule, AuthzModule};
 use features::notifications::{NotificationsEventsModule, NotificationsHttpModule};
@@ -41,6 +42,7 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         AuthnModule,
         AuthzModule,
         AuthzGraphqlModule,
+        AuditHttpModule,
         OrgsHttpModule,
         OrgsGraphqlModule,
         UsersHttpModule,

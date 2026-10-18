@@ -145,11 +145,11 @@ reads a `Display`.
 **An edge's lines carry the server's values only**: what a client addressed
 reaches them as the server's own name for it — the route template, a method
 from the conventions' known set or a route's, the event or tool a handler
-declares — or
-`operation_log::OTHER` where the server declares none, and a refused value is
-said by kind, with the settings that would admit it. The span keeps what the
-telemetry conventions require or recommend, the one stated exception
-(`.claude/decisions/payload-never-quoted.md`). Held by each edge's line tests.
+declares — or `operation_log::OTHER` where the server declares none, and a
+refused value is said by kind, with the settings that would admit it. The span
+keeps what the telemetry conventions require or recommend, the one stated
+exception (`.claude/decisions/payload-never-quoted.md`). Held by each edge's
+line tests.
 
 **A library's events are under the same rule**, since the framework's
 subscribers write them: the crate that wires a library quoting a client's

@@ -59,6 +59,7 @@ use tracing::Instrument;
 use crate::McpError;
 use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
 use crate::guard::BoxFuture;
+use crate::registry::ToolIndex;
 use nest_rs_core::__private::install_pending;
 
 /// Wraps a tool host so each operation runs with the request scope, what the
@@ -73,6 +74,8 @@ pub struct PropagatingHandler<H> {
     detached: DetachedWork,
     /// What one request operation may run for; `None` ⇒ no deadline.
     operation_timeout: Option<Duration>,
+    /// The tools the mount's hosts declare; `None` asks the host's `get_tool`.
+    tools: Option<Arc<ToolIndex>>,
 }
 
 impl<H> PropagatingHandler<H> {
@@ -82,6 +85,7 @@ impl<H> PropagatingHandler<H> {
         unit_of_work: Option<Arc<dyn UnitOfWork>>,
         detached: DetachedWork,
         operation_timeout: Option<Duration>,
+        tools: Option<Arc<ToolIndex>>,
     ) -> Self {
         Self {
             inner,
@@ -89,6 +93,7 @@ impl<H> PropagatingHandler<H> {
             unit_of_work,
             detached,
             operation_timeout,
+            tools,
         }
     }
 
@@ -99,29 +104,25 @@ impl<H> PropagatingHandler<H> {
     /// with no tool error in band.
     ///
     /// `method` is the JSON-RPC method and `addressed` what it named, which the
-    /// span records as the conventions ask; `declared` is the tool a host
-    /// declares under that name, the one operation a line names. `wrapped` is `false`
-    /// for an operation that takes neither the registered context, a unit of
-    /// work nor the operation deadline, which cuts the body, never its settle,
-    /// so a commit is never cut. `stopped` resolves when the operation is to end
-    /// before it answers, with what the client is answered; like the deadline
-    /// it cuts the body alone, so a stop arriving while the unit settles leaves
-    /// the operation to end as it answered.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one operation's names, its ambient state and its two ends, each read once"
-    )]
+    /// span records as the conventions ask; a line names only a tool the host
+    /// declares under that name. `wrapped` is `false` for an operation that
+    /// takes neither the registered context, a unit of work nor the operation
+    /// deadline, which cuts the body, never its settle, so a commit is never
+    /// cut. `stopped` resolves when the operation is to end before it answers,
+    /// with what the client is answered; like the deadline it cuts the body
+    /// alone, so a stop arriving while the unit settles leaves the operation to
+    /// end as it answered.
     async fn dispatch<T, F, S>(
         &self,
         method: &Method,
         addressed: &Addressed,
-        declared: Option<&str>,
         ambient: McpAmbient,
         wrapped: bool,
         stopped: S,
         inner: F,
     ) -> Result<T, McpError>
     where
+        H: ServerHandler,
         T: Send + 'static,
         F: Future<Output = Result<T, McpError>> + Send,
         S: Future<Output = Result<T, McpError>> + Send,
@@ -154,6 +155,7 @@ impl<H> PropagatingHandler<H> {
             mcp.operation.name = addressed.spanned(),
         );
         let method = method.named();
+        let declared = addressed.declared(&self.inner, self.tools.as_deref());
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
         let line = OperationLine::open(method, declared, correlation.clone(), operation.clone());
 
@@ -342,13 +344,18 @@ impl Addressed {
         }
     }
 
-    /// What a line names: a tool by the name `host` declares, and
+    /// What a line names: a tool by the name `host` declares — read off the
+    /// mount's `tools`, or `host`'s `get_tool` where those cannot say — and
     /// [`OTHER`](operation_log::OTHER) for one it does not; nothing else the
     /// client named, which no declaration answers for.
-    fn declared(&self, host: &impl ServerHandler) -> Option<&str> {
+    fn declared(&self, host: &impl ServerHandler, tools: Option<&ToolIndex>) -> Option<&str> {
         match self {
-            Self::Tool(name) if host.get_tool(name).is_some() => Some(name),
-            Self::Tool(_) => Some(operation_log::OTHER),
+            Self::Tool(name) => {
+                let declared = tools
+                    .and_then(|tools| tools.declares(name))
+                    .unwrap_or_else(|| host.get_tool(name).is_some());
+                Some(if declared { name } else { operation_log::OTHER })
+            }
             Self::Nothing | Self::Prompt(_) | Self::Resource(_) => None,
         }
     }
@@ -360,7 +367,7 @@ impl Addressed {
 /// [`OTHER`](operation_log::OTHER), and a tool by the name a host declares.
 struct OperationLine<'a> {
     method: &'static str,
-    addressed: Option<&'a str>,
+    declared: Option<&'a str>,
     /// Entered to file the line, which sits outside the scope the operation installs.
     correlation: Correlation,
     /// The operation's own span; [`Span::none`](tracing::Span::none) for a
@@ -373,13 +380,13 @@ struct OperationLine<'a> {
 impl<'a> OperationLine<'a> {
     fn open(
         method: &'static str,
-        addressed: Option<&'a str>,
+        declared: Option<&'a str>,
         correlation: Correlation,
         span: tracing::Span,
     ) -> Self {
         Self {
             method,
-            addressed,
+            declared,
             correlation,
             span,
             started: std::time::Instant::now(),
@@ -401,7 +408,7 @@ impl<'a> OperationLine<'a> {
                 payload,
                 "mcp operation panicked; its client is answered with an internal error",
                 method = self.method,
-                operation = self.addressed,
+                operation = self.declared,
             );
         });
     }
@@ -417,7 +424,7 @@ impl<'a> OperationLine<'a> {
                 // Flat, never dotted: a dotted field name is ambiguous to
                 // `tracing`'s parser beside a path target.
                 method = self.method,
-                operation = self.addressed,
+                operation = self.declared,
             );
         });
     }
@@ -453,12 +460,10 @@ macro_rules! request_method {
                 let ambient = McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
                 let method = Method::from($method);
                 let addressed: Addressed = $addressed;
-                let declared = addressed.declared(&self.inner);
                 let cancelled = context.ct.clone().cancelled_owned();
                 self.dispatch(
                     &method,
                     &addressed,
-                    declared,
                     ambient,
                     true,
                     async move {
@@ -586,22 +591,20 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         Addressed::Nothing,
     );
 
+    // A task's id is the client's and no convention names it, so nothing records it.
     request_method!(
         get_task(request: GetTaskParams) -> GetTaskResult,
         GetTaskMethod::VALUE,
-        // The task id the client sent: no convention names it, so nothing records it.
         Addressed::Nothing,
     );
     request_method!(
         update_task(request: UpdateTaskParams) -> (),
         UpdateTaskMethod::VALUE,
-        // The task id the client sent: no convention names it, so nothing records it.
         Addressed::Nothing,
     );
     request_method!(
         cancel_task(request: CancelTaskParams) -> (),
         CancelTaskMethod::VALUE,
-        // The task id the client sent: no convention names it, so nothing records it.
         Addressed::Nothing,
     );
 
@@ -640,7 +643,6 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         self.dispatch(
             &Method::from(SubscriptionsListenRequestMethod::VALUE),
             &Addressed::Nothing,
-            None,
             ambient,
             false,
             async move {
@@ -713,7 +715,7 @@ mod tests {
     #[test]
     fn the_wrapper_asks_the_inner_host_to_negotiate() {
         let wrapper =
-            PropagatingHandler::new(NegotiatingHost, None, None, DetachedWork::new(), None);
+            PropagatingHandler::new(NegotiatingHost, None, None, DetachedWork::new(), None, None);
         let mut request = InitializeRequestParams::default();
         request.protocol_version = THE_CALLER_ASKS_FOR;
 

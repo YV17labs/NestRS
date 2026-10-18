@@ -9,7 +9,7 @@
 
 use std::any::TypeId;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
@@ -275,8 +275,7 @@ fn declared_names(meta: &McpHostMeta) -> impl Iterator<Item = Cow<'static, str>>
 fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &DetachedWork) {
     let hosts = hosts_on(container, path);
 
-    // Built once: rmcp's `#[tool_handler]` rebuilds the whole `ToolRouter` on every `get_tool`.
-    let mut tools = ToolIndex::new();
+    let mut tools = ToolIndex::default();
     for (position, host) in hosts.iter().enumerate() {
         let names: Vec<Cow<'static, str>> = declared_names(host).collect();
         tracing::info!(
@@ -287,9 +286,12 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
             tools = names.join(", ").as_str(),
             "mounted mcp host",
         );
+        if names.is_empty() {
+            tools.unread.push(position);
+        }
         for name in names {
             // A duplicate already failed the boot.
-            tools.entry(name.into_owned()).or_insert(position);
+            tools.owners.entry(name.into_owned()).or_insert(position);
         }
     }
 
@@ -303,8 +305,10 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
         .get::<crate::McpConfig>()
         .unwrap_or_default()
         .warn_when_operations_outlast_the_window(window, path);
-    let mount = McpMount::from_container(container).stopped_with(detached.clone());
     let tools = Arc::new(tools);
+    let mount = McpMount::from_container(container)
+        .stopped_with(detached.clone())
+        .declaring(tools.clone());
     let shared_path: Arc<str> = Arc::from(path);
     let container = container.clone();
     routes.route_any_poem(
@@ -321,8 +325,40 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
     );
 }
 
-/// Tool name → position in the path's host list.
-pub(crate) type ToolIndex = std::collections::HashMap<String, usize>;
+/// The tools the hosts on one path declare, read once at mount: rmcp's
+/// `#[tool_handler]` rebuilds the whole `ToolRouter` on every `get_tool`.
+#[derive(Debug, Default)]
+pub(crate) struct ToolIndex {
+    /// Tool name → position in the path's host list.
+    owners: HashMap<String, usize>,
+    /// The positions of the hosts declaring no `#[tool_router]`, whose tools
+    /// only their own `get_tool` can name.
+    unread: Vec<usize>,
+}
+
+impl ToolIndex {
+    /// The position of the host declaring `name`.
+    pub(crate) fn owner(&self, name: &str) -> Option<usize> {
+        self.owners.get(name).copied()
+    }
+
+    /// The positions of the hosts the index could not read.
+    pub(crate) fn unread(&self) -> &[usize] {
+        &self.unread
+    }
+
+    /// Whether a host on the path declares `name`; `None` when only a host
+    /// the index could not read can say.
+    pub(crate) fn declares(&self, name: &str) -> Option<bool> {
+        if self.owners.contains_key(name) {
+            Some(true)
+        } else if self.unread.is_empty() {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
 
 /// Fail boot when two hosts on one path serve the same tool name. A host that
 /// declares no `#[tool_router]` is probed with `get_tool` for every candidate.

@@ -157,6 +157,7 @@ impl<E> EdgeEndpoint<E> {
         headers: Vec<(HeaderName, HeaderValue)>,
         normalize: bool,
         counts_body: bool,
+        known_methods: KnownMethods,
         drain: Arc<Drain>,
     ) -> Self {
         let shared_scope = (!container.has_dynamic_scopes())
@@ -181,16 +182,9 @@ impl<E> EdgeEndpoint<E> {
             counts_body,
             access_log,
             trusted_proxies,
-            known_methods: KnownMethods::default(),
+            known_methods,
             drain,
         }
-    }
-
-    /// The edge naming, beside the HTTP conventions' methods, those the route
-    /// table registers.
-    pub(crate) fn knowing(mut self, known_methods: KnownMethods) -> Self {
-        self.known_methods = known_methods;
-        self
     }
 
     fn finish(&self, mut resp: Response) -> Response {
@@ -326,10 +320,9 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         // on one id; the origin first, because the id's gate reads it.
         let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
         let correlation = trace_context::resolve(&req, origin);
+        let method = self.known_methods.name(req.method());
         // Never gated: it carries `trace_id` onto every event and declares the
         // `actor_id` field the authn guard records into.
-        // Named once, as the line and the span name it.
-        let method = self.known_methods.name(req.method());
         let span = trace_context::request_span(&req, &correlation, origin, &method);
         // Filled by the table's entry the router matched.
         let matched = MatchedRoute::default();
@@ -422,6 +415,7 @@ mod tests {
             headers,
             false,
             false,
+            KnownMethods::default(),
             Arc::default(),
         )
     }
@@ -441,6 +435,7 @@ mod tests {
             headers,
             true,
             false,
+            KnownMethods::default(),
             Arc::default(),
         )
     }
@@ -543,6 +538,7 @@ mod tests {
             Vec::new(),
             false,
             false,
+            KnownMethods::default(),
             Arc::default(),
         );
         let resp = answer(&ep, get()).await;

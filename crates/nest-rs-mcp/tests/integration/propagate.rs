@@ -499,19 +499,16 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
             nest_rs_mcp::unit::OPERATION.name(),
         )
     };
-    for _ in 0..200 {
-        if lines()
+    nest_rs_testing::wait_until(Duration::from_secs(2), || {
+        lines()
             .iter()
             .filter(|line| {
                 line.field("method").as_deref() == Some(nest_rs_core::operation_log::OTHER)
             })
             .count()
             == 2
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    })
+    .await;
     // rmcp's own events are its clamp's; the capture keeps them all.
     for event in logs
         .events()

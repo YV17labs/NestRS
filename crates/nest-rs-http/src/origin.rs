@@ -125,21 +125,20 @@ impl OriginPolicy {
         let Some(origin) = Origin::parse(origin) else {
             return refused(OriginRefusedReason::OriginNotSerialized, None);
         };
-        let own = self.own(request, trusted_proxy);
         if self.lists(&origin) {
             return Ok(());
         }
-        match origin {
-            Origin::Opaque => refused(OriginRefusedReason::OriginNull, None),
-            Origin::Tuple(sent) => match own {
-                Some(own) if own == sent => Ok(()),
-                own => refused(
-                    own.map_or(OriginRefusedReason::HostMissing, |own| {
-                        sent.differs_from(&own)
-                    }),
-                    Some(OriginScheme::of(&sent.scheme)),
-                ),
-            },
+        let Origin::Tuple(sent) = origin else {
+            return refused(OriginRefusedReason::OriginNull, None);
+        };
+        match self.own(request, trusted_proxy) {
+            Some(own) if own == sent => Ok(()),
+            own => refused(
+                own.map_or(OriginRefusedReason::HostMissing, |own| {
+                    sent.differs_from(&own)
+                }),
+                Some(OriginScheme::of(&sent.scheme)),
+            ),
         }
     }
 

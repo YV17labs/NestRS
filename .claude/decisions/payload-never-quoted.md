@@ -93,8 +93,8 @@ spelled it.
 - **The request's line carries the server's values only**: the route
   template, the method as OpenTelemetry's HTTP conventions know it — RFC
   9110's, `PATCH` and `QUERY`, spelled exactly, and any a route registers —
-  or `_OTHER`, the status, the bytes and the duration. `user_agent` left it: free text, which a log
-  pipeline keeps whole.
+  or `_OTHER`, the status, the bytes and the duration. `user_agent` left it:
+  free text, which a log pipeline keeps whole.
 - **Every edge's line names what a client addressed by the server's own
   name for it**, and `_OTHER` — the conventions' word for a method they do not
   know — where the server declares none: a WebSocket message's line, its span
@@ -118,13 +118,13 @@ spelled it.
   (each conditionally required, folded as `mcp.operation.name`), but no task
   id, which no convention names. Standards over invention: a tracing
   backend reads those names, and the span goes to the deployment's own
-  collector, never to a client or a shared log. Beyond that set, a header the span records is
-  recorded only once it parsed under its grammar — a `traceparent` the
-  transport did not continue as the four hex fields it parsed to, an
-  `X-Request-Id`, which no specification gives a grammar, only in the shape a
-  proxy mints it, bounded hex (a UUID, or 16 to 64 hex digits) — and
-  otherwise not at all: a token admits any word a client writes through a
-  proxy that forwards the header. The span still records no `url.query` and
+  collector, never to a client or a shared log. Beyond that set, a header the
+  span records is recorded only once it parsed under its grammar — a
+  `traceparent` the transport did not continue as the four hex fields it
+  parsed to, an `X-Request-Id`, which no specification gives a grammar, only
+  in the shape a proxy mints it, bounded hex (a UUID, or 16 to 64 hex digits)
+  — and otherwise not at all: a token admits any word a client writes through
+  a proxy that forwards the header. The span still records no `url.query` and
   no `client.address`, which the conventions also ask for: those stay out on
   the rule above and on personal data.
 - **The route table is the override of the known methods.** The conventions

@@ -112,12 +112,11 @@ impl CompositeHandler {
         }
     }
 
-    /// The host that declares `name`, through the index built at mount: rmcp's
-    /// `#[tool_handler]` rebuilds the whole `ToolRouter` on each `get_tool`.
+    /// The host that declares `name`, through the index built at mount.
     fn owner_of_tool(&self, name: &str) -> Option<&MountedHost> {
         self.tools
-            .get(name)
-            .and_then(|position| self.hosts.get(*position))
+            .owner(name)
+            .and_then(|position| self.hosts.get(position))
     }
 
     /// Offer an addressed operation to each host in turn, returning the first
@@ -457,11 +456,16 @@ impl ServerHandler for CompositeHandler {
             .find_map(|host| host.host.accepted_subscription_filter(requested))
     }
 
-    /// Routed through the index first, so it rebuilds one host's `ToolRouter`.
+    /// Routed through the index, so it rebuilds one host's `ToolRouter`, or
+    /// asks only the hosts the index could not read.
     fn get_tool(&self, name: &str) -> Option<Tool> {
         match self.owner_of_tool(name) {
             Some(owner) => owner.host.get_tool(name),
-            None => self.hosts.iter().find_map(|host| host.host.get_tool(name)),
+            None => self
+                .tools
+                .unread()
+                .iter()
+                .find_map(|position| self.hosts.get(*position)?.host.get_tool(name)),
         }
     }
 

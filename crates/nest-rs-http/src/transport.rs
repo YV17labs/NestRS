@@ -372,21 +372,19 @@ impl HttpTransport {
         normalize: bool,
         known_methods: KnownMethods,
     ) -> BoxEndpoint {
-        BoxEndpoint::new(
-            EdgeEndpoint::new(
-                inner,
-                container.clone(),
-                timeout,
-                self.max_body_bytes,
-                self.deadlines.body_read,
-                headers,
-                normalize,
-                // Compression replaces the request body but not its `Content-Length`.
-                self.compression,
-                Arc::clone(&self.drain),
-            )
-            .knowing(known_methods),
-        )
+        BoxEndpoint::new(EdgeEndpoint::new(
+            inner,
+            container.clone(),
+            timeout,
+            self.max_body_bytes,
+            self.deadlines.body_read,
+            headers,
+            normalize,
+            // Compression replaces the request body but not its `Content-Length`.
+            self.compression,
+            known_methods,
+            Arc::clone(&self.drain),
+        ))
     }
 }
 

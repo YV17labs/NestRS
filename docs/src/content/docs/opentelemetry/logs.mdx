@@ -419,8 +419,8 @@ value the client chose. A request no route matched carries no `route` at all.
 The line carries the server's values only. `method` is one of the methods
 OpenTelemetry's HTTP conventions know (`GET`, `POST`, `PATCH`, `QUERY` and the
 rest of RFC 9110's) or one a route registers, spelled exactly, and `_OTHER`
-for any other token a client sent. There is no `user_agent`: it is free text the client writes, and a log
-pipeline keeps whatever a line hands it. The request's span still records the
+for any other token a client sent. There is no `user_agent`: it is free text
+the client writes, and a log pipeline keeps whatever a line hands it. The request's span still records the
 user agent, as the conventions recommend — see
 [Traces](/opentelemetry/traces/#http-interceptor) for that one stated exception.
 

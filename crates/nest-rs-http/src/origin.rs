@@ -9,7 +9,6 @@
 //! server's own origin included; an entry point mounted outside the transport
 //! is held to this policy all the same.
 
-use std::fmt;
 use std::net::{IpAddr, Ipv6Addr};
 
 use http::header::{self, HeaderMap};
@@ -20,7 +19,7 @@ use crate::HttpConfig;
 use crate::client_ip::forwarded_param;
 use crate::cors::holds_wildcard;
 use crate::endpoint::{BoxEndpoint, Endpoint, OriginCheck, OriginGate};
-use crate::error::{OriginRefused, ResponseError};
+use crate::error::{OriginRefused, OriginRefusedReason, ResponseError};
 
 /// The de-facto forwarding headers for the scheme and the host, which the
 /// `http` crate does not name.
@@ -113,22 +112,35 @@ impl OriginPolicy {
         let Some(origin) = sent.next() else {
             return Ok(());
         };
-        let parsed = match sent.next() {
-            None => origin.to_str().ok().and_then(Origin::parse),
-            Some(_) => None,
+        let trusted_proxy = request
+            .peer()
+            .is_some_and(|peer| self.trusted_proxies.contains(&peer));
+        let refused = |reason, scheme| Err(OriginRefused::new(reason, scheme, trusted_proxy));
+        if sent.next().is_some() {
+            return refused(OriginRefusedReason::OriginRepeated, None);
+        }
+        let Ok(origin) = origin.to_str() else {
+            return refused(OriginRefusedReason::OriginNotVisibleAscii, None);
         };
-        let own = self.own(request);
-        if let Some(parsed) = &parsed
-            && (own.as_ref() == Some(parsed) || self.lists(parsed))
-        {
+        let Some(origin) = Origin::parse(origin) else {
+            return refused(OriginRefusedReason::OriginNotSerialized, None);
+        };
+        let own = self.own(request, trusted_proxy);
+        if self.lists(&origin) {
             return Ok(());
         }
-        Err(OriginRefused::new(
-            origin
-                .to_str()
-                .map_or_else(|_| "(not visible ASCII)".to_owned(), ToOwned::to_owned),
-            own.map_or_else(|| "none".to_owned(), |own| own.to_string()),
-        ))
+        match origin {
+            Origin::Opaque => refused(OriginRefusedReason::OriginNull, None),
+            Origin::Tuple(sent) => match own {
+                Some(own) if own == sent => Ok(()),
+                own => refused(
+                    own.map_or(OriginRefusedReason::HostMissing, |own| {
+                        sent.differs_from(&own)
+                    }),
+                    Some(OriginScheme::of(&sent.scheme)),
+                ),
+            },
+        }
     }
 
     fn lists(&self, origin: &Origin) -> bool {
@@ -138,12 +150,10 @@ impl OriginPolicy {
         }
     }
 
-    /// The origin the request was sent to.
-    fn own(&self, request: &impl OriginFacts) -> Option<Origin> {
+    /// The origin the request was sent to: its `Host` and the scheme it
+    /// arrived over, or what a trusted proxy forwarded of them.
+    fn own(&self, request: &impl OriginFacts, proxied: bool) -> Option<Tuple> {
         let headers = request.headers();
-        let proxied = request
-            .peer()
-            .is_some_and(|peer| self.trusted_proxies.contains(&peer));
         let (proto, host) = if proxied {
             forwarded(headers)
         } else {
@@ -153,7 +163,7 @@ impl OriginPolicy {
         let host = host
             .or_else(|| headers.get(header::HOST)?.to_str().ok())
             .or_else(|| request.authority())?;
-        Origin::tuple(scheme, host)
+        Tuple::of(scheme, host)
     }
 }
 
@@ -284,13 +294,17 @@ impl OriginFacts for poem::Request {
 enum Origin {
     /// `null`, an opaque origin (§7.3): admitted only where `null` is listed.
     Opaque,
-    /// Scheme and host lowercased, IPv6 literals in their canonical text, and
-    /// the port the scheme defaults to when none is written.
-    Tuple {
-        scheme: String,
-        host: String,
-        port: Option<u16>,
-    },
+    /// A scheme, a host and a port.
+    Tuple(Tuple),
+}
+
+/// Scheme and host lowercased, IPv6 literals in their canonical text, and the
+/// port the scheme defaults to when none is written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Tuple {
+    scheme: String,
+    host: String,
+    port: Option<u16>,
 }
 
 impl Origin {
@@ -301,11 +315,13 @@ impl Origin {
             return Some(Self::Opaque);
         }
         let (scheme, authority) = serialized.split_once("://")?;
-        Self::tuple(scheme, authority)
+        Tuple::of(scheme, authority).map(Self::Tuple)
     }
+}
 
+impl Tuple {
     /// The origin of a request sent to `authority` over `scheme`.
-    fn tuple(scheme: &str, authority: &str) -> Option<Self> {
+    fn of(scheme: &str, authority: &str) -> Option<Self> {
         let scheme_is_valid = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
             && scheme
                 .bytes()
@@ -318,21 +334,49 @@ impl Origin {
         let host = canonical_host(authority.host())?;
         let scheme = scheme.to_ascii_lowercase();
         let port = authority.port_u16().or_else(|| default_port(&scheme));
-        Some(Self::Tuple { scheme, host, port })
+        Some(Self { scheme, host, port })
+    }
+
+    /// The first component, in §5's order, in which `self` is not `own`.
+    fn differs_from(&self, own: &Self) -> OriginRefusedReason {
+        if self.scheme != own.scheme {
+            OriginRefusedReason::SchemeDiffers
+        } else if self.host != own.host {
+            OriginRefusedReason::HostDiffers
+        } else {
+            OriginRefusedReason::PortDiffers
+        }
     }
 }
 
-impl fmt::Display for Origin {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+/// A refused origin's scheme, from a closed set: the two a page is served
+/// over, and any other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginScheme {
+    /// `http`.
+    Http,
+    /// `https`.
+    Https,
+    /// Any other scheme.
+    Other,
+}
+
+impl OriginScheme {
+    /// The scheme of a lowercased origin.
+    pub(crate) fn of(scheme: &str) -> Self {
+        match scheme {
+            "http" => Self::Http,
+            "https" => Self::Https,
+            _ => Self::Other,
+        }
+    }
+
+    /// The word the line files.
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Opaque => f.write_str("null"),
-            Self::Tuple { scheme, host, port } => {
-                write!(f, "{scheme}://{host}")?;
-                match port {
-                    Some(port) if Some(*port) != default_port(scheme) => write!(f, ":{port}"),
-                    _ => Ok(()),
-                }
-            }
+            Self::Http => "http",
+            Self::Https => "https",
+            Self::Other => "other",
         }
     }
 }
@@ -438,18 +482,97 @@ mod tests {
     #[test]
     fn another_scheme_host_or_port_is_another_origin() {
         let policy = policy(&[], &[]);
-        for origin in [
-            "https://api.example",
-            "http://api.example:8080",
-            "http://evil.example",
-            "http://api.example.evil.example",
-            "http://[::2]",
+        for (origin, reason, scheme) in [
+            (
+                "https://api.example",
+                OriginRefusedReason::SchemeDiffers,
+                OriginScheme::Https,
+            ),
+            (
+                "ws://api.example",
+                OriginRefusedReason::SchemeDiffers,
+                OriginScheme::Other,
+            ),
+            (
+                "http://api.example:8080",
+                OriginRefusedReason::PortDiffers,
+                OriginScheme::Http,
+            ),
+            (
+                "http://evil.example",
+                OriginRefusedReason::HostDiffers,
+                OriginScheme::Http,
+            ),
+            (
+                "http://api.example.evil.example",
+                OriginRefusedReason::HostDiffers,
+                OriginScheme::Http,
+            ),
+            (
+                "http://[::2]",
+                OriginRefusedReason::HostDiffers,
+                OriginScheme::Http,
+            ),
         ] {
             let refused = policy
                 .allows(&from_browser(origin, "api.example"))
                 .expect_err(origin);
-            assert_eq!(refused.origin(), origin);
-            assert_eq!(refused.expected(), "http://api.example");
+            assert_eq!(refused.reason(), reason, "{origin}");
+            assert_eq!(refused.scheme(), Some(scheme), "{origin}");
+            assert!(!refused.trusted_proxy(), "{origin}");
+        }
+    }
+
+    /// The `Origin` sent and the `Host` it was compared to are the client's:
+    /// the refusal keeps neither, nor any part of them.
+    #[test]
+    fn a_refusal_keeps_no_value_the_request_carried() {
+        let refused = policy(&[], &[PROXY])
+            .allows(&request(
+                "/socket",
+                PROXY,
+                &[
+                    ("origin", "https://origin-marker.example:8443"),
+                    ("host", "host-marker.example"),
+                    ("x-forwarded-host", "forwarded-marker.example"),
+                ],
+            ))
+            .expect_err("another origin");
+        let kept = format!("{refused:?} {refused} {:?}", refused.hint());
+        assert!(!kept.contains("marker"), "{kept}");
+        assert!(!kept.contains("8443"), "{kept}");
+        assert_eq!(refused.reason(), OriginRefusedReason::SchemeDiffers);
+        assert!(refused.trusted_proxy());
+    }
+
+    /// The hint names the settings that admit the origin, with the
+    /// deployment's prefix; the proxy list only while the peer is no trusted
+    /// proxy, and nothing for a field no setting admits.
+    #[test]
+    fn the_hint_names_the_settings_that_would_admit_it() {
+        let origins = nest_rs_config::var_name("http", "CORS_ORIGINS");
+        let proxies = nest_rs_config::var_name("http", "TRUSTED_PROXIES");
+        let hint = |trusted_proxy, reason| {
+            OriginRefused::new(reason, Some(OriginScheme::Https), trusted_proxy).hint()
+        };
+        let direct = hint(false, OriginRefusedReason::HostDiffers).expect("a hint");
+        assert!(
+            direct.contains(&origins) && direct.contains(&proxies),
+            "{direct}"
+        );
+        let proxied = hint(true, OriginRefusedReason::HostMissing).expect("a hint");
+        assert!(
+            proxied.contains(&origins) && !proxied.contains(&proxies),
+            "{proxied}"
+        );
+        let null = hint(false, OriginRefusedReason::OriginNull).expect("a hint");
+        assert!(null.contains(&origins) && null.contains("`null`"), "{null}");
+        for reason in [
+            OriginRefusedReason::OriginNotVisibleAscii,
+            OriginRefusedReason::OriginNotSerialized,
+            OriginRefusedReason::OriginRepeated,
+        ] {
+            assert_eq!(hint(false, reason), None, "{reason:?}");
         }
     }
 
@@ -464,10 +587,15 @@ mod tests {
             "http://[::1",
             "http://api.example http://other.example",
         ] {
-            assert!(
-                policy.allows(&from_browser(origin, "api.example")).is_err(),
+            let refused = policy
+                .allows(&from_browser(origin, "api.example"))
+                .expect_err(origin);
+            assert_eq!(
+                refused.reason(),
+                OriginRefusedReason::OriginNotSerialized,
                 "{origin}"
             );
+            assert_eq!(refused.scheme(), None, "{origin}");
         }
         let twice = request(
             "/socket",
@@ -478,7 +606,22 @@ mod tests {
                 ("host", "api.example"),
             ],
         );
-        assert!(policy.allows(&twice).is_err(), "two `Origin` fields");
+        assert_eq!(
+            policy.allows(&twice).map_err(|refused| refused.reason()),
+            Err(OriginRefusedReason::OriginRepeated),
+            "two `Origin` fields",
+        );
+        let mut opaque_bytes = from_browser("http://api.example", "api.example");
+        opaque_bytes.headers_mut().insert(
+            header::ORIGIN,
+            HeaderValue::from_bytes(b"http://\xe9t\xe9.example").expect("obs-text is a value"),
+        );
+        assert_eq!(
+            policy
+                .allows(&opaque_bytes)
+                .map_err(|refused| refused.reason()),
+            Err(OriginRefusedReason::OriginNotVisibleAscii),
+        );
     }
 
     #[test]
@@ -515,13 +658,19 @@ mod tests {
         let refused = policy
             .allows(&nowhere)
             .expect_err("no host to compare with");
-        assert_eq!(refused.expected(), "none");
+        assert_eq!(refused.reason(), OriginRefusedReason::HostMissing);
+        assert_eq!(refused.scheme(), Some(OriginScheme::Https));
     }
 
     #[test]
     fn an_opaque_origin_is_admitted_only_where_null_is_listed() {
         let null = from_browser("null", "api.example");
-        assert!(policy(&[], &[]).allows(&null).is_err());
+        assert_eq!(
+            policy(&[], &[])
+                .allows(&null)
+                .map_err(|refused| refused.reason()),
+            Err(OriginRefusedReason::OriginNull),
+        );
         assert!(policy(&["https://app.example"], &[]).allows(&null).is_err());
         assert!(policy(&["null"], &[]).allows(&null).is_ok());
         assert!(
@@ -556,7 +705,12 @@ mod tests {
             ],
         );
         let refused = policy.allows(&forged).expect_err("headers from a stranger");
-        assert_eq!(refused.expected(), "http://api.internal:8080");
+        assert_eq!(
+            refused.reason(),
+            OriginRefusedReason::SchemeDiffers,
+            "compared with `http://api.internal:8080`, what the stranger reached",
+        );
+        assert!(!refused.trusted_proxy());
     }
 
     #[test]
@@ -594,7 +748,12 @@ mod tests {
         let refused = policy
             .allows(&rewritten)
             .expect_err("a proxy that rewrote `Host` and said nothing");
-        assert_eq!(refused.expected(), "http://api.internal:8080");
+        assert_eq!(
+            refused.reason(),
+            OriginRefusedReason::SchemeDiffers,
+            "compared with `http://api.internal:8080`, the `Host` it rewrote",
+        );
+        assert!(refused.trusted_proxy());
     }
 
     #[tokio::test]

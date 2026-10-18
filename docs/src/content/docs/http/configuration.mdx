@@ -200,8 +200,16 @@ and `/mcp` check `Origin` themselves, CORS on or off; a client that sends no
 `Origin` — anything but a browser — passes.
 
 - **With no `cors`**, a browser page on the server's own origin is admitted
-  and any other is answered `403`, with a `warn` naming the origin sent and
-  the one the server took for its own. Behind a proxy that terminates TLS or
+  and any other is answered `403`, with a `warn` that says why by kind. The
+  `Origin` and the `Host` it is compared to are both the client's to write,
+  so neither reaches the line: `reason` is the first check that failed
+  (`scheme_differs`, `host_differs`, `port_differs`, `host_missing`,
+  `origin_null`, `origin_repeated`, `origin_not_serialized` or
+  `origin_not_visible_ascii`), `scheme` is the sent origin's (`http`,
+  `https` or `other`), `trusted_proxy` says whether the request came through
+  a proxy you listed, and `hint` names the settings that would admit it —
+  `<PREFIX>_HTTP__CORS_ORIGINS`, and `<PREFIX>_HTTP__TRUSTED_PROXIES` while
+  the peer is not a listed proxy. Behind a proxy that terminates TLS or
   rewrites `Host`, the server sees a scheme or a host the browser did not:
   list the proxy in `trusted_proxies` so its `Forwarded` or
   `X-Forwarded-Proto` and `X-Forwarded-Host` say which origin the browser was

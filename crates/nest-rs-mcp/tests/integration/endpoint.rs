@@ -125,7 +125,9 @@ async fn the_standalone_stream_ends_at_the_shutdown_signal() {
 
 /// The MCP transport's Security Warning: a server validates `Origin` on every
 /// incoming connection, refusing an invalid one `403` — with CORS off as much
-/// as on.
+/// as on. The line says the refusal by kind: the `Origin` sent and the `Host`
+/// it was compared to are both the client's, and each carries a marker no
+/// field may hold.
 #[tokio::test]
 async fn a_browser_request_from_another_origin_is_refused_while_cors_is_off() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -134,23 +136,31 @@ async fn a_browser_request_from_another_origin_is_refused_while_cors_is_off() {
         .expect("boots");
     let initialize = nest_rs_testing::mcp::initialize_request();
 
-    let refused = nest_rs_testing::mcp::post_message_with(
-        app.http(),
-        LISTENING,
-        None,
-        None,
-        &[("origin", "https://evil.example")],
-        &initialize,
-    )
-    .await;
-    refused.assert_status(StatusCode::FORBIDDEN);
+    app.http()
+        .post(LISTENING)
+        .header("host", "host-marker.example")
+        .header("origin", "https://origin-marker.example")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body_json(&initialize)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
     let event = logs.expect_one("nest_rs::mcp", "browser origin refused");
     assert_eq!(event.level, "warn");
-    assert_eq!(
-        event.field("origin").as_deref(),
-        Some("https://evil.example")
-    );
-    assert_eq!(event.field("expected").as_deref(), Some("http://localhost"));
+    for (field, value) in &event.fields {
+        assert!(!value.contains("marker"), "{field} = {value}");
+    }
+    assert_eq!(event.field("reason").as_deref(), Some("scheme_differs"));
+    assert_eq!(event.field("scheme").as_deref(), Some("https"));
+    assert_eq!(event.field("trusted_proxy").as_deref(), Some("false"));
+    let hint = event.field("hint").unwrap_or_default();
+    for setting in ["CORS_ORIGINS", "TRUSTED_PROXIES"] {
+        assert!(
+            hint.contains(&nest_rs_config::var_name("http", setting)),
+            "{hint}"
+        );
+    }
 
     for origin in [&[][..], &[("origin", "http://localhost")][..]] {
         nest_rs_testing::mcp::post_message_with(

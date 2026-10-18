@@ -16,6 +16,7 @@ use nest_rs_core::Problem;
 use nest_rs_core::problem::code;
 
 use crate::headers::one_of;
+use crate::origin::OriginScheme;
 use crate::problem::{ProblemDetails, problem_response};
 use crate::response::{IntoResponse, Response};
 
@@ -949,29 +950,127 @@ pub(crate) const ORIGIN_REFUSED: &str =
 
 /// A browser `Origin` the [`OriginPolicy`](crate::__private::OriginPolicy)
 /// refused: it answers `403` with a problem document that names no origin, and
-/// carries what the edge's `warn` says.
+/// keeps no value the request carried — the `Origin` sent and the `Host` it was
+/// compared to are both the client's — only why, by kind, for the edge's `warn`
+/// ([`__origin_refused!`](crate::__origin_refused)).
 #[derive(Debug, thiserror::Error)]
 #[error("{}", ORIGIN_REFUSED)]
 pub struct OriginRefused {
-    origin: String,
-    expected: String,
+    reason: OriginRefusedReason,
+    scheme: Option<OriginScheme>,
+    trusted_proxy: bool,
 }
 
 impl OriginRefused {
-    pub(crate) fn new(origin: String, expected: String) -> Self {
-        Self { origin, expected }
+    pub(crate) fn new(
+        reason: OriginRefusedReason,
+        scheme: Option<OriginScheme>,
+        trusted_proxy: bool,
+    ) -> Self {
+        Self {
+            reason,
+            scheme,
+            trusted_proxy,
+        }
     }
 
-    /// The `Origin` the browser sent, as the header spelled it.
-    pub fn origin(&self) -> &str {
-        &self.origin
+    /// The first check the `Origin` failed.
+    pub fn reason(&self) -> OriginRefusedReason {
+        self.reason
     }
 
-    /// The origin the server took for its own, or `none` when the request
-    /// named no host — what tells an operator a proxy is not trusted yet.
-    pub fn expected(&self) -> &str {
-        &self.expected
+    /// The sent origin's scheme, when the field parsed as a scheme, host and
+    /// port.
+    pub fn scheme(&self) -> Option<OriginScheme> {
+        self.scheme
     }
+
+    /// Whether the request came from a peer `trusted_proxies` lists, whose
+    /// forwarded host and scheme the request's own origin was read from.
+    pub fn trusted_proxy(&self) -> bool {
+        self.trusted_proxy
+    }
+
+    /// The settings that would admit the origin, each named with the
+    /// deployment's prefix; `None` when no setting admits it, the field being
+    /// no origin at all.
+    pub fn hint(&self) -> Option<String> {
+        let origins = nest_rs_config::var_name("http", "CORS_ORIGINS");
+        match self.reason {
+            OriginRefusedReason::OriginNotVisibleAscii
+            | OriginRefusedReason::OriginNotSerialized
+            | OriginRefusedReason::OriginRepeated => None,
+            OriginRefusedReason::OriginNull => Some(format!(
+                "an opaque origin is admitted only where {origins} lists `null`"
+            )),
+            _ if self.trusted_proxy => Some(format!("list the page's origin in {origins}")),
+            _ => Some(format!(
+                "list the page's origin in {origins}, or the proxy in front of this server \
+                 in {}",
+                nest_rs_config::var_name("http", "TRUSTED_PROXIES"),
+            )),
+        }
+    }
+}
+
+/// Why an `Origin` was refused, in RFC 6454's vocabulary: the first check it
+/// failed — the field itself, then its comparison with the request's own
+/// origin, scheme, host and port in §5's order. Each word is the variant in
+/// snake case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginRefusedReason {
+    /// The field holds a byte outside visible ASCII.
+    OriginNotVisibleAscii,
+    /// The field is visible ASCII but no origin serialization (§6.2).
+    OriginNotSerialized,
+    /// The request carries the field more than once (§7.3).
+    OriginRepeated,
+    /// The field is `null`, an opaque origin, which no listed origin admits.
+    OriginNull,
+    /// The scheme is not the request's own.
+    SchemeDiffers,
+    /// The host is not the request's own.
+    HostDiffers,
+    /// The port is not the request's own.
+    PortDiffers,
+    /// The request named no host, so it has no origin of its own.
+    HostMissing,
+}
+
+impl OriginRefusedReason {
+    /// The word the line files.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OriginNotVisibleAscii => "origin_not_visible_ascii",
+            Self::OriginNotSerialized => "origin_not_serialized",
+            Self::OriginRepeated => "origin_repeated",
+            Self::OriginNull => "origin_null",
+            Self::SchemeDiffers => "scheme_differs",
+            Self::HostDiffers => "host_differs",
+            Self::PortDiffers => "port_differs",
+            Self::HostMissing => "host_missing",
+        }
+    }
+}
+
+/// Files `refused` at `warn` on `target`, said by kind: the one line each edge
+/// with a browser-origin check files on its own target.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __origin_refused {
+    (target: $target:expr, $refused:expr $(,)?) => {{
+        let __refused: &$crate::__private::OriginRefused = $refused;
+        $crate::__private::tracing::warn!(
+            target: $target,
+            reason = __refused.reason().as_str(),
+            scheme = __refused
+                .scheme()
+                .map($crate::__private::OriginScheme::as_str),
+            trusted_proxy = __refused.trusted_proxy(),
+            hint = __refused.hint().as_deref(),
+            "browser origin refused",
+        );
+    }};
 }
 
 impl ResponseError for OriginRefused {

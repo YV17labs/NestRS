@@ -126,8 +126,9 @@ effective allowlist is logged at `debug` when the endpoint mounts (both on
 The browser `Origin` half is **not** an MCP setting. The MCP transport says a
 server validates `Origin` on every incoming connection, and `/mcp` does, CORS
 on or off. With no CORS policy, a browser request from the server's own origin
-is served; any other gets `403`, with a `warn` on `nest_rs::mcp` naming the
-origin sent and the one the server took for its own. Once
+is served; any other gets `403`, with a `warn` on `nest_rs::mcp` that says
+why by kind and names the settings that would admit it, never the origin sent
+or the `Host` it was compared to. Once
 `<PREFIX>_HTTP__CORS_ORIGINS` is set, only the origins it lists are served —
 the server's own included, when it serves the page — and the CORS layer's
 `403` files no `warn`. One knob, and it covers the WebSocket and GraphQL

@@ -61,8 +61,9 @@ never consults CORS first, so the upgrade's `Origin` is checked before the
 socket opens (RFC 6455 §10.2), ahead of the gateway's guards: a refused origin
 never pays for authentication. With no
 CORS policy, a page on the server's own origin gets its socket; any other is
-answered `403`, with a `warn` on `nest_rs::ws` naming the origin sent and the
-one the server took for its own. Once `<PREFIX>_HTTP__CORS_ORIGINS` is set,
+answered `403`, with a `warn` on `nest_rs::ws` that says why by kind and
+names the settings that would admit it, never the origin sent or the `Host` it
+was compared to. Once `<PREFIX>_HTTP__CORS_ORIGINS` is set,
 only the origins it lists get one — the server's own included, when it serves
 the page — and the CORS layer's `403` files no `warn`
 ([CORS](/http/configuration/#cors)). A client that sends no `Origin` —

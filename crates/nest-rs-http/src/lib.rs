@@ -254,13 +254,13 @@ pub mod __private {
     pub use crate::deprecation::deprecated_route;
     pub use crate::endpoint::{OriginCheck, carried_units, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
-    pub use crate::error::OriginRefused;
+    pub use crate::error::{OriginRefused, OriginRefusedReason};
     pub use crate::guard_stage::{
         GuardedEndpoint, attached, attached_pending, check_request, denial_to_http_error,
         denial_to_http_response,
     };
     pub use crate::interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
-    pub use crate::origin::{OriginFacts, OriginPolicy};
+    pub use crate::origin::{OriginFacts, OriginPolicy, OriginScheme};
     pub use crate::response::IntoResult;
     pub use crate::route_shaper::{RouteShaper, ShapedRoute, refused_route, wrap_route_shaper};
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
@@ -269,6 +269,7 @@ pub mod __private {
     pub use nest_rs_pipes::PipeSpec;
 
     pub use serde;
+    pub use tracing;
     pub use validator;
 
     /// Converts between this crate's HTTP vocabulary and poem's, losing nothing

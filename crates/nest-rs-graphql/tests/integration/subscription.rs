@@ -803,26 +803,42 @@ const ELSEWHERE: &str = "https://evil.example";
 /// The browser app a CORS policy lists.
 const LISTED: &str = "https://app.example";
 
+/// A page on another site and the `Host` its request names, both the client's
+/// to choose: each carries [`MARKER`], which no line may hold.
+const ELSEWHERE_MARKED: &str = "http://origin-marker.example";
+const HOST_MARKED: &str = "host-marker.example";
+const MARKER: &str = "marker";
+
 /// RFC 6455 §10.2: CORS never asks the browser about an upgrade, so a page on
-/// another site could open a socket under the visitor's cookies.
+/// another site could open a socket under the visitor's cookies. The line says
+/// the refusal by kind, never the `Origin` sent or the `Host` it was compared to.
 #[tokio::test]
 async fn a_browser_upgrade_from_another_origin_is_refused_while_cors_is_off() {
     let logs = LogCapture::install();
     let (app, _) = ticks_app::<SubscriptionApp>().await;
 
     let status = graphql_ws(&app)
-        .header("origin", ELSEWHERE)
+        .header("origin", ELSEWHERE_MARKED)
+        .header("host", HOST_MARKED)
         .expect_refused()
         .await;
 
     assert_eq!(status, nest_rs_http::StatusCode::FORBIDDEN);
     let refused = logs.expect_one(nest_rs_graphql::TARGET, "browser origin refused");
     assert_eq!(refused.level, "warn");
-    assert_eq!(refused.field("origin").as_deref(), Some(ELSEWHERE));
-    assert_eq!(
-        refused.field("expected"),
-        Some(format!("http://{}", app.addr()))
-    );
+    for (field, value) in &refused.fields {
+        assert!(!value.contains(MARKER), "{field} = {value}");
+    }
+    assert_eq!(refused.field("reason").as_deref(), Some("host_differs"));
+    assert_eq!(refused.field("scheme").as_deref(), Some("http"));
+    assert_eq!(refused.field("trusted_proxy").as_deref(), Some("false"));
+    let hint = refused.field("hint").unwrap_or_default();
+    for setting in ["CORS_ORIGINS", "TRUSTED_PROXIES"] {
+        assert!(
+            hint.contains(&nest_rs_config::var_name("http", setting)),
+            "{hint}"
+        );
+    }
     app.shutdown().await.expect("the transport stops cleanly");
 }
 

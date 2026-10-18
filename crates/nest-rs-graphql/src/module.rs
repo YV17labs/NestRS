@@ -186,12 +186,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
 /// A graphql-ws upgrade from a browser origin the transport's policy refuses,
 /// filed on this edge's target.
 fn refused_origin(refused: &OriginRefused) {
-    tracing::warn!(
-        target: crate::TARGET,
-        origin = refused.origin(),
-        expected = refused.expected(),
-        "browser origin refused",
-    );
+    nest_rs_http::__origin_refused!(target: crate::TARGET, refused);
 }
 
 #[cfg(test)]

@@ -48,7 +48,9 @@ struct Listener {
 /// uncontended on the emit path.
 #[derive(Default)]
 pub struct EventBus {
-    listeners: RwLock<HashMap<TypeId, Vec<Listener>>>,
+    /// Each event type's listeners, behind one `Arc` an emit takes rather than
+    /// a copy of every listener.
+    listeners: RwLock<HashMap<TypeId, Arc<Vec<Listener>>>>,
     /// Set once the wiring step subscribed the app's listeners; an emit before
     /// it would reach none, and says so rather than dropping in silence.
     wired: AtomicBool,
@@ -121,9 +123,9 @@ impl EventBus {
         // No capture here: the executor that holds the dispatch carries it into
         // its commit, and one that hands it back runs it inside the emitter.
         nest_rs_database::after_commit(async move {
-            for listener in listeners {
+            for listener in listeners.iter() {
                 let body = (listener.run)(Box::new(event.clone()));
-                dispatch_one(&cause, event_name, &listener, body).await;
+                dispatch_one(&cause, event_name, listener, body).await;
             }
         })
         .await;
@@ -333,18 +335,14 @@ where
         let answer = listener(event);
         Box::pin(async move { answer.await.into_outcome() }) as ListenerFuture
     });
-    bus.listeners
-        .write()
-        .entry(TypeId::of::<E>())
-        .or_default()
-        .push(Listener {
-            name,
-            policy,
-            timeout,
-            handler: site.handler(),
-            chains,
-            run,
-        });
+    Arc::make_mut(bus.listeners.write().entry(TypeId::of::<E>()).or_default()).push(Listener {
+        name,
+        policy,
+        timeout,
+        handler: site.handler(),
+        chains,
+        run,
+    });
     Ok(())
 }
 

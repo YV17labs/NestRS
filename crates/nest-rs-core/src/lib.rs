@@ -247,6 +247,7 @@ pub mod __private {
     pub use crate::param::{ParamProbe, ParamProbeFallback, ParamProbeResolves};
     pub use crate::problem::__private::{Withheld, withheld};
     pub use crate::process_start::ProcessStart;
+    pub use crate::request_scope::__private::RequestScopes;
     pub use crate::site::{
         GlobalLayers, Shape, Site, SiteDeclaration, SiteLayers, UnitChains, declare_site,
     };

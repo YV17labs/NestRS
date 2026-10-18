@@ -29,9 +29,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
+use nest_rs_core::__private::RequestScopes;
 use nest_rs_core::{
-    Backoff, Container, RequestScope, Retries, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered,
-    error_message, process_seed, within,
+    Backoff, Container, Retries, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered, error_message,
+    process_seed, within,
 };
 use nest_rs_database::UnitOfWork;
 use serde_json::Value;
@@ -270,10 +271,8 @@ struct Shared<C: JobConsumer> {
     /// Whether the backend files a record due later, so a retry's wait is the
     /// backend's rather than a held permit's.
     delays: bool,
-    container: Container,
-    /// The request scope every attempt shares when no provider is
-    /// request-scoped or transient; each opens its own otherwise.
-    scope: Option<Arc<RequestScope>>,
+    /// The request scope each attempt runs under.
+    scopes: RequestScopes,
     /// The binding every attempt runs its unit of work through, resolved once.
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
     /// How long one receive waits for a job.
@@ -308,9 +307,7 @@ async fn serve<C: JobConsumer>(consumer: Arc<C>, serving: Serving) {
             .contains(Capability::DelayedPush),
         consumer,
         unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
-        scope: (!container.has_dynamic_scopes())
-            .then(|| Arc::new(RequestScope::new(container.clone()))),
-        container,
+        scopes: RequestScopes::new(container),
         wait: RECEIVE_WAIT.min(window / 4),
         stop: CancellationToken::new(),
         interrupt: CancellationToken::new(),
@@ -754,9 +751,7 @@ impl<C: JobConsumer> MethodRun<C> {
                 outcome = consume::attempt_in(
                     self.method,
                     &mut state,
-                    self.shared.scope.clone().unwrap_or_else(|| {
-                        Arc::new(RequestScope::new(self.shared.container.clone()))
-                    }),
+                    self.shared.scopes.open(),
                     self.shared.unit_of_work.clone(),
                 ) => {
                     Ran::Answered(outcome)

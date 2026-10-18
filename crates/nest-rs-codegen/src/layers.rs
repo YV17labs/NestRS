@@ -179,9 +179,8 @@ pub fn cell(pair: &DecoratorPair, scope: LayerScope, attribute: LayerAttribute) 
         (
             P::Processor | P::Scheduled | P::Listeners,
             _,
-            A::UseInterceptors | A::UseExceptionFilters,
+            A::UseInterceptors | A::UseExceptionFilters | A::Meta,
         ) => Built,
-        (P::Processor | P::Scheduled | P::Listeners, _, A::Meta) => Built,
     }
 }
 

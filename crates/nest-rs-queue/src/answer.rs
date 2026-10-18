@@ -16,18 +16,6 @@ pub(crate) const fn dead_letters(problem: &Problem) -> bool {
     status >= 400 && status < 500 && status != 408 && status != 429
 }
 
-/// A failure answering `problem`, classified by it.
-pub(crate) fn by_problem(
-    problem: &Problem,
-    source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
-) -> JobError {
-    if dead_letters(problem) {
-        JobError::abort(source)
-    } else {
-        JobError::retry(source)
-    }
-}
-
 /// A `#[process]` method's error, made the attempt's [`JobError`] **by its
 /// type**, in tiers, each taken only when the one above does not apply:
 ///
@@ -42,9 +30,14 @@ pub struct ProcessAnswer<E>(pub E);
 impl<E: ToProblem> ProcessAnswer<E> {
     /// The attempt's failure, classified by the problem the error says.
     pub fn into_job_error(self) -> JobError {
-        match self.0.to_problem() {
-            Some(problem) => by_problem(&problem, self.0),
-            None => JobError::retry(self.0),
+        if self
+            .0
+            .to_problem()
+            .is_some_and(|problem| dead_letters(&problem))
+        {
+            JobError::abort(self.0)
+        } else {
+            JobError::retry(self.0)
         }
     }
 }
@@ -66,9 +59,10 @@ where
             Ok(chosen) => return *chosen,
             Err(error) => error,
         };
-        match nest_rs_core::__private::find_in_chain::<Problem>(&*error) {
-            Some(problem) if dead_letters(problem) => JobError::abort(error),
-            _ => JobError::retry(error),
+        if nest_rs_core::__private::find_in_chain::<Problem>(&*error).is_some_and(dead_letters) {
+            JobError::abort(error)
+        } else {
+            JobError::retry(error)
         }
     }
 }

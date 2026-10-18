@@ -22,7 +22,7 @@ use nest_rs_database::{ExecutorScope, UnitOfWork, UnitSpec};
 use serde_json::Value;
 use tracing::Instrument;
 
-use crate::answer::{by_problem, dead_letters};
+use crate::answer::dead_letters;
 use crate::capability::unsupported;
 use crate::checkpoint::CheckpointCell;
 use crate::envelope::{self, Carried, Opened, Unusable};
@@ -1020,10 +1020,10 @@ impl Tail for JobTail<'_> {
         let Some((payload, context)) = self.input.take() else {
             unreachable!("a unit runs its tail once");
         };
-        match (self.handler)(payload, context).await {
-            Ok(()) => Ok(settled()),
-            Err(error) => Err(Failure::from(error)),
-        }
+        (self.handler)(payload, context)
+            .await
+            .map(|()| settled())
+            .map_err(Failure::from)
     }
 }
 
@@ -1032,21 +1032,17 @@ impl Tail for JobTail<'_> {
 /// then a [`Problem`] in the failure's chain decides; anything else retries
 /// within the budget.
 fn job_error(failure: Failure) -> JobError {
-    if let Some(problem) = caught_problem(&failure).cloned() {
-        return by_problem(&problem, Failed(failure));
-    }
-    if let Some(chosen) = failure.find::<JobError>() {
-        let (retryable, details) = (chosen.retryable, chosen.details.clone());
-        return JobError {
-            retryable,
-            source: Box::new(Failed(failure)),
-            details,
-        };
-    }
-    if failure.find::<Problem>().is_some_and(dead_letters) {
-        JobError::abort(Failed(failure))
+    let (retryable, details) = if let Some(problem) = caught_problem(&failure) {
+        (!dead_letters(problem), None)
+    } else if let Some(chosen) = failure.find::<JobError>() {
+        (chosen.retryable, chosen.details.clone())
     } else {
-        JobError::retry(Failed(failure))
+        (!failure.find::<Problem>().is_some_and(dead_letters), None)
+    };
+    JobError {
+        retryable,
+        source: Box::new(Failed(failure)),
+        details,
     }
 }
 

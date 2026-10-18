@@ -397,6 +397,47 @@ impl RequestScope {
     }
 }
 
+/// `request_scope` is public: its tier-2 items live here, reached only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::sync::Arc;
+
+    use super::RequestScope;
+    use crate::Container;
+
+    /// Where the units an edge dispatches over one container get their
+    /// [`RequestScope`]: one they all share while no provider is
+    /// request-scoped or transient, since it then has nothing to build or
+    /// cache, and a fresh one per unit otherwise.
+    #[derive(Clone)]
+    pub struct RequestScopes {
+        root: Container,
+        shared: Option<Arc<RequestScope>>,
+    }
+
+    impl RequestScopes {
+        /// The scopes of the units dispatched over `root`.
+        pub fn new(root: Container) -> Self {
+            let shared =
+                (!root.has_dynamic_scopes()).then(|| Arc::new(RequestScope::new(root.clone())));
+            Self { root, shared }
+        }
+
+        /// The singleton container every scope resolves through.
+        pub fn root(&self) -> &Container {
+            &self.root
+        }
+
+        /// The scope one unit runs under.
+        pub fn open(&self) -> Arc<RequestScope> {
+            match &self.shared {
+                Some(shared) => Arc::clone(shared),
+                None => Arc::new(RequestScope::new(self.root.clone())),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -557,6 +598,27 @@ mod tests {
             "four installs reach {deeper} bytes deeper than four bare scopes around a \
              {HELD}-byte unit",
         );
+    }
+
+    #[test]
+    fn units_share_one_scope_until_a_provider_is_scoped() {
+        use super::__private::RequestScopes;
+
+        let singletons = RequestScopes::new(
+            Container::builder()
+                .provide(Greeter("hi"))
+                .build()
+                .expect("the container builds"),
+        );
+        assert!(Arc::ptr_eq(&singletons.open(), &singletons.open()));
+
+        let scoped = RequestScopes::new(
+            Container::builder()
+                .provide_scoped::<Counter, _>(|_| Counter(0))
+                .build()
+                .expect("the container builds"),
+        );
+        assert!(!Arc::ptr_eq(&scoped.open(), &scoped.open()));
     }
 
     #[test]

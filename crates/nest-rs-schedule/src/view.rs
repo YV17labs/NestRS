@@ -1,12 +1,14 @@
 //! [`ScheduleView`] — what a layer reads of the tick it runs around, and how it
 //! skips one.
 
-use std::sync::Arc;
+use std::fmt;
+use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use nest_rs_core::{Settled, UnitView};
 
 use crate::Replicas;
+use crate::scheduler::JobId;
 
 /// The schedule edge's view of one tick, reached through
 /// [`UnitContext::switch_to`](nest_rs_core::UnitContext::switch_to): the job it
@@ -39,17 +41,20 @@ use crate::Replicas;
 ///     }
 /// }
 /// ```
-#[derive(Debug)]
 pub struct ScheduleView {
-    job: Arc<str>,
+    id: JobId,
+    /// The identity [`job`](Self::job) spells, on its first read: a tick no
+    /// layer asks pays nothing for it.
+    job: OnceLock<String>,
     occurrence: Option<SystemTime>,
     replicas: Replicas,
 }
 
 impl ScheduleView {
-    pub(crate) fn new(job: Arc<str>, occurrence: Option<SystemTime>, replicas: Replicas) -> Self {
+    pub(crate) const fn new(id: JobId, occurrence: Option<SystemTime>, replicas: Replicas) -> Self {
         Self {
-            job,
+            id,
+            job: OnceLock::new(),
             occurrence,
             replicas,
         }
@@ -59,7 +64,7 @@ impl ScheduleView {
     /// and its method (`features::NotificationsTasks::purge_expired`), or the
     /// key it pins.
     pub fn job(&self) -> &str {
-        &self.job
+        self.job.get_or_init(|| self.id.key())
     }
 
     /// The occurrence a job firing once claimed — the instant it fell due;
@@ -80,6 +85,16 @@ impl ScheduleView {
     /// at `warn` rather than `error`, and its unit of work still rolls back.
     pub fn skip(&mut self) -> Settled {
         nest_rs_core::__private::settled()
+    }
+}
+
+impl fmt::Debug for ScheduleView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScheduleView")
+            .field("job", &self.job())
+            .field("occurrence", &self.occurrence)
+            .field("replicas", &self.replicas)
+            .finish()
     }
 }
 

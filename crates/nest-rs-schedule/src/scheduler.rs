@@ -10,12 +10,12 @@ use croner::Cron;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use nest_rs_core::__private::{
-    GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, Tail,
-    caught_problem, declare_handler, declare_site, dispatch, new_unit_context, settled,
+    GlobalLayers, HandlerDeclaration, MetaLevels, RequestScopes, Site, SiteDeclaration, SiteLayers,
+    Tail, caught_problem, declare_handler, declare_site, dispatch, new_unit_context, settled,
 };
 use nest_rs_core::{
     Container, Correlation, Discovery, Failure, Handler, JobTimedOut, Outcome, Posture,
-    ReachableProviders, RequestScope, Transport, Unanswered, UnitContext, inventory, within,
+    ReachableProviders, Transport, Unanswered, UnitContext, inventory, within,
 };
 use nest_rs_database::__private::run_unit_bounded;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec};
@@ -108,7 +108,7 @@ static ATTACHED_SITE: Site = declare_site(
 /// A job, kept split so logs filter on the provider or the method alone, and
 /// the `key` that pins what it claims under.
 #[derive(Clone, Copy)]
-struct JobId {
+pub(crate) struct JobId {
     origin: &'static str,
     provider: &'static str,
     method: &'static str,
@@ -146,7 +146,7 @@ impl JobId {
 
     /// The identity as `key = "…"` spells it — `features::NotificationsTasks::purge_expired`
     /// — which the boot line carries.
-    fn key(&self) -> String {
+    pub(crate) fn key(&self) -> String {
         self.levels().join("::")
     }
 
@@ -468,9 +468,7 @@ impl Transport for Scheduler {
 
         let runner = Runner {
             unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
-            scope: (!container.has_dynamic_scopes())
-                .then(|| Arc::new(RequestScope::new(container.clone()))),
-            container,
+            scopes: RequestScopes::new(container),
             lock: self.lock,
         };
 
@@ -614,16 +612,14 @@ fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// What every job's loop fires through: the container its method resolves
-/// from, the binding its tick runs its unit of work through, and the lock a job
-/// declared `replicas = "one"` claims its occurrences with.
+/// What every job's loop fires through: the request scopes its ticks run
+/// under, whose root its method resolves from, the binding its tick runs its
+/// unit of work through, and the lock a job declared `replicas = "one"` claims
+/// its occurrences with.
 #[derive(Clone)]
 struct Runner {
-    container: Container,
+    scopes: RequestScopes,
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
-    /// The request scope every tick shares when no provider is request-scoped
-    /// or transient; each opens its own otherwise.
-    scope: Option<Arc<RequestScope>>,
     lock: Option<Arc<dyn OccurrenceLock>>,
 }
 
@@ -1429,10 +1425,7 @@ impl Runner {
             method = id.method,
             occurrence,
         );
-        let scope = self
-            .scope
-            .clone()
-            .unwrap_or_else(|| Arc::new(RequestScope::new(self.container.clone())));
+        let scope = self.scopes.open();
         // Opened outside the run: a tick stopped at the shutdown bound is dropped
         // with this future, and the line's `Drop` says so.
         let line = TickLine::open(id, task.replicas, occurrence, span.clone());
@@ -1446,7 +1439,7 @@ impl Runner {
     }
 
     async fn fire_inner(&self, id: JobId, task: Task, occurrence: Option<u64>, line: TickLine) {
-        let chains = match task.site.chains(&self.container) {
+        let chains = match task.site.chains(self.scopes.root()) {
             Ok(chains) => chains,
             Err(refused) => {
                 line.file(nest_rs_core::operation_log::ERROR);
@@ -1463,10 +1456,10 @@ impl Runner {
         let timeout = task.timeout;
         let deadline = Instant::now() + timeout;
         let occurred = occurrence.map(|ms| UNIX_EPOCH + Duration::from_millis(ms));
-        let mut view = ScheduleView::new(id.key().into(), occurred, task.replicas);
+        let mut view = ScheduleView::new(id, occurred, task.replicas);
         let mut tail = TickTail {
             run: task.run,
-            container: &self.container,
+            container: self.scopes.root(),
             ran: false,
         };
         // A panic would otherwise end this job's schedule while the process
@@ -1675,9 +1668,8 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::new(PanicsAnswering)),
         };
         let id = JobId {
@@ -1744,9 +1736,8 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::new(Granting)),
         };
         let id = JobId {
@@ -1920,9 +1911,8 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::new(GrantingAfterAStall)),
         };
         let id = JobId {
@@ -2053,9 +2043,8 @@ mod tests {
         }
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::new(PanicsWhenCalled)),
         };
         let id = JobId {
@@ -2119,9 +2108,8 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),
@@ -2173,9 +2161,8 @@ mod tests {
     async fn an_overrun_question_the_lock_never_answers_is_abandoned_and_counted_unanswered() {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),
@@ -2224,9 +2211,8 @@ mod tests {
             claims: std::sync::atomic::AtomicUsize::new(0),
         });
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::clone(&lock) as Arc<dyn OccurrenceLock>),
         };
         let job = Job::Interval {
@@ -2307,9 +2293,8 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let shutdown = CancellationToken::new();
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::new(GrantingAtShutdown {
                 shutdown: shutdown.clone(),
             })),
@@ -2357,9 +2342,8 @@ mod tests {
     async fn overrun_questions_in_flight_at_shutdown_are_abandoned_at_once() {
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
-            container: Container::builder().build().expect("the container builds"),
+            scopes: RequestScopes::new(Container::builder().build().expect("the container builds")),
             unit_of_work: None,
-            scope: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),

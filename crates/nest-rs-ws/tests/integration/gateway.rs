@@ -8,8 +8,7 @@ use nest_rs_pipes::{
     ArgumentKind, GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, Valid, pipe,
 };
 use nest_rs_testing::TestApp;
-use nest_rs_ws::nest_rs_http::poem;
-use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
+use nest_rs_ws::nest_rs_http::poem::{self, Request as HttpRequest};
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, async_trait, gateway, messages};
 use serde::{Deserialize, Serialize};
 use validator::Validate;

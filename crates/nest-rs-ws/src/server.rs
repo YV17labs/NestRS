@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use nest_rs_core::injectable;
+use nest_rs_http::__private::websocket::Utf8Bytes;
 use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::mpsc::Sender;
@@ -26,8 +27,8 @@ pub(crate) const OUTBOX_CAPACITY: usize = 256;
 pub struct Global;
 
 /// An encoded outbound frame, shared so a broadcast hands the same bytes to
-/// every recipient.
-pub(crate) type Frame = Arc<str>;
+/// every recipient and on to the wire.
+pub(crate) type Frame = Utf8Bytes;
 
 struct Conn {
     outbox: Sender<Frame>,
@@ -195,7 +196,7 @@ impl<N: 'static> Registry for WsServer<N> {
 fn fan_out(recipients: Vec<Sender<Frame>>, frame: Frame) -> (usize, usize) {
     let (mut sent, mut shed) = (0usize, 0usize);
     for outbox in recipients {
-        if outbox.try_send(Arc::clone(&frame)).is_ok() {
+        if outbox.try_send(frame.clone()).is_ok() {
             sent += 1;
         } else {
             shed += 1;

@@ -1245,13 +1245,13 @@ mod tests {
 
         let frames = stream::iter([
             Ok::<_, websocket::Error>(Message::text(r#"{"type":"connection_init"}"#)),
-            Ok::<_, websocket::Error>(Message::text(
+            Ok(Message::text(
                 r#"{"id":"a","type":"subscribe","payload":{"query":"subscription { x }"}}"#,
             )),
-            Ok::<_, websocket::Error>(Message::text(
+            Ok(Message::text(
                 r#"{"id":"b","type":"subscribe","payload":{"query":"subscription { x }"}}"#,
             )),
-            Ok::<_, websocket::Error>(Message::text(r#"{"id":"a","type":"complete"}"#)),
+            Ok(Message::text(r#"{"id":"a","type":"complete"}"#)),
         ])
         .chain(stream::pending());
         let (end_now, ended) = tokio::sync::oneshot::channel::<()>();
@@ -1295,10 +1295,10 @@ mod tests {
 
         let frames = stream::iter([
             Ok::<_, websocket::Error>(Message::text(r#"{"type":"connection_init"}"#)),
-            Ok::<_, websocket::Error>(Message::text(
+            Ok(Message::text(
                 r#"{"id":"s","type":"subscribe","payload":{"query":"subscription { x }"}}"#,
             )),
-            Ok::<_, websocket::Error>(Message::text(
+            Ok(Message::text(
                 r#"{"id":"q","type":"subscribe","payload":{"query":"mutation { y }"}}"#,
             )),
         ])

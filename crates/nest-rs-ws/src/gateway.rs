@@ -218,7 +218,7 @@ async fn serve_connection<G, N, S>(
     let (writer_ends, mut writer_stopped) = tokio::sync::oneshot::channel::<()>();
     let mut writer = Writer(tokio::spawn(nest_rs_core::panic::contain(async move {
         while let Some(frame) = rx.recv().await {
-            if let Err(error) = sink.send(Message::text(String::from(&*frame))).await {
+            if let Err(error) = sink.send(Message::Text(frame)).await {
                 stopped_writing(conn_id, &error);
                 break;
             }
@@ -1156,50 +1156,6 @@ mod tests {
         );
     }
 
-    /// The server's end of a socket over an in-memory pipe, whose writes
-    /// panic: what no peer can provoke, and what the writer task contains.
-    struct PanickingWrites(tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>);
-
-    impl Stream for PanickingWrites {
-        type Item = Result<Message, websocket::Error>;
-
-        fn poll_next(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<Self::Item>> {
-            std::pin::Pin::new(&mut self.0).poll_next(cx)
-        }
-    }
-
-    impl Sink<Message> for PanickingWrites {
-        type Error = websocket::Error;
-
-        fn poll_ready(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::pin::Pin::new(&mut self.0).poll_ready(cx)
-        }
-
-        fn start_send(self: std::pin::Pin<&mut Self>, _item: Message) -> Result<(), Self::Error> {
-            panic!("the writer exploded")
-        }
-
-        fn poll_flush(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::pin::Pin::new(&mut self.0).poll_flush(cx)
-        }
-
-        fn poll_close(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::pin::Pin::new(&mut self.0).poll_close(cx)
-        }
-    }
-
     /// A writer that panics ends its socket: the read loop stops with it, the
     /// disconnect hook runs, the registry lets the connection go, and the peer
     /// reads the end of the stream with no Close frame, §7.4.1's 1006.
@@ -1225,7 +1181,11 @@ mod tests {
                 max_lifetime: None,
                 max_message_bytes: 1024,
             },
-            PanickingWrites(server_socket),
+            server_socket.with(
+                |_: Message| -> std::future::Ready<Result<Message, websocket::Error>> {
+                    panic!("the writer exploded")
+                },
+            ),
             std::future::pending(),
         ));
 

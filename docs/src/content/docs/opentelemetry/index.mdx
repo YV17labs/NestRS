@@ -146,7 +146,9 @@ An `https://` collector's certificate is verified against the system's
 authorities, or the ones `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` names, which
 replace them; a collector requiring a client certificate gets `TLS_CERT`
 and `TLS_KEY`. Each takes its `_FILE` spelling, and none is accepted beside
-an `http://` endpoint, where it would go unused. The clients are this
+an `http://` endpoint, where it would go unused. All three are read at the
+start, so a renewed file takes effect at the next one: rotate it with a rolling
+restart. The clients are this
 crate's own: they follow no redirect, give up reaching the collector after
 3 s, and cut each export where the SDK stops waiting for it —
 `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` (or `_METRICS_`, `_LOGS_`), then

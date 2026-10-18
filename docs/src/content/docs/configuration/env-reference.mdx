@@ -32,7 +32,8 @@ authorities the peer's certificate must chain to, replacing the system's, and
 `TLS_CERT` / `TLS_KEY` the certificate and key presented to a peer that
 requires one, both or neither. The certificate is verified whatever is set, and
 a client that cannot present a certificate fails the boot rather than ignoring
-one.
+one. Each is read at the start, so a renewed file takes effect at the next one
+([rotating a file](/configuration/#configservice-api)).
 
 **The namespace is the path of the crate that parses it — never chosen.** It is
 the same stem the config type is named from: the crate's word, then the
@@ -123,7 +124,7 @@ on Postgres — the one engine the framework builds sea-orm with.
 
 | Key | Meaning |
 |---|---|
-| `URL` | database connection string. TLS is verified or off: with no `sslmode` the connection asks for `verify-full`, the server's certificate checked against the system's authorities — or the file `sslrootcert` names; libpq's `sslrootcert=system` is the system's too — and its name against the host; `sslmode=disable` is plaintext, written where it is meant. `allow`, `prefer`, `require` and `verify-ca`, which encrypt without that check or may, fail the boot naming this variable. Every connection the framework opens holds to it — the pool, `connect_from_env`, `EphemeralDatabase` — through `SeaOrmConfig::connect_options` |
+| `URL` | database connection string. TLS is verified or off: with no `sslmode` the connection asks for `verify-full`, the server's certificate checked against the system's authorities — or the file `sslrootcert` names; libpq's `sslrootcert=system` is the system's too — and its name against the host; `sslmode=disable` is plaintext, written where it is meant. `allow`, `prefer`, `require` and `verify-ca`, which encrypt without that check or may, fail the boot naming this variable. Every connection the framework opens holds to it — the pool, `connect_from_env`, `EphemeralDatabase` — through `SeaOrmConfig::connect_options`. The URL is read at the start; the files its `sslrootcert`, `sslcert` and `sslkey` name are read at each connection the pool opens, so a renewed one reaches every connection opened after it |
 | `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
 | `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
 | `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, and the boot's budget to open the pool — what Postgres refuses on every attempt (credentials, the database, TLS) fails the boot at once, the rest (a server not listening yet, starting or full, a name that does not resolve yet) is retried within it, each attempt a `warn` on `nest_rs::orm` — from `1` to `3600` (unset ⇒ `10`, below the authentication guard's 18-second net and the HTTP request timeout, so a pool that runs dry answers with its own error; `Repo` reaches the pool from any strategy, so an app running the authentication guard keeps it under that net: the boot refuses one at or past it) — `0` fails the boot rather than time out every acquire, and past an hour the request that asked for a connection has long been abandoned |

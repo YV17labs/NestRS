@@ -176,7 +176,8 @@ variables or tiers.
   namespaced variable has it (the kernel's pre-container `<PREFIX>_LOG*` and
   `<PREFIX>_ENV` do not), so a secret never has to sit in the process
   environment. Every file is read through the one bounded reader
-  (`read_material`), and a consumer that re-reads on renewal reuses it. The
+  (`read_material`), at the boot: only the HTTP server's certificate renews
+  in place, and a consumer that comes to re-read on renewal reuses it. The
   deployment chooses the spelling: either one present in the deployment tier
   shadows both in `.env`; both set in the answering tier is refused naming both
   — the loader's one refusal, about spelling, never meaning. A refusal never

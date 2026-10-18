@@ -140,8 +140,9 @@ The provider's certificate is verified against the system's authorities,
 or against the ones `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names, which
 replace them — an identity provider on a private network signed by your
 own authority is trusted that way. A provider requiring a client
-certificate gets `TLS_CERT` and `TLS_KEY`. No setting turns verification
-off. The HTTP backend refuses redirects — following them during the token
+certificate gets `TLS_CERT` and `TLS_KEY`. All three are read at the start,
+so a renewed file takes effect at the next one: rotate it with a rolling
+restart. No setting turns verification off. The HTTP backend refuses redirects — following them during the token
 exchange is an SSRF risk per the `oauth2` crate's own guidance, and on a
 read it could send the bearer token anywhere — and `fetch` refuses a URL
 that is not `https` before anything is sent. Beneath both checks the

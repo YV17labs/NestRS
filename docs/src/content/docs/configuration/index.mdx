@@ -260,6 +260,10 @@ convention, so a secret never has to sit in the process environment. The file
 must be a regular file of at most a mebibyte; for text, it must be UTF-8 and its
 trailing line breaks are dropped, and a file holding nothing but line breaks is
 unset. An unreadable file fails the boot naming the variable — never its value.
+The file is read once, at the start: a renewed secret, key or client
+certificate takes effect at the next one, so rotate it with a rolling restart.
+The HTTP server's own certificate is the exception, and
+[renews in place](/http/configuration/#renewal-without-a-restart).
 
 **One key, one spelling per tier.** `KEY` and `KEY_FILE` both set in the process
 environment, or both in the `.env` cascade, fail the boot naming both. Between

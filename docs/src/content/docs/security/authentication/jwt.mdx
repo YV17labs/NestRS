@@ -313,7 +313,9 @@ key a token names is looked for — answers `503` with `Retry-After`, on a
 endpoint must be `https`, and its certificate is verified against the system's
 authorities, or the ones `<PREFIX>_AUTHN__TLS_CA_CERT` names; an issuer that
 requires a client certificate gets the one `<PREFIX>_AUTHN__TLS_CERT` and
-`<PREFIX>_AUTHN__TLS_KEY` name. A handshake that fails answers that same
+`<PREFIX>_AUTHN__TLS_KEY` name, read at the start: a renewed file takes effect
+at the next one, so rotate it with a rolling restart. A handshake that fails
+answers that same
 opaque `503`, while the `authentication unavailable` event it logs at `error`
 names the setting that fixes it in its `detail` field; the fetch follows no
 redirect.

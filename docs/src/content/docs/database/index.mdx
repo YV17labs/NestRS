@@ -214,6 +214,11 @@ whose name does not resolve yet — is tried again within
 past the budget, the boot fails as unreachable, naming what the last attempt
 met.
 
+The URL is read once, at the start, its password with it. The certificate files
+its `sslrootcert`, `sslcert` and `sslkey` name are read each time the pool opens
+a connection, so a renewed one reaches every connection opened after it, while
+those already open keep the certificate they began with.
+
 The pool closes when the app ends, after every shutdown hook: each connection
 gets Postgres's goodbye rather than a dropped socket. Every unit of work has
 settled by then, so one still on its way back is waited for half a second at

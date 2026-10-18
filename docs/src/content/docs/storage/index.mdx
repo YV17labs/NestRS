@@ -235,7 +235,7 @@ fails the boot by name instead of reaching a default.
 |---|---|---|
 | `URL` | `s3://nestrs` in dev/test, **none otherwise** | the store, whose scheme picks the backend |
 | `ENDPOINT` | `https://rustfs:9000` in dev/test, **unset otherwise** | S3 only: the server's endpoint; unset ⇒ AWS |
-| `TLS_CA_CERT` | unset | S3 only: the authorities the endpoint's certificate must chain to, replacing the system's (`TLS_CA_CERT_FILE` for a path) |
+| `TLS_CA_CERT` | unset | S3 only: the authorities the endpoint's certificate must chain to, replacing the system's (`TLS_CA_CERT_FILE` for a path), read at the start: a renewed file takes effect at the next one |
 | `TLS_CERT` / `TLS_KEY` | unset | refused: `object_store` presents no client certificate, so setting one fails the boot |
 | `REGION` | `us-east-1` | S3 only: the region requests are signed for |
 | `ACCESS_KEY` / `SECRET_KEY` | `nestrs` in dev/test, **none otherwise** | S3 only: static credentials |

@@ -124,6 +124,8 @@ topology — whichever sentinel, primary or seed refuses it — naming
 refusal is said once at `warn` on `nest_rs::redis` with the same remedy,
 wherever the connection opens again: one server's, the primary the sentinels
 name, and every Cluster node, a worker's blocked read and an `ASK` included.
+The material is read at the start, so a renewed certificate or key takes effect
+at the next one: rotate it with a rolling restart.
 
 The host a sentinel or a Cluster names is the one dialled, so it is the one the
 certificate names. Have them announce hostnames the certificate carries —

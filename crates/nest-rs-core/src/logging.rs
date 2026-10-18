@@ -258,7 +258,7 @@ const BATCH_WINDOW: Duration = Duration::from_millis(2);
 /// is given back.
 const BATCH_BYTES_KEPT: usize = 1 << 20;
 
-/// The console's writer and line formats, and the one way a subscriber becomes
+/// The console's layer and text format, and the one way a subscriber becomes
 /// the process's global one: the kernel's, reached by the framework's own
 /// subscribers through the crate's `__private`, and installed for anyone else
 /// by [`install_console`]. They speak `tracing_subscriber`'s traits, a private
@@ -272,25 +272,6 @@ pub(crate) mod __private {
     use tracing_subscriber::layer::{Context, Filter, Layer, SubscriberExt as _};
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, Registry};
-
-    /// The process's console, the writer every subscriber the framework ships
-    /// writes its lines through.
-    ///
-    /// Under `#[nest_rs::main]` it is stdout written in batches by one thread
-    /// of its own (`nestrs-log`) through a queue of
-    /// [`CONSOLE_QUEUE_LINES`](crate::logging::CONSOLE_QUEUE_LINES): a line that
-    /// finds the queue full — a stdout nobody drains — is dropped and counted,
-    /// never waited for, so no task stalls on the console. Once a second, while
-    /// lines were dropped, one `warn` on [`APP`](crate::target::APP) says how
-    /// many since the process started (`dropped`), and every exit
-    /// `#[nest_rs::main]` controls waits until each line queued before it is
-    /// written, within
-    /// [`CONSOLE_FLUSH_TIMEOUT`](crate::logging::CONSOLE_FLUSH_TIMEOUT).
-    /// Elsewhere — a test binary, a process that runs an `App` without it — it
-    /// is stdout, written synchronously, so nothing queued is lost at an exit
-    /// the kernel does not see.
-    #[derive(Clone)]
-    pub struct ConsoleWriter(pub(in crate::logging) Option<&'static super::Queue>);
 
     /// The console format for **text** output.
     ///
@@ -313,19 +294,9 @@ pub(crate) mod __private {
         pub(in crate::logging) source_location: bool,
     }
 
-    /// The console format for **JSON** output — [`TextFormat`]'s rule, serialized.
-    ///
-    /// `trace_id`, `span_id`, `trace_flags` and `actor_id` are top-level keys; the
-    /// others are `tracing-subscriber`'s own — `timestamp`, `level`, `fields`,
-    /// `target`, `filename`, `line_number`.
-    #[derive(Clone, Copy, Debug)]
-    pub struct JsonFormat {
-        pub(in crate::logging) source_location: bool,
-    }
-
     /// The console's layer, the one every subscriber the framework ships
-    /// writes its lines with: [`TextFormat`] or [`JsonFormat`] through the
-    /// [`ConsoleWriter`], told of events alone.
+    /// writes its lines with: [`TextFormat`] or `JsonFormat` through the
+    /// `ConsoleWriter`, told of events alone.
     ///
     /// A line carries no span state, so no span reaches the `fmt` layer
     /// inside: it would format every field of a span as it opens and again at
@@ -565,7 +536,7 @@ pub(crate) mod __private {
     }
 }
 
-use __private::{ConsoleLayer, ConsoleWriter, JsonFormat, LibraryClamp, TextFormat, log_filter};
+use __private::{ConsoleLayer, LibraryClamp, TextFormat, log_filter};
 
 inventory::collect!(LibraryClamp);
 
@@ -618,10 +589,27 @@ const fn reaches_the_framework(target: &str) -> bool {
 /// directly.
 static CONSOLE: OnceLock<Option<Arc<Queue>>> = OnceLock::new();
 
+/// The process's console, the writer every subscriber the framework ships
+/// writes its lines through.
+///
+/// Under `#[nest_rs::main]` it is stdout written in batches by one thread
+/// of its own (`nestrs-log`) through a queue of [`CONSOLE_QUEUE_LINES`]: a
+/// line that finds the queue full — a stdout nobody drains — is dropped and
+/// counted, never waited for, so no task stalls on the console. Once a second,
+/// while lines were dropped, one `warn` on [`APP`](crate::target::APP) says
+/// how many since the process started (`dropped`), and every exit
+/// `#[nest_rs::main]` controls waits until each line queued before it is
+/// written, within [`CONSOLE_FLUSH_TIMEOUT`]. Elsewhere — a test binary, a
+/// process that runs an `App` without it — it is stdout, written
+/// synchronously, so nothing queued is lost at an exit the kernel does not
+/// see.
+#[derive(Clone)]
+struct ConsoleWriter(Option<&'static Queue>);
+
 impl ConsoleWriter {
     /// The process's writer; under `#[nest_rs::main]` its queue and its
     /// thread start on first use.
-    pub fn get() -> Self {
+    fn get() -> Self {
         Self(CONSOLE.get_or_init(open).as_deref())
     }
 
@@ -1127,10 +1115,20 @@ fn write_text_value(writer: &mut Writer<'_>, value: &str) -> fmt::Result {
     }
 }
 
+/// The console format for **JSON** output — [`TextFormat`]'s rule, serialized.
+///
+/// `trace_id`, `span_id`, `trace_flags` and `actor_id` are top-level keys; the
+/// others are `tracing-subscriber`'s own — `timestamp`, `level`, `fields`,
+/// `target`, `filename`, `line_number`.
+#[derive(Clone, Copy, Debug)]
+struct JsonFormat {
+    source_location: bool,
+}
+
 impl JsonFormat {
     /// `source_location` adds the emitting `filename` and `line_number`, as
     /// `<PREFIX>_LOG_SOURCE_LOCATION` does.
-    pub fn new(source_location: bool) -> Self {
+    fn new(source_location: bool) -> Self {
         Self { source_location }
     }
 }

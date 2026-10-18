@@ -58,7 +58,7 @@ impl OpenTelemetry {
         )?;
         LogSettings::check_filter(&config.log_filter, "OpenTelemetryConfig::log_filter")?;
         let filter = log_filter(&config.log_filter);
-        let fmt_layer = ConsoleLayer::new(config.log_format, config.log_source_location);
+        let console_layer = ConsoleLayer::new(config.log_format, config.log_source_location);
 
         #[cfg(feature = "otlp")]
         {
@@ -81,7 +81,7 @@ impl OpenTelemetry {
             if !install_global_subscriber(
                 Registry::default()
                     .with(filter)
-                    .with(fmt_layer)
+                    .with(console_layer)
                     .with(otel_layer)
                     .with(appender_layer),
             ) {
@@ -120,7 +120,7 @@ impl OpenTelemetry {
 
         #[cfg(not(feature = "otlp"))]
         {
-            if !install_global_subscriber(Registry::default().with(filter).with(fmt_layer)) {
+            if !install_global_subscriber(Registry::default().with(filter).with(console_layer)) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
             mark_initialized();

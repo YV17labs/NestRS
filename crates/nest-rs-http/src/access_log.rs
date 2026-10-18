@@ -2,9 +2,12 @@
 //!
 //! `trace_id` and `span_id` are not fields: every line carries its unit's
 //! correlation from the ambient context, which the body re-enters
-//! (`response_body`). The line names the route template the router matched
-//! (`/posts/{id}`), never the path the client sent: a path is the client's
-//! value, and a request no route matched files no route at all.
+//! (`response_body`). The line carries the server's values only
+//! (`.claude/decisions/payload-never-quoted.md`): the route template the router
+//! matched (`/posts/{id}`), never the path the client sent, and a request no
+//! route matched files no route at all; the method as the HTTP conventions
+//! know it, `_OTHER` for a token the client chose; no user agent, which is
+//! free text.
 //!
 //! A request dropped before it answers — by the shutdown window or a client's
 //! reset — files its line [`CANCELLED`] through [`Unanswered`], with no `status`
@@ -21,36 +24,29 @@ use std::time::Instant;
 use http::Method;
 use nest_rs_core::RequestContinuation;
 
+use crate::trace_context::method_name;
+
 use crate::matched::MatchedRoute;
 use crate::request::Request;
 
 /// A request being timed. Opened before the inner tree runs, filed once the
 /// response body has been written.
 pub(crate) struct AccessLog {
-    method: Method,
+    method: &'static str,
     /// The slot the router notes the matched template in; read when the line
     /// is filed.
     matched: MatchedRoute,
-    user_agent: Option<String>,
     start: Instant,
 }
 
 impl AccessLog {
     /// Snapshot what only the *request* can answer, before it is consumed.
-    /// `user_agent` is the one the operation span read; `start` is the instant
-    /// the request arrived, which its budget counts from too.
-    pub(crate) fn open(
-        req: &Request,
-        matched: &MatchedRoute,
-        user_agent: Option<&str>,
-        start: Instant,
-    ) -> Self {
+    /// `start` is the instant the request arrived, which its budget counts
+    /// from too.
+    pub(crate) fn open(req: &Request, matched: &MatchedRoute, start: Instant) -> Self {
         Self {
-            method: req.method().clone(),
+            method: method_name(req.method()),
             matched: matched.clone(),
-            // Owned: the `HeaderValue`'s bytes are a slice of hyper's shared read
-            // buffer, which holding would pin until the response body ends.
-            user_agent: user_agent.map(str::to_owned),
             start,
         }
     }
@@ -79,7 +75,6 @@ impl AccessLog {
             route = route.as_deref(),
             status,
             bytes,
-            user_agent = self.user_agent.as_deref(),
         );
     }
 
@@ -94,7 +89,6 @@ impl AccessLog {
             started: self.start,
             method = %self.method,
             route = route.as_deref(),
-            user_agent = self.user_agent.as_deref(),
         );
     }
 }
@@ -174,7 +168,7 @@ mod tests {
         let req = Request::builder()
             .uri(http::Uri::from_static("/reports/sk_live_51"))
             .finish();
-        let log = AccessLog::open(&req, matched, Some("curl/8"), Instant::now());
+        let log = AccessLog::open(&req, matched, Instant::now());
         let continuation = RequestContinuation::new(None, Correlation::minted(None));
         (log, continuation)
     }
@@ -234,6 +228,54 @@ mod tests {
                 assert!(!value.contains("sk_live"), "{field} = {value}");
             }
         }
+    }
+
+    /// What the console's text format is written to.
+    #[derive(Clone, Default)]
+    struct Written(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Written {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Written {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The console's text format prints a field written as a `&str` in quotes
+    /// and one written through `Display` bare: the method is printed
+    /// `method=GET`, as a query on the console's lines matches it.
+    #[test]
+    fn the_console_line_prints_the_method_bare() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let written = Written::default();
+        let layer = tracing_subscriber::fmt::layer()
+            .event_format(nest_rs_core::__private::TextFormat::new(false))
+            .with_ansi(false)
+            .with_writer(written.clone());
+        let subscriber = tracing_subscriber::Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let (log, _continuation) = held(&matched("/reports/{id}"));
+            log.emit(&tracing::Span::none(), 200, 2, None);
+        });
+        let line = String::from_utf8(written.0.lock().expect("unpoisoned").clone())
+            .expect("the console writes UTF-8");
+        assert!(line.contains(" method=GET "), "{line}");
     }
 
     #[test]

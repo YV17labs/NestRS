@@ -72,8 +72,9 @@ traffic it generates.
 
 So a deployment behind a proxy that already traces sets that variable, or its
 inbound traces stop at your edge. Nothing is lost either way: the caller's
-claimed `traceparent` is recorded on the span as
-`http.request.header.traceparent`, so you can still join against it.
+claimed `traceparent`, once it parses, is recorded on the span as
+`http.request.header.traceparent`, so you can still join against it. One that
+does not parse is the caller's free text, and is not recorded.
 
 What the caller reads back is the trace this service **actually used**:
 
@@ -84,8 +85,11 @@ traceresponse: 00-01a011c406fb7433abbf3a3ddf952fa5-7f15c145ffbe7ed8-03
 <Aside type="note" title="Why not `X-Request-Id`">
 It is a de-facto convention, never a standard, and OpenTelemetry's semantic
 conventions treat it as a *captured header* rather than an identity. Behind a
-trusted peer it is recorded as `http.request.header.x-request-id`, so you can
-join your logs to nginx's — it never decides what a request is called.
+trusted peer it is recorded as `http.request.header.x-request-id` when it has
+the shape a proxy mints — a UUID, or 16 to 64 hex digits, as nginx's
+`$request_id` is — so you can join your logs to nginx's. Any other value is a
+word a client could have written through the proxy, and is not recorded. It
+never decides what a request is called.
 </Aside>
 
 ## `actor_id` is an audit identity

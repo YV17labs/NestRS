@@ -68,18 +68,67 @@ fn claimed_traceparent(req: &Request) -> Option<&str> {
         .filter(|raw| !raw.is_empty())
 }
 
-/// The upstream proxy's own request id, when a trusted peer sent one.
+/// What the caller claimed, as far as it parsed: a W3C `traceparent` is
+/// bounded hex up to its 55th character, and a later version's further fields
+/// are none of it.
+fn parsed_traceparent(claimed: &str) -> Option<&str> {
+    TraceParent::parse(claimed)?;
+    claimed.trim().get(..TRACEPARENT_LEN)
+}
+
+/// The upstream proxy's own request id, when a trusted peer sent one in the
+/// shape a proxy mints: no specification gives `X-Request-Id` a grammar, and a
+/// client may write the header through a proxy that forwards it, so only
+/// bounded hex is recorded — a UUID (RFC 9562 §4), or 16 to 64 hex digits as
+/// nginx's `$request_id` is 32 — never a word a client could have chosen.
 fn upstream_request_id(req: &Request, origin: ClientOrigin) -> Option<&str> {
     origin.peer_is_trusted().then_some(())?;
     req.headers()
         .get(UPSTREAM_REQUEST_ID_HEADER)?
         .to_str()
         .ok()
-        .filter(|raw| !raw.is_empty() && raw.len() <= MAX_UPSTREAM_LEN)
+        .filter(|raw| is_minted_id(raw))
 }
 
-/// Longest upstream id recorded, so one caller cannot bloat every log line.
-const MAX_UPSTREAM_LEN: usize = 200;
+/// Whether `id` is a UUID's `8-4-4-4-12` hex groups, or 16 to 64 hex digits.
+fn is_minted_id(id: &str) -> bool {
+    const UUID_GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
+    let hex = |group: &str| group.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if id.contains('-') {
+        let mut groups = id.split('-');
+        return UUID_GROUPS.iter().all(|len| {
+            groups
+                .next()
+                .is_some_and(|group| group.len() == *len && hex(group))
+        }) && groups.next().is_none();
+    }
+    (16..=64).contains(&id.len()) && hex(id)
+}
+
+/// The word OpenTelemetry's HTTP conventions give a method they do not know.
+pub(crate) const OTHER_METHOD: &str = "_OTHER";
+
+/// `method` as the HTTP conventions name it: one they know — RFC 9110's, PATCH
+/// (RFC 5789) and QUERY — spelled exactly, methods being case-sensitive;
+/// [`OTHER_METHOD`] for any other, a token the client chose.
+///
+/// No override list: the router serves no method outside this set, so a
+/// method an app answers is never `_OTHER`.
+pub(crate) fn method_name(method: &Method) -> &'static str {
+    match method.as_str() {
+        "CONNECT" => "CONNECT",
+        "DELETE" => "DELETE",
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        "PATCH" => "PATCH",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "QUERY" => "QUERY",
+        "TRACE" => "TRACE",
+        _ => OTHER_METHOD,
+    }
+}
 
 /// Report the trace this service used back to the caller.
 pub(crate) fn stamp(correlation: &Correlation, resp: &mut Response) {
@@ -127,22 +176,28 @@ pub(crate) fn request_span(
     req: &Request,
     correlation: &Correlation,
     origin: ClientOrigin,
-    user_agent: Option<&str>,
 ) -> tracing::Span {
+    let method = method_name(req.method());
     let span = nest_rs_core::operation_span!(
         crate::unit::REQUEST,
         correlation,
         // `tracing` fixes a span name to a literal; `tracing-opentelemetry`
         // reads `otel.name` as the override, filled by `name_route`.
         otel.name = tracing::field::Empty,
-        http.request.method = %req.method(),
+        http.request.method = method,
+        // The conventions require it wherever it differs from the method named.
+        http.request.method_original = (method == OTHER_METHOD).then(|| req.method().as_str()),
         // As addressed; never in `http.route`, which a backend groups on.
         url.path = req.uri().path(),
         // Filled by `name_route`; a 404 matched no route and leaves it empty.
         http.route = tracing::field::Empty,
         // No `client.address`: an address is personal data a collector would keep.
-        user_agent.original = user_agent.unwrap_or_default(),
-        // What the caller claimed, recorded whether or not it was believed.
+        user_agent.original = req
+            .headers()
+            .get(header::USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
+        // What the caller claimed, believed or not, once it parsed.
         "http.request.header.traceparent" = tracing::field::Empty,
         "http.request.header.x-request-id" = tracing::field::Empty,
         // The size only when the access log is on, which pays for counting.
@@ -151,7 +206,7 @@ pub(crate) fn request_span(
     );
     // On a continued trace, `trace_id` already says it.
     if correlation.parent_id().is_none()
-        && let Some(claimed) = claimed_traceparent(req)
+        && let Some(claimed) = claimed_traceparent(req).and_then(parsed_traceparent)
     {
         span.record("http.request.header.traceparent", claimed);
     }
@@ -162,10 +217,15 @@ pub(crate) fn request_span(
 }
 
 /// Name the span for what the router matched: `http.route` is the template,
-/// `otel.name` is `{method} {route}`, or the method alone when nothing matched.
+/// `otel.name` is `{method} {route}`, or the method alone when nothing matched;
+/// a method the conventions do not know is `HTTP` there, as they spell it.
 ///
 /// Never the raw path: one scanner would fill a tracing backend with span names.
 pub(crate) fn name_route(span: &tracing::Span, method: &Method, route: Option<&str>) {
+    let method = match method_name(method) {
+        OTHER_METHOD => "HTTP",
+        known => known,
+    };
     match route {
         Some(route) => {
             span.record("http.route", route);
@@ -186,13 +246,6 @@ pub(crate) fn record_failure(span: &tracing::Span, status: StatusCode) {
     if status.is_server_error() {
         nest_rs_core::operation_log::record_error(span, status.as_str());
     }
-}
-
-/// The user agent, read once per request for the operation span and the access line.
-pub(crate) fn user_agent(req: &Request) -> Option<&str> {
-    req.headers()
-        .get(header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
 }
 
 #[cfg(test)]
@@ -314,15 +367,18 @@ mod tests {
         assert!(correlation.parent_id().is_none());
     }
 
+    /// nginx's `$request_id`: 32 hex digits.
+    const NGINX_REQUEST_ID: &str = "8f14e45fceea167a5a36dedd4bea2543";
+
     #[test]
     fn an_upstream_request_id_is_read_only_behind_a_trusted_peer() {
-        let headers = [(UPSTREAM_REQUEST_ID_HEADER, "nginx-abc123")];
+        let headers = [(UPSTREAM_REQUEST_ID_HEADER, NGINX_REQUEST_ID)];
         let trusted = req_from("10.0.0.1", &headers);
         let untrusted = req_from("203.0.113.9", &headers);
 
         assert_eq!(
             upstream_request_id(&trusted, ClientOrigin::of_with(&trusted, &[ip("10.0.0.1")])),
-            Some("nginx-abc123"),
+            Some(NGINX_REQUEST_ID),
         );
         assert_eq!(
             upstream_request_id(
@@ -331,6 +387,54 @@ mod tests {
             ),
             None,
         );
+    }
+
+    /// No specification gives `X-Request-Id` a grammar: it is recorded in the
+    /// shape a proxy mints, bounded hex, and not at all when it is a word a
+    /// client could have written through the proxy, a secret's shape included.
+    #[test]
+    fn an_upstream_request_id_is_recorded_only_as_a_minted_id() {
+        let trusted = [ip("10.0.0.1")];
+        let at_most = "f".repeat(64);
+        let beyond = "f".repeat(65);
+        for (sent, recorded) in [
+            (NGINX_REQUEST_ID, true),
+            ("0190e0b4-7d3c-7c4e-9f1a-3b2c1d0e9f8a", true),
+            ("0190E0B4-7D3C-7C4E-9F1A-3B2C1D0E9F8A", true),
+            ("00f067aa0ba902b7", true),
+            (at_most.as_str(), true),
+            (beyond.as_str(), false),
+            ("00f067aa0ba902b", false),
+            ("sk_live_51HsecretTOKEN", false),
+            ("nginx-abc123", false),
+            ("free text marked", false),
+            ("0190e0b4-7d3c-7c4e-9f1a-3b2c1d0e9f8a-marked", false),
+            ("0190e0b4-7d3c-7c4e-9f1a3b2c1d0e9f8a", false),
+            ("0190e0b4-7d3c-7c4e-9f1a-3b2c1d0e9f8z", false),
+            ("\"quoted\"", false),
+        ] {
+            let req = req_from("10.0.0.1", &[(UPSTREAM_REQUEST_ID_HEADER, sent)]);
+            assert_eq!(
+                upstream_request_id(&req, ClientOrigin::of_with(&req, &trusted)),
+                recorded.then_some(sent),
+                "{sent}",
+            );
+        }
+    }
+
+    /// The conventions' known methods, spelled exactly; any other is `_OTHER`.
+    #[test]
+    fn a_method_is_named_from_the_known_set_or_other() {
+        for known in [
+            "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE",
+        ] {
+            let method = Method::from_bytes(known.as_bytes()).expect("a method token");
+            assert_eq!(method_name(&method), known);
+        }
+        for other in ["get", "Get", "PROPFIND", "MARKED"] {
+            let method = Method::from_bytes(other.as_bytes()).expect("a method token");
+            assert_eq!(method_name(&method), OTHER_METHOD, "{other}");
+        }
     }
 
     #[test]

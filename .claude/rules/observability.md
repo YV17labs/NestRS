@@ -108,7 +108,7 @@ and declaring a field nothing fills is the same defect with the opposite sign.
   per id; the addressed path is `url.path`. The exported name is `otel.name`,
   `{method} {route}` once the router has matched, and the method alone when
   nothing matched — naming an unmatched span after its URL lets one scanner fill
-  a tracing backend.
+  a tracing backend; a method outside the known set reads `HTTP` there.
 - **`otel.kind` values are constants in `operation_log::kind`**, and only the
   kinds this framework emits are declared; the edge that first needs another
   adds it.
@@ -141,6 +141,13 @@ field or the enclosing span carries, and no two layers emit the same event.
 error through its `SafeLink`; no sentence formats a raw `ValidationErrors`, a
 serde error, a driver's error or a configured string. Held by review: no lint
 reads a `Display`.
+
+**A request line carries the server's values only**: a value the client
+addressed reaches it as the server's own name for it — the route template, a
+method from the conventions' known set or `_OTHER` — and a refused value is
+said by kind, with the settings that would admit it. The span keeps what the
+telemetry conventions require or recommend, the one stated exception
+(`.claude/decisions/payload-never-quoted.md`). Held by each edge's line tests.
 
 **A library's events are under the same rule**, since the framework's
 subscribers write them: the crate that wires a library quoting a client's

@@ -110,17 +110,32 @@ are things nothing else can supply:
 Everything else belongs to the transport and exists whether or not this crate is
 installed: the span itself, its W3C trace context, the `traceresponse` response
 header, and the access log. The span carries the OTel HTTP semantic-convention attributes:
-`http.request.method`, `url.path` (the addressed path), `http.route` (the
+`http.request.method` (a method the conventions know, spelled exactly, or
+`_OTHER`), `url.path` (the addressed path), `http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
 `http.response.status_code`, `http.response.body.size` and
 `user_agent.original`. It carries no `client.address`, which the conventions
 recommend: a client's address is personal data, and a collector keeps what it
 receives — no access line carries it either.
 
+**The span is the one place a value the client chose is kept, and only what
+the conventions ask for.** `url.path`, `user_agent.original` and — for a
+method outside the known set — `http.request.method_original` are the client's
+to write. The conventions require or recommend them and the span goes to your
+own collector, so it keeps them: a stated exception to the rule that no line
+and no reply quotes a client's value, which the
+[access line](/opentelemetry/logs/#access-log) follows. A header the span
+records beyond that set is one that parsed under its grammar: a `traceparent`
+the transport did not continue is recorded as the 55 hex characters it parsed
+to, and an `X-Request-Id` from a trusted proxy only in the shape a proxy mints
+it — a UUID, or 16 to 64 hex digits, as nginx's `$request_id` is. Anything
+else is not recorded.
+
 It is named `{method} {route}` through `otel.name`. `tracing` fixes a span
 name to a literal, and one literal for every route makes a trace list
 unreadable. A request that matched
-nothing is named by its method alone, never by the URL.
+nothing is named by its method alone, never by the URL, and a method outside
+the known set reads `HTTP` there, as the conventions spell it.
 
 Body size and duration are measured at **end-of-body**, not at handler return, so
 a half-streamed response and a client disconnect both still produce one access

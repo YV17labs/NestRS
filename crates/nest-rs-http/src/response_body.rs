@@ -345,7 +345,6 @@ mod tests {
             Some(AccessLog::open(
                 &request,
                 &crate::matched::MatchedRoute::default(),
-                None,
                 std::time::Instant::now(),
             )),
             None,

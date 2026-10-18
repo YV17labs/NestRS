@@ -73,3 +73,49 @@ stays its own: the framework adds no runtime restriction there.
   library's events included.
 - **A clamp is the audit of one version**: upgrading a clamped library, or one
   the audit cleared, re-reads its events.
+
+## 2026-10-18 — the framework's own request lines: a refusal by kind, the server's values, the span's stated exception
+
+The rule above reads on every value a client chose, success included, and on
+every line and reply the framework writes. Its own request lines quoted three:
+the browser-origin refusal named the `Origin` sent and the origin the server
+took for its own, read off the `Host` or a trusted proxy's forwarded host; the
+access line carried the `User-Agent` and an extension method as the client
+spelled it.
+
+- **A refusal line says the refused value by kind.** The browser-origin
+  refusal files `reason` — the first check that failed, in RFC 6454's words
+  (`scheme_differs`, `host_missing`, `origin_not_serialized`, …) — the sent
+  origin's `scheme` from a closed set, whether the peer is a `trusted_proxy`,
+  and a `hint` naming the settings that would admit it, as the MCP `Host`
+  refusal does. What an operator changes is a setting, and the line names it;
+  the value tells them nothing the kind does not.
+- **The request's line carries the server's values only**: the route
+  template, the method as OpenTelemetry's HTTP conventions know it — RFC
+  9110's, `PATCH` and `QUERY`, spelled exactly — or `_OTHER`, the status, the
+  bytes and the duration. `user_agent` left it: free text, which a log
+  pipeline keeps whole.
+- **The span keeps what the telemetry conventions require or recommend, as a
+  stated exception.** The request span records `url.path` (required),
+  `user_agent.original` (recommended) and, for a method outside the known
+  set, `http.request.method_original` (required whenever it differs from
+  `http.request.method`). Standards over invention: a tracing backend reads
+  those names, and the span goes to the deployment's own collector, never to
+  a client or a shared log. Beyond that set, a header the span records is
+  recorded only once it parsed under its grammar — a `traceparent` the
+  transport did not continue as the 55 hex characters it parsed to, an
+  `X-Request-Id`, which no specification gives a grammar, only in the shape a
+  proxy mints it, bounded hex (a UUID, or 16 to 64 hex digits) — and
+  otherwise not at all: a token admits any word a client writes through a
+  proxy that forwards the header. The span still records no `url.query` and
+  no `client.address`, which the conventions also ask for: those stay out on
+  the rule above and on personal data.
+- **No override list for the known methods.** The conventions ask an
+  instrumentation that could turn a valid method into `_OTHER` to let the list
+  be overridden. The router serves no method outside the known set, so a method
+  an app answers is never `_OTHER`; a verb the router learns joins the set in
+  that change.
+- **Refused:** a hash or a prefix of a value to keep it greppable — a short
+  value's hash is a dictionary away from the value, and a prefix is the value's
+  start; a switch putting the values back on the line, whose place is already
+  the span in the deployment's own collector.

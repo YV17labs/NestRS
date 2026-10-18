@@ -315,16 +315,15 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         // on one id; the origin first, because the id's gate reads it.
         let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
         let correlation = trace_context::resolve(&req, origin);
-        let user_agent = trace_context::user_agent(&req);
         // Never gated: it carries `trace_id` onto every event and declares the
         // `actor_id` field the authn guard records into.
-        let span = trace_context::request_span(&req, &correlation, origin, user_agent);
+        let span = trace_context::request_span(&req, &correlation, origin);
         let method = req.method().clone();
         // Filled by the table's entry the router matched.
         let matched = MatchedRoute::default();
         let log = self
             .access_log
-            .then(|| AccessLog::open(&req, &matched, user_agent, arrival.into_std()));
+            .then(|| AccessLog::open(&req, &matched, arrival.into_std()));
         req.extensions_mut().insert(matched.clone());
 
         // Built here, not in `handle`: a streaming body outlives that future.

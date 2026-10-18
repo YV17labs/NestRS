@@ -120,6 +120,86 @@ async fn the_exported_span_is_named_method_and_route() {
     );
 }
 
+/// A method outside the known set is `_OTHER` on the span, whose name then
+/// reads `HTTP`, as the HTTP conventions spell it; the method as sent is the
+/// conventions' `http.request.method_original`, required whenever the two
+/// differ, and absent otherwise.
+#[tokio::test]
+async fn a_method_the_conventions_do_not_know_is_other() {
+    let logs = LogCapture::install();
+    let client = boot::<OrgsModule>().await;
+
+    client
+        .request(
+            nest_rs_http::Method::from_bytes(b"get").expect("a method token"),
+            "/orgs/acme/members/42",
+        )
+        .send()
+        .await;
+
+    let span = logs.expect_span("nest_rs::http", "http.request");
+    assert_eq!(
+        span.field("http.request.method").as_deref(),
+        Some("_OTHER"),
+        "methods are case-sensitive: {:?}",
+        span.fields,
+    );
+    assert_eq!(
+        span.field("http.request.method_original").as_deref(),
+        Some("get")
+    );
+    assert_eq!(
+        span.field("otel.name").as_deref(),
+        Some("HTTP /orgs/{org}/members/{id}"),
+        "the route the router matched, never the method sent",
+    );
+
+    let logs = LogCapture::install();
+    client.get("/orgs/acme/members/42").send().await;
+    let span = logs.expect_span("nest_rs::http", "http.request");
+    assert_eq!(span.field("http.request.method").as_deref(), Some("GET"));
+    assert_eq!(
+        span.field("http.request.method_original"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}
+
+/// A claimed `traceparent` the span records beyond the conventions' set is
+/// recorded only once it parsed: a malformed one is the client's free text.
+#[tokio::test]
+async fn a_claimed_traceparent_is_recorded_only_when_it_parsed() {
+    for (claimed, recorded) in [
+        (
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        ),
+        ("traceparent-marked", None),
+        (
+            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-marked",
+            Some("01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        ),
+    ] {
+        let logs = LogCapture::install();
+        let client = boot::<OrgsModule>().await;
+
+        client
+            .get("/orgs/acme/members/42")
+            .header("traceparent", claimed)
+            .send()
+            .await;
+
+        let span = logs.expect_span("nest_rs::http", "http.request");
+        assert_eq!(
+            span.field("http.request.header.traceparent").as_deref(),
+            recorded,
+            "{claimed}: {:?}",
+            span.fields,
+        );
+    }
+}
+
 /// A request that matched nothing is named for its method alone, never its URL.
 #[tokio::test]
 async fn an_unmatched_request_is_named_by_its_method_alone() {

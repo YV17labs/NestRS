@@ -113,6 +113,9 @@ reqwest.workspace = true
 # against the composition that defeated it rather than against a hand-set header.
 flate2.workspace = true
 futures-util.workspace = true
+# The access line's unit tests write it through the kernel's console format,
+# which is what a query on the console's lines reads.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

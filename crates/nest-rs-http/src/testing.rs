@@ -1,8 +1,8 @@
 //! Test doubles: a real upgrade request, served by hyper over an in-memory pipe,
 //! so its `OnUpgrade` yields a socket once answered; an allocator counting the
-//! bytes a thread holds on the heap; and the in-process call this crate's units
-//! drive an endpoint with, since `nest_rs_testing::TestClient` names the
-//! crate's other copy.
+//! bytes a thread holds on the heap; a handler whose future weighs what a test
+//! asks; and the in-process call this crate's units drive an endpoint with,
+//! since `nest_rs_testing::TestClient` names the crate's other copy.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -209,4 +209,34 @@ pub(crate) async fn text(response: crate::Response) -> String {
         .into_string()
         .await
         .expect("a text body")
+}
+
+/// A handler whose future holds `N` bytes across its one await: what a test
+/// weighs the future of what runs it against.
+pub(crate) struct Holding<const N: usize>;
+
+impl<const N: usize> Holding<N> {
+    async fn answer(&self) -> crate::Result<crate::Response> {
+        let held = [0_u8; N];
+        tokio::task::yield_now().await;
+        Ok(crate::Response::builder().body(held.len().to_string()))
+    }
+}
+
+impl<const N: usize> crate::Endpoint for Holding<N> {
+    fn call(
+        &self,
+        _req: crate::Request,
+    ) -> impl Future<Output = crate::Result<crate::Response>> + Send {
+        self.answer()
+    }
+}
+
+impl<const N: usize> crate::route_site::RouteWrapper for Holding<N> {
+    fn call(
+        &self,
+        _req: &mut crate::Request,
+    ) -> impl Future<Output = crate::Result<crate::Response>> + Send {
+        self.answer()
+    }
 }

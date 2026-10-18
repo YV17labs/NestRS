@@ -214,12 +214,8 @@ fn behind_stage(
         Some(stage),
     )
     .expect("a site with nothing to resolve composes");
-    crate::endpoint::BoxEndpoint::new(crate::site::SiteEndpoint::new(
-        handler,
-        chains,
-        None,
-        crate::site::EndpointTail(inner),
-    ))
+    let tail = crate::site::EndpointTail::new(inner, &chains);
+    crate::endpoint::BoxEndpoint::new(crate::site::SiteEndpoint::new(handler, chains, None, tail))
 }
 
 /// Run `guards`' HTTP entry on `req`, the unit `handler` declares, as the

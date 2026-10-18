@@ -174,6 +174,14 @@ The `ResponseError` impl is what lets a handler's `?` carry `DomainError`; its
 status is the **default** the filter replaces. Drop the filter and the same
 handler answers `500` from that status.
 
+A filter reads the request it answers as a guard does, through
+`HttpView::of(cx)?.request()` — its method, its headers, its extensions — so it
+can answer in the media type the client accepts; only the body is gone once
+the handler read it. What the client is finally sent decides what is filed: a
+failure a filter answers with a `4xx` files nothing, and one it answers with a
+`5xx`, its own reply or a `Problem`, files the chain the client is not told
+once, at `error`, at `warn` behind a `503`.
+
 Bind it like any other layer: for the whole app with
 `App::builder().use_exception_filters_global([exception_filter::<DomainErrorFilter>()])`,
 on a controller with `#[use_exception_filters(DomainErrorFilter)]`, or beside a
@@ -194,8 +202,9 @@ That answers `422` with `caught: domain failure: boom`.
 `type Exception = dyn Error + Send + Sync` claims every failure — the
 envelope a product answers every error in. Bound globally, it also shapes
 what no route answers: a `404` for a path nothing serves, a `405` for a
-method a path does not take, and a self-mount's own error, such as `/graphql`
-refusing an oversized batch.
+method a path does not take, an API version the header or media-type
+strategy refuses, and a self-mount's own error, such as `/graphql` refusing
+an oversized batch.
 
 ```rust
 #[async_trait]

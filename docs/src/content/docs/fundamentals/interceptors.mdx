@@ -165,7 +165,9 @@ rolls its writes back.
 ## Common things an interceptor does
 
 - **Decorate the reply** — headers (`Server-Timing`, `X-Cache-Status`), read
-  through `HttpView::of(cx)?.response_mut()` once `next.run(cx)` returned.
+  through `HttpView::of(cx)?.response_mut()` once `next.run(cx)` returned. The
+  request is still there beside it, its head and extensions whole: only its
+  body is gone once the handler read it.
 - **Time the call** — measure latency by route, emit a metric.
 - **Answer instead** — a cache answers through `HttpView::of(cx)?.respond(..)`
   and returns its `Settled` without running the rest of the unit.

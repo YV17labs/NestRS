@@ -15,12 +15,15 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 
+use futures_util::FutureExt as _;
+use futures_util::future::Either;
 use http::StatusCode;
 
 use crate::endpoint::Endpoint;
 use crate::error::{HttpError, Result};
 use crate::request::Request;
 use crate::response::Response;
+use crate::route_site::RouteWrapper;
 
 /// The handler's future, as a [`ResponseShaping`] receives it; boxed on armed
 /// routes only.
@@ -187,48 +190,68 @@ pub struct ShapedEndpoint<E> {
     probe: Option<&'static str>,
 }
 
-impl<E: Endpoint> ShapedEndpoint<E> {
-    /// The handler, its streaming body continuing under what the handler ran
-    /// under.
-    async fn plain(&self, req: Request) -> Result<Response> {
-        let resp = self.inner.call(req).await?;
-        Ok(crate::response_body::continue_body(resp))
+/// `handler`'s answer, its streaming body continuing under what the handler
+/// ran under, shaped by `shaping` — or, with nothing armed, probed when
+/// `probe` names the route.
+///
+/// Not an `async fn`, nor a block awaiting `handler`: either keeps the future
+/// it is handed beside the one it awaits, so each would double the handler's
+/// future, and a debug build reserves every copy on the polling thread's stack.
+fn shape<'a>(
+    handler: impl Future<Output = Result<Response>> + Send + 'a,
+    shaping: Option<Box<dyn ResponseShaping>>,
+    probe: Option<&'static str>,
+) -> impl Future<Output = Result<Response>> + Send + 'a {
+    let plain = handler.map(|resp| resp.map(crate::response_body::continue_body));
+    match (shaping, probe) {
+        (Some(shaping), _) => Either::Left(shaping.apply(Box::pin(plain))),
+        (None, Some(route)) => Either::Right(Either::Left(probed(plain, route))),
+        (None, None) => Either::Right(Either::Right(plain)),
     }
+}
 
-    async fn probed(&self, req: Request, route: &'static str) -> Result<Response> {
-        let (marked, resp) = MASK_PROBE
-            .scope(Cell::new(false), async {
-                let resp = self.plain(req).await;
-                (MASK_PROBE.with(Cell::get), resp)
-            })
-            .await;
-        let resp = resp?;
-        if marked && resp.status().is_success() {
-            tracing::error!(
-                target: crate::target::HTTP,
-                route = route,
-                "a masking extractor ran but no response shaper armed on this route — \
-                 declare it as a handler parameter (a nested or hand-rolled extractor \
-                 is invisible to the type-directed arm); failing closed",
-            );
-            return Err(HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR));
-        }
-        Ok(resp)
+/// `plain`'s answer, failed closed when a masking extractor ran on a route
+/// nothing armed.
+fn probed<'a>(
+    plain: impl Future<Output = Result<Response>> + Send + 'a,
+    route: &'static str,
+) -> impl Future<Output = Result<Response>> + Send + 'a {
+    MASK_PROBE
+        .scope(
+            Cell::new(false),
+            plain.map(|resp| (MASK_PROBE.with(Cell::get), resp)),
+        )
+        .map(move |(marked, resp)| unmasked(marked, resp, route))
+}
+
+/// `resp`, unless `marked` says a masking extractor ran on `route`, which
+/// nothing armed, and it succeeded.
+fn unmasked(marked: bool, resp: Result<Response>, route: &'static str) -> Result<Response> {
+    let resp = resp?;
+    if marked && resp.status().is_success() {
+        tracing::error!(
+            target: crate::target::HTTP,
+            route = route,
+            "a masking extractor ran but no response shaper armed on this route — \
+             declare it as a handler parameter (a nested or hand-rolled extractor \
+             is invisible to the type-directed arm); failing closed",
+        );
+        return Err(HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR));
     }
+    Ok(resp)
 }
 
 impl<E: Endpoint> Endpoint for ShapedEndpoint<E> {
     async fn call(&self, req: Request) -> Result<Response> {
-        match self.shaper.and_then(|capture| capture(&req)) {
-            Some(shaping) => {
-                let inner: RouteFuture<'_> = Box::pin(self.plain(req));
-                shaping.apply(inner).await
-            }
-            None => match self.probe {
-                Some(route) => self.probed(req, route).await,
-                None => self.plain(req).await,
-            },
-        }
+        let shaping = self.shaper.and_then(|capture| capture(&req));
+        shape(self.inner.call(req), shaping, self.probe).await
+    }
+}
+
+impl<W: RouteWrapper> RouteWrapper for ShapedEndpoint<W> {
+    async fn call(&self, req: &mut Request) -> Result<Response> {
+        let shaping = self.shaper.and_then(|capture| capture(req));
+        shape(self.inner.call(req), shaping, self.probe).await
     }
 }
 
@@ -261,6 +284,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::endpoint::endpoint_fn;
+    use crate::testing::{Holding, get};
     use crate::{HeaderName, HeaderValue};
 
     use super::*;
@@ -472,5 +496,27 @@ mod tests {
             }
         }
         assert!(selected.is_some());
+    }
+
+    /// What shaping adds to the future of a handler holding `N` bytes, as
+    /// `#[routes]` mounts it and as an endpoint.
+    fn added_by_shaping<const N: usize>() -> [usize; 2] {
+        let handler = size_of_val(&RouteWrapper::call(&Holding::<N>, &mut get()));
+        let ep = shaped(Holding::<N>, __shaper_of!(Shout), Some("POST /x"));
+        [
+            size_of_val(&RouteWrapper::call(&ep, &mut get())) - handler,
+            size_of_val(&Endpoint::call(&ep, get())) - handler,
+        ]
+    }
+
+    #[test]
+    fn shaping_holds_the_handlers_future_once() {
+        let light = added_by_shaping::<1024>();
+        let heavy = added_by_shaping::<16384>();
+        assert_eq!(
+            light, heavy,
+            "shaping copies the handler's future: it adds {light:?} bytes to a 1 KiB one, \
+             {heavy:?} to a 16 KiB one",
+        );
     }
 }

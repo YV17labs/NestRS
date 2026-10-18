@@ -371,15 +371,6 @@ impl Request {
             .map(|(_, value)| value.as_str())
     }
 
-    /// The template the router matched, shared: what a unit keeps once its
-    /// request is answered.
-    pub(crate) fn route_template(&self) -> Option<Arc<str>> {
-        self.facts
-            .route
-            .as_ref()
-            .map(|routed| Arc::clone(&routed.template))
-    }
-
     /// Every path parameter the router decoded, in the template's order: none
     /// before routing.
     pub(crate) fn path_params(&self) -> &[(Arc<str>, String)] {
@@ -474,6 +465,16 @@ impl Request {
     /// The parts, and the facts with them.
     pub(crate) fn into_raw(self) -> (RequestParts, Body, RequestFacts) {
         (self.head, self.body, self.facts)
+    }
+
+    /// This request without its body: the head, its extensions included, and
+    /// what the connection and the router know of it.
+    pub(crate) fn head_copy(&self) -> Self {
+        Self {
+            head: self.head.clone(),
+            body: Body::empty(),
+            facts: self.facts.clone(),
+        }
     }
 
     /// When the accept loop handed the request over, if it came off a socket,

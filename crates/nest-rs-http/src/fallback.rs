@@ -25,7 +25,7 @@ use crate::response::{IntoResponse, Response};
 use crate::route_template::{segment_parameter, unescape};
 use crate::site::SiteTail;
 use crate::transport::{SELF_MOUNT, normalize_mount_path};
-use crate::versioning::route_matches;
+use crate::versioning::{VersionRefused, route_matches};
 
 /// What the router answers itself — a path no route claims, a method an
 /// address does not serve — and the router's fallback: one site, at no
@@ -52,11 +52,14 @@ pub(crate) struct NotAllowed(pub(crate) HeaderValue);
 
 /// The router's own answer: `405` with the `Allow` an address serves
 /// ([RFC 9110 §15.5.6](https://www.rfc-editor.org/rfc/rfc9110#status.405)),
-/// `404` where none claims the path.
+/// the version selector's refusal, `404` where none claims the path.
 pub(crate) struct Unrouted;
 
 impl SiteTail for Unrouted {
-    async fn answer(&self, req: Request) -> Result<Response> {
+    async fn answer(&self, req: &mut Request) -> Result<Response> {
+        if let Some(refused) = req.extensions().get::<VersionRefused>() {
+            return Ok(refused.answer());
+        }
         let Some(NotAllowed(allow)) = req.extensions().get::<NotAllowed>() else {
             return Ok(ProblemDetails::from_status(StatusCode::NOT_FOUND).into_response());
         };

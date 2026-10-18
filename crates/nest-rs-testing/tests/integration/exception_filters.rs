@@ -1,21 +1,23 @@
 //! Exception filters on the HTTP pipeline: typed dispatch at the three scopes
 //! (global, controller, method), the closest scope first, `TypeId` dedup,
 //! fallthrough when a filter does not match, a catch-all shaping what the
-//! router answers itself and a self-mount's own error, and a failed unit
-//! staying failed however a filter answered it.
+//! router answers itself and a self-mount's own error, the request's head
+//! read after the handler ran, a failed unit staying failed however a filter
+//! answered it, and its chain filed once by the status the client got.
 
 use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use nest_rs_core::problem::code;
 use nest_rs_core::{
-    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
+    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext, async_trait,
     exception_filter, injectable, interceptor, module,
 };
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::{
     HeaderName, HeaderValue, HttpView, IntoResponse, ProblemDetails, StatusCode, controller, routes,
 };
-use nest_rs_testing::TestApp;
+use nest_rs_testing::{LogCapture, TestApp};
 use tokio::sync::Mutex;
 
 static DOMAIN_CATCH_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -434,7 +436,7 @@ impl PingResolver {
         max_batch_size: 1,
         ..Default::default()
     })],
-    providers = [CatchAll, PingResolver],
+    providers = [CatchAll, EchoesAccept, PingResolver],
 )]
 struct GraphqlBatchModule;
 
@@ -447,13 +449,244 @@ async fn a_global_catch_all_shapes_a_self_mounts_own_http_error() {
         .await
         .expect("boots");
 
-    let one = serde_json::json!({ "query": "{ ping }" });
-    let resp = app
-        .http()
-        .post("/graphql")
-        .body_json(&serde_json::json!([one, one]))
-        .send()
-        .await;
+    let resp = oversized_batch(&app, "application/json").await;
     resp.assert_status(StatusCode::IM_A_TEAPOT);
     assert_eq!(detail(resp).await, "shaped");
+}
+
+/// The oversized batch `/graphql` refuses itself, sent accepting `accept`.
+async fn oversized_batch(app: &TestApp, accept: &str) -> nest_rs_testing::TestResponse {
+    let one = serde_json::json!({ "query": "{ ping }" });
+    app.http()
+        .post("/graphql")
+        .header("accept", accept)
+        .body_json(&serde_json::json!([one, one]))
+        .send()
+        .await
+}
+
+/// Every failure answered `418`, its problem saying the `Accept` the request
+/// sent: a filter negotiating what it answers.
+#[injectable]
+#[derive(Default)]
+struct EchoesAccept;
+
+impl Layer for EchoesAccept {}
+
+#[async_trait]
+impl ExceptionFilter for EchoesAccept {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        let Ok(view) = HttpView::of(cx) else {
+            return Caught::Declined;
+        };
+        let accept = view.request().header("accept").unwrap_or("-").to_owned();
+        answer(cx, StatusCode::IM_A_TEAPOT, accept)
+    }
+}
+
+#[controller(path = "/head")]
+struct HeadController;
+
+#[routes]
+impl HeadController {
+    #[get("/")]
+    #[use_exception_filters(EchoesAccept)]
+    async fn conflict(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(StatusCode::CONFLICT))
+    }
+}
+
+#[module(providers = [EchoesAccept, HeadController])]
+struct HeadModule;
+
+#[tokio::test]
+async fn a_filter_reads_the_requests_head_on_a_route_and_on_what_the_router_answers() {
+    let app = TestApp::builder()
+        .module::<HeadModule>()
+        .use_exception_filters_global([exception_filter::<EchoesAccept>()])
+        .build()
+        .await
+        .expect("boots");
+
+    for path in ["/head", "/nowhere"] {
+        let resp = app
+            .http()
+            .get(path)
+            .header("accept", "application/vnd.ledger+json")
+            .send()
+            .await;
+        resp.assert_status(StatusCode::IM_A_TEAPOT);
+        assert_eq!(
+            detail(resp).await,
+            "application/vnd.ledger+json",
+            "{path}: the head stays readable once the tail answered",
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_global_filter_reads_the_head_of_a_request_a_self_mount_answered() {
+    let app = TestApp::builder()
+        .module::<GraphqlBatchModule>()
+        .use_exception_filters_global([exception_filter::<EchoesAccept>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = oversized_batch(&app, "application/graphql-response+json").await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(detail(resp).await, "application/graphql-response+json");
+}
+
+/// Every failure answered as the `503` problem.
+#[injectable]
+#[derive(Default)]
+struct AsUnavailable;
+
+impl Layer for AsUnavailable {}
+
+#[async_trait]
+impl ExceptionFilter for AsUnavailable {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(503, code::UNAVAILABLE))
+    }
+}
+
+/// Every failure answered with a `500` the filter writes itself.
+#[injectable]
+#[derive(Default)]
+struct AsItsOwn500;
+
+impl Layer for AsItsOwn500 {}
+
+#[async_trait]
+impl ExceptionFilter for AsItsOwn500 {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        answer(cx, StatusCode::INTERNAL_SERVER_ERROR, "its own".to_owned())
+    }
+}
+
+#[controller(path = "/filed")]
+struct FiledController;
+
+#[routes]
+impl FiledController {
+    #[get("/as-a-4xx")]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn as_a_4xx(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
+            DomainError("mapped".into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    }
+
+    #[get("/as-a-503")]
+    #[use_exception_filters(AsUnavailable)]
+    async fn as_a_503(&self) -> nest_rs_http::Result<&'static str> {
+        Err(anyhow::anyhow!("db down").into())
+    }
+
+    #[get("/as-its-own-500")]
+    #[use_exception_filters(AsItsOwn500)]
+    async fn as_its_own_500(&self) -> nest_rs_http::Result<&'static str> {
+        Err(anyhow::anyhow!("db down").into())
+    }
+
+    #[get("/unfiltered")]
+    async fn unfiltered(&self) -> nest_rs_http::Result<&'static str> {
+        Err(anyhow::anyhow!("db down").into())
+    }
+}
+
+#[module(providers = [DomainErrorFilter, AsUnavailable, AsItsOwn500, FiledController])]
+struct FiledModule;
+
+/// Each chain the edge filed for a failed request: its level, its message
+/// and the chain it said.
+fn filed(logs: &LogCapture) -> Vec<(String, String, Option<String>)> {
+    logs.events()
+        .into_iter()
+        .filter(|event| event.target == "nest_rs::http")
+        .filter(|event| event.message == "request failed" || event.message == "request unavailable")
+        .map(|event| {
+            let error = event.field("error");
+            (event.level, event.message, error)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_failure_a_filter_answers_with_a_4xx_files_no_chain() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<FiledModule>().await.expect("boots");
+
+    app.http()
+        .get("/filed/as-a-4xx")
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        filed(&logs),
+        [],
+        "the client was answered a 4xx: nothing withheld"
+    );
+}
+
+#[tokio::test]
+async fn a_failure_answered_with_a_5xx_files_its_chain_once_by_the_status_sent() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<FiledModule>().await.expect("boots");
+
+    app.http()
+        .get("/filed/as-a-503")
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        filed(&logs),
+        [(
+            "warn".to_owned(),
+            "request unavailable".to_owned(),
+            Some("db down".to_owned())
+        )],
+        "a filter's 503 problem: the chain once, at warn",
+    );
+
+    let logs = LogCapture::install();
+    app.http()
+        .get("/filed/as-its-own-500")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        filed(&logs),
+        [(
+            "error".to_owned(),
+            "request failed".to_owned(),
+            Some("db down".to_owned())
+        )],
+        "a filter's own 500: the chain once, at error",
+    );
+
+    let logs = LogCapture::install();
+    app.http()
+        .get("/filed/unfiltered")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        filed(&logs),
+        [(
+            "error".to_owned(),
+            "request failed".to_owned(),
+            Some("db down".to_owned())
+        )],
+        "no filter: the edge's opaque 500, the chain once",
+    );
 }

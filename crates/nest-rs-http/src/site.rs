@@ -7,8 +7,9 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use http::StatusCode;
 use nest_rs_core::__private::{
-    Shape, Tail, UnitChains, caught_problem, dispatch, new_unit_context, withheld,
+    Shape, Tail, UnitChains, Withheld, caught_problem, dispatch, new_unit_context,
 };
 use nest_rs_core::{DecodeError, Failure, Handler, Outcome, Peer, Problem, Settled, UnitContext};
 use nest_rs_database::{
@@ -19,8 +20,8 @@ use nest_rs_pipes::PipeError;
 
 use crate::client_ip::ClientOrigin;
 use crate::deadline::RequestDeadline;
-use crate::endpoint::Endpoint;
-use crate::error::{HttpError, Result, failed, file};
+use crate::endpoint::{BoxEndpoint, Endpoint};
+use crate::error::{HttpError, Result, file};
 use crate::guard_stage::denial_response;
 use crate::pipe::rejection;
 use crate::problem::{ProblemDetails, problem_response};
@@ -31,17 +32,37 @@ use crate::view::HttpView;
 /// What a site runs last: the handler, a mount's endpoint, the router's own
 /// answer.
 pub(crate) trait SiteTail: Send + Sync + 'static {
-    /// Answer `req`.
-    fn answer(&self, req: Request) -> impl Future<Output = Result<Response>> + Send;
+    /// Answer `req`, which the unit's view holds: what the tail leaves of it —
+    /// its head at least — the layers read once it answered.
+    fn answer(&self, req: &mut Request) -> impl Future<Output = Result<Response>> + Send;
 }
 
-/// A mount's endpoint as a site's tail: a self-mount's entry, the router's
-/// fallback.
-pub(crate) struct EndpointTail(pub(crate) crate::endpoint::BoxEndpoint);
+/// An endpoint that takes its request whole as a site's tail: a self-mount's
+/// entry, the router's fallback, a route a controller registers by hand.
+pub(crate) struct EndpointTail {
+    endpoint: BoxEndpoint,
+    /// Whether a layer can read the request once the endpoint took it: the
+    /// view then keeps a copy of its head.
+    keeps_head: bool,
+}
+
+impl EndpointTail {
+    /// `endpoint` as the tail of a site running `chains`.
+    pub(crate) fn new(endpoint: BoxEndpoint, chains: &UnitChains) -> Self {
+        Self {
+            endpoint,
+            keeps_head: chains.shape() == Shape::Layered,
+        }
+    }
+}
 
 impl SiteTail for EndpointTail {
-    fn answer(&self, req: Request) -> impl Future<Output = Result<Response>> + Send {
-        self.0.call(req)
+    fn answer(&self, req: &mut Request) -> impl Future<Output = Result<Response>> + Send {
+        let left = match self.keeps_head {
+            true => req.head_copy(),
+            false => Request::builder().finish(),
+        };
+        self.endpoint.call(std::mem::replace(req, left))
     }
 }
 
@@ -109,7 +130,10 @@ impl<T: SiteTail> Endpoint for SiteEndpoint<T> {
     async fn call(&self, req: Request) -> Result<Response> {
         match &self.unit {
             // Nothing bound and no unit of work: the tail alone, as it answers.
-            None if self.chains.shape() == Shape::Bare => self.tail.answer(req).await,
+            None if self.chains.shape() == Shape::Bare => {
+                let mut req = req;
+                self.tail.answer(&mut req).await
+            }
             None => Ok(self.dispatched(req).await.response),
             Some((unit, policy)) => Ok(self.in_unit(unit, *policy, req).await),
         }
@@ -160,9 +184,9 @@ impl<T: SiteTail> SiteEndpoint<T> {
     }
 
     /// The unit through its chains, answered.
-    async fn dispatched(&self, req: Request) -> Answered {
+    async fn dispatched(&self, mut req: Request) -> Answered {
         if self.chains.shape() == Shape::Bare {
-            return match self.tail.answer(req).await {
+            return match self.tail.answer(&mut req).await {
                 Ok(response) => Answered {
                     commits: !is_error(&response),
                     response,
@@ -200,19 +224,19 @@ fn is_error(response: &Response) -> bool {
     status.is_client_error() || status.is_server_error()
 }
 
-/// A site's tail as the pipeline runs it: the request taken out of the view,
-/// the answer written back into it. A handler's error, or a `4xx`/`5xx` it
-/// answered, fails the unit, answered: the exception filters see it, and a
-/// failed unit never commits.
+/// A site's tail as the pipeline runs it: the request the view holds handed
+/// to it, the answer written back into the view. A handler's error, or a
+/// `4xx`/`5xx` it answered, fails the unit, answered: the exception filters
+/// see it, and a failed unit never commits. Nothing is filed here: what the
+/// client is not told is filed once the unit's answer is final ([`render`]).
 struct Running<'t, T>(&'t T);
 
 impl<T: SiteTail> Tail for Running<'_, T> {
     fn call(&mut self, cx: &mut UnitContext<'_>) -> impl Future<Output = Outcome> + Send {
         let tail = self.0;
         async move {
-            let req = HttpView::of(cx)?.take_request();
-            let answered = tail.answer(req).await;
             let view = HttpView::of(cx)?;
+            let answered = tail.answer(view.request_mut()).await;
             match answered {
                 Ok(response) => {
                     let status = response.status();
@@ -226,7 +250,7 @@ impl<T: SiteTail> Tail for Running<'_, T> {
                     }
                 }
                 Err(error) => {
-                    let (response, error) = error.answer_kept();
+                    let (response, error) = error.rendered_kept();
                     let settled = view.respond(response);
                     Err(Failure::from(error).answered(settled))
                 }
@@ -242,7 +266,8 @@ impl<T: SiteTail> Tail for Running<'_, T> {
 
 /// The response `outcome` answers: the reply the view holds, an exception
 /// filter's problem over it, or, for a failure nobody answered, the edge's one
-/// rule.
+/// rule. A failure's chain the answer keeps from the client is filed here,
+/// once, by the status it went out with.
 fn render(view: &mut HttpView, outcome: Outcome) -> Response {
     let failure = match outcome {
         Ok(_) => {
@@ -256,39 +281,49 @@ fn render(view: &mut HttpView, outcome: Outcome) -> Response {
         }
         Err(failure) => failure,
     };
-    if failure.is_answered()
-        && let Some(response) = view.take_response()
-    {
-        return response;
+    let response = match failure.is_answered().then(|| view.take_response()) {
+        Some(Some(response)) => response,
+        _ => failure_response(&failure),
+    };
+    if let Some(withheld) = withheld_behind(&failure, response.status()) {
+        file(withheld);
     }
-    failure_response(&failure)
+    response
+}
+
+/// What a `status` answer keeps from the client of `failure`: its chain
+/// behind a `5xx` — never a refusal's, which its decider filed, nor a bare
+/// problem's, which says it all — read off the error the edge renders
+/// ([`HttpError::withheld_behind`]) when that is the failure.
+fn withheld_behind(failure: &Failure, status: StatusCode) -> Option<Withheld> {
+    if !status.is_server_error() || failure.find::<Denial>().is_some() {
+        return None;
+    }
+    let error = failure.error();
+    match error.downcast_ref::<HttpError>() {
+        Some(error) => error.withheld_behind(status),
+        None if error.is::<Problem>() => None,
+        None => Withheld::behind(status.as_u16(), error),
+    }
 }
 
 /// What a failure the view holds no answer to renders: an exception filter's
 /// problem, or the edge's one rule.
 fn failure_response(failure: &Failure) -> Response {
     match caught_problem(failure) {
-        Some(problem) => {
-            if let Some(withheld) = withheld(problem, failure.error()) {
-                file(withheld);
-            }
-            problem_response(problem)
-        }
+        Some(problem) => problem_response(problem),
         None => unanswered(failure),
     }
 }
 
 /// What a failure no layer answered renders: a refusal, a client error the
 /// framework names or a problem in its structured form, anything else the
-/// opaque `500` with its chain filed once at `error`.
+/// opaque `500`.
 fn unanswered(failure: &Failure) -> Response {
     if let Some(denial) = failure.find::<Denial>() {
         return denial_response(denial);
     }
     if let Some(problem) = failure.find::<Problem>() {
-        if let Some(withheld) = withheld(problem, failure.error()) {
-            file(withheld);
-        }
         return problem_response(problem);
     }
     if let Some(refused) = failure.find::<PipeError>() {
@@ -300,9 +335,8 @@ fn unanswered(failure: &Failure) -> Response {
             .into_response();
     }
     if let Some(error) = failure.find::<HttpError>() {
-        return error.answer_ref();
+        return error.rendered_ref();
     }
-    failed(&nest_rs_core::error_message(failure.error()));
     ProblemDetails::internal().into_response()
 }
 
@@ -321,7 +355,7 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
-    use crate::endpoint::{BoxEndpoint, endpoint_fn};
+    use crate::endpoint::endpoint_fn;
 
     struct Routes;
 
@@ -446,12 +480,8 @@ mod tests {
         )
         .expect("the site composes");
         let unit: Arc<dyn UnitOfWork> = Arc::clone(unit) as Arc<dyn UnitOfWork>;
-        SiteEndpoint::new(
-            &ROUTE,
-            chains,
-            Some((unit, policy)),
-            EndpointTail(BoxEndpoint::new(tail)),
-        )
+        let tail = EndpointTail::new(BoxEndpoint::new(tail), &chains);
+        SiteEndpoint::new(&ROUTE, chains, Some((unit, policy)), tail)
     }
 
     /// A `method` request whose edge set its deadline one second from now.

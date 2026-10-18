@@ -70,8 +70,9 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Expands to
 ///
-/// The impl block (verb/layer/response attrs stripped), one
-/// `nest_rs_http::Endpoint` wrapper and one `static` pipeline site per route,
+/// The impl block (verb/layer/response attrs stripped), one wrapper reading
+/// the handler's parameters off the request it borrows and one `static`
+/// pipeline site per route,
 /// `impl nest_rs_http::Controller` (registers each route on the transport's
 /// `HttpRoutes`, its site's chains composed against the container), and
 /// `impl nest_rs_core::Discoverable`

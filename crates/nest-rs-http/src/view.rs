@@ -1,7 +1,7 @@
 //! [`HttpView`], the HTTP edge's view of the request it dispatches.
 
 use std::collections::HashSet;
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 use nest_rs_core::__private::new_unit_context;
 use nest_rs_core::{Handler, Settled, UnitContext, UnitView};
@@ -75,8 +75,6 @@ use crate::response::Response;
 /// ```
 pub struct HttpView {
     request: Request,
-    /// The template the router matched, kept once the tail took the request.
-    route: Option<Arc<str>>,
     response: Option<Response>,
 }
 
@@ -85,10 +83,8 @@ impl UnitView for HttpView {}
 impl HttpView {
     /// The view of `request`, as the edge builds it for a unit.
     pub(crate) fn new(request: Request) -> Self {
-        let route = request.route_template();
         Self {
             request,
-            route,
             response: None,
         }
     }
@@ -96,16 +92,6 @@ impl HttpView {
     /// The request back, once the stage that read it is over.
     pub(crate) fn into_request(self) -> Request {
         self.request
-    }
-
-    /// The request, for the tail that answers it: what the view holds after
-    /// is its head alone, without its extensions.
-    pub(crate) fn take_request(&mut self) -> Request {
-        let empty = Request::builder()
-            .method(self.request.method().clone())
-            .uri(self.request.uri().clone())
-            .finish();
-        std::mem::replace(&mut self.request, empty)
     }
 
     /// The response the unit answered, taken by the edge that writes it.
@@ -125,8 +111,10 @@ impl HttpView {
         })
     }
 
-    /// The request: its head, and its body until a reader takes it. Once the
-    /// handler took the request, its method and target alone remain.
+    /// The request: its head, its extensions and what the connection knows of
+    /// it, for the whole unit — an exception filter, or an interceptor once the
+    /// rest of the unit ran, reads them as a guard does — and its body until a
+    /// reader takes it, the handler at the latest.
     pub fn request(&self) -> &Request {
         &self.request
     }
@@ -139,7 +127,7 @@ impl HttpView {
     /// The template the router matched, as registered (`/users/{id}`), or
     /// `None` on a request no route matched.
     pub fn route(&self) -> Option<&str> {
-        self.route.as_deref()
+        self.request.route()
     }
 
     /// The response the unit answered, once the rest of it ran or a layer

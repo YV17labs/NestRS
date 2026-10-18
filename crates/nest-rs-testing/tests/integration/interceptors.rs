@@ -1,8 +1,9 @@
 //! Interceptors on the HTTP pipeline: binding per handler and controller, the
 //! guards and the class gate before every handler-stage interceptor, the
 //! cross-scope `TypeId` dedup, the unit stage around the guards seeing what
-//! the router answers itself, and a module's `#[interceptor]` being the
-//! container's own provider.
+//! the router answers itself, a module's `#[interceptor]` being the
+//! container's own provider, and a route a controller registers by hand
+//! running as a unit of the pipeline.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -483,7 +484,8 @@ impl Guard for AttachPrincipal {
 
 impl GuardFor<HttpView> for AttachPrincipal {}
 
-/// Writes what the route declared and who the guards admitted onto the answer.
+/// Writes what the route declared, who the guards admitted and the correlation
+/// the request sent onto the answer, the last read once the handler ran.
 #[injectable]
 #[derive(Default)]
 struct Reader;
@@ -501,8 +503,14 @@ impl Interceptor for Reader {
             .ambient::<Principal>()
             .map_or("-", |principal| principal.0);
         let outcome = next.run(cx).await;
-        if let Some(response) = HttpView::of(cx)?.response_mut() {
-            let read = format!("{audited} {principal}");
+        let view = HttpView::of(cx)?;
+        let sent = view
+            .request()
+            .header("x-correlation")
+            .unwrap_or("-")
+            .to_owned();
+        if let Some(response) = view.response_mut() {
+            let read = format!("{audited} {principal} {sent}");
             response.headers_mut().insert(
                 HeaderName::from_static("x-read"),
                 HeaderValue::from_str(&read).expect("ascii"),
@@ -529,7 +537,8 @@ impl ReadController {
 struct ReadModule;
 
 #[tokio::test]
-async fn a_global_interceptor_reads_the_routes_declaration_and_what_its_guards_attached() {
+async fn a_global_interceptor_reads_the_routes_declaration_what_its_guards_attached_and_the_request()
+ {
     let app = TestApp::builder()
         .module::<ReadModule>()
         .use_interceptors_global([interceptor::<Reader>()])
@@ -537,7 +546,67 @@ async fn a_global_interceptor_reads_the_routes_declaration_and_what_its_guards_a
         .await
         .expect("boots");
 
-    let resp = app.http().get("/read").send().await;
+    let resp = app
+        .http()
+        .get("/read")
+        .header("x-correlation", "c-1")
+        .send()
+        .await;
     resp.assert_status_is_ok();
-    resp.assert_header("x-read", "ledger alice");
+    resp.assert_header("x-read", "ledger alice c-1");
+}
+
+/// A controller registering its one route by hand on the route table, as
+/// `#[routes]` registers its own.
+struct HandBuilt;
+
+impl nest_rs_core::Discoverable for HandBuilt {
+    fn register(builder: nest_rs_core::ContainerBuilder) -> nest_rs_core::ContainerBuilder {
+        let meta = nest_rs_http::HttpControllerMeta::new(
+            "HandBuilt",
+            "hand_built",
+            "/hand",
+            &[],
+            Vec::new(),
+            |_, routes| {
+                routes.route(
+                    nest_rs_http::Method::GET,
+                    "/hand",
+                    nest_rs_http::endpoint_fn(|_| async {
+                        Ok(nest_rs_http::Response::builder().body("hand"))
+                    }),
+                );
+            },
+        );
+        builder
+            .provide(HandBuilt)
+            .attach_meta::<HandBuilt, nest_rs_http::HttpControllerMeta>(meta)
+    }
+}
+
+#[module(providers = [EdgeStamp, Tracer, DenyGuard, HandBuilt])]
+struct HandBuiltModule;
+
+#[tokio::test]
+async fn a_route_a_controller_registers_by_hand_runs_every_stage_of_a_route() {
+    let app = TestApp::builder()
+        .module::<HandBuiltModule>()
+        .use_interceptors_global([interceptor::<Tracer>()])
+        .build()
+        .await
+        .expect("boots");
+    let resp = app.http().get("/hand").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_header("x-edge", "hit");
+    resp.assert_header("x-trace", "hit");
+
+    let pooled = TestApp::builder()
+        .module::<HandBuiltModule>()
+        .use_guards_global([nest_rs_guards::guard::<DenyGuard>()])
+        .build()
+        .await
+        .expect("boots");
+    let denied = pooled.http().get("/hand").send().await;
+    denied.assert_status(StatusCode::FORBIDDEN);
+    denied.assert_header("x-edge", "hit");
 }

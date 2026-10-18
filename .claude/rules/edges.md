@@ -113,7 +113,9 @@ Review a new edge, or a change to one, against it:
     logged once at `error`, as is the chain behind a `5xx` problem — at `warn`
     behind a `503`, the server unable to serve the unit in time, a statement
     Postgres cancelled at its bound among them (core's `Withheld` classes it
-    once for every edge); a bare `Problem` withholds nothing. `Problem`, `Code` and `ToProblem` are the
+    once for every edge); a bare `Problem` withholds nothing. It is filed
+    where the unit's answer is final, by the status the client is sent, so a
+    failure an exception filter answers `4xx` files nothing. `Problem`, `Code` and `ToProblem` are the
     one client-error contract: a `Problem` answers in the edge's standard
     form (a `code` member, `extensions.code`, `errors.code`, `data.code`),
     never with its detail on a `5xx`, a denial carries the same `code`
@@ -207,7 +209,11 @@ stage and class gate, the exception filters (method, host, app), the handler
 stage (the app's list, the modules' `#[interceptor]`s in import order, host,
 method), the tail. A self-mount folds the unit stage and the app's exception
 filters, its guard stage the transport's request stage, and no handler stage;
-the fallback the same with no guard stage and no unit of work.
+the fallback the same with no guard stage and no unit of work. A route a
+controller registers on `HttpRoutes` by hand is a route all the same, on one
+site for every such route: the app's guard pool, filters and interceptors,
+inside a unit of work. The view holds the request for the whole unit, so a
+layer reading it after the tail reads its head whole.
 `Layer::priority` orders within a stage's bucket, never across. **Two ways to
 be app-wide, both at the handler stage**: `use_interceptors_global` (the app)
 and `#[interceptor]` (a module); only `#[interceptor(stage = unit)]` runs
@@ -341,7 +347,8 @@ version is declared and `version_path` the one place it becomes a path; a
 Selection is deployment config — `uri` (default), `header`, `media_type` — and
 the last two are a rewrite in front of routing, inside the global prefix, so one
 route table serves all three and the served, logged and documented paths agree.
-Under a non-URI strategy the URI form is a `404`; a malformed token is a `400`.
+Under a non-URI strategy the URI form is a `404`; a malformed token is a `400`;
+both are answered by the fallback's site, as what the router answers itself.
 A self-mount is neutral; a **stated** version beats an unversioned neighbour; a
 **default** never moves an address the caller did not version. Matching is loose
 only in the direction the router corrects, so it reads every segment form the

@@ -419,7 +419,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     let ty = &pt.ty;
                     Some(quote! {
                         let #pat = <#ty as ::nest_rs_http::FromRequest>::from_request(
-                            &#req_var, &mut #body_var,
+                            #req_var, &mut #body_var,
                         )
                         .await?;
                     })
@@ -446,13 +446,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             #(#cfgs)*
-            impl ::nest_rs_http::Endpoint for #wrapper_name {
+            impl ::nest_rs_http::__private::RouteWrapper for #wrapper_name {
                 #[allow(unused_mut)]
                 async fn call(
                     &self,
-                    #req_var: ::nest_rs_http::Request,
+                    #req_var: &mut ::nest_rs_http::Request,
                 ) -> ::nest_rs_http::Result<::nest_rs_http::Response> {
-                    let (#req_var, mut #body_var) = #req_var.split();
+                    let mut #body_var = ::nest_rs_http::RequestBody::new(#req_var.take_body());
+                    let #req_var: &::nest_rs_http::Request = #req_var;
                     #(#extractor_stmts)*
                     let #ctrl_var = &self.__ctrl;
                     #sse_binding

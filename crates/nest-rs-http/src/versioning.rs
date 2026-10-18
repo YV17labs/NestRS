@@ -18,8 +18,8 @@ use http::uri::PathAndQuery;
 use http::{HeaderName, StatusCode, Uri, header};
 use nest_rs_core::{Container, Discovery};
 
-use crate::endpoint::Endpoint;
-use crate::error::{HttpError, Result};
+use crate::endpoint::{BoxEndpoint, Endpoint};
+use crate::error::Result;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
@@ -306,13 +306,35 @@ fn accept_version(req: &Request) -> Requested<'_> {
         .map_or(Requested::Absent, Requested::Stated)
 }
 
-/// One refusal for both checks, so a caller cannot tell which one refused it.
-fn malformed_version() -> HttpError {
-    HttpError::from_response(
-        ProblemDetails::bad_request()
-            .with_detail("malformed API version")
-            .into_response(),
-    )
+/// Why the version selector refused a request. The router's own site answers
+/// it ([`Unrouted`](crate::fallback::Unrouted)), so the app's exception filters
+/// and its unit stage meet it as they meet a path no route claims.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VersionRefused {
+    /// No route serves the address as asked — the URI form under a strategy
+    /// that rewrites, a version no route there serves: `404`.
+    Unserved,
+    /// A stated version outside the grammar, one sentence for both checks so
+    /// a caller cannot tell which one refused it: `400`.
+    Malformed,
+    /// A path the version cannot be spliced into, unreachable for a path the
+    /// router parsed and a version the grammar admitted: `400`.
+    Unresolved,
+}
+
+impl VersionRefused {
+    /// The answer the refusal is.
+    pub(crate) fn answer(self) -> Response {
+        match self {
+            Self::Unserved => ProblemDetails::from_status(StatusCode::NOT_FOUND).into_response(),
+            Self::Malformed => ProblemDetails::bad_request()
+                .with_detail("malformed API version")
+                .into_response(),
+            Self::Unresolved => ProblemDetails::bad_request()
+                .with_detail("could not resolve the API version")
+                .into_response(),
+        }
+    }
 }
 
 /// A version token is spliced into a URL path: bare alphanumerics, `.` and `-`,
@@ -333,16 +355,22 @@ fn is_valid_version(raw: &str) -> bool {
 pub(crate) struct VersionedEndpoint<E> {
     inner: E,
     selector: VersionSelector,
+    /// The router's own site, answering what the selector refuses.
+    unrouted: BoxEndpoint,
 }
 
 impl<E> VersionedEndpoint<E> {
-    pub(crate) fn new(inner: E, selector: VersionSelector) -> Self {
-        Self { inner, selector }
+    pub(crate) fn new(inner: E, selector: VersionSelector, unrouted: BoxEndpoint) -> Self {
+        Self {
+            inner,
+            selector,
+            unrouted,
+        }
     }
 
     /// The path this request should be routed at, or `None` to route it as
-    /// sent; `Err` is the `404` or `400` refusal.
-    fn resolve(&self, req: &Request) -> Result<Option<String>> {
+    /// sent; `Err` is the refusal.
+    fn resolve(&self, req: &Request) -> std::result::Result<Option<String>, VersionRefused> {
         let sent = req.uri().path();
         // Every address sits under the global prefix, and the version follows it.
         let (prefix, path) = match self.selector.prefix.as_deref() {
@@ -366,7 +394,7 @@ impl<E> VersionedEndpoint<E> {
                 strategy = self.selector.strategy.as_str(),
                 "refused a URI-versioned path under a non-URI versioning strategy",
             );
-            return Err(HttpError::from_status(StatusCode::NOT_FOUND));
+            return Err(VersionRefused::Unserved);
         }
 
         // `debug`: a client's own line, which the access line already records as
@@ -380,7 +408,7 @@ impl<E> VersionedEndpoint<E> {
                     length = raw.len(),
                     "rejected a malformed API version",
                 );
-                return Err(malformed_version());
+                return Err(VersionRefused::Malformed);
             }
             Requested::Malformed => {
                 tracing::debug!(
@@ -389,7 +417,7 @@ impl<E> VersionedEndpoint<E> {
                     reason = "not valid text",
                     "rejected a malformed API version",
                 );
-                return Err(malformed_version());
+                return Err(VersionRefused::Malformed);
             }
             Requested::Absent => (self.selector.default_version(), false),
         };
@@ -416,7 +444,7 @@ impl<E> VersionedEndpoint<E> {
                 strategy = self.selector.strategy.as_str(),
                 "no route serves the requested API version",
             );
-            return Err(HttpError::from_status(StatusCode::NOT_FOUND));
+            return Err(VersionRefused::Unserved);
         }
         Ok(None)
     }
@@ -425,10 +453,18 @@ impl<E> VersionedEndpoint<E> {
 impl<E: Endpoint> Endpoint for VersionedEndpoint<E> {
     async fn call(&self, mut req: Request) -> Result<Response> {
         // In front of every request: only a rewrite may allocate.
-        if let Some(path) = self.resolve(&req)? {
-            rewrite_path(&mut req, &path)?;
+        let refused = match self.resolve(&req) {
+            Ok(None) => None,
+            Ok(Some(path)) => rewrite_path(&mut req, &path).err(),
+            Err(refused) => Some(refused),
+        };
+        match refused {
+            None => self.inner.call(req).await,
+            Some(refused) => {
+                req.extensions_mut().insert(refused);
+                self.unrouted.call(req).await
+            }
         }
-        self.inner.call(req).await
     }
 }
 
@@ -438,7 +474,7 @@ impl<E: Endpoint> Endpoint for VersionedEndpoint<E> {
     clippy::map_err_ignore,
     reason = "the path was already accepted by the router; the refusal is the whole answer"
 )]
-fn rewrite_path(req: &mut Request, path: &str) -> Result<()> {
+fn rewrite_path(req: &mut Request, path: &str) -> std::result::Result<(), VersionRefused> {
     let uri = req.uri().clone();
     let mut parts = uri.into_parts();
     let query = parts
@@ -447,19 +483,10 @@ fn rewrite_path(req: &mut Request, path: &str) -> Result<()> {
         .and_then(|pq| pq.query())
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    parts.path_and_query = Some(PathAndQuery::try_from(format!("{path}{query}")).map_err(
-        |_| {
-            // Unreachable: a router-parsed path plus a validated version.
-            HttpError::from_status(StatusCode::BAD_REQUEST)
-        },
-    )?);
-    *req.uri_mut() = Uri::from_parts(parts).map_err(|_| {
-        HttpError::from_response(
-            ProblemDetails::bad_request()
-                .with_detail("could not resolve the API version")
-                .into_response(),
-        )
-    })?;
+    parts.path_and_query = Some(
+        PathAndQuery::try_from(format!("{path}{query}")).map_err(|_| VersionRefused::Unresolved)?,
+    );
+    *req.uri_mut() = Uri::from_parts(parts).map_err(|_| VersionRefused::Unresolved)?;
     Ok(())
 }
 
@@ -469,7 +496,17 @@ mod tests {
     use http::HeaderValue;
 
     use super::*;
-    use crate::endpoint::{BoxEndpoint, endpoint_fn};
+    use crate::endpoint::endpoint_fn;
+    use crate::error::HttpError;
+    use crate::fallback::Unrouted;
+    use crate::site::SiteTail;
+
+    /// The router's own answer, as the fallback site's tail renders it.
+    fn unrouted() -> BoxEndpoint {
+        BoxEndpoint::new(endpoint_fn(|mut req: Request| async move {
+            Unrouted.answer(&mut req).await
+        }))
+    }
 
     /// An endpoint answering each path in `routes` with its body, `404`
     /// elsewhere, and echoing the query under `?`.
@@ -533,6 +570,7 @@ mod tests {
                 vec!["/users".into()],
                 vec!["1".into(), "2".into()],
             ),
+            unrouted(),
         )
     }
 
@@ -671,6 +709,7 @@ mod tests {
                 None,
             )
             .with_routes(vec!["/v2/users".into()], vec![], vec![], vec!["2".into()]),
+            unrouted(),
         );
         assert_eq!(
             ask(&ep, "/users?first=10&after=abc", version("2")).await,
@@ -717,6 +756,7 @@ mod tests {
                 vec![],
                 vec!["2024-08-11".into()],
             ),
+            unrouted(),
         );
         assert_eq!(
             ask(&ep, "/v2024-08-11/users", None).await.0,
@@ -743,6 +783,7 @@ mod tests {
                 vec!["/vendors".into()],
                 vec!["1".into()],
             ),
+            unrouted(),
         );
         assert_eq!(
             ask(&ep, "/vendors", None).await,
@@ -773,6 +814,7 @@ mod tests {
                 vec!["1".into(), "2".into()],
             )
             .under(Some("/api")),
+            unrouted(),
         );
         assert_eq!(
             ask(&ep, "/api/users", version("2")).await,

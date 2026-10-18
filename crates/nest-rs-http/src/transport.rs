@@ -30,6 +30,7 @@ use crate::guard_stage::{DeniedStage, HttpGuardStage, StageKind};
 use crate::origin::{OriginChecked, OriginPolicy};
 use crate::poem_adapter::{CorsPolicy, PoemAdapter};
 use crate::problem::Normalized;
+use crate::route_site::{HAND_ROUTE, HAND_ROUTE_SITE};
 use crate::route_template::RouteTemplate;
 use crate::routes::{Address, HttpRoutes, Wrap};
 use crate::server::Server;
@@ -295,13 +296,30 @@ fn mount_fallback(
         &FALLBACK,
         Arc::clone(chains),
         None,
-        EndpointTail(meta.build(container)),
+        EndpointTail::new(meta.build(container), chains),
     );
     Ok(Fallback::new(
         meta.path().to_owned(),
         claims,
         BoxEndpoint::new(endpoint),
     ))
+}
+
+/// What a controller's hand-registered entry is put behind: the site every such
+/// route runs on, inside a unit of `unit_of_work`'s binding. A site that does
+/// not compose fails the boot.
+fn hand_route(container: &Container, unit_of_work: Option<Arc<dyn UnitOfWork>>) -> Result<Wrap> {
+    let chains = HAND_ROUTE_SITE.chains(container)?;
+    let unit = unit_of_work.map(|unit| (unit, UnitPolicy::ByMethod));
+    Ok(Arc::new(move |inner: BoxEndpoint| {
+        let tail = EndpointTail::new(inner, &chains);
+        BoxEndpoint::new(SiteEndpoint::new(
+            &HAND_ROUTE,
+            Arc::clone(&chains),
+            unit.clone(),
+            tail,
+        ))
+    }))
 }
 
 /// What a self-mount's site folds of the app's layers: the unit stage and the
@@ -456,6 +474,7 @@ impl Transport for HttpTransport {
         // namespace although its routes mount flat; one at `/` owns its routes alone.
         let mut claims = Claims::default();
         let mut get_routes: Vec<(String, &'static str)> = Vec::new();
+        let hand_route = hand_route(container, unit_of_work.clone())?;
         for d in discovery.meta::<HttpControllerMeta>() {
             let at_root = literal_prefix(d.meta.path) == "/";
             if !at_root {
@@ -523,7 +542,7 @@ impl Transport for HttpTransport {
                     }
                 }
             }
-            routes.for_controller(d.meta.controller);
+            routes.for_controller(d.meta.controller, Some(Arc::clone(&hand_route)));
             d.meta.mount(container, &mut routes);
             routes.settle()?;
         }
@@ -656,11 +675,12 @@ impl Transport for HttpTransport {
             };
             let unit = unit_of_work.clone().map(|unit| (unit, policy));
             let in_site = move |inner: BoxEndpoint| {
+                let tail = EndpointTail::new(inner, &chains);
                 BoxEndpoint::new(SiteEndpoint::new(
                     handler,
                     Arc::clone(&chains),
                     unit.clone(),
-                    EndpointTail(inner),
+                    tail,
                 ))
             };
             // Ahead of the site: a refused origin never pays for a guard.
@@ -703,7 +723,7 @@ impl Transport for HttpTransport {
             None,
             Unrouted,
         ));
-        let mut router = PoemAdapter::router(addresses, unrouted)?;
+        let mut router = PoemAdapter::router(addresses, unrouted.clone())?;
         // In front of routing, after the global prefix: it rewrites the path a
         // controller's route is registered at. `rewrites()`, not `Some`: wrapping
         // the URI strategy would refuse every `/v{n}/…`.
@@ -718,7 +738,7 @@ impl Transport for HttpTransport {
                 .under(prefix.as_deref());
             // An inert selector changes nothing and costs a layer on the hot path.
             if !selector.is_inert() {
-                router = BoxEndpoint::new(VersionedEndpoint::new(router, selector));
+                router = BoxEndpoint::new(VersionedEndpoint::new(router, selector, unrouted));
             }
         }
 

@@ -57,8 +57,8 @@ struct Registrant {
     name: Arc<str>,
     /// The templates a self-mount declared; `None` for a controller.
     declared: Option<Vec<RouteTemplate>>,
-    /// What each entry is put behind: the guard pool, for a self-mount gated
-    /// at its edge.
+    /// What each entry is put behind: the site its unit runs on, a
+    /// self-mount's or a hand-registered route's.
     wrap: Option<Wrap>,
 }
 
@@ -115,7 +115,9 @@ impl HttpRoutes {
     /// `endpoint` answers `method` at `template`. The table owns the method
     /// dispatch: another method at that address answers `405` with `Allow`,
     /// and `HEAD` is served by `GET` when not registered (RFC 9110 §9.3.2,
-    /// §15.5.6).
+    /// §15.5.6). Registered from a controller's mount, it is a route like any
+    /// other: the app's guard pool, exception filters and interceptors run
+    /// around it, inside the request's unit of work.
     pub fn route(&mut self, method: Method, template: &str, endpoint: impl Endpoint) -> &mut Self {
         self.register(
             Some(method),
@@ -172,14 +174,22 @@ impl HttpRoutes {
         }
     }
 
-    /// What follows is registered by the controller `name`.
-    pub(crate) fn for_controller(&mut self, name: &str) -> &mut Self {
+    /// What follows is registered by the controller `name`, each entry it
+    /// registers by hand put behind `wrap`; what `#[routes]` mounts is a site
+    /// already ([`site`](Self::site)).
+    pub(crate) fn for_controller(&mut self, name: &str, wrap: Option<Wrap>) -> &mut Self {
         self.registrant = Registrant {
             name: Arc::from(name),
             declared: None,
-            wrap: None,
+            wrap,
         };
         self
+    }
+
+    /// `site`, a route mounted on its own site, answers `method` at
+    /// `template`, put behind nothing more.
+    pub(crate) fn site(&mut self, method: Method, template: &str, site: BoxEndpoint) {
+        self.register_as(Some(method), template, Leaf::Endpoint(site), false);
     }
 
     /// What follows is registered by the self-mount `name`, at the paths it
@@ -240,10 +250,15 @@ impl HttpRoutes {
     }
 
     fn register(&mut self, method: Option<Method>, template: &str, leaf: Leaf) {
+        self.register_as(method, template, leaf, true);
+    }
+
+    /// Register `leaf`, put behind the registrant's wrap when `wrapped`.
+    fn register_as(&mut self, method: Option<Method>, template: &str, leaf: Leaf, wrapped: bool) {
         if self.refused.is_some() {
             return;
         }
-        if let Err(refusal) = self.try_register(method, template, leaf) {
+        if let Err(refusal) = self.try_register(method, template, leaf, wrapped) {
             self.refused = Some(refusal);
         }
     }
@@ -253,6 +268,7 @@ impl HttpRoutes {
         method: Option<Method>,
         template: &str,
         leaf: Leaf,
+        wrapped: bool,
     ) -> Result<(), RouteError> {
         let owner = Arc::clone(&self.registrant.name);
         let refused = |refused| RouteError::Template {
@@ -285,8 +301,8 @@ impl HttpRoutes {
             None => written,
         };
         let leaf = match &self.registrant.wrap {
-            Some(wrap) => Leaf::Endpoint(wrap(leaf.into_endpoint())),
-            None => leaf,
+            Some(wrap) if wrapped => Leaf::Endpoint(wrap(leaf.into_endpoint())),
+            _ => leaf,
         };
         let Some(&at) = self.by_identity.get(template.identity()) else {
             self.by_identity
@@ -370,7 +386,7 @@ mod tests {
     #[test]
     fn the_global_prefix_is_applied_at_registration() {
         let mut routes = HttpRoutes::new(Some("/api"), None);
-        routes.for_controller("UsersController");
+        routes.for_controller("UsersController", None);
         routes
             .route(Method::GET, "/users/{id}", ok())
             .route(Method::GET, "/", ok());
@@ -381,7 +397,7 @@ mod tests {
     #[test]
     fn methods_of_one_address_share_it_and_one_method_twice_is_refused() {
         let mut routes = HttpRoutes::new(None, None);
-        routes.for_controller("UsersController");
+        routes.for_controller("UsersController", None);
         routes
             .route(Method::GET, "/users", ok())
             .route(Method::POST, "/users/", ok());
@@ -406,9 +422,9 @@ mod tests {
     #[test]
     fn two_shapes_of_one_address_are_refused_naming_both() {
         let mut routes = HttpRoutes::new(None, None);
-        routes.for_controller("ParcelsController");
+        routes.for_controller("ParcelsController", None);
         routes.route(Method::GET, "/parcels/{id}", ok());
-        routes.for_controller("LockersController");
+        routes.for_controller("LockersController", None);
         routes.route(Method::DELETE, "/parcels/{key}", ok());
         let refused = routes.settle().unwrap_err().to_string();
         for named in [
@@ -424,7 +440,7 @@ mod tests {
     #[test]
     fn one_address_has_one_owner() {
         let mut routes = HttpRoutes::new(None, None);
-        routes.for_controller("UsersController");
+        routes.for_controller("UsersController", None);
         routes.route(Method::GET, "/users", ok());
         routes.for_self_mount(
             "the ws endpoint Chat".into(),
@@ -478,7 +494,7 @@ mod tests {
     #[test]
     fn a_template_out_of_the_grammar_is_refused_naming_its_registrant() {
         let mut routes = HttpRoutes::new(None, None);
-        routes.for_controller("UsersController");
+        routes.for_controller("UsersController", None);
         routes.route(Method::GET, "/users/:id", ok());
         let refused = routes.settle().unwrap_err().to_string();
         assert!(
@@ -490,7 +506,7 @@ mod tests {
     #[test]
     fn the_first_refusal_is_kept() {
         let mut routes = HttpRoutes::new(None, None);
-        routes.for_controller("UsersController");
+        routes.for_controller("UsersController", None);
         routes
             .route(Method::GET, "/a/:x", ok())
             .route(Method::GET, "/b/:y", ok());

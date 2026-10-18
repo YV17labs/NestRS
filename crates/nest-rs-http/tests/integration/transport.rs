@@ -1312,3 +1312,50 @@ async fn a_request_to_a_mount_carrying_units_runs_on_the_pool_whatever_its_metho
         );
     }
 }
+
+/// A controller registering its one route by hand, beside the bound unit of
+/// work.
+struct HandBuilt;
+
+impl nest_rs_core::Discoverable for HandBuilt {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        let meta = nest_rs_http::HttpControllerMeta::new(
+            "HandBuilt",
+            "hand_built",
+            "/hand",
+            &[],
+            Vec::new(),
+            |_, routes| {
+                routes.route(
+                    Method::POST,
+                    "/hand",
+                    nest_rs_http::endpoint_fn(|_| async {
+                        Ok(nest_rs_http::Response::builder().body("hand"))
+                    }),
+                );
+            },
+        );
+        builder
+            .provide(HandBuilt)
+            .attach_meta::<HandBuilt, nest_rs_http::HttpControllerMeta>(meta)
+            .provide_dyn::<dyn nest_rs_database::UnitOfWork>(std::sync::Arc::new(RecordingUnits))
+    }
+}
+
+#[module(providers = [HandBuilt])]
+struct HandBuiltModule;
+
+#[tokio::test]
+async fn a_route_a_controller_registers_by_hand_runs_inside_a_unit_of_work() {
+    let client = crate::boot::<HandBuiltModule>().await;
+    OPENED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+    client.post("/hand").send().await.assert_status_is_ok();
+    assert_eq!(
+        *OPENED.lock().unwrap_or_else(PoisonError::into_inner),
+        [nest_rs_database::TransactionPolicy::PerUnit],
+        "its write in a transaction, as a #[routes] route's",
+    );
+}

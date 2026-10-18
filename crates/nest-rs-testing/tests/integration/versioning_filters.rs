@@ -1,6 +1,8 @@
 //! URI versioning (`#[controller(version = "1")]`) and a catch-all exception
 //! filter (`#[use_exception_filters]` over `dyn Error + Send + Sync`), the
-//! untyped mapper's successor, including the cross-scope `TypeId` dedup.
+//! untyped mapper's successor, including the cross-scope `TypeId` dedup, and
+//! what a header or media-type strategy refuses answered as the router's own
+//! answers are.
 
 use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -282,4 +284,97 @@ async fn same_filter_at_all_three_scopes_runs_once() {
         1,
         "global + controller + method filter declaration still executes exactly once",
     );
+}
+
+/// What the version selector refuses, answered as the router's own `404`: a
+/// unit the app's catch-all shapes and its unit stage sees.
+mod refused_versions {
+    use nest_rs_core::{Interceptor, Next, Outcome, interceptor};
+    use nest_rs_http::{
+        ApiVersioning, DEFAULT_VERSION_HEADER, HeaderName, HeaderValue, HttpConfig,
+        MEDIA_TYPE_PARAM,
+    };
+
+    use super::*;
+
+    /// Stamps every answer of the unit stage it runs at.
+    #[interceptor(stage = unit)]
+    #[derive(Default)]
+    struct Seen;
+
+    impl Layer for Seen {}
+
+    #[async_trait]
+    impl Interceptor for Seen {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            let outcome = next.run(cx).await;
+            if let Some(response) = HttpView::of(cx)?.response_mut() {
+                response.headers_mut().insert(
+                    HeaderName::from_static("x-seen"),
+                    HeaderValue::from_static("hit"),
+                );
+            }
+            outcome
+        }
+    }
+
+    #[module(providers = [TeapotFilter, Seen, WidgetController])]
+    struct RefusalsModule;
+
+    async fn app(versioning: ApiVersioning) -> TestApp {
+        TestApp::builder()
+            .module::<RefusalsModule>()
+            .provide(HttpConfig {
+                versioning,
+                ..HttpConfig::default()
+            })
+            .use_exception_filters_global([exception_filter::<TeapotFilter>()])
+            .build()
+            .await
+            .expect("boots")
+    }
+
+    /// How a client states `version` under `versioning`.
+    fn stating(versioning: ApiVersioning, version: &str) -> (&'static str, String) {
+        match versioning {
+            ApiVersioning::MediaType => (
+                "accept",
+                format!("application/json; {MEDIA_TYPE_PARAM}={version}"),
+            ),
+            _ => (DEFAULT_VERSION_HEADER, version.to_owned()),
+        }
+    }
+
+    #[tokio::test]
+    async fn every_refusal_of_a_rewriting_strategy_is_shaped_and_seen() {
+        for versioning in [ApiVersioning::Header, ApiVersioning::MediaType] {
+            let app = app(versioning).await;
+            let (name, malformed) = stating(versioning, "1@x");
+            let (_, unserved) = stating(versioning, "9");
+            for (case, resp) in [
+                ("unrouted", app.http().get("/nowhere").send().await),
+                ("the URI form", app.http().get("/v1/widgets").send().await),
+                (
+                    "a malformed version",
+                    app.http()
+                        .get("/widgets")
+                        .header(name, &malformed)
+                        .send()
+                        .await,
+                ),
+                (
+                    "a version no route serves",
+                    app.http()
+                        .get("/widgets")
+                        .header(name, &unserved)
+                        .send()
+                        .await,
+                ),
+            ] {
+                resp.assert_status(StatusCode::IM_A_TEAPOT);
+                resp.assert_header("x-seen", "hit");
+                assert_eq!(detail(resp).await, "filtered", "{versioning:?}: {case}");
+            }
+        }
+    }
 }

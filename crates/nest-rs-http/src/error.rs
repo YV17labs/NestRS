@@ -405,16 +405,17 @@ impl HttpError {
     }
 
     /// The response this error answers, as [`answer`](Self::answer) renders
-    /// it, and the error to keep beside it: itself, unless rendering took what
-    /// it held — a ready response, another library's error — and its status is
-    /// what is left.
-    pub(crate) fn answer_kept(self) -> (Response, HttpError) {
+    /// it but filing nothing, and the error to keep beside it: itself, unless
+    /// rendering took what it held — a ready response, another library's
+    /// error — and its status is what is left. Whoever answers last files what
+    /// the client was not told ([`withheld_behind`](Self::withheld_behind)).
+    pub(crate) fn rendered_kept(self) -> (Response, HttpError) {
         match self.0.cause {
             Cause::Response(_) | Cause::Wrapped { .. } => {
                 let status = self.0.status;
                 (self.into_response(), HttpError::from_status(status))
             }
-            _ => (self.answer_ref(), self),
+            _ => (self.rendered_ref(), self),
         }
     }
 
@@ -422,24 +423,19 @@ impl HttpError {
     /// library's error, which only their owner renders, answers its status's
     /// problem.
     pub(crate) fn answer_ref(&self) -> Response {
-        let chain: Option<&(dyn Error + 'static)> = match &self.0.cause {
-            Cause::Anyhow(error) => Some(error.as_ref()),
-            Cause::Error(error) => Some(&**error),
-            Cause::Status | Cause::Response(_) | Cause::Typed { .. } | Cause::Wrapped { .. } => {
-                None
-            }
-        };
-        let status = self.0.status;
-        let problem = chain.and_then(nest_rs_core::__private::find_in_chain::<Problem>);
-        if let Some(chain) = chain {
-            let withheld = match problem {
-                Some(problem) => nest_rs_core::__private::withheld(problem, chain),
-                None => Withheld::behind(status.as_u16(), chain),
-            };
-            if let Some(withheld) = withheld {
-                file(withheld);
-            }
+        let response = self.rendered_ref();
+        if let Some(withheld) = self.withheld_behind(response.status()) {
+            file(withheld);
         }
+        response
+    }
+
+    /// The response [`answer_ref`](Self::answer_ref) renders, filing nothing.
+    pub(crate) fn rendered_ref(&self) -> Response {
+        let status = self.0.status;
+        let problem = self
+            .chain()
+            .and_then(nest_rs_core::__private::find_in_chain::<Problem>);
         let mut response = match (problem, &self.0.cause) {
             (Some(problem), _) => problem_response(problem),
             (None, Cause::Error(error)) => {
@@ -450,6 +446,25 @@ impl HttpError {
         };
         response.extensions_mut().extend(self.0.extensions.clone());
         response
+    }
+
+    /// What a `status` answer keeps from the client of this error: the chain
+    /// it carries behind a `5xx`, unless that is a bare [`Problem`]. A status
+    /// alone, a ready response and an error that renders itself carry none.
+    pub(crate) fn withheld_behind(&self, status: StatusCode) -> Option<Withheld> {
+        let chain = self.chain().filter(|chain| !chain.is::<Problem>())?;
+        Withheld::behind(status.as_u16(), chain)
+    }
+
+    /// The error chain this error renders from, when it is one the edge reads.
+    fn chain(&self) -> Option<&(dyn Error + 'static)> {
+        match &self.0.cause {
+            Cause::Anyhow(error) => Some(error.as_ref()),
+            Cause::Error(error) => Some(&**error),
+            Cause::Status | Cause::Response(_) | Cause::Typed { .. } | Cause::Wrapped { .. } => {
+                None
+            }
+        }
     }
 }
 

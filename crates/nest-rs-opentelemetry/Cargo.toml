@@ -41,9 +41,9 @@ otlp = [
 ]
 
 [dependencies]
-# `logging` for `TextFormat` / `JsonFormat`: the console this crate installs is
-# the kernel's console, not a second one. Stated rather than leaned on, even
-# though it is one of `nest-rs-core`'s default features.
+# `logging` for `ConsoleLayer` and the log filter: the console this crate
+# installs is the kernel's console, not a second one. Stated rather than leaned
+# on, even though it is one of `nest-rs-core`'s default features.
 nest-rs-core = { workspace = true, features = ["logging"] }
 # `tls` is `ClientTls`, what the collector's certificate must chain to and the
 # certificate presented to it.

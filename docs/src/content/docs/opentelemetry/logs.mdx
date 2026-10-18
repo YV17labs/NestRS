@@ -172,7 +172,9 @@ its handler returned; the framework re-installs the request around it, so those
 lines carry the ids too.
 
 Span structure itself is untouched — nesting is normal, and it is what the OTLP
-export builds its tree from.
+export builds its tree from. And since no line prints a span's fields, the
+console never formats them: an attribute the export reads costs the console
+nothing.
 
 ## Every unit of work files one line
 

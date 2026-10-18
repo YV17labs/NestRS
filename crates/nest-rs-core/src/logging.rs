@@ -32,9 +32,9 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::format::{DefaultVisitor, JsonFields, Writer};
 use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
-use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::layer::{Context, SubscriberExt as _};
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{EnvFilter, Registry};
+use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use crate::env_prefix::EnvPrefix;
 use crate::line_safe::{LineSafe, forges};
@@ -323,6 +323,16 @@ pub(crate) mod __private {
         pub(in crate::logging) source_location: bool,
     }
 
+    /// The console's layer, the one every subscriber the framework ships
+    /// writes its lines with: [`TextFormat`] or [`JsonFormat`] through the
+    /// [`ConsoleWriter`], told of events alone.
+    ///
+    /// A line carries no span state, so no span reaches the `fmt` layer
+    /// inside: it would format every field of a span as it opens and again at
+    /// each `record` — `JsonFields` parsing the whole object back and writing
+    /// it anew — for formats that never print them.
+    pub struct ConsoleLayer<S>(pub(in crate::logging) Box<dyn Layer<S> + Send + Sync>);
+
     /// A library the framework wires whose events quote a client's payload or
     /// a secret below `level`: every subscriber the framework ships writes its
     /// events from `level` up at most — and only those the filter it was given
@@ -555,7 +565,7 @@ pub(crate) mod __private {
     }
 }
 
-use __private::{ConsoleWriter, JsonFormat, LibraryClamp, TextFormat, log_filter};
+use __private::{ConsoleLayer, ConsoleWriter, JsonFormat, LibraryClamp, TextFormat, log_filter};
 
 inventory::collect!(LibraryClamp);
 
@@ -1416,26 +1426,49 @@ pub fn install_console(settings: &LogSettings) -> bool {
 
 /// The kernel's console subscriber, as `settings` describe it.
 fn console(settings: &LogSettings) -> Dispatch {
-    let filtered = Registry::default().with(log_filter(&settings.filter));
-    let layer = tracing_subscriber::fmt::layer().with_writer(ConsoleWriter::get());
-    match settings.format {
-        LogFormat::Text => Dispatch::new(
-            filtered.with(layer.event_format(TextFormat::new(settings.source_location))),
-        ),
-        // `.json()` sets the field formatter only; the envelope is `JsonFormat`'s.
-        LogFormat::Json => Dispatch::new(
-            filtered.with(
-                layer
-                    .json()
-                    .event_format(JsonFormat::new(settings.source_location)),
-            ),
-        ),
+    Dispatch::new(
+        Registry::default()
+            .with(log_filter(&settings.filter))
+            .with(ConsoleLayer::new(settings.format, settings.source_location)),
+    )
+}
+
+impl<S> ConsoleLayer<S>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    /// The console's layer writing `format`, each line with the emitting
+    /// `file:line` when `source_location` asks for it.
+    pub fn new(format: LogFormat, source_location: bool) -> Self {
+        Self::writing_to(format, source_location, ConsoleWriter::get())
+    }
+
+    fn writing_to<W>(format: LogFormat, source_location: bool, writer: W) -> Self
+    where
+        W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+    {
+        let layer = tracing_subscriber::fmt::layer().with_writer(writer);
+        Self(match format {
+            LogFormat::Text => layer.event_format(TextFormat::new(source_location)).boxed(),
+            // `.json()` sets the field formatter only; the envelope is `JsonFormat`'s.
+            LogFormat::Json => layer
+                .json()
+                .event_format(JsonFormat::new(source_location))
+                .boxed(),
+        })
+    }
+}
+
+impl<S: Subscriber> Layer<S> for ConsoleLayer<S> {
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        self.0.on_event(event, ctx);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use tracing::level_filters::LevelFilter;
@@ -1529,6 +1562,43 @@ mod tests {
             .event_format(JsonFormat::new(source_location))
             .with_writer(captured.clone());
         render(layer, captured, actor).await
+    }
+
+    /// A span value that counts how often a layer formats it.
+    struct Formatted<'a>(&'a AtomicUsize);
+
+    impl fmt::Display for Formatted<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            f.write_str("span-value")
+        }
+    }
+
+    /// `tracing-subscriber`'s `fmt` layer formats a span's fields as it opens
+    /// and again at each `record`, `JsonFields` re-parsing the whole object:
+    /// the request span's cost, for formats that print no span state.
+    #[test]
+    fn the_console_writes_events_and_never_formats_a_span_s_fields() {
+        for format in [LogFormat::Text, LogFormat::Json] {
+            let formatted = AtomicUsize::new(0);
+            let captured = Captured::default();
+            let console =
+                Registry::default().with(ConsoleLayer::writing_to(format, false, captured.clone()));
+            tracing::subscriber::with_default(console, || {
+                let span = tracing::info_span!(
+                    "fixture.unit",
+                    opened = %Formatted(&formatted),
+                    recorded = tracing::field::Empty,
+                );
+                span.record("recorded", tracing::field::display(Formatted(&formatted)));
+                let _entered = span.enter();
+                tracing::info!(target: FIXTURE_TARGET, "inside the span");
+            });
+
+            assert_eq!(formatted.load(Ordering::Relaxed), 0, "{format:?}");
+            let line = captured.take();
+            assert!(line.contains("inside the span"), "{format:?}: {line}");
+        }
     }
 
     /// Outside the edge vocabulary, so it copies no real unit's literal.

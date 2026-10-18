@@ -236,8 +236,8 @@ pub mod __private {
     pub use crate::lifecycle::__private::{HookFuture, LifecycleHook, LifecycleUnitOfWork};
     #[cfg(feature = "logging")]
     pub use crate::logging::__private::{
-        ConsoleWriter, JsonFormat, LibraryClamp, LogFilter, TextFormat, filter_dispatch,
-        install_global_subscriber, log_filter,
+        ConsoleLayer, ConsoleWriter, JsonFormat, LibraryClamp, LogFilter, TextFormat,
+        filter_dispatch, install_global_subscriber, log_filter,
     };
     pub use crate::module::__private::{dynamic_import_module, module_registered};
     pub use crate::opaque::__private::OpaqueCause;

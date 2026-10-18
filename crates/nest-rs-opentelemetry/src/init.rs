@@ -1,12 +1,11 @@
+#[cfg(feature = "otlp")]
+use tracing_subscriber::Layer as _;
+use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{Layer, Registry};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::__private::{
-    ConsoleWriter, JsonFormat, TextFormat, install_global_subscriber, log_filter,
-};
+use nest_rs_core::__private::{ConsoleLayer, install_global_subscriber, log_filter};
 use nest_rs_core::logging::LogSettings;
 
 use crate::config::{LogFormat, OpenTelemetryConfig};
@@ -59,7 +58,7 @@ impl OpenTelemetry {
         )?;
         LogSettings::check_filter(&config.log_filter, "OpenTelemetryConfig::log_filter")?;
         let filter = log_filter(&config.log_filter);
-        let fmt_layer = console_layer(config.log_format, config.log_source_location);
+        let fmt_layer = ConsoleLayer::new(config.log_format, config.log_source_location);
 
         #[cfg(feature = "otlp")]
         {
@@ -162,7 +161,7 @@ pub fn init_for_tests() {
     install_global_subscriber(
         Registry::default()
             .with(log_filter(&filter))
-            .with(console_layer(LogFormat::Text, false)),
+            .with(ConsoleLayer::new(LogFormat::Text, false)),
     );
     mark_initialized();
 }
@@ -182,33 +181,6 @@ fn filter_is_set() -> bool {
     .any(|name| {
         std::env::var_os(name).is_some_and(|value| !value.to_string_lossy().trim().is_empty())
     })
-}
-
-/// Boxed because `text` and `json` layers have distinct concrete types.
-/// `FmtSpan::NONE`: a span's lifecycle is not an event; the console shows the
-/// operation line each edge files on `nest_rs::operation`.
-fn console_layer<S>(
-    format: LogFormat,
-    source_location: bool,
-) -> Box<dyn Layer<S> + Send + Sync + 'static>
-where
-    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
-{
-    match format {
-        // The kernel's formatters, the ones the fallback subscriber installs: a line
-        // cannot change shape because the app adopted an exporter. See
-        // `nest_rs_core::__private::TextFormat` for why `with_file` / `with_line_number`
-        // are absent here.
-        LogFormat::Text => tracing_subscriber::fmt::layer()
-            .event_format(TextFormat::new(source_location))
-            .with_writer(ConsoleWriter::get())
-            .boxed(),
-        LogFormat::Json => tracing_subscriber::fmt::layer()
-            .json()
-            .event_format(JsonFormat::new(source_location))
-            .with_writer(ConsoleWriter::get())
-            .boxed(),
-    }
 }
 
 /// How long the final telemetry flush may hold the exit, every provider at once.
@@ -322,24 +294,6 @@ mod tests {
         mark_initialized();
         assert!(initialized());
         INITIALIZED.store(prior, Ordering::Relaxed);
-    }
-
-    #[test]
-    fn console_layer_produces_a_text_layer_for_text_format() {
-        let layer = console_layer::<Registry>(LogFormat::Text, false);
-        let _subscriber = Registry::default().with(layer);
-    }
-
-    #[test]
-    fn console_layer_produces_a_json_layer_for_json_format() {
-        let layer = console_layer::<Registry>(LogFormat::Json, false);
-        let _subscriber = Registry::default().with(layer);
-    }
-
-    #[test]
-    fn console_layer_builds_with_source_location_enabled() {
-        let layer = console_layer::<Registry>(LogFormat::Text, true);
-        let _subscriber = Registry::default().with(layer);
     }
 
     #[test]

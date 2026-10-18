@@ -45,3 +45,14 @@ return nothing. The table's own refusals — a template, a second owner of an
 address, a path a self-mount did not declare — are recorded on it and read by
 `configure` as each mount returns, naming the registrant; a layer a site
 declares still refuses through its container, as above.
+
+**2026-10-18 — a route returns its refusal through the route table.** On the
+pipeline a route's chains, its guard stage and its global pipes are composed
+as `#[routes]` mounts it, and a declared layer no imported module provides, or
+a guard chain out of phase order, is recorded on the transport's `HttpRoutes`
+naming the route by its method, its served path and its controller —
+`configure` returns it, before anything serves. A controller's own guards are
+checked once at its mount, so the `warn` a chain composed for two scopes could
+file twice is filed once, and no `HttpBootCheck` remains on a controller. The
+container channel stays for what still mounts without a `Result`: a gateway's
+message table.

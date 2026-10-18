@@ -2,15 +2,14 @@
 //! provider was never registered, a controller guard no module provides, or two
 //! controllers on one prefix, fail the boot.
 
-use nest_rs_core::{Layer, injectable, module, target};
-use nest_rs_exception_filters::{ExceptionFilter, exception_filter};
-use nest_rs_filters::{Filter, RequestSnapshot, filter};
+use nest_rs_core::{
+    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, exception_filter,
+    injectable, interceptor, module, target,
+};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_pipes::{GlobalPipe, pipe};
 use nest_rs_testing::{HeadlessApp, TestApp};
-use poem::{IntoResponse, Request, Response};
 
 use crate::refused_wiring;
 
@@ -61,22 +60,8 @@ impl Layer for GhostInterceptor {}
 
 #[async_trait]
 impl Interceptor for GhostInterceptor {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> poem::Result<Response> {
-        next.run(req).await
-    }
-}
-
-/// Deliberately **not** listed in any module's providers.
-#[injectable]
-#[derive(Default)]
-struct GhostFilter;
-
-impl Layer for GhostFilter {}
-
-#[async_trait]
-impl Filter for GhostFilter {
-    async fn filter(&self, _req: &RequestSnapshot, error: poem::Error) -> Response {
-        error.into_response()
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
     }
 }
 
@@ -91,8 +76,8 @@ impl Layer for GhostExceptionFilter {}
 impl ExceptionFilter for GhostExceptionFilter {
     type Exception = std::fmt::Error;
 
-    async fn catch(&self, _err: std::fmt::Error) -> Response {
-        nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    async fn catch(&self, _err: &std::fmt::Error, _cx: &mut UnitContext<'_>) -> Caught {
+        Caught::Declined
     }
 }
 
@@ -203,23 +188,6 @@ async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_pipe() {
 }
 
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_filter() {
-    let result = HeadlessApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_filters_global([filter::<GhostFilter>()])
-        .build_headless()
-        .await;
-    let Err(err) = result else {
-        panic!("a worker would boot with a global filter silently dropped");
-    };
-    let chain = format!("{err:#}");
-    assert!(
-        chain.contains("GhostFilter") && chain.contains("nest_rs::filters::global"),
-        "the error names the unresolvable filter and the wiring refusing it: {chain}",
-    );
-}
-
-#[tokio::test]
 async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_exception_filter() {
     let result = HeadlessApp::builder()
         .module::<GuardOnlyModule>()
@@ -232,7 +200,7 @@ async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_exception_
     let chain = format!("{err:#}");
     assert!(
         chain.contains("GhostExceptionFilter")
-            && chain.contains("nest_rs::exception_filters::global"),
+            && chain.contains("nest_rs::layers::exception_filters"),
         "the error names the unresolvable exception filter and the wiring refusing it: {chain}",
     );
 }

@@ -1,13 +1,14 @@
 use std::time::Instant;
 
-use async_trait::async_trait;
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, Discoverable, Layer};
-use nest_rs_http::__private::poem_bridge::wrap_poem;
-use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
-use nest_rs_interceptors::{Interceptor, InterceptorExt, Next};
-use poem::http::{HeaderName, StatusCode};
-use poem::{Request, Response, Result};
+use nest_rs_core::__private::{InterceptorStage, register_interceptor};
+use nest_rs_core::operation_log::Unit;
+use nest_rs_core::{
+    ContainerBuilder, Discoverable, Edge, Interceptor, Layer, Next, Outcome, UnitContext,
+    async_trait,
+};
+use nest_rs_guards::__private::RefusalMark;
+use nest_rs_http::{HeaderName, HttpView, StatusCode};
 
 use crate::config::ServerTimingConfig;
 use crate::entry::Timings;
@@ -17,9 +18,10 @@ const SERVER_TIMING: HeaderName = HeaderName::from_static("server-timing");
 
 /// Answers that never carry a timing: the refusal of a credential, of a proxy's
 /// credential and of a rate, where the time spent is an oracle (W3C Server
-/// Timing §4; `.claude/decisions/server-timing-exposure.md`). Only the status
-/// line is read: a refusal inside a `200`, a GraphQL or MCP error, keeps its
-/// timing.
+/// Timing §4; `.claude/decisions/server-timing-exposure.md`). A refusal a unit
+/// inside the request answered within a `200` — a GraphQL or an MCP operation
+/// its guards refused — marks the request ([`RefusalMark`]) and goes untimed
+/// too.
 const UNTIMED: [StatusCode; 4] = [
     StatusCode::UNAUTHORIZED,
     StatusCode::FORBIDDEN,
@@ -27,48 +29,61 @@ const UNTIMED: [StatusCode; 4] = [
     StatusCode::TOO_MANY_REQUESTS,
 ];
 
+/// Whether `response` is an event stream, whose head leaves before the work it
+/// streams — an MCP operation its guards may yet refuse — so a timing there
+/// measures nothing and could time a refusal.
+fn streams_events(response: &nest_rs_http::Response) -> bool {
+    response
+        .headers()
+        .get(nest_rs_http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim_start().starts_with("text/event-stream"))
+}
+
+/// The unit-stage interceptor timing every HTTP unit — a route, a self-mount's
+/// request, what the router answers itself — its refusals aside.
 pub(crate) struct ServerTiming;
 
-impl Layer for ServerTiming {}
+impl Layer for ServerTiming {
+    fn serves(&self, unit: Unit) -> bool {
+        unit.edge() == Some(Edge::Http)
+    }
+}
 
 #[async_trait]
 impl Interceptor for ServerTiming {
-    async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
         let timings = Timings::default();
-        req.extensions_mut().insert(timings.clone());
+        HttpView::of(cx)?
+            .request_mut()
+            .extensions_mut()
+            .insert(timings.clone());
+        let refused = RefusalMark::default();
+        cx.attach(refused.clone());
         let start = Instant::now();
 
-        let result = next.run(req).await;
+        let outcome = next.run(cx).await;
         let total = start.elapsed();
 
-        let status = match &result {
-            Ok(res) => res.status(),
-            Err(err) => err.status(),
-        };
-        if UNTIMED.contains(&status) {
-            return result;
+        if refused.is_marked() {
+            return outcome;
         }
-        let Some(value) = format_header(&timings.drain(), total) else {
-            return result;
+        let Some(response) = HttpView::of(cx)?.response_mut() else {
+            return outcome;
         };
-        match result {
-            Ok(mut res) => {
-                // `append`: the handler may already have set a `Server-Timing`.
-                res.headers_mut().append(SERVER_TIMING, value);
-                Ok(res)
-            }
-            // An error response gets its timing too, keeping the error shape.
-            Err(err) => {
-                let mut res = err.into_response();
-                res.headers_mut().append(SERVER_TIMING, value);
-                Err(poem::Error::from_response(res))
-            }
+        if UNTIMED.contains(&response.status()) || streams_events(response) {
+            return outcome;
         }
+        if let Some(value) = format_header(&timings.drain(), total) {
+            // `append`: the handler may already have set a `Server-Timing`.
+            response.headers_mut().append(SERVER_TIMING, value);
+        }
+        outcome
     }
 }
 
 // Decided at register, from the config the factory phase resolved: a disabled
-// header attaches no wrap, so the transport keeps its fused path.
+// header registers nothing, so no unit runs a stage for it.
 impl Discoverable for ServerTiming {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         let config = match ConfigModule::resolved::<ServerTimingConfig>(&builder.snapshot()) {
@@ -78,10 +93,7 @@ impl Discoverable for ServerTiming {
         if !config.enabled {
             return builder;
         }
-        builder.attach_meta::<Self, HttpEndpointWrap>(HttpEndpointWrap::with_priority(
-            endpoint_wrap_priority::INTERCEPTORS,
-            |_, endpoint| wrap_poem(endpoint, |inner| inner.interceptor(ServerTiming)),
-        ))
+        register_interceptor::<Self>(builder.provide(ServerTiming), InterceptorStage::Unit)
     }
 }
 

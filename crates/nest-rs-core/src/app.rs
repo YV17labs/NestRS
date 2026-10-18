@@ -26,6 +26,9 @@ use crate::error::{
     AccessError, ContainerError, FactoryCycleError, FactoryFailedError, InitFailedError,
     OverriddenDependencyError, UnclaimedOverrideError, UnresolvedFactoryError,
 };
+use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
+use crate::interceptor::{GlobalInterceptors, InterceptorSpec};
+use crate::layer_chain::__private::check_specs_resolvable;
 use crate::lifecycle::{HookFailure, HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
 use crate::millis::millis;
 use crate::module::Module;
@@ -804,6 +807,120 @@ impl AppBuilder {
         self
     }
 
+    /// List `specs` as the interceptors every unit runs at the handler stage,
+    /// after its guards and its posture's class gate, first listed outermost
+    /// and before any a module brings; one no imported module provides fails
+    /// the boot at the wiring step, in every app.
+    ///
+    /// An interceptor that must run around the guards — a timing, a challenge
+    /// stamped on a refusal — is declared `#[interceptor(stage = unit)]` by
+    /// its module instead.
+    ///
+    /// ```
+    /// use nest_rs_core::{
+    ///     App, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable,
+    ///     interceptor, module,
+    /// };
+    ///
+    /// #[injectable]
+    /// #[derive(Default)]
+    /// struct Audit;
+    ///
+    /// impl Layer for Audit {}
+    ///
+    /// #[async_trait]
+    /// impl Interceptor for Audit {
+    ///     async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+    ///         next.run(cx).await
+    ///     }
+    /// }
+    ///
+    /// #[module(providers = [Audit])]
+    /// struct AppModule;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    ///
+    /// let app = App::builder()
+    ///     .use_interceptors_global([interceptor::<Audit>()])
+    ///     .module::<AppModule>()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn use_interceptors_global(self, specs: impl IntoIterator<Item = InterceptorSpec>) -> Self {
+        let specs = specs.into_iter().map(|spec| spec.0).collect();
+        self.provide(GlobalInterceptors(specs)).provide_wiring(
+            "nest_rs::layers::interceptors",
+            |container| {
+                check_specs_resolvable::<GlobalInterceptors>(
+                    container,
+                    "interceptor",
+                    "an unresolvable global interceptor would silently drop",
+                )
+                .map_err(anyhow::Error::msg)
+            },
+        )
+    }
+
+    /// List `specs` as the exception filters every unit tries after its
+    /// method's and its host's, first listed first; one no imported module
+    /// provides fails the boot at the wiring step, in every app.
+    ///
+    /// ```
+    /// use std::error::Error;
+    ///
+    /// use nest_rs_core::{
+    ///     App, Caught, ExceptionFilter, Layer, UnitContext, async_trait, exception_filter,
+    ///     injectable, module,
+    /// };
+    ///
+    /// #[injectable]
+    /// #[derive(Default)]
+    /// struct Logged;
+    ///
+    /// impl Layer for Logged {}
+    ///
+    /// #[async_trait]
+    /// impl ExceptionFilter for Logged {
+    ///     type Exception = dyn Error + Send + Sync;
+    ///
+    ///     async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+    ///         Caught::Declined
+    ///     }
+    /// }
+    ///
+    /// #[module(providers = [Logged])]
+    /// struct AppModule;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    ///
+    /// let app = App::builder()
+    ///     .use_exception_filters_global([exception_filter::<Logged>()])
+    ///     .module::<AppModule>()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn use_exception_filters_global(
+        self,
+        specs: impl IntoIterator<Item = ExceptionFilterSpec>,
+    ) -> Self {
+        let specs = specs.into_iter().map(|spec| spec.0).collect();
+        self.provide(GlobalExceptionFilters(specs)).provide_wiring(
+            "nest_rs::layers::exception_filters",
+            |container| {
+                check_specs_resolvable::<GlobalExceptionFilters>(
+                    container,
+                    "exception filter",
+                    "an unresolvable global exception filter would silently drop",
+                )
+                .map_err(anyhow::Error::msg)
+            },
+        )
+    }
+
     /// Register an async factory at the composition root, for a resource no
     /// module owns. A seed of the same type wins (the factory is skipped).
     ///
@@ -1168,11 +1285,8 @@ fn still_serving(serving: &Serving) -> Vec<Arc<str>> {
 pub(crate) mod __private {
     use std::future::Future;
 
-    use super::{App, AppBuilder};
+    use super::App;
     use crate::app_lifecycle::StopCause;
-    use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
-    use crate::interceptor::{GlobalInterceptors, InterceptorSpec};
-    use crate::layer_chain::__private::check_specs_resolvable;
 
     /// Refuse a transport whose stop the kernel cannot hold: past
     /// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND), `Duration::MAX` among them — the
@@ -1209,47 +1323,6 @@ pub(crate) mod __private {
         stopped: impl Future<Output = ()>,
     ) -> anyhow::Result<()> {
         app.init_tearing_down_after(stopped).await
-    }
-
-    /// List `specs` as the interceptors every unit runs at the handler stage,
-    /// first listed outermost; one no imported module provides fails the boot
-    /// at the wiring step, in every app.
-    pub fn use_interceptors_global(
-        builder: AppBuilder,
-        specs: impl IntoIterator<Item = InterceptorSpec>,
-    ) -> AppBuilder {
-        let specs = specs.into_iter().map(|spec| spec.0).collect();
-        builder.provide(GlobalInterceptors(specs)).provide_wiring(
-            "nest_rs::layers::interceptors",
-            |container| {
-                check_specs_resolvable::<GlobalInterceptors>(
-                    container,
-                    "interceptor",
-                    "an unresolvable global interceptor would silently drop",
-                )
-                .map_err(anyhow::Error::msg)
-            },
-        )
-    }
-
-    /// List `specs` as the exception filters every unit tries after its
-    /// method's and its host's; one no imported module provides fails the boot
-    /// at the wiring step, in every app.
-    pub fn use_exception_filters_global(
-        builder: AppBuilder,
-        specs: impl IntoIterator<Item = ExceptionFilterSpec>,
-    ) -> AppBuilder {
-        let specs = specs.into_iter().map(|spec| spec.0).collect();
-        builder
-            .provide(GlobalExceptionFilters(specs))
-            .provide_wiring("nest_rs::layers::exception_filters", |container| {
-                check_specs_resolvable::<GlobalExceptionFilters>(
-                    container,
-                    "exception filter",
-                    "an unresolvable global exception filter would silently drop",
-                )
-                .map_err(anyhow::Error::msg)
-            })
     }
 }
 

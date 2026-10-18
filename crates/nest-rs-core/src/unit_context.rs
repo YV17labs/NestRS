@@ -198,6 +198,12 @@ pub fn take_pending(cx: &mut UnitContext<'_>) -> Pending {
     std::mem::take(&mut cx.pending)
 }
 
+/// What the running stage attached so far, left for its install: what an
+/// edge's stage records for work its unit runs off its task.
+pub fn pending_of<'c>(cx: &'c UnitContext<'_>) -> &'c Pending {
+    &cx.pending
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;

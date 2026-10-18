@@ -122,6 +122,12 @@ use crate::unit_context::{UnitContext, take_pending};
 /// # Ok(())
 /// # }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an interceptor",
+    label = "bound as an interceptor here",
+    note = "implement `Interceptor` for it — `async fn intercept(&self, cx: &mut \
+            UnitContext<'_>, next: Next<'_>) -> Outcome` — beside `Layer`"
+)]
 #[async_trait]
 pub trait Interceptor: Layer {
     /// Run around one unit: call `next.run(cx)` once to run the rest of it,

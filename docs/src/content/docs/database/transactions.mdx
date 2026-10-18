@@ -7,12 +7,12 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-A mutating request runs inside a transaction with no boilerplate. The
-`DbContext` interceptor — auto-installed by `SeaOrmDatabaseModule` — opens it on
-the way in, hands the handler the transactional executor, and decides
-commit or rollback based on the response. The hard cases — serialization
-conflicts, deadlocks — get their own primitive, with a defined boundary
-between what the interceptor handles and what the service owns.
+A mutating request runs inside a transaction with no boilerplate. Import
+`SeaOrmDatabaseModule` and the HTTP edge opens it around every mutating
+request, hands the handler the transactional executor, and decides commit or
+rollback on the request's outcome. The hard cases — serialization conflicts,
+deadlocks — get their own primitive, with a defined boundary between what the
+edge's unit of work handles and what the service owns.
 
 The conflict classifier matches against
 [sqlx](https://github.com/launchbadge/sqlx)'s typed `DatabaseError::code()`
@@ -22,7 +22,7 @@ provides the `TransactionTrait` the programmatic boundary builds on.
 
 ## How the auto-commit works
 
-`DbContext` classifies the HTTP method and branches:
+The edge classifies the HTTP method and branches:
 
 ```text
 GET / HEAD / OPTIONS / TRACE   → Executor::Pool,  no transaction
@@ -33,13 +33,13 @@ POST / PUT / PATCH / DELETE    → Executor::Lazy, BEGIN on the first
 ```
 
 Inside the handler, `Repo::<E>::conn()` returns whichever variant the
-interceptor installed — same code, different mode. The decision matrix:
+unit installed — same code, different mode. The decision matrix:
 
 | Outcome                  | Decision  |
 |--------------------------|-----------|
 | `Ok(2xx)` or `Ok(3xx)`   | commit    |
 | `Ok(4xx)` or `Ok(5xx)`   | rollback  |
-| `Err(_)` from the handler| rollback  |
+| `Err(_)` from the handler| rollback, whatever an exception filter answered |
 | Handler past the request timeout | rollback; `503` with `Retry-After` |
 | Commit error             | response becomes `500`, rollback is implicit |
 | Commit did not answer    | response becomes `500`, no `Retry-After`: its writes may have landed |
@@ -226,14 +226,14 @@ leaves its savepoint open, so the request can no longer commit: it answers
 `500`. Keep a deadline outside the block, around the work that may cancel it.
 </Aside>
 
-## Why retrying belongs to the service, not the interceptor
+## Why retrying belongs to the service, not the request
 
-A poem `Request` is consumed by `next.run` — the body bytes are gone past
-the handler call. The interceptor cannot replay the same handler on a
+A request's body is consumed by the handler that reads it — the bytes are
+gone past the handler call. The edge cannot replay the same handler on a
 fresh transaction; the `DatabaseTransaction` handle is already aborted by
 the time a conflict surfaces. Two consequences:
 
-1. **The interceptor observes the conflict, it does not retry it.** The
+1. **The request's unit observes the conflict, it does not retry it.** The
    failed commit has already consumed its handle, and the handler's
    non-transactional side effects — a queued job, an object written to
    storage — would replay with it. (An emitted event is not among them: it
@@ -364,18 +364,18 @@ The failure modes a retry cannot fix:
 - **Application-side validation.** `ServiceError::Validation` is not a
   conflict; the closure re-runs from scratch but the input is the same.
 - **A handler-time conflict on the auto-commit transaction.** The
-  interceptor cannot retry the body; the conflict surfaces as a
+  request's unit cannot retry the body; the conflict surfaces as a
   `DbErr` from the service, which gets mapped to the appropriate HTTP
   status. Use `retry_on_conflict` at the service level instead.
 
-The split is deliberate. The interceptor handles the common case
+The split is deliberate. The request's unit handles the common case
 transparently (open / commit / rollback); the service handles the hard case
 explicitly (replay the work against a fresh snapshot). One way to do each.
 
 ## Going further
 
 - [Database](/database/) — the slice that imports `SeaOrmDatabaseModule`.
-- [Repo and executor](/database/repo-and-executor/) — what the interceptor
-  installs, the escape-on-spawn fail-closed, the savepoint a block runs on.
+- [Repo and executor](/database/repo-and-executor/) — what the request's
+  unit installs, the escape-on-spawn fail-closed, the savepoint a block runs on.
 - [Pagination](/database/pagination/) — the other knob the entity carries.
 - [Configuration](/configuration/) — the full `<PREFIX>_SEAORM__*` scheme.

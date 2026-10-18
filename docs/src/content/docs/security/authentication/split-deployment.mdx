@@ -313,8 +313,8 @@ WWW-Authenticate: Bearer error="insufficient_scope",
   scope="users:write"
 ```
 
-Both are written by the same interceptor at the transport edge, so HTTP,
-WS and MCP get them identically and neither can drift from the metadata
+Both are written by the same unit-stage interceptor around every HTTP
+request, so a route, a WS upgrade and `/mcp` get them identically and neither can drift from the metadata
 document. What raises the `403` is a scope-gated authorization rule —
 see [OAuth scopes](/security/authorization/scopes/). Make sure every
 scope your rules gate on appears in `SCOPES_SUPPORTED`, or you are

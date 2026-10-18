@@ -34,8 +34,6 @@ pub mod harness;
 #[cfg(feature = "health")]
 pub mod indicators;
 pub mod instance;
-#[cfg(feature = "http")]
-pub mod interceptor;
 pub mod lifecycle;
 #[cfg(feature = "events")]
 pub mod listener;

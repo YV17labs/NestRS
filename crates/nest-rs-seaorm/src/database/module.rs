@@ -10,8 +10,7 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
 /// Binds the `nest-rs-database` port: [`SeaOrmUnitOfWork`] as `dyn
 /// UnitOfWork`, which every edge opens its units of work through and every
-/// lifecycle hook runs in, the `DbContext` request interceptor for HTTP
-/// (feature `http`). A bare import beside
+/// lifecycle hook runs in. A bare import beside
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 pub struct SeaOrmDatabaseModule;
 
@@ -44,8 +43,6 @@ impl Module for SeaOrmDatabaseModule {
         if let Err(missing) = substrate(&builder.snapshot()) {
             return builder.refuse(missing);
         }
-        #[cfg(feature = "http")]
-        let builder = <crate::DbContext as nest_rs_core::Discoverable>::register(builder);
         builder
     }
 }

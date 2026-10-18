@@ -8,17 +8,17 @@ use proc_macro::TokenStream;
 mod attr;
 mod controller;
 mod crud;
-mod interceptor;
 mod response;
 mod routes;
 
 /// Generates `pub const PATH`, `pub const VERSIONS` (empty when unversioned)
 /// and a hidden constructor the boot builds the controller with.
 ///
-/// Class-level `#[use_guards(...)]` / `#[use_filters(...)]` /
-/// `#[use_interceptors(...)]` placed *below* `#[controller]` apply to every
-/// route the controller mounts; they stack *outside* any per-route binding
-/// (first listed outermost). A `#[meta(EXPR)]` below it is read by every route,
+/// Class-level `#[use_guards(...)]` / `#[use_interceptors(...)]` /
+/// `#[use_exception_filters(...)]` placed *below* `#[controller]` apply to
+/// every route the controller mounts; they run *outside* any per-route binding
+/// (first listed outermost), a controller's exception filters after the
+/// route's own. A `#[meta(EXPR)]` below it is read by every route,
 /// unless the route declares a value of the same type. An optional
 /// `version = "1"` enables URI versioning.
 /// The `Discoverable` impl is emitted by `#[routes]`.
@@ -30,21 +30,6 @@ mod routes;
 #[proc_macro_attribute]
 pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(controller::controller(args, input).into()).into()
-}
-
-/// Behaves like `#[injectable]` for construction and additionally emits a
-/// `Discoverable` impl attaching a transport-level wrap, mounted at boot. An
-/// optional `priority = <int>` orders the wrap among the endpoint wraps
-/// (defaults to the interceptor band).
-///
-/// # Expands to
-///
-/// Like `#[injectable]`, but `register` attaches a transport-level wrap
-/// instead of providing the value: the type is mounted, not resolved as a
-/// provider.
-#[proc_macro_attribute]
-pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(interceptor::interceptor(args, input).into()).into()
 }
 
 /// Applied to an `impl` block belonging to a `#[controller]`-marked struct.
@@ -64,11 +49,12 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `#[public]` — the route is reachable anonymously; global guards still run
 ///   and read the marker.
 /// - `#[use_guards(...)]` — container-resolved guards, first listed outermost.
-/// - `#[use_filters(...)]` — container-resolved error-mapping filters; they
-///   wrap *inside* the guards, so a denial short-circuits before them.
-/// - `#[use_exception_filters(...)]` — container-resolved typed catches, tried
-///   innermost of the response families.
-/// - `#[use_interceptors(...)]` — container-resolved interceptors.
+/// - `#[use_exception_filters(...)]` — container-resolved
+///   `nest_rs_core::ExceptionFilter`s, tried before the controller's and the
+///   app's on a failure of the handler stage; a guard's refusal reaches none.
+/// - `#[use_interceptors(...)]` — container-resolved `nest_rs_core::Interceptor`s,
+///   after the guards and the class gate, inside the app's and the
+///   controller's.
 /// - `#[meta(EXPR)]` (repeatable) — typed metadata read back by a guard with
 ///   `nest_rs_http::Reflector`, over a value of the same type the controller
 ///   declares (value type: `Send + Sync + 'static`; evaluated once per process,
@@ -85,9 +71,10 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Expands to
 ///
 /// The impl block (verb/layer/response attrs stripped), one
-/// `nest_rs_http::Endpoint` wrapper per route, `impl nest_rs_http::Controller`
-/// (registers each route on the transport's `HttpRoutes` with its
-/// guard/pipe/filter/interceptor pools), and `impl nest_rs_core::Discoverable`
+/// `nest_rs_http::Endpoint` wrapper and one `static` pipeline site per route,
+/// `impl nest_rs_http::Controller` (registers each route on the transport's
+/// `HttpRoutes`, its site's chains composed against the container), and
+/// `impl nest_rs_core::Discoverable`
 /// attaching the `HttpControllerMeta` route table the transport mounts and
 /// declaring, per parameter type, the provider an extractor resolves per
 /// request (`Scoped<T>`, `Bind<A, S>`), which the boot's access graph checks.

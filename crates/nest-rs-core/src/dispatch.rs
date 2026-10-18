@@ -13,11 +13,10 @@ use std::task::{Context, Poll, ready};
 
 use crate::ambient::install_pending;
 use crate::container::Container;
-use crate::error::UnresolvedLayerError;
 use crate::exception_filter::catch;
 use crate::handler::Handler;
 use crate::interceptor::{Next, Rest, run_handler_stage};
-use crate::outcome::{Failure, Outcome};
+use crate::outcome::{Failure, Outcome, Settled};
 use crate::site::{Shape, UnitChains};
 use crate::unit_context::{UnitContext, take_pending};
 
@@ -29,16 +28,39 @@ pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub trait Tail: Send {
     /// Run the handler for the unit `cx` describes.
     fn call(&mut self, cx: &mut UnitContext<'_>) -> impl Future<Output = Outcome> + Send;
+
+    /// Write into the edge's view the answer to `failure`, which the exception
+    /// filters left with a problem of theirs or unanswered, so the unit stage
+    /// reads the reply the client gets: the proof it wrote one, or `None` for
+    /// an edge that renders a failure only once its unit ended.
+    fn answer_failure(&mut self, cx: &mut UnitContext<'_>, failure: &Failure) -> Option<Settled> {
+        let _ = (cx, failure);
+        None
+    }
 }
 
 /// A [`Tail`] behind a box, as the handler stage's [`Next`] holds it.
 pub(crate) trait ErasedTail: Send {
     fn call_boxed<'a>(&'a mut self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Outcome>;
+
+    fn answer_failure_erased(
+        &mut self,
+        cx: &mut UnitContext<'_>,
+        failure: &Failure,
+    ) -> Option<Settled>;
 }
 
 impl<T: Tail> ErasedTail for T {
     fn call_boxed<'a>(&'a mut self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Outcome> {
         Box::pin(self.call(cx))
+    }
+
+    fn answer_failure_erased(
+        &mut self,
+        cx: &mut UnitContext<'_>,
+        failure: &Failure,
+    ) -> Option<Settled> {
+        self.answer_failure(cx, failure)
     }
 }
 
@@ -51,9 +73,10 @@ pub trait GuardStage: Send + Sync {
 }
 
 /// Builds a site's guard stage against a container; `None` when no guard
-/// applies there.
+/// applies there. A refusal fails the site: an [`UnresolvedLayerError`](crate::UnresolvedLayerError), or
+/// whatever the edge refuses a chain for (a guard listed out of phase order).
 pub type GuardStageFactory =
-    fn(&Container, &Handler) -> Result<Option<Arc<dyn GuardStage>>, UnresolvedLayerError>;
+    fn(&Container, &Handler) -> anyhow::Result<Option<Arc<dyn GuardStage>>>;
 
 /// The posture's class gate: synchronous, since it reads what the guards
 /// attached, so a gated unit pays no box for it.
@@ -187,15 +210,23 @@ pub(crate) async fn after_unit_stage(
     install_pending(take_pending(cx), filtered(cx, chains, tail)).await
 }
 
-/// The handler stage, its failure handed to the exception filters.
+/// The handler stage, its failure handed to the exception filters, then to the
+/// edge to answer what they left unanswered.
 async fn filtered(
     cx: &mut UnitContext<'_>,
     chains: &UnitChains,
     tail: &mut (dyn ErasedTail + '_),
 ) -> Outcome {
-    match run_handler_stage(cx, &chains.handler_stage, tail).await {
-        Ok(settled) => Ok(settled),
-        Err(failure) => catch(cx, &chains.exception_filters, failure).await,
+    let failure = match run_handler_stage(cx, &chains.handler_stage, tail).await {
+        Ok(settled) => return Ok(settled),
+        Err(failure) => failure,
+    };
+    match catch(cx, &chains.exception_filters, failure).await {
+        Err(failure) if !failure.is_answered() => match tail.answer_failure_erased(cx, &failure) {
+            Some(reply) => Err(failure.answered(reply)),
+            None => Err(failure),
+        },
+        caught => caught,
     }
 }
 
@@ -206,7 +237,7 @@ mod tests {
     use super::*;
     use crate::ambient::Pending;
     use crate::container::ContainerBuilder;
-    use crate::exception_filter::GlobalExceptionFilters;
+    use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
     use crate::interceptor::__private::{InterceptorStage, register_interceptor};
     use crate::interceptor::GlobalInterceptors;
     use crate::outcome::__private::settled;
@@ -227,17 +258,11 @@ mod tests {
     struct OnTheHost;
     struct OnTheMethod;
 
-    fn admitting(
-        _: &Container,
-        _: &Handler,
-    ) -> Result<Option<Arc<dyn GuardStage>>, UnresolvedLayerError> {
+    fn admitting(_: &Container, _: &Handler) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
         Ok(Some(Arc::new(RecordingGuards { admit: true })))
     }
 
-    fn denying(
-        _: &Container,
-        _: &Handler,
-    ) -> Result<Option<Arc<dyn GuardStage>>, UnresolvedLayerError> {
+    fn denying(_: &Container, _: &Handler) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
         Ok(Some(Arc::new(RecordingGuards { admit: false })))
     }
 
@@ -566,14 +591,14 @@ mod tests {
     fn attaching_and_admitting(
         _: &Container,
         _: &Handler,
-    ) -> Result<Option<Arc<dyn GuardStage>>, UnresolvedLayerError> {
+    ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
         Ok(Some(Arc::new(AttachingGuards(true))))
     }
 
     fn attaching_and_denying(
         _: &Container,
         _: &Handler,
-    ) -> Result<Option<Arc<dyn GuardStage>>, UnresolvedLayerError> {
+    ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
         Ok(Some(Arc::new(AttachingGuards(false))))
     }
 
@@ -905,6 +930,119 @@ mod tests {
         let mut view = TrailView::new();
         let mut cx = new_unit_context(&SEND, &mut view, None, None);
         send(&dispatch(&mut cx, &chains, &mut RecordingTail::ok()));
+    }
+
+    /// Fails unanswered, and renders a failure handed back to it, writing
+    /// that it did.
+    struct Rendering;
+
+    impl Tail for Rendering {
+        async fn call(&mut self, cx: &mut UnitContext<'_>) -> Outcome {
+            record(cx, "handler");
+            Err(Failure::from(HandlerFailed))
+        }
+
+        fn answer_failure(&mut self, cx: &mut UnitContext<'_>, _: &Failure) -> Option<Settled> {
+            record(cx, "rendered");
+            Some(settled())
+        }
+    }
+
+    /// Writes whether the unit it wraps came back answered.
+    struct ReadsTheAnswer;
+    impl Layer for ReadsTheAnswer {}
+
+    #[async_trait]
+    impl Interceptor for ReadsTheAnswer {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            let outcome = next.run(cx).await;
+            let answered = matches!(&outcome, Err(failure) if failure.is_answered());
+            record(
+                cx,
+                if answered {
+                    "read answered"
+                } else {
+                    "read unanswered"
+                },
+            );
+            outcome
+        }
+    }
+
+    fn reading_at_the_unit_stage(filters: Vec<ExceptionFilterSpec>) -> UnitChains {
+        let builder = ContainerBuilder::default()
+            .provide(ReadsTheAnswer)
+            .provide(Declining)
+            .provide(GlobalExceptionFilters(
+                filters.into_iter().map(|spec| spec.0).collect(),
+            ));
+        let container = register_interceptor::<ReadsTheAnswer>(builder, InterceptorStage::Unit)
+            .build()
+            .expect("the container builds");
+        composed(
+            &container,
+            &SiteDeclaration {
+                layers: SiteLayers::default,
+                global: GlobalLayers::ALL,
+                guard_stage: None,
+                class_gate: None,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn a_failure_no_filter_answered_is_rendered_before_the_unit_stage_reads_it() {
+        let chains = reading_at_the_unit_stage(vec![exception_filter::<Declining>()]);
+
+        let (outcome, steps) = run(&chains, &mut Rendering).await;
+        assert_eq!(
+            steps,
+            ["handler", "filter", "rendered", "read answered"],
+            "the edge renders it once every filter declined, inside the unit stage",
+        );
+        let failure = outcome.expect_err("the unit stays failed");
+        assert!(
+            failure.find::<HandlerFailed>().is_some(),
+            "its error is kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failure_a_filter_answered_is_never_rendered_again() {
+        struct Answering;
+        impl Layer for Answering {}
+
+        #[async_trait]
+        impl ExceptionFilter for Answering {
+            type Exception = HandlerFailed;
+
+            async fn catch(&self, _: &HandlerFailed, cx: &mut UnitContext<'_>) -> Caught {
+                record(cx, "answered");
+                Caught::Answered(settled())
+            }
+        }
+
+        let builder = ContainerBuilder::default()
+            .provide(ReadsTheAnswer)
+            .provide(Answering)
+            .provide(GlobalExceptionFilters(vec![
+                exception_filter::<Answering>().0,
+            ]));
+        let container = register_interceptor::<ReadsTheAnswer>(builder, InterceptorStage::Unit)
+            .build()
+            .expect("the container builds");
+        let chains = composed(
+            &container,
+            &SiteDeclaration {
+                layers: SiteLayers::default,
+                global: GlobalLayers::ALL,
+                guard_stage: None,
+                class_gate: None,
+            },
+        );
+
+        let (_, steps) = run(&chains, &mut Rendering).await;
+        assert_eq!(steps, ["handler", "answered", "read answered"]);
     }
 
     #[tokio::test]

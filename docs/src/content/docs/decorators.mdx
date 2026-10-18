@@ -44,12 +44,11 @@ whether you type it, not how the compiler resolves it.
 | `#[response_header]` | method | Appends a response header (repeatable) | [Responses](/http/responses/) |
 | `#[redirect]` | method | Issues a redirect and discards the handler payload | [Responses](/http/responses/) |
 | `#[use_guards]` | struct or method | Binds container-resolved Guards, first listed outermost | [Guards](/fundamentals/guards/) |
-| `#[use_interceptors]` | struct or method | Binds container-resolved Interceptors | [Interceptors](/fundamentals/interceptors/) |
-| `#[use_filters]` | struct or method | Binds error-mapping Filters (response mapping; the global pool runs at the transport band); HTTP only | [Exception filters](/fundamentals/exception-filters/#route-bound-filters-via-use_filters) |
-| `#[use_exception_filters]` | struct or method | Binds typed ExceptionFilters — downcast catch, the layer closest to the handler | [Exception filters](/fundamentals/exception-filters/#typed-catches-via-exceptionfilter) |
+| `#[use_interceptors]` | struct or method | Binds container-resolved Interceptors at the handler stage, after the guards | [Interceptors](/fundamentals/interceptors/) |
+| `#[use_exception_filters]` | struct or method | Binds exception filters — a typed catch, or every error with `dyn Error + Send + Sync`; the method's tried first | [Error handling](/fundamentals/exception-filters/#exception-filters) |
 | `#[meta]` | struct, impl block or method | Declares typed metadata, the method's over its host's (repeatable); read back by a guard through `cx.reflector()`, on every edge | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
-| `#[interceptor]` | struct | Marks a struct as a global HTTP interceptor | [Interceptors](/fundamentals/interceptors/) |
+| `#[interceptor]` | struct | Makes a struct an interceptor its module's import brings to every unit — at the handler stage, or around the guards with `stage = unit` | [Interceptors](/fundamentals/interceptors/#brought-by-a-module-interceptor) |
 | `#[version]` | method | Narrows a route to one of the controller's declared versions | [Versioning](/http/versioning/) |
 | `#[force_guards]` | method | Binds a guard and re-runs it though the broader scope already ran it — the opt-out from dedup | [Guards](/fundamentals/guards/#re-running-one-on-purpose-force_guards) |
 
@@ -69,7 +68,7 @@ it yet: the WebSocket `#[on_connect]` / `#[on_disconnect]` hooks take
 | `#[use_pipes]` | struct, method | — bind a per-argument pipe | not yet | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
 | `#[use_interceptors]` | struct, method | not yet | not yet | not yet | impl block, method | — |
 | `#[use_exception_filters]` | struct, method | not yet | not yet | not yet | impl block, method | — |
-| `#[use_filters]` | struct, method | — use `#[use_exception_filters]` | — | — | — | — |
+| `#[use_filters]` | — use `#[use_exception_filters]` | — | — | — | — | — |
 | `#[meta]` | struct, method | struct, method | struct, method | struct, method | impl block, method | — |
 
 **Not yet** marks a family the edge does not run yet: the compiler refuses it

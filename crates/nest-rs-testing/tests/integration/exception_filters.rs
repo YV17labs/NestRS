@@ -1,15 +1,20 @@
-//! Typed [`ExceptionFilter`] dispatch across the three Layer-System scopes
-//! (global, controller, method), TypeId dedup, fallthrough when a filter
-//! does not match, and a clean separation from the unconditional
-//! [`Filter`](nest_rs_filters::Filter).
+//! Exception filters on the HTTP pipeline: typed dispatch at the three scopes
+//! (global, controller, method), the closest scope first, `TypeId` dedup,
+//! fallthrough when a filter does not match, a catch-all shaping what the
+//! router answers itself and a self-mount's own error, and a failed unit
+//! staying failed however a filter answered it.
 
+use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use async_trait::async_trait;
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_exception_filters::{ExceptionFilter, exception_filter};
-use nest_rs_http::StatusCode;
-use nest_rs_http::{controller, routes};
+use nest_rs_core::{
+    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
+    exception_filter, injectable, interceptor, module,
+};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
+use nest_rs_http::{
+    HeaderName, HeaderValue, HttpView, IntoResponse, ProblemDetails, StatusCode, controller, routes,
+};
 use nest_rs_testing::TestApp;
 use tokio::sync::Mutex;
 
@@ -40,6 +45,22 @@ impl nest_rs_http::ResponseError for DomainError {
     }
 }
 
+/// Answer the unit with the `status` problem saying `detail`, through its
+/// view.
+fn answer(cx: &mut UnitContext<'_>, status: StatusCode, detail: String) -> Caught {
+    let problem = ProblemDetails::from_status(status).with_detail(detail);
+    match HttpView::of(cx) {
+        Ok(view) => Caught::Answered(view.respond(problem.into_response())),
+        Err(_) => Caught::Declined,
+    }
+}
+
+/// The `detail` the answer's problem says.
+async fn detail(resp: nest_rs_testing::TestResponse) -> String {
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    body["detail"].as_str().unwrap_or_default().to_owned()
+}
+
 #[injectable]
 #[derive(Default)]
 struct DomainErrorFilter;
@@ -50,11 +71,29 @@ impl Layer for DomainErrorFilter {}
 impl ExceptionFilter for DomainErrorFilter {
     type Exception = DomainError;
 
-    async fn catch(&self, err: DomainError) -> poem::Response {
+    async fn catch(&self, err: &DomainError, cx: &mut UnitContext<'_>) -> Caught {
         DOMAIN_CATCH_COUNTER.fetch_add(1, Ordering::SeqCst);
-        poem::Response::builder()
-            .status(StatusCode::UNPROCESSABLE_ENTITY)
-            .body(format!("caught: {err}"))
+        answer(
+            cx,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("caught: {err}"),
+        )
+    }
+}
+
+/// Every failure, whatever its error: a crate-wide envelope.
+#[injectable]
+#[derive(Default)]
+struct CatchAll;
+
+impl Layer for CatchAll {}
+
+#[async_trait]
+impl ExceptionFilter for CatchAll {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        answer(cx, StatusCode::IM_A_TEAPOT, "shaped".to_owned())
     }
 }
 
@@ -160,14 +199,39 @@ impl OrdinaryRaise {
     }
 }
 
+/// A catch-all on the controller, a typed filter on one route.
+#[controller(path = "/closest")]
+#[use_exception_filters(CatchAll)]
+struct ClosestScope;
+
+#[routes]
+impl ClosestScope {
+    #[get("/typed")]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn typed(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("closest".into()))
+    }
+
+    #[get("/other")]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn other(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
+            InfraError("not the route's".into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    }
+}
+
 #[module(providers = [
     DomainErrorFilter,
+    CatchAll,
     GlobalScope,
     ControllerScope,
     MethodScope,
     DupGlobalMethod,
     DupCtrlMethod,
     OrdinaryRaise,
+    ClosestScope,
 ])]
 struct ExceptionFiltersModule;
 
@@ -227,7 +291,7 @@ async fn raising_the_error_the_ordinary_way_reaches_the_filter() {
 
     let filtered = app.http().get("/ordinary/filtered").send().await;
     filtered.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
-    filtered.assert_text("caught: domain failure: boom").await;
+    assert_eq!(detail(filtered).await, "caught: domain failure: boom");
     assert_eq!(catches(), 1);
 
     let unfiltered = app.http().get("/ordinary/unfiltered").send().await;
@@ -292,4 +356,104 @@ async fn same_filter_at_all_three_scopes_catches_once() {
         1,
         "global + controller + method declaration still catches exactly once",
     );
+}
+
+#[tokio::test]
+async fn a_typed_filter_at_the_route_answers_before_a_catch_all_on_its_controller() {
+    let _gate = GATE.lock().await;
+    reset_counter();
+
+    let app = TestApp::for_module::<ExceptionFiltersModule>()
+        .await
+        .expect("boots");
+
+    let typed = app.http().get("/closest/typed").send().await;
+    typed.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(catches(), 1);
+
+    let other = app.http().get("/closest/other").send().await;
+    other.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(detail(other).await, "shaped");
+    assert_eq!(catches(), 1, "the route's typed filter declined it");
+}
+
+/// Stamps every answer of the unit stage it runs at.
+#[interceptor(stage = unit)]
+#[derive(Default)]
+struct Observed;
+
+impl Layer for Observed {}
+
+#[async_trait]
+impl Interceptor for Observed {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        let failed = outcome.is_err();
+        if let Some(response) = HttpView::of(cx)?.response_mut() {
+            response.headers_mut().insert(
+                HeaderName::from_static("x-observed"),
+                HeaderValue::from_static(if failed { "failed" } else { "ok" }),
+            );
+        }
+        outcome
+    }
+}
+
+#[module(providers = [CatchAll, Observed])]
+struct ObservedModule;
+
+#[tokio::test]
+async fn a_404_is_shaped_by_a_global_catch_all_and_observed_at_the_unit_stage() {
+    let app = TestApp::builder()
+        .module::<ObservedModule>()
+        .use_exception_filters_global([exception_filter::<CatchAll>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/nowhere").send().await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    resp.assert_header("x-observed", "failed");
+    assert_eq!(detail(resp).await, "shaped");
+}
+
+#[resolver]
+struct PingResolver;
+
+#[operations]
+impl PingResolver {
+    #[query]
+    #[public]
+    async fn ping(&self) -> i32 {
+        0
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(nest_rs_graphql::GraphqlConfig {
+        max_batch_size: 1,
+        ..Default::default()
+    })],
+    providers = [CatchAll, PingResolver],
+)]
+struct GraphqlBatchModule;
+
+#[tokio::test]
+async fn a_global_catch_all_shapes_a_self_mounts_own_http_error() {
+    let app = TestApp::builder()
+        .module::<GraphqlBatchModule>()
+        .use_exception_filters_global([exception_filter::<CatchAll>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let one = serde_json::json!({ "query": "{ ping }" });
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!([one, one]))
+        .send()
+        .await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(detail(resp).await, "shaped");
 }

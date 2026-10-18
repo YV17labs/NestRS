@@ -65,15 +65,16 @@ mod gate_order {
 
     use nest_rs_authz::http::Authorize;
     use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
-    use nest_rs_core::{Layer, injectable, module};
-    use nest_rs_filters::{Filter, RequestSnapshot};
+    use nest_rs_core::{
+        Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, injectable, module,
+    };
     use nest_rs_guards::{Denial, Guard, GuardFor};
-    use nest_rs_http::StatusCode;
-    use nest_rs_http::{Json, async_trait, controller, crud, routes};
-    use nest_rs_interceptors::{Interceptor, Next};
+    use nest_rs_http::{
+        HeaderValue, HttpView, Json, Response, StatusCode, async_trait, controller, crud, header,
+        routes,
+    };
     use nest_rs_seaorm::CrudService;
     use nest_rs_testing::TestApp;
-    use poem::{Request, Response};
 
     mod secret {
         use sea_orm::entity::prelude::*;
@@ -148,10 +149,14 @@ mod gate_order {
 
     #[async_trait]
     impl Interceptor for Stored {
-        async fn intercept(&self, _req: Request, _next: Next<'_>) -> poem::Result<Response> {
-            Ok(Response::builder()
-                .content_type("application/json")
-                .body(STORED))
+        async fn intercept(&self, cx: &mut UnitContext<'_>, _next: Next<'_>) -> Outcome {
+            let stored = Response::builder()
+                .header(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                )
+                .body(STORED);
+            Ok(HttpView::of(cx)?.respond(stored))
         }
     }
 
@@ -165,10 +170,15 @@ mod gate_order {
     impl Layer for Swallow {}
 
     #[async_trait]
-    impl Filter for Swallow {
-        async fn filter(&self, _req: &RequestSnapshot, _error: poem::Error) -> Response {
+    impl ExceptionFilter for Swallow {
+        type Exception = dyn std::error::Error + Send + Sync;
+
+        async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
             SWALLOWED.fetch_add(1, Ordering::SeqCst);
-            Response::builder().body("swallowed")
+            match HttpView::of(cx) {
+                Ok(view) => Caught::Answered(view.respond(Response::builder().body("swallowed"))),
+                Err(_) => Caught::Declined,
+            }
         }
     }
 
@@ -187,7 +197,7 @@ mod gate_order {
 
         #[get("/swallowed")]
         #[authorize(Read, secret::Entity)]
-        #[use_filters(Swallow)]
+        #[use_exception_filters(Swallow)]
         async fn swallowed(&self) -> Json<Vec<SecretDto>> {
             Json(Vec::new())
         }

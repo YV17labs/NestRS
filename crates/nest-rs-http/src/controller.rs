@@ -433,7 +433,7 @@ mod tests {
             },
         );
         let container = Container::builder().build().expect("the container builds");
-        let mut routes = HttpRoutes::new(None);
+        let mut routes = HttpRoutes::new(None, None);
 
         meta.mount(&container, &mut routes);
         assert_eq!(CALLS.load(Ordering::SeqCst), 1);

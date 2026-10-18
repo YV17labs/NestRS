@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use nest_rs_core::__private::{
     GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, Tail,
     declare_handler, declare_site, declare_unit, dispatch, new_unit_context, settled,
-    use_interceptors_global,
 };
 use nest_rs_core::operation_log::Kind;
 use nest_rs_core::{
@@ -139,20 +138,18 @@ struct ImportsTracingFirst;
 
 #[tokio::test]
 async fn a_module_interceptor_runs_after_the_apps_own_in_import_order() {
-    let metrics_first = use_interceptors_global(
-        App::builder().module::<ImportsMetricsFirst>(),
-        [nest_rs_core::interceptor::<AppListed>()],
-    );
+    let metrics_first = App::builder()
+        .module::<ImportsMetricsFirst>()
+        .use_interceptors_global([nest_rs_core::interceptor::<AppListed>()]);
     assert_eq!(
         one_unit(&boot(metrics_first).await).await,
         ["app", "metrics", "tracing"],
         "the app's list first, then each module's in the order the root imports them",
     );
 
-    let tracing_first = use_interceptors_global(
-        App::builder().module::<ImportsTracingFirst>(),
-        [nest_rs_core::interceptor::<AppListed>()],
-    );
+    let tracing_first = App::builder()
+        .module::<ImportsTracingFirst>()
+        .use_interceptors_global([nest_rs_core::interceptor::<AppListed>()]);
     assert_eq!(
         one_unit(&boot(tracing_first).await).await,
         ["app", "tracing", "metrics"]
@@ -164,10 +161,9 @@ struct ImportsTiming;
 
 #[tokio::test]
 async fn an_interceptor_at_the_unit_stage_the_app_also_lists_runs_once() {
-    let builder = use_interceptors_global(
-        App::builder().module::<ImportsTiming>(),
-        [nest_rs_core::interceptor::<Timing>()],
-    );
+    let builder = App::builder()
+        .module::<ImportsTiming>()
+        .use_interceptors_global([nest_rs_core::interceptor::<Timing>()]);
     let app = boot(builder).await;
     assert_eq!(one_unit(&app).await, ["timing"]);
 }
@@ -196,10 +192,9 @@ struct CountingBeforeItsDependency;
 
 #[tokio::test]
 async fn the_interceptor_a_unit_runs_is_the_containers_own_provider() {
-    let builder = use_interceptors_global(
-        App::builder().module::<CountingBeforeItsDependency>(),
-        [nest_rs_core::interceptor::<Counting>()],
-    );
+    let builder = App::builder()
+        .module::<CountingBeforeItsDependency>()
+        .use_interceptors_global([nest_rs_core::interceptor::<Counting>()]);
     let app = boot(builder).await;
     assert_eq!(one_unit(&app).await, ["counting"], "listed twice, run once");
     let counting = app.container().get::<Counting>().expect("provided");
@@ -224,12 +219,11 @@ async fn a_module_the_app_does_not_import_brings_no_interceptor() {
 
 #[tokio::test]
 async fn an_interceptor_the_app_lists_and_no_module_provides_fails_the_boot_naming_it() {
-    let built = use_interceptors_global(
-        App::builder().module::<ImportsNoInterceptor>(),
-        [nest_rs_core::interceptor::<Metrics>()],
-    )
-    .build()
-    .await;
+    let built = App::builder()
+        .module::<ImportsNoInterceptor>()
+        .use_interceptors_global([nest_rs_core::interceptor::<Metrics>()])
+        .build()
+        .await;
     let Err(refused) = built else {
         panic!("a global interceptor would silently drop");
     };

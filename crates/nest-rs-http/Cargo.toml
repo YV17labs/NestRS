@@ -31,6 +31,9 @@ nest-rs-config = { workspace = true, features = ["tls"] }
 # poem (the `Valid`/`Piped` extractors). `validator` is needed for the `Validate`
 # bound on `Valid`; `serde_json` renders a `PipeError` as a JSON 400.
 nest-rs-pipes.workspace = true
+# Each unit a site runs — a route, a self-mount's request — opens through the
+# data port's one binding, resolved once at mount (`run_unit`).
+nest-rs-database.workspace = true
 validator.workspace = true
 serde_json.workspace = true
 # `#[routes]` captures the JSON schema of each `Json<T>` payload into
@@ -91,10 +94,6 @@ nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
 # Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
 # the `Json<T>` extractor in `from_request` test paths.
 serde.workspace = true
-# `#[routes]` composes a route's response-side layers through
-# `nest-rs-interceptors`, so any test using `#[routes]` needs it in scope. An
-# allowed dev-dependency cycle: the interceptors depend on this crate.
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `test-util` (not part of tokio's `full`) pauses time, so the shutdown window is
 # proved at its default length without the suite waiting it out.
 tokio = { workspace = true, features = ["test-util"] }

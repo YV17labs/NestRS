@@ -1,6 +1,7 @@
-//! Covers `src/http/interceptor.rs` under the HTTP edge: the request deadline
-//! the edge sets reaches `DbContext`, which cuts the handler alone, so a commit
-//! outliving the deadline answers the handler's own status.
+//! Covers `src/database/module.rs` under the HTTP edge, which runs each request
+//! as a unit of the binding: the request deadline the edge sets cuts the
+//! handler alone, so a commit outliving the deadline answers the handler's own
+//! status, and a request carrying units of its own runs on the pool.
 
 use std::future::Future;
 use std::pin::Pin;

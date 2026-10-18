@@ -1383,7 +1383,7 @@ static SETTLE_STARTED: Notify = Notify::const_new();
 static SETTLE_RELEASED: Notify = Notify::const_new();
 /// Set once a held commit landed.
 static SETTLE_LANDED: AtomicBool = AtomicBool::new(false);
-/// Whether the next unit to settle is held — the tool call's, not the
+/// Whether the next operation to settle is held — the tool call's, not the
 /// handshake's.
 static HOLD_NEXT: AtomicBool = AtomicBool::new(false);
 
@@ -1393,14 +1393,20 @@ static HOLD_NEXT: AtomicBool = AtomicBool::new(false);
 #[derive(Default)]
 struct HeldCommit;
 
-struct HeldCommitUnit;
+/// A unit of it: an MCP operation's may be held, the request carrying it
+/// never is.
+struct HeldCommitUnit {
+    operation: bool,
+}
 
 impl nest_rs_database::UnitOfWork for HeldCommit {
     fn open(
         &self,
-        _: &nest_rs_database::UnitSpec,
+        spec: &nest_rs_database::UnitSpec,
     ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
-        Ok(Box::new(HeldCommitUnit))
+        Ok(Box::new(HeldCommitUnit {
+            operation: spec.unit.name() != nest_rs_http::unit::REQUEST.name(),
+        }))
     }
 
     fn settle_net(&self) -> Duration {
@@ -1417,7 +1423,7 @@ impl nest_rs_database::OpenUnit for HeldCommitUnit {
         self: Box<Self>,
         _ok: bool,
     ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
-        let held = HOLD_NEXT.swap(false, Ordering::SeqCst);
+        let held = self.operation && HOLD_NEXT.swap(false, Ordering::SeqCst);
         let landed = tokio::spawn(async move {
             if held {
                 SETTLE_STARTED.notify_one();

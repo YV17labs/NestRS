@@ -1,8 +1,7 @@
 //! `.filter()` composition. A `Filter` maps a handler `Err` to a
 //! response; when several are stacked the **innermost** (closest to the handler)
 //! maps first and turns the error into `Ok`, so outer filters never see it. A
-//! successful handler passes through every filter unmapped. Every mapped
-//! response carries the `MappedError` rollback tag.
+//! successful handler passes through every filter unmapped.
 
 use std::sync::{Arc, Mutex};
 
@@ -75,12 +74,6 @@ async fn the_innermost_filter_maps_and_outer_filters_never_see_the_error() {
         ["inner"],
         "only the innermost filter maps the handler's error",
     );
-    assert!(
-        resp.extensions()
-            .get::<nest_rs_http::MappedError>()
-            .is_some(),
-        "a mapped error response carries the rollback tag",
-    );
 }
 
 #[tokio::test]
@@ -107,11 +100,5 @@ async fn a_successful_handler_passes_through_every_filter_unmapped() {
     assert!(
         trace.lock().expect("trace lock").is_empty(),
         "no filter runs when the handler succeeds",
-    );
-    assert!(
-        resp.extensions()
-            .get::<nest_rs_http::MappedError>()
-            .is_none(),
-        "an unmapped success is never tagged for rollback",
     );
 }

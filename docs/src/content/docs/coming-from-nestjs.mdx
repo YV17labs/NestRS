@@ -51,7 +51,7 @@ resolver — carries across intact.
 | `@Inject('TOKEN')` provider token | inject `Arc<dyn Trait>`, provider listed `as dyn Trait` |
 | `@UseGuards(...)` | `#[use_guards(...)]` |
 | `@UseInterceptors(...)` | `#[use_interceptors(...)]` |
-| `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]` — `#[use_filters(...)]` is the *unconditional* mapper, not the typed catch |
+| `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]`; `@Catch()` with no argument is `type Exception = dyn Error + Send + Sync` |
 | `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
 | `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
 | Hooks run by DI level, each level at once (`Promise.all`) | dependencies first, one hook at a time, and shutdown in exact reverse ([order](/fundamentals/lifecycle/#ordering-and-failure)) |

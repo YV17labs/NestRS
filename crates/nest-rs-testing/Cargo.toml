@@ -19,15 +19,12 @@ all-features = true
 
 [features]
 # The HTTP half: `TestApp`, which mounts the app's HTTP transport and drives it
-# through the kit's `TestClient`, the `use_*_global` layer seams and the MCP
-# helpers. A headless suite — a worker, a queue driver's kit — leaves it off
+# through the kit's `TestClient`, the guard and pipe `use_*_global` seams and
+# the MCP helpers. A headless suite — a worker, a queue driver's kit — leaves it off
 # and links no HTTP stack; it boots through `HeadlessApp::builder()`.
 http = [
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
-    "dep:nest-rs-interceptors",
-    "dep:nest-rs-filters",
-    "dep:nest-rs-exception-filters",
     "dep:nest-rs-pipes",
     "dep:serde",
     "dep:url",
@@ -58,13 +55,10 @@ tls = ["dep:rcgen", "dep:rustls", "dep:tokio-rustls", "nest-rs-config/tls"]
 [dependencies]
 nest-rs-core.workspace = true
 anyhow.workspace = true
-# Behind `http`: the transport `TestApp` mounts, and the layer crates its
-# `use_*_global` seams register into.
+# Behind `http`: the transport `TestApp` mounts, and the guard and pipe
+# registries its `use_*_global` seams fill.
 nest-rs-http = { workspace = true, optional = true }
 nest-rs-guards = { workspace = true, optional = true }
-nest-rs-interceptors = { workspace = true, optional = true }
-nest-rs-filters = { workspace = true, optional = true }
-nest-rs-exception-filters = { workspace = true, optional = true }
 nest-rs-pipes = { workspace = true, optional = true }
 # Behind `http`: the client's query and form bodies are form-encoded through
 # rust-url's `form_urlencoded`, the WHATWG encoder `nest-rs-config` already

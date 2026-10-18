@@ -1,0 +1,17 @@
+error[E0277]: `Forgetful` is not an exception filter
+  --> tests/integration/diagnostics/core/exception_filter_spec_of_a_type_that_does_not_catch.rs:12:32
+   |
+12 |     let _ = exception_filter::<Forgetful>();
+   |                                ^^^^^^^^^ bound as an exception filter here
+   |
+help: the trait `nest_rs::nest_rs_core::ExceptionFilter` is not implemented for `Forgetful`
+  --> tests/integration/diagnostics/core/exception_filter_spec_of_a_type_that_does_not_catch.rs:7:1
+   |
+ 7 | struct Forgetful;
+   | ^^^^^^^^^^^^^^^^
+   = note: implement `ExceptionFilter` for it — `type Exception`, the error it catches (`dyn Error + Send + Sync` for every one), and `async fn catch(&self, exception: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught` — beside `Layer`
+note: required by a bound in `nest_rs::nest_rs_core::exception_filter`
+  --> $WORKSPACE/crates/nest-rs-core/src/exception_filter.rs
+   |
+   | pub fn exception_filter<F: ExceptionFilter>() -> ExceptionFilterSpec {
+   |                            ^^^^^^^^^^^^^^^ required by this bound in `exception_filter`

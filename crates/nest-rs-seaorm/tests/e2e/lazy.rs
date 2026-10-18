@@ -1,30 +1,11 @@
-//! The lazy request executor: `BEGIN` waits for the first data-layer touch, so
-//! a guard-denied mutating request opens no transaction.
+//! The lazy executor: `BEGIN` waits for the first data-layer touch, and what
+//! the boundary reports when a statement or the session failed under it. The
+//! HTTP edge's request running through it is `unit`'s.
 
 use std::sync::Arc;
 
-use nest_rs_http::{Method, StatusCode};
-use nest_rs_interceptors::InterceptorExt;
-use nest_rs_seaorm::{
-    DbContext, Executor, LazyTransaction, SeaOrmConfig, current_executor, with_request_executor,
-};
-use poem::endpoint::make;
-use poem::{Endpoint, IntoResponse, Request, Response, Result};
+use nest_rs_seaorm::{Executor, LazyTransaction, current_executor, with_request_executor};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
-
-fn mutating_request() -> Request {
-    Request::builder()
-        .method(Method::POST)
-        .uri("/".parse().unwrap())
-        .finish()
-}
-
-fn status_of(result: Result<Response>) -> StatusCode {
-    match result {
-        Ok(resp) => resp.status(),
-        Err(err) => err.into_response().status(),
-    }
-}
 
 #[tokio::test]
 async fn no_data_layer_touch_opens_no_transaction() {
@@ -69,59 +50,6 @@ async fn first_query_opens_the_transaction_once() {
     txn.rollback()
         .await
         .expect("rollback the probe transaction");
-}
-
-#[tokio::test]
-async fn a_denied_mutating_request_passes_through_with_no_transaction() {
-    let ctx = DbContext::new(
-        crate::harness::connect_arc().await,
-        Arc::new(SeaOrmConfig::default()),
-    );
-
-    let endpoint = make(|_req: Request| async { StatusCode::FORBIDDEN.into_response() });
-
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-    assert_eq!(status, StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn a_writing_handler_commits_through_the_lazy_transaction() {
-    let conn = crate::harness::connect_arc().await;
-    conn.execute_unprepared("DROP TABLE IF EXISTS lazy_commit_probe")
-        .await
-        .expect("drop any leftover probe table");
-    conn.execute_unprepared("CREATE TABLE lazy_commit_probe (id INT PRIMARY KEY)")
-        .await
-        .expect("create the probe table");
-
-    let ctx = DbContext::new(conn.clone(), Arc::new(SeaOrmConfig::default()));
-    let endpoint = make(|_req: Request| async {
-        let executor = current_executor().expect("ambient executor installed");
-        executor
-            .execute_unprepared("INSERT INTO lazy_commit_probe (id) VALUES (1)")
-            .await
-            .expect("the insert opens and rides the lazy transaction");
-        StatusCode::CREATED.into_response()
-    });
-
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-    assert_eq!(status, StatusCode::CREATED);
-
-    let count: i32 = conn
-        .query_one_raw(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "SELECT COUNT(*)::int AS n FROM lazy_commit_probe",
-        ))
-        .await
-        .expect("count on the pool")
-        .expect("count returns a row")
-        .try_get("", "n")
-        .expect("read the count");
-    assert_eq!(count, 1, "the lazily opened transaction must commit");
-
-    conn.execute_unprepared("DROP TABLE IF EXISTS lazy_commit_probe")
-        .await
-        .expect("clean up the probe table");
 }
 
 /// The pool never hands out a connection, so `BEGIN` cannot even be issued.

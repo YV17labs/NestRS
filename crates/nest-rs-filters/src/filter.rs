@@ -89,13 +89,7 @@ where
         let snapshot = RequestSnapshot::from_req(&req);
         match self.inner.call(req).await {
             Ok(out) => Ok(out.into_response()),
-            Err(err) => {
-                let mut resp = self.filter.filter(&snapshot, err).await;
-                // Tag it so the ambient transaction rolls back even when the
-                // mapped status reads as success.
-                resp.extensions_mut().insert(nest_rs_http::MappedError);
-                Ok(resp)
-            }
+            Err(err) => Ok(self.filter.filter(&snapshot, err).await),
         }
     }
 }
@@ -134,15 +128,9 @@ where
         for entry in self.chain.iter().rev() {
             result = match result {
                 Ok(resp) => Ok(resp),
-                Err(err) => {
-                    // `as_ref()`: the `Filter for Arc<T>` blanket would nest a
-                    // second boxed future around the call.
-                    let mut resp = entry.layer.as_ref().filter(&snapshot, err).await;
-                    // Same tag as `FilterEndpoint`: the handler failed, the
-                    // mapped status must not bless its writes.
-                    resp.extensions_mut().insert(nest_rs_http::MappedError);
-                    Ok(resp)
-                }
+                // `as_ref()`: the `Filter for Arc<T>` blanket would nest a
+                // second boxed future around the call.
+                Err(err) => Ok(entry.layer.as_ref().filter(&snapshot, err).await),
             };
         }
         result
@@ -182,27 +170,16 @@ mod tests {
             .await
             .expect("success flows through");
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(
-            resp.extensions()
-                .get::<nest_rs_http::MappedError>()
-                .is_none()
-        );
     }
 
     #[tokio::test]
-    async fn errors_map_to_the_filters_response_tagged_mapped_error() {
+    async fn errors_map_to_the_filters_response() {
         let failing = make(|_req: Request| async {
             Err::<Response, _>(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
         });
         let ep = FilterEndpoint::new(failing, TeapotFilter);
         let resp = ep.call(Request::default()).await.expect("error is mapped");
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
-        assert!(
-            resp.extensions()
-                .get::<nest_rs_http::MappedError>()
-                .is_some(),
-            "a mapped error response must carry the rollback tag",
-        );
     }
 
     struct BodyTagFilter(&'static str);
@@ -238,11 +215,6 @@ mod tests {
         );
         let resp = ep.call(Request::default()).await.expect("success flows");
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(
-            resp.extensions()
-                .get::<nest_rs_http::MappedError>()
-                .is_none()
-        );
     }
 
     #[tokio::test]
@@ -259,12 +231,6 @@ mod tests {
         );
         let resp = ep.call(Request::default()).await.expect("error is mapped");
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
-        assert!(
-            resp.extensions()
-                .get::<nest_rs_http::MappedError>()
-                .is_some(),
-            "a mapped error response must carry the rollback tag",
-        );
         let body = resp.into_body().into_string().await.expect("body");
         assert_eq!(body, "inner", "the innermost (last-listed) filter maps");
     }

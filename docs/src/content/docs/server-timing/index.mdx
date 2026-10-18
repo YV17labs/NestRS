@@ -6,9 +6,10 @@ description: Surface server-side latency in the browser's Network panel during d
 [`Server-Timing`](https://www.w3.org/TR/server-timing/) is a W3C header
 browsers render in their Network panel (DevTools → Network → Timing
 tab) — a per-request breakdown of where the time went. It rides on the
-[HTTP transport](/http/) as an interceptor: importing
-`ServerTimingModule` attaches one that appends a final `total;dur=<ms>` to
-every answer but a refusal; handlers add their own sub-steps by recording into
+[HTTP transport](/http/) as a [unit-stage interceptor](/fundamentals/interceptors/#the-unit-stage-interceptorstage--unit):
+importing `ServerTimingModule` brings one that appends a final
+`total;dur=<ms>` to every answer but a refusal — a route's, a self-mount's
+and what the router answers itself; handlers add their own sub-steps by recording into
 a per-request `Timings` accumulator pulled from the request extensions.
 It is a development surface: on in the development and test profiles, off
 elsewhere until the deployment turns it on.
@@ -46,10 +47,16 @@ server-timing: total;dur=12.34
 That alone shows up in DevTools next to the request — round-trip vs.
 server time becomes a glance.
 
-A refusal on the status line never carries it. A `401`, `403`, `407` or `429`
-goes out without timings in every profile, so the caller an authentication or
-rate check turned away cannot read how long that check worked. A refusal
-answered inside a `200` is the one exception, under [Limits](#limits).
+A refusal never carries it. A `401`, `403`, `407` or `429` goes out without
+timings in every profile, so the caller an authentication or rate check turned
+away cannot read how long that check worked — and so does a refusal answered
+inside a `200`: a `/graphql` operation refused `UNAUTHENTICATED`, `FORBIDDEN`
+or `RATE_LIMITED`, a `/mcp` tool or prompt call its guards refused. Such a
+refusal marks the request it rode on, and a marked request goes untimed.
+
+An event stream (`text/event-stream`) goes untimed too: its head leaves before
+the work it streams, so a total there would measure nothing — and on `/mcp`
+could time an operation its guards refuse after the head left.
 
 ## Record sub-steps
 
@@ -143,15 +150,6 @@ The variable still outranks the pin, field by field, so
 deployment.
 A pin over `ServerTimingConfig::default()` stamps nothing in any profile: the
 struct's default is the production one.
-
-## Limits
-
-The interceptor reads the status line, so a refusal answered inside a `200`
-keeps its timing. That is how `/graphql` refuses an operation — `200 OK` with an
-`UNAUTHENTICATED`, `FORBIDDEN` or `RATE_LIMITED` error — and how `/mcp` refuses
-a tool or prompt call, with a JSON-RPC error. In development that timing is the
-diagnostic you came for; a deployment serving GraphQL or MCP to callers it does
-not trust leaves the header off, which is already its default.
 
 ## Reference
 

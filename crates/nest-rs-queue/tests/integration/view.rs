@@ -418,12 +418,12 @@ struct ViewedModule;
 
 #[tokio::test]
 async fn the_apps_interceptors_run_around_every_job_outermost() {
-    let builder = App::builder().module::<ViewedModule>();
-    let app =
-        nest_rs_core::__private::use_interceptors_global(builder, [interceptor::<AppReading>()])
-            .build()
-            .await
-            .expect("the app boots");
+    let app = App::builder()
+        .module::<ViewedModule>()
+        .use_interceptors_global([interceptor::<AppReading>()])
+        .build()
+        .await
+        .expect("the app boots");
 
     let outcome = consume::attempt(
         method("HostedProcessor::hosted"),

@@ -16,23 +16,24 @@ nest-rs-core.workspace = true
 # `ServerTimingModule` owns its `#[config]` `ServerTimingConfig` (namespace
 # `server_timing`), loaded from `<PREFIX>_SERVER_TIMING__*`.
 nest-rs-config.workspace = true
+# The view a unit-stage interceptor reads the answer through.
 nest-rs-http.workspace = true
-nest-rs-interceptors.workspace = true
-poem.workspace = true
-async-trait.workspace = true
+# The mark an operation's refused guard stage leaves on the request around it.
+nest-rs-guards.workspace = true
 # Per-request entry accumulator lock — poison-free locking.
 parking_lot.workspace = true
 # One boot event when the header is turned on outside a development profile.
 tracing.workspace = true
 
 # The composition witness boots an app and reads the header back off a route.
-# `nest-rs-guards` is there because `#[routes]` expands into the per-route layer
-# chain unconditionally — the dependency a *consumer* gets through the umbrella,
-# and which a workspace crate names directly. Path-only intra-workspace dev
-# edges, per the manifest rule.
+# Path-only intra-workspace dev edges, per the manifest rule.
 [dev-dependencies]
-nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
+# A refusal answered inside a `200`, by a GraphQL field's or an MCP
+# operation's guards, leaves its request untimed.
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+serde_json.workspace = true
 tokio.workspace = true
 # `figment::Jail` declares `<PREFIX>_ENV`, which the default reads off the
 # process environment rather than a `ConfigService`.

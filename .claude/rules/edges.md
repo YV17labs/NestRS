@@ -186,34 +186,39 @@ the sole database gateway, an interceptor carries cross-cutting work such as a
 transaction. Inline conversion, permission checks or transaction management in a
 handler is drift.
 
-**A layer executes exactly once per request.** Declaring a guard, pipe,
-interceptor, filter or exception filter at any scope — global
-(`use_*_global`), controller, handler — contributes to one pool per family,
-deduplicated by `TypeId` in `compose_chain`, the single dedup for all five. The
-broadest scope wins and `#[force_*]` is the re-run opt-in. Scope never multiplies
+**A layer executes exactly once per unit.** Declaring a guard, pipe,
+interceptor or exception filter at any scope — global (`use_*_global`),
+controller, handler — contributes to one pool per family, deduplicated by
+`TypeId` in `compose_chain`, the single dedup for all four. The broadest scope
+wins and `#[force_guards]` is the re-run opt-in. Scope never multiplies
 executions; it chooses the **site**, by the family's nature:
 
 | Family | Global scope runs at | Controller / handler scope runs at |
 |---|---|---|
-| Guard | the route shaper; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`); the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
-| Pipe | the route shaper; `/graphql` variables (a POST or a graphql-ws operation) and WS `data` at their endpoint | the route shaper; per argument on the other edges |
-| Exception filter | the route, closest to the handler | the route |
-| Interceptor | the transport edge — sees 404s, denials and self-mounts, before authentication | around the handler, inside the guards |
-| Filter | the transport edge | around the handler, inside the guards |
+| Guard | a route's guard stage; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`); the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
+| Pipe | a route's tail, over the body; `/graphql` variables (a POST or a graphql-ws operation) and WS `data` at their endpoint | a route's tail; per argument on the other edges |
+| Exception filter | around a route's handler stage; a self-mount's request; the fallback (`404`, `405`) | around the route's handler stage |
+| Interceptor | a route's handler stage, after the guards and the class gate | the same, inside the app's |
 
-*Global is around the whole HTTP process; scoped is around your handler; once
-either way.* `Layer::priority` orders within a site, never across; the transport
-bands are constants in `nest_rs_http`'s interceptor module, and the per-route
-nesting is stated on `#[routes]`' builder. Both sites nest alike: interceptors
-outside filters, exception filters closest to the handler. **Two ways to be
-transport-wide**: `use_*_global` is the app-listed pool; `#[interceptor]` is
-infrastructure a module import brings (`DbContext`, tracing), off the pool.
+An HTTP unit — a route, a self-mount's request, the fallback — is one `Site`
+dispatched through core's pipeline inside `run_unit`
+(`.claude/decisions/one-execution-pipeline.md`): the unit stage, the guard
+stage and class gate, the exception filters (method, host, app), the handler
+stage (the app's list, the modules' `#[interceptor]`s in import order, host,
+method), the tail. A self-mount folds the unit stage and the app's exception
+filters, its guard stage the transport's request stage, and no handler stage;
+the fallback the same with no guard stage and no unit of work.
+`Layer::priority` orders within a stage's bucket, never across. **Two ways to
+be app-wide, both at the handler stage**: `use_interceptors_global` (the app)
+and `#[interceptor]` (a module); only `#[interceptor(stage = unit)]` runs
+around the guards — `Server-Timing`, the RFC 9728 challenge — and writing it is
+the visible opening.
 
-- **A denial is an `Ok(4xx)` response, never an `Err`**: filters do not see it,
-  global interceptors observe it. **The posture's class gate runs with the
-  guards**, after them and before any scoped interceptor or filter, however the
-  route spells it: a layer that answers for the handler never answers a caller
-  the posture refuses. A guard may attach context (`Ctx<T>`); metadata is
+- **A denial is answered by the guard stage**: exception filters do not see
+  it, unit-stage interceptors observe it. **The posture's class gate runs with
+  the guards**, after them and before any handler-stage interceptor or
+  exception filter, however the route spells it: a layer that answers for the
+  handler never answers a caller the posture refuses. A guard may attach context (`Ctx<T>`); metadata is
   `#[meta(EXPR)]`, declared on any host or handler into the site's one
   `Handler` — the method's value over its host's — and read through
   `Reflector`, never copied into the request a layer can write.
@@ -257,8 +262,10 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   second is a contested declaration), and a module declaring guards beside it
   fails the boot
   (`.claude/decisions/bridge-joins-the-pool.md`).
-- **A mapped error never commits**: a route-site filter mapping a handler `Err`
-  tags it `MappedError`, and `DbContext` rolls back whatever status it maps to.
+- **A failed unit never commits, answered or not**: a handler's `Err` or a
+  `4xx`/`5xx` it answered fails the unit, an exception filter or interceptor
+  that answers it changes only what the client reads, and the unit of work
+  rolls back whatever status went out.
 - **The global site takes no capability bound**, by decision: a global guard
   legitimately serves whichever edges it implements, and the pool reaches each
   operation where the operation exists, at all four edges. The pool dispatches
@@ -276,11 +283,10 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
 
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
 `nest_rs::core::{Interceptor, ExceptionFilter}`, `#[interceptor]` (handler
-stage) and `#[interceptor(stage = unit)]`, and one `dispatch` — unit stage,
-guard stage and class gate, exception filters (method, host, app), handler
-stage (the app's, the modules' in import order, host, method), tail. An edge
-moves onto it in its own change, a `Site` per dispatch site, and its row of the
-table above goes with it; until then that table is what runs.
+stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP runs on
+it; GraphQL, WS, MCP and the job edges move onto it each in its own change, a
+`Site` per dispatch site, and until then refuse `#[use_interceptors]` and
+`#[use_exception_filters]` by name and run none of the app's.
 
 ## Posture inside an operation
 

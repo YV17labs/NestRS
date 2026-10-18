@@ -97,9 +97,11 @@ with none bound a unit runs bare and `Repo` fails closed. A driver implements
 that one trait and binds it through `nest_rs_database::provide_unit_of_work`,
 which serves every edge and the kernel's lifecycle hooks; an app lists no data
 context. Each edge commits on its own unit's outcome: an HTTP request on
-2xx/3xx without a `MappedError` (a safe method runs on the pool, the unit
-opened by the `DbContext` interceptor in the innermost band, and so does a
-request carrying units of its own, `/graphql` and `/mcp`); a GraphQL operation
+its success — a handler `Err` or a `4xx`/`5xx` it answered rolls back,
+whatever a filter or an interceptor then answered (a safe method runs on the
+pool, the unit opened by the edge's `run_unit` around the request's whole
+pipeline, and so does a request carrying units of its own, `/graphql` and
+`/mcp`; what the router answers itself opens none); a GraphQL operation
 once it executed, each mutation root field in a savepoint of it rolled back
 when its answer carries an error (`.claude/decisions/graphql-transactions.md`);
 a WS message unless it answers an error frame, a connection hook unless it
@@ -113,7 +115,7 @@ no transaction at all.
 **The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
 rest of the unit once its guard stage passed. A route no response mask shapes,
 an `#[sse]` stream among them, runs under the `UnmaskedReply` marker its
-shaper attaches, and
+guard stage attaches, and
 `current_ability` withholds the ability there, so a read the mask would have
 scoped fails closed — and `nest-rs-http` knows nothing of authz or the ORM
 (`.claude/decisions/unmasked-reply-withholds-the-ability.md`).

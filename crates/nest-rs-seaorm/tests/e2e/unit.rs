@@ -1,51 +1,53 @@
-//! `DbContext` opens a real transaction around mutating handlers: commits on
-//! 2xx/3xx, rolls back on anything else, and fails a leaked executor with a 500.
+//! The HTTP edge's unit of work over the binding: a mutating request runs in
+//! one lazy transaction, committed on a success and rolled back on every
+//! failure however it was answered, and a transaction the request leaked or
+//! could not honour fails it with a `500`.
 
+use std::error::Error;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use nest_rs_http::{Method, StatusCode};
-use nest_rs_interceptors::InterceptorExt;
-use nest_rs_seaorm::{DbContext, SeaOrmConfig, current_executor};
-use poem::endpoint::make;
-use poem::{Endpoint, IntoResponse, Request, Response, Result};
-use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+use nest_rs_core::{
+    Caught, ExceptionFilter, Layer, UnitContext, async_trait, exception_filter, injectable, module,
+};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::{HttpConfig, HttpError, HttpModule, HttpView, StatusCode};
+use nest_rs_seaorm::{
+    Executor, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, current_executor,
+};
+use nest_rs_testing::TestApp;
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
-fn config() -> Arc<SeaOrmConfig> {
-    Arc::new(SeaOrmConfig::default())
-}
+use crate::harness::{
+    ProbeController, ProbeHandler, ProbeModule, answered, committed_rows, fresh_table, probe,
+    probe_app,
+};
 
-fn mutating_request() -> Request {
-    Request::builder()
-        .method(Method::POST)
-        .uri("/".parse().unwrap())
-        .finish()
-}
-
-fn status_of(result: Result<Response>) -> StatusCode {
-    match result {
-        Ok(resp) => resp.status(),
-        Err(err) => err.into_response().status(),
-    }
+/// Write one row into `table` on the request's executor.
+async fn insert_into(table: &str) {
+    let inserted = current_executor()
+        .expect("the handler runs with an ambient executor")
+        .execute_unprepared(&format!("INSERT INTO {table} (id) VALUES (1)"))
+        .await
+        .expect("the insert runs inside the request transaction");
+    assert_eq!(inserted.rows_affected(), 1, "the write really lands");
 }
 
 #[tokio::test]
 async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
     let logs = nest_rs_testing::LogCapture::install();
-    let ctx = DbContext::new(crate::harness::connect_arc().await, config());
-
-    let endpoint = make(|_req: Request| async {
+    let app = probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::OK, || async {
         let escaped = current_executor().expect("the handler runs with an ambient executor");
         tokio::spawn(async move {
             let _hold = escaped;
             tokio::time::sleep(Duration::from_secs(30)).await;
         });
-        StatusCode::OK.into_response()
-    });
+    }))
+    .await;
 
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
     assert_eq!(
-        status,
+        probe(&app).await,
         StatusCode::INTERNAL_SERVER_ERROR,
         "a leaked transaction must surface as a 500, never a false 2xx",
     );
@@ -67,74 +69,151 @@ async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
 
 #[tokio::test]
 async fn a_well_behaved_mutating_handler_keeps_its_status() {
-    let ctx = DbContext::new(crate::harness::connect_arc().await, config());
-
-    let endpoint = make(|_req: Request| async {
+    let app = probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::CREATED, || async {
         current_executor().expect("the handler runs with an ambient executor");
-        StatusCode::CREATED.into_response()
-    });
+    }))
+    .await;
 
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(probe(&app).await, StatusCode::CREATED);
 }
 
 #[tokio::test]
-async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
-    let conn = crate::harness::connect_arc().await;
+async fn a_writing_handler_commits_through_the_lazy_transaction() {
+    const TABLE: &str = "lazy_commit_probe";
+    let conn = crate::harness::connect().await;
+    fresh_table(&conn, TABLE).await;
+    let app = probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::CREATED, || {
+        insert_into(TABLE)
+    }))
+    .await;
 
-    conn.execute_unprepared("DROP TABLE IF EXISTS mapped_rollback_probe")
-        .await
-        .expect("drop any leftover probe table");
-    conn.execute_unprepared("CREATE TABLE mapped_rollback_probe (id INT PRIMARY KEY)")
-        .await
-        .expect("create the probe table");
-
-    let ctx = DbContext::new(conn.clone(), config());
-
-    // A 2xx tagged `MappedError`, as a route-site Filter emits: the mapping
-    // shapes the answer, it does not bless the failed handler's writes.
-    let endpoint = make(|_req: Request| async {
-        let executor = current_executor().expect("the handler runs with an ambient executor");
-        let inserted = executor
-            .execute_unprepared("INSERT INTO mapped_rollback_probe (id) VALUES (1)")
-            .await
-            .expect("the insert runs inside the request transaction");
-        assert_eq!(
-            inserted.rows_affected(),
-            1,
-            "the write really lands inside the open transaction",
-        );
-
-        let mut resp = StatusCode::OK.into_response();
-        resp.extensions_mut().insert(nest_rs_http::MappedError);
-        resp
-    });
-
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
+    assert_eq!(probe(&app).await, StatusCode::CREATED);
     assert_eq!(
-        status,
+        committed_rows(&conn, TABLE).await,
+        1,
+        "the lazily opened transaction must commit",
+    );
+}
+
+/// Answers every failure `200`, as an envelope a product shapes errors with.
+#[injectable]
+#[derive(Default)]
+struct AnswersOk;
+
+impl Layer for AnswersOk {}
+
+#[async_trait]
+impl ExceptionFilter for AnswersOk {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        match HttpView::of(cx) {
+            Ok(view) => Caught::Answered(view.respond(answered(StatusCode::OK))),
+            Err(_) => Caught::Declined,
+        }
+    }
+}
+
+#[module(imports = [ProbeModule], providers = [AnswersOk])]
+struct FilteredProbeModule;
+
+#[tokio::test]
+async fn a_handler_error_a_filter_answered_rolls_the_handlers_writes_back() {
+    const TABLE: &str = "filtered_rollback_probe";
+    let conn = crate::harness::connect().await;
+    fresh_table(&conn, TABLE).await;
+    let app = TestApp::builder()
+        .provide(ProbeHandler::new(|| async {
+            insert_into(TABLE).await;
+            Err(HttpError::new(
+                std::io::Error::other("refused after writing"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ))
+        }))
+        .module::<FilteredProbeModule>()
+        .use_exception_filters_global([exception_filter::<AnswersOk>()])
+        .build()
+        .await
+        .expect("the probe app boots against live Postgres");
+
+    assert_eq!(
+        probe(&app).await,
         StatusCode::OK,
-        "the mapped success status is still returned to the client",
+        "the filter's answer is what the client reads",
     );
-
-    let remaining: i32 = conn
-        .query_one_raw(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "SELECT COUNT(*)::int AS n FROM mapped_rollback_probe",
-        ))
-        .await
-        .expect("count on the pool")
-        .expect("count returns a row")
-        .try_get("", "n")
-        .expect("read the count");
     assert_eq!(
-        remaining, 0,
-        "a MappedError-tagged 2xx must roll back the handler's writes",
+        committed_rows(&conn, TABLE).await,
+        0,
+        "a failed unit never commits, however a filter answered it",
     );
+}
 
-    conn.execute_unprepared("DROP TABLE IF EXISTS mapped_rollback_probe")
+#[tokio::test]
+async fn a_handler_answering_not_found_rolls_its_writes_back() {
+    const TABLE: &str = "not_found_rollback_probe";
+    let conn = crate::harness::connect().await;
+    fresh_table(&conn, TABLE).await;
+    let app = probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::NOT_FOUND, || {
+        insert_into(TABLE)
+    }))
+    .await;
+
+    assert_eq!(probe(&app).await, StatusCode::NOT_FOUND);
+    assert_eq!(
+        committed_rows(&conn, TABLE).await,
+        0,
+        "a 4xx the handler answered on purpose still rolls back",
+    );
+}
+
+/// Whether the refusing guard ran inside the request's unit, its transaction
+/// not yet opened, and whether the handler ran after it.
+static GUARD_SAW_UNOPENED_UNIT: AtomicBool = AtomicBool::new(false);
+static HANDLER_RAN: AtomicBool = AtomicBool::new(false);
+
+/// Refuses every request, after reading the executor it runs under.
+#[injectable]
+#[derive(Default)]
+struct Refusing;
+
+impl Layer for Refusing {}
+
+#[async_trait]
+impl Guard for Refusing {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let unopened =
+            matches!(current_executor(), Some(Executor::Lazy(lazy)) if !lazy.is_opened());
+        GUARD_SAW_UNOPENED_UNIT.store(unopened, Ordering::SeqCst);
+        Err(Denial::forbidden("refused before the handler"))
+    }
+}
+
+impl GuardFor<HttpView> for Refusing {}
+
+#[module(imports = [ProbeModule], providers = [Refusing])]
+struct RefusingProbeModule;
+
+#[tokio::test]
+async fn a_denied_mutating_request_opens_no_transaction() {
+    let app = TestApp::builder()
+        .provide(ProbeHandler::answering(StatusCode::CREATED, || async {
+            HANDLER_RAN.store(true, Ordering::SeqCst);
+        }))
+        .module::<RefusingProbeModule>()
+        .use_guards_global([guard::<Refusing>()])
+        .build()
         .await
-        .expect("clean up the probe table");
+        .expect("the probe app boots against live Postgres");
+
+    assert_eq!(probe(&app).await, StatusCode::FORBIDDEN);
+    assert!(
+        GUARD_SAW_UNOPENED_UNIT.load(Ordering::SeqCst),
+        "the guard runs inside the request's lazy unit, before anything opened it",
+    );
+    assert!(
+        !HANDLER_RAN.load(Ordering::SeqCst),
+        "and nothing after the refusal touches the data layer",
+    );
 }
 
 /// A handler that swallows a `DbErr` and answers `200`: Postgres aborts the
@@ -143,23 +222,20 @@ async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
 #[tokio::test]
 async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit() {
     let logs = nest_rs_testing::LogCapture::install();
-    let ctx = DbContext::new(crate::harness::connect_arc().await, config());
-
-    let endpoint = make(|_req: Request| async {
-        let executor = current_executor().expect("the handler runs with an ambient executor");
-        let failed = executor
+    let app = probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::OK, || async {
+        let failed = current_executor()
+            .expect("the handler runs with an ambient executor")
             .execute_raw(Statement::from_string(
                 DatabaseBackend::Postgres,
                 "INSERT INTO a_table_this_test_never_created VALUES (1)",
             ))
             .await;
         assert!(failed.is_err(), "the statement really did fail");
-        StatusCode::OK.into_response()
-    });
+    }))
+    .await;
 
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
     assert_eq!(
-        status,
+        probe(&app).await,
         StatusCode::INTERNAL_SERVER_ERROR,
         "a boundary that cannot honour the success it was handed must not report one",
     );
@@ -173,7 +249,7 @@ async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit
     assert_eq!(
         event.field("transport").as_deref(),
         Some("http"),
-        "which edge swallowed it, since all four settle through this one seam: {:?}",
+        "which edge swallowed it, since every edge settles through this one seam: {:?}",
         event.fields,
     );
     // A missing table never heals: a retry would only replay side effects.
@@ -188,24 +264,19 @@ async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit
 #[tokio::test]
 async fn a_clean_mutation_commits_without_any_of_that() {
     let logs = nest_rs_testing::LogCapture::install();
-    let ctx = DbContext::new(crate::harness::connect_arc().await, config());
-
-    let endpoint = make(|_req: Request| async {
-        let executor = current_executor().expect("the handler runs with an ambient executor");
-        executor
+    let app = probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::OK, || async {
+        current_executor()
+            .expect("the handler runs with an ambient executor")
             .execute_raw(Statement::from_string(
                 DatabaseBackend::Postgres,
                 "SELECT 1",
             ))
             .await
             .expect("a statement that works");
-        StatusCode::OK.into_response()
-    });
+    }))
+    .await;
 
-    assert_eq!(
-        status_of(endpoint.interceptor(ctx).call(mutating_request()).await),
-        StatusCode::OK,
-    );
+    assert_eq!(probe(&app).await, StatusCode::OK);
     assert!(
         logs.events()
             .iter()
@@ -217,32 +288,24 @@ async fn a_clean_mutation_commits_without_any_of_that() {
 
 /// A `COMMIT` that fails on a deferred foreign key, after every statement
 /// succeeded and the handler returned `200`.
-async fn deferred_constraint_tables() -> Arc<sea_orm::DatabaseConnection> {
-    let conn = crate::harness::connect_arc().await;
-    crate::harness::deferred_probe_tables(&conn, "commit_probe").await;
-    conn
-}
-
 #[tokio::test]
 async fn a_commit_the_database_refuses_fails_the_response_it_had_already_built() {
     let logs = nest_rs_testing::LogCapture::install();
-    let conn = deferred_constraint_tables().await;
-    let ctx = DbContext::new(Arc::clone(&conn), config());
-
-    let endpoint = make(|_req: Request| async {
-        let executor = current_executor().expect("the handler runs with an ambient executor");
-        executor
+    let conn = crate::harness::connect().await;
+    crate::harness::deferred_probe_tables(&conn, "commit_probe").await;
+    let app = probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::OK, || async {
+        current_executor()
+            .expect("the handler runs with an ambient executor")
             .execute_unprepared(
                 "INSERT INTO commit_probe_children (id, parent_id) VALUES (1, 4242)",
             )
             .await
             .expect("a deferred constraint lets the statement through — that is the point");
-        StatusCode::OK.into_response()
-    });
+    }))
+    .await;
 
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
     assert_eq!(
-        status,
+        probe(&app).await,
         StatusCode::INTERNAL_SERVER_ERROR,
         "a response whose transaction did not commit must not go out as a success",
     );
@@ -283,21 +346,19 @@ async fn kill_this_transactions_backend() {
 #[tokio::test]
 async fn a_rollback_with_no_session_left_to_reach_is_reported_rather_than_assumed() {
     let logs = nest_rs_testing::LogCapture::install();
-    let ctx = DbContext::new(crate::harness::connect_arc().await, config());
+    let app =
+        probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::BAD_REQUEST, || async {
+            current_executor()
+                .expect("the handler runs with an ambient executor")
+                .execute_unprepared("SELECT 1")
+                .await
+                .expect("a statement opens the lazy transaction");
+            kill_this_transactions_backend().await;
+        }))
+        .await;
 
-    let endpoint = make(|_req: Request| async {
-        let executor = current_executor().expect("the handler runs with an ambient executor");
-        executor
-            .execute_unprepared("SELECT 1")
-            .await
-            .expect("a statement opens the lazy transaction");
-        kill_this_transactions_backend().await;
-        StatusCode::BAD_REQUEST.into_response()
-    });
-
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
     assert_eq!(
-        status,
+        probe(&app).await,
         StatusCode::BAD_REQUEST,
         "the handler's own status still reaches the client — a rollback that \
          could not be issued does not change what the request answered",
@@ -315,9 +376,7 @@ async fn a_rollback_with_no_session_left_to_reach_is_reported_rather_than_assume
 #[tokio::test]
 async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
     let logs = nest_rs_testing::LogCapture::install();
-    let ctx = DbContext::new(crate::harness::connect_arc().await, config());
-
-    let endpoint = make(|_req: Request| async {
+    let app = probe_app::<ProbeModule>(ProbeHandler::answering(StatusCode::OK, || async {
         let executor = current_executor().expect("the handler runs with an ambient executor");
         // Read first: a poisoned transaction refuses every later statement.
         let pid = crate::harness::backend_pid(&executor).await;
@@ -327,12 +386,11 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
         assert!(failed.is_err(), "the statement poisons the transaction");
         let killer = crate::harness::connect().await;
         crate::harness::terminate_backend(&killer, pid).await;
-        StatusCode::OK.into_response()
-    });
+    }))
+    .await;
 
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
     assert_eq!(
-        status,
+        probe(&app).await,
         StatusCode::INTERNAL_SERVER_ERROR,
         "a swallowed statement failure still refuses the success it was handed",
     );
@@ -355,26 +413,33 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
     );
 }
 
-fn conflict_observing_config() -> Arc<SeaOrmConfig> {
-    Arc::new(SeaOrmConfig {
-        observe_serialization_conflicts: true,
-        ..SeaOrmConfig::default()
-    })
-}
+/// The probe route over a binding that observes serialization conflicts.
+#[module(
+    imports = [
+        SeaOrmModule::for_root(SeaOrmConfig {
+            url: crate::harness::url(),
+            observe_serialization_conflicts: true,
+            ..Default::default()
+        }),
+        SeaOrmDatabaseModule,
+    ],
+    providers = [ProbeController],
+)]
+struct ConflictProbeModule;
 
-/// The textbook SSI conflict: each side reads the rows the other writes, so
+/// The textbook SSI conflict: each request reads the rows the other writes, so
 /// Postgres refuses one of them at `COMMIT`.
-async fn racing_write(
-    conn: Arc<sea_orm::DatabaseConnection>,
-    read_barrier: Arc<tokio::sync::Barrier>,
-    write_barrier: Arc<tokio::sync::Barrier>,
-    reads: i32,
-    writes: i32,
-) -> StatusCode {
-    let ctx = DbContext::new(conn, conflict_observing_config());
-    let endpoint = make(move |_req: Request| {
-        let read_barrier = Arc::clone(&read_barrier);
-        let write_barrier = Arc::clone(&write_barrier);
+fn racing_writes() -> ProbeHandler {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let reads = Arc::new(tokio::sync::Barrier::new(2));
+    let writes = Arc::new(tokio::sync::Barrier::new(2));
+    ProbeHandler::answering(StatusCode::OK, move || {
+        let (class, reads, writes) = (
+            calls.fetch_add(1, Ordering::SeqCst),
+            Arc::clone(&reads),
+            Arc::clone(&writes),
+        );
+        let (read, write) = if class == 0 { (1, 2) } else { (2, 1) };
         async move {
             let executor = current_executor().expect("the handler runs with an ambient executor");
             // Postgres accepts it only as the first statement; `BEGIN` is lazy.
@@ -384,31 +449,29 @@ async fn racing_write(
                 .expect("the isolation level is set on a fresh transaction");
             executor
                 .execute_unprepared(&format!(
-                    "SELECT count(*) FROM serialization_probe WHERE class = {reads}"
+                    "SELECT count(*) FROM serialization_probe WHERE class = {read}"
                 ))
                 .await
                 .expect("the read that makes the two transactions overlap");
             // Both sides must have read before either writes.
-            read_barrier.wait().await;
+            reads.wait().await;
             executor
                 .execute_unprepared(&format!(
-                    "INSERT INTO serialization_probe (class) VALUES ({writes})"
+                    "INSERT INTO serialization_probe (class) VALUES ({write})"
                 ))
                 .await
                 .expect("the write the other side's read did not see");
             // Both must have written before either commits, or SSI may cancel
             // the loser at its `INSERT` instead of at `COMMIT`.
-            write_barrier.wait().await;
-            StatusCode::OK.into_response()
+            writes.wait().await;
         }
-    });
-    status_of(endpoint.interceptor(ctx).call(mutating_request()).await)
+    })
 }
 
 #[tokio::test]
 async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
     let logs = nest_rs_testing::LogCapture::install();
-    let conn = crate::harness::connect_arc().await;
+    let conn = crate::harness::connect().await;
     crate::harness::setup_shared_table(
         &conn,
         "serialization_probe",
@@ -421,25 +484,9 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
              SELECT 2 WHERE NOT EXISTS (SELECT 1 FROM serialization_probe WHERE class = 2);",
     )
     .await;
+    let app = probe_app::<ConflictProbeModule>(racing_writes()).await;
 
-    let reads = Arc::new(tokio::sync::Barrier::new(2));
-    let writes = Arc::new(tokio::sync::Barrier::new(2));
-    let (left, right) = tokio::join!(
-        racing_write(
-            Arc::clone(&conn),
-            Arc::clone(&reads),
-            Arc::clone(&writes),
-            1,
-            2
-        ),
-        racing_write(
-            Arc::clone(&conn),
-            Arc::clone(&reads),
-            Arc::clone(&writes),
-            2,
-            1
-        ),
-    );
+    let (left, right) = tokio::join!(probe(&app), probe(&app));
 
     // Which side loses is the database's choice: assert on the pair.
     let refused = [left, right]
@@ -476,28 +523,37 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
     );
 }
 
+/// A handler writing to `table` and holding work for the commit that records
+/// what it sees, answering `status`.
+fn writes_and_holds(
+    table: &'static str,
+    observer: Arc<DatabaseConnection>,
+    record: crate::harness::Sightings,
+    status: StatusCode,
+) -> ProbeHandler {
+    ProbeHandler::answering(status, move || {
+        crate::harness::write_and_hold(table, observer.clone(), record.clone())
+    })
+}
+
 /// Work held for the commit of a mutating request runs after it — on the pool,
 /// seeing the row the request committed — and before the response leaves.
 #[tokio::test]
 async fn work_held_for_the_commit_runs_once_the_request_committed() {
-    use crate::harness::{Sighting, Sightings, after_commit_table, sighted, write_and_hold};
+    use crate::harness::{Sighting, Sightings, sighted};
     const TABLE: &str = "after_commit_http_commit";
     let conn = crate::harness::connect_arc().await;
-    after_commit_table(&conn, TABLE).await;
+    fresh_table(&conn, TABLE).await;
     let sightings = Sightings::default();
-    let ctx = DbContext::new(conn.clone(), config());
+    let app = probe_app::<ProbeModule>(writes_and_holds(
+        TABLE,
+        conn.clone(),
+        sightings.clone(),
+        StatusCode::CREATED,
+    ))
+    .await;
 
-    let (observer, record) = (conn.clone(), sightings.clone());
-    let endpoint = make(move |_req: Request| {
-        let (observer, record) = (observer.clone(), record.clone());
-        async move {
-            write_and_hold(TABLE, observer, record).await;
-            StatusCode::CREATED.into_response()
-        }
-    });
-
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(probe(&app).await, StatusCode::CREATED);
     assert_eq!(
         sighted(&sightings),
         [Sighting {
@@ -512,24 +568,20 @@ async fn work_held_for_the_commit_runs_once_the_request_committed() {
 /// their commit never runs.
 #[tokio::test]
 async fn work_held_by_a_request_that_rolled_back_never_runs() {
-    use crate::harness::{Sightings, after_commit_table, committed_rows, sighted, write_and_hold};
+    use crate::harness::{Sightings, sighted};
     const TABLE: &str = "after_commit_http_rollback";
     let conn = crate::harness::connect_arc().await;
-    after_commit_table(&conn, TABLE).await;
+    fresh_table(&conn, TABLE).await;
     let sightings = Sightings::default();
-    let ctx = DbContext::new(conn.clone(), config());
+    let app = probe_app::<ProbeModule>(writes_and_holds(
+        TABLE,
+        conn.clone(),
+        sightings.clone(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+    ))
+    .await;
 
-    let (observer, record) = (conn.clone(), sightings.clone());
-    let endpoint = make(move |_req: Request| {
-        let (observer, record) = (observer.clone(), record.clone());
-        async move {
-            write_and_hold(TABLE, observer, record).await;
-            StatusCode::UNPROCESSABLE_ENTITY.into_response()
-        }
-    });
-
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(probe(&app).await, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(committed_rows(&conn, TABLE).await, 0);
     assert!(
         sighted(&sightings).is_empty(),
@@ -537,8 +589,20 @@ async fn work_held_by_a_request_that_rolled_back_never_runs() {
     );
 }
 
+/// The probe route under a one-second request timeout.
+#[module(
+    imports = [
+        HttpModule::for_root(HttpConfig {
+            request_timeout: Some(Duration::from_secs(1)),
+            ..HttpConfig::default()
+        }),
+        ProbeModule,
+    ],
+)]
+struct DeadlineProbeModule;
+
 /// How many times the listener on the request's committed write ran.
-static LISTENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static LISTENED: AtomicU32 = AtomicU32::new(0);
 
 /// The request timeout bounds the handler: one that wrote and answered within
 /// it answers its own status, never `503`, however long what listens to its
@@ -546,38 +610,23 @@ static LISTENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 /// run on.
 #[tokio::test]
 async fn a_post_whose_listener_outlives_the_request_timeout_answers_its_own_status() {
-    let conn = crate::harness::connect_arc().await;
-    conn.execute_unprepared("DROP TABLE IF EXISTS deadline_commit_probe")
-        .await
-        .expect("drop any leftover probe table");
-    conn.execute_unprepared("CREATE TABLE deadline_commit_probe (id INT PRIMARY KEY)")
-        .await
-        .expect("create the probe table");
-    let ctx = DbContext::new(conn.clone(), config());
-
-    let endpoint = make(|_req: Request| async {
-        current_executor()
-            .expect("the handler runs with an ambient executor")
-            .execute_unprepared("INSERT INTO deadline_commit_probe (id) VALUES (1)")
-            .await
-            .expect("the insert runs inside the request transaction");
-        nest_rs_database::after_commit(async {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            LISTENED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        })
+    const TABLE: &str = "deadline_commit_probe";
+    let conn = crate::harness::connect().await;
+    fresh_table(&conn, TABLE).await;
+    let app =
+        probe_app::<DeadlineProbeModule>(ProbeHandler::answering(StatusCode::CREATED, || async {
+            insert_into(TABLE).await;
+            nest_rs_database::after_commit(async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                LISTENED.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+            tokio::time::sleep(Duration::from_millis(900)).await;
+        }))
         .await;
-        tokio::time::sleep(Duration::from_millis(900)).await;
-        StatusCode::CREATED.into_response()
-    });
 
-    let mut req = mutating_request();
     let started = tokio::time::Instant::now();
-    req.extensions_mut()
-        .insert(nest_rs_http::RequestDeadline::new(
-            started + Duration::from_secs(1),
-            Duration::from_secs(1),
-        ));
-    let status = status_of(endpoint.interceptor(ctx).call(req).await);
+    let status = probe(&app).await;
     let took = started.elapsed();
     assert_eq!(
         status,
@@ -588,12 +637,9 @@ async fn a_post_whose_listener_outlives_the_request_timeout_answers_its_own_stat
         took < Duration::from_millis(1900),
         "answered at the deadline, not after the listener, took {took:?}",
     );
-    assert_eq!(
-        crate::harness::committed_rows(&conn, "deadline_commit_probe").await,
-        1
-    );
+    assert_eq!(committed_rows(&conn, TABLE).await, 1);
     nest_rs_testing::wait_until(Duration::from_secs(5), || {
-        LISTENED.load(std::sync::atomic::Ordering::SeqCst) == 1
+        LISTENED.load(Ordering::SeqCst) == 1
     })
     .await;
 }

@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_core::{App, AppBuilder, Container, Module};
+use nest_rs_core::{App, AppBuilder, Container, ExceptionFilterSpec, InterceptorSpec, Module};
 
 use crate::headless::HeadlessApp;
 
@@ -92,6 +92,24 @@ impl TestAppBuilder {
         self
     }
 
+    /// Forwards to [`AppBuilder::use_interceptors_global`].
+    pub fn use_interceptors_global(
+        mut self,
+        specs: impl IntoIterator<Item = InterceptorSpec>,
+    ) -> Self {
+        self.inner = self.inner.use_interceptors_global(specs);
+        self
+    }
+
+    /// Forwards to [`AppBuilder::use_exception_filters_global`].
+    pub fn use_exception_filters_global(
+        mut self,
+        specs: impl IntoIterator<Item = ExceptionFilterSpec>,
+    ) -> Self {
+        self.inner = self.inner.use_exception_filters_global(specs);
+        self
+    }
+
     /// Boot without an HTTP surface, for queue workers and schedulers; drive
     /// their transports through [`HeadlessApp::spawn_transport`].
     pub async fn build_headless(self) -> Result<HeadlessApp> {
@@ -118,11 +136,8 @@ mod http {
 
     use anyhow::Result;
     use nest_rs_core::{App, AppLifecycle, Container, Module, Transport};
-    use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, ExceptionFilterSpec};
-    use nest_rs_filters::{AppBuilderFiltersExt, FilterSpec};
     use nest_rs_guards::{AppBuilderGuardsExt, GuardSpec};
     use nest_rs_http::{HttpConfig, HttpTransport};
-    use nest_rs_interceptors::{AppBuilderInterceptorsExt, InterceptorSpec};
     use nest_rs_pipes::{AppBuilderPipesExt, PipeSpec};
 
     use super::TestAppBuilder;
@@ -210,34 +225,6 @@ mod http {
             I: IntoIterator<Item = PipeSpec>,
         {
             self.inner = self.inner.use_pipes_global(specs);
-            self
-        }
-
-        /// Forwards to [`AppBuilderInterceptorsExt::use_interceptors_global`].
-        pub fn use_interceptors_global<I>(mut self, specs: I) -> Self
-        where
-            I: IntoIterator<Item = InterceptorSpec>,
-        {
-            self.inner = self.inner.use_interceptors_global(specs);
-            self
-        }
-
-        /// Forwards to [`AppBuilderFiltersExt::use_filters_global`].
-        pub fn use_filters_global<I>(mut self, specs: I) -> Self
-        where
-            I: IntoIterator<Item = FilterSpec>,
-        {
-            self.inner = self.inner.use_filters_global(specs);
-            self
-        }
-
-        /// Forwards to
-        /// [`AppBuilderExceptionFiltersExt::use_exception_filters_global`].
-        pub fn use_exception_filters_global<I>(mut self, specs: I) -> Self
-        where
-            I: IntoIterator<Item = ExceptionFilterSpec>,
-        {
-            self.inner = self.inner.use_exception_filters_global(specs);
             self
         }
 

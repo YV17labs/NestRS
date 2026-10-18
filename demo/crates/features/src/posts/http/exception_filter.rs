@@ -1,7 +1,5 @@
-use nest_rs::core::{Layer, error_message, injectable};
-use nest_rs::exception_filters::ExceptionFilter;
-use nest_rs::http::{ResponseError, StatusCode, async_trait};
-use poem::Response;
+use nest_rs::core::{Caught, ExceptionFilter, Layer, UnitContext, async_trait, injectable};
+use nest_rs::http::{HttpView, IntoResponse, ProblemDetails};
 
 use crate::posts::PostError;
 
@@ -15,37 +13,17 @@ impl Layer for PostProblemFilter {}
 impl ExceptionFilter for PostProblemFilter {
     type Exception = PostError;
 
-    async fn catch(&self, err: PostError) -> Response {
-        let (status, title, kind) = match &err {
-            PostError::AlreadyPublished { .. } => (
-                StatusCode::CONFLICT,
-                "Post already published",
-                "https://nestrs.dev/problems/post-already-published",
-            ),
-            PostError::Service(svc) => return svc.as_response().into(),
+    async fn catch(&self, err: &PostError, cx: &mut UnitContext<'_>) -> Caught {
+        let PostError::AlreadyPublished { .. } = err else {
+            return Caught::Declined;
         };
-        let body = serde_json::json!({
-            "type": kind,
-            "title": title,
-            "status": status.as_u16(),
-            "detail": err.to_string(),
-        });
-        let bytes = match serde_json::to_vec(&body) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                tracing::error!(
-                    target: crate::posts::TARGET,
-                    error = %error_message(&error),
-                    "problem+json body failed to serialize",
-                );
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .finish();
-            }
-        };
-        Response::builder()
-            .status(status)
-            .content_type("application/problem+json")
-            .body(bytes)
+        let problem = ProblemDetails::conflict()
+            .with_type("https://nestrs.dev/problems/post-already-published")
+            .with_title("Post already published")
+            .with_detail(err.to_string());
+        match HttpView::of(cx) {
+            Ok(view) => Caught::Answered(view.respond(problem.into_response())),
+            Err(_) => Caught::Declined,
+        }
     }
 }

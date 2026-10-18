@@ -19,17 +19,14 @@ nest-rs-core.workspace = true
 # `validator` here.
 nest-rs-config.workspace = true
 # The document is served by a `#[controller]`, and the challenge is an
-# `#[interceptor]` auto-mounted at the transport edge. `NoBearerChallenge` is
-# how a non-resource `401` opts out of the pointer.
+# `#[interceptor(stage = unit)]` reading each HTTP unit's answer through its
+# view. `NoBearerChallenge` is how a non-resource `401` opts out of the pointer.
 nest-rs-http.workspace = true
-nest-rs-interceptors.workspace = true
 # `RequiredScopes` carries the refused operation's scopes to the edge.
 nest-rs-guards.workspace = true
 # The boot check binds the advertised `resource` to `AuthnConfig.audience`
 # (RFC 8707), and a misconfiguration is an `AuthError`.
 nest-rs-authn.workspace = true
-poem.workspace = true
-async-trait.workspace = true
 serde.workspace = true
 # The RFC 9728 document is serialized by hand so zero-valued members are
 # omitted, as §3.2 requires.

@@ -19,7 +19,6 @@ mod events;
 mod executor;
 #[cfg(feature = "graphql")]
 mod graphql;
-mod interceptor;
 mod lazy;
 mod lifecycle_hooks;
 mod mcp;
@@ -29,6 +28,7 @@ mod public_visitor;
 mod relational_authz;
 mod scope;
 mod soft_delete;
+mod unit;
 mod worker;
 mod ws;
 

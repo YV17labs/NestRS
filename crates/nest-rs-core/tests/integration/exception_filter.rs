@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_core::__private::{
     GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, Tail,
     declare_handler, declare_site, declare_unit, dispatch, new_unit_context, settled,
-    use_exception_filters_global,
 };
 use nest_rs_core::operation_log::Kind;
 use nest_rs_core::{
@@ -80,13 +79,12 @@ impl Tail for Failing {
 
 #[tokio::test]
 async fn a_filter_the_app_lists_answers_a_failed_unit_with_the_containers_own_provider() {
-    let app = use_exception_filters_global(
-        App::builder().module::<CatchAllModule>(),
-        [exception_filter::<CatchAll>()],
-    )
-    .build()
-    .await
-    .unwrap_or_else(|refused| panic!("the app boots: {refused:#}"));
+    let app = App::builder()
+        .module::<CatchAllModule>()
+        .use_exception_filters_global([exception_filter::<CatchAll>()])
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the app boots: {refused:#}"));
     let chains = SITE
         .chains(app.container())
         .unwrap_or_else(|refused| panic!("the site composes: {refused}"));
@@ -107,12 +105,11 @@ async fn a_filter_the_app_lists_answers_a_failed_unit_with_the_containers_own_pr
 
 #[tokio::test]
 async fn a_filter_the_app_lists_and_no_module_provides_fails_the_boot_naming_it() {
-    let built = use_exception_filters_global(
-        App::builder().module::<ImportsNoFilter>(),
-        [exception_filter::<CatchAll>()],
-    )
-    .build()
-    .await;
+    let built = App::builder()
+        .module::<ImportsNoFilter>()
+        .use_exception_filters_global([exception_filter::<CatchAll>()])
+        .build()
+        .await;
     let Err(refused) = built else {
         panic!("a global exception filter would silently drop");
     };

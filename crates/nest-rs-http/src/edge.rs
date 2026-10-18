@@ -330,6 +330,8 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
             .access_log
             .then(|| AccessLog::open(method.clone(), &matched, arrival.into_std()));
         req.extensions_mut().insert(matched.clone());
+        // The peer a unit's context names, resolved once.
+        req.extensions_mut().insert(origin);
 
         // Built here, not in `handle`: a streaming body outlives that future.
         let scope = match &self.shared_scope {

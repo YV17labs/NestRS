@@ -1,6 +1,6 @@
-//! `GuardedEndpoint` — a guard stage's `check_http` in front of an endpoint, the
-//! [`Denial`] → HTTP response mapping, and what the stage attaches. The
-//! endpoint is driven by calling `.call(..)` directly (no live socket).
+//! The HTTP guard stage — each guard's `check_http` in front of a site's tail,
+//! the [`Denial`] → HTTP response mapping, and what the stage attaches. The
+//! site is driven by calling `.call(..)` directly (no live socket).
 
 use std::any::TypeId;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler};
 use nest_rs_core::{Handler, Layer, LayerSite, Posture, UnitContext};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::__private::{GuardedEndpoint, poem_bridge};
+use nest_rs_http::__private::{behind_guards, poem_bridge};
 use nest_rs_http::async_trait;
 use nest_rs_testing::LogCapture;
 use poem::{Endpoint, IntoResponse, Request, endpoint::make_sync};
@@ -76,7 +76,7 @@ where
     E: Endpoint + 'static,
     E::Output: IntoResponse,
 {
-    poem_bridge::to_poem(GuardedEndpoint::new(
+    poem_bridge::to_poem(behind_guards(
         &UPGRADE,
         chain,
         nest_rs_http::BoxEndpoint::new(poem_bridge::from_poem(inner)),

@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::time::Duration;
 
-use poem::http::HeaderValue;
+use nest_rs_http::HeaderValue;
 
 use crate::entry::Entry;
 

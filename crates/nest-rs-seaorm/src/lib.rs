@@ -96,7 +96,7 @@ pub use unit::SeaOrmUnitOfWork;
 #[cfg(feature = "health")]
 pub use health::{SeaOrmHealthIndicator, SeaOrmHealthModule};
 #[cfg(feature = "http")]
-pub use http::{Bind, DbContext};
+pub use http::Bind;
 
 #[doc(hidden)]
 pub mod __private {

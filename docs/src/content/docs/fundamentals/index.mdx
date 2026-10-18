@@ -32,12 +32,12 @@ every binary leans on:
 - **Pipes** — convert and validate input at the request boundary.
   Stateless transforms (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …)
   bound by HTTP through the `Valid<E>` / `Piped<P, E>` extractors.
-- **Interceptors** — wrap handler execution. The same seam that lets you
-  log a request also installs the ambient database transaction and the
-  authorization context.
-- **Error handling** — map errors to responses. `#[use_filters(...)]`
-  for route-shaped mapping; `#[use_exception_filters(...)]` for typed
-  catches. See [Error handling](/fundamentals/exception-filters/).
+- **Interceptors** — wrap handler execution, after the guards: time it,
+  decorate the reply, or answer in its place.
+- **Error handling** — map errors to responses. `ResponseError` on the
+  error type for the default; `#[use_exception_filters(...)]` for a typed
+  catch or one envelope for every error. See
+  [Error handling](/fundamentals/exception-filters/).
 - **Middleware** — NestRS doesn't have a middleware primitive. See [the
   page](/fundamentals/middleware/) for the Guards/Interceptors split if
   you're looking for one.

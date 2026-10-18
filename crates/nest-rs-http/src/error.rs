@@ -163,8 +163,11 @@ struct Repr {
     extensions: Extensions,
 }
 
-/// How a cause answers on the wire.
+/// How another library's cause answers on the wire, consumed.
 type Render = fn(BoxError, StatusCode) -> Response;
+
+/// How a [`ResponseError`] answers on the wire, from a borrow.
+type RenderTyped = fn(&BoxError, StatusCode) -> Response;
 
 enum Cause {
     /// Nothing beneath the status.
@@ -174,7 +177,10 @@ enum Cause {
     /// An error rendered as a problem document of the status.
     Error(BoxError),
     /// A [`ResponseError`], rendered by its own `as_response`.
-    Typed { error: BoxError, render: Render },
+    Typed {
+        error: BoxError,
+        render: RenderTyped,
+    },
     /// Another HTTP library's error crossing into this one: it renders itself,
     /// and a downcast reaches the cause it wraps.
     Wrapped { error: BoxError, render: Render },
@@ -378,9 +384,8 @@ impl HttpError {
             Cause::Status | Cause::Anyhow(_) => ProblemDetails::from_status(status).into_response(),
             Cause::Response(response) => response,
             Cause::Error(error) => ProblemDetails::answering(status, &*error).into_response(),
-            Cause::Typed { error, render } | Cause::Wrapped { error, render } => {
-                render(error, status)
-            }
+            Cause::Typed { error, render } => render(&error, status),
+            Cause::Wrapped { error, render } => render(error, status),
         };
         response.extensions_mut().extend(extensions);
         response
@@ -393,6 +398,30 @@ impl HttpError {
     /// [`Problem`] its cause carries answers its own document; the chain a `5xx`
     /// answer withholds is filed once at `error`.
     pub(crate) fn answer(self) -> Response {
+        match self.0.cause {
+            Cause::Response(_) | Cause::Wrapped { .. } => self.into_response(),
+            _ => self.answer_ref(),
+        }
+    }
+
+    /// The response this error answers, as [`answer`](Self::answer) renders
+    /// it, and the error to keep beside it: itself, unless rendering took what
+    /// it held — a ready response, another library's error — and its status is
+    /// what is left.
+    pub(crate) fn answer_kept(self) -> (Response, HttpError) {
+        match self.0.cause {
+            Cause::Response(_) | Cause::Wrapped { .. } => {
+                let status = self.0.status;
+                (self.into_response(), HttpError::from_status(status))
+            }
+            _ => (self.answer_ref(), self),
+        }
+    }
+
+    /// [`answer`](Self::answer), from a borrow: a ready response or another
+    /// library's error, which only their owner renders, answers its status's
+    /// problem.
+    pub(crate) fn answer_ref(&self) -> Response {
         let chain: Option<&(dyn Error + 'static)> = match &self.0.cause {
             Cause::Anyhow(error) => Some(error.as_ref()),
             Cause::Error(error) => Some(&**error),
@@ -400,22 +429,26 @@ impl HttpError {
                 None
             }
         };
-        let Some(chain) = chain else {
-            return self.into_response();
-        };
-        let problem = nest_rs_core::__private::find_in_chain::<Problem>(chain);
-        let withheld = match problem {
-            Some(problem) => nest_rs_core::__private::withheld(problem, chain),
-            None => Withheld::behind(self.0.status.as_u16(), chain),
-        };
-        if let Some(withheld) = withheld {
-            file(withheld);
+        let status = self.0.status;
+        let problem = chain.and_then(nest_rs_core::__private::find_in_chain::<Problem>);
+        if let Some(chain) = chain {
+            let withheld = match problem {
+                Some(problem) => nest_rs_core::__private::withheld(problem, chain),
+                None => Withheld::behind(status.as_u16(), chain),
+            };
+            if let Some(withheld) = withheld {
+                file(withheld);
+            }
         }
-        let Some(problem) = problem else {
-            return self.into_response();
+        let mut response = match (problem, &self.0.cause) {
+            (Some(problem), _) => problem_response(problem),
+            (None, Cause::Error(error)) => {
+                ProblemDetails::answering(status, &**error).into_response()
+            }
+            (None, Cause::Typed { error, render }) => render(error, status),
+            (None, _) => ProblemDetails::from_status(status).into_response(),
         };
-        let mut response = problem_response(problem);
-        response.extensions_mut().extend(self.0.extensions);
+        response.extensions_mut().extend(self.0.extensions.clone());
         response
     }
 }
@@ -443,7 +476,7 @@ pub(crate) fn file(withheld: Withheld) {
 }
 
 /// A [`ResponseError`]'s own rendering, behind the box that erased its type.
-fn render_typed<E>(error: BoxError, status: StatusCode) -> Response
+fn render_typed<E>(error: &BoxError, status: StatusCode) -> Response
 where
     E: ResponseError + Error + Send + Sync + 'static,
 {
@@ -682,6 +715,14 @@ pub(crate) enum RouteError {
         owner: String,
         template: String,
         declared: String,
+    },
+    /// A site whose layers did not compose: it would run without one it
+    /// declares, or with its guards out of phase order.
+    #[error("{site} cannot mount: its layers do not compose")]
+    Layers {
+        site: String,
+        #[source]
+        source: BoxError,
     },
     /// The fallback's path outside the grammar.
     #[error("the router fallback {owner} answers at {refused}")]

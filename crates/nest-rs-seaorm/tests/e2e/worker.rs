@@ -372,10 +372,10 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
 /// sees what the attempt committed.
 #[tokio::test]
 async fn work_held_for_the_commit_runs_once_the_attempt_committed() {
-    use crate::harness::{Sighting, Sightings, after_commit_table, sighted, write_and_hold};
+    use crate::harness::{Sighting, Sightings, fresh_table, sighted, write_and_hold};
     const TABLE: &str = "after_commit_worker_commit";
     let conn = crate::harness::connect_arc().await;
-    after_commit_table(&conn, TABLE).await;
+    fresh_table(&conn, TABLE).await;
     let sightings = Sightings::default();
     let ctx = context(conn.clone());
 
@@ -401,10 +401,10 @@ async fn work_held_for_the_commit_runs_once_the_attempt_committed() {
 /// the retry that follows is the only one that announces anything.
 #[tokio::test]
 async fn work_held_by_an_attempt_that_failed_never_runs() {
-    use crate::harness::{Sightings, after_commit_table, committed_rows, sighted, write_and_hold};
+    use crate::harness::{Sightings, committed_rows, fresh_table, sighted, write_and_hold};
     const TABLE: &str = "after_commit_worker_rollback";
     let conn = crate::harness::connect_arc().await;
-    after_commit_table(&conn, TABLE).await;
+    fresh_table(&conn, TABLE).await;
     let sightings = Sightings::default();
     let ctx = context(conn.clone());
 

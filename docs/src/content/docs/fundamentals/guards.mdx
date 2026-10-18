@@ -243,7 +243,7 @@ flowchart TB
 
 ## Where guards run in the chain
 
-Guards are pooled by `TypeId` and execute **once per request**, post-routing at the `RouteShaper` — so a global guard still reads `#[public]` route data, and a guard denial short-circuits before the route's interceptors run. The full family-by-family nesting (guards vs pipes vs interceptors vs filters, and why `DbContext` wraps the guards) lives on [the request lifecycle](/fundamentals/request-lifecycle/).
+Guards are pooled by `TypeId` and execute **once per request**, after routing, in the guard stage — so a global guard still reads `#[public]` route data, and a refusal is answered before any of the route's interceptors or exception filters run. The full family-by-family nesting (guards vs pipes vs interceptors vs exception filters, and why the unit of work wraps the guards) lives on [the request lifecycle](/fundamentals/request-lifecycle/).
 
 ## Attach context and route metadata
 
@@ -605,8 +605,8 @@ for the full HTTP / GraphQL / WS / MCP wiring, and
   per-handler is additive.
 - **Declare on the provider** — `#[use_guards(...)]` on `PostsController`
   binds security to the feature; global + controller dedup to one run.
-- **Order matters** — `AuthnGuard` before `AuthzGuard`; global
-  interceptors outside global guards (`DbContext` before `AuthzGuard`).
+- **Order matters** — `AuthnGuard` before `AuthzGuard`; the unit of work
+  outside every guard, so a refused mutation opens no transaction.
 </Aside>
 
 ## Going further

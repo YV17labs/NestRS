@@ -19,16 +19,14 @@ all-features = true
 
 [features]
 default = []
-# The HTTP binding: `DbContext`, the interceptor that runs each request as one
-# unit of work, `Bind<S, A>` (the extractor that loads + authorizes through
-# `CrudService::access`) and `#[crud]`'s error mapping. A headless app — a
-# worker, a scheduler — leaves it off and links no HTTP stack.
+# The HTTP binding: `Bind<S, A>` (the extractor that loads + authorizes through
+# `CrudService::access`), the response mask and `#[crud]`'s error mapping. The
+# HTTP edge runs each request's unit of work through the port itself. A
+# headless app — a worker, a scheduler — leaves it off and links no HTTP stack.
 # `nest-rs-authz/http` is forwarded because `src/http/shape.rs` uses
 # `nest_rs_authz::http`.
 http = [
     "dep:nest-rs-http",
-    "dep:nest-rs-interceptors",
-    "dep:poem",
     "nest-rs-authz/http",
 ]
 # GraphQL transport extractors: the `bind` resolver helper, and what
@@ -105,11 +103,8 @@ tokio-util.workspace = true
 async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono"] }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
-# Behind `http`: the request boundary that runs each request as one unit of
-# work is an HTTP binding.
+# Behind `http`: the extractor, the mask and the error mapping a route reads.
 nest-rs-http = { workspace = true, optional = true }
-nest-rs-interceptors = { workspace = true, optional = true }
-poem = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Self dev-dependency: the suite runs with every transport binding on.
@@ -151,6 +146,9 @@ nest-rs-queue = { path = "../nest-rs-queue" }
 # `test-util` (not part of tokio's `full`) pauses time, so the instant each
 # conflicting call retries at is read off the clock its backoff sleeps on.
 tokio = { workspace = true, features = ["test-util"] }
+# The suites' authentication strategies read poem's request, as `Strategy`
+# still takes it.
+poem.workspace = true
 
 [lints]
 workspace = true

@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{Container, Correlation, Problem, current_request_scope};
-use nest_rs_http::__private::attached_pending;
 use nest_rs_http::__private::poem_bridge::{
     request_from_poem, request_to_poem, response_from_poem, response_to_poem,
 };
+use nest_rs_http::__private::{attached_pending, framework_sentence};
 use nest_rs_http::ResponseError as _;
 use nest_rs_http::{
     Body, DetachedWork, HeaderValue, Method, Request, StatusCode, header, normalize_error_response,
@@ -511,7 +511,8 @@ async fn said_by_kind(response: Response) -> Response {
                 .ok()
                 .and_then(transport_sentence)
                 .map_or_else(Body::empty, |sentence| Body::from(sentence.to_owned()));
-            normalize_error_response(nest_rs_http::Response::from_parts(head, detail)).await
+            let refusal = nest_rs_http::Response::from_parts(head, detail);
+            normalize_error_response(framework_sentence(refusal)).await
         }
     };
     response_to_poem(said)

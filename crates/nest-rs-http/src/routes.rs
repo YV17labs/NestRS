@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use http::Method;
+use nest_rs_database::UnitOfWork;
 
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::RouteError;
@@ -40,6 +41,8 @@ use crate::versioning::route_matches;
 /// ```
 pub struct HttpRoutes {
     prefix: Option<String>,
+    /// The binding every unit the table's sites run opens through.
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     registrant: Registrant,
     addresses: Vec<Address>,
     /// Where each address sits in `addresses`, by its identity.
@@ -152,10 +155,11 @@ impl HttpRoutes {
     }
 
     /// An empty table whose every template is registered under `prefix`, a
-    /// canonical literal path.
-    pub(crate) fn new(prefix: Option<&str>) -> Self {
+    /// canonical literal path, its sites' units opened through `unit_of_work`.
+    pub(crate) fn new(prefix: Option<&str>, unit_of_work: Option<Arc<dyn UnitOfWork>>) -> Self {
         Self {
             prefix: prefix.map(str::to_owned),
+            unit_of_work,
             registrant: Registrant {
                 name: Arc::from("the transport"),
                 declared: None,
@@ -192,6 +196,31 @@ impl HttpRoutes {
             wrap,
         };
         self
+    }
+
+    /// The binding the table's sites open their units through, resolved once
+    /// by the transport.
+    pub(crate) fn unit_of_work(&self) -> Option<&Arc<dyn UnitOfWork>> {
+        self.unit_of_work.as_ref()
+    }
+
+    /// `template` as a client calls it: under the global prefix.
+    pub(crate) fn served(&self, template: &str) -> String {
+        match &self.prefix {
+            Some(prefix) => join_path(prefix, template),
+            None => template.to_owned(),
+        }
+    }
+
+    /// Who registers now, as a refusal names it.
+    pub(crate) fn registrant(&self) -> &str {
+        &self.registrant.name
+    }
+
+    /// Refuse the boot with `refusal`, unless one came first: the mount keeps
+    /// registering, and nothing it registers serves.
+    pub(crate) fn refuse(&mut self, refusal: RouteError) {
+        self.refused.get_or_insert(refusal);
     }
 
     /// The first registration refused since the last call.
@@ -340,7 +369,7 @@ mod tests {
 
     #[test]
     fn the_global_prefix_is_applied_at_registration() {
-        let mut routes = HttpRoutes::new(Some("/api"));
+        let mut routes = HttpRoutes::new(Some("/api"), None);
         routes.for_controller("UsersController");
         routes
             .route(Method::GET, "/users/{id}", ok())
@@ -351,7 +380,7 @@ mod tests {
 
     #[test]
     fn methods_of_one_address_share_it_and_one_method_twice_is_refused() {
-        let mut routes = HttpRoutes::new(None);
+        let mut routes = HttpRoutes::new(None, None);
         routes.for_controller("UsersController");
         routes
             .route(Method::GET, "/users", ok())
@@ -376,7 +405,7 @@ mod tests {
 
     #[test]
     fn two_shapes_of_one_address_are_refused_naming_both() {
-        let mut routes = HttpRoutes::new(None);
+        let mut routes = HttpRoutes::new(None, None);
         routes.for_controller("ParcelsController");
         routes.route(Method::GET, "/parcels/{id}", ok());
         routes.for_controller("LockersController");
@@ -394,7 +423,7 @@ mod tests {
 
     #[test]
     fn one_address_has_one_owner() {
-        let mut routes = HttpRoutes::new(None);
+        let mut routes = HttpRoutes::new(None, None);
         routes.for_controller("UsersController");
         routes.route(Method::GET, "/users", ok());
         routes.for_self_mount(
@@ -412,7 +441,7 @@ mod tests {
 
     #[test]
     fn a_self_mount_registers_what_it_declared_and_below() {
-        let mut routes = HttpRoutes::new(Some("/api"));
+        let mut routes = HttpRoutes::new(Some("/api"), None);
         routes.for_self_mount(
             "the docs endpoint Docs".into(),
             vec![template("/docs"), template("/docs-json/{*version}")],
@@ -448,7 +477,7 @@ mod tests {
 
     #[test]
     fn a_template_out_of_the_grammar_is_refused_naming_its_registrant() {
-        let mut routes = HttpRoutes::new(None);
+        let mut routes = HttpRoutes::new(None, None);
         routes.for_controller("UsersController");
         routes.route(Method::GET, "/users/:id", ok());
         let refused = routes.settle().unwrap_err().to_string();
@@ -460,7 +489,7 @@ mod tests {
 
     #[test]
     fn the_first_refusal_is_kept() {
-        let mut routes = HttpRoutes::new(None);
+        let mut routes = HttpRoutes::new(None, None);
         routes.for_controller("UsersController");
         routes
             .route(Method::GET, "/a/:x", ok())

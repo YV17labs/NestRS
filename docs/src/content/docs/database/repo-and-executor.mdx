@@ -130,23 +130,23 @@ gone — and under the caller's ability. A task you hand to `TaskContext`
 carries the ability but **no executor**: it may outlive the unit, so a write
 in it has to open a unit of its own, and a `Repo` call there fails closed.
 
-## The DbContext interceptor
+## Every HTTP request is a unit of work
 
-`DbContext` is auto-registered when you import `SeaOrmDatabaseModule`. It runs
-every HTTP request as one unit of work, *outside* the route's guards so guards
-and handlers resolve the same ambient executor through `Repo`:
+Import `SeaOrmDatabaseModule` and the HTTP edge runs every request as one unit
+of work through the binding it provides, *outside* the route's guards, so
+guards and handlers resolve the same ambient executor through `Repo`:
 
 ```text
 HTTP request
   ↓
-DbContext              ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
-                       ──→ installs Executor::Lazy (POST/PUT/PATCH/DELETE)
+unit of work          ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
+                      ──→ installs Executor::Lazy (POST/PUT/PATCH/DELETE)
   ↓
 guards (AuthnGuard, AbilityGuard, ...)
   ↓
-handler
+interceptors, handler
   ↓
-DbContext (response)   ──→ commit on 2xx/3xx, rollback otherwise
+unit of work (outcome) ──→ commit on success, rollback on any failure
 ```
 
 A request to `/graphql` or `/mcp` runs on the pool whatever its method: each
@@ -155,13 +155,13 @@ operation it carries is a unit of its own
 
 A safe method gets the pool, no transaction overhead. A mutating method
 opens a `DatabaseTransaction`, runs the handler against it, and commits
-or rolls back based on the response status:
+or rolls back on the unit's outcome:
 
 | Outcome                  | Decision  |
 |--------------------------|-----------|
 | `Ok(2xx)` or `Ok(3xx)`   | commit    |
 | `Ok(4xx)` or `Ok(5xx)`   | rollback  |
-| `Err(_)` from the handler| rollback  |
+| `Err(_)` from the handler, whatever an exception filter answered | rollback |
 
 A failed mutation never half-persists. See
 [Transactions](/database/transactions/) for the conflict-retry knobs and where

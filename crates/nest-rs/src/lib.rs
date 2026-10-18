@@ -162,7 +162,8 @@ macro_rules! __requires_seaorm {
 /// HTTP-API case.
 pub mod prelude {
     pub use nest_rs_core::{
-        App, AppBuilder, Container, ContainerBuilder, Module, Reflector, hooks, injectable, module,
+        App, AppBuilder, Container, ContainerBuilder, Module, Reflector, hooks, injectable,
+        interceptor, module,
     };
 
     // Outside every edge's feature: a headless worker needs `#[input]` too.
@@ -171,7 +172,7 @@ pub mod prelude {
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
         ClientIp, Ctx, HttpConfig, HttpModule, Json, Path, Query, RawBody, Scoped, Valid,
-        controller, http_code, interceptor, redirect, response_header, routes,
+        controller, http_code, redirect, response_header, routes,
     };
 
     #[cfg(feature = "config")]

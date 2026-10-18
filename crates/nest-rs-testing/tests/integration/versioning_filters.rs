@@ -1,15 +1,33 @@
-//! URI versioning (`#[controller(version = "1")]`) and filters
-//! (`#[use_filters]`), including the cross-scope `TypeId` dedup.
+//! URI versioning (`#[controller(version = "1")]`) and a catch-all exception
+//! filter (`#[use_exception_filters]` over `dyn Error + Send + Sync`), the
+//! untyped mapper's successor, including the cross-scope `TypeId` dedup.
 
+use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_filters::{Filter, RequestSnapshot, filter};
-use nest_rs_http::StatusCode;
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_core::{
+    Caught, ExceptionFilter, Layer, UnitContext, exception_filter, injectable, module,
+};
+use nest_rs_http::{
+    HttpView, IntoResponse, ProblemDetails, StatusCode, async_trait, controller, routes,
+};
 use nest_rs_testing::TestApp;
-use poem::{Error, Response};
 use tokio::sync::Mutex;
+
+/// Answer the unit `418`, its problem saying `detail`.
+fn answer(cx: &mut UnitContext<'_>, detail: &'static str) -> Caught {
+    let problem = ProblemDetails::from_status(StatusCode::IM_A_TEAPOT).with_detail(detail);
+    match HttpView::of(cx) {
+        Ok(view) => Caught::Answered(view.respond(problem.into_response())),
+        Err(_) => Caught::Declined,
+    }
+}
+
+/// The `detail` the answer's problem says.
+async fn detail(resp: nest_rs_testing::TestResponse) -> String {
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    body["detail"].as_str().unwrap_or_default().to_owned()
+}
 
 #[injectable]
 #[derive(Default)]
@@ -18,11 +36,11 @@ struct TeapotFilter;
 impl Layer for TeapotFilter {}
 
 #[async_trait]
-impl Filter for TeapotFilter {
-    async fn filter(&self, _req: &RequestSnapshot, _error: Error) -> Response {
-        Response::builder()
-            .status(StatusCode::IM_A_TEAPOT)
-            .body("filtered")
+impl ExceptionFilter for TeapotFilter {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        answer(cx, "filtered")
     }
 }
 
@@ -37,7 +55,7 @@ impl WidgetController {
     }
 
     #[get("/boom")]
-    #[use_filters(TeapotFilter)]
+    #[use_exception_filters(TeapotFilter)]
     async fn boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -53,7 +71,7 @@ impl WidgetController {
 }
 
 #[controller(path = "/gadgets")]
-#[use_filters(TeapotFilter)]
+#[use_exception_filters(TeapotFilter)]
 struct GadgetController;
 
 #[routes]
@@ -89,7 +107,7 @@ async fn per_route_filter_maps_the_error() {
     let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
     let resp = app.http().get("/v1/widgets/boom").send().await;
     resp.assert_status(StatusCode::IM_A_TEAPOT);
-    resp.assert_text("filtered").await;
+    assert_eq!(detail(resp).await, "filtered");
 }
 
 #[tokio::test]
@@ -104,7 +122,7 @@ async fn controller_level_filter_maps_errors_without_a_per_route_filter() {
     let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
     let resp = app.http().get("/gadgets/boom").send().await;
     resp.assert_status(StatusCode::IM_A_TEAPOT);
-    resp.assert_text("filtered").await;
+    assert_eq!(detail(resp).await, "filtered");
 }
 
 static FILTER_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -125,17 +143,17 @@ struct CountingFilter;
 impl Layer for CountingFilter {}
 
 #[async_trait]
-impl Filter for CountingFilter {
-    async fn filter(&self, _req: &RequestSnapshot, _error: Error) -> Response {
+impl ExceptionFilter for CountingFilter {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
         FILTER_COUNTER.fetch_add(1, Ordering::SeqCst);
-        Response::builder()
-            .status(StatusCode::IM_A_TEAPOT)
-            .body("counted")
+        answer(cx, "counted")
     }
 }
 
 #[controller(path = "/dup-global-ctrl")]
-#[use_filters(CountingFilter)]
+#[use_exception_filters(CountingFilter)]
 struct DupGlobalCtrl;
 
 #[routes]
@@ -154,7 +172,7 @@ struct DupGlobalMethod;
 #[routes]
 impl DupGlobalMethod {
     #[get("/boom")]
-    #[use_filters(CountingFilter)]
+    #[use_exception_filters(CountingFilter)]
     async fn dup_global_method_boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -163,13 +181,13 @@ impl DupGlobalMethod {
 }
 
 #[controller(path = "/dup-ctrl-method")]
-#[use_filters(CountingFilter)]
+#[use_exception_filters(CountingFilter)]
 struct DupCtrlMethod;
 
 #[routes]
 impl DupCtrlMethod {
     #[get("/boom")]
-    #[use_filters(CountingFilter)]
+    #[use_exception_filters(CountingFilter)]
     async fn dup_ctrl_method_boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -192,7 +210,7 @@ async fn same_filter_global_and_controller_runs_once() {
 
     let app = TestApp::builder()
         .module::<DedupFilterModule>()
-        .use_filters_global([filter::<CountingFilter>()])
+        .use_exception_filters_global([exception_filter::<CountingFilter>()])
         .build()
         .await
         .expect("boots");
@@ -213,7 +231,7 @@ async fn same_filter_global_and_method_runs_once() {
 
     let app = TestApp::builder()
         .module::<DedupFilterModule>()
-        .use_filters_global([filter::<CountingFilter>()])
+        .use_exception_filters_global([exception_filter::<CountingFilter>()])
         .build()
         .await
         .expect("boots");
@@ -252,7 +270,7 @@ async fn same_filter_at_all_three_scopes_runs_once() {
 
     let app = TestApp::builder()
         .module::<DedupFilterModule>()
-        .use_filters_global([filter::<CountingFilter>()])
+        .use_exception_filters_global([exception_filter::<CountingFilter>()])
         .build()
         .await
         .expect("boots");

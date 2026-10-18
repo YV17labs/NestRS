@@ -227,7 +227,14 @@ left running until they drain the 6.x jobs (step 7).
    | `nest_rs::guards::{dispatch, RouteShaper, GraphqlSite, run_layered_graphql_chain, run_layered_mcp_chain, GuardAsWsMessageCheck}`, `nest_rs::http::{GlobalGuardsActive, Public}`, `nest_rs::ws::{WsMessageCheck, EventLayerTable, gateway_endpoint}`, `nest_rs::graphql::GraphqlFederationGuard`, `nest_rs::authz::run_ability_chain` | nothing: the decorators' expansions call each edge's own stage, which is no API |
    | `nest_rs::guards::denial_to_graphql_error`, `denial_to_ws_error`, `denial_to_mcp_error` | `nest_rs::graphql::denial_to_graphql_error`, `nest_rs::ws::denial_to_ws_error`, `nest_rs::mcp::denial_to_mcp_error` |
    | `nest_rs::guards::denial_to_http_response`, `denial_to_http_error` | a guard returns its `Denial`; an extractor answers a `ProblemDetails` or an error of its own implementing `ResponseError` |
-   | a `#[routes]` in a crate naming the `nest-rs-*` crates rather than `nest-rs` | the same with `nest-rs-interceptors` among its dependencies — the route's response layers wrap there |
+   | `impl Interceptor` from `nest_rs::interceptors`, `async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>` | `nest_rs::core::Interceptor`, `async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome`: run the rest with `next.run(cx).await`, the request through `HttpView::of(cx)?.request()`, the reply through `response_mut()` once it returned — see [Interceptors](/fundamentals/interceptors/) |
+   | `impl ExceptionFilter` from `nest_rs::exception_filters`, `async fn catch(&self, err: E) -> Response` | `nest_rs::core::ExceptionFilter`, `async fn catch(&self, err: &E, cx: &mut UnitContext<'_>) -> Caught`: `Caught::Answered(HttpView::of(cx)?.respond(response))`, `Caught::Problem(problem)` or `Caught::Declined` — see [Error handling](/fundamentals/exception-filters/) |
+   | `impl Filter` from `nest_rs::filters`, `#[use_filters(F)]`, `use_filters_global([filter::<F>()])` | an exception filter whose `type Exception = dyn Error + Send + Sync`, bound with `#[use_exception_filters(F)]` or `use_exception_filters_global([exception_filter::<F>()])`; `#[use_filters]` is refused naming it |
+   | `use nest_rs::interceptors::AppBuilderInterceptorsExt;`, `AppBuilderExceptionFiltersExt`, `AppBuilderFiltersExt` | nothing: `use_interceptors_global` and `use_exception_filters_global` are `AppBuilder`'s own methods, taking `nest_rs::core::{interceptor, exception_filter}` specs |
+   | `#[nest_rs::http::interceptor(priority = n)]` | `#[nest_rs::core::interceptor]`, at the handler stage, or `#[interceptor(stage = unit)]` around the guards; the order within a stage is `Layer::priority` on the struct's `Layer` impl |
+   | `nest_rs::seaorm::DbContext`, listed or built by hand | nothing: importing `SeaOrmDatabaseModule` makes the HTTP edge run every request as a unit of work |
+   | `nest_rs::http::MappedError` on a filter's response | nothing: a failed unit never commits, whatever a filter answered |
+   | `nest_rs::http::{CarriedUnits, carried_units}` | nothing: the transport runs a `/graphql` or `/mcp` request on the pool itself |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, never `M::register(builder)` or `M::collect(builder)`, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` — the import runs each phase once, `collect` first |
 
    `.opaque()` now takes an owned error that converts into `Box<dyn Error +
@@ -478,6 +485,15 @@ left running until they drain the 6.x jobs (step 7).
   `JwtOptions` choosing HS384 needs 48 bytes, HS512 64. **An unparseable
   `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` or `METRIC_INTERVAL_SECS`** fails
   `OpenTelemetry::init` where 6.x kept the default.
+
+- **A global interceptor** — `use_interceptors_global` or a module's
+  `#[interceptor]` — now runs after the guards, around a route's handler: it
+  no longer sees a `404`, a `405` or a refusal, nor a self-mount's request
+  (`/graphql`, `/mcp`, a WS upgrade). One that must, such as a timing or an
+  access record, is declared `#[interceptor(stage = unit)]`.
+- **A failed mutation answered `2xx` by a filter** rolls back, as a handler
+  that answered `404` on purpose does: a unit commits on its own success
+  alone.
 
 ## Reference
 

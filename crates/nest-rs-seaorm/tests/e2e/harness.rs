@@ -140,7 +140,7 @@ pub(crate) struct Sighting {
 pub(crate) type Sightings = Arc<std::sync::Mutex<Vec<Sighting>>>;
 
 /// A fresh one-column table for one test, so a row count is that test's alone.
-pub(crate) async fn after_commit_table(conn: &DatabaseConnection, table: &str) {
+pub(crate) async fn fresh_table(conn: &DatabaseConnection, table: &str) {
     for sql in [
         format!("DROP TABLE IF EXISTS {table}"),
         format!("CREATE TABLE {table} (id INT PRIMARY KEY)"),
@@ -199,4 +199,92 @@ pub(crate) fn sighted(sightings: &Sightings) -> Vec<Sighting> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     )
+}
+
+/// What the probe route answers, built per request.
+type Probed = std::pin::Pin<
+    Box<dyn std::future::Future<Output = nest_rs_http::Result<nest_rs_http::Response>> + Send>,
+>;
+
+/// What the probe route runs as its handler, seeded per test: the HTTP edge
+/// runs it as one request, inside the unit of work the binding opens.
+pub(crate) struct ProbeHandler(Box<dyn Fn() -> Probed + Send + Sync>);
+
+impl ProbeHandler {
+    pub(crate) fn new<F, Fut>(handler: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = nest_rs_http::Result<nest_rs_http::Response>>
+            + Send
+            + 'static,
+    {
+        Self(Box::new(move || Box::pin(handler())))
+    }
+
+    /// A handler answering `status` once `work` ran.
+    pub(crate) fn answering<F, Fut>(status: nest_rs_http::StatusCode, work: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let work = Arc::new(work);
+        Self::new(move || {
+            let work = Arc::clone(&work);
+            async move {
+                work().await;
+                Ok(answered(status))
+            }
+        })
+    }
+}
+
+/// The one route a probe app serves: `POST /probe`, answering what its seeded
+/// [`ProbeHandler`] answers.
+#[nest_rs_http::controller(path = "/probe")]
+pub(crate) struct ProbeController {
+    #[inject]
+    handler: Arc<ProbeHandler>,
+}
+
+#[nest_rs_http::routes]
+impl ProbeController {
+    #[post("/")]
+    async fn run(&self) -> nest_rs_http::Result<nest_rs_http::Response> {
+        (self.handler.0)().await
+    }
+}
+
+/// The probe route over the suite's Postgres, through the binding.
+#[nest_rs_core::module(
+    imports = [
+        nest_rs_seaorm::SeaOrmModule::for_root(nest_rs_seaorm::SeaOrmConfig {
+            url: url(),
+            ..Default::default()
+        }),
+        nest_rs_seaorm::SeaOrmDatabaseModule,
+    ],
+    providers = [ProbeController],
+)]
+pub(crate) struct ProbeModule;
+
+/// A probe app of `M` whose route runs `handler`.
+pub(crate) async fn probe_app<M: nest_rs_core::Module + 'static>(
+    handler: ProbeHandler,
+) -> nest_rs_testing::TestApp {
+    nest_rs_testing::TestApp::builder()
+        .provide(handler)
+        .module::<M>()
+        .build()
+        .await
+        .expect("the probe app boots against live Postgres")
+}
+
+/// The status `POST /probe` answers on `app`.
+pub(crate) async fn probe(app: &nest_rs_testing::TestApp) -> nest_rs_http::StatusCode {
+    app.http().post("/probe").send().await.0.status()
+}
+
+/// A response of `status` alone.
+pub(crate) fn answered(status: nest_rs_http::StatusCode) -> nest_rs_http::Response {
+    nest_rs_http::Response::builder().status(status).finish()
 }

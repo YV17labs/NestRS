@@ -1,7 +1,5 @@
-use nest_rs::core::{Layer, injectable};
-use nest_rs::http::async_trait;
-use nest_rs::interceptors::{Interceptor, Next};
-use poem::{Request, Response, Result};
+use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};
+use nest_rs::http::HttpView;
 
 #[injectable]
 #[derive(Default)]
@@ -11,14 +9,17 @@ impl Layer for PostAuditInterceptor {}
 
 #[async_trait]
 impl Interceptor for PostAuditInterceptor {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        let resp = next.run(req).await?;
-
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        let status = HttpView::of(cx)
+            .ok()
+            .and_then(|view| view.response())
+            .map(|resp| resp.status().as_u16());
         tracing::info!(
             target: crate::posts::TARGET,
-            status = resp.status().as_u16(),
+            status,
             "post request audited",
         );
-        Ok(resp)
+        outcome
     }
 }

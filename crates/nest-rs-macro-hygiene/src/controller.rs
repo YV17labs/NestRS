@@ -27,6 +27,7 @@ pub struct HygieneLimit(pub u32);
 
 #[controller(path = "/hygiene")]
 #[meta(HygieneLimit(100))]
+#[use_interceptors(crate::pipeline::HygieneCache)]
 pub struct HygieneController;
 
 #[routes]
@@ -78,8 +79,11 @@ impl HygieneController {
         SseStream::new(stream::iter([SseEvent::message("tick")]))
     }
 
+    /// A route's own interceptor and exception filter: its site's layers.
     #[get("/sync")]
     #[public]
+    #[use_interceptors(crate::pipeline::HygieneAudit)]
+    #[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
     fn sync(&self) -> String {
         "sync".into()
     }

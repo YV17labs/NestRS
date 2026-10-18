@@ -1,7 +1,8 @@
 //! What a unit's continuation runs on: a streaming body a mutating route
 //! returns reads on the pool once the route's transaction has committed, under
-//! the caller's ability; a listener with no commit to wait for runs at once,
-//! in a unit of its own beside the transaction the caller opened itself.
+//! the caller's ability; an `#[sse]` stream, which no mask shapes, reads
+//! nothing scoped; a listener with no commit to wait for runs at once, in a
+//! unit of its own beside the transaction the caller opened itself.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::http::Authorize;
@@ -9,13 +10,14 @@ use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefau
 use nest_rs_core::module;
 use nest_rs_guards::guard;
 use nest_rs_http::futures_util::stream;
-use nest_rs_http::{Body, HeaderValue, Response};
+use nest_rs_http::{Body, HeaderValue, Response, SseEvent, SseStream};
 use nest_rs_http::{controller, routes};
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::TestApp;
 use sea_orm::ConnectionTrait;
 
 const TABLE: &str = "continuation_probe_items";
+const STREAMED: &str = "sse_probe_items";
 
 mod item {
     use sea_orm::entity::prelude::*;
@@ -43,6 +45,32 @@ impl CrudService for ItemsService {
     type Entity = item::Entity;
 }
 
+mod streamed {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+    #[sea_orm(table_name = "sse_probe_items")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: i32,
+        pub published: bool,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+impl WireModelDefaults for streamed::Entity {}
+
+struct StreamedService;
+
+impl CrudService for StreamedService {
+    type Entity = streamed::Entity;
+}
+
 /// A visitor reads published items, and nothing else.
 #[nest_rs_core::injectable]
 #[derive(Default)]
@@ -56,6 +84,8 @@ impl AbilityFactory for PublishedItems {
     fn define_visitor(&self, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, item::Entity)
             .when(|p| p.eq(item::Column::Published, true));
+        ab.can(Action::Read, streamed::Entity)
+            .when(|p| p.eq(streamed::Column::Published, true));
     }
 }
 
@@ -94,6 +124,21 @@ impl ItemsController {
         Response::builder()
             .content_type(HeaderValue::from_static("text/plain"))
             .body(Body::from_stream(listed))
+    }
+
+    /// Streams how many rows the caller may read, counted once the stream is
+    /// polled: an `#[sse]` route takes no mask, so its stream reads under
+    /// none.
+    #[sse("/events")]
+    #[public]
+    async fn events(&self) -> SseStream {
+        SseStream::new(stream::once(async {
+            let line = match StreamedService.list().await {
+                Ok(rows) => format!("rows:{}", rows.len()),
+                Err(_) => String::from("failed"),
+            };
+            SseEvent::message(line)
+        }))
     }
 }
 
@@ -135,6 +180,39 @@ async fn a_streaming_body_reads_on_the_pool_after_the_commit_under_the_callers_a
     assert_eq!(
         listed, "1,3",
         "the body sees the committed write and only the rows the caller may read",
+    );
+}
+
+/// The visitor may read the published row, through a route a mask shapes; a
+/// stream no mask shapes is handed no ability, so the read finds nothing
+/// rather than rows nothing would filter.
+#[tokio::test]
+async fn an_sse_streams_repo_read_fails_closed() {
+    let conn = crate::harness::connect().await;
+    crate::harness::setup_shared_table(
+        &conn,
+        STREAMED,
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {STREAMED} (id INT PRIMARY KEY, published BOOLEAN NOT NULL);
+             INSERT INTO {STREAMED} (id, published) VALUES (1, true), (2, false)
+                 ON CONFLICT DO NOTHING;"
+        ),
+    )
+    .await;
+    let app = TestApp::builder()
+        .module::<AppModule>()
+        .use_guards_global([guard::<ItemsGuard>()])
+        .build()
+        .await
+        .expect("the app boots against live Postgres");
+
+    let resp = app.http().get("/items/events").send().await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("the body");
+
+    assert!(
+        body.contains("data: rows:0"),
+        "the stream reads no row, the published one included: {body:?}",
     );
 }
 

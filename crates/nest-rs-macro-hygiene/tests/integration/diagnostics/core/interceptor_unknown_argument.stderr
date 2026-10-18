@@ -1,0 +1,11 @@
+error: unknown #[interceptor] argument `order`; expected `stage`
+  --> tests/integration/diagnostics/core/interceptor_unknown_argument.rs:11:15
+   |
+11 | #[interceptor(order = 100)]
+   |               ^^^^^
+
+error: unknown #[interceptor] argument `stag`; expected `stage`
+  --> tests/integration/diagnostics/core/interceptor_unknown_argument.rs:15:15
+   |
+15 | #[interceptor(stag = unit, stage = handler)]
+   |               ^^^^

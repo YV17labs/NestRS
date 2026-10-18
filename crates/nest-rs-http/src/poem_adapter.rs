@@ -28,6 +28,7 @@ use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::{
     FormError, HttpError, JsonError, MultipartError, PathParameterError, Result, RouteError,
 };
+use crate::fallback::NotAllowed;
 use crate::matched::MatchedRoute;
 use crate::poem_bridge::{
     body_to_poem, error_from_poem, error_to_poem, from_poem, note_route, request_from_poem,
@@ -48,22 +49,38 @@ type PoemEndpoint = poem::endpoint::BoxEndpoint<'static, poem::Response>;
 
 impl PoemAdapter {
     /// The route table, compiled into poem's router, answering nestrs's
-    /// requests: a request no address claims answers `404` as an `Err`, which
-    /// the bands under
-    /// [`ERROR_RESOLVE`](crate::interceptor::priority::ERROR_RESOLVE) still see.
-    pub(crate) fn router(table: Vec<Address>) -> std::result::Result<BoxEndpoint, RouteError> {
+    /// requests: a path no address claims, and a method an address does not
+    /// serve, reach `unrouted` — the fallback site answering `404` and `405` —
+    /// with the request whole.
+    pub(crate) fn router(
+        table: Vec<Address>,
+        unrouted: BoxEndpoint,
+    ) -> std::result::Result<BoxEndpoint, RouteError> {
         let mut route = poem::Route::new();
+        // A root catch-all of the table's own answers every unclaimed path.
+        let claims_everything = table
+            .iter()
+            .any(|address| address.template.is_root_catch_all());
+        let mut root = None;
         for address in table {
             let pattern = poem_pattern(address.template.as_str());
             let template = address.template.as_str().to_owned();
             let owner = address.owner.to_string();
-            route = route
-                .try_at(pattern, Matched::new(address))
-                .map_err(|refused| RouteError::Router {
-                    template,
-                    owner,
-                    reason: refused.to_string(),
-                })?;
+            let matched = Arc::new(Matched::new(address, unrouted.clone()));
+            if template == "/" {
+                root = Some(Arc::clone(&matched));
+            }
+            route =
+                route
+                    .try_at(pattern, Shared(matched))
+                    .map_err(|refused| RouteError::Router {
+                        template,
+                        owner,
+                        reason: refused.to_string(),
+                    })?;
+        }
+        if !claims_everything {
+            route = route.at(UNROUTED, Unmatched { unrouted, root });
         }
         Ok(BoxEndpoint::new(Router(route)))
     }
@@ -275,6 +292,47 @@ impl PoemLeaf {
     }
 }
 
+/// The catch-all poem matches below every other route: what no address claims.
+const UNROUTED: &str = "/*__nestrs_unrouted";
+
+/// What poem's catch-all reaches: the request, whole, for the fallback site.
+///
+/// poem matches a root catch-all before the root's own route when nothing of
+/// the path is left, so `/` is handed back to the table's root address.
+struct Unmatched {
+    unrouted: BoxEndpoint,
+    root: Option<Arc<Matched>>,
+}
+
+impl poem::Endpoint for Unmatched {
+    type Output = poem::Response;
+
+    async fn call(&self, req: poem::Request) -> poem::Result<poem::Response> {
+        if let Some(root) = &self.root
+            && req.uri().path() == "/"
+        {
+            return poem::Endpoint::call(root.as_ref(), req).await;
+        }
+        let resp = self
+            .unrouted
+            .call(request_from_poem(req))
+            .await
+            .map_err(error_to_poem)?;
+        Ok(response_to_poem(resp))
+    }
+}
+
+/// One address, registered on poem's table and kept for [`Unmatched`].
+struct Shared(Arc<Matched>);
+
+impl poem::Endpoint for Shared {
+    type Output = poem::Response;
+
+    async fn call(&self, req: poem::Request) -> poem::Result<poem::Response> {
+        poem::Endpoint::call(self.0.as_ref(), req).await
+    }
+}
+
 /// poem's router answering nestrs's requests.
 struct Router(poem::Route);
 
@@ -305,10 +363,12 @@ struct Matched {
     template: Arc<str>,
     names: Box<[Arc<str>]>,
     answers: Answers,
+    /// What answers a method the address does not serve.
+    unrouted: BoxEndpoint,
 }
 
 impl Matched {
-    fn new(address: Address) -> Self {
+    fn new(address: Address, unrouted: BoxEndpoint) -> Self {
         let names = address
             .template
             .parameters()
@@ -323,6 +383,7 @@ impl Matched {
             template: Arc::from(address.template.as_str()),
             names,
             answers,
+            unrouted,
         }
     }
 
@@ -363,7 +424,14 @@ impl poem::Endpoint for Matched {
                     req.extensions_mut().insert(HeadAsGet);
                     (leaf, true)
                 }
-                Chosen::NotAllowed => return Ok(response_to_poem(methods.not_allowed())),
+                Chosen::NotAllowed => {
+                    let mut request = request_from_poem(req);
+                    request
+                        .extensions_mut()
+                        .insert(NotAllowed(methods.allow().clone()));
+                    let resp = self.unrouted.call(request).await.map_err(error_to_poem)?;
+                    return Ok(response_to_poem(resp));
+                }
             },
         };
         match leaf {
@@ -568,14 +636,29 @@ mod tests {
                 req.path_param("rest").unwrap_or("-"),
             )))
         });
-        let router = PoemAdapter::router(vec![Address {
-            template: crate::RouteTemplate::parse("/orgs/@{org}/files/{*rest}").unwrap(),
-            owner: Arc::from("FilesController"),
-            dispatch: Dispatch::Methods(vec![(
-                Method::GET,
-                Leaf::Endpoint(BoxEndpoint::new(echo)),
-            )]),
-        }])
+        let unrouted = BoxEndpoint::new(crate::endpoint_fn(|req: Request| async move {
+            let allowed = req
+                .extensions()
+                .get::<NotAllowed>()
+                .map(|allow| allow.0.clone());
+            Ok(Response::builder()
+                .status(StatusCode::IM_A_TEAPOT)
+                .body(match allowed {
+                    Some(allow) => format!("unrouted {} allow {allow:?}", req.uri().path()),
+                    None => format!("unrouted {}", req.uri().path()),
+                }))
+        }));
+        let router = PoemAdapter::router(
+            vec![Address {
+                template: crate::RouteTemplate::parse("/orgs/@{org}/files/{*rest}").unwrap(),
+                owner: Arc::from("FilesController"),
+                dispatch: Dispatch::Methods(vec![(
+                    Method::GET,
+                    Leaf::Endpoint(BoxEndpoint::new(echo)),
+                )]),
+            }],
+            unrouted,
+        )
         .unwrap();
 
         let slot = MatchedRoute::default();
@@ -590,15 +673,28 @@ mod tests {
         );
         assert_eq!(slot.route().as_deref(), Some("/orgs/@{org}/files/{*rest}"));
 
-        let missed = router
+        for (path, answered) in [("/elsewhere", "unrouted /elsewhere"), ("/", "unrouted /")] {
+            let missed = router
+                .call(Request::builder().uri(path.parse().unwrap()).finish())
+                .await
+                .expect("the fallback site answers it");
+            assert_eq!(missed.status(), StatusCode::IM_A_TEAPOT);
+            assert_eq!(missed.into_body().into_string().await.unwrap(), answered);
+        }
+
+        let not_allowed = router
             .call(
                 Request::builder()
-                    .uri("/elsewhere".parse().unwrap())
+                    .method(Method::DELETE)
+                    .uri("/orgs/@acme/files/x".parse().unwrap())
                     .finish(),
             )
             .await
-            .unwrap_err();
-        assert_eq!(missed.status(), StatusCode::NOT_FOUND);
+            .expect("the fallback site answers it");
+        assert_eq!(
+            not_allowed.into_body().into_string().await.unwrap(),
+            r#"unrouted /orgs/@acme/files/x allow "GET, HEAD""#
+        );
     }
 
     #[test]

@@ -53,3 +53,17 @@ Reopened when the stage that stamps the header can read the authenticated
 caller, so a deployment could give its timings to its operators alone, or when
 an in-band refusal can mark the HTTP request it answers inside, so `/graphql`
 and `/mcp` refusals go out untimed too.
+
+**2026-10-18 — reopened and closed: an in-band refusal marks its request.**
+`ServerTiming` is now an `#[interceptor(stage = unit)]` around every HTTP
+unit — a route, a self-mount's request, the fallback — and attaches a
+`RefusalMark` the request carries; a guard stage of any unit inside it that
+refuses marks it, so a `/graphql` operation refused `UNAUTHENTICATED`,
+`FORBIDDEN` or `RATE_LIMITED` inside a `200`, and a `/mcp` tool or prompt call
+its guards refused, go out untimed whatever the profile. An event stream
+(`text/event-stream`) goes untimed too: its head leaves before the work it
+streams, so on `/mcp` a total could time an operation refused after the head
+left, and on any stream it measures nothing. The decision at register stands:
+switched off, nothing registers and no unit runs a stage for it. Still open:
+the stage reading the authenticated caller, so a deployment could give its
+timings to its operators alone.

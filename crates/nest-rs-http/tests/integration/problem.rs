@@ -2,13 +2,14 @@
 //! `detail` names where and what kind, never the value, on every path an `Err`
 //! is rendered by.
 
-use nest_rs_core::{App, Layer, Transport, injectable, module};
+use nest_rs_core::{
+    App, Interceptor, Layer, Next, Outcome, Transport, UnitContext, injectable, interceptor, module,
+};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
     Result, Valid, async_trait, controller, input, routes,
 };
-use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
 use nest_rs_testing::TestClient;
 use serde::{Deserialize, Serialize};
 
@@ -198,8 +199,8 @@ struct FailureModule;
 
 type Client = TestClient;
 
-/// An interceptor that only forwards: registering any wrap moves the rendering
-/// of a still-unhandled `Err` to the `ERROR_RESOLVE` band, below every wrap.
+/// An interceptor that only forwards: listed by the app, it puts every route on
+/// the layered pipeline, where its tail renders a handler's `Err`.
 #[injectable]
 #[derive(Default)]
 struct Forwarding;
@@ -208,12 +209,12 @@ impl Layer for Forwarding {}
 
 #[async_trait]
 impl Interceptor for Forwarding {
-    async fn intercept(&self, req: poem::Request, next: Next<'_>) -> poem::Result<poem::Response> {
-        next.run(req).await
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
     }
 }
 
-/// The app every real deployment is: one with a wrap registered.
+/// The app every real deployment is: one with a layer listed.
 async fn wrapped() -> Client {
     let app = App::builder()
         .use_interceptors_global([interceptor::<Forwarding>()])
@@ -234,7 +235,7 @@ async fn wrapped() -> Client {
 }
 
 /// Every place an `Err` is rendered: the fused edge, the outer wrap compression
-/// mounts, and the `ERROR_RESOLVE` band a registered wrap moves it to.
+/// mounts, and the tail of a layered route.
 async fn clients() -> [Client; 3] {
     [
         crate::boot::<DecodeModule>().await,

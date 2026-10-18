@@ -368,7 +368,7 @@ pub struct OrgsModule;
 pub struct OrgsHttpModule;
 ```
 
-The HTTP transport + the interceptor running each request's unit of work
+The HTTP transport and the unit of work each request runs in
 activate at the app root with `HttpModule::for_root(...)`,
 `SeaOrmModule::for_root(...)` and `SeaOrmDatabaseModule`.
 Importing only `OrgsModule` (no HTTP module) gives a worker the same

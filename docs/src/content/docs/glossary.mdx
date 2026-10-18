@@ -53,17 +53,14 @@ deep on each.
 - **[Pipe](/fundamentals/pipes/)** — a stateless edge transform that
   parses and validates a single input, never a DI provider; bound to a
   handler argument through `Valid<E>` or `Piped<P, E>`.
-- **[Interceptor](/fundamentals/interceptors/)** — wraps the handler
-  call from the outside; the seam that installs the ambient executor,
-  records a span, or appends a `Server-Timing` entry.
-- **[Filter](/fundamentals/exception-filters/#route-bound-filters-via-use_filters)** —
-  error-path mapper from `nest-rs-filters`; sees any `poem::Error` the
-  inner chain raises. Bound with `#[use_filters(...)]`. Transparent on
-  the success path.
-- **[Exception filter](/fundamentals/exception-filters/#typed-catches-via-exceptionfilter)** —
-  typed catch via downcast inside `ExceptionFiltersEndpoint`; bound with
-  `#[use_exception_filters(...)]`. Only fires when the error matches
-  `Self::Exception`.
+- **[Interceptor](/fundamentals/interceptors/)** — wraps a unit from the
+  outside, after its guards; one declared `#[interceptor(stage = unit)]` runs
+  around them, the seam that appends a `Server-Timing` entry.
+- **[Exception filter](/fundamentals/exception-filters/#exception-filters)** —
+  answers a failure whose source chain carries its `Exception` type, or every
+  failure with `dyn Error + Send + Sync`; bound with
+  `#[use_exception_filters(...)]`, the method's tried first. The unit stays
+  failed whatever it answers.
 - **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
   macro emits when a route declares `#[authorize(A, S)]` or takes that type
   as a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside

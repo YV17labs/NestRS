@@ -233,27 +233,25 @@ fn reason_phrase(status: StatusCode) -> &'static str {
 /// single RFC-9457 `application/problem+json` envelope.
 ///
 /// Only a `>= 400` response with a `text/plain` or empty body is rebuilt, keeping
-/// its headers. A `4xx` body becomes `detail`, said without any value it quotes
-/// ([`DecodeError::redact`]); a `5xx` body is dropped so a driver or panic
-/// message never reaches the wire.
+/// its headers. Its text becomes `detail` only on a `4xx` the framework wrote
+/// itself, its own sentence with any decode failure said without its value
+/// ([`DecodeError::redact`]); any other text — a library's, a layer's, a
+/// handler's — may quote what the client sent, and answers its status's
+/// problem alone, as a `5xx` always does.
 pub async fn normalize_error_response(resp: crate::Response) -> crate::Response {
     let status = resp.status();
     if !(status.is_client_error() || status.is_server_error()) {
-        return resp;
-    }
-    // A filter-mapped error is a deliberate wire contract, never rewritten.
-    if resp.extensions().get::<crate::MappedError>().is_some() {
         return resp;
     }
     if !is_raw_text(resp.headers()) {
         return resp;
     }
 
+    let said = resp.extensions().get::<Said>().is_some();
     let (parts, body) = resp.into_parts();
     let mut problem = ProblemDetails::from_status(status);
-    // A body rendered from an `Err` has been through `render_error`; one a
-    // handler or a layer wrote as text is read by serde's wording alone.
     if status.is_client_error()
+        && said
         && let Ok(bytes) = body.into_bytes().await
         && let Ok(text) = std::str::from_utf8(&bytes)
         && !text.trim().is_empty()
@@ -261,6 +259,20 @@ pub async fn normalize_error_response(resp: crate::Response) -> crate::Response 
         problem = problem.with_detail(DecodeError::redact(text.trim(), None).into_owned());
     }
     replacing(problem, &parts.headers)
+}
+
+/// Marks a raw-text error body the framework wrote — its own sentence, already
+/// said without the values it quoted — as the one text a problem's `detail`
+/// may carry.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Said;
+
+/// `response` with its raw-text body marked as a sentence the framework owns:
+/// one a sibling crate checked quotes nothing the request carried, which the
+/// normalizer then keeps as the problem's `detail`.
+pub fn framework_sentence(mut response: crate::Response) -> crate::Response {
+    response.extensions_mut().insert(Said);
+    response
 }
 
 /// `problem` as the answer, keeping the headers of the response it replaces.
@@ -348,24 +360,17 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
         }
         resp.set_body(body);
     }
-    match redacted {
+    let mut resp = match redacted {
         Some(said) if is_raw_text(resp.headers()) => {
             let (parts, _) = resp.into_parts();
             Response::from_parts(parts, poem::Body::from_string(said))
         }
         _ => resp,
+    };
+    if is_raw_text(resp.headers()) {
+        resp.extensions_mut().insert(Said);
     }
-}
-
-/// The [`ERROR_RESOLVE`](crate::interceptor::priority::ERROR_RESOLVE) band: the
-/// route tree, with a still-unhandled `Err` rendered as the edge answers it, so
-/// every band above observes a response.
-pub(crate) struct ResolvedErrors<E>(pub(crate) E);
-
-impl<E: crate::Endpoint> crate::Endpoint for ResolvedErrors<E> {
-    async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
-        Ok(self.0.call(req).await.unwrap_or_else(HttpError::answer))
-    }
+    resp
 }
 
 /// The outermost layer when something wraps the edge: every answer, an `Err`
@@ -641,8 +646,10 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_lifts_a_raw_plain_text_transport_error() {
-        let raw = poem::Error::from_string(nest_rs_core::UUID_V7_REQUIRED, StatusCode::BAD_REQUEST)
-            .into_response();
+        let raw = render_error(poem::Error::from_string(
+            nest_rs_core::UUID_V7_REQUIRED,
+            StatusCode::BAD_REQUEST,
+        ));
         let resp = normalize_error_response(crossed(raw)).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -684,16 +691,21 @@ mod tests {
         );
     }
 
+    /// A layer or a library writing what the client sent into a `4xx` text:
+    /// the problem holds no part of it.
     #[tokio::test]
-    async fn normalize_leaves_a_filter_mapped_response_alone() {
-        let mut mapped = Response::builder()
-            .status(StatusCode::IM_A_TEAPOT)
-            .body("edge-mapped".as_bytes().to_vec());
-        mapped.extensions_mut().insert(crate::MappedError);
-        let resp = normalize_error_response(crossed(mapped)).await;
-        assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+    async fn normalize_keeps_no_text_the_framework_did_not_write() {
+        let echoed = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body("unknown session x-quoted-marker".as_bytes().to_vec());
+        let resp = normalize_error_response(crossed(echoed)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let bytes = resp.into_body().into_bytes().await.expect("body");
-        assert_eq!(&bytes[..], b"edge-mapped");
+        let text = std::str::from_utf8(&bytes).expect("utf8");
+        assert!(!text.contains("x-quoted-marker"), "{text}");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
+        assert_eq!(v["title"], "Bad Request");
+        assert!(v.get("detail").is_none(), "{v}");
     }
 
     #[tokio::test]

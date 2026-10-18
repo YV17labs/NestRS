@@ -1,61 +1,62 @@
-//! [`ResourceChallenge`] — stamps the OAuth challenge onto every refusal the
-//! process emits: the RFC 9728 discovery pointer on a `401`, and the RFC 6750
-//! `insufficient_scope` challenge on a `403` whose token was merely too narrow.
+//! [`ResourceChallenge`] — stamps the OAuth challenge onto every refusal an
+//! HTTP unit answers: the RFC 9728 discovery pointer on a `401`, and the RFC
+//! 6750 `insufficient_scope` challenge on a `403` whose token was merely too
+//! narrow.
 //!
-//! It sits at the transport edge, where every `401` converges — a guard denial,
-//! the MCP fallback, rmcp, a handler. GraphQL answers `200` + `UNAUTHENTICATED`,
-//! so a GraphQL client discovers through the well-known document instead.
+//! It runs at the unit stage of every HTTP unit, where each `401` converges — a
+//! guard's denial, the MCP fallback, rmcp, a handler, what the router answers.
+//! GraphQL answers `200` + `UNAUTHENTICATED`, so a GraphQL client discovers
+//! through the well-known document instead.
 
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use nest_rs_core::Layer;
+use nest_rs_core::operation_log::Unit;
+use nest_rs_core::{
+    Edge, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor,
+};
 use nest_rs_guards::RequiredScopes;
 use nest_rs_http::challenge::{BEARER, NoBearerChallenge};
-use nest_rs_http::interceptor;
-use nest_rs_interceptors::{Interceptor, Next};
-use poem::http::{HeaderValue, StatusCode, header};
-use poem::{Request, Response, Result};
+use nest_rs_http::{HeaderValue, HttpView, Response, StatusCode, header};
 
 use crate::metadata::ProtectedResourceMetadata;
 
 /// Infra interceptor brought by
-/// [`OAuthResourceModule`](crate::OAuthResourceModule). Auto-mounted at
-/// the transport edge; never listed as a provider.
-#[interceptor]
+/// [`OAuthResourceModule`](crate::OAuthResourceModule), at the unit stage of
+/// every HTTP unit, around its guards.
+#[interceptor(stage = unit)]
 pub(crate) struct ResourceChallenge {
     #[inject]
     metadata: Arc<ProtectedResourceMetadata>,
 }
 
-impl Layer for ResourceChallenge {}
+impl Layer for ResourceChallenge {
+    fn serves(&self, unit: Unit) -> bool {
+        unit.edge() == Some(Edge::Http)
+    }
+}
 
 #[async_trait]
 impl Interceptor for ResourceChallenge {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        match next.run(req).await {
-            Ok(res) => Ok(self.stamp(res)),
-            // A `401` still an `Err` here renders to the same bytes, so it
-            // carries the same challenge.
-            Err(err) => {
-                let res = self.stamp(err.into_response());
-                Err(poem::Error::from_response(res))
-            }
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        if let Some(response) = HttpView::of(cx)?.response_mut() {
+            self.stamp(response);
         }
+        outcome
     }
 }
 
 impl ResourceChallenge {
-    fn stamp(&self, mut res: Response) -> Response {
+    fn stamp(&self, res: &mut Response) {
         if res.status() == StatusCode::FORBIDDEN {
             return self.stamp_insufficient_scope(res);
         }
         if res.status() != StatusCode::UNAUTHORIZED {
-            return res;
+            return;
         }
         if res.extensions().get::<NoBearerChallenge>().is_some() {
-            return res;
+            return;
         }
         // Never touch a non-`Bearer` scheme or a challenge already carrying the
         // pointer; otherwise merge the pointer in, keeping RFC 6750 §3.1's `error`.
@@ -65,14 +66,14 @@ impl ResourceChallenge {
             None => Cow::Borrowed(self.metadata.challenge()),
             Some(existing) => {
                 let Ok(existing) = existing.to_str() else {
-                    return res;
+                    return;
                 };
                 let existing = existing.trim();
                 let is_bearer = existing
                     .get(..BEARER.len())
                     .is_some_and(|scheme| scheme.eq_ignore_ascii_case(BEARER));
                 if !is_bearer || existing.contains("resource_metadata") {
-                    return res;
+                    return;
                 }
                 let params = existing[BEARER.len()..].trim_start().trim_end_matches(',');
                 if params.is_empty() {
@@ -96,18 +97,17 @@ impl ResourceChallenge {
                 "protected resource challenge is not a valid header value",
             ),
         }
-        res
     }
 
     /// The `403` half of RFC 6750 §3.1: a token that verified but is too narrow.
     /// Only a response carrying [`RequiredScopes`] qualifies; an ordinary `403`
     /// cannot be fixed by a wider token, so it gets no challenge.
-    fn stamp_insufficient_scope(&self, mut res: Response) -> Response {
+    fn stamp_insufficient_scope(&self, res: &mut Response) {
         let Some(required) = res.extensions().get::<RequiredScopes>() else {
-            return res;
+            return;
         };
         if required.is_empty() {
-            return res;
+            return;
         }
         let required = required.as_slice().to_vec();
 
@@ -144,7 +144,6 @@ impl ResourceChallenge {
                 "insufficient-scope challenge is not a valid header value",
             ),
         }
-        res
     }
 }
 
@@ -156,7 +155,7 @@ mod tests {
         challenge_advertising(res, Vec::new())
     }
 
-    fn challenge_advertising(res: Response, scopes_supported: Vec<String>) -> Option<String> {
+    fn challenge_advertising(mut res: Response, scopes_supported: Vec<String>) -> Option<String> {
         let metadata = ProtectedResourceMetadata::new(
             "https://api.example.com".into(),
             vec!["https://auth.example.com".into()],
@@ -164,12 +163,11 @@ mod tests {
             vec!["header".into()],
             Default::default(),
         );
-        let stamped = ResourceChallenge {
+        ResourceChallenge {
             metadata: Arc::new(metadata),
         }
-        .stamp(res);
-        stamped
-            .headers()
+        .stamp(&mut res);
+        res.headers()
             .get(header::WWW_AUTHENTICATE)
             .map(|v| v.to_str().expect("ascii").to_owned())
     }

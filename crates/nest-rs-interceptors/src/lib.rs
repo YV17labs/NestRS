@@ -1,16 +1,9 @@
 //! # nest-rs-interceptors
 //!
-//! Interceptors — the wrap-handler slot of the Layer System.
-//!
-//! An [`Interceptor`] sees the inputs before the handler runs and the outputs
-//! after. A **global** interceptor wraps the whole routing tree at the transport
-//! edge, so it also observes 404s, guard denials and self-mounted surfaces (a
-//! GraphQL `POST` or WS upgrade is an HTTP request); a **controller / method**
-//! interceptor wraps its handler, inside the guard chain.
-//!
-//! `Interceptor` is a [`Layer`](nest_rs_core::Layer) sub-trait, so global + per-scope
-//! declarations dedup by [`TypeId`](std::any::TypeId) at mount time
-//! (broadest scope wins — one execution, at the broadest scope's site).
+//! The poem-typed interceptor `nest_rs::core::Interceptor` replaced: that one
+//! runs on every edge, through the one pipeline, and `#[use_interceptors]`
+//! and `use_interceptors_global` bind it. Nothing in the framework runs this
+//! one any more; the crate leaves in 7.0.
 //!
 //! ## Defining an interceptor
 //!
@@ -43,34 +36,15 @@
 //! # fn main() {}
 //! ```
 //!
-//! ## Registering globally
-//!
-//! Register with `App::builder().use_interceptors_global([...])`
-//! ([`AppBuilderInterceptorsExt`]); the example on
-//! [`interceptor`](fn@interceptor) runs it.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-mod builder;
 mod ext;
 mod interceptor;
 mod registry;
-mod route;
 
-pub use builder::AppBuilderInterceptorsExt;
 pub use ext::InterceptorExt;
 pub use interceptor::{Interceptor, InterceptorChain, InterceptorEndpoint, Next};
-pub use registry::{InterceptorSpec, InterceptorSpecs, interceptor};
+pub use registry::{InterceptorSpec, interceptor};
 // Re-exported so an `Interceptor` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;
-
-#[doc(hidden)]
-pub mod __private {
-    //! Called by this framework's macro expansions and sibling crates. Not API:
-    //! may change in any release.
-
-    pub use crate::route::{
-        ExceptionFilterDeclaration, FilterDeclaration, InterceptorDeclaration, RouteEndpoint,
-        wrap_route_response_layers,
-    };
-}

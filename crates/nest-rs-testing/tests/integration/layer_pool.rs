@@ -1,19 +1,20 @@
 //! Layer-pool invariant: a guard declared at any combination of scopes
-//! executes **exactly once** per request; global interceptors and filters run
-//! at the transport edge, seeing 404s and guard denials; a mapped error keeps
-//! its `MappedError` marker.
+//! executes **exactly once** per request; a global interceptor runs after the
+//! guards, so a denial never reaches it; a unit an exception filter answered
+//! stays failed, so its data rolls back.
 
+use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_filters::{Filter, RequestSnapshot, filter};
+use nest_rs_core::{
+    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, injectable,
+    interceptor, module,
+};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::MappedError;
-use nest_rs_http::StatusCode;
-use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_interceptors::{Interceptor, Next, interceptor};
+use nest_rs_http::{
+    HeaderName, HeaderValue, HttpView, Response, StatusCode, async_trait, controller, routes,
+};
 use nest_rs_testing::TestApp;
-use poem::{Request, Response};
 use tokio::sync::Mutex;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -133,7 +134,7 @@ fn edge_counter() -> usize {
     EDGE_COUNTER.load(Ordering::SeqCst)
 }
 
-/// Counts every request it observes, then forwards.
+/// Counts every unit it runs around, then forwards.
 #[injectable]
 #[derive(Default)]
 struct EdgeObserver;
@@ -142,29 +143,13 @@ impl Layer for EdgeObserver {}
 
 #[async_trait]
 impl Interceptor for EdgeObserver {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> poem::Result<Response> {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
         EDGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-        next.run(req).await
+        next.run(cx).await
     }
 }
 
-/// Maps any error escaping routing to `418` with a fixed body.
-#[injectable]
-#[derive(Default)]
-struct EdgeTeapot;
-
-impl Layer for EdgeTeapot {}
-
-#[async_trait]
-impl Filter for EdgeTeapot {
-    async fn filter(&self, _req: &RequestSnapshot, _error: poem::Error) -> Response {
-        Response::builder()
-            .status(StatusCode::IM_A_TEAPOT)
-            .body("edge-mapped")
-    }
-}
-
-/// Maps a handler error to a *success*.
+/// Answers a handler's error with a *success*.
 #[injectable]
 #[derive(Default)]
 struct MapToOk;
@@ -172,9 +157,36 @@ struct MapToOk;
 impl Layer for MapToOk {}
 
 #[async_trait]
-impl Filter for MapToOk {
-    async fn filter(&self, _req: &RequestSnapshot, _error: poem::Error) -> Response {
-        Response::builder().status(StatusCode::OK).body("recovered")
+impl ExceptionFilter for MapToOk {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        match HttpView::of(cx) {
+            Ok(view) => Caught::Answered(view.respond(Response::builder().body("recovered"))),
+            Err(_) => Caught::Declined,
+        }
+    }
+}
+
+/// Says, at the unit stage, whether the unit failed, whatever it answered.
+#[nest_rs_core::interceptor(stage = unit)]
+#[derive(Default)]
+struct UnitOutcome;
+
+impl Layer for UnitOutcome {}
+
+#[async_trait]
+impl Interceptor for UnitOutcome {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        let said = if outcome.is_ok() { "ok" } else { "failed" };
+        if let Some(response) = HttpView::of(cx)?.response_mut() {
+            response.headers_mut().insert(
+                HeaderName::from_static("x-unit"),
+                HeaderValue::from_static(said),
+            );
+        }
+        outcome
     }
 }
 
@@ -208,7 +220,7 @@ impl EdgeController {
     }
 
     #[get("/boom")]
-    #[use_filters(MapToOk)]
+    #[use_exception_filters(MapToOk)]
     async fn boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -216,32 +228,11 @@ impl EdgeController {
     }
 }
 
-#[module(providers = [EdgeObserver, EdgeTeapot, MapToOk, DenyAll, EdgeController])]
+#[module(providers = [EdgeObserver, MapToOk, UnitOutcome, DenyAll, EdgeController])]
 struct EdgeModule;
 
 #[tokio::test]
-async fn global_interceptor_observes_an_unmatched_path() {
-    let _gate = GATE.lock().await;
-    reset_edge_counter();
-
-    let app = TestApp::builder()
-        .module::<EdgeModule>()
-        .use_interceptors_global([interceptor::<EdgeObserver>()])
-        .build()
-        .await
-        .expect("boots");
-
-    let resp = app.http().get("/no-such-route").send().await;
-    resp.assert_status(StatusCode::NOT_FOUND);
-    assert_eq!(
-        edge_counter(),
-        1,
-        "a global interceptor wraps routing itself, so a 404 is still observed",
-    );
-}
-
-#[tokio::test]
-async fn global_interceptor_observes_a_guard_denial() {
+async fn a_global_interceptor_never_sees_a_guard_denial() {
     let _gate = GATE.lock().await;
     reset_edge_counter();
 
@@ -256,38 +247,19 @@ async fn global_interceptor_observes_a_guard_denial() {
     resp.assert_status(StatusCode::FORBIDDEN);
     assert_eq!(
         edge_counter(),
-        1,
-        "a global interceptor runs outside the guard pool and observes the denial response",
+        0,
+        "the guards answer before the handler stage, which a global interceptor runs at",
     );
 }
 
 #[tokio::test]
-async fn global_filter_maps_an_unmatched_path() {
-    let _gate = GATE.lock().await;
-
-    let app = TestApp::builder()
-        .module::<EdgeModule>()
-        .use_filters_global([filter::<EdgeTeapot>()])
-        .build()
-        .await
-        .expect("boots");
-
-    let resp = app.http().get("/no-such-route").send().await;
-    resp.assert_status(StatusCode::IM_A_TEAPOT);
-    resp.assert_text("edge-mapped").await;
-}
-
-#[tokio::test]
-async fn a_mapped_error_response_carries_the_rollback_marker() {
+async fn a_unit_a_filter_answered_with_a_success_stays_failed() {
     let _gate = GATE.lock().await;
 
     let app = TestApp::for_module::<EdgeModule>().await.expect("boots");
 
-    // The data layer reads `MappedError` to roll the ambient transaction back.
     let resp = app.http().get("/edge/boom").send().await;
     resp.assert_status_is_ok();
-    assert!(
-        resp.0.extensions().get::<MappedError>().is_some(),
-        "a response produced by mapping a handler error must be tagged MappedError",
-    );
+    resp.assert_header("x-unit", "failed");
+    resp.assert_text("recovered").await;
 }

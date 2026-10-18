@@ -114,10 +114,6 @@ nest-rs-core = { path = "../nest-rs-core" }
 nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-guards = { path = "../nest-rs-guards" }
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
-# The class gate's order is proved against a route-scoped filter, which sees
-# every error its route returns.
-nest-rs-filters = { path = "../nest-rs-filters" }
 # The `ws` mirror suites declare a real `#[gateway]`, whose expansion names
 # `::nest_rs_ws::` paths at the call site.
 nest-rs-ws = { path = "../nest-rs-ws" }

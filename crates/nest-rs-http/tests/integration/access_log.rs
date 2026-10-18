@@ -145,3 +145,153 @@ async fn a_method_a_route_registers_is_named_as_registered() {
         );
     }
 }
+
+/// A unit of work whose every commit its database refuses.
+struct Refusing;
+
+struct RefusedUnit;
+
+struct NoExecutor;
+
+impl nest_rs_database::Executor for NoExecutor {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl nest_rs_database::OpenUnit for RefusedUnit {
+    fn executor(&self) -> std::sync::Arc<dyn nest_rs_database::Executor> {
+        std::sync::Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        _ok: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = nest_rs_database::Settlement> + Send>>
+    {
+        Box::pin(std::future::ready(
+            nest_rs_database::Settlement::Unhonoured(nest_rs_database::Unhonoured::deterministic(
+                "refused by the test",
+            )),
+        ))
+    }
+}
+
+impl nest_rs_database::UnitOfWork for Refusing {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(RefusedUnit))
+    }
+
+    fn settle_net(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(16)
+    }
+}
+
+#[controller(path = "/writes")]
+struct WritesController;
+
+#[routes]
+impl WritesController {
+    #[post("/")]
+    async fn write(&self) -> &'static str {
+        "written"
+    }
+
+    #[post("/slow")]
+    async fn slow(&self) -> &'static str {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        "written"
+    }
+}
+
+/// The writes, over a binding whose commit is refused.
+struct RefusedCommits;
+
+impl nest_rs_core::Discoverable for RefusedCommits {
+    fn register(builder: nest_rs_core::ContainerBuilder) -> nest_rs_core::ContainerBuilder {
+        builder.provide_dyn::<dyn nest_rs_database::UnitOfWork>(std::sync::Arc::new(Refusing))
+    }
+}
+
+#[module(providers = [WritesController, RefusedCommits])]
+struct RefusedCommitsModule;
+
+#[module(providers = [WritesController])]
+struct WritesModule;
+
+/// The one line filed, and the bytes the client read.
+async fn line_and_body(
+    logs: &LogCapture,
+    resp: nest_rs_testing::TestResponse,
+) -> (nest_rs_testing::CapturedEvent, usize) {
+    let body = resp.0.into_body().into_bytes().await.expect("the body");
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_http::unit::REQUEST.name(),
+    );
+    (line, body.len())
+}
+
+/// Every answer the framework renders itself — a path nothing serves, a method
+/// its path does not take, a unit its database refused to commit, a handler
+/// cut at the request's deadline — is a body the client read, and the line
+/// counts it.
+#[tokio::test]
+async fn an_answer_the_framework_rendered_counts_the_bytes_it_wrote() {
+    for (path, method, status) in [
+        ("/nowhere", nest_rs_http::Method::GET, 404_u16),
+        ("/writes", nest_rs_http::Method::GET, 405),
+    ] {
+        let logs = LogCapture::install();
+        let client = boot::<WritesModule>().await;
+        let resp = client.request(method, path).send().await;
+        resp.assert_status(nest_rs_http::StatusCode::from_u16(status).expect("a status"));
+        let (line, written) = line_and_body(&logs, resp).await;
+        assert!(written > 0, "{path}: a problem document was written");
+        assert_eq!(
+            line.field("bytes"),
+            Some(written.to_string()),
+            "{path}: {:?}",
+            line.fields
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_unit_its_database_refused_counts_the_problem_it_answered() {
+    let logs = LogCapture::install();
+    let client = boot::<RefusedCommitsModule>().await;
+    let resp = client.post("/writes").send().await;
+    resp.assert_status(nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR);
+    let (line, written) = line_and_body(&logs, resp).await;
+    assert!(written > 0, "a problem document was written");
+    assert_eq!(
+        line.field("bytes"),
+        Some(written.to_string()),
+        "{:?}",
+        line.fields
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_handler_cut_at_its_deadline_counts_the_problem_it_answered() {
+    let logs = LogCapture::install();
+    let client = crate::boot_on::<WritesModule>(nest_rs_http::HttpConfig {
+        request_timeout: Some(std::time::Duration::from_secs(1)),
+        ..nest_rs_http::HttpConfig::default()
+    })
+    .await;
+    let resp = client.post("/writes/slow").send().await;
+    resp.assert_status(nest_rs_http::StatusCode::SERVICE_UNAVAILABLE);
+    let (line, written) = line_and_body(&logs, resp).await;
+    assert!(written > 0, "a problem document was written");
+    assert_eq!(
+        line.field("bytes"),
+        Some(written.to_string()),
+        "{:?}",
+        line.fields
+    );
+}

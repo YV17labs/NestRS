@@ -83,6 +83,15 @@ impl ClientOrigin {
         )
     }
 
+    /// The client's address, when the evidence names one: the direct peer, or
+    /// the hop a trusted proxy forwarded — never the proxy's own.
+    pub(crate) fn client(self) -> Option<IpAddr> {
+        match self {
+            Self::Peer(ip) | Self::Forwarded(ip) => Some(ip),
+            Self::TrustedProxy(_) | Self::Unknown => None,
+        }
+    }
+
     /// Whether the direct peer is declared infrastructure — the one fact that
     /// decides whether *any* header this caller sent may be believed, the
     /// `X-Request-Id` gate included.

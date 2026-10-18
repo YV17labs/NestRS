@@ -24,6 +24,22 @@ use crate::{Guard, GuardPhase};
 /// the chain is no misorder, since every guard between the two runs already
 /// read what the first one attached.
 pub fn validate_guard_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> Result<(), String> {
+    validate(label, chain, |_| true)
+}
+
+/// [`validate_guard_chain`] for a route whose method scope declares guards,
+/// once its controller's chain was validated ([`boot_validate_guards`]): a
+/// consumer the controller's check already said has no producer is not said
+/// again, so only the method's own guards warn.
+pub fn validate_route_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> Result<(), String> {
+    validate(label, chain, |entry| entry.source == LayerSite::Method)
+}
+
+fn validate(
+    label: &str,
+    chain: &[ResolvedLayer<dyn Guard>],
+    warns: impl Fn(&ResolvedLayer<dyn Guard>) -> bool,
+) -> Result<(), String> {
     let first_runs: Vec<&ResolvedLayer<dyn Guard>> = chain
         .iter()
         .enumerate()
@@ -85,6 +101,7 @@ pub fn validate_guard_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> 
                     produced.join(", "),
                 ));
             }
+            None if !warns(entry) => {}
             None => {
                 tracing::warn!(
                     target: nest_rs_core::target::LAYERS,

@@ -1,13 +1,13 @@
 //! The documented import, booted, and the header a caller reads back: the
-//! interceptor is mounted by the import, so only a boot can see it.
+//! interceptor is registered by the import, so only a boot can see it.
 
-use nest_rs_core::{Discovery, Layer, injectable, module};
+use nest_rs_core::__private::InterceptorRegistration;
+use nest_rs_core::{
+    Discovery, Interceptor, Layer, Next, Outcome, UnitContext, injectable, interceptor, module,
+};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::__private::HttpEndpointWrap;
 use nest_rs_http::StatusCode;
-use nest_rs_http::poem::{Request, Response};
 use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_server_timing::ServerTimingModule;
 use nest_rs_testing::TestApp;
 
@@ -171,8 +171,8 @@ async fn a_guard_denial_carries_no_timing() {
     );
 }
 
-/// A global-pool interceptor sits outside the band that renders a handler's
-/// `Err`, so its own refusal reaches the header's wrap still an `Err`.
+/// A global interceptor refusing with a failure of its own, which the edge
+/// answers inside the unit stage the header reads.
 #[injectable]
 #[derive(Default)]
 struct AdmitInterceptor;
@@ -181,18 +181,15 @@ impl Layer for AdmitInterceptor {}
 
 #[async_trait]
 impl Interceptor for AdmitInterceptor {
-    async fn intercept(
-        &self,
-        req: Request,
-        next: Next<'_>,
-    ) -> nest_rs_http::poem::Result<Response> {
-        if req.headers().contains_key(ADMIT) {
-            next.run(req).await
-        } else {
-            Err(nest_rs_http::poem::Error::from_status(
-                StatusCode::UNAUTHORIZED,
-            ))
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let admitted = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header(ADMIT)
+            .is_some();
+        if !admitted {
+            return Err(Denial::unauthorized("no").into());
         }
+        next.run(cx).await
     }
 }
 
@@ -215,18 +212,18 @@ async fn a_pool_interceptor_refusal_carries_no_timing() {
     assert_eq!(
         private_timing(&app, false).await,
         None,
-        "an interceptor's `Err` refusal is no oracle",
+        "an interceptor's refusal is no oracle",
     );
 }
 
-/// How many endpoint wraps the bare import attaches, booted in the process's
+/// How many interceptors the bare import registers, booted in the process's
 /// profile.
 async fn bare_wraps() -> usize {
     let app = TestApp::for_module::<BareModule>()
         .await
         .expect("the import boots");
     Discovery::new(app.container())
-        .meta::<HttpEndpointWrap>()
+        .meta::<InterceptorRegistration>()
         .len()
 }
 
@@ -235,11 +232,134 @@ fn a_switched_off_header_mounts_nothing() {
     assert_eq!(
         in_profile("production", &[], bare_wraps),
         0,
-        "off, the import attaches no wrap: a request pays nothing for it",
+        "off, the import registers no interceptor: a request pays nothing for it",
     );
     assert_eq!(
         in_profile("development", &[], bare_wraps),
         1,
-        "on, the import attaches its one wrap",
+        "on, the import registers its one interceptor",
     );
+}
+
+/// Admits every request, and refuses every in-band unit — a GraphQL field, an
+/// MCP operation — a rate.
+#[injectable]
+#[derive(Default)]
+struct OperationLimit;
+
+impl Layer for OperationLimit {}
+
+#[async_trait]
+impl Guard for OperationLimit {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::rate_limited(30, "slow down"))
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for OperationLimit {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for OperationLimit {}
+impl GuardFor<nest_rs_mcp::McpView> for OperationLimit {}
+
+#[nest_rs_graphql::resolver]
+struct LimitedResolver;
+
+#[nest_rs_graphql::operations]
+impl LimitedResolver {
+    #[query]
+    #[public]
+    async fn ping(&self) -> i32 {
+        0
+    }
+}
+
+#[module(
+    imports = [ServerTimingModule, nest_rs_graphql::GraphqlModule::for_root(None)],
+    providers = [OperationLimit, LimitedResolver],
+)]
+struct LimitedGraphqlModule;
+
+/// A refusal answered inside a `200` — a GraphQL field its guards rate
+/// limited — is no oracle either: the request it ran in goes untimed.
+#[tokio::test]
+async fn a_graphql_field_its_guards_refused_leaves_its_request_untimed() {
+    let app = TestApp::builder()
+        .module::<LimitedGraphqlModule>()
+        .use_guards_global([guard::<OperationLimit>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ ping }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let timing = crate::server_timing(&resp);
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"], "RATE_LIMITED",
+        "{body}"
+    );
+    assert_eq!(timing, None, "the refused field marked its request");
+}
+
+#[nest_rs_mcp::mcp(path = "/mcp/limited")]
+#[derive(Clone, Default)]
+struct LimitedTools;
+
+#[nest_rs_mcp::tools]
+impl LimitedTools {
+    /// Answers nothing: its guards refuse it first.
+    #[tool]
+    #[public]
+    async fn ping(&self) -> Result<String, nest_rs_mcp::McpError> {
+        Ok("pong".into())
+    }
+}
+
+#[module(
+    imports = [ServerTimingModule, nest_rs_mcp::McpModule::for_root(None)],
+    providers = [OperationLimit, LimitedTools],
+)]
+struct LimitedMcpModule;
+
+/// The same for an MCP operation its guards refused: a JSON-RPC error inside
+/// a `200`.
+#[tokio::test]
+async fn an_mcp_operation_its_guards_refused_leaves_its_request_untimed() {
+    use nest_rs_testing::mcp::{open_session, post_message, result};
+
+    let app = TestApp::builder()
+        .module::<LimitedMcpModule>()
+        .use_guards_global([guard::<OperationLimit>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let session = open_session(app.http(), "/mcp/limited", None).await;
+    let resp = post_message(
+        app.http(),
+        "/mcp/limited",
+        Some(&session),
+        None,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": { "name": "ping", "arguments": {} },
+        }),
+    )
+    .await;
+    resp.assert_status_is_ok();
+    let timing = crate::server_timing(&resp);
+    let body = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a JSON-RPC answer");
+    assert!(result(&body).get("error").is_some(), "{body}");
+    assert_eq!(timing, None, "the refused operation marked its request");
 }

@@ -711,21 +711,23 @@ struct Caller(&'static str);
 
 impl nest_rs_core::AmbientValue for Caller {}
 
-/// Adds the caller around the upgrade request, as a guard's attachment does.
-#[nest_rs_core::injectable]
+/// Adds the caller around the upgrade request, at its unit stage, as a
+/// guard's attachment does.
+#[nest_rs_core::interceptor(stage = unit)]
 #[derive(Default)]
 struct CallerInterceptor;
 
 impl nest_rs_core::Layer for CallerInterceptor {}
 
-#[nest_rs_http::async_trait]
-impl nest_rs_interceptors::Interceptor for CallerInterceptor {
+#[nest_rs_core::async_trait]
+impl nest_rs_core::Interceptor for CallerInterceptor {
     async fn intercept(
         &self,
-        req: poem::Request,
-        next: nest_rs_interceptors::Next<'_>,
-    ) -> poem::Result<poem::Response> {
-        nest_rs_core::with_ambient(Arc::new(Caller("alice")), next.run(req)).await
+        cx: &mut nest_rs_core::UnitContext<'_>,
+        next: nest_rs_core::Next<'_>,
+    ) -> nest_rs_core::Outcome {
+        cx.attach(Caller("alice"));
+        next.run(cx).await
     }
 }
 
@@ -767,7 +769,6 @@ struct CallerApp;
 async fn an_operation_on_the_socket_reads_what_its_upgrade_carried() {
     let app = TestApp::builder()
         .module::<CallerApp>()
-        .use_interceptors_global([nest_rs_interceptors::interceptor::<CallerInterceptor>()])
         .build_ws()
         .await
         .expect("the schema boots on a real port");

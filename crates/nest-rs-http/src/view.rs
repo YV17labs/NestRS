@@ -1,16 +1,18 @@
 //! [`HttpView`], the HTTP edge's view of the request it dispatches.
 
 use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use nest_rs_core::__private::new_unit_context;
-use nest_rs_core::{Handler, UnitContext, UnitView};
+use nest_rs_core::{Handler, Settled, UnitContext, UnitView};
 use nest_rs_guards::Denial;
 
 use crate::request::Request;
+use crate::response::Response;
 
 /// The HTTP edge's view of one request: what a guard reads through
-/// [`HttpView::of`] — the request, head and body — and the route it matched.
+/// [`HttpView::of`] — the request, head and body — the route it matched, and,
+/// once the unit answered, the response a layer around it reads or rewrites.
 ///
 /// A guard that reads the body sets it back for the handler:
 ///
@@ -39,21 +41,76 @@ use crate::request::Request;
 ///
 /// impl GuardFor<HttpView> for SignedBody {}
 /// ```
+///
+/// An interceptor reads the answer once the rest of the unit ran, or answers
+/// instead of it:
+///
+/// ```
+/// use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait};
+/// use nest_rs_http::{HeaderValue, HttpView, Response, StatusCode};
+///
+/// struct Maintenance;
+///
+/// impl Layer for Maintenance {}
+///
+/// #[async_trait]
+/// impl Interceptor for Maintenance {
+///     async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+///         let http = HttpView::of(cx)?;
+///         if http.request().header("x-maintenance").is_some() {
+///             let closed = Response::builder()
+///                 .status(StatusCode::SERVICE_UNAVAILABLE)
+///                 .finish();
+///             return Ok(http.respond(closed));
+///         }
+///         let outcome = next.run(cx).await;
+///         if let Some(response) = HttpView::of(cx)?.response_mut() {
+///             response
+///                 .headers_mut()
+///                 .insert("x-served-by", HeaderValue::from_static("api"));
+///         }
+///         outcome
+///     }
+/// }
+/// ```
 pub struct HttpView {
     request: Request,
+    /// The template the router matched, kept once the tail took the request.
+    route: Option<Arc<str>>,
+    response: Option<Response>,
 }
 
 impl UnitView for HttpView {}
 
 impl HttpView {
-    /// The view of `request`, as the edge builds it for its guard stage.
+    /// The view of `request`, as the edge builds it for a unit.
     pub(crate) fn new(request: Request) -> Self {
-        Self { request }
+        let route = request.route_template();
+        Self {
+            request,
+            route,
+            response: None,
+        }
     }
 
     /// The request back, once the stage that read it is over.
     pub(crate) fn into_request(self) -> Request {
         self.request
+    }
+
+    /// The request, for the tail that answers it: what the view holds after
+    /// is its head alone, without its extensions.
+    pub(crate) fn take_request(&mut self) -> Request {
+        let empty = Request::builder()
+            .method(self.request.method().clone())
+            .uri(self.request.uri().clone())
+            .finish();
+        std::mem::replace(&mut self.request, empty)
+    }
+
+    /// The response the unit answered, taken by the edge that writes it.
+    pub(crate) fn take_response(&mut self) -> Option<Response> {
+        self.response.take()
     }
 
     /// The HTTP view of `cx`, or an opaque [`Denial::internal`] when an HTTP
@@ -68,7 +125,8 @@ impl HttpView {
         })
     }
 
-    /// The request: its head, and its body until a reader takes it.
+    /// The request: its head, and its body until a reader takes it. Once the
+    /// handler took the request, its method and target alone remain.
     pub fn request(&self) -> &Request {
         &self.request
     }
@@ -81,7 +139,25 @@ impl HttpView {
     /// The template the router matched, as registered (`/users/{id}`), or
     /// `None` on a request no route matched.
     pub fn route(&self) -> Option<&str> {
-        self.request.route()
+        self.route.as_deref()
+    }
+
+    /// The response the unit answered, once the rest of it ran or a layer
+    /// answered through [`respond`](Self::respond).
+    pub fn response(&self) -> Option<&Response> {
+        self.response.as_ref()
+    }
+
+    /// The response the unit answered, to rewrite a header or its body.
+    pub fn response_mut(&mut self) -> Option<&mut Response> {
+        self.response.as_mut()
+    }
+
+    /// Answer the unit with `response`, in place of whatever it held: the proof
+    /// an interceptor that answers instead of running the rest returns.
+    pub fn respond(&mut self, response: Response) -> Settled {
+        self.response = Some(response);
+        nest_rs_core::__private::settled()
     }
 }
 

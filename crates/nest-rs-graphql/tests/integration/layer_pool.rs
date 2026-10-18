@@ -1,17 +1,16 @@
 //! The layer-pool contract on the `/graphql` self-mount: a global guard runs
-//! **exactly once** per request, and the guards a module declares for the
-//! endpoint **add to** the global pool, a guard in both running once.
+//! **exactly once** per request, the guards a module declares for the
+//! endpoint **add to** the global pool, a guard in both running once, and a
+//! unit-stage interceptor runs around the request.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{EndpointGuards, async_trait};
-use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
-use poem::{Request, Response};
 use tokio::sync::Mutex;
 
 static GUARD_RUNS: AtomicUsize = AtomicUsize::new(0);
@@ -43,8 +42,8 @@ impl Guard for CountingPassGuard {
 
 impl GuardFor<nest_rs_http::HttpView> for CountingPassGuard {}
 
-/// Counts every HTTP interception, then forwards.
-#[injectable]
+/// Counts every unit it runs around, then forwards.
+#[nest_rs_core::interceptor(stage = unit)]
 #[derive(Default)]
 struct CountingInterceptor;
 
@@ -52,9 +51,9 @@ impl Layer for CountingInterceptor {}
 
 #[async_trait]
 impl Interceptor for CountingInterceptor {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> poem::Result<Response> {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
         INTERCEPTOR_RUNS.fetch_add(1, Ordering::SeqCst);
-        next.run(req).await
+        next.run(cx).await
     }
 }
 
@@ -161,14 +160,11 @@ async fn a_guard_declared_for_the_endpoint_runs_without_a_pool() {
 }
 
 #[tokio::test]
-async fn the_global_interceptor_pool_covers_the_graphql_post() {
+async fn a_unit_stage_interceptor_runs_around_the_graphql_post() {
     let _gate = GATE.lock().await;
     reset_counters();
 
-    let app = TestApp::builder()
-        .module::<FallbackModule>()
-        .use_interceptors_global([interceptor::<CountingInterceptor>()])
-        .build()
+    let app = TestApp::for_module::<FallbackModule>()
         .await
         .expect("boots");
 
@@ -176,6 +172,6 @@ async fn the_global_interceptor_pool_covers_the_graphql_post() {
     assert_eq!(
         INTERCEPTOR_RUNS.load(Ordering::SeqCst),
         1,
-        "the transport-edge interceptor pool wraps self-mounted surfaces too",
+        "a self-mount's request is a unit of the HTTP edge: the unit stage runs there",
     );
 }

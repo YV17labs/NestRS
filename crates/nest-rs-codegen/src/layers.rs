@@ -43,8 +43,8 @@ pub enum LayerAttribute {
     UseInterceptors,
     /// `#[use_exception_filters(...)]`.
     UseExceptionFilters,
-    /// `#[use_filters(...)]`: HTTP's untyped error mapper, which an exception
-    /// filter catching `dyn Error + Send + Sync` replaces.
+    /// `#[use_filters(...)]`: the untyped error mapper an exception filter
+    /// catching `dyn Error + Send + Sync` replaced, refused everywhere by name.
     UseFilters,
     /// `#[meta(EXPR)]`.
     Meta,
@@ -137,10 +137,10 @@ const GRAPHQL_PIPES: &str = "a GraphQL operation's variables are folded once per
 const MCP_PIPES: &str = "an MCP operation's arguments are decoded once per call — bind \
      `Piped<P, T>` or `Valid<T>` inside `Parameters<…>`";
 
-/// `#[use_filters]` binds HTTP's `Filter` alone.
-const FILTERS: &str = "it binds HTTP's untyped `Filter`, which an exception filter replaces — one \
-     whose `Exception` is `dyn Error + Send + Sync` catches every error; bind that with \
-     `#[use_exception_filters]`";
+/// `#[use_filters]` bound HTTP's untyped `Filter`, which an exception filter
+/// replaced.
+const FILTERS: &str = "an exception filter whose `Exception` is `dyn Error + Send + Sync` \
+     catches every error — bind that with `#[use_exception_filters]`";
 
 /// What `attribute` answers at `scope` on `pair`.
 ///
@@ -160,22 +160,18 @@ pub fn cell(pair: &DecoratorPair, scope: LayerScope, attribute: LayerAttribute) 
             Built
         }
 
-        // HTTP runs every family; `Filter` leaves when HTTP moves onto the pipeline.
-        (P::Http, _, A::UsePipes | A::UseInterceptors | A::UseExceptionFilters | A::UseFilters) => {
-            Built
-        }
+        (P::Http, _, A::UsePipes | A::UseInterceptors | A::UseExceptionFilters) => Built,
+        (_, _, A::UseFilters) => Refused(FILTERS),
 
         (P::Graphql, _, A::UsePipes) => Refused(GRAPHQL_PIPES),
         (P::Mcp, _, A::UsePipes) => Refused(MCP_PIPES),
         (P::Ws, _, A::UsePipes) => Pending,
         (P::Graphql | P::Ws | P::Mcp, _, A::UseInterceptors | A::UseExceptionFilters) => Pending,
-        (P::Graphql | P::Ws | P::Mcp, _, A::UseFilters) => Refused(FILTERS),
 
         (P::Processor | P::Scheduled | P::Listeners, _, A::UseGuards | A::ForceGuards) => {
             Refused(NO_CALLER)
         }
         (P::Processor | P::Scheduled | P::Listeners, _, A::UsePipes) => Refused(WORKER_PIPES),
-        (P::Processor | P::Scheduled | P::Listeners, _, A::UseFilters) => Refused(FILTERS),
         (
             P::Processor | P::Scheduled | P::Listeners,
             _,
@@ -252,8 +248,6 @@ pub struct Layers {
     pub interceptors: Vec<Path>,
     /// `#[use_exception_filters]`.
     pub exception_filters: Vec<Path>,
-    /// `#[use_filters]`.
-    pub filters: Vec<Path>,
     /// Every `#[meta]` value, in the order written.
     pub meta: Vec<Expr>,
 }
@@ -287,7 +281,6 @@ pub fn take_layers(
         pipes: taken(LayerAttribute::UsePipes)?,
         interceptors: taken(LayerAttribute::UseInterceptors)?,
         exception_filters: taken(LayerAttribute::UseExceptionFilters)?,
-        filters: taken(LayerAttribute::UseFilters)?,
         meta: Vec::new(),
     };
     if cell(pair, scope, LayerAttribute::Meta) == Cell::Built {
@@ -438,7 +431,6 @@ mod tests {
             parse_quote!(#[use_interceptors(I)]),
             parse_quote!(#[use_exception_filters(F)]),
             parse_quote!(#[use_pipes(P)]),
-            parse_quote!(#[use_filters(L)]),
             parse_quote!(#[meta(Tag)]),
         ];
         let layers = take_layers(&crate::pair::HTTP, LayerScope::Host, &mut attrs)
@@ -450,11 +442,25 @@ mod tests {
                 layers.interceptors.len(),
                 layers.exception_filters.len(),
                 layers.pipes.len(),
-                layers.filters.len(),
                 layers.meta.len(),
             ),
-            (2, 1, 1, 1, 1, 1),
+            (2, 1, 1, 1, 1),
         );
+    }
+
+    #[test]
+    fn use_filters_is_refused_on_every_pair_naming_the_exception_filter() {
+        use crate::pair::{GRAPHQL, HTTP, MCP, WS};
+        for pair in [&HTTP, &GRAPHQL, &WS, &MCP] {
+            for scope in SCOPES {
+                let mut attrs: Vec<Attribute> = vec![parse_quote!(#[use_filters(L)])];
+                let refused = take_layers(pair, scope, &mut attrs)
+                    .err()
+                    .map(|err| err.to_string())
+                    .unwrap_or_default();
+                assert!(refused.contains("#[use_exception_filters]"), "{refused}");
+            }
+        }
     }
 
     #[test]

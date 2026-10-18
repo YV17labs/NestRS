@@ -5,13 +5,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{AmbientValue, Layer, ambient, injectable, module, with_ambient};
+use nest_rs_core::{AmbientValue, Layer, ambient, injectable, module};
 use nest_rs_http::futures_util::StreamExt;
 use nest_rs_http::{
-    HttpConfig, HttpModule, Scoped, SseEvent, SseStream, async_trait, controller,
-    futures_util::stream, routes,
+    HttpConfig, HttpModule, Scoped, SseEvent, SseStream, controller, futures_util::stream, routes,
 };
-use nest_rs_interceptors::{Interceptor, Next};
 use nest_rs_testing::LogCapture;
 use tokio::io::AsyncWriteExt;
 
@@ -419,10 +417,15 @@ struct CallerInterceptor;
 
 impl Layer for CallerInterceptor {}
 
-#[async_trait]
-impl Interceptor for CallerInterceptor {
-    async fn intercept(&self, req: poem::Request, next: Next<'_>) -> poem::Result<poem::Response> {
-        with_ambient(Arc::new(Caller("alice")), next.run(req)).await
+#[nest_rs_core::async_trait]
+impl nest_rs_core::Interceptor for CallerInterceptor {
+    async fn intercept(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+        next: nest_rs_core::Next<'_>,
+    ) -> nest_rs_core::Outcome {
+        cx.attach(Caller("alice"));
+        next.run(cx).await
     }
 }
 

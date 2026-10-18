@@ -211,10 +211,7 @@ pub mod __private {
         Pending, UnmaskedReply, carries_ambient, install_pending, with_ambient_from,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
-    pub use crate::app::__private::{
-        check_stop_bound, close_after, init_tearing_down_after, use_exception_filters_global,
-        use_interceptors_global,
-    };
+    pub use crate::app::__private::{check_stop_bound, close_after, init_tearing_down_after};
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
         enter_import, leave_import, overrides_any, record_absent_optional, record_stall,
@@ -249,7 +246,8 @@ pub mod __private {
     pub use crate::process_start::ProcessStart;
     pub use crate::request_scope::__private::RequestScopes;
     pub use crate::site::{
-        GlobalLayers, Shape, Site, SiteDeclaration, SiteLayers, UnitChains, declare_site,
+        GlobalLayers, Shape, Site, SiteDeclaration, SiteLayers, UnitChains, compose_site,
+        declare_site,
     };
     pub use crate::tenant::TenantId;
     pub use crate::trace_context::__private::{
@@ -257,7 +255,7 @@ pub mod __private {
         set_span_linker, with_pending_ids,
     };
     pub use crate::type_name::short_type_name;
-    pub use crate::unit_context::{new_unit_context, take_pending};
+    pub use crate::unit_context::{new_unit_context, pending_of, take_pending};
     pub use crate::way_down::main;
 
     pub use schemars;

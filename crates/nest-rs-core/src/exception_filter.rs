@@ -45,6 +45,13 @@ use crate::unit_context::UnitContext;
 ///     }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an exception filter",
+    label = "bound as an exception filter here",
+    note = "implement `ExceptionFilter` for it — `type Exception`, the error it catches (`dyn \
+            Error + Send + Sync` for every one), and `async fn catch(&self, exception: \
+            &Self::Exception, cx: &mut UnitContext<'_>) -> Caught` — beside `Layer`"
+)]
 #[async_trait]
 pub trait ExceptionFilter: Layer {
     /// An error type found anywhere in the failure's source chain, or

@@ -33,13 +33,27 @@ impl Journal {
             .push(entry);
     }
 
-    fn read(&self) -> Vec<String> {
+    /// Every entry, the request's own unit included.
+    fn all(&self) -> Vec<String> {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
+
+    /// The entries of the units the request carries, without the request's
+    /// own pool unit around them.
+    fn read(&self) -> Vec<String> {
+        self.all()
+            .into_iter()
+            .filter(|entry| !entry.contains(CARRIER))
+            .collect()
+    }
 }
+
+/// The unit of the HTTP request carrying the operations, which runs on the
+/// pool around them.
+const CARRIER: &str = "http.request";
 
 /// How the recording binding settles a unit.
 #[derive(Clone, Copy)]
@@ -116,6 +130,12 @@ impl OpenUnit for Opened {
             ..
         } = *self;
         Box::pin(async move {
+            // The request carrying the operations settles at once: what a test
+            // sets is how an operation's unit settles.
+            if unit == CARRIER {
+                journal.note(format!("settle {unit} {ok}"));
+                return Settlement::Settled;
+            }
             match settles {
                 Settles::At(after) => {
                     tokio::time::sleep(after).await;
@@ -292,6 +312,24 @@ async fn a_query_runs_as_a_unit_of_its_own_on_the_pool() {
             "open graphql.operation pool",
             "settle graphql.operation true"
         ]
+    );
+}
+
+#[tokio::test]
+async fn the_request_carrying_operations_runs_on_the_pool_around_them() {
+    let (app, journal) = boot().await;
+    let reply = post(&app, json!({ "query": "mutation { write(fail: false) }" })).await;
+    assert_eq!(reply["data"]["write"], "block", "{reply}");
+    assert_eq!(
+        journal.all(),
+        [
+            "open http.request pool",
+            "open graphql.operation per_unit",
+            "block released",
+            "settle graphql.operation true",
+            "settle http.request true",
+        ],
+        "the request holds no transaction; the operation it carries opens its own",
     );
 }
 

@@ -1,6 +1,7 @@
-//! `#[interceptor]` at both stages: a consumer with no direct `async-trait`
-//! or `tracing` dependency compiles the provider and the registration it
-//! emits — and the layers the worker witnesses bind.
+//! `#[interceptor]` at both stages, and an exception filter: a consumer with no
+//! direct `async-trait` or `tracing` dependency compiles the provider and the
+//! registration it emits — and the layers a route and the worker witnesses
+//! bind.
 
 use std::sync::Arc;
 
@@ -70,8 +71,8 @@ impl Interceptor for HygieneUnitAudit {
     }
 }
 
-/// An exception filter a job, a tick and a listener bind on their block and
-/// their method.
+/// Declines every failure: the exception filter a route, a job, a tick and a
+/// listener bind.
 #[nest_rs::core::injectable]
 #[derive(Default)]
 pub struct HygieneUnitRefusal;
@@ -87,5 +88,7 @@ impl ExceptionFilter for HygieneUnitRefusal {
     }
 }
 
-#[nest_rs::core::module(providers = [HygieneClock, HygieneAudit, HygieneTiming, HygieneCache])]
+#[nest_rs::core::module(
+    providers = [HygieneClock, HygieneAudit, HygieneTiming, HygieneCache, HygieneUnitRefusal]
+)]
 pub struct HygienePipelineModule;

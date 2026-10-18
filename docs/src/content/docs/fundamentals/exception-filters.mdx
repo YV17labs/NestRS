@@ -1,65 +1,55 @@
 ---
 title: Error handling
-description: "Catch typed errors, then map every other error to a response — typed catches via ExceptionFilter, unconditional mapping via Filter, defaults via ResponseError."
+description: "Map errors to responses — defaults on the error type via ResponseError, and typed or catch-all exception filters at the route, the controller or the whole app."
 sidebar:
   order: 9
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Three seams turn handler errors into responses, in the order the
+Two seams turn a handler's error into a response, in the order the
 framework tries them:
 
-1. **`ResponseError`** on a feature's error type — the default mapping
-   the framework reaches for first. Lives next to the error in the
-   crate that owns it.
-2. **`ExceptionFilter`** — catches a single typed exception via
-   downcast. Shipped by
-   [`nest-rs-exception-filters`](https://crates.io/crates/nest-rs-exception-filters).
-3. **`Filter`** — unconditional mapping; sees any error the inner
-   chain raises. Shipped by
-   [`nest-rs-filters`](https://crates.io/crates/nest-rs-filters),
-   over [`poem`](https://crates.io/crates/poem)'s error type. HTTP only —
-   see below.
+1. **An exception filter** — a layer that catches one error type, or every
+   error, at the route, the controller or the whole app, closest first.
+2. **`ResponseError`** on a feature's error type — the default mapping the
+   framework answers with when no filter answered. Lives next to the error in
+   the crate that owns it.
 
-Both `Filter` and `ExceptionFilter` are [`Layer`](/fundamentals/request-lifecycle/)
-sub-traits — one method each, on HTTP — and dedup by
-[`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html) across
-the global / controller / method scopes.
+`ExceptionFilter` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait in
+`nest_rs::core`, edge-neutral like [interceptors](/fundamentals/interceptors/),
+and dedups by [`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html)
+across the global, controller and method scopes.
 
-```rust title="nest_rs::filters::Filter · nest_rs::exception_filters::ExceptionFilter"
-#[async_trait]
-pub trait Filter: Layer {
-    /// HTTP entry — required, no default: a filter that targets HTTP
-    /// without implementing this would silently let errors through.
-    async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
-}
-
+```rust title="nest_rs::core::ExceptionFilter"
 #[async_trait]
 pub trait ExceptionFilter: Layer {
-    /// The concrete exception this filter catches.
-    type Exception: std::error::Error + Send + Sync + 'static;
-    /// HTTP entry — required. Called with the downcast `Exception`.
-    async fn catch(&self, exception: Self::Exception) -> Response;
+    /// The error it catches, found anywhere in the failure's source chain —
+    /// `dyn Error + Send + Sync` for every one.
+    type Exception: Catch + ?Sized;
+
+    async fn catch(&self, exception: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught;
 }
 ```
 
-**HTTP only**, the same answer [interceptors](/fundamentals/interceptors/)
-give: reserved per-resolver and per-message seams were removed rather than
-shipped unwired, so a `filter_graphql` or `catch_ws` method on an impl is an
-`E0407` (`method is not a member of trait`). A global filter still covers a
-GraphQL `POST` or a WS upgrade through its HTTP entry, because both are HTTP
-requests. Inside GraphQL, an operation's error is shaped by
-[its own error handling](/graphql/errors/); inside WS, by the
-[message error frame](/websockets/messages/).
+<Aside type="caution">
+**HTTP runs them today**, on a route, a self-mount's request (`/graphql`,
+`/mcp`, a WS upgrade) and what the router answers itself. Inside GraphQL an
+operation's error is shaped by [its own error handling](/graphql/errors/),
+inside WS by the [message error frame](/websockets/messages/), until those
+edges move onto the same pipeline during 7.0; until then
+`#[use_exception_filters]` beside their decorators is a compile error naming
+the edge.
+</Aside>
 
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs --features exception-filters,filters
+cargo add nest-rs
 ```
 
-Two features because they are two crates: `filters` maps an inner error to a transport response, `exception-filters` catches one concrete type. Both ride `http`, so a default install already has them.
+The trait, its specs and `Caught` live in `nest_rs::core`, which every build
+has: no feature turns them on.
 
 ## The default: framework error types, already mapped
 
@@ -130,87 +120,22 @@ answered opaquely on every edge, and its whole chain is filed once at
 `error`, as is the chain behind a `5xx` problem: a failed handler is never
 logged nowhere.
 
-## Route-bound filters via `#[use_filters(...)]`
+## Exception filters
 
-Sometimes the mapping depends on the *route*, not the error. Maybe
-`/v1/widgets/boom` should return an `I'm a teapot` while every other
-500 stays a 500. That's what `#[use_filters(...)]` is for.
-
-```rust title="apps/api/src/filter.rs"
-use nest_rs::core::{Layer, injectable};
-use nest_rs::filters::{Filter, RequestSnapshot, async_trait};
-use nest_rs::http::poem::{http::StatusCode, Error, Response};
-
-#[injectable]
-#[derive(Default)]
-pub struct TeapotFilter;
-
-impl Layer for TeapotFilter {}
-
-#[async_trait]
-impl Filter for TeapotFilter {
-    async fn filter(&self, _req: &RequestSnapshot, _error: Error) -> Response {
-        Response::builder()
-            .status(StatusCode::IM_A_TEAPOT)
-            .body("filtered")
-    }
-}
-```
-
-Bind it per route or per controller — or globally:
-
-```rust title="the three scopes — global, controller, route"
-// Global, in main.rs
-App::builder()
-    .use_filters_global([filter::<TeapotFilter>()])
-    .module::<AppModule>()
-
-// Per-scope, in a controller
-#[controller(path = "/widgets")]
-pub struct WidgetController;
-
-#[routes]
-impl WidgetController {
-    #[get("/boom")]
-    #[use_filters(TeapotFilter)]               // route scope
-    async fn boom(&self) -> nest_rs::http::Result<&'static str> {
-        Err(nest_rs::http::HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR))
-    }
-}
-
-#[controller(path = "/gadgets")]
-#[use_filters(TeapotFilter)]                   // controller scope
-pub struct GadgetController;
-```
-
-A filter sees a **`RequestSnapshot`** (method + URI + headers), not the
-live `Request` — the inner endpoint has already consumed it. Snapshot
-the routing-relevant bits up front, pass them to the renderer.
-
-Filters are `#[injectable]` providers, listed in `providers = [...]` and
-resolved from the container — same shape as guards and interceptors.
-
-## Typed catches via `ExceptionFilter`
-
-`Filter` rewrites *every* error. When the rewrite should depend on the
-concrete error type — `DomainError` becomes 422, every other 500 stays
-500 — reach for `ExceptionFilter`. It declares the type it claims via
-the `Exception` associated type and only fires on a matching downcast;
-unmatched errors fall through to the next exception filter, then to any
-outer `Filter`, then to the transport's default renderer.
+When the answer should depend on the concrete error type — `DomainError`
+becomes `422`, every other failure keeps its own answer — write an exception
+filter. It names the type it claims in `Exception`; a failure whose chain does
+not carry that type never reaches it, and one that does gets the filter's
+`catch`:
 
 ```rust title="apps/api/src/exception_filter.rs"
-use nest_rs::core::{Layer, injectable};
-use nest_rs::exception_filters::{ExceptionFilter, async_trait};
-use nest_rs::http::ResponseError;
-use nest_rs::http::poem::{http::StatusCode, Response};
+use nest_rs::core::{Caught, ExceptionFilter, Layer, UnitContext, async_trait, injectable};
+use nest_rs::http::{HttpView, IntoResponse, ProblemDetails, ResponseError, StatusCode};
 
 #[derive(Debug, thiserror::Error)]
 #[error("domain failure: {0}")]
 pub struct DomainError(pub String);
 
-// The filter claims by downcast, so a handler's `?` has to turn the error
-// into an `HttpError` first — that is what this impl is for.
 impl ResponseError for DomainError {
     fn status(&self) -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
@@ -227,19 +152,32 @@ impl Layer for DomainErrorFilter {}
 impl ExceptionFilter for DomainErrorFilter {
     type Exception = DomainError;
 
-    async fn catch(&self, err: DomainError) -> Response {
-        Response::builder()
-            .status(StatusCode::UNPROCESSABLE_ENTITY)
-            .body(format!("caught: {err}"))
+    async fn catch(&self, err: &DomainError, cx: &mut UnitContext<'_>) -> Caught {
+        let problem = ProblemDetails::unprocessable().with_detail(format!("caught: {err}"));
+        match HttpView::of(cx) {
+            Ok(view) => Caught::Answered(view.respond(problem.into_response())),
+            Err(_) => Caught::Declined,
+        }
     }
 }
 ```
 
-Bind it like any other layer: globally with
-`use_exception_filters_global([exception_filter::<DomainErrorFilter>()])`,
-on a controller with `#[use_exception_filters(DomainErrorFilter)]`, or
-beside a verb. The handler raises the exception the way it raises any
-other error:
+`catch` answers one of three ways:
+
+| `Caught` | What the client reads |
+|---|---|
+| `Answered(settled)` | the reply the filter wrote through the edge's view |
+| `Problem(problem)` | a `nest_rs::core::Problem`, which every edge renders in its own form — the problem document on HTTP |
+| `Declined` | whatever the next filter answers, else the default |
+
+The `ResponseError` impl is what lets a handler's `?` carry `DomainError`; its
+status is the **default** the filter replaces. Drop the filter and the same
+handler answers `500` from that status.
+
+Bind it like any other layer: for the whole app with
+`App::builder().use_exception_filters_global([exception_filter::<DomainErrorFilter>()])`,
+on a controller with `#[use_exception_filters(DomainErrorFilter)]`, or beside a
+verb:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[get("/domain")]
@@ -249,60 +187,67 @@ async fn domain(&self) -> Result<&'static str, DomainError> {
 }
 ```
 
-That answers `422` with `caught: domain failure: boom`. Drop the
-`#[use_exception_filters]` line and the same handler answers `500` from
-its `ResponseError` status: the filter replaces the default, it does not
-create it.
+That answers `422` with `caught: domain failure: boom`.
 
-:::caution[A global `ExceptionFilter` covers the route table, not the edge]
-"Global" means a different thing for the two families. A global `Filter`
-attaches a wrap at the transport edge, so it maps errors from paths no
-route matched. A global `ExceptionFilter` is read **per route** by the
-`#[routes]` composer, so a 404, a self-mounted surface such as `/graphql`
-or `/mcp`, or a WS upgrade never reaches one — even when the error raised
-there is exactly the type it claims. Use a `Filter` for those.
-:::
+### Every error: the catch-all
+
+`type Exception = dyn Error + Send + Sync` claims every failure — the
+envelope a product answers every error in. Bound globally, it also shapes
+what no route answers: a `404` for a path nothing serves, a `405` for a
+method a path does not take, and a self-mount's own error, such as `/graphql`
+refusing an oversized batch.
+
+```rust
+#[async_trait]
+impl ExceptionFilter for Envelope {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        /* answer every failure in the product's own envelope */
+        Caught::Declined
+    }
+}
+```
+
+### Closest first
+
+The method's filters are tried first, then the controller's, then the app's;
+the first that answers wins. A typed filter on a route therefore answers
+before a catch-all on its controller, and a `Declined` hands the failure on.
+
+### A failed unit stays failed
+
+A filter changes what the client reads, never whether the unit failed: a
+mutating request whose handler failed rolls its writes back, whatever status
+the filter answered — a `200` included. A guard's refusal never reaches a
+filter: it is answered by the guard stage, before the filters run.
 
 ## TypeId dedup — redeclaration is free
 
-Both `Filter` and `ExceptionFilter` are
-[`Layer`](/fundamentals/request-lifecycle/)s, so the dedup story matches every other
-layer kind: a global declaration and a per-scope redeclaration collapse
-to one execution.
-
-Both are composed the same way, so the dedup covers every pair of scopes
-— including controller + method with no global in play. One composition
-resolves global + controller + method by `TypeId` and the survivors go
-into a single chain endpoint per route (`ExceptionFiltersEndpoint` for
-the typed catches, `FilterChain` for the untyped ones). The per-scope
-wraps do not nest; there is one wrap holding a deduped list.
-
-A global `Filter` additionally wraps the transport edge, which is what
-lets it map errors from paths no route matched. A global
-`ExceptionFilter` has no such wrap — see the scope note above.
-
-The same defense-in-depth rationale as
-[guards](/fundamentals/guards/#declare-on-the-provider)
-applies: a portable controller that needs a domain filter should
-redeclare it, the dedup keeps the cost at zero.
+An exception filter declared globally and redeclared on a controller or a
+method runs once, at the broadest scope that declares it — the same
+[defense-in-depth rationale as guards](/fundamentals/guards/#declare-on-the-provider):
+a portable controller that needs a domain filter redeclares it, and the dedup
+keeps the cost at zero.
 
 ## Where filters sit in the chain
 
-A route-site exception-filter sits closest to the handler (typed catch); global filters fold at the transport edge and see the whole inner tree. A mapped `Err` is tagged `MappedError` so `DbContext` still rolls back. The full family-by-family nesting is on [the request lifecycle](/fundamentals/request-lifecycle/#nesting-order).
+Exception filters run around the handler stage, after the guards and the
+posture's class gate, so a failure of the handler or of any handler-stage
+interceptor reaches them. The full order is on
+[the request lifecycle](/fundamentals/request-lifecycle/#nesting-order).
 
-## Choosing between the three seams
+## Choosing between the seams
 
-| Layer | Where it lives | When to reach for it |
+| Seam | Where it lives | When to reach for it |
 |-------|----------------|-----------------|
 | `ResponseError` on an error type | Framework crate that owns the error (`nest-rs-seaorm`, `nest-rs-authn`), or `<feature>/error.rs` for a domain-specific variant | Default. Every handler returning that error gets the same mapping |
-| `ExceptionFilter` | A provider | The mapping depends on the **error type** — `DomainError → 422` even when the surrounding handler returns `HttpError` for everything else |
-| `#[use_filters(F)]` | A provider | The mapping depends on the **route** — a debug endpoint, a special status, a custom body envelope |
+| A typed `ExceptionFilter` | A provider | The mapping depends on the **error type** across many routes |
+| A catch-all `ExceptionFilter` | A provider | One envelope for every failure, bound on a route, a controller or the app |
 
-Reach for `ResponseError` first. An `ExceptionFilter` earns its keep
-when the behaviour follows a concrete error type across many routes; a
-`Filter` when it follows a single route shape independent of the error.
+Reach for `ResponseError` first.
 
-## A small filter-only case: validation envelopes
+## Validation envelopes
 
 The framework's pipe error renderer already returns an RFC 9457
 `application/problem+json` body:
@@ -311,17 +256,17 @@ The framework's pipe error renderer already returns an RFC 9457
 { "type": "…#status.400", "title": "Bad Request", "status": 400, "detail": "…", "errors": { /* ... */ } }
 ```
 
-If your API uses a different envelope (`{ ok: false, error: { ... } }`),
-write one filter that intercepts the error path and re-renders, bind it
-globally. The error itself stays pure.
+If your API uses a different envelope (`{ ok: false, error: { ... } }`), bind
+one catch-all exception filter globally that re-renders it. The error itself
+stays pure.
 
 ## Going further
 
 - [HTTP / errors — map a feature error with `ResponseError`](/http/errors/#map-a-feature-error-with-responseerror) —
   the `ResponseError` walkthrough.
 - [Interceptors](/fundamentals/interceptors/) — the success-path sibling.
-- [Guards](/fundamentals/guards/) — return `Err(Response)` directly,
-  bypassing the filter chain.
+- [Guards](/fundamentals/guards/) — a refusal is answered before any
+  filter runs.
 - [`posts/http/exception_filter.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/posts/http/exception_filter.rs)
-  in the demo — maps `PostError::AlreadyPublished` to RFC 9457
-  `application/problem+json`.
+  in the demo — answers `PostError::AlreadyPublished` with an RFC 9457
+  `application/problem+json` and declines every other variant.

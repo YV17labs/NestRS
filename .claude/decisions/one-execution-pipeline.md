@@ -173,3 +173,32 @@ layer nothing provides fails the boot. Where it departs:
 - **A job attached by hand as a `CronJobMeta` runs under the scheduler's own
   handler**, which declares nothing: no decorator declared its site, so it
   binds no layer of its own, and the app's run around it.
+
+**2026-10-18 — `feat/http-on-pipeline`: HTTP runs on it.** A route, a
+self-mount's request and what the router answers itself are each one `Site`,
+dispatched inside `run_unit` over the binding the transport resolves at mount;
+`DbContext`, `MappedError`, the transport bands, the route shaper and the HTTP
+`#[interceptor]` are gone, and `use_interceptors_global` /
+`use_exception_filters_global` are `AppBuilder`'s own. Where it departs:
+
+- **The tail answers a failure, and the edge renders one inside the unit
+  stage.** A handler's `Err`, or a `4xx`/`5xx` it answered, is an answered
+  failure the exception filters still see; a failure no filter answered is
+  rendered by the edge's one rule through `Tail::answer_failure` before the
+  unit stage returns, so a unit-stage interceptor reads the reply that goes
+  out, a `401` included.
+- **A self-mount's guard stage is the transport's request stage, handed to
+  `compose_site`** rather than declared as a `GuardStageFactory`: a
+  self-mount declares no site of its own, and the origin check stays in front
+  of the site, so a refused origin pays for no guard.
+- **A guard-stage factory refuses with `anyhow::Error`**, so a route whose
+  guards are out of phase order refuses through the same return as a layer
+  that does not resolve.
+- **The fallback is a site with no guard stage and no unit of work**: a `404`
+  through a catch-all at the router's root, a `405` through the route that
+  matched its path; the app's exception filters and unit stage see both.
+- **A request carrying units runs on the pool**, its body uncut, whatever its
+  method: `/graphql` and `/mcp` operations settle their own work.
+- **A self-mount folds no handler stage** until its edge's own units move
+  (GraphQL, MCP): the app's global interceptors reach a route's handler
+  alone.

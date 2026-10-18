@@ -220,7 +220,7 @@ both fixes — import the owner, or route through a module already imported.
 Boot fails before HTTP listens — not on the first request.
 
 The same check applies to layers bound with
-`#[use_guards(...)]` / `#[use_filters(...)]` /
+`#[use_guards(...)]` / `#[use_exception_filters(...)]` /
 `#[use_interceptors(...)]`: if a controller lists a guard, its module
 must import a module that provides that guard.
 

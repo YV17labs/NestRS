@@ -10,21 +10,12 @@ use nest_rs_core::__private::ResolvedLayer;
 use nest_rs_core::Layer;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
-/// Wraps handler execution: an [`Interceptor`] sees the inputs before the handler
-/// runs and the outputs after. A *global* one also covers a GraphQL `POST` and a
-/// WS upgrade, which are HTTP requests.
-///
-/// `Interceptor` extends [`Layer`] so the same impl can be declared at any
-/// scope (global / controller / method) and the Layer System dedups by
-/// [`TypeId`](std::any::TypeId).
-///
-/// Bind globally via [`use_interceptors_global`](crate::AppBuilderInterceptorsExt),
-/// per-provider via `#[use_interceptors(...)]` on the
-/// controller/resolver/gateway, or per-handler beside the verb /
-/// `#[query]` / `#[subscribe_message]`.
+/// Wraps a poem endpoint: an [`Interceptor`] sees the request before it runs and
+/// the response after — around an endpoint it wraps itself
+/// ([`InterceptorExt`](crate::InterceptorExt)); no framework site runs it.
 #[async_trait]
 pub trait Interceptor: Layer {
-    /// HTTP entry, called by the per-route shaper once for every HTTP route.
+    /// Run around the endpoint `next` holds.
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
 }
 

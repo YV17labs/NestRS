@@ -10,6 +10,7 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
+mod database;
 mod error;
 mod expose;
 mod http;

@@ -8,12 +8,11 @@
 //! dispatches on the method itself: `PUT /mcp` answers the surface's own
 //! `405`.
 
-use http::header::{ALLOW, CONTENT_LENGTH};
-use http::{HeaderValue, Method, StatusCode};
+use http::header::CONTENT_LENGTH;
+use http::{HeaderValue, Method};
 
 use crate::body::Body;
-use crate::problem::ProblemDetails;
-use crate::response::{IntoResponse, Response};
+use crate::response::Response;
 
 /// The entries one address answers, one per method, in registration order.
 pub(crate) struct Methods<L> {
@@ -59,13 +58,10 @@ impl<L> Methods<L> {
             .map_or(Chosen::NotAllowed, |(_, entry)| Chosen::HeadOf(entry))
     }
 
-    /// The `405` this address answers a method it does not serve: an `Ok`
-    /// problem document, so a handler's own `405` error stays an error through
-    /// the bands.
-    pub(crate) fn not_allowed(&self) -> Response {
-        let mut resp = ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).into_response();
-        resp.headers_mut().insert(ALLOW, self.allow.clone());
-        resp
+    /// The `Allow` this address answers a method it does not serve with,
+    /// through the router's fallback site.
+    pub(crate) fn allow(&self) -> &HeaderValue {
+        &self.allow
     }
 }
 
@@ -142,14 +138,11 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn a_405_is_a_problem_document_carrying_allow() {
-        let resp = methods(&[Method::GET, Method::POST]).not_allowed();
-        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(resp.headers()[ALLOW], "GET, HEAD, POST");
+    #[test]
+    fn a_405_carries_the_allow_its_address_serves() {
         assert_eq!(
-            resp.headers()[http::header::CONTENT_TYPE],
-            "application/problem+json"
+            methods(&[Method::GET, Method::POST]).allow(),
+            "GET, HEAD, POST"
         );
     }
 

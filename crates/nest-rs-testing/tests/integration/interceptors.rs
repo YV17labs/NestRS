@@ -1,16 +1,31 @@
-//! Interceptor binding per handler and controller, guard-before-interceptor
-//! ordering, the cross-scope `TypeId` dedup and the transport-edge band.
+//! Interceptors on the HTTP pipeline: binding per handler and controller, the
+//! guards and the class gate before every handler-stage interceptor, the
+//! cross-scope `TypeId` dedup, the unit stage around the guards seeing what
+//! the router answers itself, and a module's `#[interceptor]` being the
+//! container's own provider.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{
+    AmbientValue, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable,
+    interceptor, module,
+};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::StatusCode;
-use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_interceptors::{Interceptor, Next, interceptor};
+use nest_rs_http::{HeaderName, HeaderValue, HttpView, StatusCode, controller, routes};
 use nest_rs_testing::TestApp;
-use poem::{Request, Response, Result};
 use tokio::sync::Mutex;
+
+/// Stamp `name` on the answer the unit holds, once the rest of it ran.
+fn stamp(cx: &mut UnitContext<'_>, name: &'static str) -> Result<(), Denial> {
+    if let Some(response) = HttpView::of(cx)?.response_mut() {
+        response.headers_mut().insert(
+            HeaderName::from_static(name),
+            HeaderValue::from_static("hit"),
+        );
+    }
+    Ok(())
+}
 
 #[injectable]
 #[derive(Default)]
@@ -20,11 +35,10 @@ impl Layer for Tracer {}
 
 #[async_trait]
 impl Interceptor for Tracer {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        let mut resp = next.run(req).await?;
-        resp.headers_mut()
-            .insert("x-trace", "hit".parse().expect("static header value"));
-        Ok(resp)
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        stamp(cx, "x-trace")?;
+        outcome
     }
 }
 
@@ -36,15 +50,12 @@ impl Layer for DenyGuard {}
 
 #[async_trait]
 impl Guard for DenyGuard {
-    async fn check_http(
-        &self,
-        _cx: &mut nest_rs_core::UnitContext<'_>,
-    ) -> std::result::Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("denied"))
     }
 }
 
-impl GuardFor<nest_rs_http::HttpView> for DenyGuard {}
+impl GuardFor<HttpView> for DenyGuard {}
 
 #[controller(path = "/a")]
 struct PerHandlerController;
@@ -148,9 +159,9 @@ impl Layer for CounterInterceptor {}
 
 #[async_trait]
 impl Interceptor for CounterInterceptor {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
         COUNTER.fetch_add(1, Ordering::SeqCst);
-        next.run(req).await
+        next.run(cx).await
     }
 }
 
@@ -278,85 +289,98 @@ async fn same_interceptor_at_all_three_scopes_runs_once() {
     );
 }
 
-static EDGE_EVENTS: Mutex<Vec<&'static str>> = Mutex::const_new(Vec::new());
+/// What a module's `#[interceptor]` counted, on the provider it depends on.
+#[injectable]
+#[derive(Default)]
+struct Units {
+    seen: AtomicUsize,
+}
 
-/// Infra interceptor (the `DbContext` shape), mounted at the transport edge.
-#[nest_rs_http::interceptor]
+/// A module's handler-stage interceptor whose dependency its module lists
+/// after it.
+#[interceptor]
+struct CountUnits {
+    #[inject]
+    units: Arc<Units>,
+}
+
+impl Layer for CountUnits {}
+
+#[async_trait]
+impl Interceptor for CountUnits {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        self.units.seen.fetch_add(1, Ordering::SeqCst);
+        next.run(cx).await
+    }
+}
+
+#[controller(path = "/counted")]
+struct CountedController;
+
+#[routes]
+impl CountedController {
+    #[get("/")]
+    async fn counted(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [CountUnits, Units, CountedController])]
+struct CountingModule;
+
+#[tokio::test]
+async fn a_modules_interceptor_is_the_containers_provider_whatever_order_it_is_listed_in() {
+    let app = TestApp::for_module::<CountingModule>()
+        .await
+        .expect("an interceptor listed before its dependency boots");
+    app.http()
+        .get("/counted")
+        .send()
+        .await
+        .assert_status_is_ok();
+    let units = app.container().get::<Units>().expect("provided");
+    assert_eq!(units.seen.load(Ordering::SeqCst), 1);
+    assert!(
+        app.container().get::<CountUnits>().is_some(),
+        "an interceptor a module brings is a provider of its own"
+    );
+}
+
+#[tokio::test]
+async fn a_modules_interceptor_the_app_also_lists_runs_once() {
+    let app = TestApp::builder()
+        .module::<CountingModule>()
+        .use_interceptors_global([interceptor::<CountUnits>()])
+        .build()
+        .await
+        .expect("boots");
+    app.http()
+        .get("/counted")
+        .send()
+        .await
+        .assert_status_is_ok();
+    let units = app.container().get::<Units>().expect("provided");
+    assert_eq!(
+        units.seen.load(Ordering::SeqCst),
+        1,
+        "listed twice, run once"
+    );
+}
+
+/// At the unit stage, around the guards: it sees every HTTP unit's answer.
+#[interceptor(stage = unit)]
+#[derive(Default)]
 struct EdgeStamp;
 
 impl Layer for EdgeStamp {}
 
 #[async_trait]
 impl Interceptor for EdgeStamp {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        // An unmatched route arrives as an `Err`, so a 404 is stamped too.
-        let mut resp = next
-            .run(req)
-            .await
-            .unwrap_or_else(|err| err.into_response());
-        EDGE_EVENTS.lock().await.push("edge");
-        resp.headers_mut()
-            .insert("x-edge", "hit".parse().expect("static header value"));
-        Ok(resp)
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        stamp(cx, "x-edge")?;
+        outcome
     }
-}
-
-#[injectable]
-#[derive(Default)]
-struct ScopedProbe;
-
-impl Layer for ScopedProbe {}
-
-#[async_trait]
-impl Interceptor for ScopedProbe {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        let resp = next.run(req).await?;
-        EDGE_EVENTS.lock().await.push("scoped");
-        Ok(resp)
-    }
-}
-
-#[controller(path = "/edge")]
-struct EdgeController;
-
-#[routes]
-impl EdgeController {
-    #[get("/probe")]
-    #[use_interceptors(ScopedProbe)]
-    async fn probe(&self) -> &'static str {
-        "ok"
-    }
-}
-
-#[module(providers = [EdgeStamp, ScopedProbe, EdgeController])]
-struct EdgeModule;
-
-#[tokio::test]
-async fn infra_interceptor_mounts_at_the_transport_edge_and_is_not_a_provider() {
-    let _gate = GATE.lock().await;
-    EDGE_EVENTS.lock().await.clear();
-
-    let app = TestApp::for_module::<EdgeModule>().await.expect("boots");
-
-    let resp = app.http().get("/edge/probe").send().await;
-    resp.assert_status_is_ok();
-    resp.assert_header("x-edge", "hit");
-    assert_eq!(
-        *EDGE_EVENTS.lock().await,
-        vec!["scoped", "edge"],
-        "infra band wraps outside the per-route interceptor pool",
-    );
-
-    EDGE_EVENTS.lock().await.clear();
-    let resp = app.http().get("/edge/nowhere").send().await;
-    resp.assert_status(StatusCode::NOT_FOUND);
-    resp.assert_header("x-edge", "hit");
-    assert_eq!(*EDGE_EVENTS.lock().await, vec!["edge"]);
-
-    assert!(
-        app.container().get::<EdgeStamp>().is_none(),
-        "an infra interceptor is not a provider",
-    );
 }
 
 #[controller(path = "/edgeband")]
@@ -368,13 +392,51 @@ impl EdgeBandController {
     async fn ok(&self) -> &'static str {
         "ok"
     }
+
+    #[get("/denied")]
+    #[use_guards(DenyGuard)]
+    async fn denied(&self) -> &'static str {
+        "unreachable"
+    }
 }
 
-#[module(providers = [Tracer, EdgeBandController])]
+#[module(providers = [EdgeStamp, Tracer, DenyGuard, EdgeBandController])]
 struct EdgeBandModule;
 
 #[tokio::test]
-async fn a_global_interceptor_sees_matched_routes_denials_404s_and_405s() {
+async fn a_unit_stage_interceptor_sees_matched_routes_denials_404s_and_405s() {
+    let app = TestApp::for_module::<EdgeBandModule>()
+        .await
+        .expect("boots");
+
+    let matched = app.http().get("/edgeband/ok").send().await;
+    matched.assert_status_is_ok();
+    matched.assert_header("x-edge", "hit");
+
+    // The edge trims a trailing slash before routing.
+    let trailing = app.http().get("/edgeband/ok/").send().await;
+    trailing.assert_status_is_ok();
+    trailing.assert_header("x-edge", "hit");
+
+    let denied = app.http().get("/edgeband/denied").send().await;
+    denied.assert_status(StatusCode::FORBIDDEN);
+    denied.assert_header("x-edge", "hit");
+
+    let bogus = app.http().get("/totally-bogus").send().await;
+    bogus.assert_status(StatusCode::NOT_FOUND);
+    bogus.assert_header("x-edge", "hit");
+
+    let bogus_slashed = app.http().get("/totally-bogus/").send().await;
+    bogus_slashed.assert_status(StatusCode::NOT_FOUND);
+    bogus_slashed.assert_header("x-edge", "hit");
+
+    let wrong_method = app.http().post("/edgeband/ok").send().await;
+    wrong_method.assert_status(StatusCode::METHOD_NOT_ALLOWED);
+    wrong_method.assert_header("x-edge", "hit");
+}
+
+#[tokio::test]
+async fn a_global_interceptor_runs_after_the_guards_and_sees_no_404() {
     let app = TestApp::builder()
         .module::<EdgeBandModule>()
         .use_interceptors_global([interceptor::<Tracer>()])
@@ -386,20 +448,96 @@ async fn a_global_interceptor_sees_matched_routes_denials_404s_and_405s() {
     matched.assert_status_is_ok();
     matched.assert_header("x-trace", "hit");
 
-    // The edge trims a trailing slash before routing.
-    let trailing = app.http().get("/edgeband/ok/").send().await;
-    trailing.assert_status_is_ok();
-    trailing.assert_header("x-trace", "hit");
+    let denied = app.http().get("/edgeband/denied").send().await;
+    denied.assert_status(StatusCode::FORBIDDEN);
+    denied.assert_header_is_not_exist("x-trace");
 
     let bogus = app.http().get("/totally-bogus").send().await;
     bogus.assert_status(StatusCode::NOT_FOUND);
-    bogus.assert_header("x-trace", "hit");
+    bogus.assert_header_is_not_exist("x-trace");
+}
 
-    let bogus_slashed = app.http().get("/totally-bogus/").send().await;
-    bogus_slashed.assert_status(StatusCode::NOT_FOUND);
-    bogus_slashed.assert_header("x-trace", "hit");
+/// What the route declared, read back by a global interceptor.
+#[derive(Debug)]
+struct Audited(&'static str);
 
-    let wrong_method = app.http().post("/edgeband/ok").send().await;
-    wrong_method.assert_status(StatusCode::METHOD_NOT_ALLOWED);
-    wrong_method.assert_header("x-trace", "hit");
+/// What a guard attached for the unit.
+#[derive(Debug)]
+struct Principal(&'static str);
+
+impl AmbientValue for Principal {}
+
+#[injectable]
+#[derive(Default)]
+struct AttachPrincipal;
+
+impl Layer for AttachPrincipal {}
+
+#[async_trait]
+impl Guard for AttachPrincipal {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(Principal("alice"));
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for AttachPrincipal {}
+
+/// Writes what the route declared and who the guards admitted onto the answer.
+#[injectable]
+#[derive(Default)]
+struct Reader;
+
+impl Layer for Reader {}
+
+#[async_trait]
+impl Interceptor for Reader {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let audited = cx
+            .reflector()
+            .get::<Audited>()
+            .map_or("-", |audited| audited.0);
+        let principal = cx
+            .ambient::<Principal>()
+            .map_or("-", |principal| principal.0);
+        let outcome = next.run(cx).await;
+        if let Some(response) = HttpView::of(cx)?.response_mut() {
+            let read = format!("{audited} {principal}");
+            response.headers_mut().insert(
+                HeaderName::from_static("x-read"),
+                HeaderValue::from_str(&read).expect("ascii"),
+            );
+        }
+        outcome
+    }
+}
+
+#[controller(path = "/read")]
+#[use_guards(AttachPrincipal)]
+struct ReadController;
+
+#[routes]
+impl ReadController {
+    #[get("/")]
+    #[meta(Audited("ledger"))]
+    async fn read(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [AttachPrincipal, Reader, ReadController])]
+struct ReadModule;
+
+#[tokio::test]
+async fn a_global_interceptor_reads_the_routes_declaration_and_what_its_guards_attached() {
+    let app = TestApp::builder()
+        .module::<ReadModule>()
+        .use_interceptors_global([interceptor::<Reader>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/read").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_header("x-read", "ledger alice");
 }

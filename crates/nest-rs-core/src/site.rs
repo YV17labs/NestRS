@@ -8,7 +8,6 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError, Weak};
 use crate::container::__private::site_chains;
 use crate::container::{Container, ContainerId};
 use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory};
-use crate::error::UnresolvedLayerError;
 use crate::exception_filter::__private::ErasedExceptionFilter;
 use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
 use crate::handler::Handler;
@@ -95,6 +94,26 @@ pub const fn declare_site(handler: &'static Handler, declared: SiteDeclaration) 
     }
 }
 
+/// The chains of a site an edge declares as it mounts rather than in a
+/// `static` — a self-mount, whose guard stage the edge composes itself from
+/// what the mount declared — around `guard_stage`; held by `container`, as a
+/// static site's are.
+pub fn compose_site(
+    container: &Container,
+    handler: &'static Handler,
+    declared: &SiteDeclaration,
+    guard_stage: Option<Arc<dyn GuardStage>>,
+) -> anyhow::Result<Arc<UnitChains>> {
+    let chains = Arc::new(UnitChains::compose_around(
+        container,
+        handler,
+        declared,
+        guard_stage,
+    )?);
+    site_chains(container).hold(Arc::clone(&chains));
+    Ok(chains)
+}
+
 impl Site {
     /// The handler the site dispatches to.
     pub fn handler(&self) -> &'static Handler {
@@ -102,9 +121,10 @@ impl Site {
     }
 
     /// The chains `container` composed for this site, composing them on the
-    /// first call. A layer that does not resolve refuses the site and nothing
-    /// is kept: no unit runs without a layer its site declares.
-    pub fn chains(&self, container: &Container) -> Result<Arc<UnitChains>, UnresolvedLayerError> {
+    /// first call. A layer that does not resolve ([`UnresolvedLayerError`](crate::UnresolvedLayerError)),
+    /// or a guard stage its edge refuses, refuses the site and nothing is
+    /// kept: no unit runs without a layer its site declares.
+    pub fn chains(&self, container: &Container) -> anyhow::Result<Arc<UnitChains>> {
         if let Some(chains) = self.cache.live_for(container.id()) {
             return Ok(chains);
         }
@@ -113,7 +133,7 @@ impl Site {
 
     /// The miss: this site's first unit, or another app in the process.
     #[cold]
-    fn compose_for(&self, container: &Container) -> Result<Arc<UnitChains>, UnresolvedLayerError> {
+    fn compose_for(&self, container: &Container) -> anyhow::Result<Arc<UnitChains>> {
         let mut extra = self.cache.extra();
         if let Some(chains) = self.cache.live_in(&extra, container.id()) {
             return Ok(chains);
@@ -223,7 +243,22 @@ impl UnitChains {
         container: &Container,
         handler: &Handler,
         declared: &SiteDeclaration,
-    ) -> Result<Self, UnresolvedLayerError> {
+    ) -> anyhow::Result<Self> {
+        let guard_stage = match declared.guard_stage {
+            Some(build) => build(container, handler)?,
+            None => None,
+        };
+        Self::compose_around(container, handler, declared, guard_stage)
+    }
+
+    /// The chains of `declared`, around `guard_stage` rather than the one its
+    /// factory would build.
+    pub(crate) fn compose_around(
+        container: &Container,
+        handler: &Handler,
+        declared: &SiteDeclaration,
+        guard_stage: Option<Arc<dyn GuardStage>>,
+    ) -> anyhow::Result<Self> {
         let label = site_label(handler);
         let unit = handler.unit();
         let global = declared.global;
@@ -309,10 +344,6 @@ impl UnitChains {
             LayerSite::Global => 2,
         });
 
-        let guard_stage = match declared.guard_stage {
-            Some(build) => build(container, handler)?,
-            None => None,
-        };
         let class_gate = declared.class_gate;
 
         let layered =
@@ -778,6 +809,9 @@ mod tests {
             let Err(refused) = UNRESOLVED.chains(&container) else {
                 panic!("the site composed without a layer it declares");
             };
+            let refused = refused
+                .downcast_ref::<crate::UnresolvedLayerError>()
+                .unwrap_or_else(|| panic!("not an unresolved layer: {refused:#}"));
             assert!(
                 refused
                     .layer

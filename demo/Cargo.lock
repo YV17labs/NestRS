@@ -2880,6 +2880,7 @@ dependencies = [
  "hyper-util",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-guards",
  "nest-rs-http-macros",
  "nest-rs-pipes",
@@ -2974,14 +2975,11 @@ name = "nest-rs-oauth-resource"
 version = "7.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "nest-rs-authn",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
- "poem",
  "serde",
  "serde_json",
  "tracing",
@@ -3150,10 +3148,8 @@ dependencies = [
  "nest-rs-graphql",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-pipes",
  "nest-rs-seaorm-macros",
- "poem",
  "schemars",
  "sea-orm",
  "serde",
@@ -3182,13 +3178,11 @@ dependencies = [
 name = "nest-rs-server-timing"
 version = "7.0.0"
 dependencies = [
- "async-trait",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "parking_lot",
- "poem",
  "tracing",
 ]
 
@@ -3234,12 +3228,9 @@ dependencies = [
  "futures-util",
  "nest-rs-config",
  "nest-rs-core",
- "nest-rs-exception-filters",
- "nest-rs-filters",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-opentelemetry",
  "nest-rs-pipes",
  "nest-rs-queue",

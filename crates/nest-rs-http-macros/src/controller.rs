@@ -34,7 +34,6 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         pipes,
         interceptors,
         exception_filters,
-        filters,
         meta,
         ..
     } = match take_layers(&pair::HTTP, LayerScope::Host, &mut item.attrs) {
@@ -60,7 +59,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // A layer is resolved at mount, so it joins the access graph like a field;
     // otherwise one from a non-imported module resolves through the flat container.
     let layers = layer_deps(
-        [&interceptors, &guards, &filters, &pipes, &exception_filters]
+        [&interceptors, &guards, &pipes, &exception_filters]
             .into_iter()
             .flatten(),
     );
@@ -68,11 +67,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
 
-    let interceptor_specs = scoped_specs(
-        &interceptors,
-        quote!(dyn ::nest_rs_interceptors::Interceptor),
-    );
-    let filter_specs = scoped_specs(&filters, quote!(dyn ::nest_rs_filters::Filter));
+    let interceptor_specs = quote! {
+        ::std::vec![#(::nest_rs_core::interceptor::<#interceptors>()),*]
+    };
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     let capability_bounds = guard_capability_bounds(
         guards.iter(),
@@ -80,10 +77,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let controller_has_throttler = guards.iter().any(crate::routes::guard_path_is_throttler);
     let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
-    let exception_filter_specs = scoped_specs(
-        &exception_filters,
-        quote!(dyn ::nest_rs_exception_filters::ExceptionFilterErased),
-    );
+    let exception_filter_specs = quote! {
+        ::std::vec![#(::nest_rs_core::exception_filter::<#exception_filters>()),*]
+    };
 
     let residency = pair::HTTP.host_residency(&name, &item.generics);
 
@@ -120,17 +116,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_interceptors(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_interceptor_specs()
-                -> ::std::vec::Vec<::nest_rs_interceptors::__private::InterceptorDeclaration>
+                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
             {
                 #interceptor_specs
-            }
-
-            /// Controller-level `#[use_filters(...)]`, read by `#[routes]`.
-            #[doc(hidden)]
-            pub fn __nestrs_controller_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_interceptors::__private::FilterDeclaration>
-            {
-                #filter_specs
             }
 
             /// Controller-level `#[use_guards(...)]`, read by `#[routes]`.
@@ -159,7 +147,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_exception_filters(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_interceptors::__private::ExceptionFilterDeclaration>
+                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
             {
                 #exception_filter_specs
             }

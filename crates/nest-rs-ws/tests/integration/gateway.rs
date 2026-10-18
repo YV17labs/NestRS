@@ -8,7 +8,6 @@ use nest_rs_pipes::{
     ArgumentKind, GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, Valid, pipe,
 };
 use nest_rs_testing::TestApp;
-use nest_rs_ws::nest_rs_http::poem::{self, Request as HttpRequest};
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, async_trait, gateway, messages};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -2544,21 +2543,23 @@ struct Caller(&'static str);
 
 impl nest_rs_core::AmbientValue for Caller {}
 
-/// Adds the caller around the upgrade request, as a guard's attachment does.
-#[injectable]
+/// Adds the caller around the upgrade request, at its unit stage, as a
+/// guard's attachment does.
+#[nest_rs_core::interceptor(stage = unit)]
 #[derive(Default)]
 struct CallerInterceptor;
 
 impl Layer for CallerInterceptor {}
 
 #[async_trait]
-impl nest_rs_interceptors::Interceptor for CallerInterceptor {
+impl nest_rs_core::Interceptor for CallerInterceptor {
     async fn intercept(
         &self,
-        req: HttpRequest,
-        next: nest_rs_interceptors::Next<'_>,
-    ) -> poem::Result<poem::Response> {
-        nest_rs_core::with_ambient(std::sync::Arc::new(Caller("alice")), next.run(req)).await
+        cx: &mut nest_rs_core::UnitContext<'_>,
+        next: nest_rs_core::Next<'_>,
+    ) -> nest_rs_core::Outcome {
+        cx.attach(Caller("alice"));
+        next.run(cx).await
     }
 }
 
@@ -2595,7 +2596,6 @@ struct CallerModule;
 async fn every_unit_of_a_socket_reads_what_its_upgrade_carried() {
     let app = nest_rs_testing::TestApp::builder()
         .module::<CallerModule>()
-        .use_interceptors_global([nest_rs_interceptors::interceptor::<CallerInterceptor>()])
         .build_ws()
         .await
         .expect("the gateway boots");

@@ -30,7 +30,7 @@ covers — logging, request id, rate limiting, auth, opening a transaction
 | Authenticating the bearer token | **Guard** (`AuthnGuard`) | Short-circuit on 401, attach `Claims` for the handler |
 | Rate-limiting | **Guard** | Short-circuit on 429 before any work runs |
 | Parsing/normalizing the body | **Pipe** at the boundary | Pure transform, no DI |
-| Opening a database transaction | **Interceptor** (`DbContext`, auto-mounted) | Wraps the handler, commits/rolls back on exit |
+| Opening a database transaction | **Nothing to write** | Importing the database binding runs every request as a [unit of work](/database/transactions/), committed on its outcome |
 | Stamping a request / correlation id | **Nothing to write** | Every unit of work already runs under a [W3C trace](/fundamentals/correlation/) |
 | CORS, security headers | poem middleware, configured on `HttpConfig` | Lower-level than a Guard/Interceptor |
 
@@ -55,19 +55,23 @@ impl Layer for NoIndex {}
 
 #[async_trait]
 impl Interceptor for NoIndex {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        let mut resp = next.run(req).await?;
-        resp.headers_mut()
-            .insert("x-robots-tag", HeaderValue::from_static("noindex"));
-        Ok(resp)
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        if let Some(resp) = HttpView::of(cx).ok().and_then(HttpView::response_mut) {
+            resp.headers_mut()
+                .insert("x-robots-tag", HeaderValue::from_static("noindex"));
+        }
+        outcome
     }
 }
 ```
 
-Bind it globally — either by adding `#[interceptor]` on the struct
-(auto-mount on every route) or via
-`App::builder().use_interceptors_global([interceptor::<NoIndex>()])`
-in `main`.
+Bind it for the whole app — either by writing `#[interceptor]` on the struct
+in place of `#[injectable]` (its module's import brings it to every route) or
+via `App::builder().use_interceptors_global([interceptor::<NoIndex>()])` in
+`main`. Either runs after the guards, so a refused request never reaches it;
+an interceptor that must see every answer, refusals and `404`s included, is
+declared `#[interceptor(stage = unit)]`.
 
 Do **not** write this one to stamp a correlation id: the framework already runs
 every request under a [trace](/fundamentals/correlation/) and reports it as
@@ -134,7 +138,7 @@ See [Guards / Attach context](/fundamentals/guards/#attach-context-and-route-met
 
 `nest-rs-http` builds on [poem](https://docs.rs/poem), and poem has its
 own `Middleware` trait. The framework exposes the named categories
-(Guard / Interceptor / Filter) layered over it. CORS, request-size
+(Guard / Interceptor / Exception filter) layered over it. CORS, request-size
 limits, body-decoding — those things live on `HttpConfig` and are
 applied as poem middleware by the transport, not as NestRS Guards or
 Interceptors.

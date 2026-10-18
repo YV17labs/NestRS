@@ -6,18 +6,78 @@
 //! claim — toward the API's own `404` — and never lets the fallback shadow a
 //! route.
 
+use std::any::TypeId;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use nest_rs_core::Container;
+use http::header::ALLOW;
+use http::{HeaderValue, StatusCode};
+use nest_rs_core::__private::{
+    GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers,
+    declare_handler, declare_site,
+};
+use nest_rs_core::{Container, Handler, Posture};
 
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::Result;
+use crate::problem::ProblemDetails;
 use crate::request::Request;
-use crate::response::Response;
+use crate::response::{IntoResponse, Response};
 use crate::route_template::{segment_parameter, unescape};
+use crate::site::SiteTail;
 use crate::transport::normalize_mount_path;
 use crate::versioning::route_matches;
+
+/// What the router answers itself — a path no route claims, a method an
+/// address does not serve — and the router's fallback: one site, at no
+/// address of its own.
+pub(crate) static FALLBACK: Handler = declare_handler(HandlerDeclaration {
+    unit: crate::unit::REQUEST,
+    host: TypeId::of::<crate::HttpModule>(),
+    host_name: "HttpModule",
+    method: "",
+    address: "*",
+    posture: Posture::Public,
+    meta: MetaLevels::default,
+});
+
+/// The fallback's site: the unit stage and the app's exception filters around
+/// what it answers, so a global catch-all shapes a `404` and a unit-stage
+/// interceptor sees it.
+pub(crate) static FALLBACK_SITE: Site = declare_site(
+    &FALLBACK,
+    SiteDeclaration {
+        layers: SiteLayers::default,
+        global: GlobalLayers {
+            unit_stage: true,
+            exception_filters: true,
+            handler_stage: false,
+        },
+        guard_stage: None,
+        class_gate: None,
+    },
+);
+
+/// The methods an address serves, on a request it does not serve with its
+/// method: the router answers it through the fallback site.
+#[derive(Clone)]
+pub(crate) struct NotAllowed(pub(crate) HeaderValue);
+
+/// The router's own answer: `405` with the `Allow` an address serves
+/// ([RFC 9110 §15.5.6](https://www.rfc-editor.org/rfc/rfc9110#status.405)),
+/// `404` where none claims the path.
+pub(crate) struct Unrouted;
+
+impl SiteTail for Unrouted {
+    async fn answer(&self, req: Request) -> Result<Response> {
+        let Some(NotAllowed(allow)) = req.extensions().get::<NotAllowed>() else {
+            return Ok(ProblemDetails::from_status(StatusCode::NOT_FOUND).into_response());
+        };
+        let mut resp = ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).into_response();
+        resp.headers_mut().insert(ALLOW, allow.clone());
+        Ok(resp)
+    }
+}
 
 type BuildFn = dyn Fn(&Container) -> BoxEndpoint + Send + Sync;
 

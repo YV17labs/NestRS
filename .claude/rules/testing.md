@@ -52,7 +52,9 @@ nextest prints each test's time: compare before and after.
 - **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives HTTP,
   GraphQL, OpenAPI and MCP through nestrs's `TestClient`, the stack the server
   runs, no socket; `TestApp` and the builder's HTTP half (`build`, `build_ws`,
-  `use_*_global`) are the `http` feature, the builder itself is not. The
+  `use_guards_global`, `use_pipes_global`) are the `http` feature, the
+  builder itself is not, nor `use_interceptors_global` and
+  `use_exception_filters_global`, core's. The
   default entry point, and the composition witness `manifests-ci.md` asks of
   every `for_root` seam. It boots the transport the app's own
   `HttpModule::for_root(cfg)` describes, through the call the module itself

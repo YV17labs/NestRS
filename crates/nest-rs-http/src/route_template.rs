@@ -130,6 +130,12 @@ impl RouteTemplate {
             .map(|range| &self.template[range.clone()])
     }
 
+    /// Whether the template is one catch-all at the root (`/{*rest}`): it
+    /// claims every path.
+    pub(crate) fn is_root_catch_all(&self) -> bool {
+        self.catch_all.is_some() && self.identity.starts_with("/{*")
+    }
+
     /// What makes two templates one address: the template with every
     /// parameter's name dropped — `/users/{id}` and `/users/{key}` are both
     /// `/users/{}`.

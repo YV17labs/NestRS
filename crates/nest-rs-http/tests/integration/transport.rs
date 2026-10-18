@@ -7,14 +7,16 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::{App, ContainerBuilder, Layer, Transport, injectable, module};
+use nest_rs_core::{
+    App, ContainerBuilder, Interceptor, Layer, Next, Outcome, Transport, UnitContext, interceptor,
+    module,
+};
 use nest_rs_http::__private::websocket::{WebSocketLimits, WebSocketUpgrade};
 use nest_rs_http::Body;
 use nest_rs_http::{
     DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, Method, SseStream, async_trait,
     controller, routes,
 };
-use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
 use nest_rs_testing::LogCapture;
 use poem::handler;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -780,9 +782,9 @@ fn a_body_read_gap_under_the_request_timeout_or_without_one_is_not_remarked() {
     }
 }
 
-/// An interceptor that only forwards: registered, it puts the bands between
-/// the edge and the router.
-#[injectable]
+/// An interceptor that only forwards, at the unit stage: imported, it puts a
+/// layered site around each of the self-mount's entries.
+#[interceptor(stage = unit)]
 #[derive(Default)]
 struct Forwarding;
 
@@ -790,8 +792,8 @@ impl Layer for Forwarding {}
 
 #[async_trait]
 impl Interceptor for Forwarding {
-    async fn intercept(&self, req: poem::Request, next: Next<'_>) -> poem::Result<poem::Response> {
-        next.run(req).await
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
     }
 }
 
@@ -877,20 +879,21 @@ impl nest_rs_core::Discoverable for Upgrades {
     }
 }
 
-#[module(providers = [Upgrades, Forwarding])]
+#[module(providers = [Upgrades])]
 struct UpgradeModule;
 
-/// An upgrade request crosses the edge, the bands when one is registered and the
-/// router with its socket still reachable: a nestrs entry and a poem leaf on
-/// one table each switch it.
+#[module(providers = [Upgrades, Forwarding])]
+struct LayeredUpgradeModule;
+
+/// An upgrade request crosses the edge, its site — layered when a unit-stage
+/// interceptor runs there — and the router with its socket still reachable: a
+/// nestrs entry and a poem leaf on one table each switch it.
 #[tokio::test]
 async fn a_converter_leaf_and_a_poem_leaf_both_upgrade() {
     for banded in [false, true] {
-        let builder = App::builder().module::<UpgradeModule>();
-        let builder = if banded {
-            builder.use_interceptors_global([interceptor::<Forwarding>()])
-        } else {
-            builder
+        let builder = match banded {
+            false => App::builder().module::<UpgradeModule>(),
+            true => App::builder().module::<LayeredUpgradeModule>(),
         };
         let serving = serve_app(builder, HttpConfig::default()).await;
         for leaf in ["/upgrade/poem", "/upgrade/nestrs"] {
@@ -1205,16 +1208,59 @@ impl nest_rs_core::UnitView for Units {}
 
 impl nest_rs_http::CarriedView for Units {}
 
+/// What the bound unit of work was asked to open, in order.
+static OPENED: Mutex<Vec<nest_rs_database::TransactionPolicy>> = Mutex::new(Vec::new());
+
+/// A unit of work recording the policy of each unit it opens.
+struct RecordingUnits;
+
+struct Nowhere;
+
+impl nest_rs_database::Executor for Nowhere {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+struct Opened;
+
+impl nest_rs_database::OpenUnit for Opened {
+    fn executor(&self) -> std::sync::Arc<dyn nest_rs_database::Executor> {
+        std::sync::Arc::new(Nowhere)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        _ok: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = nest_rs_database::Settlement> + Send>>
+    {
+        Box::pin(std::future::ready(nest_rs_database::Settlement::Settled))
+    }
+}
+
+impl nest_rs_database::UnitOfWork for RecordingUnits {
+    fn open(
+        &self,
+        spec: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        OPENED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(spec.policy);
+        Ok(Box::new(Opened))
+    }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
+}
+
 /// A self-mount whose request carries units of its own, as `/graphql` does,
-/// beside a route and a wrap in the unit-of-work band that says whether the
-/// request it saw was marked.
+/// beside a route, with a unit of work bound.
 struct CarryingMount;
 
 impl nest_rs_core::Discoverable for CarryingMount {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
-        use nest_rs_http::{BoxEndpoint, CarriedUnits, Endpoint, HeaderValue, endpoint_fn};
-
         builder
             .attach_meta::<CarryingMount, HttpEndpointMeta>(
                 HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/units", "units", |_c, routes| {
@@ -1223,23 +1269,7 @@ impl nest_rs_core::Discoverable for CarryingMount {
                 .carries::<Units>()
                 .owned_by("CarryingMount"),
             )
-            .provide_meta(HttpEndpointWrap::with_priority(
-                endpoint_wrap_priority::DATA_CONTEXT,
-                |_container, inner: BoxEndpoint| {
-                    BoxEndpoint::new(endpoint_fn(move |req: nest_rs_http::Request| {
-                        let marked = req.extensions().get::<CarriedUnits>().is_some();
-                        let inner = inner.clone();
-                        async move {
-                            let mut resp = inner.call(req).await?;
-                            resp.headers_mut().insert(
-                                "x-carried-units",
-                                HeaderValue::from_static(if marked { "yes" } else { "no" }),
-                            );
-                            Ok(resp)
-                        }
-                    }))
-                },
-            ))
+            .provide_dyn::<dyn nest_rs_database::UnitOfWork>(std::sync::Arc::new(RecordingUnits))
     }
 }
 
@@ -1258,7 +1288,7 @@ impl PlainController {
 struct CarryingModule;
 
 #[tokio::test]
-async fn a_request_to_a_mount_carrying_units_is_marked_before_the_unit_of_work_band() {
+async fn a_request_to_a_mount_carrying_units_runs_on_the_pool_whatever_its_method() {
     for prefix in [None, Some("/api")] {
         let client = crate::boot_on::<CarryingModule>(HttpConfig {
             global_prefix: prefix.map(Into::into),
@@ -1266,11 +1296,19 @@ async fn a_request_to_a_mount_carrying_units_is_marked_before_the_unit_of_work_b
         })
         .await;
         let at = |path: &str| format!("{}{path}", prefix.unwrap_or(""));
-        let carried = client.post(at("/units")).send().await;
-        carried.assert_status_is_ok();
-        carried.assert_header("x-carried-units", "yes");
-        let plain = client.post(at("/plain")).send().await;
-        plain.assert_status_is_ok();
-        plain.assert_header("x-carried-units", "no");
+        OPENED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        client.post(at("/units")).send().await.assert_status_is_ok();
+        client.post(at("/plain")).send().await.assert_status_is_ok();
+        assert_eq!(
+            *OPENED.lock().unwrap_or_else(PoisonError::into_inner),
+            [
+                nest_rs_database::TransactionPolicy::Pool,
+                nest_rs_database::TransactionPolicy::PerUnit,
+            ],
+            "{prefix:?}: the mount's request on the pool, the route's write in a transaction",
+        );
     }
 }

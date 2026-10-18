@@ -586,8 +586,8 @@ async fn a_route_whose_method_scope_lists_authorization_first_fails_the_boot_nam
         "the refusal names both guards: {chain}",
     );
     assert!(
-        chain.contains("get /x"),
-        "…and the route they are misordered on, as `#[routes]` labels it: {chain}",
+        chain.contains("GET /misordered/x") && chain.contains("MisorderedScope"),
+        "…and the route they are misordered on, its whole path and its controller: {chain}",
     );
 }
 

@@ -27,11 +27,12 @@ framework half.
   (`FactoryInputs`, sealed): a new arity is an impl, never a new form.
 - **A `register` refuses, never panics**: what it cannot build it files with
   `ContainerBuilder::refuse` and returns, as a factory returns `Err`. So does a
-  site a transport composes at `configure` (a route, a gateway) against the
-  built container: a mount has no `Result`, so it files the refusal, mounts
-  what denies, and the boot fails on it once the transports are configured —
-  `App::run` and the test harness read it
-  (`.claude/decisions/site-refuses-through-its-container.md`). A factory
+  site a transport composes at `configure` against the built container: a
+  route returns its refusal through the route table, failing `configure`
+  naming the route and its controller; a gateway's message table, mounted
+  with no `Result`, files it, mounts what denies, and the boot fails on it
+  once the transports are configured — `App::run` and the test harness read
+  it (`.claude/decisions/site-refuses-through-its-container.md`). A factory
   is queued in `collect`, so a module or setup wiring another imports it in
   both phases, through `ContainerBuilder::import` — the one way into a
   module's phases, held by `Collecting` and `Registering`

@@ -1,16 +1,16 @@
 ---
 title: The request lifecycle
-description: "One pool per layer family, deduplicated by TypeId, run exactly once — how scope chooses where a guard, pipe, interceptor or filter executes."
+description: "One pool per layer family, deduplicated by TypeId, run exactly once — how scope chooses where a guard, pipe, interceptor or exception filter executes."
 sidebar:
   order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Five layer families wrap every request: **guards** (gate access), **pipes**
-(edge conversion), **interceptors** (cross-cutting, e.g. transactions),
-**filters** and **exception-filters** (error mapping). This page is the one
-place that explains how they compose — every other page links here instead of
+Four layer families wrap every request: **guards** (gate access), **pipes**
+(edge conversion), **interceptors** (cross-cutting work around the handler)
+and **exception filters** (error mapping). This page is the one place that
+explains how they compose — every other page links here instead of
 re-explaining it.
 
 ## One pool per family
@@ -45,45 +45,65 @@ site differs:
 
 | Family | Global scope | Controller / handler scope |
 |---|---|---|
-| Guard | `RouteShaper` (post-routing — reads `#[public]`) | same site |
-| Pipe | `RouteShaper`; `/graphql` POST variables and a WS message's `data`, at their endpoint — a graphql-ws operation runs none | `RouteShaper`; per argument on the other edges |
-| ExceptionFilter | route site (closest to the handler) | route site |
-| Interceptor | transport edge (before auth — sees 404s, denials) | around the handler, inside guards |
-| Filter | transport edge | around the handler, inside guards |
+| Guard | the guard stage, after routing (reads `#[public]`); a self-mount's request | same site |
+| Pipe | before the handler, over the body; `/graphql` POST variables and a WS message's `data`, at their endpoint — a graphql-ws operation runs none | before the handler; per argument on the other edges |
+| Exception filter | around the handler stage; a self-mount's request; what the router answers itself | around the handler stage |
+| Interceptor | the handler stage, after the guards | the handler stage, inside the app's |
 
-Global guards are **pooled** globally but **execute** post-routing at the
-`RouteShaper`, because a guard reads `#[public]` route data that only exists
-after routing — they do **not** run "before routing". Nothing the framework
-runs before them reads the request body: the transport wraps it, and whatever
-reads it first — a guard, the pipe pool, an extractor — reads it under
+Global guards are **pooled** globally but **execute** after routing, because a
+guard reads `#[public]` route data that only exists once the route is known —
+they do **not** run "before routing". Nothing the framework runs before them
+reads the request body: the transport wraps it, and whatever reads it first — a
+guard, the pipe pool, an extractor — reads it under
 [the body cap and its gap bound](/http/configuration/#request-body-size-limit).
 
-Two ways to be transport-wide, deliberately distinct: `use_*_global` adds to
-the **pool** (TypeId-deduped against narrower scopes); `#[interceptor]` is
-**infrastructure** a module import auto-mounts at a fixed band (off the pool —
-`DbContext`, tracing, timing).
+Two ways to be app-wide, both at the handler stage: `use_interceptors_global`
+is the app's list, and `#[interceptor]` is what a module import brings. Only
+an interceptor its module declares `#[interceptor(stage = unit)]` runs around
+the guards — on every HTTP unit, a `404` and a refusal included — and writing
+`stage = unit` is the visible line that opens it.
 
 ## Nesting order
 
-Per route, innermost → outermost: **handler → ability shaper → exception-filter
-pool → scoped filters → scoped interceptors → `RouteShaper` (guard pool →
-`#[authorize]` class gate → pipe pool)**. At the transport edge
-(innermost → outermost band): **routing → DbContext (−10) → global filter pool
-(50) → error resolution (70) → global interceptor pool (90) → infra
-`#[interceptor]` (100)**. The error-resolution band is what makes a global
-filter see a raw `Err` while a global interceptor sees a `Response`.
+Every HTTP unit — a route, a self-mount's request, what the router answers
+itself — runs the same stages, outermost first:
+
+1. **The edge**: the request span and its operation line, the request scope,
+   the deadline, panic containment.
+2. **The unit of work**, opened through the database binding when one is
+   imported: a transaction on a mutating route, the pool otherwise. It
+   commits on the unit's own outcome.
+3. **The unit stage**: `#[interceptor(stage = unit)]` (`Server-Timing`, the
+   RFC 9728 challenge).
+4. **The guard stage**: the global, controller and method guards, then the
+   route's `#[authorize]` class gate. A refusal is answered here.
+5. **Exception filters**: the method's, the controller's, then the app's.
+6. **The handler stage**: the app's global interceptors, then the modules'
+   `#[interceptor]`s in import order, then the controller's, then the
+   method's.
+7. **The handler**: the global pipe pool over the body, the extractors and
+   their pipes, the handler, the response mask.
+
+A self-mount's request runs stages 1 to 5, its guard stage the request stage
+the transport composes for it; no handler of yours runs there, so no handler
+stage either. What the router answers itself — a `404`, a `405`, a module's
+fallback — runs the edge, the unit stage and the exception filters alone: no
+unit of work, no guard.
 
 The operation span is outside all of it: the transport opens it before routing,
 so every stage above logs under one `trace_id` — see
 [Correlation](/fundamentals/correlation/).
 
-Interceptors sit outside filters; exception-filters sit closest to the handler
-— at both sites. The route's `#[authorize]` class gate runs with its guards,
-after the ability guard and before any interceptor or filter the route declares:
-a caching interceptor never answers a caller the gate refuses, and a filter never
-sees the refusal. `Layer::priority` orders entries *within* a site, never across
-sites: a handler-scope guard at `-10` still runs after every global and
-controller guard.
+The route's `#[authorize]` class gate runs with its guards, before any
+interceptor or filter the route declares: a caching interceptor never answers a
+caller the gate refuses, and a filter never sees the refusal. `Layer::priority`
+orders entries *within* a site, never across sites: a handler-scope guard at
+`-10` still runs after every global and controller guard.
+
+A failure is sticky. A handler's error, or a `4xx`/`5xx` it answered, fails
+the unit; an exception filter or an interceptor may change what the client
+reads, never whether the unit failed, so a failed mutating request rolls back
+whatever it answered.
 
 ## `#[public]` and `#[meta]`
 
@@ -92,8 +112,8 @@ layer reads. `#[public]` marks a route as anonymous-admissible (the guard admits
 it through); `#[meta]` declares typed data on a route or its controller, which a
 guard reads through `cx.reflector()`. Each route keeps one declaration for
 the process, its values built on first read; its layers read it through a
-pointer, so nothing is copied per request. A denial is an `Ok(4xx)` response,
-never an `Err` — filters never see it; global interceptors do.
+pointer, so nothing is copied per request. A refusal is answered by the guard
+stage — exception filters never see it; a unit-stage interceptor observes it.
 
 Every guarded site's `#[meta]` is read the same way: a resolver, a gateway, an
 MCP host and each of their methods keep theirs with their site, and a guard's
@@ -116,7 +136,7 @@ provides it. `AuthzGuard` is provided by `AuthzModule` — add
 route the dependency through a module `PostsHttpModule` already imports.
 ```
 
-A global guard, pipe, interceptor, filter or exception filter that cannot
+A global guard, pipe, interceptor or exception filter that cannot
 resolve (its provider's module is not imported) fails the boot of every app, one
 that serves no HTTP included, naming the type: the check runs at the boot's
 wiring step, before any hook.

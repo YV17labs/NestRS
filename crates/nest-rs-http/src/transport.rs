@@ -7,7 +7,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::header::{HeaderName, HeaderValue, SERVER};
+use nest_rs_core::__private::{
+    GlobalLayers, GuardStage, SiteDeclaration, SiteLayers, UnitChains, compose_site,
+};
 use nest_rs_core::{Container, Discovery, Listening, Posture, Transport};
+use nest_rs_database::UnitOfWork;
 use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::HttpBootCheck;
@@ -15,18 +19,21 @@ use crate::controller::HttpControllerMeta;
 use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::edge::EdgeEndpoint;
-use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, MarkCarriedUnits};
+use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta};
 use crate::endpoint_guards::{RequestStage, check_declarations_reached, request_stage};
 use crate::error::RouteError;
-use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
-use crate::guard_stage::{DeniedEndpoint, GuardedEndpoint};
-use crate::interceptor::HttpEndpointWrap;
+use crate::fallback::{
+    Claims, FALLBACK, FALLBACK_SITE, Fallback, HttpFallbackMeta, Unrouted, WithFallback,
+    literal_prefix,
+};
+use crate::guard_stage::{DeniedStage, HttpGuardStage, StageKind};
 use crate::origin::{OriginChecked, OriginPolicy};
 use crate::poem_adapter::{CorsPolicy, PoemAdapter};
-use crate::problem::{Normalized, ResolvedErrors};
+use crate::problem::Normalized;
 use crate::route_template::RouteTemplate;
 use crate::routes::{Address, HttpRoutes, Wrap};
 use crate::server::Server;
+use crate::site::{EndpointTail, SiteEndpoint, UnitPolicy};
 use crate::tls::{HttpTls, ListenerTls};
 use crate::trace_context::KnownMethods;
 use crate::versioning::VersionedEndpoint;
@@ -254,6 +261,7 @@ fn mount_fallback(
     meta: &HttpFallbackMeta,
     claims: Claims,
     get_routes: &[(String, &'static str)],
+    chains: &Arc<UnitChains>,
 ) -> Result<Fallback, RouteError> {
     RouteTemplate::literal(meta.path()).map_err(|refused| RouteError::FallbackPath {
         owner: meta.owner().to_owned(),
@@ -283,12 +291,32 @@ fn mount_fallback(
         path = meta.path(),
         "mounted endpoint",
     );
+    let endpoint = SiteEndpoint::new(
+        &FALLBACK,
+        Arc::clone(chains),
+        None,
+        EndpointTail(meta.build(container)),
+    );
     Ok(Fallback::new(
         meta.path().to_owned(),
         claims,
-        meta.build(container),
+        BoxEndpoint::new(endpoint),
     ))
 }
+
+/// What a self-mount's site folds of the app's layers: the unit stage and the
+/// exception filters, which still shape the mount's own HTTP error, never the
+/// handler stage — its operations are units of their own.
+const SELF_MOUNT: SiteDeclaration = SiteDeclaration {
+    layers: SiteLayers::default,
+    global: GlobalLayers {
+        unit_stage: true,
+        exception_filters: true,
+        handler_stage: false,
+    },
+    guard_stage: None,
+    class_gate: None,
+};
 
 /// `path`, a controller's prefix or one of its routes, read as a template; the
 /// macros read both halves, so a refusal here is a hand-built controller's.
@@ -406,7 +434,9 @@ impl Transport for HttpTransport {
                 refused,
             })?;
         }
-        let mut routes = HttpRoutes::new(prefix.as_deref());
+        // Resolved once: every site opens its units through it.
+        let unit_of_work = container.get_dyn::<dyn UnitOfWork>();
+        let mut routes = HttpRoutes::new(prefix.as_deref(), unit_of_work.clone());
         // What an operator reads of a path is the one a client calls.
         let served = |path: &str| match &prefix {
             Some(prefix) => join_path(prefix, path),
@@ -542,9 +572,6 @@ impl Transport for HttpTransport {
         let origins = OriginPolicy::from_container(container);
         let mut endpoint_owner: HashMap<String, String> = HashMap::new();
         let mut carried: Vec<TypeId> = Vec::new();
-        // As a client addresses them: the wraps run before the router strips
-        // the global prefix.
-        let mut carrying: Vec<String> = Vec::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
             let owner = format!("{} endpoint {}", d.meta.label(), d.meta.owner());
             // Nested whole at its path; what it routes below is its own template.
@@ -594,29 +621,26 @@ impl Transport for HttpTransport {
             if let Some(work) = d.meta.detached() {
                 self.detached.push((d.meta.path().to_owned(), work.clone()));
             }
-            // Each entry runs the stage once routed, so a guard reads the template
-            // it matched; a public surface (OpenAPI), or one with no guard to run,
-            // registers its entries as they are.
+            // Each entry is a unit of its site once routed, so a guard reads the
+            // template it matched.
             let site = format!("the {} request at {}", d.meta.label(), d.meta.path());
             let handler = d.meta.handler();
             if let Some(units) = d.meta.carried() {
                 carried.push(units.view);
-                carrying.extend(
-                    d.meta
-                        .paths()
-                        .map(|path| join_path(prefix.as_deref().unwrap_or(""), path)),
-                );
             }
-            let guarded: Option<Wrap> = match request_stage(container, &d.meta, &site)? {
+            let stage: Option<Arc<dyn GuardStage>> = match request_stage(container, &d.meta, &site)?
+            {
                 RequestStage::Open => {
                     if handler.posture() == Posture::Gated && d.meta.carried().is_none() {
                         unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
                     }
                     None
                 }
-                RequestStage::Guarded(chain) => Some(Arc::new(move |inner| {
-                    BoxEndpoint::new(GuardedEndpoint::new(handler, chain.clone(), inner))
-                })),
+                RequestStage::Guarded(chain) => Some(Arc::new(HttpGuardStage::new(
+                    chain,
+                    Vec::new(),
+                    StageKind::SelfMount,
+                ))),
                 RequestStage::Denied => {
                     tracing::warn!(
                         target: nest_rs_core::target::LAYERS,
@@ -627,27 +651,34 @@ impl Transport for HttpTransport {
                                 units, or open the endpoint in code",
                         "a gated endpoint runs no guard at its request; it denies every request",
                     );
-                    let path = d.meta.path().to_owned();
-                    Some(Arc::new(move |_inner| {
-                        BoxEndpoint::new(DeniedEndpoint::new(path.clone()))
-                    }))
+                    Some(Arc::new(DeniedStage::new(d.meta.path().to_owned())))
                 }
             };
-            // Ahead of the guards: a refused origin never pays for authentication.
-            let wrap = match d.meta.origin() {
+            let chains = compose_site(container, handler, &SELF_MOUNT, stage)?;
+            let policy = match d.meta.carried() {
+                Some(_) => UnitPolicy::Carried,
+                None => UnitPolicy::ByMethod,
+            };
+            let unit = unit_of_work.clone().map(|unit| (unit, policy));
+            let in_site = move |inner: BoxEndpoint| {
+                BoxEndpoint::new(SiteEndpoint::new(
+                    handler,
+                    Arc::clone(&chains),
+                    unit.clone(),
+                    EndpointTail(inner),
+                ))
+            };
+            // Ahead of the site: a refused origin never pays for a guard.
+            let wrap: Wrap = match d.meta.origin() {
                 Some(gate) => {
                     let policy = origins.clone();
-                    Some(Arc::new(move |inner| {
-                        let inner = match &guarded {
-                            Some(guard) => guard(inner),
-                            None => inner,
-                        };
-                        BoxEndpoint::new(OriginChecked::new(policy.clone(), gate, inner))
-                    }) as Wrap)
+                    Arc::new(move |inner| {
+                        BoxEndpoint::new(OriginChecked::new(policy.clone(), gate, in_site(inner)))
+                    })
                 }
-                None => guarded,
+                None => Arc::new(in_site),
             };
-            routes.for_self_mount(format!("the {owner}"), templates, wrap);
+            routes.for_self_mount(format!("the {owner}"), templates, Some(wrap));
             d.meta.mount(container, &mut routes);
             routes.settle()?;
         }
@@ -668,7 +699,16 @@ impl Transport for HttpTransport {
         let addresses = routes.into_addresses();
         let known_methods =
             KnownMethods::with(addresses.iter().flat_map(Address::methods).cloned());
-        let mut router = PoemAdapter::router(addresses)?;
+        // What the router answers itself, as one site: its 404s and 405s, and
+        // the fallback a module mounts.
+        let fallback_chains = FALLBACK_SITE.chains(container)?;
+        let unrouted = BoxEndpoint::new(SiteEndpoint::new(
+            &FALLBACK,
+            Arc::clone(&fallback_chains),
+            None,
+            Unrouted,
+        ));
+        let mut router = PoemAdapter::router(addresses, unrouted)?;
         // In front of routing, after the global prefix: it rewrites the path a
         // controller's route is registered at. `rewrites()`, not `Some`: wrapping
         // the URI strategy would refuse every `/v{n}/…`.
@@ -694,7 +734,13 @@ impl Transport for HttpTransport {
         }
         let fallback = match discovery.meta::<HttpFallbackMeta>().as_slice() {
             [] => None,
-            [only] => Some(mount_fallback(container, &only.meta, claims, &get_routes)?),
+            [only] => Some(mount_fallback(
+                container,
+                &only.meta,
+                claims,
+                &get_routes,
+                &fallback_chains,
+            )?),
             [first, second, ..] => {
                 return Err(RouteError::TwoFallbacks {
                     first: first.meta.owner().to_owned(),
@@ -705,14 +751,6 @@ impl Transport for HttpTransport {
         };
         let router = WithFallback::new(router, fallback);
 
-        // Ascending priority, whatever the registration order; the stable sort
-        // keeps insertion order within a band.
-        let mut metas: Vec<std::sync::Arc<HttpEndpointWrap>> = discovery
-            .meta::<HttpEndpointWrap>()
-            .into_iter()
-            .map(|d| d.meta)
-            .collect();
-        metas.sort_by_key(|m| m.priority());
         let mut edge_headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
         for (name, value) in self.security_headers.headers(self.tls.is_some()) {
             // Values are boot-validated: a failure here is a framework bug.
@@ -733,52 +771,22 @@ impl Transport for HttpTransport {
         let fuse_normalize = !self.compression && self.cors.is_none();
         let timeout = self.request_timeout.take();
 
-        let endpoint = if metas.is_empty() && fuse_normalize {
-            self.edge(
-                router,
-                container,
-                timeout,
-                edge_headers,
-                true,
-                known_methods,
-            )
-        } else {
-            // The router answers 404/405 with an `Err`, which would short-circuit an
-            // interceptor's `next.run(req).await?`; rendering at `ERROR_RESOLVE` lets them see it.
-            let split = metas
-                .partition_point(|m| m.priority() < crate::interceptor::priority::ERROR_RESOLVE);
-            let (below, above) = metas.split_at(split);
-            let inner = below.iter().fold(BoxEndpoint::new(router), |inner, meta| {
-                meta.wrap(container, inner)
-            });
-            // Outside the unit-of-work band, which reads the mark.
-            let inner = match carrying.is_empty() {
-                true => inner,
-                false => BoxEndpoint::new(MarkCarriedUnits::new(inner, carrying)),
-            };
-            let endpoint = above
-                .iter()
-                .fold(BoxEndpoint::new(ResolvedErrors(inner)), |endpoint, meta| {
-                    meta.wrap(container, endpoint)
-                });
-            let endpoint = self.edge(
+        let endpoint = self.edge(
+            router,
+            container,
+            timeout,
+            edge_headers,
+            fuse_normalize,
+            known_methods,
+        );
+        let endpoint = match fuse_normalize {
+            true => endpoint,
+            // Outside the edge, so a preflight carries no request scope.
+            false => BoxEndpoint::new(Normalized(PoemAdapter::around(
                 endpoint,
-                container,
-                timeout,
-                edge_headers,
-                fuse_normalize,
-                known_methods,
-            );
-            if fuse_normalize {
-                endpoint
-            } else {
-                // Outside the edge, so a preflight carries no request scope.
-                BoxEndpoint::new(Normalized(PoemAdapter::around(
-                    endpoint,
-                    self.cors.take(),
-                    self.compression,
-                )))
-            }
+                self.cors.take(),
+                self.compression,
+            ))),
         };
 
         self.endpoint = Some(endpoint);

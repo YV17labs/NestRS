@@ -1,20 +1,10 @@
 //! # nest-rs-filters
 //!
-//! HTTP filters — the error-mapping slot of the Layer System.
-//!
-//! A [`Filter`] runs only on the error path: when the inner endpoint returns
-//! `Err(poem::Error)`, the filter maps the error to a [`Response`](poem::Response).
-//! Successful responses pass through unchanged. `Filter` is a [`Layer`](nest_rs_core::Layer)
-//! sub-trait so global + per-scope declarations dedup by
-//! [`TypeId`](std::any::TypeId) at mount time.
-//!
-//! # Which of the two do I want?
-//!
-//! **`Filter` maps *every* error; `ExceptionFilter` maps *one type* of error.**
-//! Reach for `nest_rs_exception_filters::ExceptionFilter` first — a typed catch
-//! is what a handler usually wants (map `PostAlreadyPublished` to a `409`) and
-//! it leaves every other error alone. Reach for `Filter` when the mapping is
-//! unconditional: a crate-wide envelope, a last-resort `500` shaper.
+//! The poem-typed error mapper that `nest_rs::core::ExceptionFilter` replaced:
+//! an exception filter whose `Exception` is `dyn Error + Send + Sync` catches
+//! every failure, through the one pipeline, and `#[use_filters]` is refused
+//! naming `#[use_exception_filters]`. Nothing in the framework runs a `Filter`
+//! any more; the crate leaves in 7.0.
 //!
 //! ## Defining a filter
 //!
@@ -44,21 +34,15 @@
 //! The reply carries the status alone: an error's text can quote the request
 //! it failed on, so it goes to the log and never to the client.
 //!
-//! ## Registering globally
-//!
-//! Register with `App::builder().use_filters_global([...])`
-//! ([`AppBuilderFiltersExt`]); the example on [`filter`](fn@filter) runs it.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-mod builder;
 mod ext;
 mod filter;
 mod registry;
 
-pub use builder::AppBuilderFiltersExt;
 pub use ext::FilterExt;
 pub use filter::{Filter, FilterChain, FilterEndpoint, RequestSnapshot};
-pub use registry::{FilterSpec, FilterSpecs, filter};
+pub use registry::{FilterSpec, filter};
 // Re-exported so a `Filter` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;

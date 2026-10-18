@@ -34,13 +34,12 @@ mod endpoint_guards;
 mod error;
 mod fallback;
 mod form;
+mod global_pipes;
 mod guard_stage;
 mod headers;
-mod interceptor;
 mod json;
 mod link;
 mod location;
-mod mapped;
 mod matched;
 mod module;
 mod multipart;
@@ -57,13 +56,14 @@ mod raw_body;
 mod request;
 mod response;
 mod response_body;
-mod route_shaper;
+mod route_site;
 mod route_template;
 mod routes;
 mod scope;
 mod security_headers;
 mod server;
 mod shaper;
+mod site;
 mod sse;
 mod stall;
 pub mod target;
@@ -206,7 +206,7 @@ pub use cors::HttpCors;
 pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
-pub use endpoint::{BoxEndpoint, CarriedUnits, Endpoint, HttpEndpointMeta, endpoint_fn};
+pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, endpoint_fn};
 pub use endpoint_guards::{CarriedView, EndpointGuards, GuardList};
 pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError};
 pub use fallback::HttpFallbackMeta;
@@ -215,7 +215,6 @@ pub use headers::Header;
 pub use json::Json;
 pub use link::set_next_link;
 pub use location::{caller_path, set_created_location};
-pub use mapped::MappedError;
 pub use module::{HttpModule, HttpSetup};
 pub use multipart::{Field, Multipart, PartStream};
 pub use nest_rs_core::input;
@@ -253,17 +252,19 @@ pub mod __private {
 
     pub use crate::controller::{SchemaFn, schema_of};
     pub use crate::deprecation::deprecated_route;
-    pub use crate::endpoint::{OriginCheck, carried_units, checks_origin, guarded_by};
+    pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
     pub use crate::error::{OriginRefused, OriginRefusedReason};
     pub use crate::guard_stage::{
-        GuardedEndpoint, attached, attached_pending, check_request, denial_to_http_error,
+        attached, attached_pending, behind_guards, check_request, denial_to_http_error,
         denial_to_http_response,
     };
-    pub use crate::interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
     pub use crate::origin::{OriginFacts, OriginPolicy, OriginScheme};
+    pub use crate::problem::framework_sentence;
     pub use crate::response::IntoResult;
-    pub use crate::route_shaper::{RouteShaper, ShapedRoute, refused_route, wrap_route_shaper};
+    pub use crate::route_site::{
+        RouteGuards, RoutePipes, mount_controller, mount_route, route_guard_stage,
+    };
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
     pub use crate::view::{put_poem, take_poem, with_view};
     pub use nest_rs_guards::__private::global_guards_active;
@@ -373,44 +374,6 @@ pub use nest_rs_http_macros::routes;
 /// Each route delegates to the service's `nest_rs_seaorm::CrudService` and
 /// declares its posture with `#[authorize(Action, Entity)]`.
 pub use nest_rs_http_macros::crud;
-
-/// `#[interceptor]` — mounts a struct implementing
-/// `nest_rs_interceptors::Interceptor` around the whole HTTP endpoint, as a
-/// transport-edge wrap rather than a provider.
-///
-/// ```
-/// # use nest_rs_core::{Layer, module};
-/// # use nest_rs_http::poem::http::HeaderValue;
-/// # use nest_rs_http::poem::{Request, Response, Result};
-/// # use nest_rs_http::{async_trait, interceptor};
-/// # use nest_rs_interceptors::{Interceptor, Next};
-/// # use nest_rs_testing::TestApp;
-/// #[interceptor]
-/// struct ServedBy;
-///
-/// impl Layer for ServedBy {}
-///
-/// #[async_trait]
-/// impl Interceptor for ServedBy {
-///     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-///         let mut resp = next.run(req).await.unwrap_or_else(|err| err.into_response());
-///         resp.headers_mut().insert("x-served-by", HeaderValue::from_static("api"));
-///         Ok(resp)
-///     }
-/// }
-///
-/// #[module(providers = [ServedBy])]
-/// struct AppModule;
-/// # #[nest_rs_core::main]
-/// # async fn main() -> anyhow::Result<()> {
-/// # let app = TestApp::for_module::<AppModule>().await?;
-///
-/// app.http().get("/nowhere").send().await.assert_header("x-served-by", "api");
-/// assert!(app.container().get::<ServedBy>().is_none());
-/// # Ok(())
-/// # }
-/// ```
-pub use nest_rs_http_macros::interceptor;
 
 pub use nest_rs_http_macros::http_code;
 pub use nest_rs_http_macros::redirect;

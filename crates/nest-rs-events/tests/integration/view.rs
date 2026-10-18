@@ -143,6 +143,20 @@ impl ExceptionFilter for Internal {
     }
 }
 
+/// Built per request, so no listener call resolves it from the app's root.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct PerRequest;
+
+impl Layer for PerRequest {}
+
+#[async_trait]
+impl Interceptor for PerRequest {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
+    }
+}
+
 #[injectable]
 #[derive(Default)]
 struct CatalogListeners;
@@ -195,6 +209,17 @@ impl IndexListeners {
     async fn on_reindexed(&self, _event: Reindexed) -> anyhow::Result<()> {
         anyhow::bail!("the search index refused the connection")
     }
+}
+
+#[injectable]
+#[derive(Default)]
+struct AuditListeners;
+
+#[listeners]
+impl AuditListeners {
+    #[on_event]
+    #[use_interceptors(PerRequest)]
+    async fn on_archived(&self, _event: Archived) {}
 }
 
 #[module(
@@ -343,6 +368,28 @@ async fn a_layer_a_listener_binds_that_no_module_provides_fails_the_boot_naming_
         .map(|error| format!("{error:#}"))
         .unwrap_or_default();
     for part in ["CatalogListeners", "Reading"] {
+        assert!(
+            refused.contains(part),
+            "the refusal names `{part}`: {refused}"
+        );
+    }
+}
+
+#[module(imports = [EventsModule], providers = [AuditListeners, PerRequest])]
+struct PerRequestModule;
+
+#[tokio::test]
+async fn a_layer_a_listener_binds_that_its_wiring_cannot_resolve_fails_the_boot_naming_both() {
+    let booted = async {
+        let app = App::builder().module::<PerRequestModule>().build().await?;
+        app.init().await
+    };
+    let refused = booted
+        .await
+        .err()
+        .map(|error| format!("{error:#}"))
+        .unwrap_or_default();
+    for part in ["AuditListeners::on_archived", "PerRequest"] {
         assert!(
             refused.contains(part),
             "the refusal names `{part}`: {refused}"

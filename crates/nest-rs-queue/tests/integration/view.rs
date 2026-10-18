@@ -3,19 +3,24 @@
 //! through `QueueView`, and settle it — a filter's problem by its class, an
 //! acknowledgement without running it.
 
+use std::any::TypeId;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{
     App, Caught, Container, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem,
-    UnitContext, async_trait, injectable, interceptor, module,
+    ReachableProviders, Transport, UnitContext, async_trait, injectable, interceptor, module,
 };
 use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
-use nest_rs_queue::{JobId, QueueName, QueueView, WIRE_FORMAT_VERSION, processor, queue};
+use nest_rs_queue::{
+    BoundConsumer, JobId, QueueName, QueueView, QueueWorker, WIRE_FORMAT_VERSION, processor, queue,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::memory::{Memory, PLAIN};
 use crate::{BARE, method};
 
 /// A job id as a push mints it.
@@ -457,6 +462,31 @@ async fn a_layer_a_job_binds_from_a_module_its_host_does_not_import_fails_the_bo
         "Reading",
         "LayersModule",
     ] {
+        assert!(
+            refused.contains(part),
+            "the refusal names `{part}`: {refused}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_layer_a_job_binds_that_nothing_provides_fails_the_configure_naming_both() {
+    let consumer = Memory::new(&PLAIN, Duration::from_secs(1)).consumer();
+    let container = Container::builder()
+        .provide(ReachableProviders(
+            [TypeId::of::<HostedProcessor>()].into_iter().collect(),
+        ))
+        .provide(HostedProcessor)
+        .provide(BoundConsumer::new(consumer))
+        .build()
+        .expect("the container builds");
+    let refused = QueueWorker::new()
+        .configure(&container)
+        .await
+        .err()
+        .map(|error| format!("{error:#}"))
+        .unwrap_or_default();
+    for part in ["Reading", "HostedProcessor::hosted"] {
         assert!(
             refused.contains(part),
             "the refusal names `{part}`: {refused}"

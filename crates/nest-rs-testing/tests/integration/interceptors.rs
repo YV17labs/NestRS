@@ -610,3 +610,42 @@ async fn a_route_a_controller_registers_by_hand_runs_every_stage_of_a_route() {
     denied.assert_status(StatusCode::FORBIDDEN);
     denied.assert_header("x-edge", "hit");
 }
+
+/// Half the stack a tokio worker thread gets.
+const HALF_A_WORKER_STACK: usize = 1024 * 1024;
+
+#[module(providers = [EdgeStamp, AttachPrincipal, Reader, ReadController])]
+struct EveryStageModule;
+
+/// The pipeline's stages poll as `async fn` frames on the thread's stack: a
+/// route running each of them, boot included, stays well inside a worker's.
+#[test]
+fn a_route_running_every_stage_answers_within_half_a_worker_threads_stack() {
+    let answered = std::thread::Builder::new()
+        .stack_size(HALF_A_WORKER_STACK)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime")
+                .block_on(async {
+                    let app = TestApp::builder()
+                        .module::<EveryStageModule>()
+                        .use_interceptors_global([interceptor::<Reader>()])
+                        .build()
+                        .await
+                        .expect("boots");
+                    let resp = app
+                        .http()
+                        .get("/read")
+                        .header("x-correlation", "c-1")
+                        .send()
+                        .await;
+                    resp.assert_header("x-edge", "hit");
+                    resp.assert_header("x-read", "ledger alice c-1");
+                });
+        })
+        .expect("the thread starts")
+        .join();
+    assert!(answered.is_ok(), "the route answered on that thread");
+}

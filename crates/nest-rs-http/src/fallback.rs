@@ -13,8 +13,7 @@ use std::sync::Arc;
 use http::header::ALLOW;
 use http::{HeaderValue, StatusCode};
 use nest_rs_core::__private::{
-    GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers,
-    declare_handler, declare_site,
+    HandlerDeclaration, MetaLevels, Site, declare_handler, declare_site,
 };
 use nest_rs_core::{Container, Handler, Posture};
 
@@ -25,7 +24,7 @@ use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::route_template::{segment_parameter, unescape};
 use crate::site::SiteTail;
-use crate::transport::normalize_mount_path;
+use crate::transport::{SELF_MOUNT, normalize_mount_path};
 use crate::versioning::route_matches;
 
 /// What the router answers itself — a path no route claims, a method an
@@ -41,22 +40,10 @@ pub(crate) static FALLBACK: Handler = declare_handler(HandlerDeclaration {
     meta: MetaLevels::default,
 });
 
-/// The fallback's site: the unit stage and the app's exception filters around
-/// what it answers, so a global catch-all shapes a `404` and a unit-stage
-/// interceptor sees it.
-pub(crate) static FALLBACK_SITE: Site = declare_site(
-    &FALLBACK,
-    SiteDeclaration {
-        layers: SiteLayers::default,
-        global: GlobalLayers {
-            unit_stage: true,
-            exception_filters: true,
-            handler_stage: false,
-        },
-        guard_stage: None,
-        class_gate: None,
-    },
-);
+/// The fallback's site, folding what a self-mount's does: the unit stage and
+/// the app's exception filters around what it answers, so a global catch-all
+/// shapes a `404` and a unit-stage interceptor sees it.
+pub(crate) static FALLBACK_SITE: Site = declare_site(&FALLBACK, SELF_MOUNT);
 
 /// The methods an address serves, on a request it does not serve with its
 /// method: the router answers it through the fallback site.

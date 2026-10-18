@@ -22,6 +22,7 @@ use crate::deadline::RequestDeadline;
 use crate::endpoint::Endpoint;
 use crate::error::{HttpError, Result, failed, file};
 use crate::guard_stage::denial_response;
+use crate::pipe::rejection;
 use crate::problem::{ProblemDetails, problem_response};
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
@@ -215,7 +216,7 @@ impl<T: SiteTail> Tail for Running<'_, T> {
             match answered {
                 Ok(response) => {
                     let status = response.status();
-                    let failed = status.is_client_error() || status.is_server_error();
+                    let failed = is_error(&response);
                     let settled = view.respond(response);
                     match failed {
                         false => Ok(settled),
@@ -280,7 +281,7 @@ fn failure_response(failure: &Failure) -> Response {
 /// What a failure no layer answered renders: a refusal, a client error the
 /// framework names or a problem in its structured form, anything else the
 /// opaque `500` with its chain filed once at `error`.
-pub(crate) fn unanswered(failure: &Failure) -> Response {
+fn unanswered(failure: &Failure) -> Response {
     if let Some(denial) = failure.find::<Denial>() {
         return denial_response(denial);
     }
@@ -291,11 +292,7 @@ pub(crate) fn unanswered(failure: &Failure) -> Response {
         return problem_response(problem);
     }
     if let Some(refused) = failure.find::<PipeError>() {
-        let mut problem = ProblemDetails::bad_request().with_detail(refused.message().to_owned());
-        if let Some(details) = refused.details() {
-            problem = problem.with_extension("errors", details.clone());
-        }
-        return problem.into_response();
+        return rejection(refused.clone()).into_response();
     }
     if let Some(decode) = failure.find::<DecodeError>() {
         return ProblemDetails::bad_request()

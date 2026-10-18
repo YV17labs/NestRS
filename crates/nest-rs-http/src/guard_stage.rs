@@ -182,10 +182,20 @@ pub fn behind_guards(
     chain: Vec<ResolvedLayer<dyn Guard>>,
     inner: crate::endpoint::BoxEndpoint,
 ) -> crate::endpoint::BoxEndpoint {
+    behind_stage(handler, chain, StageKind::SelfMount, inner)
+}
+
+/// `inner` behind `chain`, run as a `kind` guard stage of a site `handler`
+/// declares and nothing else.
+fn behind_stage(
+    handler: &'static Handler,
+    chain: Vec<ResolvedLayer<dyn Guard>>,
+    kind: StageKind,
+    inner: crate::endpoint::BoxEndpoint,
+) -> crate::endpoint::BoxEndpoint {
     use nest_rs_core::__private::{GlobalLayers, SiteDeclaration, SiteLayers, compose_site};
 
-    let stage: Arc<dyn GuardStage> =
-        Arc::new(HttpGuardStage::new(chain, Vec::new(), StageKind::SelfMount));
+    let stage: Arc<dyn GuardStage> = Arc::new(HttpGuardStage::new(chain, Vec::new(), kind));
     let declared = SiteDeclaration {
         layers: SiteLayers::default,
         global: GlobalLayers::NONE,
@@ -354,16 +364,12 @@ pub fn denial_to_http_error(denial: Denial) -> HttpError {
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs_core::__private::{
-        GlobalLayers, HandlerDeclaration, MetaLevels, SiteDeclaration, SiteLayers, compose_site,
-        declare_handler, meta_value,
-    };
-    use nest_rs_core::{Container, Layer, LayerSite, Posture, UnitContext};
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
+    use nest_rs_core::{Layer, LayerSite, Posture, UnitContext};
     use nest_rs_guards::async_trait;
 
     use super::*;
     use crate::endpoint::{BoxEndpoint, Endpoint};
-    use crate::site::{EndpointTail, SiteEndpoint};
 
     /// The guards of a composed chain, as `check_request` takes them.
     fn erased(
@@ -379,21 +385,7 @@ mod tests {
         kind: StageKind,
         inner: impl Endpoint,
     ) -> impl Endpoint {
-        let container = Container::default();
-        let stage: Arc<dyn GuardStage> = Arc::new(HttpGuardStage::new(chain, Vec::new(), kind));
-        let chains = compose_site(
-            &container,
-            &ROUTE,
-            &SiteDeclaration {
-                layers: SiteLayers::default,
-                global: GlobalLayers::NONE,
-                guard_stage: None,
-                class_gate: None,
-            },
-            Some(stage),
-        )
-        .expect("the site composes");
-        SiteEndpoint::new(&ROUTE, chains, None, EndpointTail(BoxEndpoint::new(inner)))
+        behind_stage(&ROUTE, chain, kind, BoxEndpoint::new(inner))
     }
 
     #[tokio::test]

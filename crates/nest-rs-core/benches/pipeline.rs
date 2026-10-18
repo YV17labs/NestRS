@@ -115,10 +115,6 @@ impl ExceptionFilter for Decline {
     }
 }
 
-fn no_layers() -> SiteLayers {
-    SiteLayers::default()
-}
-
 fn a_filter() -> SiteLayers {
     SiteLayers {
         method_exception_filters: vec![exception_filter::<Decline>()],
@@ -159,8 +155,8 @@ const fn site(
     )
 }
 
-static BARE: Site = site(no_layers, None, None);
-static GATE_ONLY: Site = site(no_layers, Some(admitting), Some(gate));
+static BARE: Site = site(SiteLayers::default, None, None);
+static GATE_ONLY: Site = site(SiteLayers::default, Some(admitting), Some(gate));
 static LAYERED_0: Site = site(a_filter, Some(admitting), Some(gate));
 static LAYERED_1: Site = site(one_interceptor, Some(admitting), Some(gate));
 static LAYERED_3: Site = site(three_interceptors, Some(admitting), Some(gate));

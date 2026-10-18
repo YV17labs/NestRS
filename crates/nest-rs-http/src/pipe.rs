@@ -45,7 +45,7 @@ macro_rules! into_inner {
 into_inner!(Json<T>, Path<T>, Query<T>, Form<T>, Header<T>);
 
 /// A pipe's refusal, as the `400` problem every edge's rejection is.
-fn rejection(err: PipeError) -> ProblemDetails {
+pub(crate) fn rejection(err: PipeError) -> ProblemDetails {
     let mut problem = ProblemDetails::bad_request().with_detail(err.message().to_owned());
     if let Some(details) = err.into_details() {
         problem = problem.with_extension("errors", details);

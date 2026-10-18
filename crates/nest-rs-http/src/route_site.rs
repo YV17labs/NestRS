@@ -29,12 +29,9 @@ use crate::routes::HttpRoutes;
 use crate::shaper::GateFn;
 use crate::site::{SiteEndpoint, SiteTail, UnitPolicy};
 
-/// A route mounted on the pipeline.
-pub(crate) type RouteSite<E> = SiteEndpoint<RouteTail<E>>;
-
 /// What a route runs last: its global pipes over the body, then the handler
 /// and its response shaper.
-pub(crate) struct RouteTail<E> {
+struct RouteTail<E> {
     handler: &'static Handler,
     pipes: GlobalPipes,
     endpoint: E,
@@ -196,7 +193,7 @@ pub fn mount_route<E: Endpoint>(
         pipes,
         endpoint,
     };
-    let route: RouteSite<E> = SiteEndpoint::new(handler, chains, unit, tail);
+    let route = SiteEndpoint::new(handler, chains, unit, tail);
     match deprecated {
         Some(header) => routes.route(method, path, deprecated_route(route, header)),
         None => routes.route(method, path, route),

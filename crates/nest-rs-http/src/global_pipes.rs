@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::body::Body;
 use crate::error::{BodyError, HttpError, Result};
+use crate::pipe::rejection;
 use crate::request::Request;
 use crate::view::with_view;
 
@@ -35,7 +36,15 @@ impl GlobalPipes {
         host: &[PipeSpec],
         method: &[PipeSpec],
     ) -> anyhow::Result<Self> {
-        resolve_pipes(container, route_label, host, method).map(Self)
+        let global = resolve_global_layers::<PipeSpecs>(container);
+        let host = resolve_scoped(container, host, LayerSite::Host, route_label)
+            .inspect_err(report_unresolved)?;
+        let method = resolve_scoped(container, method, LayerSite::Method, route_label)
+            .inspect_err(report_unresolved)?;
+        let chain =
+            compose_chain::<dyn GlobalPipe>(dedup_bucket(global), host, method, &[], route_label);
+        log_effective_chain(route_label, "pipes", &chain);
+        Ok(Self(chain))
     }
 
     /// Whether the chain runs nothing.
@@ -47,23 +56,6 @@ impl GlobalPipes {
     pub(crate) async fn apply(&self, handler: &'static Handler, req: &mut Request) -> Result<()> {
         apply_body_pipes(handler, req, &self.0).await
     }
-}
-
-fn resolve_pipes(
-    container: &Container,
-    route_label: &str,
-    controller_pipes: &[PipeSpec],
-    method_pipes: &[PipeSpec],
-) -> anyhow::Result<Vec<ResolvedLayer<dyn GlobalPipe>>> {
-    let global = resolve_global_layers::<PipeSpecs>(container);
-    let controller = resolve_scoped(container, controller_pipes, LayerSite::Host, route_label)
-        .inspect_err(report_unresolved)?;
-    let method = resolve_scoped(container, method_pipes, LayerSite::Method, route_label)
-        .inspect_err(report_unresolved)?;
-    let chain =
-        compose_chain::<dyn GlobalPipe>(dedup_bucket(global), controller, method, &[], route_label);
-    log_effective_chain(route_label, "pipes", &chain);
-    Ok(chain)
 }
 
 /// Whether the transport's body wrapper ended this read — past the cap, or no
@@ -123,14 +115,7 @@ async fn apply_body_pipes(
             .try_for_each(|entry| entry.layer.transform(cx, ArgumentKind::Body, &mut value))
     });
     if let Err(err) = folded {
-        // A `400` RFC 9457 problem: the pipe message as `detail`, field-level
-        // errors as an `errors` extension member.
-        let mut problem =
-            crate::ProblemDetails::bad_request().with_detail(err.message().to_owned());
-        if let Some(details) = err.into_details() {
-            problem = problem.with_extension("errors", details);
-        }
-        return Err(HttpError::from(problem));
+        return Err(HttpError::from(rejection(err)));
     }
     // A re-serialization failure must not hand the handler an empty body
     // silently — fail the request instead.

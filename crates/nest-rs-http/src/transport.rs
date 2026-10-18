@@ -103,8 +103,8 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 }
 
 /// HTTP [`Transport`]: every discovered controller and self-mounted endpoint,
-/// under the discovered transport-level wraps, routed and served by the
-/// transport's own accept loop.
+/// each request a unit of the pipeline, routed and served by the transport's
+/// own accept loop.
 ///
 /// [`from_config`](Self::from_config) is its one constructor, the call
 /// [`HttpModule::for_root`](crate::HttpModule::for_root) makes:
@@ -307,7 +307,7 @@ fn mount_fallback(
 /// What a self-mount's site folds of the app's layers: the unit stage and the
 /// exception filters, which still shape the mount's own HTTP error, never the
 /// handler stage — its operations are units of their own.
-const SELF_MOUNT: SiteDeclaration = SiteDeclaration {
+pub(crate) const SELF_MOUNT: SiteDeclaration = SiteDeclaration {
     layers: SiteLayers::default,
     global: GlobalLayers {
         unit_stage: true,
@@ -437,11 +437,6 @@ impl Transport for HttpTransport {
         // Resolved once: every site opens its units through it.
         let unit_of_work = container.get_dyn::<dyn UnitOfWork>();
         let mut routes = HttpRoutes::new(prefix.as_deref(), unit_of_work.clone());
-        // What an operator reads of a path is the one a client calls.
-        let served = |path: &str| match &prefix {
-            Some(prefix) => join_path(prefix, path),
-            None => path.to_owned(),
-        };
 
         let global_guards = nest_rs_guards::__private::global_guards_active(container);
         let mut unguarded: Vec<String> = Vec::new();
@@ -513,7 +508,7 @@ impl Transport for HttpTransport {
                         target: crate::target::ROUTES,
                         controller = d.meta.controller,
                         method = r.verb.as_str(),
-                        path = served(&logged).as_str(),
+                        path = routes.served(&logged).as_str(),
                         version = version,
                         handler = r.handler,
                         "mounted route",
@@ -522,7 +517,7 @@ impl Transport for HttpTransport {
                         unguarded.push(format!(
                             "{} {} ({})",
                             r.verb.as_str(),
-                            served(&path),
+                            routes.served(&path),
                             r.handler
                         ));
                     }
@@ -615,7 +610,7 @@ impl Transport for HttpTransport {
             tracing::info!(
                 target: crate::target::ROUTES,
                 kind = d.meta.label(),
-                path = served(d.meta.path()).as_str(),
+                path = routes.served(d.meta.path()).as_str(),
                 "mounted endpoint",
             );
             if let Some(work) = d.meta.detached() {

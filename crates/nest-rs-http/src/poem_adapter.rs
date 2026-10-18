@@ -70,14 +70,13 @@ impl PoemAdapter {
             if template == "/" {
                 root = Some(Arc::clone(&matched));
             }
-            route =
-                route
-                    .try_at(pattern, Shared(matched))
-                    .map_err(|refused| RouteError::Router {
-                        template,
-                        owner,
-                        reason: refused.to_string(),
-                    })?;
+            route = route
+                .try_at(pattern, matched)
+                .map_err(|refused| RouteError::Router {
+                    template,
+                    owner,
+                    reason: refused.to_string(),
+                })?;
         }
         if !claims_everything {
             route = route.at(UNROUTED, Unmatched { unrouted, root });
@@ -319,17 +318,6 @@ impl poem::Endpoint for Unmatched {
             .await
             .map_err(error_to_poem)?;
         Ok(response_to_poem(resp))
-    }
-}
-
-/// One address, registered on poem's table and kept for [`Unmatched`].
-struct Shared(Arc<Matched>);
-
-impl poem::Endpoint for Shared {
-    type Output = poem::Response;
-
-    async fn call(&self, req: poem::Request) -> poem::Result<poem::Response> {
-        poem::Endpoint::call(self.0.as_ref(), req).await
     }
 }
 

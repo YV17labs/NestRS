@@ -33,7 +33,7 @@ slices.
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
 | [`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs) | *(always)* | Re-exports core + optional surface crates; `nest_rs::prelude` for the common case. One version to bump, and the **only** framework line your manifest needs — a decorator's expansion resolves through it | [Getting started](/getting-started/) |
-| [`nest-rs-core`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-core) | *(via umbrella)* | DI container, `#[module]`, lifecycle hooks, boot-time access graph | [Fundamentals](/fundamentals/) |
+| [`nest-rs-core`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-core) | *(via umbrella)* | DI container, `#[module]`, lifecycle hooks, boot-time access graph, and the one pipeline every unit runs through — `Interceptor`, `ExceptionFilter`, `#[interceptor]` | [Fundamentals](/fundamentals/) |
 
 Default features: `http`, `config` — every other surface crate is opt-in via
 `features = [...]`.
@@ -85,9 +85,14 @@ globally on `App::builder()` or per controller / resolver / gateway.
 |---|---|---|---|
 | [`nest-rs-guards`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-guards) | `guards` | The `Guard` trait — gates access before the handler runs | [Guards](/fundamentals/guards/) |
 | [`nest-rs-pipes`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-pipes) | `pipes` | Stateless input validation and transformation at the edge | [Pipes](/fundamentals/pipes/) |
-| [`nest-rs-interceptors`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-interceptors) | `interceptors` | Wrap handler execution — logging, transactions, ability scope | [Interceptors](/fundamentals/interceptors/) |
-| [`nest-rs-filters`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-filters) | `filters` | Map inner errors to transport responses | [Exception filters](/fundamentals/exception-filters/) |
-| [`nest-rs-exception-filters`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-exception-filters) | `exception-filters` | Typed exception filters — catch one concrete error type | [Exception filters](/fundamentals/exception-filters/) |
+
+Interceptors and exception filters take no feature: `Interceptor`,
+`ExceptionFilter` and `#[interceptor]` live in `nest_rs::core`, beside the
+pipeline that runs them — see [Interceptors](/fundamentals/interceptors/) and
+[Exception filters](/fundamentals/exception-filters/). The `interceptors`,
+`filters` and `exception-filters` features still build NestRS 6's layer
+crates, which nothing in the framework runs any more; they leave in 7.0
+([Upgrading](/upgrading/)).
 
 ## Background work
 

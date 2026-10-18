@@ -101,7 +101,8 @@ one opened here.
 An idle session costs about 110 KiB, so the default cap holds about 110 MiB
 at most. Two `initialize`s racing for the last place are both admitted by the
 check that answers `503`; the session manager then refuses the second, which
-rmcp answers `500`. The wait for the `initialize` itself is 60 seconds, set
+rmcp answers `500`, said by the same `warn` on `nest_rs::mcp` as the check's
+refusal. The wait for the `initialize` itself is 60 seconds, set
 in code so an rmcp release cannot move it.
 
 ## The host allowlist
@@ -117,9 +118,10 @@ DNS rebinding only reaches a host the victim's browser can resolve to but the
 attacker cannot call directly — loopback and the local network. The vulnerable
 server is the developer's local one, which is exactly the one that configures
 nothing. A default of "off" would disarm the control in the only case the
-attack works. A refused `Host` is logged with the offending value; the
-effective allowlist is logged at `debug` when the endpoint mounts
-(`target: nest_rs::mcp`).
+attack works. A refused `Host` is said at `warn`, `reason="host_not_allowed"`,
+naming `<PREFIX>_MCP__ALLOWED_HOSTS` and never the value the client sent; the
+effective allowlist is logged at `debug` when the endpoint mounts (both on
+`nest_rs::mcp`).
 
 The browser `Origin` half is **not** an MCP setting. The MCP transport says a
 server validates `Origin` on every incoming connection, and `/mcp` does, CORS

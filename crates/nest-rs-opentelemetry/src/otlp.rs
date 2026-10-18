@@ -32,6 +32,15 @@ use uuid::Uuid;
 use crate::config::OpenTelemetryConfig;
 use crate::error::OpenTelemetryError;
 
+// opentelemetry-otlp 0.33 quotes its request's URL, whose userinfo or query may
+// carry a collector's credential, and the collector's error body at `debug`.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::LibraryClamp::new(
+        "opentelemetry-otlp",
+        tracing::level_filters::LevelFilter::INFO,
+    )
+}
+
 pub(crate) struct Exporters {
     pub tracer: opentelemetry_sdk::trace::Tracer,
     pub tracer_provider: SdkTracerProvider,

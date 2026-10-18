@@ -11,6 +11,12 @@ use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 use tokio_rustls::TlsAcceptor;
 
+// rustls 0.23 quotes a client's SNI at `warn` (one it refuses) and its whole
+// ClientHello at `trace`.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::LibraryClamp::new("rustls", tracing::level_filters::LevelFilter::ERROR)
+}
+
 /// How often a file-sourced certificate is re-read; `0` turns watching off.
 const DEFAULT_RELOAD_SECS: u64 = 60;
 
@@ -1087,5 +1093,32 @@ mod tests {
             assert_eq!(cfg.key, b"file-key-bytes");
             Ok(())
         });
+    }
+
+    /// rustls quotes a client's SNI at `warn` and its whole ClientHello at
+    /// `trace`.
+    #[test]
+    fn rustls_writes_only_its_errors_unless_a_filter_names_it() {
+        use nest_rs_core::__written_under as written;
+
+        for directive in ["info", "debug", "trace"] {
+            assert!(
+                !written!(directive, "rustls::msgs::handshake", WARN),
+                "{directive}"
+            );
+            assert!(
+                !written!(directive, "rustls::server::hs", TRACE),
+                "{directive}"
+            );
+            assert!(
+                written!(directive, "rustls::common_state", ERROR),
+                "{directive}"
+            );
+        }
+        assert!(written!(
+            "info,rustls=warn",
+            "rustls::msgs::handshake",
+            WARN
+        ));
     }
 }

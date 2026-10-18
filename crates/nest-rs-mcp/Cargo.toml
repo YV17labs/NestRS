@@ -30,6 +30,9 @@ nest-rs-guards.workspace = true
 nest-rs-pipes.workspace = true
 # `Stream`, which the session manager wrapping rmcp's names in its signatures.
 futures-util.workspace = true
+# rmcp's `SessionStore` is an `async_trait`, which the store reporting an app's
+# failures implements.
+async-trait.workspace = true
 poem.workspace = true
 rmcp.workspace = true
 schemars.workspace = true

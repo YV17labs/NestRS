@@ -37,6 +37,10 @@ paths:
   crosses the bar is flagged at its pin with the condition to move. No fork, no
   vendoring, no `[patch]` of a third-party crate: an upstream defect is
   reported upstream.
+- **A dependency's events are read when it is added or its version moves**:
+  the framework's subscribers write them, so one that quotes a client's
+  payload or a secret is clamped (`observability.md`, *What a log line
+  carries*).
 - **Every third-party requirement is `major.minor`** (`"1.53"`, `"=2.0"`), in
   every manifest the repo owns or the CLI generates: the minor is the floor we
   build against, the patch is the publisher's. Exact pins (`=`) say why at the

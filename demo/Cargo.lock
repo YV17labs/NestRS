@@ -2934,6 +2934,7 @@ dependencies = [
 name = "nest-rs-mcp"
 version = "7.0.0"
 dependencies = [
+ "async-trait",
  "futures-util",
  "nest-rs-config",
  "nest-rs-core",

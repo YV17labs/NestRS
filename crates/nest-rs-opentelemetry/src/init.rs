@@ -1,10 +1,12 @@
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{EnvFilter, Layer, Registry};
+use tracing_subscriber::{Layer, Registry};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::__private::{ConsoleWriter, JsonFormat, TextFormat, install_global_subscriber};
+use nest_rs_core::__private::{
+    ConsoleWriter, JsonFormat, TextFormat, install_global_subscriber, log_filter,
+};
 use nest_rs_core::logging::LogSettings;
 
 use crate::config::{LogFormat, OpenTelemetryConfig};
@@ -56,7 +58,7 @@ impl OpenTelemetry {
             config.metric_interval,
         )?;
         LogSettings::check_filter(&config.log_filter, "OpenTelemetryConfig::log_filter")?;
-        let filter = EnvFilter::new(&config.log_filter);
+        let filter = log_filter(&config.log_filter);
         let fmt_layer = console_layer(config.log_format, config.log_source_location);
 
         #[cfg(feature = "otlp")]
@@ -72,7 +74,7 @@ impl OpenTelemetry {
             let appender_layer = match exporters.logger_provider.as_ref() {
                 Some(lp) => Some(
                     opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp)
-                        .with_filter(EnvFilter::new(&config.log_filter)),
+                        .with_filter(log_filter(&config.log_filter)),
                 ),
                 None => None,
             };
@@ -159,7 +161,7 @@ pub fn init_for_tests() {
     // `false` is a subscriber already installed, which a test run keeps.
     install_global_subscriber(
         Registry::default()
-            .with(EnvFilter::new(filter))
+            .with(log_filter(&filter))
             .with(console_layer(LogFormat::Text, false)),
     );
     mark_initialized();

@@ -65,7 +65,7 @@ import, no config struct. It reads three process-level variables:
 
 | Key | Meaning |
 |---|---|
-| `<PREFIX>_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info` |
+| `<PREFIX>_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info`. A library that quotes a client's payload or a secret is [clamped](/opentelemetry/logs/#the-libraries-the-framework-wires) until a directive names it |
 | `<PREFIX>_LOG_FORMAT` | `json` (the release default) or `text` (the dev default) |
 | `<PREFIX>_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
 

@@ -54,8 +54,9 @@ pub struct OpenTelemetryConfig {
     pub deployment_environment: Option<String>,
     /// `service.instance.id`; defaults to a fresh UUID v7 per process.
     pub service_instance_id: Option<String>,
-    /// `EnvFilter` syntax; applied to console layer and OTel log appender, and
-    /// checked at [`init_with`](crate::OpenTelemetry::init_with).
+    /// `EnvFilter` syntax; applied to console layer and OTel log appender,
+    /// narrowed by the clamps of the libraries the framework wires, and checked
+    /// at [`init_with`](crate::OpenTelemetry::init_with).
     pub log_filter: String,
     /// Console output shape; defaults by build profile (see [`new`](Self::new)).
     /// The OTLP appender is unaffected.

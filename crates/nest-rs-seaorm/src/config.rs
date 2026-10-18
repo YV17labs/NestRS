@@ -47,6 +47,15 @@ pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
 /// 18 s net and the HTTP edge's default 20 s deadline.
 pub const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(15);
 
+// sqlx-postgres 0.9 quotes a malformed `.pgpass` line, password included, and
+// an unknown URL parameter's value at `warn`.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::LibraryClamp::new(
+        "sqlx_postgres",
+        tracing::level_filters::LevelFilter::ERROR,
+    )
+}
+
 /// The acquire budget when none is set: under the authentication guard's 18 s
 /// net and the HTTP edge's default 20 s deadline, so a dry pool answers with its
 /// own error.
@@ -644,5 +653,34 @@ mod tests {
             !cfg.observe_serialization_conflicts,
             "conflict tagging off by default"
         );
+    }
+
+    /// sqlx-postgres quotes a malformed `.pgpass` line, password included, and
+    /// an unknown connection parameter's value, both at `warn`; the statement
+    /// log `sqlx_logging` turns on is `sqlx::query`'s, and stays open.
+    #[test]
+    fn sqlx_postgres_writes_only_its_errors_unless_a_filter_names_it() {
+        use nest_rs_core::__written_under as written;
+
+        for directive in ["info", "debug", "trace"] {
+            assert!(
+                !written!(directive, "sqlx_postgres::options::pgpass", WARN),
+                "{directive}"
+            );
+            assert!(
+                !written!(directive, "sqlx_postgres::options::parse", WARN),
+                "{directive}"
+            );
+            assert!(
+                written!(directive, "sqlx_postgres::advisory_lock", ERROR),
+                "{directive}"
+            );
+            assert!(written!(directive, "sqlx::query", INFO), "{directive}");
+        }
+        assert!(written!(
+            "info,sqlx_postgres=warn",
+            "sqlx_postgres::options::pgpass",
+            WARN
+        ));
     }
 }

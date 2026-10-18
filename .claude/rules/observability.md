@@ -142,6 +142,16 @@ error through its `SafeLink`; no sentence formats a raw `ValidationErrors`, a
 serde error, a driver's error or a configured string. Held by review: no lint
 reads a `Display`.
 
+**A library's events are under the same rule**, since the framework's
+subscribers write them: the crate that wires a library quoting a client's
+payload or a secret declares its `LibraryClamp` beside the code that wires it,
+at the level below which the library quotes nothing — read off its source,
+never chosen for usefulness — and every subscriber the framework ships narrows
+the filter it is given by the clamps, so a clamp never opens what the filter
+closes and only a directive naming the library opens it. What a clamped line
+reported that an operator needs, a framework line says instead, described.
+Held by each wiring crate's unit test and `nest-rs-core`'s `LogFilter` tests.
+
 **A port error's internal-failure variant carries its cause**: a detail and an
 optional source, built by `<variant>(detail)` or `<variant>_because(detail,
 source)` (`ServiceError::internal_because`), never a cause flattened into the

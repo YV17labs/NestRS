@@ -56,7 +56,9 @@ use nest_rs_core::__private::Withheld;
 use nest_rs_core::ToProblem;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManagerError;
+use rmcp::transport::streamable_http_server::session::local::{
+    LocalSessionManagerError, SessionError,
+};
 
 use nest_rs_core::OPAQUE_CLIENT_MESSAGE as OPAQUE;
 
@@ -188,15 +190,41 @@ pub fn refused<R: OperationAnswer>(error: McpError) -> R {
 
 /// Why a mount's session manager refused: its cap, or rmcp's own manager.
 ///
-/// rmcp writes the `Display` into the `500` it answers a refused session with.
+/// rmcp writes the `Display` into the `500` it answers a refused session with,
+/// so neither variant names the session.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SessionsError {
     /// The mount holds its `max_concurrent_sessions`.
     #[error("the mount holds its maximum of live sessions")]
     Full,
     /// rmcp's local session manager refused.
-    #[error(transparent)]
+    #[error("the session manager failed")]
     Local(#[from] LocalSessionManagerError),
+}
+
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_session) }
+
+/// rmcp's session manager error said by its kind: its own sentence names the
+/// session a client named.
+fn say_session(link: &(dyn std::error::Error + 'static)) -> Option<String> {
+    let said = match link.downcast_ref::<LocalSessionManagerError>()? {
+        LocalSessionManagerError::SessionNotFound(_) => "session not found",
+        LocalSessionManagerError::SessionError(error) => match error {
+            SessionError::DuplicatedRequestId(_) => "a request id the session already holds",
+            SessionError::ChannelClosed(_) => "the session's channel closed",
+            SessionError::EventIdParseError(_) => "an event id that does not parse",
+            SessionError::SessionServiceTerminated => "the session's service terminated",
+            SessionError::InvalidEventId => "an event id the session does not hold",
+            SessionError::Io(error) => {
+                return Some(format!("session I/O failed: {}", error.kind()));
+            }
+            SessionError::EventStore(_) => "the event store failed",
+            _ => "the session failed",
+        },
+        LocalSessionManagerError::InvalidEventId(_) => "an event id that does not parse",
+        _ => "the session manager failed",
+    };
+    Some(said.to_owned())
 }
 
 #[cfg(test)]
@@ -371,6 +399,29 @@ mod tests {
             logs.find("nest_rs::mcp", "mcp operation unavailable").len(),
             1,
             "a bare problem or a client one withholds nothing",
+        );
+    }
+
+    /// rmcp writes the error into the `500` it answers, and its own sentence
+    /// names the session a client named: the reply says neither, the chain
+    /// the kind alone.
+    #[test]
+    fn a_session_manager_error_is_said_by_its_kind_never_the_session() {
+        let named = SessionsError::from(LocalSessionManagerError::SessionNotFound(
+            rmcp::transport::streamable_http_server::session::SessionId::from("named-by-a-client"),
+        ));
+        assert_eq!(named.to_string(), "the session manager failed");
+        assert_eq!(
+            nest_rs_core::error_message(&named),
+            "the session manager failed: session not found"
+        );
+
+        let io = SessionsError::from(LocalSessionManagerError::SessionError(SessionError::Io(
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "sk_live_quoted"),
+        )));
+        assert_eq!(
+            nest_rs_core::error_message(&io),
+            "the session manager failed: session I/O failed: broken pipe"
         );
     }
 

@@ -3,7 +3,9 @@
 //! in place. Configuration is env-only, read by [`LogSettings`]:
 //!
 //! - `<PREFIX>_LOG` (falling back to `RUST_LOG`) — `EnvFilter` directives,
-//!   default `info`.
+//!   default `info`, narrowed by the clamp of each library the framework wires
+//!   that quotes a client's payload or a secret: a clamp never opens what the
+//!   filter closes, and a directive naming such a library replaces its clamp.
 //! - `<PREFIX>_LOG_FORMAT` — `text` or `json`; defaults by build profile
 //!   (text in debug, JSON in release).
 //! - `<PREFIX>_LOG_SOURCE_LOCATION` — append the emitting `file:line` to each
@@ -24,14 +26,15 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use tracing::field::{Field, Visit};
 use tracing::{Dispatch, Event, Level, Subscriber};
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::field::VisitOutput;
 use tracing_subscriber::filter::{LevelParseError, ParseError};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::format::{DefaultVisitor, JsonFields, Writer};
 use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
+use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::{EnvFilter, Registry};
 
 use crate::env_prefix::EnvPrefix;
 use crate::line_safe::{LineSafe, forges};
@@ -97,9 +100,11 @@ const RUST_LOG: &str = "RUST_LOG";
 /// `<PREFIX>_LOG_SOURCE_LOCATION`.
 ///
 /// They are read from the process environment, which `#[nest_rs::main]` fills
-/// with the `.env` cascade before `main` runs. A subscriber builds its filter
-/// with `EnvFilter::new(&settings.filter)`, which cannot lose a directive the
-/// read already checked.
+/// with the `.env` cascade before `main` runs. Every subscriber the framework
+/// ships narrows the filter by the clamps of the libraries it wires, so a
+/// library that quotes a client's payload or a secret below some level writes
+/// nothing below it until the filter names the library, and nothing the filter
+/// closes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LogSettings {
@@ -259,8 +264,14 @@ const BATCH_BYTES_KEPT: usize = 1 << 20;
 /// by [`install_console`]. They speak `tracing_subscriber`'s traits, a private
 /// dependency's, so they are not API.
 pub(crate) mod __private {
-    use tracing::Dispatch;
+    use std::cmp::Reverse;
+
+    use tracing::level_filters::LevelFilter;
+    use tracing::subscriber::Interest;
+    use tracing::{Dispatch, Metadata, Subscriber, span};
+    use tracing_subscriber::layer::{Context, Filter, Layer, SubscriberExt as _};
     use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{EnvFilter, Registry};
 
     /// The process's console, the writer every subscriber the framework ships
     /// writes its lines through.
@@ -312,6 +323,212 @@ pub(crate) mod __private {
         pub(in crate::logging) source_location: bool,
     }
 
+    /// A library the framework wires whose events quote a client's payload or
+    /// a secret below `level`: every subscriber the framework ships writes its
+    /// events from `level` up at most — and only those the filter it was given
+    /// writes — unless that filter names the library.
+    ///
+    /// The crate that wires the library declares it with `inventory::submit!`,
+    /// beside the code that wires it, so the subscriber — which starts before
+    /// any module is known — reads every clamp the binary links.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct LibraryClamp {
+        pub(in crate::logging) target: &'static str,
+        pub(in crate::logging) level: LevelFilter,
+    }
+
+    impl LibraryClamp {
+        /// Write the events of `target` — the library's crate name, which its
+        /// events' targets begin with — from `level` up.
+        ///
+        /// A target a directive cannot name, one whose directive would also
+        /// select a target of the framework's, and a clamp at `trace`, which
+        /// clamps nothing, do not compile.
+        pub const fn new(target: &'static str, level: LevelFilter) -> Self {
+            assert!(
+                super::is_directive_target(target),
+                "a clamped target is a crate name: ASCII letters, digits, `_`, `-` and `:`",
+            );
+            assert!(
+                !super::reaches_the_framework(target),
+                "a clamp never reaches the framework's own targets, which begin with `nest_rs`",
+            );
+            assert!(
+                !matches!(level, LevelFilter::TRACE),
+                "a clamp at `trace` clamps nothing",
+            );
+            Self { target, level }
+        }
+    }
+
+    /// The filter every subscriber the framework ships applies under a
+    /// directive: an event is written when the directive writes it and the
+    /// [`LibraryClamp`]s let it through, so a clamp narrows the directive and
+    /// never opens what it closes. Built by [`log_filter`].
+    #[derive(Debug)]
+    pub struct LogFilter {
+        /// The directive alone.
+        directive: EnvFilter,
+        /// Each clamp, then the directive, whose directive naming a clamped
+        /// library replaces its clamp.
+        clamped: EnvFilter,
+    }
+
+    impl LogFilter {
+        /// Whether both filters write `metadata` here.
+        fn enabled<S>(&self, metadata: &Metadata<'_>, ctx: &Context<'_, S>) -> bool {
+            self.directive.enabled(metadata, ctx.clone())
+                && self.clamped.enabled(metadata, ctx.clone())
+        }
+
+        /// The most verbose level both filters can write: the stricter of
+        /// their two.
+        fn max_level_hint(&self) -> Option<LevelFilter> {
+            match (
+                self.directive.max_level_hint(),
+                self.clamped.max_level_hint(),
+            ) {
+                (Some(directive), Some(clamped)) => Some(directive.min(clamped)),
+                (hint, None) | (None, hint) => hint,
+            }
+        }
+
+        fn on_new_span<S>(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
+            self.directive.on_new_span(attrs, id, ctx.clone());
+            self.clamped.on_new_span(attrs, id, ctx);
+        }
+
+        fn on_record<S>(&self, id: &span::Id, values: &span::Record<'_>, ctx: Context<'_, S>) {
+            self.directive.on_record(id, values, ctx.clone());
+            self.clamped.on_record(id, values, ctx);
+        }
+
+        fn on_enter<S>(&self, id: &span::Id, ctx: Context<'_, S>) {
+            self.directive.on_enter(id, ctx.clone());
+            self.clamped.on_enter(id, ctx);
+        }
+
+        fn on_exit<S>(&self, id: &span::Id, ctx: Context<'_, S>) {
+            self.directive.on_exit(id, ctx.clone());
+            self.clamped.on_exit(id, ctx);
+        }
+
+        fn on_close<S>(&self, id: span::Id, ctx: Context<'_, S>) {
+            self.directive.on_close(id.clone(), ctx.clone());
+            self.clamped.on_close(id, ctx);
+        }
+    }
+
+    /// What two filters that must both agree say of a callsite.
+    fn both(directive: Interest, clamped: Interest) -> Interest {
+        if directive.is_never() || clamped.is_never() {
+            Interest::never()
+        } else if directive.is_always() && clamped.is_always() {
+            Interest::always()
+        } else {
+            Interest::sometimes()
+        }
+    }
+
+    impl<S: Subscriber> Layer<S> for LogFilter {
+        fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
+            both(
+                Layer::<S>::register_callsite(&self.directive, metadata),
+                Layer::<S>::register_callsite(&self.clamped, metadata),
+            )
+        }
+
+        fn max_level_hint(&self) -> Option<LevelFilter> {
+            self.max_level_hint()
+        }
+
+        fn enabled(&self, metadata: &Metadata<'_>, ctx: Context<'_, S>) -> bool {
+            self.enabled(metadata, &ctx)
+        }
+
+        fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
+            self.on_new_span(attrs, id, ctx);
+        }
+
+        fn on_record(&self, id: &span::Id, values: &span::Record<'_>, ctx: Context<'_, S>) {
+            self.on_record(id, values, ctx);
+        }
+
+        fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
+            self.on_enter(id, ctx);
+        }
+
+        fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
+            self.on_exit(id, ctx);
+        }
+
+        fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
+            self.on_close(id, ctx);
+        }
+    }
+
+    /// The same filter on one layer: the OTLP log appender's.
+    impl<S> Filter<S> for LogFilter {
+        fn enabled(&self, metadata: &Metadata<'_>, ctx: &Context<'_, S>) -> bool {
+            self.enabled(metadata, ctx)
+        }
+
+        fn callsite_enabled(&self, metadata: &'static Metadata<'static>) -> Interest {
+            both(
+                Filter::<S>::callsite_enabled(&self.directive, metadata),
+                Filter::<S>::callsite_enabled(&self.clamped, metadata),
+            )
+        }
+
+        fn max_level_hint(&self) -> Option<LevelFilter> {
+            self.max_level_hint()
+        }
+
+        fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
+            self.on_new_span(attrs, id, ctx);
+        }
+
+        fn on_record(&self, id: &span::Id, values: &span::Record<'_>, ctx: Context<'_, S>) {
+            self.on_record(id, values, ctx);
+        }
+
+        fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
+            self.on_enter(id, ctx);
+        }
+
+        fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
+            self.on_exit(id, ctx);
+        }
+
+        fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
+            self.on_close(id, ctx);
+        }
+    }
+
+    /// The filter every subscriber the framework ships applies under
+    /// `directive`: `directive`, narrowed by each [`LibraryClamp`] the binary
+    /// links.
+    pub fn log_filter(directive: &str) -> LogFilter {
+        let mut clamps: Vec<&LibraryClamp> = inventory::iter::<LibraryClamp>().collect();
+        // Of one target's clamps the stricter comes last, which `EnvFilter` keeps.
+        clamps.sort_by_key(|clamp| (clamp.target, Reverse(clamp.level)));
+        let mut clamped: String = clamps
+            .iter()
+            .map(|clamp| format!("{}={},", clamp.target, clamp.level))
+            .collect();
+        clamped.push_str(directive);
+        LogFilter {
+            directive: EnvFilter::new(directive),
+            clamped: EnvFilter::new(clamped),
+        }
+    }
+
+    /// A subscriber that writes nothing and filters as [`log_filter`] does
+    /// under `directive`: what a test asks `tracing::event_enabled!` through.
+    pub fn filter_dispatch(directive: &str) -> Dispatch {
+        Dispatch::new(Registry::default().with(log_filter(directive)))
+    }
+
     /// Install `subscriber` as the process's global one and bridge `log`
     /// records into it: `false` when the process already has a global
     /// subscriber, which is kept. A `log` logger set before keeps the `log`
@@ -338,7 +555,54 @@ pub(crate) mod __private {
     }
 }
 
-use __private::{ConsoleWriter, JsonFormat, TextFormat};
+use __private::{ConsoleWriter, JsonFormat, LibraryClamp, TextFormat, log_filter};
+
+inventory::collect!(LibraryClamp);
+
+/// Whether every subscriber the framework ships writes, under the filter
+/// `$directive`, an event on `$target` at `$level` — a `tracing::Level`
+/// constant's name: what a crate clamping a library tests its clamp through.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __written_under {
+    ($directive:expr, $target:expr, $level:ident) => {
+        $crate::tracing::dispatcher::with_default(
+            &$crate::__private::filter_dispatch($directive),
+            || $crate::tracing::event_enabled!(target: $target, $crate::tracing::Level::$level),
+        )
+    };
+}
+
+/// What every target of the framework's begins with.
+const FRAMEWORK_ROOT: &str = "nest_rs";
+
+/// Whether `target` is one a directive names whole: ASCII letters, digits,
+/// `_`, `-` and `:`, at least one.
+const fn is_directive_target(target: &str) -> bool {
+    let bytes = target.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        if !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':')) {
+            return false;
+        }
+        at += 1;
+    }
+    !bytes.is_empty()
+}
+
+/// Whether a directive naming `target` selects a target of the framework's:
+/// `EnvFilter` matches with `starts_with` on the raw string, both ways round
+/// here since either may be the longer.
+const fn reaches_the_framework(target: &str) -> bool {
+    let (target, root) = (target.as_bytes(), FRAMEWORK_ROOT.as_bytes());
+    let shared = if target.len() < root.len() {
+        target.len()
+    } else {
+        root.len()
+    };
+    crate::operation_log::eq_bytes(target, 0, root, 0, shared)
+}
 
 /// The process's console queue, opened on first use; `None` writes stdout
 /// directly.
@@ -1147,23 +1411,26 @@ pub(crate) fn init_fallback() -> Result<()> {
 /// }
 /// ```
 pub fn install_console(settings: &LogSettings) -> bool {
-    let builder = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(&settings.filter))
-        .with_writer(ConsoleWriter::get());
-    __private::install_global_subscriber(match settings.format {
+    __private::install_global_subscriber(console(settings))
+}
+
+/// The kernel's console subscriber, as `settings` describe it.
+fn console(settings: &LogSettings) -> Dispatch {
+    let filtered = Registry::default().with(log_filter(&settings.filter));
+    let layer = tracing_subscriber::fmt::layer().with_writer(ConsoleWriter::get());
+    match settings.format {
         LogFormat::Text => Dispatch::new(
-            builder
-                .event_format(TextFormat::new(settings.source_location))
-                .finish(),
+            filtered.with(layer.event_format(TextFormat::new(settings.source_location))),
         ),
         // `.json()` sets the field formatter only; the envelope is `JsonFormat`'s.
         LogFormat::Json => Dispatch::new(
-            builder
-                .json()
-                .event_format(JsonFormat::new(settings.source_location))
-                .finish(),
+            filtered.with(
+                layer
+                    .json()
+                    .event_format(JsonFormat::new(settings.source_location)),
+            ),
         ),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1171,13 +1438,14 @@ mod tests {
     use std::io;
     use std::sync::{Arc, Mutex};
 
+    use tracing::level_filters::LevelFilter;
     use tracing_subscriber::Layer;
     use tracing_subscriber::Registry;
     use tracing_subscriber::fmt::MakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;
-    use crate::__private::set_actor_id;
+    use crate::__private::{filter_dispatch, set_actor_id};
     use crate::Correlation;
     use crate::request_scope::with_request_scope;
 
@@ -1813,6 +2081,226 @@ mod tests {
             .to_string();
         assert!(said.contains("a field filter does not parse"), "{said}");
         assert!(!said.contains("sk_live"), "{said}");
+    }
+
+    /// A library these tests clamp, as the crate wiring one declares it.
+    const QUOTING: &str = "quoting_library";
+
+    /// One of its modules, which its events' targets name.
+    const QUOTING_MODULE: &str = "quoting_library::service";
+
+    inventory::submit! { LibraryClamp::new(QUOTING, LevelFilter::WARN) }
+
+    /// A library two crates clamp, each at its own level.
+    const TWICE: &str = "twice_clamped";
+
+    inventory::submit! { LibraryClamp::new(TWICE, LevelFilter::INFO) }
+    inventory::submit! { LibraryClamp::new(TWICE, LevelFilter::ERROR) }
+
+    /// A library clamped at `info`, looser than a filter may be.
+    const CHATTY: &str = "chatty_library::protocol";
+
+    inventory::submit! { LibraryClamp::new("chatty_library", LevelFilter::INFO) }
+
+    /// Filters stricter than a clamp, each with the level it leaves the
+    /// process: a bare level, `off`, and one naming a single target.
+    const STRICTER: [(&str, LevelFilter); 4] = [
+        ("warn", LevelFilter::WARN),
+        ("error", LevelFilter::ERROR),
+        ("off", LevelFilter::OFF),
+        ("billing=debug", LevelFilter::DEBUG),
+    ];
+
+    /// Whether `$dispatch` writes an event on `$target` at `$level`.
+    macro_rules! writes {
+        ($dispatch:expr, $target:expr, $level:ident) => {
+            tracing::dispatcher::with_default(&$dispatch, || {
+                tracing::event_enabled!(target: $target, Level::$level)
+            })
+        };
+    }
+
+    #[test]
+    fn a_clamped_library_writes_nothing_below_its_level_under_the_default_or_a_bare_level() {
+        let default = settings_under(&[]).expect("the defaults").filter;
+        for directive in [default.as_str(), "debug", "trace"] {
+            let dispatch = filter_dispatch(directive);
+            assert!(!writes!(dispatch, QUOTING_MODULE, TRACE), "{directive}");
+            assert!(!writes!(dispatch, QUOTING_MODULE, DEBUG), "{directive}");
+            assert!(!writes!(dispatch, QUOTING_MODULE, INFO), "{directive}");
+            assert!(writes!(dispatch, QUOTING_MODULE, WARN), "{directive}");
+            assert!(writes!(dispatch, QUOTING, ERROR), "{directive}");
+        }
+    }
+
+    /// `EnvFilter` keeps the later of two directives for one target, and the
+    /// developer's come after the clamps.
+    #[test]
+    fn a_directive_naming_the_library_or_one_of_its_modules_replaces_its_clamp() {
+        let opened = filter_dispatch("info,quoting_library=debug");
+        assert!(writes!(opened, QUOTING_MODULE, DEBUG));
+        assert!(!writes!(opened, QUOTING_MODULE, TRACE));
+
+        let one_module = filter_dispatch("info,quoting_library::service=trace");
+        assert!(writes!(one_module, QUOTING_MODULE, TRACE));
+        assert!(!writes!(one_module, "quoting_library::client", INFO));
+
+        let closed = filter_dispatch("trace,quoting_library=off");
+        assert!(!writes!(closed, QUOTING_MODULE, ERROR));
+    }
+
+    /// A clamp narrows the filter: under one stricter than the clamp, the
+    /// library writes what the filter writes, and nothing a filter naming
+    /// another target alone leaves closed.
+    #[test]
+    fn a_clamp_never_opens_what_the_filter_closes() {
+        for (directive, _) in STRICTER {
+            assert!(
+                !writes!(filter_dispatch(directive), CHATTY, INFO),
+                "{directive}"
+            );
+        }
+        let warn = filter_dispatch("warn");
+        assert!(writes!(warn, CHATTY, WARN));
+        assert!(writes!(warn, QUOTING_MODULE, WARN));
+
+        let error = filter_dispatch("error");
+        assert!(!writes!(error, CHATTY, WARN));
+        assert!(writes!(error, QUOTING_MODULE, ERROR));
+
+        let off = filter_dispatch("off");
+        assert!(!writes!(off, QUOTING_MODULE, ERROR));
+        assert!(!writes!(off, CHATTY, ERROR));
+
+        let one_target = filter_dispatch("billing=debug");
+        assert!(writes!(one_target, "billing::service", DEBUG));
+        assert!(!writes!(one_target, CHATTY, ERROR));
+        assert!(!writes!(one_target, QUOTING_MODULE, ERROR));
+    }
+
+    /// The process's level is the filter's: a clamp raises neither `tracing`'s
+    /// nor, once installed, `log`'s.
+    #[test]
+    fn the_clamps_leave_the_level_the_filter_sets() {
+        for (directive, level) in STRICTER {
+            let dispatch = filter_dispatch(directive);
+            assert_eq!(LevelFilter::current(), level, "{directive}");
+            drop(dispatch);
+        }
+    }
+
+    #[test]
+    fn a_library_clamped_twice_keeps_the_stricter_level() {
+        let dispatch = filter_dispatch("trace");
+        assert!(!writes!(dispatch, TWICE, WARN));
+        assert!(writes!(dispatch, TWICE, ERROR));
+    }
+
+    #[test]
+    fn the_framework_s_and_the_app_s_targets_are_never_clamped() {
+        let dispatch = filter_dispatch("trace");
+        assert!(writes!(dispatch, crate::target::APP, TRACE));
+        assert!(writes!(dispatch, "billing::service", TRACE));
+    }
+
+    /// A span directive opens what runs inside the span it names, a clamped
+    /// library's events included: `EnvFilter`'s rule, which no clamp narrows.
+    #[test]
+    fn a_span_directive_opens_a_clamped_library_inside_its_span() {
+        tracing::dispatcher::with_default(&filter_dispatch("info,[audited]=debug"), || {
+            assert!(!tracing::event_enabled!(target: QUOTING_MODULE, Level::DEBUG));
+            let audited = tracing::info_span!("audited");
+            let _inside = audited.enter();
+            assert!(tracing::event_enabled!(target: QUOTING_MODULE, Level::DEBUG));
+        });
+    }
+
+    #[test]
+    fn the_console_subscriber_applies_the_clamps_in_both_formats() {
+        for format in [LogFormat::Text, LogFormat::Json] {
+            let console = console(&LogSettings {
+                filter: "trace".to_owned(),
+                format,
+                source_location: false,
+            });
+            assert!(!writes!(console, QUOTING_MODULE, INFO), "{format:?}");
+            assert!(writes!(console, QUOTING_MODULE, WARN), "{format:?}");
+            assert!(writes!(console, crate::target::APP, TRACE), "{format:?}");
+        }
+    }
+
+    #[test]
+    fn the_console_subscriber_never_opens_what_its_filter_closes_in_either_format() {
+        for format in [LogFormat::Text, LogFormat::Json] {
+            for (directive, level) in STRICTER {
+                let console = console(&LogSettings {
+                    filter: directive.to_owned(),
+                    format,
+                    source_location: false,
+                });
+                assert_eq!(LevelFilter::current(), level, "{format:?} {directive}");
+                assert!(!writes!(console, CHATTY, INFO), "{format:?} {directive}");
+                assert_eq!(
+                    writes!(console, QUOTING_MODULE, ERROR),
+                    directive != "off" && directive != "billing=debug",
+                    "{format:?} {directive}"
+                );
+            }
+        }
+    }
+
+    /// On one layer — the OTLP log appender's shape — the filter narrows as it
+    /// does a whole subscriber.
+    #[test]
+    fn the_filter_on_one_layer_never_opens_what_its_directive_closes() {
+        let layer = |directive| {
+            Dispatch::new(Registry::default().with(
+                tracing_subscriber::layer::Identity::new().with_filter(log_filter(directive)),
+            ))
+        };
+        let warn = layer("warn");
+        assert_eq!(LevelFilter::current(), LevelFilter::WARN);
+        assert!(!writes!(warn, CHATTY, INFO));
+        assert!(writes!(warn, CHATTY, WARN));
+        drop(warn);
+
+        let trace = layer("trace");
+        assert!(!writes!(trace, QUOTING_MODULE, INFO));
+        assert!(writes!(trace, crate::target::APP, TRACE));
+    }
+
+    /// Installed, the console leaves `log` at the filter's level too.
+    #[test]
+    fn the_installed_console_leaves_log_at_the_filter_s_level() {
+        assert!(install_console(&LogSettings {
+            filter: "warn".to_owned(),
+            format: LogFormat::Text,
+            source_location: false,
+        }));
+        assert_eq!(LevelFilter::current(), LevelFilter::WARN);
+        assert_eq!(log::max_level(), log::LevelFilter::Warn);
+        assert!(!tracing::event_enabled!(target: CHATTY, Level::INFO));
+    }
+
+    #[test]
+    fn a_clamp_names_a_library_and_never_the_framework() {
+        for target in [
+            "",
+            "a b",
+            "rmcp=off",
+            "nest",
+            "nest_rs",
+            "nest_rs::http",
+            "nest_rs_core",
+        ] {
+            let refused = std::panic::catch_unwind(|| LibraryClamp::new(target, LevelFilter::WARN));
+            assert!(refused.is_err(), "{target:?} is no library's target");
+        }
+        let nothing = std::panic::catch_unwind(|| LibraryClamp::new("rmcp", LevelFilter::TRACE));
+        assert!(nothing.is_err(), "a clamp at `trace` clamps nothing");
+        for target in ["rmcp", "opentelemetry-otlp", "sqlx_postgres", "h2::proto"] {
+            assert_eq!(LibraryClamp::new(target, LevelFilter::OFF).target, target);
+        }
     }
 
     #[test]

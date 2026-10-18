@@ -42,6 +42,18 @@ use crate::request::{Request, RequestFacts};
 use crate::tls::ListenerTls;
 use crate::window::{self, Window};
 
+// h2 0.4 quotes a client's PING data at `warn` (an unsolicited ack) and its
+// GOAWAY debug data at `debug`.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::LibraryClamp::new("h2", tracing::level_filters::LevelFilter::ERROR)
+}
+
+// tungstenite 0.27, which poem's upgrade speaks, quotes a close frame's reason
+// at `debug` and every message at `trace`.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::LibraryClamp::new("tungstenite", tracing::level_filters::LevelFilter::INFO)
+}
+
 /// What one HTTP/2 connection runs at once (RFC 9113 §5.1.2), hyper's own default.
 const MAX_CONCURRENT_STREAMS: u32 = 200;
 
@@ -1449,6 +1461,61 @@ mod tests {
             logs.find(crate::target::HTTP, REACHED).len(),
             2,
             "the next busy spell opens with its own warn",
+        );
+    }
+
+    /// h2 quotes a PING's opaque data at `warn` and a GOAWAY's debug data at
+    /// `debug`, both a client's.
+    #[test]
+    fn h2_writes_only_its_errors_unless_a_filter_names_it() {
+        use nest_rs_core::__written_under as written;
+
+        for directive in ["info", "debug", "trace"] {
+            assert!(
+                !written!(directive, "h2::proto::ping_pong", WARN),
+                "{directive}"
+            );
+            assert!(
+                !written!(directive, "h2::codec::framed_read", DEBUG),
+                "{directive}"
+            );
+            assert!(
+                written!(directive, "h2::proto::connection", ERROR),
+                "{directive}"
+            );
+        }
+        assert!(written!("info,h2=warn", "h2::proto::ping_pong", WARN));
+        assert!(!written!("info,h2=warn", "h2::codec::framed_read", DEBUG));
+    }
+
+    /// tungstenite quotes a close frame's reason at `debug` and every message
+    /// at `trace`, a client's.
+    #[test]
+    fn tungstenite_writes_nothing_below_info_unless_a_filter_names_it() {
+        use nest_rs_core::__written_under as written;
+
+        for directive in ["info", "debug", "trace"] {
+            assert!(
+                !written!(directive, "tungstenite::protocol", DEBUG),
+                "{directive}"
+            );
+            assert!(
+                !written!(directive, "tungstenite::protocol", TRACE),
+                "{directive}"
+            );
+            assert!(
+                written!(directive, "tungstenite::protocol", INFO),
+                "{directive}"
+            );
+        }
+        assert!(written!(
+            "info,tungstenite=debug",
+            "tungstenite::protocol",
+            DEBUG
+        ));
+        assert!(
+            written!("debug", "tokio_tungstenite", DEBUG),
+            "tokio-tungstenite's lines describe errors without their data"
         );
     }
 }

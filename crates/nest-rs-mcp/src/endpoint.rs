@@ -19,12 +19,19 @@ use rmcp::transport::streamable_http_server::session::store::SessionStore;
 use crate::config::McpConfig;
 use crate::context::{McpAmbient, McpToolContext};
 use crate::propagate::PropagatingHandler;
-use crate::sessions::BoundedSessions;
+use crate::sessions::{BoundedSessions, ReportedStore};
 use nest_rs_database::UnitOfWork;
 
 /// The wait, in seconds, a client refused a session is told to take before
 /// trying again.
 const SESSION_RETRY_AFTER_SECS: u32 = 5;
+
+// rmcp 3.5 quotes what a client sent at every level, `error` included: the
+// session id a client named, when the session store fails to load it. The
+// mount's sessions and store say its failure lines instead (`sessions.rs`).
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::LibraryClamp::new("rmcp", tracing::level_filters::LevelFilter::OFF)
+}
 
 /// Everything one `#[mcp]` mount needs beyond the handler itself: what ambient
 /// state is re-installed around an operation, and how the streamable-HTTP
@@ -76,8 +83,8 @@ impl McpMount {
                 "mcp host allowlist is empty — inbound Host headers are not validated",
             );
         } else {
-            // rmcp's warning on a rejected Host cannot name the variable; `debug`
-            // because the loopback default is right for a dev run.
+            // `debug`: the loopback default is right for a dev run, and each
+            // refusal is said at `warn` (`host_refused`).
             tracing::debug!(
                 target: crate::TARGET,
                 allowed_hosts = ?config.allowed_hosts,
@@ -144,7 +151,8 @@ where
     let mut server_config = config
         .to_server_config()
         .with_cancellation_token(detached.cancellation_token());
-    server_config.session_store = session_store;
+    server_config.session_store =
+        session_store.map(|store| Arc::new(ReportedStore(store)) as Arc<dyn SessionStore>);
 
     let service = StreamableHttpService::new(
         move || {
@@ -216,17 +224,27 @@ impl SessionCap {
             req.set_body(body);
             return None;
         }
-        tracing::warn!(
-            target: crate::TARGET,
-            max_concurrent_sessions = self.sessions.max(),
-            "mcp session refused: the mount holds its maximum",
-        );
+        self.sessions.say_full();
         Some(
             Problem::new(503, code::UNAVAILABLE)
                 .with_retry_after(SESSION_RETRY_AFTER_SECS)
                 .as_response(),
         )
     }
+}
+
+/// The line of a request rmcp refused for its `Host`: rmcp's own quotes the
+/// `Host`, and is under its clamp.
+fn host_refused() {
+    tracing::warn!(
+        target: crate::TARGET,
+        reason = "host_not_allowed",
+        hint = %format!(
+            "set {} to this deployment's own hostnames",
+            nest_rs_config::var_name("mcp", "ALLOWED_HOSTS"),
+        ),
+        "mcp request refused: its Host is outside the allowlist",
+    );
 }
 
 /// Whether `body` is an `initialize` request, as rmcp decodes it.
@@ -279,6 +297,11 @@ where
             self.inner.call(request_to_poem(req)),
         )
         .await?;
+        // rmcp answers `403` to a `Host` outside the allowlist alone, the
+        // endpoint keeping its `Origin` check off.
+        if response.status() == poem::http::StatusCode::FORBIDDEN {
+            host_refused();
+        }
         // Ended at the shutdown signal; a POST's stream ends with its answer.
         if standalone && response.status().is_success() {
             response
@@ -313,5 +336,35 @@ mod tests {
             serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
         assert!(!opens_a_session(initialized.to_string().as_bytes()));
         assert!(!opens_a_session(b"{ not json"));
+    }
+
+    /// rmcp quotes what a client sent at every level, so one `/mcp` denial
+    /// files the framework's line alone: rmcp's `response error` is a `warn`
+    /// on `rmcp::service`.
+    #[test]
+    fn rmcp_writes_nothing_unless_a_filter_names_it() {
+        use nest_rs_core::__written_under as written;
+
+        for directive in ["info", "debug", "trace"] {
+            assert!(!written!(directive, "rmcp::service", ERROR), "{directive}");
+            assert!(!written!(directive, "rmcp::service", WARN), "{directive}");
+            assert!(!written!(directive, "rmcp::service", INFO), "{directive}");
+            assert!(!written!(directive, "rmcp::service", DEBUG), "{directive}");
+            assert!(!written!(directive, "rmcp::service", TRACE), "{directive}");
+            assert!(
+                !written!(directive, "rmcp::service::server", WARN),
+                "{directive}"
+            );
+            assert!(
+                !written!(
+                    directive,
+                    "rmcp::transport::streamable_http_server::tower",
+                    WARN
+                ),
+                "{directive}"
+            );
+        }
+        assert!(written!("info,rmcp=warn", "rmcp::service", WARN));
+        assert!(!written!("info,rmcp=warn", "rmcp::service", INFO));
     }
 }

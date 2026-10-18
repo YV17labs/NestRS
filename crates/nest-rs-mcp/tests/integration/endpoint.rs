@@ -2,6 +2,9 @@
 //! guard runs at its request.
 
 use nest_rs_core::module;
+use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
+    SessionState, SessionStore, SessionStoreError,
+};
 use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
@@ -178,6 +181,110 @@ fn two_sessions() -> nest_rs_mcp::McpConfig {
         max_concurrent_sessions: 2,
         ..nest_rs_mcp::McpConfig::default()
     }
+}
+
+/// rmcp refuses a `Host` outside the allowlist with `403`, and its own line,
+/// which quotes the `Host`, is under its clamp: the mount files the denial,
+/// naming the variable that admits a host and never the one refused.
+#[tokio::test]
+async fn a_host_outside_the_allowlist_is_refused_and_said_without_its_value() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = listening_on(nest_rs_mcp::McpConfig::default()).await;
+
+    app.http()
+        .post(LISTENING)
+        .header("host", "rebound.example")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body_json(&serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    let event = logs.expect_one(
+        "nest_rs::mcp",
+        "mcp request refused: its Host is outside the allowlist",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("reason").as_deref(), Some("host_not_allowed"));
+    let hint = event.field("hint").expect("a hint");
+    assert!(
+        hint.contains(&nest_rs_config::var_name("mcp", "ALLOWED_HOSTS")),
+        "{hint}"
+    );
+    assert!(
+        event
+            .fields
+            .values()
+            .all(|value| !value.contains("rebound")),
+        "the refused host is quoted: {:?}",
+        event.fields
+    );
+}
+
+/// The app's session store, failing to load every session.
+struct StoreDown;
+
+#[async_trait::async_trait]
+impl SessionStore for StoreDown {
+    async fn load(&self, _: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        Err("the store is down".into())
+    }
+
+    async fn store(&self, _: &str, _: &SessionState) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+
+    async fn delete(&self, _: &str) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+}
+
+/// A session the app's store fails to restore is answered `500`, and said by
+/// the mount without the session it names: rmcp's own line names it, and is
+/// under its clamp.
+#[tokio::test]
+async fn a_session_the_store_fails_to_restore_is_said_without_the_session() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::builder()
+        .provide_dyn::<dyn SessionStore>(std::sync::Arc::new(StoreDown))
+        .module::<ListeningModule>()
+        .build()
+        .await
+        .expect("boots");
+
+    nest_rs_testing::mcp::post_message_with(
+        app.http(),
+        LISTENING,
+        Some("named-by-a-client"),
+        None,
+        &[],
+        &serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+    )
+    .await
+    .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+    let event = logs.expect_one("nest_rs::mcp", "mcp session store failed");
+    assert_eq!(event.level, "error");
+    assert_eq!(event.field("call").as_deref(), Some("load"));
+    assert_eq!(event.field("error").as_deref(), Some("the store is down"));
+    // The capture records rmcp's own lines too, which the clamp keeps off a
+    // subscriber the framework ships.
+    let quoting: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.target.starts_with("nest_rs"))
+        .filter(|event| {
+            event
+                .fields
+                .values()
+                .any(|value| value.contains("named-by-a-client"))
+        })
+        .collect();
+    assert!(
+        quoting.is_empty(),
+        "the session a client named is quoted: {quoting:#?}"
+    );
 }
 
 /// A session outlives the connection that opened it, so the connection cap

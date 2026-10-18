@@ -344,7 +344,7 @@ const fn is_crate_root(target: &str, name: &str, dot: usize) -> bool {
 }
 
 /// `a[at_a..at_a + len] == b[at_b..at_b + len]`; the caller checks both lengths.
-const fn eq_bytes(a: &[u8], at_a: usize, b: &[u8], at_b: usize, len: usize) -> bool {
+pub(crate) const fn eq_bytes(a: &[u8], at_a: usize, b: &[u8], at_b: usize, len: usize) -> bool {
     let mut i = 0;
     while i < len {
         if a[at_a + i] != b[at_b + i] {

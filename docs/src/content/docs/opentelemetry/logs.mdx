@@ -40,6 +40,50 @@ job enqueued, a file transcoded — earns `info`. `Repo` at `trace`. **Access de
 appear under the default `info` filter. A production deploy should respect
 `info` — no per-request `debug!` on the hot path.
 
+## The libraries the framework wires
+
+The framework's subscribers write the events of every library in the process,
+and a few of them quote what a client sent, or a secret, below some level. A
+line never carries either, so each of those libraries is clamped: its events
+are written from the level below which it quotes nothing at most. A clamp only
+narrows `<PREFIX>_LOG`, never opens what it closes: under `warn`, `tungstenite`
+writes its warnings and nothing below, and under `nest_rs=debug` no library
+writes at all.
+
+| Library | Written from | Below that, it quotes |
+|---|---|---|
+| `rmcp` | nothing (`off`) | a client's `initialize` params, notifications and cancel reasons (`info`); its `Host` and protocol-version headers (`warn`); the session id it named, when the session store fails (`error`); each tool call's arguments and reply (`debug`, `trace`) |
+| `h2` | `error` | a PING's opaque data (`warn`); a GOAWAY's debug data (`debug`) |
+| `rustls` | `error` | a client's SNI (`warn`); its whole ClientHello (`trace`) |
+| `sqlx_postgres` | `error` | a malformed `.pgpass` line, password included, and an unknown connection parameter's value (`warn`) |
+| `tungstenite` | `info` | a close frame's reason (`debug`); every message (`trace`) |
+| `opentelemetry-otlp` | `info` | the export URL, whose userinfo or query may carry a collector's credential, and the collector's error body (`debug`) |
+
+A directive naming the library — or one of its modules — replaces its clamp,
+because `EnvFilter` keeps the later of two directives for one target and yours
+come after the framework's: `<PREFIX>_LOG=info,rmcp=debug` writes rmcp's debug
+lines, and with them what the table says they quote, so keep it to a
+development run. Under the clamp, one `/mcp` denial files one line, the
+framework's: rmcp's own `response error` is a `warn`, and a `Host` rmcp refuses
+is said by the mount, without the value. The mount also says, on
+`nest_rs::mcp` and without the session a client named, each failure rmcp's own
+lines reported: a session call that failed (`mcp session manager failed`,
+`error`, its `call`), a stream that could not resume (`warn`), and a failure of
+your `SessionStore` (`mcp session store failed`, `error` for a load rmcp
+answers `500`, `warn` for a store or a delete it carries on past). Two stay
+rmcp's alone: why a session's handshake failed in its worker — the session is
+closed, and a call still waiting on it is said as a failed session call — and
+an event store's persist failures, which the mount never reaches: it opens no
+event store. The statement log
+`<PREFIX>_SEAORM__SQLX_LOGGING` turns on is `sqlx::query`'s and stays open — it
+writes each statement's SQL, its values bound apart.
+
+Two of `EnvFilter`'s rules reach a clamp. A directive matches every target its
+name begins with, so `rustls=error` also holds rustls-platform-verifier's
+warnings, which `rustls_platform_verifier=warn` opens alone. And a span
+directive (`[audited]=debug`) opens what runs inside the span it names, a
+clamped library's events included.
+
 ## Structured fields
 
 ```rust title="crates/features/src/users/service.rs"

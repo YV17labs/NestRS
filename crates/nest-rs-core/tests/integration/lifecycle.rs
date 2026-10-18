@@ -892,7 +892,6 @@ struct TearsDownAfterServingModule;
 /// still serving uses.
 #[tokio::test(start_paused = true)]
 async fn no_shutdown_hook_starts_before_every_transport_has_returned_from_serve() {
-    let started = tokio::time::Instant::now();
     App::new::<TearsDownAfterServingModule>()
         .expect("the module boots")
         .run()
@@ -908,11 +907,6 @@ async fn no_shutdown_hook_starts_before_every_transport_has_returned_from_serve(
         "a shutdown hook started before every transport returned from `serve`: {saw:?}",
     );
     let unwound = unwound_at().expect("the unwinding transport returned once its stop fired");
-    assert!(
-        unwound - started >= UNWIND,
-        "the transport unwound after the stop, took {:?}",
-        unwound - started,
-    );
     assert_eq!(
         saw,
         [

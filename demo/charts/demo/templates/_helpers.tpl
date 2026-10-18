@@ -198,13 +198,14 @@ that installs cleanly and then misbehaves in a way no probe reports.
 {{- if not (has $cfg.kind (list "deployment" "job")) -}}
 {{- fail (printf "demo: apps.%s has kind %q. An app is either a `deployment` — a long-running process behind a Service — or a `job`, run to completion before them." $app $cfg.kind) -}}
 {{- end -}}
-{{- if and (eq $cfg.kind "deployment") (not $cfg.port) -}}
+{{- if eq $cfg.kind "deployment" -}}
+{{- if not $cfg.port -}}
 {{- fail (printf "demo: apps.%s needs a `port`. Every app the framework runs mounts an HTTP transport — the worker included, for its probes — and this chart sets NESTRS_HTTP__PORT from that value." $app) -}}
 {{- end -}}
-{{- if eq $cfg.kind "deployment" -}}
-{{- $needed := ceil (addf $cfg.shutdownDelaySeconds 29.5) -}}
+{{- $wayDown := 29.5 -}}
+{{- $needed := ceil (addf $cfg.shutdownDelaySeconds $wayDown) -}}
 {{- if lt (float64 $cfg.terminationGracePeriodSeconds) $needed -}}
-{{- fail (printf "demo: apps.%s has a terminationGracePeriodSeconds of %v, under the %v its way down needs. Kubernetes counts the preStop sleep inside the grace, so the %vs `shutdownDelaySeconds` comes first, then the framework's 29.5s from SIGTERM to exit at its defaults; a pod past its grace is killed mid-drain, with no line saying why. Raise the grace, or lower the delay." $app $cfg.terminationGracePeriodSeconds $needed $cfg.shutdownDelaySeconds) -}}
+{{- fail (printf "demo: apps.%s has a terminationGracePeriodSeconds of %v, under the %v its way down needs. Kubernetes counts the preStop sleep inside the grace, so the %vs `shutdownDelaySeconds` comes first, then the framework's %vs from SIGTERM to exit at its defaults; a pod past its grace is killed mid-drain, with no line saying why. Raise the grace, or lower the delay." $app $cfg.terminationGracePeriodSeconds $needed $cfg.shutdownDelaySeconds $wayDown) -}}
 {{- end -}}
 {{- end -}}
 {{- if and $cfg.autoscaling.enabled $cfg.keda.enabled -}}

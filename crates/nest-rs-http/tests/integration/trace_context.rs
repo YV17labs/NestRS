@@ -91,6 +91,23 @@ async fn the_span_reports_the_route_template_and_the_path_separately() {
     );
 }
 
+/// The HTTP server conventions require `url.scheme` beside `url.path`.
+#[tokio::test]
+async fn the_span_reports_the_scheme_the_request_arrived_over() {
+    let logs = LogCapture::install();
+    let client = boot::<OrgsModule>().await;
+
+    client.get("/orgs/acme/members/42").send().await;
+
+    let span = logs.expect_span("nest_rs::http", "http.request");
+    assert_eq!(
+        span.field("url.scheme").as_deref(),
+        Some("http"),
+        "{:?}",
+        span.fields
+    );
+}
+
 /// The span names no client: an address is personal data.
 #[tokio::test]
 async fn the_span_carries_no_client_address() {

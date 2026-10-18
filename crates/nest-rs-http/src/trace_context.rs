@@ -14,6 +14,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use http::uri::Scheme;
 use http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use nest_rs_core::operation_log::OTHER;
 use nest_rs_core::{Correlation, TraceParent, TraceState};
@@ -80,10 +81,10 @@ fn parsed_traceparent(claimed: &str) -> Option<&str> {
 }
 
 /// The upstream proxy's own request id, when a trusted peer sent one in the
-/// shape a proxy mints: no specification gives `X-Request-Id` a grammar, and a
-/// client may write the header through a proxy that forwards it, so only
-/// bounded hex is recorded — a UUID (RFC 9562 §4), or 16 to 64 hex digits as
-/// nginx's `$request_id` is 32 — never a word a client could have chosen.
+/// shape a proxy mints: no specification gives `X-Request-Id` a grammar, so
+/// only bounded hex is recorded — a UUID (RFC 9562 §4), or 16 to 64 hex digits
+/// as nginx's `$request_id` is 32. The shape is all it checks: behind a proxy
+/// forwarding the client's header, hex the client wrote passes as minted.
 fn upstream_request_id(req: &Request, origin: ClientOrigin) -> Option<&str> {
     origin.peer_is_trusted().then_some(())?;
     req.headers()
@@ -91,6 +92,23 @@ fn upstream_request_id(req: &Request, origin: ClientOrigin) -> Option<&str> {
         .to_str()
         .ok()
         .filter(|raw| is_minted_id(raw))
+}
+
+/// The HTTP server conventions' `url.scheme`: the scheme of the client's own
+/// request when a trusted proxy forwarded it — `Forwarded`'s `proto`, else
+/// `X-Forwarded-Proto`, read as the browser-origin check reads them — and it
+/// is `http` or `https`; otherwise the one the request arrived over.
+fn url_scheme(req: &Request, origin: ClientOrigin) -> &'static str {
+    let forwarded = origin
+        .peer_is_trusted()
+        .then(|| crate::origin::forwarded_proto(req.headers()))
+        .flatten();
+    match forwarded {
+        Some(proto) if proto.eq_ignore_ascii_case("https") => "https",
+        Some(proto) if proto.eq_ignore_ascii_case("http") => "http",
+        _ if *req.scheme() == Scheme::HTTPS => "https",
+        _ => "http",
+    }
 }
 
 /// Whether `id` is a UUID's `8-4-4-4-12` hex groups, or 16 to 64 hex digits.
@@ -215,6 +233,7 @@ pub(crate) fn request_span(
         http.request.method_original = (method == OTHER).then(|| req.method().as_str()),
         // As addressed; never in `http.route`, which a backend groups on.
         url.path = req.uri().path(),
+        url.scheme = url_scheme(req, origin),
         // Filled by `name_route`; a 404 matched no route and leaves it empty.
         http.route = tracing::field::Empty,
         // No `client.address`: an address is personal data a collector would keep.
@@ -447,6 +466,70 @@ mod tests {
                 "{sent}",
             );
         }
+    }
+
+    /// The HTTP server conventions' `url.scheme`: the scheme the client asked
+    /// for when a trusted proxy forwarded it, `http` or `https` alone, else the
+    /// scheme the request arrived over.
+    #[test]
+    fn the_scheme_is_the_client_s_behind_a_trusted_proxy_else_the_listener_s() {
+        let trusted = [ip("10.0.0.1")];
+        let over = |scheme: &str, peer: &str, headers: &[(HeaderName, &str)]| {
+            let socket: std::net::SocketAddr =
+                format!("{peer}:40000").parse().expect("test literal");
+            let uri = format!("{scheme}://api.example/orgs");
+            let mut built = Request::builder()
+                .peer_addr(socket)
+                .uri(uri.parse().expect("test literal"));
+            for (name, value) in headers {
+                built = built.header(
+                    name.clone(),
+                    HeaderValue::from_str(value).expect("header value"),
+                );
+            }
+            let req = built.finish();
+            url_scheme(&req, ClientOrigin::of_with(&req, &trusted))
+        };
+        let proto = HeaderName::from_static("x-forwarded-proto");
+
+        assert_eq!(over("https", "203.0.113.9", &[]), "https", "a TLS listener");
+        assert_eq!(over("http", "203.0.113.9", &[]), "http", "a plaintext one");
+        assert_eq!(
+            over("http", "10.0.0.1", &[(proto.clone(), "https")]),
+            "https"
+        );
+        assert_eq!(
+            over("http", "10.0.0.1", &[(proto.clone(), "HTTPS, http")]),
+            "https"
+        );
+        assert_eq!(
+            over(
+                "https",
+                "10.0.0.1",
+                &[(header::FORWARDED, "for=192.0.2.60;proto=http")]
+            ),
+            "http",
+            "the client's own, which the conventions ask for, over the hop's",
+        );
+        assert_eq!(
+            over(
+                "http",
+                "10.0.0.1",
+                &[(header::FORWARDED, "proto=https"), (proto.clone(), "http")]
+            ),
+            "https",
+            "the standard field first, as the origin check reads it",
+        );
+        assert_eq!(
+            over("http", "203.0.113.9", &[(proto.clone(), "https")]),
+            "http",
+            "a header from an untrusted peer is the client's own claim",
+        );
+        assert_eq!(
+            over("https", "10.0.0.1", &[(proto, "sk_live_marked")]),
+            "https",
+            "a value outside the two is no scheme: the listener's stands",
+        );
     }
 
     /// The conventions' known methods and the ones a route registers, spelled

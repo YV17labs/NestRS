@@ -151,7 +151,7 @@ spelled it.
   start; a switch putting the values back on the line, whose place is already
   the span in the deployment's own collector.
 
-## 2026-10-18 — a GraphQL variable's value by kind, the document's names and MCP's version echo as stated exceptions
+## 2026-10-18 — a library's reply by kind, the document's names and MCP's version echo as stated exceptions, the span's `url.scheme`
 
 async-graphql's validation and input coercion quote what a variable held: an
 enum's value (`does not contain the value "…"`), an input object's key it does
@@ -199,3 +199,15 @@ GraphQL grammar bounds.
   `data.requested` are both required, at HTTP 400. The shape is the
   specification's, the echo goes to the sender alone, and no framework line
   carries it.
+- **The request span records `url.scheme`**, which OpenTelemetry's HTTP
+  server conventions (Stable) require beside `http.request.method` and
+  `url.path`: the scheme of the client's own request when a trusted proxy
+  forwarded it — `Forwarded`'s `proto`, else `X-Forwarded-Proto`, read as the
+  browser-origin check reads them — and it is `http` or `https`, otherwise
+  the scheme the request arrived over. A closed pair of words, no value a
+  client chose; the span exception above holds as written.
+- **The `X-Request-Id` shape check has a residual, stated**: it records an id
+  in the shape a proxy mints, so behind a proxy forwarding the client's
+  header, hex the client wrote — a secret minted as hex or as a UUID
+  included — is recorded as a minted id would be. The shape is all a header
+  without a grammar offers to check.

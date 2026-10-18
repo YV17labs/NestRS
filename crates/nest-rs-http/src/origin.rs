@@ -172,28 +172,34 @@ impl OriginPolicy {
 /// wrote. A value a caller prepended can only claim an origin, and a caller
 /// that is no browser may send none at all.
 fn forwarded(headers: &HeaderMap) -> (Option<&str>, Option<&str>) {
-    let standard = headers
-        .get(header::FORWARDED)
-        .and_then(|value| value.to_str().ok());
-    let de_facto = |name: &str| {
-        headers
-            .get(name)?
-            .to_str()
-            .ok()?
-            .split(',')
-            .next()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    };
-    let named = |param: &str, header: &str| {
-        standard
-            .and_then(|raw| forwarded_param(raw, param))
-            .or_else(|| de_facto(header))
-    };
     (
-        named("proto", X_FORWARDED_PROTO),
-        named("host", X_FORWARDED_HOST),
+        forwarded_proto(headers),
+        forwarded_named(headers, "host", X_FORWARDED_HOST),
     )
+}
+
+/// The scheme a trusted proxy says the client asked for, read as
+/// [`forwarded`] reads it: `Forwarded`'s `proto`, else `X-Forwarded-Proto`.
+pub(crate) fn forwarded_proto(headers: &HeaderMap) -> Option<&str> {
+    forwarded_named(headers, "proto", X_FORWARDED_PROTO)
+}
+
+/// `Forwarded`'s `param`, else the first value of the de-facto `header`.
+fn forwarded_named<'a>(headers: &'a HeaderMap, param: &str, header: &str) -> Option<&'a str> {
+    headers
+        .get(header::FORWARDED)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| forwarded_param(raw, param))
+        .or_else(|| {
+            headers
+                .get(header)?
+                .to_str()
+                .ok()?
+                .split(',')
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
 }
 
 /// An entry behind its surface's origin check, run before any guard: a refused

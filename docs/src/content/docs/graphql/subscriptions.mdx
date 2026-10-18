@@ -110,7 +110,10 @@ fact carries the fact.
 ## On the wire
 
 The socket speaks [graphql-ws](https://github.com/enisdenjo/graphql-ws)
-on the same URL as the POST endpoint, so a client points at one address:
+on the same URL as the POST endpoint, so a client points at one address. Of
+the subprotocols a client offers in `Sec-WebSocket-Protocol`, the first one
+async-graphql speaks is chosen — `graphql-transport-ws`, or the legacy
+`graphql-ws` — and a handshake offering neither is refused `400`:
 
 ```bash frame="terminal"
 $ curl -i --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
@@ -120,13 +123,17 @@ $ curl -i --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
 HTTP/1.1 101 Switching Protocols
 connection: upgrade
 upgrade: websocket
+sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 sec-websocket-protocol: graphql-transport-ws
 ```
 
 The caller authenticates on the **upgrade** request, with the same
 `Authorization` header a query carries. A plain `GET` on that path still
 serves the playground when it is enabled; the upgrade header is what
-selects the socket.
+selects the socket. A handshake the server cannot accept is refused as a
+gateway's is ([When the server refuses a
+handshake](/websockets/#when-the-server-refuses-a-handshake)), a `HEAD`
+carrying one included.
 
 A browser never consults CORS before it opens a socket, so the upgrade
 checks the `Origin` header itself (RFC 6455 §10.2), before the guard runs.
@@ -206,7 +213,7 @@ authorised for:
 
 | Bound | Variable | Default | Past it |
 |---|---|---|---|
-| A message's size | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | 64 KiB | the frame is refused before it is buffered, and the socket closes `1011` |
+| A message's size | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | 64 KiB | the frame is refused before it is buffered, and the socket closes `1009 Message Too Big` |
 | The wait for `connection_init` | `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS` | 3 s, from 1 to 60 | the socket closes `4408 Connection initialisation timeout` |
 | Operations running at once | `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` | 100, `0` ⇒ unlimited | the `subscribe` is answered an `error` message for its id, and the socket stays |
 

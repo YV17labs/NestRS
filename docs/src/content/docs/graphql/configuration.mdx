@@ -121,7 +121,10 @@ depends on it), leave `playground` and `emit_sdl` to env.
 `GraphqlModule` mounts on `HttpTransport` at `path`:
 
 - `POST <path>` — GraphQL operations (queries + mutations).
-- `GET <path>` — the playground HTML, when `playground = true`.
+- `GET <path>` — the [subscription socket](/graphql/subscriptions/) when the
+  request asks to upgrade; otherwise the playground HTML, when `playground = true`.
+
+Any other method is answered `405`, with `Allow: POST, GET, HEAD`.
 
 The path is a `nest`ed route on the HTTP transport, so the surrounding
 `HttpModule` config (host, port, CORS, TLS) applies as usual.

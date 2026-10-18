@@ -339,7 +339,7 @@ fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
 // Over a real upgrade: the close is the socket's, and the in-process driver has none.
 
 use nest_rs_testing::ws::{WsApp, WsFrame, WsRead, WsSocket, WsSocketBuilder};
-use poem::web::websocket::CloseCode;
+use nest_rs_ws::CloseCode;
 
 fn graphql_ws(app: &WsApp) -> WsSocketBuilder {
     app.socket("/graphql")
@@ -902,11 +902,85 @@ async fn once_cors_is_set_only_the_origins_it_lists_open_a_socket() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
-/// A frame past the socket's message cap is never buffered whole: the protocol
-/// layer refuses it and the socket closes. 1011, not 1009: poem hands the cause
-/// on as an opaque `io::Error`, as the WebSocket gateway's cap meets it.
+/// `Upgrade` is a list (RFC 9110 §7.8): the `GET` on the GraphQL path reads
+/// `websocket` anywhere in it as the handshake does, and so does the origin
+/// check.
 #[tokio::test]
-async fn a_frame_past_the_message_cap_closes_the_socket() {
+async fn an_upgrade_listing_websocket_among_others_is_origin_checked_and_served() {
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+
+    for listed in ["websocket, h2c", "h2c, WebSocket"] {
+        assert_eq!(
+            graphql_ws(&app)
+                .header("upgrade", listed)
+                .header("origin", ELSEWHERE)
+                .expect_refused()
+                .await,
+            nest_rs_http::StatusCode::FORBIDDEN,
+            "{listed}",
+        );
+        let mut socket = graphql_ws(&app).header("upgrade", listed).connect().await;
+        socket.send_text(r#"{"type":"connection_init"}"#).await;
+        assert_eq!(
+            next_message(&mut socket).await["type"],
+            "connection_ack",
+            "{listed}"
+        );
+    }
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// A `HEAD` carrying the graphql-ws handshake, which the route table serves
+/// through the `GET` entry: the handshake refuses it, and nothing switches.
+#[tokio::test]
+async fn a_head_carrying_the_handshake_opens_no_socket() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+    let mut stream = tokio::net::TcpStream::connect(app.addr())
+        .await
+        .expect("the transport listens");
+    stream
+        .write_all(
+            b"HEAD /graphql HTTP/1.1\r\nhost: localhost\r\nupgrade: websocket\r\n\
+              connection: Upgrade\r\nsec-websocket-version: 13\r\n\
+              sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+              sec-websocket-protocol: graphql-transport-ws\r\n\r\n",
+        )
+        .await
+        .expect("the handshake is sent");
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+            .await
+            .expect("answered")
+            .expect("the connection reads");
+        assert_eq!(read, 1, "the head ended early: {head:?}");
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).expect("an HTTP head");
+    assert!(head.starts_with("HTTP/1.1 400"), "{head}");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// The GraphQL path serves `POST` and `GET`: another method meets the route
+/// table's `405`, which names them.
+#[tokio::test]
+async fn another_method_on_the_graphql_path_answers_405_naming_the_served_ones() {
+    let app = boot().await;
+    let resp = app.http().put("/graphql").send().await;
+    resp.assert_status(nest_rs_http::StatusCode::METHOD_NOT_ALLOWED);
+    resp.assert_header(nest_rs_http::header::ALLOW, "POST, GET, HEAD");
+}
+
+/// A frame past the socket's message cap is never buffered whole: the protocol
+/// layer refuses it and the socket closes with RFC 6455 §7.4.1's 1009, as the
+/// WebSocket gateway's cap does.
+#[tokio::test]
+async fn a_frame_past_the_message_cap_closes_1009_message_too_big() {
     let logs = LogCapture::install();
     let (app, _) = ticks_app::<SubscriptionApp>().await;
     let mut socket = graphql_ws(&app).connect().await;
@@ -920,9 +994,15 @@ async fn a_frame_past_the_message_cap_closes_the_socket() {
         .await;
     let (code, reason) = socket.expect_close().await;
 
-    assert_eq!(code, CloseCode::Error, "{reason}");
+    assert_eq!(code, CloseCode::Size, "{reason}");
     assert!(!reason.is_empty());
     let read = logs.expect_one(nest_rs_graphql::TARGET, "subscription socket read failed");
+    assert_eq!(
+        read.field("close_code").as_deref(),
+        Some("1009"),
+        "the line says the code the peer was sent: {:?}",
+        read.fields,
+    );
     assert!(
         read.field("error")
             .is_some_and(|error| error.contains("Space limit")),
@@ -980,6 +1060,58 @@ async fn a_reused_operation_id_closes_the_socket_4409_without_echoing_it() {
 
     assert_eq!(u16::from(code), 4409);
     assert!(!reason.contains('1'), "the id is not echoed: {reason}");
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Both subprotocols async-graphql speaks are negotiated off
+/// `Sec-WebSocket-Protocol`, and each serves a subscription in its own
+/// wording: the client refuses an answer that echoes none it offered.
+#[tokio::test]
+async fn both_graphql_ws_subprotocols_are_negotiated_and_serve_a_subscription() {
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+    for (protocol, subscribe, item) in [
+        ("graphql-transport-ws", "subscribe", "next"),
+        ("graphql-ws", "start", "data"),
+    ] {
+        let mut socket = app
+            .socket("/graphql")
+            .header("sec-websocket-protocol", format!("unknown, {protocol}"))
+            .connect()
+            .await;
+        socket.send_text(r#"{"type":"connection_init"}"#).await;
+        assert_eq!(
+            next_message(&mut socket).await["type"],
+            "connection_ack",
+            "{protocol}"
+        );
+        socket
+            .send_text(
+                serde_json::json!({
+                    "id": "1",
+                    "type": subscribe,
+                    "payload": { "query": "subscription { counted }" },
+                })
+                .to_string(),
+            )
+            .await;
+        let first = next_message(&mut socket).await;
+        assert_eq!(first["type"], item, "{protocol}: {first}");
+        assert_eq!(
+            first["payload"]["data"]["counted"], 1,
+            "{protocol}: {first}"
+        );
+    }
+
+    let refused = app
+        .socket("/graphql")
+        .header("sec-websocket-protocol", "mqtt")
+        .expect_refused()
+        .await;
+    assert_eq!(
+        refused,
+        nest_rs_http::StatusCode::BAD_REQUEST,
+        "a handshake offering no graphql-ws subprotocol is refused"
+    );
     app.shutdown().await.expect("the transport stops cleanly");
 }
 

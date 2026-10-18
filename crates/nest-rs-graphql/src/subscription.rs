@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -17,16 +18,15 @@ use std::time::Duration;
 use async_graphql::http::{ALL_WEBSOCKET_PROTOCOLS, ClientMessage, WebSocketProtocols, WsMessage};
 use async_graphql::parser::types::OperationType;
 use async_graphql::{Data, Executor};
-use async_graphql_poem::GraphQLProtocol;
 use futures_util::future::Either;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, Stream, StreamExt};
-use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketConfig, WebSocketStream};
-use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
-use nest_rs_http::__private::poem_bridge::request_from_poem;
-use nest_rs_http::DetachedWork;
+use nest_rs_http::__private::websocket::{
+    self, CloseCode, HandshakeRefused, Message, WebSocketLimits, WebSocketStream, WebSocketUpgrade,
+};
+use nest_rs_http::{DetachedWork, Endpoint, Request, Response};
 use tracing::Instrument;
 
 use crate::config::GraphqlConfig;
@@ -82,7 +82,7 @@ pub fn keep_masked_item<T>(
 }
 
 /// The data handle a socket runs on when no unit-of-work binding is mounted,
-/// taken from the **upgrade request**: poem answers the `101` before the
+/// taken from the **upgrade request**: the `101` is answered before the
 /// connection task runs.
 ///
 /// Always **non-transactional**: the request transaction is finalized with the
@@ -178,11 +178,6 @@ const LIFETIME_REACHED: &str = "connection lifetime reached, re-upgrade to conti
 /// condition that prevented the server from serving the rest of the socket.
 const UNWOUND: &str = "the subscription failed on the server";
 
-/// §7.4.1 **1011 Internal Error**, not 1009: poem hands tungstenite's errors on
-/// as an opaque `io::Error`, so the message cap cannot be told from a framing
-/// fault — the sentence a WebSocket gateway closes with.
-const READ_FAILED: &str = "the connection could not be read";
-
 /// What an operation past the socket's cap is answered with.
 const TOO_MANY_OPERATIONS: &str = "too many operations on this socket";
 
@@ -196,8 +191,9 @@ enum Refusal {
     /// A `subscribe` reusing the id of a running operation — *Subscribe*. The
     /// reason does not echo the id.
     SubscriberExists,
-    /// The read failed: a frame past the message cap, or broken framing.
-    ReadFailed,
+    /// The read failed — a frame past the message cap (1009), or broken framing
+    /// (1011) — with the close the gateway's socket ends with too.
+    ReadFailed(CloseCode, &'static str),
 }
 
 impl Refusal {
@@ -205,7 +201,7 @@ impl Refusal {
         match self {
             Self::InitTimeout => (CloseCode::from(4408), "Connection initialisation timeout"),
             Self::SubscriberExists => (CloseCode::from(4409), "Subscriber already exists"),
-            Self::ReadFailed => (CloseCode::Error, READ_FAILED),
+            Self::ReadFailed(code, reason) => (code, reason),
         }
     }
 
@@ -214,7 +210,7 @@ impl Refusal {
     fn ended(self) -> Ended {
         match self {
             Self::InitTimeout | Self::SubscriberExists => Ended::Refused,
-            Self::ReadFailed => Ended::ByPeer,
+            Self::ReadFailed(..) => Ended::ByPeer,
         }
     }
 }
@@ -293,7 +289,8 @@ enum Ended {
 }
 
 /// The graphql-ws endpoint, reached through the GET dispatcher on the POST
-/// endpoint's path.
+/// endpoint's path: the handshake on the transport's upgrade, the subprotocol
+/// the first of the client's offers async-graphql speaks.
 pub(crate) struct SubscriptionEndpoint<E> {
     executor: E,
     bridge: Arc<OperationBridge>,
@@ -324,15 +321,16 @@ impl<E> SubscriptionEndpoint<E> {
 }
 
 impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> Result<Self::Output> {
+    async fn call(&self, mut req: Request) -> nest_rs_http::Result<Response> {
         // The transport checked the origin and ran the upgrade's guards in front:
         // a refusal there is an ordinary HTTP response, and no socket opens.
-        let (req, mut body) = req.split();
-        let websocket = WebSocket::from_request(&req, &mut body).await?;
-        let protocol = GraphQLProtocol::from_request(&req, &mut body).await?;
-        let req = request_from_poem(req);
+        let upgrade = WebSocketUpgrade::from_request(&mut req)?;
+        let protocol = upgrade
+            .protocols()
+            .find_map(|offered| WebSocketProtocols::from_str(offered).ok())
+            .ok_or(HandshakeRefused::SubprotocolNotOffered(
+                &ALL_WEBSOCKET_PROTOCOLS,
+            ))?;
         let pipes = SocketPipes::of(&self.bridge, &req);
         // What the upgrade's guards attached reaches the socket the way it
         // reaches a POST: forwarded by the seeds, carried by the connection.
@@ -343,18 +341,16 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         let executor = self.executor.clone();
         let bounds = self.bounds;
         let socket_data = SocketData::of_upgrade(self.unit_of_work.as_ref());
-        // Read on the request task, before poem answers the `101`.
+        // Read on the request task, before the `101` is answered.
         let correlation = socket_correlation();
         let sockets = self.sockets.clone();
+        // At the protocol layer, so a frame past the cap is never buffered whole.
+        let limits = WebSocketLimits::new(bounds.max_message_bytes);
 
-        Ok(websocket
-            .config(
-                WebSocketConfig::default()
-                    .max_message_size(Some(bounds.max_message_bytes))
-                    .max_frame_size(Some(bounds.max_message_bytes)),
-            )
-            .protocols(ALL_WEBSOCKET_PROTOCOLS)
-            .on_upgrade(move |stream| async move {
+        Ok(upgrade.accept(
+            Some(protocol.sec_websocket_protocol()),
+            limits,
+            move |stream| async move {
                 // One span per socket: async-graphql's engine hides operation
                 // boundaries from this crate.
                 let span = nest_rs_core::operation_span!(crate::unit::SUBSCRIPTION, &correlation,);
@@ -363,8 +359,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // A local slot, since the executor scope wraps a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
-                    let served =
-                        serve_socket(stream, executor, protocol.0, data, end, bounds, pipes);
+                    let served = serve_socket(stream, executor, protocol, data, end, bounds, pipes);
                     ended = Some(match bounds.max_connection {
                         // A peer that stopped reading cannot hold the socket past
                         // the ceiling plus the close grace.
@@ -403,8 +398,8 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 if let Some(ended) = ended {
                     line.settle(ended);
                 }
-            })
-            .into_response())
+            },
+        ))
     }
 }
 
@@ -438,7 +433,7 @@ async fn serve_socket<E: Executor>(
             .connection_data(data);
     loop {
         if let Some(frame) = withheld.take() {
-            if let Err(error) = sink.send(Message::Text(frame)).await {
+            if let Err(error) = sink.send(Message::text(frame)).await {
                 return stopped_writing(&error);
             }
             continue;
@@ -461,7 +456,7 @@ async fn serve_socket<E: Executor>(
                 if let Some(id) = completed_id(&text) {
                     lock(&started).remove(&id);
                 }
-                if let Err(error) = sink.send(Message::Text(text)).await {
+                if let Err(error) = sink.send(Message::text(text)).await {
                     return stopped_writing(&error);
                 }
             }
@@ -496,8 +491,8 @@ async fn serve_socket<E: Executor>(
 
 /// A frame could not be written: past the transport's send deadline the
 /// server drops the socket; any other failure is the peer gone.
-fn stopped_writing(error: &std::io::Error) -> Ended {
-    if error.kind() != std::io::ErrorKind::TimedOut {
+fn stopped_writing(error: &websocket::Error) -> Ended {
+    if !matches!(error, websocket::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut) {
         return Ended::ByPeer;
     }
     tracing::warn!(
@@ -697,7 +692,7 @@ impl<S> Inbound<S> {
 
 impl<S> Stream for Inbound<S>
 where
-    S: Stream<Item = std::io::Result<Message>> + Unpin,
+    S: Stream<Item = Result<Message, websocket::Error>> + Unpin,
 {
     type Item = serde_json::Result<ClientMessage>;
 
@@ -750,19 +745,20 @@ where
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Ready(Some(Err(error))) => {
+                    let (code, reason) = websocket::read_failed(&error);
                     tracing::debug!(
                         target: crate::TARGET,
                         error = %nest_rs_core::error_message(&error),
-                        close_code = u16::from(CloseCode::Error),
+                        close_code = u16::from(code),
                         "subscription socket read failed",
                     );
-                    return this.refuse(Refusal::ReadFailed);
+                    return this.refuse(Refusal::ReadFailed(code, reason));
                 }
                 Poll::Ready(Some(Ok(message))) => {
                     if !(message.is_text() || message.is_binary()) {
                         continue;
                     }
-                    let mut parsed = serde_json::from_slice::<ClientMessage>(&message.into_bytes())
+                    let mut parsed = serde_json::from_slice::<ClientMessage>(&message.into_data())
                         .map_err(not_a_message);
                     match &mut parsed {
                         Ok(ClientMessage::ConnectionInit { .. }) => this.init_deadline = None,
@@ -839,30 +835,15 @@ fn not_a_message(error: serde_json::Error) -> serde_json::Error {
     <serde_json::Error as nest_rs_core::__private::serde::de::Error>::custom(NOT_A_MESSAGE)
 }
 
-/// RFC 6455 §5.5: a control frame's payload is at most 125 bytes, the close
-/// code taking two of them.
-const CLOSE_REASON_MAX: usize = 123;
-
-/// `reason` cut to [`CLOSE_REASON_MAX`] bytes on a character boundary, so no
-/// engine sentence can make the close frame one the peer must refuse.
-fn close_reason(reason: &str) -> &str {
-    &reason[..reason.floor_char_boundary(CLOSE_REASON_MAX)]
-}
-
 /// Put a Close frame on the wire, then flush — best-effort, since a peer that
-/// has already gone cannot be told anything.
+/// has already gone cannot be told anything. An engine sentence past what a
+/// control frame holds is cut, never sent whole for the peer to refuse.
 async fn close_socket(
     sink: &mut SplitSink<WebSocketStream, Message>,
     code: CloseCode,
     reason: &str,
 ) {
-    if let Err(err) = sink
-        .send(Message::Close(Some((
-            code,
-            close_reason(reason).to_owned(),
-        ))))
-        .await
-    {
+    if let Err(err) = sink.send(websocket::close_frame(code, reason)).await {
         tracing::debug!(
             target: crate::TARGET,
             error = %nest_rs_core::error_message(&err),
@@ -952,16 +933,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-
-    #[test]
-    fn a_close_reason_is_cut_to_what_a_control_frame_carries_on_a_character_boundary() {
-        assert_eq!(close_reason("going away"), "going away");
-        let long = "é".repeat(100);
-        let cut = close_reason(&long);
-        assert!(cut.len() <= CLOSE_REASON_MAX, "{}", cut.len());
-        assert_eq!(cut.len(), 122, "the last whole character before the limit");
-        assert!(long.starts_with(cut));
-    }
 
     #[test]
     fn a_frame_that_is_not_a_protocol_message_is_refused_without_its_payload() {
@@ -1273,14 +1244,14 @@ mod tests {
         use async_graphql::futures_util::stream;
 
         let frames = stream::iter([
-            Ok(Message::Text(r#"{"type":"connection_init"}"#.into())),
-            Ok(Message::Text(
-                r#"{"id":"a","type":"subscribe","payload":{"query":"subscription { x }"}}"#.into(),
+            Ok::<_, websocket::Error>(Message::text(r#"{"type":"connection_init"}"#)),
+            Ok::<_, websocket::Error>(Message::text(
+                r#"{"id":"a","type":"subscribe","payload":{"query":"subscription { x }"}}"#,
             )),
-            Ok(Message::Text(
-                r#"{"id":"b","type":"subscribe","payload":{"query":"subscription { x }"}}"#.into(),
+            Ok::<_, websocket::Error>(Message::text(
+                r#"{"id":"b","type":"subscribe","payload":{"query":"subscription { x }"}}"#,
             )),
-            Ok(Message::Text(r#"{"id":"a","type":"complete"}"#.into())),
+            Ok::<_, websocket::Error>(Message::text(r#"{"id":"a","type":"complete"}"#)),
         ])
         .chain(stream::pending());
         let (end_now, ended) = tokio::sync::oneshot::channel::<()>();
@@ -1323,12 +1294,12 @@ mod tests {
         use async_graphql::futures_util::stream;
 
         let frames = stream::iter([
-            Ok(Message::Text(r#"{"type":"connection_init"}"#.into())),
-            Ok(Message::Text(
-                r#"{"id":"s","type":"subscribe","payload":{"query":"subscription { x }"}}"#.into(),
+            Ok::<_, websocket::Error>(Message::text(r#"{"type":"connection_init"}"#)),
+            Ok::<_, websocket::Error>(Message::text(
+                r#"{"id":"s","type":"subscribe","payload":{"query":"subscription { x }"}}"#,
             )),
-            Ok(Message::Text(
-                r#"{"id":"q","type":"subscribe","payload":{"query":"mutation { y }"}}"#.into(),
+            Ok::<_, websocket::Error>(Message::text(
+                r#"{"id":"q","type":"subscribe","payload":{"query":"mutation { y }"}}"#,
             )),
         ])
         .chain(stream::pending());

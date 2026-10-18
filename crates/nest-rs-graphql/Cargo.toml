@@ -28,7 +28,8 @@ serde_json.workspace = true
 validator.workspace = true
 # GraphqlModule self-mounts over HTTP via HttpEndpointMeta — this crate serves
 # GraphQL on the HTTP transport. No cycle: nest-rs-http does not depend on us.
-nest-rs-http.workspace = true
+# `websocket` is the graphql-ws socket's handshake and frames.
+nest-rs-http = { workspace = true, features = ["websocket"] }
 async-graphql.workspace = true
 # `#[crud]`-generated create/update ops validate their input through the
 # re-exported `ValidateProbe` (global validation, the NestJS `ValidationPipe`
@@ -63,6 +64,8 @@ tokio.workspace = true
 # Close frame — exists only over a real upgrade, and so does the shutdown window
 # a DataLoader batch is stopped at.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "http", "ws"] }
+# The close codes a socket the suites open ends with, as an app names them.
+nest-rs-ws = { path = "../nest-rs-ws" }
 # The layer-pool test asserts the transport-edge interceptor pool covers the
 # `/graphql` self-mount. An allowed dev-dependency cycle: the interceptors
 # depend on `nest-rs-http`, which this crate does.

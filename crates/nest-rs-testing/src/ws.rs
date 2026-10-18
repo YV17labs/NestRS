@@ -1,8 +1,9 @@
 //! Driving a WebSocket gateway over a **real** upgrade.
 //!
 //! The upgrade, the [`WsConfig`] it resolves, the lifetime ceiling, the writer
-//! task and the per-message request scope all live in the connection task poem
-//! spawns from `on_upgrade`, so this driver binds a port:
+//! task and the per-message request scope all live in the connection task the
+//! upgrade spawns once its `101` is written, and an in-process request has no
+//! connection to switch, so this driver binds a port:
 //! [`WsApp`](crate::ws::WsApp) boots the app's own HTTP transport on a free
 //! local address, and [`WsSocket`](crate::ws::WsSocket) speaks the gateway's
 //! `{ event, data }` envelope over it.

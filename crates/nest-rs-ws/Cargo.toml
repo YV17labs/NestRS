@@ -6,8 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "WebSocket gateways for NestRS: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport, built on poem's WebSocket upgrade."
-keywords = ["framework", "nestrs", "websocket", "web", "poem"]
+description = "WebSocket gateways for NestRS: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport's upgrade."
+keywords = ["framework", "nestrs", "websocket", "web", "gateway"]
 categories = ["web-programming::websocket", "asynchronous"]
 
 
@@ -18,15 +18,13 @@ nest-rs-core.workspace = true
 nest-rs-config.workspace = true
 # The gateway self-mounts as an HttpEndpointMeta (the upgrade is an HTTP GET),
 # so it rides the existing HTTP transport — reusing its guards, CORS, port and
-# TLS — rather than opening a second server.
-nest-rs-http.workspace = true
+# TLS — rather than opening a second server. `websocket` is the handshake and
+# the socket above it.
+nest-rs-http = { workspace = true, features = ["websocket"] }
 nest-rs-ws-macros.workspace = true
 # Each message and each connection hook is a unit of work the gateway runs
 # through the bound `dyn UnitOfWork`, resolved once at mount.
 nest-rs-database.workspace = true
-# `websocket` is a non-default poem feature; enabling it here turns it on for the
-# whole build (Cargo features are additive).
-poem = { workspace = true, features = ["websocket"] }
 serde = { workspace = true }
 serde_json.workspace = true
 # Global pipes over a message's `data` (`ArgumentKind::Data`): the gateway
@@ -39,7 +37,7 @@ async-trait.workspace = true
 # Typed error for the per-message `Scoped<T>` bridge (`WsScopeError`) — the
 # house pattern: thiserror in libs.
 thiserror.workspace = true
-# `StreamExt`/`SinkExt` to split and drive poem's `WebSocketStream`: the connection
+# `StreamExt`/`SinkExt` to split and drive the upgraded socket: the connection
 # loop reads while a spawned writer task drains the per-connection outbox.
 futures-util.workspace = true
 # `tokio::spawn` for the writer task and `mpsc` for the per-connection outbox the
@@ -65,6 +63,9 @@ tokio = { workspace = true, features = ["test-util"] }
 # A global interceptor wraps the upgrade, which is how a suite puts a value in
 # what the upgrade carries into its connection.
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
+# Both ends of a socket over an in-memory pipe, so a unit test drives the
+# connection loop past what a real peer can provoke (a writer that panics).
+tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true

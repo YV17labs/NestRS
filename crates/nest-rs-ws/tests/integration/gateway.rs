@@ -8,6 +8,7 @@ use nest_rs_pipes::{
     ArgumentKind, GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, Valid, pipe,
 };
 use nest_rs_testing::TestApp;
+use nest_rs_ws::nest_rs_http::poem;
 use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, async_trait, gateway, messages};
 use serde::{Deserialize, Serialize};
@@ -891,9 +892,9 @@ fn an_undeclared_version_leaves_the_mount_alone() {
 #[module(imports = [WsModule], providers = [VersionedGateway])]
 struct VersionedModule;
 
-/// The status an in-process handshake gets: `500 no upgrade` is poem's
-/// `WebSocket` extractor accepting the whole handshake and finding no hyper
-/// upgrade seam, which only a mounted gateway answers.
+/// The status an in-process handshake gets: `426 Upgrade Required` is the
+/// upgrade accepting the whole handshake and finding no connection under the
+/// request to switch, which only a mounted gateway answers.
 async fn upgrade_status(app: &TestApp, path: &str) -> StatusCode {
     app.http()
         .get(path)
@@ -915,7 +916,7 @@ async fn a_versioned_gateway_serves_at_its_version_segment_and_nowhere_else() {
 
     assert_eq!(
         upgrade_status(&app, "/v1/ws").await,
-        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::UPGRADE_REQUIRED,
         "the handshake reached the gateway and passed every header check",
     );
     app.http()
@@ -1548,9 +1549,10 @@ async fn a_message_cut_at_its_deadline_is_answered_while_its_rollback_still_wait
 struct CappedModule;
 
 /// The protocol-layer cap surfaces as a read error with the framing gone, so the
-/// socket cannot continue.
+/// socket cannot continue: it closes with the code RFC 6455 §7.4.1 gives a
+/// message too big to process.
 #[tokio::test]
-async fn a_message_past_the_cap_closes_the_socket_instead_of_vanishing() {
+async fn a_message_past_the_cap_closes_1009_message_too_big() {
     let logs = LogCapture::install();
     let app = nest_rs_testing::TestApp::builder()
         .module::<CappedModule>()
@@ -1566,13 +1568,18 @@ async fn a_message_past_the_cap_closes_the_socket_instead_of_vanishing() {
     let (code, reason) = socket.expect_close().await;
     assert_eq!(
         code,
-        CloseCode::Error,
-        "§7.4.1 1011: poem hands the cause on as an opaque `io::Error`, so the cap cannot be \
-         claimed as the reason — a code the peer cannot check would be worse than the generic one",
+        CloseCode::Size,
+        "§7.4.1 1009 Message Too Big: {reason}"
     );
     assert!(!reason.is_empty());
 
     let read = logs.expect_one("nest_rs::ws", "websocket read error");
+    assert_eq!(
+        read.field("close_code").as_deref(),
+        Some("1009"),
+        "the line says the code the peer was sent: {:?}",
+        read.fields,
+    );
     assert!(
         read.field("error")
             .is_some_and(|e| e.contains("Space limit")),
@@ -2766,6 +2773,82 @@ async fn once_cors_is_set_only_the_origins_it_lists_open_a_socket() {
         "the server's own origin, unlisted",
     );
     logs.expect_none("nest_rs::ws", "browser origin refused");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// `Upgrade` is a list (RFC 9110 §7.8): the handshake admits `websocket`
+/// anywhere in it, so the origin check reads it the same way.
+#[tokio::test]
+async fn an_upgrade_listing_websocket_among_others_is_origin_checked_and_served() {
+    let app = socket_app::<SocketModule>().await;
+
+    for listed in ["websocket, h2c", "h2c, WebSocket"] {
+        assert_eq!(
+            app.socket("/socket")
+                .header("upgrade", listed)
+                .header("origin", ELSEWHERE)
+                .expect_refused()
+                .await,
+            StatusCode::FORBIDDEN,
+            "{listed}",
+        );
+        let mut socket = app
+            .socket("/socket")
+            .header("upgrade", listed)
+            .connect()
+            .await;
+        socket.send("echo", serde_json::json!("hi")).await;
+        assert_eq!(socket.next_envelope().await["data"], "hi", "{listed}");
+    }
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// The head `method /socket` with a whole handshake is answered over a real
+/// connection.
+async fn handshake_answer(app: &nest_rs_testing::ws::WsApp, method: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = tokio::net::TcpStream::connect(app.addr())
+        .await
+        .expect("the transport listens");
+    stream
+        .write_all(
+            format!(
+                "{method} /socket HTTP/1.1\r\nhost: localhost\r\nupgrade: websocket\r\n\
+                 connection: Upgrade\r\nsec-websocket-version: 13\r\n\
+                 sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("the handshake is sent");
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+            .await
+            .expect("answered")
+            .expect("the connection reads");
+        assert_eq!(read, 1, "the head ended early: {head:?}");
+        head.push(byte[0]);
+    }
+    String::from_utf8(head).expect("an HTTP head")
+}
+
+/// A gateway serves its handshake at `GET` alone: a `HEAD`, which the route
+/// table serves through `GET`, is refused by the handshake and switches
+/// nothing; another method meets the table's `405`.
+#[tokio::test]
+async fn a_handshake_sent_with_another_method_than_get_opens_no_socket() {
+    let app = socket_app::<SocketModule>().await;
+
+    let head = handshake_answer(&app, "HEAD").await;
+    assert!(head.starts_with("HTTP/1.1 400"), "{head}");
+    let post = handshake_answer(&app, "POST").await;
+    assert!(post.starts_with("HTTP/1.1 405"), "{post}");
+    assert!(post.contains("allow: GET, HEAD"), "{post}");
 
     app.shutdown().await.expect("the transport stops cleanly");
 }

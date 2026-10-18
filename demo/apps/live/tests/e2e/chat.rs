@@ -151,8 +151,8 @@ async fn an_oversized_message_is_rejected_and_closes_the_socket() {
     let (code, _) = socket.expect_close().await;
     assert_eq!(
         code,
-        CloseCode::Error,
-        "an over-cap message ends the socket with a status, never a bare drop",
+        CloseCode::Size,
+        "an over-cap message ends the socket with 1009 Message Too Big, never a bare drop",
     );
 
     app.shutdown().await.expect("transport shuts down");

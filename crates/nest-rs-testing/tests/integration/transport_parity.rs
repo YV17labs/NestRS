@@ -294,9 +294,9 @@ async fn graphql_upgrade(app: &TestApp, headers: &[(&str, &str)]) -> TestRespons
     request.send().await
 }
 
-/// What an upgrade every guard admitted answers in process: poem's `500` for a
-/// connection with nothing to upgrade, the step after the guards.
-const ADMITTED_UPGRADE: StatusCode = StatusCode::INTERNAL_SERVER_ERROR;
+/// What an upgrade every guard admitted answers in process: `426`, for a
+/// request with no connection under it to switch, the step after the guards.
+const ADMITTED_UPGRADE: StatusCode = StatusCode::UPGRADE_REQUIRED;
 
 async fn pooled() -> TestApp {
     TestApp::builder()

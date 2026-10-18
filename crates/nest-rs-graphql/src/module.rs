@@ -5,7 +5,7 @@ use std::sync::Arc;
 use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering};
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
-use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta};
+use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta, Method};
 
 use crate::config::GraphqlConfig;
 use crate::context::{ENDPOINT, OperationBridge};
@@ -156,12 +156,12 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             let bridge = Arc::new(OperationBridge::new(container.clone()));
             let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
             let units = OperationUnits::new(crate::redact::Redacted(schema), binding.clone());
-            let method = poem::post(crate::context::ContextEndpoint::new(
+            let post = crate::context::ContextEndpoint::new(
                 units.clone(),
                 Arc::clone(&bridge),
                 options.max_batch_size,
-            ))
-            .get(GetEndpoint::new(
+            );
+            let get = GetEndpoint::new(
                 SubscriptionEndpoint::new(units, bridge, &options, mounted.clone(), binding),
                 options.playground.then(|| {
                     async_graphql::http::playground_source(
@@ -169,12 +169,14 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                             .subscription_endpoint(options.path.as_str()),
                     )
                 }),
-            ));
+            );
             // The transport runs the request's guards in front of both methods:
             // the endpoint's `InBand` posture lets `AuthnGuard` admit an anonymous
             // request to the operations' own gates while a presented bearer is
             // still verified.
-            routes.route_any_poem(options.path.as_str(), method);
+            routes
+                .route_poem(Method::POST, options.path.as_str(), post)
+                .route_poem(Method::GET, options.path.as_str(), get);
         })
         .carries::<GraphqlView>()
         .runs_detached(carried),

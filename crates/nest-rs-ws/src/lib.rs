@@ -167,7 +167,7 @@ pub use envelope::{
     ReplyValueFallback, WsEnvelope, WsError, WsReply,
 };
 pub use error::WsScopeError;
-pub use gateway::{Gateway, GatewayEndpoint};
+pub use gateway::Gateway;
 pub use guard::denial_to_ws_error;
 pub use module::{WsModule, WsSetup};
 pub use namespace::WsNamespaces;
@@ -197,10 +197,17 @@ pub use serde_json;
 /// `tracing` dependency.
 pub use tracing;
 
-/// The RFC 6455 §7.4.1 status codes the gateway closes with.
-pub use poem::web::websocket::CloseCode;
-
-pub use poem;
+/// The status a socket closes with (RFC 6455 §7.4), which a test reads off
+/// the socket it opened.
+///
+/// ```
+/// use nest_rs_ws::CloseCode;
+///
+/// assert_eq!(u16::from(CloseCode::Away), 1001);
+/// assert_eq!(CloseCode::from(1009), CloseCode::Size);
+/// assert_eq!(u16::from(CloseCode::from(4409)), 4409);
+/// ```
+pub use nest_rs_http::__private::websocket::CloseCode;
 
 // Re-exported so a WS-only crate needs no direct `nest-rs-http` dependency.
 pub use nest_rs_http;

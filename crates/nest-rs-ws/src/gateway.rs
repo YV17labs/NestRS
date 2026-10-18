@@ -5,20 +5,19 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::FutureExt as _;
 use futures_util::future::Either;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nest_rs_core::__private::{install_pending, new_unit_context};
 use nest_rs_core::{
     Container, Continuation, Correlation, Handler, Peer, RequestContinuation, RequestScope,
     operation_log,
 };
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
-use nest_rs_http::__private::poem_bridge::request_from_poem;
-use nest_rs_http::DetachedWork;
+use nest_rs_http::__private::websocket::{
+    self, CloseCode, Message, WebSocketLimits, WebSocketUpgrade,
+};
+use nest_rs_http::{BoxEndpoint, DetachedWork, Endpoint, Request, Response};
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 use tracing::Instrument;
-
-use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketConfig};
-use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
 use crate::WsReply;
 use crate::config::WsConfig;
@@ -51,18 +50,19 @@ pub trait Gateway: Send + Sync + 'static {
     }
 }
 
-/// Assemble a [`GatewayEndpoint`] from a gateway, its per-message guard table,
-/// the container it mounts from, and the [`DetachedWork`] its `HttpEndpointMeta`
-/// declares; what each connection needs from the container is resolved here,
-/// once. Called by `#[messages]`-generated mount code.
+/// The endpoint a gateway's upgrade mounts at, assembled from the gateway, its
+/// per-message guard table, the container it mounts from, and the
+/// [`DetachedWork`] its `HttpEndpointMeta` declares; what each connection needs
+/// from the container is resolved here, once. Called by `#[messages]`-generated
+/// mount code.
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     guards: EventLayerTable,
     container: &Container,
     sockets: DetachedWork,
-) -> GatewayEndpoint<G, N> {
-    GatewayEndpoint {
+) -> BoxEndpoint {
+    BoxEndpoint::new(GatewayEndpoint {
         gateway,
         server,
         guards: Arc::new(guards),
@@ -70,12 +70,12 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
         unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
         pipes: nest_rs_pipes::__private::resolve_global_pipes(container),
         sockets,
-    }
+    })
 }
 
 /// The endpoint `#[messages]` mounts a gateway's upgrade at, holding the
 /// gateway's own [`WsServer<N>`].
-pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
+struct GatewayEndpoint<G, N: 'static> {
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     guards: Arc<EventLayerTable>,
@@ -91,17 +91,14 @@ pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
 }
 
 impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> poem::Result<Response> {
+    async fn call(&self, mut req: Request) -> nest_rs_http::Result<Response> {
         // The transport checked the origin and ran the upgrade's guards in front.
-        let (req, mut body) = req.split();
-        let ws = WebSocket::from_request(&req, &mut body).await?;
-        // The request does not survive into the connection task `on_upgrade` spawns.
+        let upgrade = WebSocketUpgrade::from_request(&mut req)?;
+        // The request does not survive into the connection task the upgrade spawns.
         let ambient = self
             .ctx
             .as_ref()
-            .map(|ctx| (ctx.clone(), ctx.capture(&request_from_poem(req))));
+            .map(|ctx| (ctx.clone(), ctx.capture(&req)));
         // `None` outside the HTTP request scope: `Scoped<T>` then answers `NoScope`.
         let root_container =
             nest_rs_http::current_request_scope().map(|scope| scope.root().clone());
@@ -111,12 +108,6 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             .unwrap_or_default();
         let max_lifetime = ws_config.max_connection;
         let max_message_bytes = ws_config.max_message_bytes;
-        // At the protocol layer, so tungstenite never buffers up to its 64 MiB default.
-        let ws = ws.config(
-            WebSocketConfig::default()
-                .max_message_size(Some(max_message_bytes))
-                .max_frame_size(Some(max_message_bytes)),
-        );
         let gateway = Arc::clone(&self.gateway);
         let server = Arc::clone(&self.server);
         let guards = Arc::clone(&self.guards);
@@ -137,26 +128,25 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             max_message_bytes,
         };
         let sockets = self.sockets.clone();
-        Ok(ws
-            .on_upgrade(move |socket| {
-                // Installed once for the whole task; each hook and message is a
-                // unit nested in it, so it carries what the connection carries.
-                let connection = wiring.connection.clone();
-                let going_away = sockets.going_away();
-                async move {
-                    let serving = serve_connection(
-                        gateway, server, guards, wiring, limits, socket, going_away,
-                    );
-                    let serving = match carried {
-                        Some(carried) => Either::Left(carried.scope(serving)),
-                        None => Either::Right(nest_rs_core::with_request_scope(
-                            None, connection, serving,
-                        )),
-                    };
-                    let _ = sockets.run(serving).await;
-                }
-            })
-            .into_response())
+        // At the protocol layer, so tungstenite never buffers past the cap.
+        let protocol_limits = WebSocketLimits::new(max_message_bytes);
+        Ok(upgrade.accept(None, protocol_limits, move |socket| {
+            // Installed once for the whole task; each hook and message is a
+            // unit nested in it, so it carries what the connection carries.
+            let connection = wiring.connection.clone();
+            let going_away = sockets.going_away();
+            async move {
+                let serving =
+                    serve_connection(gateway, server, guards, wiring, limits, socket, going_away);
+                let serving = match carried {
+                    Some(carried) => Either::Left(carried.scope(serving)),
+                    None => {
+                        Either::Right(nest_rs_core::with_request_scope(None, connection, serving))
+                    }
+                };
+                let _ = sockets.run(serving).await;
+            }
+        }))
     }
 }
 
@@ -201,15 +191,22 @@ impl<N: 'static> Drop for RegistryGuard<N> {
 ///
 /// `going_away` is the transport's shutdown signal: the socket then closes with
 /// 1001, after the message it is answering.
-async fn serve_connection<G: Gateway, N: 'static>(
+async fn serve_connection<G, N, S>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     guards: Arc<EventLayerTable>,
     wiring: DispatchWiring,
     limits: SocketLimits,
-    socket: poem::web::websocket::WebSocketStream,
+    socket: S,
     going_away: impl Future<Output = ()>,
-) {
+) where
+    G: Gateway,
+    N: 'static,
+    S: Stream<Item = Result<Message, websocket::Error>>
+        + Sink<Message, Error = websocket::Error>
+        + Send
+        + 'static,
+{
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut rx) =
         tokio::sync::mpsc::channel::<crate::server::Frame>(crate::server::OUTBOX_CAPACITY);
@@ -221,7 +218,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     let (writer_ends, mut writer_stopped) = tokio::sync::oneshot::channel::<()>();
     let mut writer = Writer(tokio::spawn(nest_rs_core::panic::contain(async move {
         while let Some(frame) = rx.recv().await {
-            if let Err(error) = sink.send(Message::Text(frame.to_string())).await {
+            if let Err(error) = sink.send(Message::text(String::from(&*frame))).await {
                 stopped_writing(conn_id, &error);
                 break;
             }
@@ -308,7 +305,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                             continue;
                         }
                         if let Some(reply) =
-                            handle_text(&*gateway, &guards, &wiring, &client, &text).await
+                            handle_text(&*gateway, &guards, &wiring, &client, text.as_str()).await
                         {
                             // The pushes' outbox, so ordering with broadcasts the handler
                             // triggered is preserved.
@@ -326,17 +323,19 @@ async fn serve_connection<G: Gateway, N: 'static>(
                         }
                     }
                     Ok(Message::Close(_)) => break Closure::Echo,
-                    // tungstenite queues the Pong before a Ping reaches this loop.
-                    Ok(Message::Ping(_) | Message::Pong(_)) => {}
+                    // tungstenite queues the Pong before a Ping reaches this loop,
+                    // and a raw frame is never read.
+                    Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => {}
                     Err(err) => {
+                        let (code, reason) = websocket::read_failed(&err);
                         tracing::debug!(
                             target: crate::TARGET,
                             conn_id,
                             error = %nest_rs_core::error_message(&err),
-                            close_code = u16::from(CloseCode::Error),
+                            close_code = u16::from(code),
                             "websocket read error",
                         );
-                        break Closure::Server(CloseCode::Error, READ_FAILED);
+                        break Closure::Server(code, reason);
                     }
                 }
             }
@@ -381,9 +380,9 @@ async fn serve_connection<G: Gateway, N: 'static>(
 
 /// The task writing a connection's frames, aborted if the connection is
 /// dropped before it is joined: it owns the sink, so it would keep the socket open.
-struct Writer(tokio::task::JoinHandle<Written<WsSink>>);
+struct Writer<S>(tokio::task::JoinHandle<Written<WsSink<S>>>);
 
-impl Drop for Writer {
+impl<S> Drop for Writer<S> {
     fn drop(&mut self) {
         self.0.abort();
     }
@@ -412,11 +411,11 @@ fn writer_ended<S>(joined: Result<Written<S>, tokio::task::JoinError>, conn_id: 
 }
 
 /// The write half of a connection's socket.
-type WsSink = futures_util::stream::SplitSink<poem::web::websocket::WebSocketStream, Message>;
+type WsSink<S> = futures_util::stream::SplitSink<S, Message>;
 
 /// The writer could not put a frame on the wire, and the socket ends with it.
-fn stopped_writing(conn_id: ConnId, error: &std::io::Error) {
-    if error.kind() == std::io::ErrorKind::TimedOut {
+fn stopped_writing(conn_id: ConnId, error: &websocket::Error) {
+    if matches!(error, websocket::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut) {
         tracing::warn!(
             target: crate::TARGET,
             conn_id,
@@ -476,21 +475,17 @@ const CONNECT_FAILED: &str = "the connection could not be set up";
 /// drain a bounded outbox is shed.
 const OUTBOX_STALLED: &str = "outbox full, the client is not draining its messages";
 
-/// §7.4.1 **1011 Internal Error**, not 1009: poem stringifies tungstenite's
-/// errors into an opaque `io::Error`, so the message cap cannot be told from a
-/// framing fault.
-const READ_FAILED: &str = "the connection could not be read";
-
 /// Put the Close frame on the wire, then flush — the flush also drives out the
 /// echo queued for [`Closure::Echo`]. Best-effort: a gone peer is logged at `debug`.
-async fn close_socket(mut sink: WsSink, closure: Closure, conn_id: ConnId) {
+async fn close_socket<S>(mut sink: WsSink<S>, closure: Closure, conn_id: ConnId)
+where
+    S: Sink<Message, Error = websocket::Error>,
+{
     if let Closure::WriterStopped = closure {
         return;
     }
     if let Closure::Server(code, reason) = closure
-        && let Err(err) = sink
-            .send(Message::Close(Some((code, reason.to_string()))))
-            .await
+        && let Err(err) = sink.send(websocket::close_frame(code, reason)).await
     {
         tracing::debug!(
             target: crate::TARGET,
@@ -1158,6 +1153,113 @@ mod tests {
             logs.events().iter().all(|event| event.level != "warn"),
             "an answered message files no warning: {:#?}",
             logs.events(),
+        );
+    }
+
+    /// The server's end of a socket over an in-memory pipe, whose writes
+    /// panic: what no peer can provoke, and what the writer task contains.
+    struct PanickingWrites(tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>);
+
+    impl Stream for PanickingWrites {
+        type Item = Result<Message, websocket::Error>;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::pin::Pin::new(&mut self.0).poll_next(cx)
+        }
+    }
+
+    impl Sink<Message> for PanickingWrites {
+        type Error = websocket::Error;
+
+        fn poll_ready(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::pin::Pin::new(&mut self.0).poll_ready(cx)
+        }
+
+        fn start_send(self: std::pin::Pin<&mut Self>, _item: Message) -> Result<(), Self::Error> {
+            panic!("the writer exploded")
+        }
+
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::pin::Pin::new(&mut self.0).poll_flush(cx)
+        }
+
+        fn poll_close(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::pin::Pin::new(&mut self.0).poll_close(cx)
+        }
+    }
+
+    /// A writer that panics ends its socket: the read loop stops with it, the
+    /// disconnect hook runs, the registry lets the connection go, and the peer
+    /// reads the end of the stream with no Close frame, §7.4.1's 1006.
+    #[tokio::test]
+    async fn a_writer_that_panics_over_a_socket_ends_it_and_the_disconnect_hook_runs() {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let (server_end, client_end) = tokio::io::duplex(64 * 1024);
+        let server_socket =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(server_end, Role::Server, None)
+                .await;
+        let mut client =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(client_end, Role::Client, None)
+                .await;
+        let server = Arc::new(WsServer::<crate::server::Global>::default());
+        let serving = tokio::spawn(serve_connection(
+            Arc::new(Echo),
+            Arc::clone(&server),
+            Arc::new(EventLayerTable::new()),
+            wiring(),
+            SocketLimits {
+                max_lifetime: None,
+                max_message_bytes: 1024,
+            },
+            PanickingWrites(server_socket),
+            std::future::pending(),
+        ));
+
+        client
+            .send(Message::text(r#"{"event":"open","data":"hi"}"#))
+            .await
+            .expect("the message reaches the server");
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(5), serving)
+            .await
+            .expect("the connection ends with its writer");
+        assert!(ended.is_ok(), "the connection task itself never panics");
+
+        assert_eq!(server.connection_count(), 0, "the registry let it go");
+        let read = tokio::time::timeout(std::time::Duration::from_secs(5), client.next())
+            .await
+            .expect("the peer sees the end");
+        assert!(
+            !matches!(read, Some(Ok(Message::Close(_)))),
+            "no Close frame reaches the peer once the writer went down: {read:?}",
+        );
+        let panicked = logs.expect_one(crate::TARGET, "writer task panicked");
+        assert_eq!(panicked.level, "error");
+        let said = panicked
+            .field(nest_rs_core::panic::FIELD)
+            .unwrap_or_default();
+        assert!(said.contains("the writer exploded"), "{panicked:#?}");
+        let left = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::DISCONNECT.name(),
+        );
+        assert_eq!(
+            left.field("outcome").as_deref(),
+            Some(operation_log::OK),
+            "the disconnect hook ran: {left:#?}",
         );
     }
 

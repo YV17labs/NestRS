@@ -1,6 +1,7 @@
 //! [`GetEndpoint`] — what `GET` on the GraphQL path answers.
 
-use poem::http::header;
+use nest_rs_http::__private::poem_bridge::{error_to_poem, request_from_poem, response_to_poem};
+use nest_rs_http::__private::websocket;
 use poem::{Endpoint, IntoResponse, Request, Response};
 
 use crate::subscription::SubscriptionEndpoint;
@@ -26,14 +27,11 @@ impl<E: async_graphql::Executor> Endpoint for GetEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Response> {
-        // `Upgrade` decides, not `Connection`, a hop-by-hop header a proxy may rewrite.
-        let upgrading = req
-            .headers()
-            .get(header::UPGRADE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
-        if upgrading {
-            return self.subscriptions.call(req).await;
+        if websocket::requested(req.headers()) {
+            return nest_rs_http::Endpoint::call(&self.subscriptions, request_from_poem(req))
+                .await
+                .map(response_to_poem)
+                .map_err(error_to_poem);
         }
         match &self.playground {
             Some(html) => Ok(poem::web::Html(html.clone()).into_response()),

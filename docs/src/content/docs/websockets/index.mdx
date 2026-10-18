@@ -17,11 +17,11 @@ Read this section, then start from the working reference: the
 [`live`](/publish/) app in Publish — a chat gateway plus org-scoped
 notifications, running the exact shapes below.
 
-`nest-rs-ws` is a thin layer over [`poem`'s WebSocket
-support](https://docs.rs/poem/latest/poem/web/websocket/) — the same
-transport `nest-rs-http` already uses. It hides the read/write split,
-the outbox writer task, the connection registry, and the dispatch
-plumbing behind one decorator.
+`nest-rs-ws` speaks the protocol through
+[tokio-tungstenite](https://docs.rs/tokio-tungstenite), over the connection the
+HTTP transport's own server hands across once it answers the handshake. It
+hides the handshake, the read/write split, the outbox writer task, the
+connection registry, and the dispatch plumbing behind one decorator.
 
 In the [**Publish**](/publish/) workspace, live comments and notifications
 run in [`live`](/publish/) on port **3004**.
@@ -180,6 +180,26 @@ boot, since a message admitted just before a stop could then be cut
 unanswered. A handler that legitimately runs longer raises the timeout and the
 window together.
 
+## When the server refuses a handshake
+
+A gateway's handshake is a `GET`. Any other method is answered by the route
+table before anything else runs: `405`, with `Allow: GET, HEAD`. Then the
+browser-origin check and the gateway's `#[use_guards]` run, so a refused caller
+learns nothing about the handshake. A handshake the server cannot accept is
+answered before any socket opens, with a problem document saying what it lacks
+(RFC 6455 §4.2.1) and never quoting what was sent:
+
+| The handshake | Status |
+|---|---|
+| Sent as a `HEAD`, which the route table answers as its `GET` without the content | `400` |
+| An `Upgrade` listing no `websocket`, a `Connection` listing no `upgrade`, or a `Sec-WebSocket-Key` that is not 16 bytes in base64 | `400` |
+| A `Sec-WebSocket-Version` other than `13` | `426`, with `Sec-WebSocket-Version: 13` |
+| Over a connection that cannot switch protocols — HTTP/1.0, or an in-process test client | `426` |
+
+`Upgrade` and `Connection` are lists, read as RFC 9110 reads them:
+`Upgrade: h2c, websocket` asks for a WebSocket, and the browser-origin check
+reads it the same way.
+
 ## When the server closes a socket
 
 The server closes a socket with the RFC 6455 code for the cause, and a reason,
@@ -191,7 +211,8 @@ so a client can tell a deliberate close from the `1006` a network fault leaves:
 | `<PREFIX>_WS__MAX_CONNECTION_SECS` elapsed | `1001 Going Away` | re-upgrades, and is authenticated again |
 | The client stopped reading and its outbox filled | `1008 Policy Violation` | drains faster, or is shed again |
 | The client took nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) | none can reach it — it reads `1006` | reconnects |
-| A read failed, a message past the cap included | `1011 Internal Error` | reconnects |
+| A message past `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `1009 Message Too Big` | sends smaller messages |
+| A read failed on broken framing | `1011 Internal Error` | reconnects |
 | `#[on_connect]` panicked | `1011 Internal Error` | reconnects |
 
 A handler that panics does not close the socket: its `ws.message` line files

@@ -589,7 +589,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                 __container,
                                 ::core::clone::Clone::clone(&__carried),
                             );
-                            __routes.route_any_poem(&__path, __ep);
+                            __routes.route(
+                                ::nest_rs_ws::nest_rs_http::Method::GET,
+                                &__path,
+                                __ep,
+                            );
                         },
                     )
                     .owned_by(#gateway_name)

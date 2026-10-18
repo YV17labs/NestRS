@@ -174,3 +174,45 @@ client over a loopback socket, which would test the socket on every request
 where `tests/integration/server.rs` already does once; and keeping poem's
 client behind the bridge, which kept poem's `test` feature, and the MPL-2.0
 `sse-codec` it pulls, in every suite's graph.
+
+## 2026-10-18 — the WebSocket upgrade is nestrs's, and so is its close code
+
+Both socket edges — a gateway and the graphql-ws socket — open on one
+handshake of the transport's own, `nest_rs_http`'s hidden `websocket` module
+behind the `websocket` feature: RFC 6455 §4.2.1's checks, each refusal a
+problem document naming what the handshake lacks (`400` for the method and
+for the `Upgrade`, `Connection` and `Sec-WebSocket-Key` lines, `426` with
+`Sec-WebSocket-Version: 13` for the version), then the `101` with its accept
+key, and the socket on tokio-tungstenite 0.30 over the connection hyper hands
+across — its place under the connection cap and its send deadline kept,
+since the accept loop's wrapper sits under hyper's upgrade. A request with no
+connection under it to switch — HTTP/1.0, or the in-process test client —
+answers `426`, as axum's extractor does, where poem answered a `500`. The
+ports of poem's checks are stricter where the RFC is: one key of 16 bytes in
+base64, one version line, the tokens read in any case from any line.
+
+Both edges register the handshake on the route table at `GET`, so another
+method meets the table's `405` and the one `Allow` the address carries. The
+table hands a `HEAD` to the `GET` entry as a `GET` and marks it, and the
+handshake refuses a marked request `400` (RFC 6455 §4.1: a handshake is a
+`GET`): a `405` of its own would name an `Allow` it cannot know, `/graphql`
+serving `POST` too. `Upgrade` is read as RFC 9110 §7.8's list by one
+predicate, which the browser-origin check, the GraphQL `GET` and the
+handshake share, so no upgrade the handshake admits skips the origin check.
+
+`CloseCode` keeps its name and poem's variants, nestrs's own enum now and
+`#[non_exhaustive]`; every `u16` round-trips, an application's `44xx`
+through `Reserved`. It is defined beside the upgrade, not in `nest-rs-ws`,
+because the graphql-ws socket closes with it too and `nest-rs-graphql` does
+not depend on the gateway's crate; `nest_rs::ws::CloseCode` is its one public
+path. The conversions to tungstenite's code stay private. A read past the
+message cap now closes `1009 Message Too Big` on both edges, read off
+tungstenite's typed capacity error, which poem flattened into an opaque
+`io::Error`.
+
+Refused: keeping the type in `nest-rs-ws` and having graphql-ws close with
+bare numbers — two vocabularies for one code; a public handshake type,
+which no app writes and the next adapter would have to keep; and a gateway
+registered for every method, which answered another method behind the
+guards, with an `Allow` beside the table's.
+

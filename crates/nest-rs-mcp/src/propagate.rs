@@ -98,18 +98,24 @@ impl<H> PropagatingHandler<H> {
     /// ability), the dispatch. The unit commits when the operation answers `Ok`
     /// with no tool error in band.
     ///
-    /// `method` is the JSON-RPC method, `addressed` the tool, prompt or resource
-    /// it named, `None` where the protocol names nothing. `wrapped` is `false`
+    /// `method` is the JSON-RPC method and `addressed` what it named, which the
+    /// span records as the conventions ask; `declared` is the tool a host
+    /// declares under that name, the one operation a line names. `wrapped` is `false`
     /// for an operation that takes neither the registered context, a unit of
     /// work nor the operation deadline, which cuts the body, never its settle,
     /// so a commit is never cut. `stopped` resolves when the operation is to end
     /// before it answers, with what the client is answered; like the deadline
     /// it cuts the body alone, so a stop arriving while the unit settles leaves
     /// the operation to end as it answered.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one operation's names, its ambient state and its two ends, each read once"
+    )]
     async fn dispatch<T, F, S>(
         &self,
-        method: &str,
-        addressed: Option<&str>,
+        method: &Method,
+        addressed: &Addressed,
+        declared: Option<&str>,
         ambient: McpAmbient,
         wrapped: bool,
         stopped: S,
@@ -144,11 +150,12 @@ impl<H> PropagatingHandler<H> {
         let operation = nest_rs_core::operation_span!(
             crate::unit::OPERATION,
             &correlation,
-            mcp.method.name = method,
-            mcp.operation.name = addressed,
+            mcp.method.name = method.sent(),
+            mcp.operation.name = addressed.spanned(),
         );
+        let method = method.named();
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
-        let line = OperationLine::open(method, addressed, correlation.clone(), operation.clone());
+        let line = OperationLine::open(method, declared, correlation.clone(), operation.clone());
 
         // Inside the operation's own scope: rmcp's task carries no ambient
         // context for the attachments to extend.
@@ -175,7 +182,7 @@ impl<H> PropagatingHandler<H> {
                         match deadline {
                             Some((timeout, at)) => tokio::time::timeout_at(at, body)
                                 .await
-                                .unwrap_or_else(|_| Err(timed_out(method, addressed, timeout))),
+                                .unwrap_or_else(|_| Err(timed_out(method, declared, timeout))),
                             None => body.await,
                         }
                     };
@@ -273,10 +280,86 @@ fn cancelled_before_completion() -> McpError {
     McpError::internal_error("the operation was cancelled before it completed", None)
 }
 
+/// The JSON-RPC method an operation answers: one the protocol defines, which
+/// rmcp names as a constant, or a custom one only the client named.
+enum Method {
+    Defined(&'static str),
+    Custom(String),
+}
+
+impl Method {
+    /// As sent: the span's `mcp.method.name`, which the conventions require
+    /// whatever it is.
+    fn sent(&self) -> &str {
+        match self {
+            Self::Defined(method) => method,
+            Self::Custom(method) => method,
+        }
+    }
+
+    /// What a line names: the protocol's method, or
+    /// [`OTHER`](operation_log::OTHER) for one only the client named.
+    fn named(&self) -> &'static str {
+        match self {
+            Self::Defined(method) => method,
+            Self::Custom(_) => operation_log::OTHER,
+        }
+    }
+}
+
+impl From<&'static str> for Method {
+    fn from(method: &'static str) -> Self {
+        Self::Defined(method)
+    }
+}
+
+impl From<String> for Method {
+    fn from(method: String) -> Self {
+        Self::Custom(method)
+    }
+}
+
+/// What an operation addressed, as the client named it.
+enum Addressed {
+    /// Nothing a convention records: the method names nothing, or what it
+    /// names no convention does (a task id).
+    Nothing,
+    /// A tool.
+    Tool(String),
+    /// A prompt.
+    Prompt(String),
+    /// A resource, by its URI.
+    Resource(String),
+}
+
+impl Addressed {
+    /// What the span records as `mcp.operation.name`: the conventions' tool,
+    /// prompt or resource, their stated exception.
+    fn spanned(&self) -> Option<&str> {
+        match self {
+            Self::Nothing => None,
+            Self::Tool(name) | Self::Prompt(name) | Self::Resource(name) => Some(name),
+        }
+    }
+
+    /// What a line names: a tool by the name `host` declares, and
+    /// [`OTHER`](operation_log::OTHER) for one it does not; nothing else the
+    /// client named, which no declaration answers for.
+    fn declared(&self, host: &impl ServerHandler) -> Option<&str> {
+        match self {
+            Self::Tool(name) if host.get_tool(name).is_some() => Some(name),
+            Self::Tool(_) => Some(operation_log::OTHER),
+            Self::Nothing | Self::Prompt(_) | Self::Resource(_) => None,
+        }
+    }
+}
+
 /// One operation's `mcp.operation` line, filed exactly once — by the end the
 /// dispatch saw, else by `Drop` as [`CANCELLED`](operation_log::CANCELLED).
+/// It names the server's values only: the protocol's method or
+/// [`OTHER`](operation_log::OTHER), and a tool by the name a host declares.
 struct OperationLine<'a> {
-    method: &'a str,
+    method: &'static str,
     addressed: Option<&'a str>,
     /// Entered to file the line, which sits outside the scope the operation installs.
     correlation: Correlation,
@@ -289,7 +372,7 @@ struct OperationLine<'a> {
 
 impl<'a> OperationLine<'a> {
     fn open(
-        method: &'a str,
+        method: &'static str,
         addressed: Option<&'a str>,
         correlation: Correlation,
         span: tracing::Span,
@@ -353,7 +436,8 @@ impl Drop for OperationLine<'_> {
 }
 
 /// Delegate one request-shaped method inside the full nesting. Every invocation
-/// states `$addressed`, `None` out loud; it is read before the call consumes the parameters.
+/// states `$addressed`, [`Addressed::Nothing`] out loud; it is read before the
+/// call consumes the parameters.
 macro_rules! request_method {
     (
         $name:ident ( $($arg:ident : $arg_ty:ty),* ) -> $out:ty,
@@ -367,12 +451,14 @@ macro_rules! request_method {
         ) -> impl Future<Output = Result<$out, McpError>> + MaybeSendFuture + '_ {
             async move {
                 let ambient = McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
-                let method: Cow<'_, str> = ($method).into();
-                let addressed: Option<String> = $addressed;
+                let method = Method::from($method);
+                let addressed: Addressed = $addressed;
+                let declared = addressed.declared(&self.inner);
                 let cancelled = context.ct.clone().cancelled_owned();
                 self.dispatch(
                     &method,
-                    addressed.as_deref(),
+                    &addressed,
+                    declared,
                     ambient,
                     true,
                     async move {
@@ -399,8 +485,13 @@ macro_rules! notification_method {
             async move {
                 let McpAmbient { scope, span, correlation, .. } =
                     McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
-                let method: Cow<'_, str> = ($method).into();
-                let line = OperationLine::open(&method, None, correlation.clone(), tracing::Span::none());
+                let method = Method::from($method);
+                let line = OperationLine::open(
+                    method.named(),
+                    None,
+                    correlation.clone(),
+                    tracing::Span::none(),
+                );
                 let handled = nest_rs_core::panic::contain(self.inner.$name($($arg,)* context));
                 nest_rs_core::with_request_scope(scope, correlation, async move {
                     match self.detached.run(handled).await {
@@ -418,61 +509,65 @@ macro_rules! notification_method {
 
 #[deny(clippy::missing_trait_methods)]
 impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
-    request_method!(ping() -> (), PingRequestMethod::VALUE, None);
+    request_method!(ping() -> (), PingRequestMethod::VALUE, Addressed::Nothing);
     request_method!(
         initialize(request: InitializeRequestParams) -> InitializeResult,
         InitializeResultMethod::VALUE,
-        None,
+        Addressed::Nothing,
     );
-    request_method!(discover() -> DiscoverResult, DiscoverRequestMethod::VALUE, None);
+    request_method!(
+        discover() -> DiscoverResult,
+        DiscoverRequestMethod::VALUE,
+        Addressed::Nothing,
+    );
 
     request_method!(
         call_tool(request: CallToolRequestParams) -> CallToolResponse,
         CallToolRequestMethod::VALUE,
-        Some(request.name.to_string()),
+        Addressed::Tool(request.name.to_string()),
     );
     request_method!(
         list_tools(request: Option<PaginatedRequestParams>) -> ListToolsResult,
         ListToolsRequestMethod::VALUE,
-        None,
+        Addressed::Nothing,
     );
 
     request_method!(
         get_prompt(request: GetPromptRequestParams) -> GetPromptResponse,
         GetPromptRequestMethod::VALUE,
-        Some(request.name.clone()),
+        Addressed::Prompt(request.name.clone()),
     );
     request_method!(
         list_prompts(request: Option<PaginatedRequestParams>) -> ListPromptsResult,
         ListPromptsRequestMethod::VALUE,
-        None,
+        Addressed::Nothing,
     );
 
     request_method!(
         read_resource(request: ReadResourceRequestParams) -> ReadResourceResponse,
         ReadResourceRequestMethod::VALUE,
-        Some(request.uri.clone()),
+        Addressed::Resource(request.uri.clone()),
     );
     request_method!(
         list_resources(request: Option<PaginatedRequestParams>) -> ListResourcesResult,
         ListResourcesRequestMethod::VALUE,
-        None,
+        Addressed::Nothing,
     );
     request_method!(
         list_resource_templates(request: Option<PaginatedRequestParams>)
             -> ListResourceTemplatesResult,
         ListResourceTemplatesRequestMethod::VALUE,
-        None,
+        Addressed::Nothing,
     );
     request_method!(
         subscribe(request: SubscribeRequestParams) -> (),
         SubscribeRequestMethod::VALUE,
-        Some(request.uri.clone()),
+        Addressed::Resource(request.uri.clone()),
     );
     request_method!(
         unsubscribe(request: UnsubscribeRequestParams) -> (),
         UnsubscribeRequestMethod::VALUE,
-        Some(request.uri.clone()),
+        Addressed::Resource(request.uri.clone()),
     );
 
     request_method!(
@@ -480,37 +575,40 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         CompleteRequestMethod::VALUE,
         // `Reference` is `#[non_exhaustive]`: a variant rmcp adds files no name.
         match &request.r#ref {
-            Reference::Prompt(prompt) => Some(prompt.name.clone()),
-            Reference::Resource(resource) => Some(resource.uri.clone()),
-            _ => None,
+            Reference::Prompt(prompt) => Addressed::Prompt(prompt.name.clone()),
+            Reference::Resource(resource) => Addressed::Resource(resource.uri.clone()),
+            _ => Addressed::Nothing,
         },
     );
     request_method!(
         set_level(request: SetLevelRequestParams) -> (),
         SetLevelRequestMethod::VALUE,
-        None,
+        Addressed::Nothing,
     );
 
     request_method!(
         get_task(request: GetTaskParams) -> GetTaskResult,
         GetTaskMethod::VALUE,
-        Some(request.task_id.clone()),
+        // The task id the client sent: no convention names it, so nothing records it.
+        Addressed::Nothing,
     );
     request_method!(
         update_task(request: UpdateTaskParams) -> (),
         UpdateTaskMethod::VALUE,
-        Some(request.task_id.clone()),
+        // The task id the client sent: no convention names it, so nothing records it.
+        Addressed::Nothing,
     );
     request_method!(
         cancel_task(request: CancelTaskParams) -> (),
         CancelTaskMethod::VALUE,
-        Some(request.task_id.clone()),
+        // The task id the client sent: no convention names it, so nothing records it.
+        Addressed::Nothing,
     );
 
     request_method!(
         on_custom_request(request: CustomRequest) -> CustomResult,
         request.method.clone(),
-        None,
+        Addressed::Nothing,
     );
 
     notification_method!(
@@ -540,7 +638,8 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
             McpAmbient::from_extensions(&context.request_context().extensions).unwrap_or_default();
         let going_away = self.detached.going_away();
         self.dispatch(
-            SubscriptionsListenRequestMethod::VALUE,
+            &Method::from(SubscriptionsListenRequestMethod::VALUE),
+            &Addressed::Nothing,
             None,
             ambient,
             false,

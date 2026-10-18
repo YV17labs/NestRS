@@ -453,6 +453,110 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
     );
 }
 
+/// What a client named — a custom method, a tool no host declares, a prompt,
+/// a resource, a task — is its own value: the `mcp.operation` line names the
+/// protocol's method or `_OTHER`, and a tool only by the name a host declares,
+/// so no line holds what the client wrote. The span keeps the conventions'
+/// method, tool, prompt and resource, a stated exception, and no task id,
+/// which no convention names.
+#[tokio::test]
+async fn an_operation_line_names_nothing_only_the_client_named() {
+    let logs = LogCapture::install();
+    let host = ProbeHandler {
+        seen: Arc::default(),
+    };
+    let client = TestClient::new(from_poem(
+        endpoint(McpMount::new(), move || host.clone()).into_endpoint(),
+    ));
+    let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
+
+    let requests: &[(&str, serde_json::Value)] = &[
+        (
+            "tools/call",
+            json!({ "name": "marked-tool", "arguments": {} }),
+        ),
+        ("prompts/get", json!({ "name": "marked-prompt" })),
+        ("resources/read", json!({ "uri": "marked://resource" })),
+        ("tasks/get", json!({ "taskId": "marked-task" })),
+        ("marked/custom", json!({})),
+    ];
+    for (method, params) in requests {
+        call_method(&client, "/", &session, None, method, params.clone()).await;
+    }
+    notify(
+        &client,
+        "/",
+        &session,
+        None,
+        "notifications/marked",
+        json!({}),
+    )
+    .await;
+
+    let lines = || {
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_mcp::unit::OPERATION.name(),
+        )
+    };
+    for _ in 0..200 {
+        if lines()
+            .iter()
+            .filter(|line| {
+                line.field("method").as_deref() == Some(nest_rs_core::operation_log::OTHER)
+            })
+            .count()
+            == 2
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // rmcp's own events are its clamp's; the capture keeps them all.
+    for event in logs
+        .events()
+        .into_iter()
+        .filter(|event| event.target.starts_with("nest_rs"))
+    {
+        for (field, value) in &event.fields {
+            assert!(
+                !value.contains("marked"),
+                "{}: {field} = {value}",
+                event.target
+            );
+        }
+    }
+    let lines = lines();
+    let line = |method: &str| {
+        lines
+            .iter()
+            .find(|line| line.field("method").as_deref() == Some(method))
+            .unwrap_or_else(|| panic!("a `{method}` line: {lines:#?}"))
+    };
+    assert_eq!(
+        line("tools/call").field("operation").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER),
+        "a tool no host declares"
+    );
+    for method in ["prompts/get", "resources/read", "tasks/get"] {
+        assert_eq!(line(method).field("operation"), None, "{method}");
+    }
+
+    let span = |method: &str| {
+        logs.spans()
+            .into_iter()
+            .find(|span| span.field("mcp.method.name").as_deref() == Some(method))
+            .unwrap_or_else(|| panic!("a `{method}` span"))
+    };
+    assert_eq!(
+        span("prompts/get").field("mcp.operation.name").as_deref(),
+        Some("marked-prompt"),
+        "the conventions' prompt name"
+    );
+    assert_eq!(span("tasks/get").field("mcp.operation.name"), None);
+    span("marked/custom");
+}
+
 /// POST one stateless `2026-07-28` request: no session id, the negotiated
 /// version in the header, and whatever SEP-2243 standard headers the case needs.
 async fn post_modern(

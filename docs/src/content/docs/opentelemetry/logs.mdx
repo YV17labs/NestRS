@@ -189,7 +189,7 @@ lifecycle hook:
 | WS socket close | `ws.disconnect` | `conn_id` |
 | Scheduled tick | `schedule.tick` | provider, method, `replicas`, and the `occurrence` a job firing once claimed |
 | Queue job | `queue.job` | queue, processor, `job_id`, `backend_id`, attempt |
-| MCP operation | `mcp.operation` | the JSON-RPC method |
+| MCP operation | `mcp.operation` | the JSON-RPC method (`_OTHER` for a custom one), and for `tools/call` the tool a host declares (`_OTHER` for any other) |
 | GraphQL operation | `graphql.operation` | `operation_type` |
 | GraphQL root field | `graphql.field` | role, operation |
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |

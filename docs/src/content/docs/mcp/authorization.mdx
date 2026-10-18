@@ -56,12 +56,17 @@ edge: rmcp addresses many operations over one HTTP request, so the endpoint's
 access line names the session and would say nothing about the work.
 
 ```text frame="terminal"
-INFO nest_rs::operation: mcp.operation operation="call_tool" outcome="ok" duration_ms=25.252 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=50514602c8481e19
+INFO nest_rs::operation: mcp.operation method="tools/call" operation="hello" outcome="ok" duration_ms=25.252 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=50514602c8481e19
 INFO nest_rs::operation: http.request method=POST route="/mcp" status=200 bytes=211 duration_ms=25.927 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=b3162e5d41cfe17e
 ```
 
 The tool call and the request that carried it share a `trace_id` and hold
 different `span_id`s, so "what did this call do" is answerable on its own.
+The line names what the server declares: the protocol's method, `_OTHER` for a
+custom one, and a tool by the name a host gives it, `_OTHER` for one no host
+declares. A prompt name, a resource URI or a task id is the client's to write
+and stays off the line; the span records the prompt and the resource, as the
+telemetry conventions ask.
 Everything the tool and the data layer below it log carries the operation's ids
 and its `actor_id`. See [Logs](/opentelemetry/logs/).
 

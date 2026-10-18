@@ -102,15 +102,21 @@ spelled it.
   serves is `_OTHER`, its error frame saying `unknown event`. The frame still
   answers on the event the message named: a protocol's correlation key echoed
   to its sender, on its own socket, is the protocol, as a JSON-RPC id is.
-  A value with no declared counterpart stays off the line: a GraphQL
-  operation's name is the document's, so its line names the operation's type
-  and its root-field lines what ran.
+  An MCP operation's line names the protocol's method, `_OTHER` for a custom
+  one, and a tool by the name a host declares (rmcp's `get_tool`), `_OTHER`
+  for another. A value with no declared counterpart stays off the line: a
+  GraphQL operation's name is the document's, so its line names the
+  operation's type and its root-field lines what ran; an MCP prompt name,
+  resource URI or task id, which no lookup answers for at dispatch.
 - **The span keeps what the telemetry conventions require or recommend, as a
   stated exception.** The request span records `url.path` (required),
   `user_agent.original` (recommended) and, for a method outside the known
   set, `http.request.method_original` (required whenever it differs from
   `http.request.method`); a GraphQL operation's span its
-  `graphql.operation.name` (recommended). Standards over invention: a tracing
+  `graphql.operation.name` (recommended); an MCP operation's span its
+  method, custom or not (required), and the tool, prompt or resource it named
+  (each conditionally required, folded as `mcp.operation.name`), but no task
+  id, which no convention names. Standards over invention: a tracing
   backend reads those names, and the span goes to the deployment's own
   collector, never to a client or a shared log. Beyond that set, a header the span records is
   recorded only once it parsed under its grammar — a `traceparent` the

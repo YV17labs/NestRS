@@ -188,11 +188,12 @@ impl Guard for ThrottlerGuard {
             return Ok(());
         }
         // The route alone, never the store key: the key holds the client's
-        // address, personal data no line carries.
+        // address, personal data no line carries; and only the template the
+        // router matched, never the path a client sent.
         tracing::warn!(
             target: crate::TARGET,
             transport = transport::HTTP,
-            route = %route,
+            route = view.route(),
             retry_after = retry_after_secs(decision.retry_after),
             "rate limit exceeded",
         );
@@ -534,6 +535,50 @@ mod tests {
         );
         assert_eq!(keys[0], keys[1], "one client, one bucket");
         assert_ne!(keys[0], keys[2], "two clients, two buckets");
+    }
+
+    /// A store keeping its counters in this process, past its limit at once.
+    struct Exhausted;
+
+    #[async_trait]
+    impl ThrottlerStore for Exhausted {
+        async fn hit(
+            &self,
+            _key: &str,
+            _limit: Throttle,
+        ) -> Result<Decision, crate::ThrottlerStoreError> {
+            Ok(Decision::denied(std::time::Duration::from_secs(1)))
+        }
+
+        fn in_process(&self) -> bool {
+            true
+        }
+    }
+
+    /// The line names the template the router matched; a request it matched
+    /// nothing for names no route, its path being the client's.
+    #[tokio::test]
+    async fn a_refusal_names_no_path_the_router_did_not_match() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let guard = ThrottlerGuard::new(Arc::new(Exhausted), DEFAULT_THROTTLE, None)
+            .expect("an in-process store needs no pseudonym key");
+        let mut request = Request::builder()
+            .uri(nest_rs_http::Uri::from_static("/marked/path"))
+            .finish();
+
+        check_request(
+            &LOGIN,
+            [("ThrottlerGuard", &guard as &dyn Guard)],
+            &mut request,
+        )
+        .await
+        .expect_err("past its limit");
+
+        let line = logs.expect_one(crate::TARGET, "rate limit exceeded");
+        for (field, value) in &line.fields {
+            assert!(!value.contains("marked"), "{field} = {value}");
+        }
+        assert_eq!(line.field("route"), None, "{:?}", line.fields);
     }
 
     #[test]

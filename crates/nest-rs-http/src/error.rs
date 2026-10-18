@@ -1,7 +1,7 @@
 //! Every error type of the HTTP edge: the vocabulary's ([`BodyError`],
 //! [`HttpError`], [`ResponseError`]), the route grammar's
-//! ([`RouteTemplateError`]), the browser-origin check's ([`OriginRefused`])
-//! and the header binding's.
+//! ([`RouteTemplateError`]), the browser-origin check's ([`OriginRefused`]),
+//! the WebSocket handshake's and the header binding's.
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -1080,6 +1080,81 @@ impl ResponseError for OriginRefused {
 
     fn as_response(&self) -> Response {
         problem_response(&Problem::new(403, code::FORBIDDEN).with_detail(ORIGIN_REFUSED))
+    }
+}
+
+/// Why a WebSocket opening handshake was refused (RFC 6455 §4.2.1): each
+/// answers a problem document that names what the handshake lacks, never a
+/// value the request sent.
+#[cfg(feature = "websocket")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum HandshakeRefused {
+    /// Not a `GET` — a `HEAD` the route table answers through its `GET` entry
+    /// included: `400`. The `405` naming what an address serves is the route
+    /// table's, which knows it.
+    #[error("a WebSocket handshake is a GET request")]
+    MethodNotGet,
+    /// `Upgrade` lists no `websocket`: `400`.
+    #[error("a WebSocket handshake carries `Upgrade: websocket`")]
+    UpgradeNotWebSocket,
+    /// `Connection` lists no `upgrade`: `400`.
+    #[error("a WebSocket handshake carries `Connection: Upgrade`")]
+    ConnectionNotUpgrade,
+    /// `Sec-WebSocket-Key` is absent, repeated, or not 16 bytes in base64:
+    /// `400`.
+    #[error("a WebSocket handshake carries one `Sec-WebSocket-Key` of 16 bytes in base64")]
+    KeyMalformed,
+    /// `Sec-WebSocket-Version` is absent, repeated, or not `13`: `426` with
+    /// `Sec-WebSocket-Version: 13` (§4.4).
+    #[error("this server speaks WebSocket version 13")]
+    VersionUnsupported,
+    /// The connection under the request cannot switch protocols — HTTP/1.0,
+    /// or no connection at all, as in process: `426`.
+    #[error("this connection cannot switch protocols; a WebSocket opens over HTTP/1.1")]
+    NotUpgradable,
+    /// `Sec-WebSocket-Protocol` offers none of the subprotocols the endpoint
+    /// speaks, listed here: `400`.
+    #[error("a WebSocket handshake here offers one of the subprotocols {}", .0.join(", "))]
+    SubprotocolNotOffered(&'static [&'static str]),
+}
+
+#[cfg(feature = "websocket")]
+impl ResponseError for HandshakeRefused {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::VersionUnsupported | Self::NotUpgradable => StatusCode::UPGRADE_REQUIRED,
+            Self::MethodNotGet
+            | Self::UpgradeNotWebSocket
+            | Self::ConnectionNotUpgrade
+            | Self::KeyMalformed
+            | Self::SubprotocolNotOffered(_) => StatusCode::BAD_REQUEST,
+        }
+    }
+
+    fn as_response(&self) -> Response {
+        use http::HeaderValue;
+        use http::header::{CONNECTION, SEC_WEBSOCKET_VERSION, UPGRADE};
+
+        let mut response = ProblemDetails::from_status(self.status())
+            .with_detail(self.to_string())
+            .into_response();
+        let headers = response.headers_mut();
+        match self {
+            // RFC 9110 §15.5.22: a `426` names the protocol to switch to.
+            Self::VersionUnsupported | Self::NotUpgradable => {
+                headers.insert(UPGRADE, HeaderValue::from_static("websocket"));
+                headers.insert(CONNECTION, HeaderValue::from_static("upgrade"));
+                if *self == Self::VersionUnsupported {
+                    headers.insert(SEC_WEBSOCKET_VERSION, HeaderValue::from_static("13"));
+                }
+            }
+            Self::MethodNotGet
+            | Self::UpgradeNotWebSocket
+            | Self::ConnectionNotUpgrade
+            | Self::KeyMalformed
+            | Self::SubprotocolNotOffered(_) => {}
+        }
+        response
     }
 }
 

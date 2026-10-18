@@ -67,7 +67,9 @@ bytes = "1.12"  # public
 futures-util = "0.3"  # public
 pin-project-lite = "0.2"
 
-tokio-tungstenite = "0.30"
+# No default feature: the server half needs only the handshake's accept key;
+# a client (`connect`) is enabled where one is driven.
+tokio-tungstenite = { version = "0.30", default-features = false }
 
 async-trait = "0.1"  # public
 

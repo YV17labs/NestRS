@@ -48,8 +48,8 @@ nest_rs_core::inventory::submit! {
     nest_rs_core::__private::LibraryClamp::new("h2", tracing::level_filters::LevelFilter::ERROR)
 }
 
-// tungstenite 0.27, which poem's upgrade speaks, quotes a close frame's reason
-// at `debug` and every message at `trace`.
+// tungstenite, which every upgraded WebSocket speaks, quotes a close frame's
+// reason at `debug` and every message at `trace`.
 nest_rs_core::inventory::submit! {
     nest_rs_core::__private::LibraryClamp::new("tungstenite", tracing::level_filters::LevelFilter::INFO)
 }

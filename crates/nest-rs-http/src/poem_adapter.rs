@@ -21,7 +21,7 @@ use serde::de::DeserializeOwned;
 use tokio::io::AsyncRead;
 
 use crate::accept_encoding::{AcceptEncoding, Coding};
-use crate::allow::{Chosen, Methods, head_of};
+use crate::allow::{Chosen, HeadAsGet, Methods, head_of};
 use crate::body::Body;
 use crate::cors::{FRAMEWORK_SENT, HttpCors, listed};
 use crate::endpoint::{BoxEndpoint, Endpoint};
@@ -360,6 +360,7 @@ impl poem::Endpoint for Matched {
                 Chosen::Entry(leaf) => (leaf, false),
                 Chosen::HeadOf(leaf) => {
                     req.set_method(Method::GET);
+                    req.extensions_mut().insert(HeadAsGet);
                     (leaf, true)
                 }
                 Chosen::NotAllowed => return Ok(response_to_poem(methods.not_allowed())),

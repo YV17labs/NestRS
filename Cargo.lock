@@ -2844,6 +2844,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
+ "nest-rs-http",
  "nest-rs-http-macros",
  "nest-rs-interceptors",
  "nest-rs-pipes",

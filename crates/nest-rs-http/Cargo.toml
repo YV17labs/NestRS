@@ -11,6 +11,11 @@ keywords = ["framework", "nestrs", "http", "web", "poem"]
 categories = ["web-programming::http-server", "asynchronous"]
 
 
+[features]
+# The WebSocket opening handshake on hyper's upgrade and the socket above it,
+# for the edges that speak one: `nest-rs-ws` and `nest-rs-graphql` enable it.
+websocket = ["dep:tokio-tungstenite"]
+
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-http-macros.workspace = true
@@ -72,8 +77,13 @@ h2.workspace = true
 # resolver a renewal swaps without rebuilding the listener.
 tokio-rustls.workspace = true
 rustls.workspace = true
+# Behind `websocket`: the frames over an upgraded socket. `handshake` is the
+# accept key the `101` answers with.
+tokio-tungstenite = { workspace = true, optional = true, features = ["handshake"] }
 
 [dev-dependencies]
+# The suites exercise the upgrade, so they build the crate with `websocket` on.
+nest-rs-http = { path = ".", features = ["websocket"] }
 # `LogCapture`: several transport refusals answer one status code for two very
 # different causes (an unreadable version header and a malformed one both give
 # `400`), so the event is what separates them for an operator.
@@ -85,16 +95,12 @@ serde.workspace = true
 # `nest-rs-interceptors`, so any test using `#[routes]` needs it in scope. An
 # allowed dev-dependency cycle: the interceptors depend on this crate.
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
-# `websocket` lets `tests/integration/transport.rs` hold a real WebSocket open
-# across a shutdown — an upgraded connection is the one the shutdown window
-# neither waits for nor closes, and the transport's report has to say so.
-poem = { workspace = true, features = ["websocket"] }
 # `test-util` (not part of tokio's `full`) pauses time, so the shutdown window is
 # proved at its default length without the suite waiting it out.
 tokio = { workspace = true, features = ["test-util"] }
-# The client half of that WebSocket — the same crate poem's server half runs on,
-# so it adds no crate to the graph.
-tokio-tungstenite.workspace = true
+# The client half of the WebSocket the suites open — the crate the server half
+# runs on, so it adds no crate to the graph.
+tokio-tungstenite = { workspace = true, features = ["connect"] }
 # `tests/global_prefix.rs` env-path test isolates the process env via
 # `figment::Jail`, matching how `nest-rs-config` itself tests env reads.
 figment = { workspace = true, features = ["test"] }

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{App, ContainerBuilder, Layer, Transport, injectable, module};
+use nest_rs_http::__private::websocket::{WebSocketLimits, WebSocketUpgrade};
 use nest_rs_http::Body;
 use nest_rs_http::{
     DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, Method, SseStream, async_trait,
@@ -15,8 +16,7 @@ use nest_rs_http::{
 };
 use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
 use nest_rs_testing::LogCapture;
-use poem::web::websocket::{Message as Frame, WebSocket};
-use poem::{IntoResponse, handler};
+use poem::handler;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Notify;
@@ -106,17 +106,20 @@ struct ShutdownModule;
 
 /// A WebSocket that echoes text until its peer goes, outliving the HTTP
 /// connection that upgraded it.
-#[handler]
-fn echo(ws: WebSocket) -> impl IntoResponse {
-    ws.on_upgrade(|mut socket| async move {
+pub(crate) async fn echo(
+    mut req: nest_rs_http::Request,
+) -> nest_rs_http::Result<nest_rs_http::Response> {
+    let upgrade = WebSocketUpgrade::from_request(&mut req)?;
+    let limits = WebSocketLimits::new(64 * 1024);
+    Ok(upgrade.accept(None, limits, |mut socket| async move {
         while let Some(Ok(frame)) = socket.next().await {
-            if let Frame::Text(text) = frame
-                && socket.send(Frame::Text(text)).await.is_err()
+            if let Message::Text(text) = frame
+                && socket.send(Message::Text(text)).await.is_err()
             {
                 break;
             }
         }
-    })
+    }))
 }
 
 /// The echo socket, self-mounted by hand: it upgrades without declaring the
@@ -131,7 +134,7 @@ impl nest_rs_core::Discoverable for EchoSocket {
                 "/socket",
                 "echo",
                 |_container, routes| {
-                    routes.route_poem(Method::GET, "/socket", echo);
+                    routes.route(Method::GET, "/socket", nest_rs_http::endpoint_fn(echo));
                 },
             )
             .owned_by("EchoSocket"),

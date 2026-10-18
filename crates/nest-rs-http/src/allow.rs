@@ -5,7 +5,7 @@
 //! `HEAD` is served by `GET` whenever `GET` is registered and `HEAD` is not
 //! (RFC 9110 §9.3.2), so it is advertised beside it; `OPTIONS` never, since
 //! nothing here serves it. An entry answering every method (`route_any`)
-//! dispatches on the method itself: `PUT /graphql` answers the surface's own
+//! dispatches on the method itself: `PUT /mcp` answers the surface's own
 //! `405`.
 
 use http::header::{ALLOW, CONTENT_LENGTH};
@@ -20,6 +20,11 @@ pub(crate) struct Methods<L> {
     entries: Vec<(Method, L)>,
     allow: HeaderValue,
 }
+
+/// Marks a `HEAD` request the table hands its `GET` entry as a `GET`, so a
+/// leaf that must not serve a `HEAD` — the WebSocket handshake — still tells.
+#[derive(Clone, Copy)]
+pub(crate) struct HeadAsGet;
 
 /// What a method selects out of [`Methods`].
 pub(crate) enum Chosen<'a, L> {

@@ -39,6 +39,7 @@ mod tls;
 mod trace_context;
 mod transport;
 mod versioning;
+mod websocket;
 
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{App, Handler, Module, Posture, Transport};

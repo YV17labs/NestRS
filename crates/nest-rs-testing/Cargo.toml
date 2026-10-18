@@ -96,8 +96,8 @@ tracing-subscriber.workspace = true
 # the writer task only exist above a socket, so unlike `GraphqlSocket` — which
 # runs the protocol engine in process — this driver has to bind one. Already in
 # the graph as the WebSocket edge's own backend, so the feature adds no new
-# crate.
-tokio-tungstenite = { workspace = true, optional = true }
+# crate, only its client half (`connect`).
+tokio-tungstenite = { workspace = true, optional = true, features = ["connect"] }
 # `SinkExt`/`StreamExt` to drive that client.
 futures-util = { workspace = true, optional = true }
 # Behind `ws`: the port whose sockets this driver speaks to. `CloseCode` and

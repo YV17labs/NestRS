@@ -75,6 +75,7 @@ mod transport;
 pub mod unit;
 mod versioning;
 mod view;
+mod websocket;
 mod window;
 
 /// A cheaply cloned, shared slice of bytes.
@@ -271,6 +272,20 @@ pub mod __private {
     pub use serde;
     pub use tracing;
     pub use validator;
+
+    /// Whether a request asks for a WebSocket and, behind the `websocket`
+    /// feature, the opening handshake on hyper's upgrade, the socket above it
+    /// and the codes it closes with, for the edges that speak one.
+    pub mod websocket {
+        #[cfg(feature = "websocket")]
+        pub use crate::error::HandshakeRefused;
+        pub use crate::websocket::requested;
+        #[cfg(feature = "websocket")]
+        pub use crate::websocket::{
+            CloseCode, Error, Message, Utf8Bytes, WebSocketLimits, WebSocketStream,
+            WebSocketUpgrade, close_frame, read_failed,
+        };
+    }
 
     /// Converts between this crate's HTTP vocabulary and poem's, losing nothing
     /// either way, while the transport moves onto the vocabulary; removed once

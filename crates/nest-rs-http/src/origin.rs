@@ -225,7 +225,7 @@ impl Endpoint for OriginChecked {
     async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
         let checked = match self.gate.on {
             OriginCheck::Every => true,
-            OriginCheck::Upgrades => upgrades(&req),
+            OriginCheck::Upgrades => crate::websocket::requested(req.headers()),
         };
         if checked && let Err(refused) = self.policy.allows(&req) {
             (self.gate.refused)(&refused);
@@ -233,15 +233,6 @@ impl Endpoint for OriginChecked {
         }
         self.inner.call(req).await
     }
-}
-
-/// Whether `req` asks to upgrade to a WebSocket: `Upgrade` decides, never
-/// `Connection`, a hop-by-hop header a proxy may rewrite.
-fn upgrades(req: &crate::Request) -> bool {
-    req.headers()
-        .get(header::UPGRADE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
 }
 
 /// What [`OriginPolicy::allows`] reads off a request: its headers, the
@@ -759,6 +750,47 @@ mod tests {
             "compared with `http://api.internal:8080`, the `Host` it rewrote",
         );
         assert!(refused.trusted_proxy());
+    }
+
+    /// The handshake admits `websocket` anywhere in `Upgrade`'s list, in any
+    /// case and on any line: each such request is checked before it.
+    #[tokio::test]
+    async fn every_upgrade_the_handshake_admits_is_checked() {
+        let checked = OriginChecked::new(
+            policy(&[], &[]),
+            OriginGate {
+                on: OriginCheck::Upgrades,
+                refused: |_| {},
+            },
+            BoxEndpoint::new(crate::endpoint_fn(|_req| async {
+                Ok(crate::Response::default())
+            })),
+        );
+        let foreign = [("origin", "https://evil.example"), ("host", "api.example")];
+        for lines in [
+            &["websocket"][..],
+            &["WebSocket"],
+            &["websocket, h2c"],
+            &["h2c ,websocket"],
+            &["h2c", "websocket"],
+        ] {
+            let mut headers = foreign.to_vec();
+            headers.extend(lines.iter().map(|&line| ("upgrade", line)));
+            let resp = checked
+                .call(request("/socket", "203.0.113.9", &headers))
+                .await
+                .expect("an answer");
+            assert_eq!(resp.status(), http::StatusCode::FORBIDDEN, "{lines:?}");
+        }
+        for lines in [&[][..], &["h2c"], &["websockets"]] {
+            let mut headers = foreign.to_vec();
+            headers.extend(lines.iter().map(|&line| ("upgrade", line)));
+            let resp = checked
+                .call(request("/socket", "203.0.113.9", &headers))
+                .await
+                .expect("an answer");
+            assert_eq!(resp.status(), http::StatusCode::OK, "{lines:?}");
+        }
     }
 
     #[tokio::test]

@@ -206,8 +206,7 @@ impl JobError {
     /// may have landed
     /// ([`Unhonoured::IN_DOUBT`](nest_rs_database::Unhonoured::IN_DOUBT)).
     pub(crate) fn is_in_doubt(&self) -> bool {
-        self.source
-            .downcast_ref::<nest_rs_database::Unhonoured>()
+        nest_rs_core::__private::find_in_chain::<nest_rs_database::Unhonoured>(&*self.source)
             .is_some_and(|why| *why == nest_rs_database::Unhonoured::IN_DOUBT)
     }
 

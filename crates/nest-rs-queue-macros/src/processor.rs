@@ -4,6 +4,7 @@
 //! `QueueWorker` runs from boot. No `Discoverable` for the host struct: the
 //! user's own `#[injectable]` owns it.
 
+use nest_rs_codegen::layers::{LayerScope, take_layers};
 use nest_rs_codegen::pair;
 use nest_rs_codegen::{
     Grammar, JobDecorator, JobKey, PipeWrapper, VersionedEdge, await_if_async, cfg_attrs,
@@ -57,8 +58,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
-        Ok(values) => values,
+    let host_layers = match take_layers(&pair::PROCESSOR, LayerScope::Host, &mut item.attrs) {
+        Ok(layers) => layers,
         Err(err) => return err.to_compile_error().into(),
     };
     let mut emissions: Vec<TokenStream2> = Vec::new();
@@ -119,11 +120,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         if let Err(err) = check_shape(method) {
             return err.to_compile_error().into();
         }
-        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
-            Ok(values) => values,
-            Err(err) => return err.to_compile_error().into(),
-        };
+        let method_layers =
+            match take_layers(&pair::PROCESSOR, LayerScope::Method, &mut method.attrs) {
+                Ok(layers) => layers,
+                Err(err) => return err.to_compile_error().into(),
+            };
         let QueueId::Type(queue_ty) = &args.queue;
+        let cfgs = cfg_attrs(&method.attrs);
         handler_consts.push(nest_rs_codegen::handler_const(
             &nest_rs_codegen::HandlerSite {
                 unit: quote!(::nest_rs_queue::unit::JOB),
@@ -132,11 +135,20 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 method: &method.sig.ident,
                 address: quote!(<#queue_ty as ::nest_rs_queue::Queue>::NAME),
                 posture: nest_rs_codegen::SitePosture::System,
-                host_meta: nest_rs_codegen::HostMeta::Values(&host_meta),
-                method_meta: &metas,
-                cfgs: &cfg_attrs(&method.attrs),
+                host_meta: nest_rs_codegen::HostMeta::Values(&host_layers.meta),
+                method_meta: &method_layers.meta,
+                cfgs: &cfgs,
             },
         ));
+        let site = nest_rs_codegen::ProviderSite {
+            self_ty: &self_ty,
+            method: &method.sig.ident,
+            host: &host_layers,
+            method_layers: &method_layers,
+            cfgs: &cfgs,
+        };
+        handler_consts.push(nest_rs_codegen::site_const(&site));
+        emissions.push(nest_rs_codegen::host_layers_entry(&site));
 
         match emit_method(&self_ty, &provider_ident, method, args) {
             Ok(emitted) => emissions.push(emitted),
@@ -273,8 +285,9 @@ fn emit_method(
     }
     let timeout = job_timeout(timeout);
     options = quote!(#options.with_timeout(#timeout));
+    let transaction = job_transaction(transactional, &quote!(::nest_rs_queue::__private));
+    options = quote!(#options.with_transaction(#transaction));
 
-    let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue::__private));
     let checkpoint_open = checkpoint.as_ref().map(|checkpoint| {
         let state = &checkpoint.state;
         quote! {
@@ -287,7 +300,7 @@ fn emit_method(
     });
     let checkpoints_take = checkpoint
         .as_ref()
-        .map(|_| quote!(let __checkpoints = __context.checkpoints.clone();));
+        .map(|_| quote!(let __checkpoints = __context.checkpoints;));
     // The method's arguments in the order it declares them.
     let call_args: Vec<TokenStream2> = method
         .sig
@@ -301,11 +314,12 @@ fn emit_method(
             _ => quote!(__job),
         })
         .collect();
-    let attempt_take = attempt.map(|_| quote!(let __attempt = __context.attempt.clone();));
+    let attempt_take = attempt.map(|_| quote!(let __attempt = __context.attempt;));
     let call = await_if_async(
         &method.sig,
         quote!(<#self_ty>::#method_ident(&__provider, #(#call_args),*)),
     );
+    let site = nest_rs_codegen::site_ref(self_ty, &method_ident);
 
     Ok(quote! {
         #(#cfgs)*
@@ -354,20 +368,22 @@ fn emit_method(
                 };
                 #checkpoints_take
                 #attempt_take
-                // The user `#[process]` method's `Err` is a transient fault —
-                // retryable within the budget. Mapped *inside* the unit so its
-                // settling reads one error type and can report a commit it could
-                // not honour in it. The checkpoint is read inside the body the
-                // deadline cuts: past it, the queue's timer calls a commit in doubt.
-                ::nest_rs_queue::__private::run_attempt(
-                    __context,
-                    #transaction_tokens,
-                    async move {
-                        #checkpoint_open
-                        #call.map_err(::nest_rs_queue::JobError::retry)
+                #checkpoint_open
+                // The method's error is read by its type: a problem it says
+                // decides its disposition, anything else retries within the
+                // budget. Built by its constructor, never by a call here: on a
+                // `Result<(), !>` that call would be unreachable code.
+                ::core::result::Result::map_err(
+                    ::core::result::Result::map_err(#call, ::nest_rs_queue::__private::ProcessAnswer),
+                    |__nestrs_answer| {
+                        #[allow(
+                            unused_imports,
+                            reason = "the second tier answers through this trait, which no lint sees used"
+                        )]
+                        use ::nest_rs_queue::__private::ProcessAnswerChain as _;
+                        __nestrs_answer.into_job_error()
                     },
                 )
-                .await
             })
         }
 
@@ -379,6 +395,7 @@ fn emit_method(
                 #queue_str,
                 #options,
                 || ::std::any::TypeId::of::<#self_ty>(),
+                #site,
                 #handler_ident,
             )
         }

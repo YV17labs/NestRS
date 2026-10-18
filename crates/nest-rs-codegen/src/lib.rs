@@ -29,6 +29,7 @@ mod mount;
 mod on_event;
 pub mod pair;
 mod posture;
+mod provider_site;
 mod queue_name;
 mod replicas;
 mod root;
@@ -87,6 +88,7 @@ pub use posture::{
     ID_ARG_UNSUPPORTED_BECAUSE, Posture, PostureRules, at_most_one_authorize,
     posture_contradiction, posture_key_unsupported, posture_required,
 };
+pub use provider_site::{ProviderSite, host_layers_entry, site_const, site_ref};
 pub use queue_name::{invalid_queue_name, is_valid_queue_name};
 pub use replicas::{REPLICAS, Replicas, replicas_value};
 pub use root::reroot;

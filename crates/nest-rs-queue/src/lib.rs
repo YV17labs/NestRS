@@ -72,6 +72,7 @@
 /// reason each failed.
 pub const TARGET: &str = "nest_rs::queue";
 
+mod answer;
 mod attempt;
 mod backend;
 mod backoff;
@@ -96,7 +97,10 @@ mod push_options;
 mod push_receipt;
 mod queue;
 mod queue_name;
+#[cfg(test)]
+mod testing;
 pub mod unit;
+mod view;
 mod worker;
 
 pub use attempt::Attempt;
@@ -121,6 +125,7 @@ pub use push_options::{Delay, PushOptions};
 pub use push_receipt::PushReceipt;
 pub use queue::Queue;
 pub use queue_name::QueueName;
+pub use view::QueueView;
 pub use worker::{QueueWorker, lease_fits_renewal};
 
 #[doc(hidden)]
@@ -134,10 +139,11 @@ pub mod __private {
         pub use crate::consume::{AttemptOutcome, Delivery, attempt, discover, refuse};
     }
 
+    pub use crate::answer::{ProcessAnswer, ProcessAnswerChain};
     pub use crate::checkpoint::{CheckpointCell, open_checkpoint};
     pub use crate::error::undecodable;
     pub use crate::inventory::{
-        HandlerContext, JobHandler, decode, process_method, required_capabilities, run_attempt,
+        HandlerContext, JobHandler, decode, process_method, required_capabilities,
     };
     pub use crate::queue_name::is_valid_queue_name;
 

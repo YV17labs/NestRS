@@ -1559,6 +1559,28 @@ fn never_runs(
     Box::pin(async { Ok(()) })
 }
 
+static NEVER_RUNS: nest_rs_core::Handler =
+    nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
+        unit: nest_rs_queue::unit::JOB,
+        host: TypeId::of::<ThrottledHost>(),
+        host_name: "ThrottledHost",
+        method: "run",
+        address: "throttled",
+        posture: nest_rs_core::Posture::System,
+        meta: nest_rs_core::__private::MetaLevels::default,
+    });
+
+/// The site every hand-built entry below declares: discovery reads none of it.
+static HAND_BUILT: nest_rs_core::__private::Site = nest_rs_core::__private::declare_site(
+    &NEVER_RUNS,
+    nest_rs_core::__private::SiteDeclaration {
+        layers: nest_rs_core::__private::SiteLayers::default,
+        global: nest_rs_core::__private::GlobalLayers::ALL,
+        guard_stage: None,
+        class_gate: None,
+    },
+);
+
 struct ThrottledHost;
 struct CheckpointHost;
 struct FirstClaimant;
@@ -1571,7 +1593,7 @@ nest_rs_core::inventory::submit! {
     nest_rs_queue::__private::process_method(
         module_path!(), "ThrottledHost::run", "throttled",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_secs(1))),
-        TypeId::of::<ThrottledHost>, never_runs,
+        TypeId::of::<ThrottledHost>, &HAND_BUILT, never_runs,
     )
 }
 
@@ -1579,7 +1601,7 @@ nest_rs_core::inventory::submit! {
     nest_rs_queue::__private::process_method(
         module_path!(), "CheckpointHost::run", "resumable",
         ProcessOptions::DEFAULT.with_checkpoint(true),
-        TypeId::of::<CheckpointHost>, never_runs,
+        TypeId::of::<CheckpointHost>, &HAND_BUILT, never_runs,
     )
 }
 
@@ -1587,7 +1609,7 @@ nest_rs_core::inventory::submit! {
     nest_rs_queue::__private::process_method(
         module_path!(), "FirstClaimant::drain", "contested",
         ProcessOptions::DEFAULT,
-        TypeId::of::<FirstClaimant>, never_runs,
+        TypeId::of::<FirstClaimant>, &HAND_BUILT, never_runs,
     )
 }
 
@@ -1595,7 +1617,7 @@ nest_rs_core::inventory::submit! {
     nest_rs_queue::__private::process_method(
         module_path!(), "SecondClaimant::drain", "contested",
         ProcessOptions::DEFAULT.with_retries(9),
-        TypeId::of::<SecondClaimant>, never_runs,
+        TypeId::of::<SecondClaimant>, &HAND_BUILT, never_runs,
     )
 }
 
@@ -1603,7 +1625,7 @@ nest_rs_core::inventory::submit! {
     nest_rs_queue::__private::process_method(
         module_path!(), "BadlyNamedHost::run", "nestrs:queue:dead",
         ProcessOptions::DEFAULT,
-        TypeId::of::<BadlyNamedHost>, never_runs,
+        TypeId::of::<BadlyNamedHost>, &HAND_BUILT, never_runs,
     )
 }
 
@@ -1611,7 +1633,7 @@ nest_rs_core::inventory::submit! {
     nest_rs_queue::__private::process_method(
         module_path!(), "SubMillisecondWindowHost::run", "half-a-millisecond",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_micros(500))),
-        TypeId::of::<SubMillisecondWindowHost>, never_runs,
+        TypeId::of::<SubMillisecondWindowHost>, &HAND_BUILT, never_runs,
     )
 }
 
@@ -1619,7 +1641,7 @@ nest_rs_core::inventory::submit! {
     nest_rs_queue::__private::process_method(
         module_path!(), "ZeroWindowHost::run", "unwindowed",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::ZERO)),
-        TypeId::of::<ZeroWindowHost>, never_runs,
+        TypeId::of::<ZeroWindowHost>, &HAND_BUILT, never_runs,
     )
 }
 
@@ -2146,4 +2168,160 @@ async fn a_baggage_past_the_limits_is_dropped_once_and_quoted_nowhere() {
         "{event:#?}"
     );
     assert_never_quoted(&logs, "SECRET");
+}
+
+#[queue(name = "answers-unprocessable", job = TranscodeCommand)]
+struct UnprocessableAnswerQueue;
+
+#[queue(name = "answers-conflict-in-a-chain", job = TranscodeCommand)]
+struct ConflictInAChainQueue;
+
+#[queue(name = "answers-request-timeout", job = TranscodeCommand)]
+struct RequestTimeoutQueue;
+
+#[queue(name = "answers-rate-limited", job = TranscodeCommand)]
+struct RateLimitedQueue;
+
+#[queue(name = "answers-unavailable", job = TranscodeCommand)]
+struct UnavailableAnswerQueue;
+
+#[queue(name = "answers-opaquely", job = TranscodeCommand)]
+struct OpaqueAnswerQueue;
+
+#[queue(name = "answers-a-job-error", job = TranscodeCommand)]
+struct JobErrorAnswerQueue;
+
+/// A `408`'s code: no framework code names a request that took too long.
+const REQUEST_TIMEOUT: nest_rs_core::Code = nest_rs_core::Code::new("REQUEST_TIMEOUT");
+
+/// A domain error that says nothing a client may read.
+#[derive(Debug, thiserror::Error)]
+#[error("the ledger is unreachable")]
+struct LedgerDown;
+
+impl nest_rs_core::ToProblem for LedgerDown {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        None
+    }
+}
+
+/// Every answer a `#[process]` method can give its attempt, one per method.
+struct AnsweringProcessor;
+
+// Hand-provided: no decorator built this type to state its residency.
+impl nest_rs_core::ProviderResidency for AnsweringProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl AnsweringProcessor {
+    #[process(queue = UnprocessableAnswerQueue, retries = 3)]
+    async fn unprocessable(&self, job: TranscodeCommand) -> Result<(), nest_rs_core::Problem> {
+        let _ = job;
+        Err(nest_rs_core::Problem::new(
+            422,
+            nest_rs_core::problem::code::INVALID_ARGUMENT,
+        ))
+    }
+
+    #[process(queue = ConflictInAChainQueue, retries = 3)]
+    async fn conflicting(&self, job: TranscodeCommand) -> anyhow::Result<()> {
+        Err(anyhow::Error::new(nest_rs_core::Problem::new(
+            409,
+            nest_rs_core::problem::code::CONFLICT,
+        ))
+        .context(format!("importing {}", job.file)))
+    }
+
+    #[process(queue = RequestTimeoutQueue, retries = 3)]
+    async fn timed_out(&self, job: TranscodeCommand) -> Result<(), nest_rs_core::Problem> {
+        let _ = job;
+        Err(nest_rs_core::Problem::new(408, REQUEST_TIMEOUT))
+    }
+
+    #[process(queue = RateLimitedQueue, retries = 3)]
+    async fn rate_limited(&self, job: TranscodeCommand) -> Result<(), nest_rs_core::Problem> {
+        let _ = job;
+        Err(
+            nest_rs_core::Problem::new(429, nest_rs_core::problem::code::RATE_LIMITED)
+                .with_retry_after(30),
+        )
+    }
+
+    #[process(queue = UnavailableAnswerQueue, retries = 3)]
+    async fn unavailable(&self, job: TranscodeCommand) -> Result<(), nest_rs_core::Problem> {
+        let _ = job;
+        Err(nest_rs_core::Problem::new(
+            503,
+            nest_rs_core::problem::code::UNAVAILABLE,
+        ))
+    }
+
+    #[process(queue = OpaqueAnswerQueue, retries = 3)]
+    async fn opaque(&self, job: TranscodeCommand) -> Result<(), LedgerDown> {
+        let _ = job;
+        Err(LedgerDown)
+    }
+
+    #[process(queue = JobErrorAnswerQueue, retries = 3)]
+    async fn deliberate(&self, job: TranscodeCommand) -> Result<(), JobError> {
+        let _ = job;
+        Err(JobError::abort("the clip was withdrawn"))
+    }
+}
+
+/// What the first attempt of `name`, draining `queue`, comes to.
+async fn first_answer(name: &str, queue: &'static str) -> AttemptOutcome {
+    let container = Container::builder()
+        .provide(AnsweringProcessor)
+        .build()
+        .expect("the container builds");
+    let mut delivery = Delivery::new(
+        &BARE,
+        QueueName::new(queue).expect("a valid name"),
+        json!({ "v": WIRE_FORMAT_VERSION, "payload": { "file": "a.wav" } }),
+    );
+    consume::attempt(method(name), &mut delivery, container, None).await
+}
+
+#[tokio::test]
+async fn a_method_answering_a_client_error_dead_letters_its_job_at_the_first_attempt() {
+    for (name, queue) in [
+        ("AnsweringProcessor::unprocessable", "answers-unprocessable"),
+        (
+            "AnsweringProcessor::conflicting",
+            "answers-conflict-in-a-chain",
+        ),
+    ] {
+        let outcome = first_answer(name, queue).await;
+        let AttemptOutcome::DeadLetter(error) = outcome else {
+            panic!("{name}: a 4xx is the client's error, which no retry clears: {outcome:?}");
+        };
+        assert!(!error.retryable, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn a_method_answering_a_problem_another_attempt_may_clear_retries_its_job() {
+    for (name, queue) in [
+        ("AnsweringProcessor::timed_out", "answers-request-timeout"),
+        ("AnsweringProcessor::rate_limited", "answers-rate-limited"),
+        ("AnsweringProcessor::unavailable", "answers-unavailable"),
+        ("AnsweringProcessor::opaque", "answers-opaquely"),
+    ] {
+        let outcome = first_answer(name, queue).await;
+        assert!(
+            matches!(outcome, AttemptOutcome::Retry { .. }),
+            "{name}: 408, 429, a 5xx and a problem withheld invite a repeat: {outcome:?}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_method_answering_a_job_error_keeps_its_disposition() {
+    let outcome = first_answer("AnsweringProcessor::deliberate", "answers-a-job-error").await;
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("an abort the method chose is never retried: {outcome:?}");
+    };
+    assert_eq!(error.to_string(), "the clip was withdrawn");
 }

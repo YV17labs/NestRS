@@ -6,18 +6,17 @@ use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
+use nest_rs_core::__private::Site;
 use nest_rs_core::Container;
-use nest_rs_database::__private::run_unit_bounded;
-use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec};
 
 use crate::checkpoint::CheckpointCell;
 use crate::{Attempt, Capabilities, Capability, JobError, ProcessOptions};
 
-/// The type-erased handler `#[processor]` emits for each `#[process]` method:
-/// deserializes the job payload ([`decode`]), resolves the provider, runs the
-/// method as one unit of work through the bound `UnitOfWork`.
+/// The type-erased handler `#[processor]` emits for each `#[process]` method,
+/// the tail of its attempt's pipeline: deserializes the job payload
+/// ([`decode`]), runs its per-argument pipe, resolves the provider and calls
+/// the method, its error classified by its type.
 ///
 /// The payload is borrowed from the stored record while another attempt may
 /// follow, and handed over on the last.
@@ -43,52 +42,8 @@ pub struct HandlerContext {
     pub container: Container,
     /// The delivery's checkpoint, when its backend keeps one.
     pub checkpoints: Option<Arc<CheckpointCell>>,
-    /// The binding the attempt runs its unit of work through, resolved once by
-    /// the worker; `None` runs it bare.
-    pub unit_of_work: Option<Arc<dyn UnitOfWork>>,
     /// The attempt this is: the job's id, its number and its queue.
     pub attempt: Attempt,
-    /// When the attempt's body is cut: its start plus its method's `timeout`.
-    pub deadline: tokio::time::Instant,
-    /// The method's `timeout`, which the cut reports.
-    pub timeout: Duration,
-}
-
-/// Run `body` — the method's call — as the attempt's one unit of work under
-/// `policy`, through the binding `context` carries: the unit names the job and
-/// the attempt, a success its driver could not honour fails the attempt with
-/// the driver's classification, and the body alone is cut at the attempt's
-/// deadline, failing it retryably, so a commit is never cut — and past the
-/// binding's settle net beyond it, a commit that never answered is in doubt.
-pub fn run_attempt<F>(
-    context: HandlerContext,
-    policy: TransactionPolicy,
-    body: F,
-) -> impl Future<Output = Result<(), JobError>> + Send
-where
-    F: Future<Output = Result<(), JobError>> + Send,
-{
-    let HandlerContext {
-        unit_of_work,
-        attempt,
-        deadline,
-        timeout,
-        ..
-    } = context;
-    let spec =
-        UnitSpec::new(crate::unit::JOB, ExecutorScope::Job, policy).with_job(attempt.job_ref());
-    async move {
-        run_unit_bounded(
-            unit_of_work.as_ref(),
-            spec,
-            deadline,
-            body,
-            Result::is_ok,
-            |why| Err(JobError::unhonoured(why)),
-            move || Err(JobError::retry(nest_rs_core::JobTimedOut::new(timeout))),
-        )
-        .await
-    }
 }
 
 /// A `#[process]` method, as its decorator declared it.
@@ -102,6 +57,7 @@ pub struct ProcessMethod {
     queue: &'static str,
     options: ProcessOptions,
     provider_type_id: fn() -> TypeId,
+    site: &'static Site,
     handler: JobHandler,
 }
 
@@ -132,6 +88,12 @@ impl ProcessMethod {
         (self.provider_type_id)()
     }
 
+    /// The dispatch site its decorator declared: its handler and the layers
+    /// bound on its method and its block.
+    pub(crate) fn site(&self) -> &'static Site {
+        self.site
+    }
+
     pub(crate) fn handler(&self) -> JobHandler {
         self.handler
     }
@@ -145,6 +107,7 @@ pub const fn process_method(
     queue: &'static str,
     options: ProcessOptions,
     provider_type_id: fn() -> TypeId,
+    site: &'static Site,
     handler: JobHandler,
 ) -> ProcessMethod {
     ProcessMethod {
@@ -153,6 +116,7 @@ pub const fn process_method(
         queue,
         options,
         provider_type_id,
+        site,
         handler,
     }
 }

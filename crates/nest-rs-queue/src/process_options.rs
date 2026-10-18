@@ -4,6 +4,8 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use nest_rs_database::TransactionPolicy;
+
 /// A rate at which a method's attempts may start: at most `limit` starts per
 /// `window`, **across the deployment**.
 ///
@@ -51,17 +53,20 @@ pub struct ProcessOptions {
     throttle: Option<Throttle>,
     checkpoint: bool,
     timeout: Duration,
+    transaction: TransactionPolicy,
 }
 
 impl ProcessOptions {
-    /// One job at a time, no retry, no throttle, no checkpoint, and the
-    /// family's timeout ([`JOB_TIMEOUT`](nest_rs_core::JOB_TIMEOUT)).
+    /// One job at a time, no retry, no throttle, no checkpoint, the family's
+    /// timeout ([`JOB_TIMEOUT`](nest_rs_core::JOB_TIMEOUT)), and one
+    /// transaction per attempt.
     pub const DEFAULT: Self = Self {
         retries: 0,
         concurrency: NonZeroU32::MIN,
         throttle: None,
         checkpoint: false,
         timeout: nest_rs_core::JOB_TIMEOUT,
+        transaction: TransactionPolicy::PerUnit,
     };
 
     /// `retries = N`: re-run a job whose attempt failed retryably, up to `N`
@@ -98,6 +103,13 @@ impl ProcessOptions {
         self
     }
 
+    /// `transactional = false`: an attempt's data-layer work runs on the pool
+    /// rather than in one transaction.
+    pub const fn with_transaction(mut self, transaction: TransactionPolicy) -> Self {
+        self.transaction = transaction;
+        self
+    }
+
     /// Re-runs after a first failed attempt.
     pub const fn retries(&self) -> u32 {
         self.retries
@@ -121,6 +133,11 @@ impl ProcessOptions {
     /// How long an attempt runs before it is cut.
     pub const fn timeout(&self) -> Duration {
         self.timeout
+    }
+
+    /// How an attempt's data-layer work is settled.
+    pub const fn transaction(&self) -> TransactionPolicy {
+        self.transaction
     }
 }
 

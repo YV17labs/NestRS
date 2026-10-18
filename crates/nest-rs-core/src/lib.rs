@@ -206,7 +206,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
+    pub use crate::access::__private::{HostLayers, ModuleDescriptor, ProviderDescriptor};
     pub use crate::ambient::{
         Pending, UnmaskedReply, carries_ambient, install_pending, with_ambient_from,
     };

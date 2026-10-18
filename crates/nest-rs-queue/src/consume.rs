@@ -5,23 +5,31 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use nest_rs_core::{
-    Container, Correlation, ReachableProviders, RequestScope, panic_message, with_request_scope,
+use nest_rs_core::__private::{
+    Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled,
 };
-use nest_rs_database::UnitOfWork;
+use nest_rs_core::{
+    Container, Correlation, Failure, Outcome, Problem, ReachableProviders, RequestScope,
+    UnitContext, panic_message, with_request_scope,
+};
+use nest_rs_database::__private::run_unit_bounded;
+use nest_rs_database::{ExecutorScope, UnitOfWork, UnitSpec};
 use serde_json::Value;
 use tracing::Instrument;
 
+use crate::answer::{by_problem, dead_letters};
 use crate::capability::unsupported;
 use crate::checkpoint::CheckpointCell;
 use crate::envelope::{self, Carried, Opened, Unusable};
 use crate::inventory::{HandlerContext, JobHandler};
 use crate::{
     Attempt, CheckpointStore, Envelope, JobError, JobId, ProcessMethod, QueueBackend, QueueName,
-    TARGET, Throttle, backoff, unit,
+    QueueView, TARGET, Throttle, backoff, unit,
 };
 
 /// A job span's `messaging.operation.name` and `messaging.operation.type`, per
@@ -246,7 +254,7 @@ pub struct Delivery {
     /// — see [`Delivery::with_deferred_for`].
     deferred_for: Option<Duration>,
     unique_key: Option<String>,
-    backend_id: Option<String>,
+    backend_id: Option<Arc<str>>,
     message: Value,
     checkpoints: Option<Arc<CheckpointCell>>,
     /// The trace the first attempt minted when the stored value carried none:
@@ -285,7 +293,7 @@ impl Delivery {
     /// The backend's own id for the stored record — reported beside the job's
     /// [`JobId`] as `backend_id`, never in its place.
     pub fn with_backend_id(mut self, backend_id: impl Into<String>) -> Self {
-        self.backend_id = Some(backend_id.into());
+        self.backend_id = Some(Arc::from(backend_id.into()));
         self
     }
 
@@ -374,11 +382,30 @@ impl Delivery {
 /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
 ///
 /// The attempt is one unit of work, run through `unit_of_work` — the binding the
-/// worker resolved once — or bare without one.
+/// worker resolved once — or bare without one, around the pipeline its
+/// method's site composed on `container`: the app's, the method's and its
+/// block's interceptors and exception filters, then the method.
 pub async fn attempt(
     method: &'static ProcessMethod,
     delivery: &mut Delivery,
     container: Container,
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
+) -> AttemptOutcome {
+    attempt_in(
+        method,
+        delivery,
+        Arc::new(RequestScope::new(container)),
+        unit_of_work,
+    )
+    .await
+}
+
+/// [`attempt`] under `scope`, the one a worker shares between its attempts
+/// when no provider is request-scoped.
+pub(crate) async fn attempt_in(
+    method: &'static ProcessMethod,
+    delivery: &mut Delivery,
+    scope: Arc<RequestScope>,
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
 ) -> AttemptOutcome {
     let newer = envelope::newer_version(&delivery.message);
@@ -442,7 +469,12 @@ pub async fn attempt(
         _ if delivery.stalls >= STALL_LIMIT => Input::Stalled {
             deliveries: delivery.stalls.saturating_add(1),
         },
-        (None, Ok(payload)) => Input::Payload(payload),
+        // A site the worker composed at boot is read back; only an attempt
+        // driven without a worker composes it here.
+        (None, Ok(payload)) => match method.site().chains(scope.root()) {
+            Ok(chains) => Input::Payload(payload, chains),
+            Err(refused) => Input::Refused(JobError::abort(refused)),
+        },
         (None, Err(refused)) => Input::Refused(refused),
     };
     // One trace per job: the producer's, continued, or one minted at the first
@@ -485,21 +517,15 @@ pub async fn attempt(
         backend_id: delivery.backend_id.clone(),
         attempt,
     };
-    let checkpoints = delivery.checkpoints.clone();
-    let timeout = method.options().timeout();
     let context = HandlerContext {
-        container: container.clone(),
-        checkpoints: checkpoints.clone(),
-        unit_of_work,
+        container: scope.root().clone(),
+        checkpoints: delivery.checkpoints.clone(),
         attempt: Attempt::new(delivery.id.clone(), attempt, delivery.queue.clone()),
-        deadline: tokio::time::Instant::now() + timeout,
-        timeout,
     };
     let retry_after = backoff::retry_after(&delivery.id, attempt);
     // The ambient context too: a job the body pushes seals *this* trace and
     // what crossed with the job, and every line below reads its trace ids off
     // it, not off the span.
-    let scope = Arc::new(RequestScope::new(container));
     let unit = carried.install(async move {
         tracing::debug!(target: TARGET, attempt, "job started");
         // Said once per delivery: a retry is not a second legacy job.
@@ -527,10 +553,11 @@ pub async fn attempt(
             }
         }
         run(
-            method.handler(),
+            method,
             input,
             context,
             identity,
+            unit_of_work.as_ref(),
             last,
             retry_after,
         )
@@ -641,8 +668,9 @@ pub async fn refuse(
 
 /// What an attempt runs on.
 enum Input<'a> {
-    /// The payload the envelope carried, for the handler.
-    Payload(Cow<'a, Value>),
+    /// The payload the envelope carried, for the handler, and the pipeline its
+    /// method's site composed.
+    Payload(Cow<'a, Value>, Arc<UnitChains>),
     /// Nothing: the envelope was refused, and this is why.
     Refused(JobError),
     /// Nothing: the record was handed over `deliveries` times, and every
@@ -678,7 +706,7 @@ struct JobIdentity {
     queue: QueueName,
     processor: &'static str,
     job_id: JobId,
-    backend_id: Option<String>,
+    backend_id: Option<Arc<str>>,
     attempt: u32,
 }
 
@@ -740,13 +768,15 @@ impl Drop for JobLine {
     }
 }
 
-/// Run one job handler — or refuse the envelope it would have run on — and turn
-/// the outcome into the event it logs plus the [`AttemptOutcome`] the adapter
-/// translates.
+/// Run one job's attempt — or refuse the envelope it would have run on — and
+/// turn the outcome into the event it logs plus the [`AttemptOutcome`] the
+/// adapter translates.
 ///
 /// | outcome | event | [`AttemptOutcome`] |
 /// | --- | --- | --- |
 /// | `Ok(())` | *(the operation line alone)* | `Ok` |
+/// | a layer acknowledged it without running it | `job acknowledged without running` (`debug`) | `Ok` |
+/// | a failure a layer answered by acknowledging it | `job failed; a layer acknowledged it, …` (`warn`) | `Ok` |
 /// | non-retryable `Err` | `job dead-lettered: non-retryable failure` (`error`) | `DeadLetter` |
 /// | retryable `Err`, budget left | `job failed; will retry within the budget` (`warn`) | `Retry` |
 /// | retryable `Err`, last attempt | `job dead-lettered: retry budget spent` (`error`) | `DeadLetter` |
@@ -757,10 +787,11 @@ impl Drop for JobLine {
 /// The panic is caught **here**: a backend's panic layer would unwind past the
 /// per-job span and every event below.
 async fn run(
-    handler: JobHandler,
+    method: &'static ProcessMethod,
     input: Input<'_>,
     context: HandlerContext,
     identity: JobIdentity,
+    unit_of_work: Option<&Arc<dyn UnitOfWork>>,
     last: bool,
     retry_after: Duration,
 ) -> AttemptOutcome {
@@ -768,14 +799,19 @@ async fn run(
     let line = JobLine::open(identity);
     // `Err` when nothing ran, saying why.
     let outcome = match input {
-        // No edge deadline bounds developer code here: a handler that never
-        // answers would hold its permit for as long as the process lives. The
-        // handler's unit cuts its body at the deadline, and calls a commit
-        // still unanswered its settle net past it in doubt.
-        Input::Payload(payload) => {
-            Ok(nest_rs_core::panic::contain(handler(payload, context)).await)
+        Input::Payload(payload, chains) => {
+            let backend_id = line.identity.backend_id.clone();
+            Ok(nest_rs_core::panic::contain(ran(
+                method,
+                &chains,
+                payload,
+                context,
+                backend_id,
+                unit_of_work,
+            ))
+            .await)
         }
-        Input::Refused(refused) => Ok(Ok(Err(refused))),
+        Input::Refused(refused) => Ok(Ok(Ran::Failed(refused))),
         Input::Stalled { deliveries } => Err(Unrun::Stalled { deliveries }),
         Input::Unread { version, waited } => Err(Unrun::Unread { version, waited }),
     };
@@ -822,8 +858,21 @@ async fn run(
                 ))),
             )
         }
-        Ok(Ok(Ok(()))) => (nest_rs_core::operation_log::OK, AttemptOutcome::Ok),
-        Ok(Ok(Err(error))) if error.is_in_doubt() => {
+        Ok(Ok(Ran::Done { method_ran })) => {
+            if !method_ran {
+                tracing::debug!(target: TARGET, "job acknowledged without running");
+            }
+            (nest_rs_core::operation_log::OK, AttemptOutcome::Ok)
+        }
+        Ok(Ok(Ran::Acknowledged(error))) => {
+            tracing::warn!(
+                target: TARGET,
+                error = %nest_rs_core::error_message(&error),
+                "job failed; a layer acknowledged it, so it settles done and its writes rolled back",
+            );
+            (nest_rs_core::operation_log::ERROR, AttemptOutcome::Ok)
+        }
+        Ok(Ok(Ran::Failed(error))) if error.is_in_doubt() => {
             tracing::error!(
                 target: TARGET,
                 outcome = "in_doubt",
@@ -836,7 +885,7 @@ async fn run(
                 AttemptOutcome::DeadLetter(error),
             )
         }
-        Ok(Ok(Err(error))) if !error.retryable => {
+        Ok(Ok(Ran::Failed(error))) if !error.retryable => {
             // `errors` is the member name HTTP and the WebSocket error frame use;
             // `error` is the whole chain, since a wrapper names no cause.
             tracing::error!(
@@ -850,7 +899,7 @@ async fn run(
                 AttemptOutcome::DeadLetter(error),
             )
         }
-        Ok(Ok(Err(error))) if last => {
+        Ok(Ok(Ran::Failed(error))) if last => {
             tracing::error!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
@@ -862,7 +911,7 @@ async fn run(
                 AttemptOutcome::DeadLetter(error),
             )
         }
-        Ok(Ok(Err(error))) => {
+        Ok(Ok(Ran::Failed(error))) => {
             tracing::warn!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
@@ -891,13 +940,173 @@ async fn run(
     result
 }
 
+/// What one attempt's unit came to.
+enum Ran {
+    /// The unit succeeded: its method ran, or a layer acknowledged the job
+    /// without running it.
+    Done {
+        /// Whether the method ran.
+        method_ran: bool,
+    },
+    /// The unit failed, and a layer answered it by acknowledging the job.
+    Acknowledged(JobError),
+    /// The unit failed.
+    Failed(JobError),
+}
+
+impl Ran {
+    /// What `outcome` comes to. The view's one answer is acknowledging the
+    /// job, so a failure answered is one a layer acknowledged.
+    fn of(outcome: Outcome, method_ran: bool) -> Self {
+        match outcome {
+            Ok(_) => Self::Done { method_ran },
+            Err(failure) if failure.is_answered() => Self::Acknowledged(job_error(failure)),
+            Err(failure) => Self::Failed(job_error(failure)),
+        }
+    }
+}
+
+/// One attempt as a unit of work around its pipeline: the attempt's
+/// [`QueueView`], its method's site, the method's call as the tail. The body
+/// is cut at the method's `timeout`, failing it retryably; a commit is never
+/// cut, and one still unanswered its binding's settle net past it is in doubt.
+async fn ran(
+    method: &'static ProcessMethod,
+    chains: &UnitChains,
+    payload: Cow<'_, Value>,
+    context: HandlerContext,
+    backend_id: Option<Arc<str>>,
+    unit_of_work: Option<&Arc<dyn UnitOfWork>>,
+) -> Ran {
+    let options = method.options();
+    let timeout = options.timeout();
+    let deadline = tokio::time::Instant::now() + timeout;
+    let spec = UnitSpec::new(unit::JOB, ExecutorScope::Job, options.transaction())
+        .with_job(context.attempt.job_ref());
+    let mut view = QueueView::new(context.attempt.clone(), method.name(), backend_id);
+    let mut tail = JobTail {
+        handler: method.handler(),
+        input: Some((payload, context)),
+    };
+    let outcome = run_unit_bounded(
+        unit_of_work,
+        spec,
+        deadline,
+        async {
+            let mut cx = new_unit_context(method.site().handler(), &mut view, None, Some(deadline));
+            dispatch(&mut cx, chains, &mut tail).await
+        },
+        Result::is_ok,
+        |why| Err(Failure::from(JobError::unhonoured(why))),
+        move || {
+            Err(Failure::from(JobError::retry(
+                nest_rs_core::JobTimedOut::new(timeout),
+            )))
+        },
+    )
+    .await;
+    Ran::of(outcome, tail.input.is_none())
+}
+
+/// The last step of an attempt's pipeline: the handler its decorator emitted,
+/// called once with the payload and what the attempt hands it.
+struct JobTail<'a> {
+    handler: JobHandler,
+    input: Option<(Cow<'a, Value>, HandlerContext)>,
+}
+
+impl Tail for JobTail<'_> {
+    async fn call(&mut self, _: &mut UnitContext<'_>) -> Outcome {
+        let Some((payload, context)) = self.input.take() else {
+            unreachable!("a unit runs its tail once");
+        };
+        match (self.handler)(payload, context).await {
+            Ok(()) => Ok(settled()),
+            Err(error) => Err(Failure::from(error)),
+        }
+    }
+}
+
+/// The [`JobError`] a failed attempt settles on: the problem an exception
+/// filter answered decides first, then a [`JobError`] keeps its disposition,
+/// then a [`Problem`] in the failure's chain decides; anything else retries
+/// within the budget.
+fn job_error(failure: Failure) -> JobError {
+    if let Some(problem) = caught_problem(&failure).cloned() {
+        return by_problem(&problem, Failed(failure));
+    }
+    if let Some(chosen) = failure.find::<JobError>() {
+        let (retryable, details) = (chosen.retryable, chosen.details.clone());
+        return JobError {
+            retryable,
+            source: Box::new(Failed(failure)),
+            details,
+        };
+    }
+    if failure.find::<Problem>().is_some_and(dead_letters) {
+        JobError::abort(Failed(failure))
+    } else {
+        JobError::retry(Failed(failure))
+    }
+}
+
+/// A failed attempt's failure, carried as the source of the [`JobError`] it
+/// settles on: said as its error is, its whole chain kept.
+#[derive(Debug)]
+struct Failed(Failure);
+
+impl fmt::Display for Failed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self.0.error(), f)
+    }
+}
+
+impl Error for Failed {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.error())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::any::TypeId;
     use std::future::Future;
 
     use nest_rs_testing::LogCapture;
 
     use super::*;
+    use crate::ProcessOptions;
+    use crate::inventory::process_method;
+    use crate::testing::{AudioProcessor, SITE};
+
+    /// The entry a decorator would submit for a method answering by `handler`.
+    fn method_of(handler: JobHandler) -> &'static ProcessMethod {
+        Box::leak(Box::new(process_method(
+            module_path!(),
+            "AudioProcessor::run",
+            "audio",
+            ProcessOptions::DEFAULT,
+            TypeId::of::<AudioProcessor>,
+            &SITE,
+            handler,
+        )))
+    }
+
+    /// Run the attempt `handler` answers, at `attempt`.
+    async fn run_handler(handler: JobHandler, attempt: u32, last: bool) -> AttemptOutcome {
+        let context = context();
+        let chains = SITE.chains(&context.container).expect("the site composes");
+        run(
+            method_of(handler),
+            Input::Payload(Cow::Owned(serde_json::json!({})), chains),
+            context,
+            identity(attempt),
+            None,
+            last,
+            Duration::from_secs(1),
+        )
+        .await
+    }
 
     fn identity(attempt: u32) -> JobIdentity {
         JobIdentity {
@@ -913,29 +1122,18 @@ mod tests {
         HandlerContext {
             container: Container::builder().build().expect("the container builds"),
             checkpoints: None,
-            unit_of_work: None,
             attempt: Attempt::new(
                 JobId::mint(),
                 1,
                 QueueName::new("audio").expect("a valid name"),
             ),
-            deadline: tokio::time::Instant::now() + nest_rs_core::JOB_TIMEOUT,
-            timeout: nest_rs_core::JOB_TIMEOUT,
         }
     }
 
     type Handler<'a> = std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send + 'a>>;
 
     async fn run_payload(handler: JobHandler, last: bool) -> AttemptOutcome {
-        run(
-            handler,
-            Input::Payload(Cow::Owned(serde_json::json!({}))),
-            context(),
-            identity(1),
-            last,
-            Duration::from_secs(1),
-        )
-        .await
+        run_handler(handler, 1, last).await
     }
 
     #[tokio::test]
@@ -1122,15 +1320,7 @@ mod tests {
         }
 
         let logs = LogCapture::install();
-        let result = run(
-            flaky,
-            Input::Payload(Cow::Owned(serde_json::json!({}))),
-            context(),
-            identity(4),
-            true,
-            Duration::from_secs(1),
-        )
-        .await;
+        let result = run_handler(flaky, 4, true).await;
         assert!(matches!(result, AttemptOutcome::DeadLetter(_)));
 
         let spent = logs.expect_one(TARGET, "job dead-lettered: retry budget spent");
@@ -1151,10 +1341,11 @@ mod tests {
 
         let logs = LogCapture::install();
         let result = run(
-            unreachable_handler,
+            method_of(unreachable_handler),
             Input::Refused(JobError::abort("unsupported job wire-format version 99")),
             context(),
             identity(1),
+            None,
             false,
             Duration::from_secs(1),
         )

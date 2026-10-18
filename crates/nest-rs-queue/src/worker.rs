@@ -30,8 +30,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use nest_rs_core::{
-    Backoff, Container, Retries, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered, error_message,
-    process_seed, within,
+    Backoff, Container, RequestScope, Retries, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered,
+    error_message, process_seed, within,
 };
 use nest_rs_database::UnitOfWork;
 use serde_json::Value;
@@ -147,6 +147,11 @@ impl Transport for QueueWorker {
         }
         if methods.is_empty() {
             return Ok(());
+        }
+        // Composed once, from the final container, so a layer a method binds
+        // and nothing provides fails the boot; every attempt reads them back.
+        for (method, _) in &methods {
+            method.site().chains(container)?;
         }
         let declared: Vec<&'static ProcessMethod> =
             methods.iter().map(|(method, _)| *method).collect();
@@ -266,6 +271,9 @@ struct Shared<C: JobConsumer> {
     /// backend's rather than a held permit's.
     delays: bool,
     container: Container,
+    /// The request scope every attempt shares when no provider is
+    /// request-scoped or transient; each opens its own otherwise.
+    scope: Option<Arc<RequestScope>>,
     /// The binding every attempt runs its unit of work through, resolved once.
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
     /// How long one receive waits for a job.
@@ -300,6 +308,8 @@ async fn serve<C: JobConsumer>(consumer: Arc<C>, serving: Serving) {
             .contains(Capability::DelayedPush),
         consumer,
         unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
+        scope: (!container.has_dynamic_scopes())
+            .then(|| Arc::new(RequestScope::new(container.clone()))),
         container,
         wait: RECEIVE_WAIT.min(window / 4),
         stop: CancellationToken::new(),
@@ -741,10 +751,12 @@ impl<C: JobConsumer> MethodRun<C> {
                 biased;
                 () = self.shared.interrupt.cancelled() => Ran::Cut,
                 () = lost.cancelled() => Ran::Lost,
-                outcome = consume::attempt(
+                outcome = consume::attempt_in(
                     self.method,
                     &mut state,
-                    self.shared.container.clone(),
+                    self.shared.scope.clone().unwrap_or_else(|| {
+                        Arc::new(RequestScope::new(self.shared.container.clone()))
+                    }),
                     self.shared.unit_of_work.clone(),
                 ) => {
                     Ran::Answered(outcome)

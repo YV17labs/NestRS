@@ -180,8 +180,9 @@ pub fn cell(pair: &DecoratorPair, scope: LayerScope, attribute: LayerAttribute) 
         (P::Processor | P::Scheduled | P::Listeners, _, A::UsePipes) => Refused(WORKER_PIPES),
         (P::Processor | P::Scheduled | P::Listeners, _, A::UseFilters) => Refused(FILTERS),
         (P::Listeners, _, A::UseExceptionFilters) => Refused(LISTENER_FILTERS),
-        (P::Processor | P::Scheduled, _, A::UseExceptionFilters)
-        | (P::Processor | P::Scheduled | P::Listeners, _, A::UseInterceptors) => Pending,
+        (P::Scheduled, _, A::UseExceptionFilters)
+        | (P::Scheduled | P::Listeners, _, A::UseInterceptors) => Pending,
+        (P::Processor, _, A::UseInterceptors | A::UseExceptionFilters) => Built,
         (P::Processor | P::Scheduled | P::Listeners, _, A::Meta) => Built,
     }
 }

@@ -18,7 +18,7 @@ use crate::error::{
     UnbuiltCause,
 };
 
-pub(crate) use self::__private::{ModuleDescriptor, ProviderDescriptor};
+pub(crate) use self::__private::{HostLayers, ModuleDescriptor, ProviderDescriptor};
 
 /// How a boot error names a dependency whose provider reported no label.
 pub(crate) const UNNAMED_DEPENDENCY: &str = "<unnamed dependency>";
@@ -63,6 +63,17 @@ pub(crate) mod __private {
         pub injects_per_request: fn() -> Vec<(TypeId, &'static str)>,
     }
 
+    /// The layers one provider-hosted dispatch site binds — a `#[process]`
+    /// method's, a trigger's, an `#[on_event]` method's — submitted by its
+    /// decorator, so the access graph checks them as dependencies of its host,
+    /// whose struct a decorator of another concern (`#[injectable]`) declared.
+    pub struct HostLayers {
+        /// The host provider's type.
+        pub host: fn() -> TypeId,
+        /// Each layer the site binds, with its label for boot errors.
+        pub layers: fn() -> Vec<(TypeId, &'static str)>,
+    }
+
     /// Per-module descriptor submitted to the link-time registry by `#[module]`.
     pub struct ModuleDescriptor {
         /// `TypeId` of the `#[module]` struct, matched against other modules'
@@ -80,6 +91,22 @@ pub(crate) mod __private {
 }
 
 inventory::collect!(ModuleDescriptor);
+inventory::collect!(HostLayers);
+
+/// The layers each provider-hosted site binds, by host, with their labels.
+pub(crate) type BoundLayers = HashMap<TypeId, Vec<(TypeId, &'static str)>>;
+
+/// Every [`HostLayers`] entry linked into the binary, by host.
+pub(crate) fn bound_layers() -> BoundLayers {
+    let mut by_host = BoundLayers::new();
+    for entry in inventory::iter::<HostLayers>() {
+        by_host
+            .entry((entry.host)())
+            .or_default()
+            .extend((entry.layers)());
+    }
+    by_host
+}
 
 /// Provider keys reachable from the app's module tree — every provider of a
 /// reachable module plus the global infrastructure keys — seeded into the
@@ -181,7 +208,8 @@ pub(crate) fn positions(order: impl IntoIterator<Item = TypeId>) -> HashMap<Type
 ///
 /// Pure over its inputs (no link-time registry access). `roots` without a
 /// descriptor terminate a branch, making a hand-written root a no-op. A
-/// provider in `overridden` is never built, so what it injects is not checked.
+/// provider in `overridden` is never built, so what it injects is not checked;
+/// `bound` holds the layers each provider-hosted site binds, by host.
 pub(crate) fn validate_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
@@ -189,6 +217,7 @@ pub(crate) fn validate_access_graph(
     registered: &HashSet<TypeId>,
     scoped_or_transient: &HashSet<TypeId>,
     overridden: &HashSet<TypeId>,
+    bound: &BoundLayers,
 ) -> Result<(), AccessError> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -246,10 +275,12 @@ pub(crate) fn validate_access_graph(
                 }
                 .into());
             }
-            // Resolved per request, so out of the scope check above: a
-            // request-scoped provider is what a handler's parameter is for.
+            // Resolved per request or where a site composes, so out of the
+            // scope check above: a request-scoped provider is what a handler's
+            // parameter is for, and a site refuses a layer it cannot resolve.
             let per_request = (p.injects_per_request)()
                 .into_iter()
+                .chain(bound.get(&(p.provider)()).into_iter().flatten().copied())
                 .map(|(dep, name)| (dep, name, false));
             for (dep, name, optional) in deps.into_iter().chain(per_request) {
                 if global.contains(&dep) || closure_keys.contains(&dep) {
@@ -845,6 +876,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &BoundLayers::new(),
         )
         .expect("a dependency on global infrastructure is always reachable");
     }
@@ -887,6 +919,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &BoundLayers::new(),
         )
         .expect("a provider may depend on another provider of the same module");
     }
@@ -923,8 +956,61 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &BoundLayers::new(),
         )
         .expect("an imported module's provider is reachable");
+    }
+
+    #[test]
+    fn a_layer_a_site_of_the_host_binds_needs_the_import_an_injected_dependency_needs() {
+        let users = users_module();
+        let billing = |imports: &'static [fn() -> TypeId]| ModuleDescriptor {
+            module: || TypeId::of::<BillingMod>(),
+            name: "BillingModule",
+            imports,
+            providers: &[ProviderDescriptor {
+                name: "BillingService",
+                provides: || TypeId::of::<BillingService>(),
+                provider: || TypeId::of::<BillingService>(),
+                injects: no_deps,
+                inject_names: no_names,
+                injects_optional: no_deps,
+                inject_optional_names: no_names,
+                injects_per_request: no_per_request,
+                also_provides: provides_only_itself,
+            }],
+        };
+        let app = ModuleDescriptor {
+            module: || TypeId::of::<AppMod>(),
+            name: "AppModule",
+            imports: &[|| TypeId::of::<BillingMod>(), || TypeId::of::<UsersMod>()],
+            providers: &[],
+        };
+        let bound = BoundLayers::from([(
+            TypeId::of::<BillingService>(),
+            vec![(TypeId::of::<UsersService>(), "UsersService")],
+        )]);
+        let check = |billing: &ModuleDescriptor| {
+            validate_access_graph(
+                &[&app, billing, &users],
+                &[TypeId::of::<AppMod>()],
+                &global(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &bound,
+            )
+        };
+
+        let Err(AccessError::CrossModule(refused)) = check(&billing(&[])) else {
+            panic!("a layer from a module the host's never imports must be refused");
+        };
+        assert_eq!(
+            (refused.consumer, refused.dependency, refused.owner),
+            ("BillingService", "UsersService", "UsersModule"),
+        );
+        check(&billing(&[|| TypeId::of::<UsersMod>()]))
+            .expect("the import that licenses an injection licenses the layer");
     }
 
     #[test]
@@ -959,6 +1045,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &BoundLayers::new(),
         )
         .expect_err("reaching an unimported module must fail");
 
@@ -999,6 +1086,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &BoundLayers::new(),
         )
         .expect_err("a dependency no module provides must fail the boot");
 
@@ -1045,6 +1133,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &BoundLayers::new(),
         )
         .expect("a module outside the root's import tree is not validated");
     }
@@ -1058,6 +1147,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &BoundLayers::new(),
         )
         .expect("a root with no descriptor validates trivially");
     }

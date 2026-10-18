@@ -174,6 +174,7 @@ mod tests {
             QUEUE,
             options,
             TypeId::of::<Producer>,
+            &crate::testing::SITE,
             handler as JobHandler,
         );
         unsupported_by(&method, &NOTHING)

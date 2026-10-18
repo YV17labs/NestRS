@@ -294,6 +294,7 @@ async fn an_interceptor_on_the_processor_block_runs_around_each_of_its_jobs() {
 
 #[tokio::test]
 async fn an_interceptor_acknowledging_a_job_settles_it_without_running_it() {
+    let logs = nest_rs_testing::LogCapture::install();
     let outcome = consume::attempt(
         method("ViewedProcessor::acknowledged"),
         &mut delivery("acknowledged"),
@@ -304,6 +305,8 @@ async fn an_interceptor_acknowledging_a_job_settles_it_without_running_it() {
 
     assert!(matches!(outcome, AttemptOutcome::Ok), "{outcome:?}");
     assert_eq!(RAN.load(Ordering::SeqCst), 0, "the method never ran");
+    let said = logs.expect_one(nest_rs_queue::TARGET, "job acknowledged without running");
+    assert_eq!(said.field("attempt").as_deref(), Some("2"));
 }
 
 #[tokio::test]

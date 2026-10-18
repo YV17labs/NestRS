@@ -860,7 +860,7 @@ async fn run(
         }
         Ok(Ok(Ran::Done { method_ran })) => {
             if !method_ran {
-                tracing::debug!(target: TARGET, "job acknowledged without running");
+                tracing::debug!(target: TARGET, attempt, "job acknowledged without running");
             }
             (nest_rs_core::operation_log::OK, AttemptOutcome::Ok)
         }

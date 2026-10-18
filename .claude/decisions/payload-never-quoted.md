@@ -177,3 +177,8 @@ GraphQL grammar bounds.
   framework line or span carries async-graphql's message (its `tracing`
   feature is off). An `operationName` is the request's free text, not a parsed
   Name, and is said by kind.
+- **A task id is said by kind in a refusal, as a prompt's name is.** rmcp
+  3.5's `TaskManager`, the helper it offers a host writing `tasks/*`, refuses
+  a task it does not hold as `unknown task: <id>`; the edge answers `unknown
+  task`, matched on that wording against the id the request carried. The id
+  reaches neither the span nor the line: no convention names it.

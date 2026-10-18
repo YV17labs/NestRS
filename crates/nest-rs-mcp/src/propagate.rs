@@ -58,7 +58,10 @@ use tracing::Instrument;
 
 use crate::McpError;
 use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
-use crate::error::{method_not_found, prompt_not_found, refuses_method, refuses_prompt};
+use crate::error::{
+    method_not_found, prompt_not_found, refuses_method, refuses_prompt, refuses_task,
+    task_not_found,
+};
 use crate::guard::BoxFuture;
 use crate::registry::MountIndex;
 use nest_rs_core::__private::install_pending;
@@ -324,8 +327,7 @@ impl From<String> for Method {
 
 /// What an operation addressed, as the client named it.
 enum Addressed {
-    /// Nothing a convention records: the method names nothing, or what it
-    /// names no convention does (a task id).
+    /// Nothing: the method names nothing.
     Nothing,
     /// A tool.
     Tool(String),
@@ -333,6 +335,9 @@ enum Addressed {
     Prompt(String),
     /// A resource, by its URI.
     Resource(String),
+    /// A task, by its id, which no convention names: read only to say a
+    /// refusal of it by kind, never recorded.
+    Task(String),
 }
 
 impl Addressed {
@@ -340,7 +345,7 @@ impl Addressed {
     /// prompt or resource, their stated exception.
     fn spanned(&self) -> Option<&str> {
         match self {
-            Self::Nothing => None,
+            Self::Nothing | Self::Task(_) => None,
             Self::Tool(name) | Self::Prompt(name) | Self::Resource(name) => Some(name),
         }
     }
@@ -357,7 +362,7 @@ impl Addressed {
                     .unwrap_or_else(|| host.get_tool(name).is_some());
                 Some(if declared { name } else { operation_log::OTHER })
             }
-            Self::Nothing | Self::Prompt(_) | Self::Resource(_) => None,
+            Self::Nothing | Self::Prompt(_) | Self::Resource(_) | Self::Task(_) => None,
         }
     }
 
@@ -367,6 +372,7 @@ impl Addressed {
         match (method, self) {
             (Method::Custom(sent), _) if refuses_method(&error, sent) => method_not_found(),
             (_, Self::Prompt(name)) if refuses_prompt(&error, name) => prompt_not_found(error.data),
+            (_, Self::Task(id)) if refuses_task(&error, id) => task_not_found(),
             _ => error,
         }
     }
@@ -603,21 +609,20 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         Addressed::Nothing,
     );
 
-    // A task's id is the client's and no convention names it, so nothing records it.
     request_method!(
         get_task(request: GetTaskParams) -> GetTaskResult,
         GetTaskMethod::VALUE,
-        Addressed::Nothing,
+        Addressed::Task(request.task_id.clone()),
     );
     request_method!(
         update_task(request: UpdateTaskParams) -> (),
         UpdateTaskMethod::VALUE,
-        Addressed::Nothing,
+        Addressed::Task(request.task_id.clone()),
     );
     request_method!(
         cancel_task(request: CancelTaskParams) -> (),
         CancelTaskMethod::VALUE,
-        Addressed::Nothing,
+        Addressed::Task(request.task_id.clone()),
     );
 
     request_method!(

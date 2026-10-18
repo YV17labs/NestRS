@@ -6,7 +6,7 @@
 //! | Kind | Methods | Behaviour |
 //! |---|---|---|
 //! | **Listing** | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list` | Every host is asked; the entries are concatenated in registration order onto the first host's envelope. |
-//! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that declares the name, whatever it answers; failing that, offered to each host in turn until one does not answer *not-found* (a prompt: asked of each host whose own listing names it). |
+//! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that declares the name, whatever it answers; failing that, offered to each host in turn until one does not answer *not-found* — a task, until one holds it; a prompt, to the host whose own listing names it. |
 //! | **Broadcast** | `logging/setLevel`, every notification | Delivered to every host. |
 //! | **Declaration** | `initialize`, `discover`, `get_info`, `supported_protocol_versions` | The resolved [`ResolvedIdentity`] states the identity; capabilities are unioned, protocol versions intersected, instructions declared-or-joined. |
 //!
@@ -36,7 +36,7 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
 use crate::McpError;
-use crate::error::{AVAILABLE_PROMPTS, prompt_not_found};
+use crate::error::{AVAILABLE_PROMPTS, prompt_not_found, refuses_task};
 use crate::guard::BoxFuture;
 use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
@@ -134,11 +134,24 @@ impl CompositeHandler {
     where
         F: Fn(&'a dyn McpHost) -> BoxFuture<'a, Result<T, McpError>>,
     {
+        self.route_past(|_| false, call).await
+    }
+
+    /// [`route`](Self::route), a refusal `misses` reads also leaving the next
+    /// host its turn.
+    async fn route_past<'a, T, F>(
+        &'a self,
+        misses: impl Fn(&McpError) -> bool,
+        call: F,
+    ) -> Result<T, McpError>
+    where
+        F: Fn(&'a dyn McpHost) -> BoxFuture<'a, Result<T, McpError>>,
+    {
         let mut unhandled = None;
         for host in &self.hosts {
             match call(host.host.as_ref()).await {
                 Ok(value) => return Ok(value),
-                Err(err) if is_not_found(&err) => unhandled = Some(err),
+                Err(err) if is_not_found(&err) || misses(&err) => unhandled = Some(err),
                 Err(err) => return Err(err),
             }
         }
@@ -268,6 +281,28 @@ macro_rules! addressed {
             }
             self.route(|host| host.$name(request.clone(), context.clone()))
                 .await
+        }
+    };
+}
+
+/// One `tasks/*` method: routed as [`addressed!`] is, past a host whose
+/// `TaskManager` refuses the task as one it does not hold.
+macro_rules! addressed_task {
+    ($name:ident ( $req:ty ) -> $out:ty) => {
+        async fn $name(
+            &self,
+            request: $req,
+            context: RequestContext<RoleServer>,
+        ) -> Result<$out, McpError> {
+            if let Some(only) = self.single() {
+                return only.host.$name(request, context).await;
+            }
+            let task = request.task_id.clone();
+            self.route_past(
+                |refusal| refuses_task(refusal, &task),
+                |host| host.$name(request.clone(), context.clone()),
+            )
+            .await
         }
     };
 }
@@ -464,9 +499,9 @@ impl ServerHandler for CompositeHandler {
         }
     }
 
-    addressed!(get_task(GetTaskParams) -> GetTaskResult);
-    addressed!(update_task(UpdateTaskParams) -> ());
-    addressed!(cancel_task(CancelTaskParams) -> ());
+    addressed_task!(get_task(GetTaskParams) -> GetTaskResult);
+    addressed_task!(update_task(UpdateTaskParams) -> ());
+    addressed_task!(cancel_task(CancelTaskParams) -> ());
 
     addressed!(on_custom_request(CustomRequest) -> CustomResult);
 

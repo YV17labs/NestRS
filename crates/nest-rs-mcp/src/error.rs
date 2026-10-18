@@ -185,6 +185,21 @@ pub(crate) fn prompt_not_found(data: Option<serde_json::Value>) -> McpError {
     McpError::invalid_params("prompt not found", data)
 }
 
+/// Whether `error` is rmcp's `TaskManager` refusing `id`, a task it does not
+/// hold, in words quoting the id a client sent.
+pub(crate) fn refuses_task(error: &McpError, id: &str) -> bool {
+    error.code == ErrorCode::INVALID_PARAMS
+        && error.message.strip_prefix(UNKNOWN_TASK_QUOTED) == Some(id)
+}
+
+/// How rmcp's `TaskManager` opens its refusal of a task, the id following it.
+const UNKNOWN_TASK_QUOTED: &str = "unknown task: ";
+
+/// The refusal of a task no host holds, said by kind.
+pub(crate) fn task_not_found() -> McpError {
+    McpError::invalid_params("unknown task", None)
+}
+
 /// Whether `error` is rmcp's default answer to a custom method no host serves,
 /// whose message is the method as a client sent it.
 pub(crate) fn refuses_method(error: &McpError, method: &str) -> bool {

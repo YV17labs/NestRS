@@ -770,29 +770,11 @@ async fn run(
     let outcome = match input {
         // No edge deadline bounds developer code here: a handler that never
         // answers would hold its permit for as long as the process lives. The
-        // handler cuts its body at the deadline itself; past a unit's settle
-        // net beyond it, a commit never answered and may have landed.
-        Input::Payload(payload) => Ok({
-            let (deadline, timeout) = (context.deadline, context.timeout);
-            let net = context
-                .unit_of_work
-                .as_ref()
-                .map(|unit_of_work| unit_of_work.settle_net());
-            match tokio::time::timeout_at(
-                net.map_or(deadline, |net| deadline + net),
-                nest_rs_core::panic::contain(handler(payload, context)),
-            )
-            .await
-            {
-                Ok(caught) => caught,
-                Err(_) if net.is_some() => Ok(Err(JobError::unhonoured(
-                    nest_rs_database::Unhonoured::IN_DOUBT,
-                ))),
-                Err(_) => Ok(Err(JobError::retry(nest_rs_core::JobTimedOut::new(
-                    timeout,
-                )))),
-            }
-        }),
+        // handler's unit cuts its body at the deadline, and calls a commit
+        // still unanswered its settle net past it in doubt.
+        Input::Payload(payload) => {
+            Ok(nest_rs_core::panic::contain(handler(payload, context)).await)
+        }
         Input::Refused(refused) => Ok(Ok(Err(refused))),
         Input::Stalled { deliveries } => Err(Unrun::Stalled { deliveries }),
         Input::Unread { version, waited } => Err(Unrun::Unread { version, waited }),

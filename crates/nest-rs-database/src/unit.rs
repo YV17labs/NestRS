@@ -348,6 +348,40 @@ where
     Either::Right(ran.then(move |outcome| settle(open, outcome, ok, unhonoured, deadline)))
 }
 
+/// [`run_unit`] for a unit no edge deadline bounds — a queue attempt, a
+/// scheduled tick, a listener call — whose decorator's `timeout` is its
+/// deadline: `body` is cut at `deadline`, answered by `cut`, and the whole unit
+/// is waited on at most its binding's [`settle_net`](UnitOfWork::settle_net)
+/// past it. A unit still unsettled then holds a commit that never answered and
+/// may have landed: it is answered `unhonoured(Unhonoured::IN_DOUBT)`, never a
+/// retryable timeout. With no binding the body runs bare, cut alone.
+pub fn run_unit_bounded<T, B, C>(
+    unit: Option<&Arc<dyn UnitOfWork>>,
+    spec: UnitSpec,
+    deadline: Instant,
+    body: B,
+    ok: fn(&T) -> bool,
+    unhonoured: fn(Unhonoured) -> T,
+    cut: C,
+) -> impl Future<Output = T> + Send
+where
+    T: Send,
+    B: Future<Output = T> + Send,
+    C: FnOnce() -> T + Send,
+{
+    let net = unit.map(|binding| binding.settle_net());
+    let cut_body =
+        tokio::time::timeout_at(deadline, body).map(|answered| answered.unwrap_or_else(|_| cut()));
+    let ran = run_unit(unit, spec.with_deadline(deadline), cut_body, ok, unhonoured);
+    match net {
+        Some(net) => Either::Left(
+            tokio::time::timeout_at(deadline + net, ran)
+                .map(move |settled| settled.unwrap_or_else(|_| unhonoured(Unhonoured::IN_DOUBT))),
+        ),
+        None => Either::Right(ran),
+    }
+}
+
 /// Settle `open` on `outcome`, which a success the driver could not honour
 /// replaces.
 async fn settle<T>(

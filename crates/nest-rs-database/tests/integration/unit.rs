@@ -568,6 +568,92 @@ async fn a_commit_that_did_not_answer_in_time_fails_the_unit_in_doubt_never_retr
     };
 }
 
+/// A unit no edge deadline bounds, run through `run_unit_bounded` with its body
+/// answering `outcome` after `takes`, cut at one second.
+fn bounded<T: Send>(
+    binding: Option<&Arc<dyn UnitOfWork>>,
+    takes: Duration,
+    outcome: T,
+    cut: T,
+    unhonoured: fn(Unhonoured) -> T,
+    ok: fn(&T) -> bool,
+) -> impl Future<Output = T> + Send + use<'_, T> {
+    nest_rs_database::__private::run_unit_bounded(
+        binding,
+        spec(ExecutorScope::Job),
+        tokio::time::Instant::now() + Duration::from_secs(1),
+        async move {
+            tokio::time::sleep(takes).await;
+            outcome
+        },
+        ok,
+        unhonoured,
+        move || cut,
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_bounded_unit_cuts_its_body_at_its_deadline_as_its_edge_answers() {
+    for binding in [
+        None,
+        Some(Spawning::binding(Duration::ZERO, Settlement::Settled).0),
+    ] {
+        let started = tokio::time::Instant::now();
+        let answered = bounded(
+            binding.as_ref(),
+            Duration::from_secs(5),
+            Ok::<_, &str>(7),
+            Err("cut"),
+            |_| Err("unhonoured"),
+            Result::is_ok,
+        )
+        .await;
+        assert_eq!(answered, Err("cut"), "bound: {}", binding.is_some());
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_bounded_unit_still_unsettled_its_net_past_its_deadline_is_in_doubt() {
+    let (binding, ended) = Spawning::binding(Duration::from_secs(60), Settlement::Settled);
+    let started = tokio::time::Instant::now();
+    let answered = bounded(
+        Some(&binding),
+        Duration::from_millis(500),
+        Ok::<_, Unhonoured>(7),
+        Ok(0),
+        Err,
+        Result::is_ok,
+    )
+    .await;
+    assert_eq!(
+        answered,
+        Err(Unhonoured::IN_DOUBT),
+        "its commit never answered"
+    );
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(17),
+        "the deadline, then the binding's settle net"
+    );
+    assert!(!ended.load(Ordering::SeqCst), "nothing cut the commit");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_bounded_unit_settled_within_its_net_answers_its_own_outcome() {
+    let (binding, _) = Spawning::binding(Duration::from_secs(10), Settlement::Settled);
+    let answered = bounded(
+        Some(&binding),
+        Duration::from_millis(500),
+        Ok::<_, &str>(7),
+        Err("cut"),
+        |_| Err("unhonoured"),
+        Result::is_ok,
+    )
+    .await;
+    assert_eq!(answered, Ok(7), "a commit is never cut");
+}
+
 /// The input a stub driver's binding is built from, as a real driver reads its
 /// pool and config.
 struct StubDriver {

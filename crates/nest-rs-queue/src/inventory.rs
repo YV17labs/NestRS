@@ -9,7 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::Container;
-use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
+use nest_rs_database::__private::run_unit_bounded;
+use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec};
 
 use crate::checkpoint::CheckpointCell;
 use crate::{Attempt, Capabilities, Capability, JobError, ProcessOptions};
@@ -57,7 +58,8 @@ pub struct HandlerContext {
 /// `policy`, through the binding `context` carries: the unit names the job and
 /// the attempt, a success its driver could not honour fails the attempt with
 /// the driver's classification, and the body alone is cut at the attempt's
-/// deadline, failing it retryably, so a commit is never cut.
+/// deadline, failing it retryably, so a commit is never cut — and past the
+/// binding's settle net beyond it, a commit that never answered is in doubt.
 pub fn run_attempt<F>(
     context: HandlerContext,
     policy: TransactionPolicy,
@@ -73,18 +75,18 @@ where
         timeout,
         ..
     } = context;
-    let spec = UnitSpec::new(crate::unit::JOB, ExecutorScope::Job, policy)
-        .with_job(attempt.job_ref())
-        .with_deadline(deadline);
-    let cut = async move {
-        tokio::time::timeout_at(deadline, body)
-            .await
-            .unwrap_or_else(|_| Err(JobError::retry(nest_rs_core::JobTimedOut::new(timeout))))
-    };
+    let spec =
+        UnitSpec::new(crate::unit::JOB, ExecutorScope::Job, policy).with_job(attempt.job_ref());
     async move {
-        run_unit(unit_of_work.as_ref(), spec, cut, Result::is_ok, |why| {
-            Err(JobError::unhonoured(why))
-        })
+        run_unit_bounded(
+            unit_of_work.as_ref(),
+            spec,
+            deadline,
+            body,
+            Result::is_ok,
+            |why| Err(JobError::unhonoured(why)),
+            move || Err(JobError::retry(nest_rs_core::JobTimedOut::new(timeout))),
+        )
         .await
     }
 }

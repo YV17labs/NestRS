@@ -63,3 +63,11 @@ pub use unit::{
     BACKEND_REMEDY, JobRef, OpenUnit, Settlement, TransactionPolicy, UnitOfWork, UnitSpec,
     current_unit_of_work, provide_unit_of_work, run_unit,
 };
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's sibling crates. Not API: may change in any
+    //! release.
+
+    pub use crate::unit::run_unit_bounded;
+}

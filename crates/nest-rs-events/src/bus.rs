@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use nest_rs_core::tracing::Instrument;
-use nest_rs_database::{ExecutorScope, TransactionPolicy, Unhonoured, UnitSpec, run_unit};
+use nest_rs_database::__private::run_unit_bounded;
+use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitSpec};
 use parking_lot::RwLock;
 
 use crate::answer::ListenerAnswer;
@@ -187,26 +188,19 @@ async fn dispatch_one(
 /// started, never after the listeners queued before it.
 async fn run(policy: TransactionPolicy, timeout: Duration, body: ListenerFuture) -> Answered {
     let deadline = tokio::time::Instant::now() + timeout;
-    // The body alone is cut, so a commit never is.
-    let cut = async move {
-        tokio::time::timeout_at(deadline, body)
-            .await
-            .unwrap_or_else(|_| Err(Box::new(ListenerTimedOut::new(timeout))))
-    };
-    let Some(binding) = nest_rs_database::current_unit_of_work() else {
-        return cut.await;
-    };
+    let binding = nest_rs_database::current_unit_of_work();
     let scope = nest_rs_database::current_executor_scope().unwrap_or(ExecutorScope::Request);
-    let spec = UnitSpec::new(crate::unit::DISPATCH, scope, policy).with_deadline(deadline);
-    let net = binding.settle_net();
-    let unit = run_unit(Some(&binding), spec, cut, Result::is_ok, |why| {
-        Err(Box::new(why))
-    });
-    // A unit not settled within its binding's net past the deadline holds a
-    // commit that never answered, and may have landed.
-    tokio::time::timeout_at(deadline + net, unit)
-        .await
-        .unwrap_or_else(|_| Err(Box::new(Unhonoured::IN_DOUBT)))
+    let spec = UnitSpec::new(crate::unit::DISPATCH, scope, policy);
+    run_unit_bounded(
+        binding.as_ref(),
+        spec,
+        deadline,
+        body,
+        Result::is_ok,
+        |why| Err(Box::new(why)),
+        move || Err(Box::new(ListenerTimedOut::new(timeout))),
+    )
+    .await
 }
 
 /// One listener's `events.dispatch` line, filed exactly once — by the end the

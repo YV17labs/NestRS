@@ -80,3 +80,68 @@ async fn the_line_names_a_known_method() {
     );
     assert_eq!(line.field("method").as_deref(), Some("GET"));
 }
+
+/// A self-mount answering a method outside the conventions' set, as a WebDAV
+/// mount answers `PROPFIND`.
+struct DavMount;
+
+impl nest_rs_core::Discoverable for DavMount {
+    fn register(builder: nest_rs_core::ContainerBuilder) -> nest_rs_core::ContainerBuilder {
+        builder.attach_meta::<DavMount, nest_rs_http::HttpEndpointMeta>(
+            nest_rs_http::HttpEndpointMeta::new(
+                &crate::PUBLIC_MOUNT,
+                "/dav",
+                "dav",
+                |_c, routes| {
+                    routes.route(
+                        nest_rs_http::Method::from_bytes(b"PROPFIND").expect("a method token"),
+                        "/dav",
+                        crate::answering("listed"),
+                    );
+                },
+            )
+            .owned_by("DavMount"),
+        )
+    }
+}
+
+#[module(providers = [DavMount])]
+struct DavModule;
+
+/// A method a route registers is the server's own word: the line and the span
+/// name it as the route does, and the override the HTTP conventions ask of an
+/// instrumentation that could turn a valid method into `_OTHER` is that route.
+/// Any other extension method is still `_OTHER`.
+#[tokio::test]
+async fn a_method_a_route_registers_is_named_as_registered() {
+    for (sent, named) in [("PROPFIND", "PROPFIND"), ("MARKED", "_OTHER")] {
+        let logs = LogCapture::install();
+        let client = boot::<DavModule>().await;
+
+        client
+            .request(
+                nest_rs_http::Method::from_bytes(sent.as_bytes()).expect("a method token"),
+                "/dav",
+            )
+            .send()
+            .await;
+
+        let line = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_http::unit::REQUEST.name(),
+        );
+        assert_eq!(line.field("method").as_deref(), Some(named), "{sent}");
+        let span = logs.expect_span("nest_rs::http", "http.request");
+        assert_eq!(
+            span.field("http.request.method").as_deref(),
+            Some(named),
+            "{sent}"
+        );
+        assert_eq!(
+            span.field("http.request.method_original").is_some(),
+            named == nest_rs_core::operation_log::OTHER,
+            "{sent}: {:?}",
+            span.fields,
+        );
+    }
+}

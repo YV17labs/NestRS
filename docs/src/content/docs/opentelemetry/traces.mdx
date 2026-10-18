@@ -110,8 +110,8 @@ are things nothing else can supply:
 Everything else belongs to the transport and exists whether or not this crate is
 installed: the span itself, its W3C trace context, the `traceresponse` response
 header, and the access log. The span carries the OTel HTTP semantic-convention attributes:
-`http.request.method` (a method the conventions know, spelled exactly, or
-`_OTHER`), `url.path` (the addressed path), `http.route` (the
+`http.request.method` (a method the conventions know or a route registers,
+spelled exactly, or `_OTHER`), `url.path` (the addressed path), `http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
 `http.response.status_code`, `http.response.body.size` and
 `user_agent.original`. It carries no `client.address`, which the conventions
@@ -126,7 +126,7 @@ own collector, so it keeps them: a stated exception to the rule that no line
 and no reply quotes a client's value, which the
 [access line](/opentelemetry/logs/#access-log) follows. A header the span
 records beyond that set is one that parsed under its grammar: a `traceparent`
-the transport did not continue is recorded as the 55 hex characters it parsed
+the transport did not continue is recorded as the four hex fields it parsed
 to, and an `X-Request-Id` from a trusted proxy only in the shape a proxy mints
 it — a UUID, or 16 to 64 hex digits, as nginx's `$request_id` is. Anything
 else is not recorded.

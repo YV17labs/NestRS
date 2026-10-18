@@ -10,7 +10,9 @@
 //! behind the same peer and recorded as a captured header, never an identity
 //! (`.claude/decisions/trace-context-over-request-id.md`).
 
+use std::borrow::Cow;
 use std::fmt::Write;
+use std::sync::Arc;
 
 use http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use nest_rs_core::operation_log::OTHER;
@@ -106,14 +108,40 @@ fn is_minted_id(id: &str) -> bool {
     (16..=64).contains(&id.len()) && hex(id)
 }
 
-/// `method` as the HTTP conventions name it: one they know — RFC 9110's, PATCH
-/// (RFC 5789) and QUERY — spelled exactly, methods being case-sensitive;
-/// [`OTHER`] for any other, a token the client chose.
-///
-/// No override list: the router serves no method outside this set, so a
-/// method an app answers is never `_OTHER`.
-pub(crate) fn method_name(method: &Method) -> &'static str {
-    match method.as_str() {
+/// The methods a line and a span name as sent: the HTTP conventions' known set
+/// — RFC 9110's, PATCH (RFC 5789) and QUERY — and every other method a route
+/// registers, the server's own word for it. The conventions ask an
+/// instrumentation that could turn a valid method into [`OTHER`] for a way to
+/// override the set; a route declaring its method is that way.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct KnownMethods(Arc<[Method]>);
+
+impl KnownMethods {
+    /// The conventions' set, and each of `registered` outside it.
+    pub(crate) fn with(registered: impl IntoIterator<Item = Method>) -> Self {
+        let mut beyond: Vec<Method> = Vec::new();
+        for method in registered {
+            if conventional(&method).is_none() && !beyond.contains(&method) {
+                beyond.push(method);
+            }
+        }
+        Self(beyond.into())
+    }
+
+    /// `method` as a line names it: spelled exactly, methods being
+    /// case-sensitive, or [`OTHER`] for a token only the client chose.
+    pub(crate) fn name(&self, method: &Method) -> Cow<'static, str> {
+        match conventional(method) {
+            Some(known) => Cow::Borrowed(known),
+            None if self.0.contains(method) => Cow::Owned(method.as_str().to_owned()),
+            None => Cow::Borrowed(OTHER),
+        }
+    }
+}
+
+/// `method` as the conventions' known set spells it, if it is one.
+fn conventional(method: &Method) -> Option<&'static str> {
+    Some(match method.as_str() {
         "CONNECT" => "CONNECT",
         "DELETE" => "DELETE",
         "GET" => "GET",
@@ -124,8 +152,8 @@ pub(crate) fn method_name(method: &Method) -> &'static str {
         "PUT" => "PUT",
         "QUERY" => "QUERY",
         "TRACE" => "TRACE",
-        _ => OTHER,
-    }
+        _ => return None,
+    })
 }
 
 /// Report the trace this service used back to the caller.
@@ -174,8 +202,8 @@ pub(crate) fn request_span(
     req: &Request,
     correlation: &Correlation,
     origin: ClientOrigin,
+    method: &str,
 ) -> tracing::Span {
-    let method = method_name(req.method());
     let span = nest_rs_core::operation_span!(
         crate::unit::REQUEST,
         correlation,
@@ -216,11 +244,12 @@ pub(crate) fn request_span(
 
 /// Name the span for what the router matched: `http.route` is the template,
 /// `otel.name` is `{method} {route}`, or the method alone when nothing matched;
-/// a method the conventions do not know is `HTTP` there, as they spell it.
+/// `method` is the [`KnownMethods`] name, and `HTTP` there for [`OTHER`], as the
+/// conventions spell it.
 ///
 /// Never the raw path: one scanner would fill a tracing backend with span names.
-pub(crate) fn name_route(span: &tracing::Span, method: &Method, route: Option<&str>) {
-    let method = match method_name(method) {
+pub(crate) fn name_route(span: &tracing::Span, method: &str, route: Option<&str>) {
+    let method = match method {
         OTHER => "HTTP",
         known => known,
     };
@@ -420,19 +449,22 @@ mod tests {
         }
     }
 
-    /// The conventions' known methods, spelled exactly; any other is `_OTHER`.
+    /// The conventions' known methods and the ones a route registers, spelled
+    /// exactly; any other is `_OTHER`.
     #[test]
     fn a_method_is_named_from_the_known_set_or_other() {
-        for known in [
-            "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE",
+        let method = |name: &str| Method::from_bytes(name.as_bytes()).expect("a method token");
+        let known = KnownMethods::with([method("PROPFIND"), Method::GET]);
+        for name in [
+            "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY",
+            "TRACE", "PROPFIND",
         ] {
-            let method = Method::from_bytes(known.as_bytes()).expect("a method token");
-            assert_eq!(method_name(&method), known);
+            assert_eq!(known.name(&method(name)), name);
         }
-        for other in ["get", "Get", "PROPFIND", "MARKED"] {
-            let method = Method::from_bytes(other.as_bytes()).expect("a method token");
-            assert_eq!(method_name(&method), OTHER, "{other}");
+        for other in ["get", "Get", "propfind", "MKCOL", "MARKED"] {
+            assert_eq!(known.name(&method(other)), OTHER, "{other}");
         }
+        assert_eq!(KnownMethods::default().name(&method("PROPFIND")), OTHER);
     }
 
     #[test]

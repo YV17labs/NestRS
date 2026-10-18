@@ -44,6 +44,7 @@ use crate::matched::MatchedRoute;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
+use crate::trace_context::KnownMethods;
 use crate::{response_body, trace_context};
 
 /// What a request whose unit of work did not settle within its `net` past the
@@ -136,6 +137,8 @@ pub(crate) struct EdgeEndpoint<E> {
     /// Decides whether `X-Forwarded-For` and `X-Request-Id` may be believed,
     /// whether or not a line is filed.
     trusted_proxies: Arc<[IpAddr]>,
+    /// The methods the line and the span name as sent.
+    known_methods: KnownMethods,
     drain: Arc<Drain>,
 }
 
@@ -178,8 +181,16 @@ impl<E> EdgeEndpoint<E> {
             counts_body,
             access_log,
             trusted_proxies,
+            known_methods: KnownMethods::default(),
             drain,
         }
+    }
+
+    /// The edge naming, beside the HTTP conventions' methods, those the route
+    /// table registers.
+    pub(crate) fn knowing(mut self, known_methods: KnownMethods) -> Self {
+        self.known_methods = known_methods;
+        self
     }
 
     fn finish(&self, mut resp: Response) -> Response {
@@ -317,13 +328,14 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         let correlation = trace_context::resolve(&req, origin);
         // Never gated: it carries `trace_id` onto every event and declares the
         // `actor_id` field the authn guard records into.
-        let span = trace_context::request_span(&req, &correlation, origin);
-        let method = req.method().clone();
+        // Named once, as the line and the span name it.
+        let method = self.known_methods.name(req.method());
+        let span = trace_context::request_span(&req, &correlation, origin, &method);
         // Filled by the table's entry the router matched.
         let matched = MatchedRoute::default();
         let log = self
             .access_log
-            .then(|| AccessLog::open(&req, &matched, arrival.into_std()));
+            .then(|| AccessLog::open(method.clone(), &matched, arrival.into_std()));
         req.extensions_mut().insert(matched.clone());
 
         // Built here, not in `handle`: a streaming body outlives that future.

@@ -25,9 +25,10 @@ use crate::origin::{OriginChecked, OriginPolicy};
 use crate::poem_adapter::{CorsPolicy, PoemAdapter};
 use crate::problem::{Normalized, ResolvedErrors};
 use crate::route_template::RouteTemplate;
-use crate::routes::{HttpRoutes, Wrap};
+use crate::routes::{Address, HttpRoutes, Wrap};
 use crate::server::Server;
 use crate::tls::{HttpTls, ListenerTls};
+use crate::trace_context::KnownMethods;
 use crate::versioning::VersionedEndpoint;
 
 /// The `Server` value a transport sends when [`HttpConfig::server_header`](crate::HttpConfig::server_header) is on.
@@ -369,19 +370,23 @@ impl HttpTransport {
         timeout: Option<Duration>,
         headers: Vec<(HeaderName, HeaderValue)>,
         normalize: bool,
+        known_methods: KnownMethods,
     ) -> BoxEndpoint {
-        BoxEndpoint::new(EdgeEndpoint::new(
-            inner,
-            container.clone(),
-            timeout,
-            self.max_body_bytes,
-            self.deadlines.body_read,
-            headers,
-            normalize,
-            // Compression replaces the request body but not its `Content-Length`.
-            self.compression,
-            Arc::clone(&self.drain),
-        ))
+        BoxEndpoint::new(
+            EdgeEndpoint::new(
+                inner,
+                container.clone(),
+                timeout,
+                self.max_body_bytes,
+                self.deadlines.body_read,
+                headers,
+                normalize,
+                // Compression replaces the request body but not its `Content-Length`.
+                self.compression,
+                Arc::clone(&self.drain),
+            )
+            .knowing(known_methods),
+        )
     }
 }
 
@@ -662,7 +667,10 @@ impl Transport for HttpTransport {
         // a mount's path needs no declaration, and a versioned catch-all must not
         // swallow it.
         let self_mounts = routes.take_self_mounted();
-        let mut router = PoemAdapter::router(routes.into_addresses())?;
+        let addresses = routes.into_addresses();
+        let known_methods =
+            KnownMethods::with(addresses.iter().flat_map(Address::methods).cloned());
+        let mut router = PoemAdapter::router(addresses)?;
         // In front of routing, after the global prefix: it rewrites the path a
         // controller's route is registered at. `rewrites()`, not `Some`: wrapping
         // the URI strategy would refuse every `/v{n}/…`.
@@ -728,7 +736,14 @@ impl Transport for HttpTransport {
         let timeout = self.request_timeout.take();
 
         let endpoint = if metas.is_empty() && fuse_normalize {
-            self.edge(router, container, timeout, edge_headers, true)
+            self.edge(
+                router,
+                container,
+                timeout,
+                edge_headers,
+                true,
+                known_methods,
+            )
         } else {
             // The router answers 404/405 with an `Err`, which would short-circuit an
             // interceptor's `next.run(req).await?`; rendering at `ERROR_RESOLVE` lets them see it.
@@ -748,7 +763,14 @@ impl Transport for HttpTransport {
                 .fold(BoxEndpoint::new(ResolvedErrors(inner)), |endpoint, meta| {
                     meta.wrap(container, endpoint)
                 });
-            let endpoint = self.edge(endpoint, container, timeout, edge_headers, fuse_normalize);
+            let endpoint = self.edge(
+                endpoint,
+                container,
+                timeout,
+                edge_headers,
+                fuse_normalize,
+                known_methods,
+            );
             if fuse_normalize {
                 endpoint
             } else {

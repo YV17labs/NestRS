@@ -336,14 +336,11 @@ mod tests {
     #[tokio::test]
     async fn a_body_that_panics_ends_with_an_error_and_files_its_line_panic() {
         let logs = nest_rs_testing::LogCapture::install();
-        let request = crate::Request::builder()
-            .uri(http::Uri::from_static("/feed"))
-            .finish();
         let carried = carry(
             RequestContinuation::new(None, Correlation::minted(None)),
             tracing::Span::none(),
             Some(AccessLog::open(
-                &request,
+                std::borrow::Cow::Borrowed("GET"),
                 &crate::matched::MatchedRoute::default(),
                 std::time::Instant::now(),
             )),

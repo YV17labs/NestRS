@@ -92,8 +92,8 @@ spelled it.
   the value tells them nothing the kind does not.
 - **The request's line carries the server's values only**: the route
   template, the method as OpenTelemetry's HTTP conventions know it — RFC
-  9110's, `PATCH` and `QUERY`, spelled exactly — or `_OTHER`, the status, the
-  bytes and the duration. `user_agent` left it: free text, which a log
+  9110's, `PATCH` and `QUERY`, spelled exactly, and any a route registers —
+  or `_OTHER`, the status, the bytes and the duration. `user_agent` left it: free text, which a log
   pipeline keeps whole.
 - **Every edge's line names what a client addressed by the server's own
   name for it**, and `_OTHER` — the conventions' word for a method they do not
@@ -120,18 +120,19 @@ spelled it.
   backend reads those names, and the span goes to the deployment's own
   collector, never to a client or a shared log. Beyond that set, a header the span records is
   recorded only once it parsed under its grammar — a `traceparent` the
-  transport did not continue as the 55 hex characters it parsed to, an
+  transport did not continue as the four hex fields it parsed to, an
   `X-Request-Id`, which no specification gives a grammar, only in the shape a
   proxy mints it, bounded hex (a UUID, or 16 to 64 hex digits) — and
   otherwise not at all: a token admits any word a client writes through a
   proxy that forwards the header. The span still records no `url.query` and
   no `client.address`, which the conventions also ask for: those stay out on
   the rule above and on personal data.
-- **No override list for the known methods.** The conventions ask an
-  instrumentation that could turn a valid method into `_OTHER` to let the list
-  be overridden. The router serves no method outside the known set, so a method
-  an app answers is never `_OTHER`; a verb the router learns joins the set in
-  that change.
+- **The route table is the override of the known methods.** The conventions
+  ask an instrumentation that could turn a valid method into `_OTHER` to let
+  the list be overridden, and name the variable an override by environment
+  takes. A method a route registers outside the set — a mount answering
+  `PROPFIND` — is the server's own word, so the line and the span name it as
+  registered; no variable is read, the declaration being in code already.
 - **Refused:** a hash or a prefix of a value to keep it greppable — a short
   value's hash is a dictionary away from the value, and a prefix is the value's
   start; a switch putting the values back on the line, whose place is already

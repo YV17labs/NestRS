@@ -19,20 +19,18 @@
 //! [`CANCELLED`]: nest_rs_core::operation_log::CANCELLED
 //! [`PANIC`]: nest_rs_core::operation_log::PANIC
 
+use std::borrow::Cow;
 use std::time::Instant;
 
-use http::Method;
 use nest_rs_core::RequestContinuation;
 
-use crate::trace_context::method_name;
-
 use crate::matched::MatchedRoute;
-use crate::request::Request;
 
 /// A request being timed. Opened before the inner tree runs, filed once the
 /// response body has been written.
 pub(crate) struct AccessLog {
-    method: &'static str,
+    /// The [`KnownMethods`](crate::trace_context::KnownMethods) name.
+    method: Cow<'static, str>,
     /// The slot the router notes the matched template in; read when the line
     /// is filed.
     matched: MatchedRoute,
@@ -40,12 +38,12 @@ pub(crate) struct AccessLog {
 }
 
 impl AccessLog {
-    /// Snapshot what only the *request* can answer, before it is consumed.
-    /// `start` is the instant the request arrived, which its budget counts
-    /// from too.
-    pub(crate) fn open(req: &Request, matched: &MatchedRoute, start: Instant) -> Self {
+    /// Snapshot what only the *request* can answer, before it is consumed:
+    /// its method as the line names it. `start` is the instant the request
+    /// arrived, which its budget counts from too.
+    pub(crate) fn open(method: Cow<'static, str>, matched: &MatchedRoute, start: Instant) -> Self {
         Self {
-            method: method_name(req.method()),
+            method,
             matched: matched.clone(),
             start,
         }
@@ -104,7 +102,7 @@ pub(crate) struct Unanswered<'a> {
     log: Option<AccessLog>,
     continuation: &'a RequestContinuation,
     span: &'a tracing::Span,
-    method: &'a Method,
+    method: &'a str,
     matched: &'a MatchedRoute,
     answered: bool,
 }
@@ -114,7 +112,7 @@ impl<'a> Unanswered<'a> {
         log: Option<AccessLog>,
         continuation: &'a RequestContinuation,
         span: &'a tracing::Span,
-        method: &'a Method,
+        method: &'a str,
         matched: &'a MatchedRoute,
     ) -> Self {
         Self {
@@ -162,13 +160,9 @@ mod tests {
 
     use super::*;
 
-    /// A line opened on `/reports/sk_live_51`, the router having matched
-    /// `matched`.
+    /// A line opened on a request the router matched `matched` for.
     fn held(matched: &MatchedRoute) -> (AccessLog, RequestContinuation) {
-        let req = Request::builder()
-            .uri(http::Uri::from_static("/reports/sk_live_51"))
-            .finish();
-        let log = AccessLog::open(&req, matched, Instant::now());
+        let log = AccessLog::open(Cow::Borrowed("GET"), matched, Instant::now());
         let continuation = RequestContinuation::new(None, Correlation::minted(None));
         (log, continuation)
     }
@@ -196,7 +190,7 @@ mod tests {
             Some(log),
             &continuation,
             &span,
-            &Method::GET,
+            "GET",
             &route,
         ));
 
@@ -224,9 +218,6 @@ mod tests {
             log.emit(&tracing::Span::none(), 200, 2, None);
             let line = the_line(&logs);
             assert_eq!(line.field("route").as_deref(), named);
-            for (field, value) in &line.fields {
-                assert!(!value.contains("sk_live"), "{field} = {value}");
-            }
         }
     }
 
@@ -285,7 +276,7 @@ mod tests {
         let (log, continuation) = held(&matched);
         let span = tracing::Span::none();
         let answered =
-            Unanswered::hold(Some(log), &continuation, &span, &Method::GET, &matched).answered();
+            Unanswered::hold(Some(log), &continuation, &span, "GET", &matched).answered();
         assert!(answered.is_some());
         logs.expect_none(
             nest_rs_core::operation_log::TARGET,

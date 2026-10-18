@@ -88,6 +88,18 @@ pub(crate) struct Address {
     pub(crate) dispatch: Dispatch,
 }
 
+impl Address {
+    /// The methods this address answers by name; none for an entry answering
+    /// every method.
+    pub(crate) fn methods(&self) -> impl Iterator<Item = &Method> {
+        let named: &[(Method, Leaf)] = match &self.dispatch {
+            Dispatch::Any(_) => &[],
+            Dispatch::Methods(methods) => methods,
+        };
+        named.iter().map(|(method, _)| method)
+    }
+}
+
 /// What answers at one address.
 pub(crate) enum Dispatch {
     /// One entry for every method: it dispatches on the method itself.

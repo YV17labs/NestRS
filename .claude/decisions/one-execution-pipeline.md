@@ -200,5 +200,5 @@ dispatched inside `run_unit` over the binding the transport resolves at mount;
 - **A request carrying units runs on the pool**, its body uncut, whatever its
   method: `/graphql` and `/mcp` operations settle their own work.
 - **A self-mount folds no handler stage** until its edge's own units move
-  (GraphQL, MCP): the app's global interceptors reach a route's handler
-  alone.
+  (GraphQL, MCP): the app's global interceptors reach a route's handler,
+  never a self-mount's request.

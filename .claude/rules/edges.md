@@ -289,10 +289,11 @@ the visible opening.
 
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
 `nest_rs::core::{Interceptor, ExceptionFilter}`, `#[interceptor]` (handler
-stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP runs on
-it; GraphQL, WS, MCP and the job edges move onto it each in its own change, a
-`Site` per dispatch site, and until then refuse `#[use_interceptors]` and
-`#[use_exception_filters]` by name and run none of the app's.
+stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP, a job's
+attempt, a tick and a listener call run on it; GraphQL, WS and MCP move onto it
+each in its own change, a `Site` per dispatch site, and until then refuse
+`#[use_interceptors]` and `#[use_exception_filters]` by name and run none of
+the app's.
 
 ## Posture inside an operation
 

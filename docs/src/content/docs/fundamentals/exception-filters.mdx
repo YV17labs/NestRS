@@ -34,12 +34,14 @@ pub trait ExceptionFilter: Layer {
 
 <Aside type="caution">
 **HTTP runs them today**, on a route, a self-mount's request (`/graphql`,
-`/mcp`, a WS upgrade) and what the router answers itself. Inside GraphQL an
-operation's error is shaped by [its own error handling](/graphql/errors/),
-inside WS by the [message error frame](/websockets/messages/), until those
-edges move onto the same pipeline during 7.0; until then
-`#[use_exception_filters]` beside their decorators is a compile error naming
-the edge.
+`/mcp`, a WS upgrade) and what the router answers itself, and so do
+[jobs](/queue/#layers-around-a-job), [ticks](/schedule/#layers-around-a-tick)
+and [listener calls](/events/dispatch/#layers-around-a-listener-call). Inside
+GraphQL an operation's error is shaped by
+[its own error handling](/graphql/errors/), inside WS by the
+[message error frame](/websockets/messages/), until those edges move onto the
+same pipeline during 7.0; until then `#[use_exception_filters]` beside their
+decorators is a compile error naming the edge.
 </Aside>
 
 ## Install

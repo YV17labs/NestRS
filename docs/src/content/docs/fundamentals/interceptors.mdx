@@ -7,11 +7,12 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-An interceptor wraps a unit: an HTTP request a route serves, today, and every
-other edge's unit as each moves onto the same pipeline. It sees the unit before
-the handler runs, holds the outcome after, and in between calls
-`next.run(cx)` to run whatever sits inside it — another interceptor, and
-eventually the handler. One call, both sides of the boundary.
+An interceptor wraps a unit: an HTTP request a route serves, a job's attempt,
+a tick and a listener call today, and every other edge's unit as each moves
+onto the same pipeline. It sees the unit before the handler runs, holds the
+outcome after, and in between calls `next.run(cx)` to run whatever sits inside
+it — another interceptor, and eventually the handler. One call, both sides of
+the boundary.
 
 `Interceptor` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait in
 `nest_rs::core`, edge-neutral: it reads the unit through its
@@ -30,10 +31,13 @@ of the unit or answering it mints one: an interceptor that does neither does
 not compile. `next.run(cx)` consumes `next`, so the rest of the unit runs once.
 
 <Aside type="caution">
-**HTTP routes run them today.** GraphQL, WebSocket, MCP and the job edges move
-onto the same pipeline during 7.0; until an edge has, `#[use_interceptors]`
-beside its decorator is a compile error naming the edge, and the app's global
-interceptors do not reach its units.
+**HTTP routes, [jobs](/queue/#layers-around-a-job),
+[ticks](/schedule/#layers-around-a-tick) and
+[listener calls](/events/dispatch/#layers-around-a-listener-call) run them
+today.** GraphQL, WebSocket and MCP move onto the same pipeline during 7.0;
+until an edge has, `#[use_interceptors]` beside its decorator is a compile
+error naming the edge, and the app's global interceptors do not reach its
+units.
 </Aside>
 
 Same vocabulary as a guard, different shape:
@@ -87,7 +91,7 @@ macro no longer matches it (`E0195`).
 
 | Scope | Binding | Runs |
 |-------|---------|------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main` | around every route's handler, after its guards |
+| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main` | around every route's handler, after its guards, and every job, tick and listener call |
 | **Controller** | `#[use_interceptors(Tracer)]` on the struct | around each of its handlers |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb | around that handler |
 

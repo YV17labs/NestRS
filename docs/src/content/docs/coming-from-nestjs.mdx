@@ -55,6 +55,7 @@ resolver — carries across intact.
 | `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
 | `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
 | Hooks run by DI level, each level at once (`Promise.all`) | dependencies first, one hook at a time, and shutdown in exact reverse ([order](/fundamentals/lifecycle/#ordering-and-failure)) |
+| `onModuleDestroy()` / `beforeApplicationShutdown(signal)`, run before the server closes | `#[on_module_destroy]` / `#[before_application_shutdown]`, run once every transport has drained; work due at the signal waits on `stopping()` on an injected `Arc<AppLifecycle>` ([why](/fundamentals/lifecycle/#the-five-phases)) |
 | `onApplicationShutdown(signal)` | `#[on_application_shutdown]`; the signal is `cause()` on an injected `Arc<AppLifecycle>` (`StopCause::Terminate`, `Interrupt`, …) |
 | `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
 | `ServeStaticModule.forRoot({ rootPath })` | `StaticFilesModule::for_root(StaticFilesConfig { root, .. })` — or `for_root(Embedded::of::<WebAssets>())` for a folder embedded in the binary |
@@ -239,6 +240,7 @@ does not do.
 | `configure(consumer)` middleware | The word covers two shapes. Gating is a [Guard](/fundamentals/guards/), wrapping is an [Interceptor](/fundamentals/interceptors/), body normalization is a [Pipe](/fundamentals/pipes/), CORS and security headers are `HttpConfig`. [Middleware](/fundamentals/middleware/) maps every role to its home |
 | `@Global()` | What a seed or a factory makes is [app-global](/fundamentals/modules/#what-is-global) — every config and connection, as `TypeOrmModule.forRoot` and `ConfigModule.forRoot({ isGlobal: true })` are in NestJS. A provider a module lists is import-gated, and no flag opens it everywhere: the import list is its declaration, the one the boot-time access-graph check reads |
 | `app.enableShutdownHooks()` | Never opt-in. `#[on_module_destroy]` and `#[on_application_shutdown]` always run, best-effort, so one failing cleanup doesn't skip the rest |
+| Terminus's `gracefulShutdownTimeoutMs`, Fastify's `return503OnClosing` | The transport stops accepting at the signal and answers what it already took, so no request arrives to be answered `503`; taking the replica out of rotation first is the platform's — a Kubernetes `preStop` sleep, an ECS deregistration ([leaving the load balancer first](/fundamentals/lifecycle/#leaving-the-load-balancer-first)) |
 | `@Injectable()` on everything | `#[injectable]` marks a provider the container builds; a controller, resolver or gateway is already one through its own decorator |
 
 ## The parameter type is the decorator

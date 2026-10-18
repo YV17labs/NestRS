@@ -103,7 +103,19 @@ both run against the assembled container. The two names exist so you
 can express "everyone's `on_module_init` finishes before anyone's
 `on_application_bootstrap` starts": late hooks see the side effects of
 early ones. The three shutdown phases give the same staged unwind in
-reverse-intent order.
+reverse-intent order: each module tears its own down, dependents first, then
+`before_application_shutdown` does what spans modules, then
+`on_application_shutdown` runs last, before the resources close.
+
+**They start once every transport has stopped**, never at the signal: a
+request, a job or a socket message still running uses the providers they tear
+down, so none is torn down under it. The one exception is a transport still
+serving past the bound it states: the kernel abandons it there, and the hooks
+start anyway ([the way down](#the-way-down)). Work due at the signal itself —
+stop starting new work, end a loop — waits on
+[`stopping()`](#where-the-app-stands) instead, and taking the replica out of
+the load balancer is the platform's
+([leaving the load balancer first](#leaving-the-load-balancer-first)).
 
 ## Method shape
 

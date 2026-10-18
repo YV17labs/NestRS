@@ -442,8 +442,11 @@ bound (held by `nest-rs-core`'s and `nest-rs-database`'s suites). The init phase
 `init` or `run` reaches them first; an init hook that fails or panics aborts the
 boot naming it, then the shutdown phases run for every host and the resources
 close, and the app refuses its init again (`InitFailedError`).
-The app's state and stop cause are `AppLifecycle`'s; the kernel alone moves
-them, and a loop a provider runs beside the app stops at its `stopping()`.
+The shutdown phases run once every transport has stopped or been abandoned at
+its bound, never at the signal (`decisions/shutdown-hooks-after-transports.md`,
+held by `nest-rs-core`'s lifecycle suite): the app's state and stop cause are
+`AppLifecycle`'s, the kernel alone moves them, and a loop a provider runs
+beside the app stops at its `stopping()`.
 Shutdown hooks are best-effort — a failure or panic is logged at
 `error` and the next runs — and the three shutdown phases **share one budget**,
 never a bound per hook (`k` stuck hooks would cost `k` bounds). A hook still

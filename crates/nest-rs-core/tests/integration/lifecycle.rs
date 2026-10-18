@@ -1,15 +1,22 @@
 //! Covers `src/lifecycle.rs` — hook shapes, a host bound as `dyn Trait`, the
-//! order hosts run in, shutdown hooks that fail, hang or panic, and each hook
-//! run as one `lifecycle.hook` unit of work.
+//! order hosts run in, the shutdown phases after every transport stopped or
+//! was abandoned, shutdown hooks that fail, hang or panic, and each hook run as
+//! one `lifecycle.hook` unit of work.
 
 use nest_rs_core::{operation_log, target};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use nest_rs_core::__private::{HookFuture, LifecycleUnitOfWork};
-use nest_rs_core::{App, LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, hooks, injectable, module};
+use nest_rs_core::{
+    App, Container, ContainerBuilder, LifecyclePhase, Module, Registering, SHUTDOWN_HOOKS_TIMEOUT,
+    Transport, hooks, injectable, module,
+};
 use nest_rs_testing::{CapturedEvent, LogCapture};
+use tokio_util::sync::CancellationToken;
+
+use crate::Failing;
 
 /// Every `lifecycle.hook` line `logs` holds.
 fn hook_lines(logs: &LogCapture) -> Vec<CapturedEvent> {
@@ -798,6 +805,222 @@ async fn a_failed_boot_tears_down_within_the_budget_and_returns_the_init_error()
     );
     let abandoned = logs.expect_one(target::LIFECYCLE, ABANDONED);
     assert_eq!(abandoned.field("method").as_deref(), Some("deregister"));
+}
+
+/// How long [`UnwindsAfterItsStop`] takes to return once its stop fires.
+const UNWIND: Duration = Duration::from_secs(2);
+
+/// When [`UnwindsAfterItsStop`]'s `serve` returned.
+static UNWOUND_AT: Mutex<Option<tokio::time::Instant>> = Mutex::new(None);
+
+/// Each shutdown hook's phase, with what it read of [`UNWOUND_AT`] as it started.
+static HOOKS_SAW: Mutex<Vec<(LifecyclePhase, Option<tokio::time::Instant>)>> =
+    Mutex::new(Vec::new());
+
+fn unwound_at() -> Option<tokio::time::Instant> {
+    *UNWOUND_AT.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn saw(phase: LifecyclePhase) {
+    let unwound = unwound_at();
+    HOOKS_SAW
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((phase, unwound));
+}
+
+/// Serves until its stop, then takes [`UNWIND`] to return, as a transport
+/// finishing what it still runs does.
+struct UnwindsAfterItsStop;
+
+#[async_trait::async_trait]
+impl Transport for UnwindsAfterItsStop {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, stop: CancellationToken) -> anyhow::Result<()> {
+        stop.cancelled().await;
+        tokio::time::sleep(UNWIND).await;
+        *UNWOUND_AT.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(tokio::time::Instant::now());
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        UNWIND * 2
+    }
+}
+
+struct UnwindsBesideFailingModule;
+
+impl Module for UnwindsBesideFailingModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_transport(|_| Ok(UnwindsAfterItsStop))
+            .provide_transport(|_| Ok(Failing))
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct TearsDownAfterServing;
+
+#[hooks]
+impl TearsDownAfterServing {
+    #[on_module_destroy]
+    async fn destroy(&self) {
+        saw(LifecyclePhase::OnModuleDestroy);
+    }
+
+    #[before_application_shutdown]
+    async fn before(&self) {
+        saw(LifecyclePhase::BeforeApplicationShutdown);
+    }
+
+    #[on_application_shutdown]
+    async fn shutdown(&self) {
+        saw(LifecyclePhase::OnApplicationShutdown);
+    }
+}
+
+#[module(imports = [UnwindsBesideFailingModule], providers = [TearsDownAfterServing])]
+struct TearsDownAfterServingModule;
+
+/// The three shutdown phases start once every transport's `serve` returned,
+/// the slowest included, never at the stop: no hook tears down what a unit
+/// still serving uses.
+#[tokio::test(start_paused = true)]
+async fn no_shutdown_hook_starts_before_every_transport_has_returned_from_serve() {
+    let started = tokio::time::Instant::now();
+    App::new::<TearsDownAfterServingModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("the failing transport stopped the app");
+
+    let saw = HOOKS_SAW
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert!(
+        saw.iter().all(|(_, unwound)| unwound.is_some()),
+        "a shutdown hook started before every transport returned from `serve`: {saw:?}",
+    );
+    let unwound = unwound_at().expect("the unwinding transport returned once its stop fired");
+    assert!(
+        unwound - started >= UNWIND,
+        "the transport unwound after the stop, took {:?}",
+        unwound - started,
+    );
+    assert_eq!(
+        saw,
+        [
+            (LifecyclePhase::OnModuleDestroy, Some(unwound)),
+            (LifecyclePhase::BeforeApplicationShutdown, Some(unwound)),
+            (LifecyclePhase::OnApplicationShutdown, Some(unwound)),
+        ],
+        "each shutdown phase ran once, in order",
+    );
+}
+
+/// The bound [`IgnoresItsStop`] states.
+const IGNORED_BOUND: Duration = Duration::from_secs(3);
+
+/// Each shutdown hook's phase, with the instant it started.
+static STARTED_PAST_THE_BOUND: Mutex<Vec<(LifecyclePhase, tokio::time::Instant)>> =
+    Mutex::new(Vec::new());
+
+fn started(phase: LifecyclePhase) {
+    STARTED_PAST_THE_BOUND
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((phase, tokio::time::Instant::now()));
+}
+
+/// Never returns from `serve`, its stop ignored.
+struct IgnoresItsStop;
+
+#[async_trait::async_trait]
+impl Transport for IgnoresItsStop {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _stop: CancellationToken) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+
+    fn stop_bound(&self) -> Duration {
+        IGNORED_BOUND
+    }
+}
+
+struct IgnoresBesideFailingModule;
+
+impl Module for IgnoresBesideFailingModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_transport(|_| Ok(IgnoresItsStop))
+            .provide_transport(|_| Ok(Failing))
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct TearsDownPastTheBound;
+
+#[hooks]
+impl TearsDownPastTheBound {
+    #[on_module_destroy]
+    async fn destroy(&self) {
+        started(LifecyclePhase::OnModuleDestroy);
+    }
+
+    #[before_application_shutdown]
+    async fn before(&self) {
+        started(LifecyclePhase::BeforeApplicationShutdown);
+    }
+
+    #[on_application_shutdown]
+    async fn shutdown(&self) {
+        started(LifecyclePhase::OnApplicationShutdown);
+    }
+}
+
+#[module(imports = [IgnoresBesideFailingModule], providers = [TearsDownPastTheBound])]
+struct TearsDownPastTheBoundModule;
+
+/// A transport still serving past its bound and the settle is abandoned there,
+/// and the three shutdown phases start then, never before it.
+#[tokio::test(start_paused = true)]
+async fn the_shutdown_phases_start_once_a_transport_ignoring_its_stop_is_abandoned() {
+    let app = App::new::<TearsDownPastTheBoundModule>().expect("the module boots");
+    let stopped = tokio::time::Instant::now();
+
+    tokio::time::timeout(Duration::from_secs(60), app.run())
+        .await
+        .expect("the kernel does not wait on the transport past its bound")
+        .expect_err("the failing transport stopped the app");
+
+    let abandoned = stopped + IGNORED_BOUND + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
+    let started = STARTED_PAST_THE_BOUND
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert!(
+        started.iter().all(|(_, at)| *at >= abandoned),
+        "a shutdown hook started before the transport was abandoned at {abandoned:?}: {started:?}",
+    );
+    assert_eq!(
+        started.iter().map(|(phase, _)| *phase).collect::<Vec<_>>(),
+        [
+            LifecyclePhase::OnModuleDestroy,
+            LifecyclePhase::BeforeApplicationShutdown,
+            LifecyclePhase::OnApplicationShutdown,
+        ],
+        "each shutdown phase ran once, in order, past the abandonment",
+    );
 }
 
 #[injectable]

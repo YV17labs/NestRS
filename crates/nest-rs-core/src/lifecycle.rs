@@ -51,7 +51,13 @@ pub const SHUTDOWN_HOOKS_TIMEOUT: Duration = Duration::from_secs(5);
 pub const SHUTDOWN_SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Lifecycle phase at which a hook runs. Init phases run before serving;
-/// shutdown phases after the transports stop.
+/// shutdown phases once every transport has returned from `serve`, or was
+/// abandoned past its stop bound, never at the signal: a unit its transport
+/// stopped in time meets no provider torn down under it.
+///
+/// Work due at the signal itself — to stop starting new work, or end a loop —
+/// waits on [`AppLifecycle::stopping`] and is joined in a shutdown hook; the
+/// cause is [`AppLifecycle::cause`], readable in every one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LifecyclePhase {
@@ -59,11 +65,13 @@ pub enum LifecyclePhase {
     OnModuleInit,
     /// Second init phase — app-wide setup once every module has initialized.
     OnApplicationBootstrap,
-    /// First shutdown phase — per-module teardown after transports stop.
+    /// First shutdown phase — each module's own teardown, dependents first,
+    /// once every transport has stopped or been abandoned.
     OnModuleDestroy,
-    /// Shutdown notification, before the app-wide shutdown work runs.
+    /// Second shutdown phase — cross-module work once every module tore down,
+    /// such as releasing what several of them shared.
     BeforeApplicationShutdown,
-    /// Final shutdown phase — the last hooks to run before the process exits.
+    /// Last shutdown phase; the resources the modules opened close after it.
     OnApplicationShutdown,
 }
 

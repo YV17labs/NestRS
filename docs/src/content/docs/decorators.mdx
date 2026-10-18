@@ -29,7 +29,7 @@ whether you type it, not how the compiler resolves it.
 | `#[on_module_init]` | method | Runs once after wiring, before serving | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_application_bootstrap]` | method | Runs once after every module init, before serving | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_module_destroy]` | method | Runs on shutdown after transports stop | [Lifecycle](/fundamentals/lifecycle/) |
-| `#[before_application_shutdown]` | method | Runs before the application begins shutting down | [Lifecycle](/fundamentals/lifecycle/) |
+| `#[before_application_shutdown]` | method | Runs on shutdown once every module-destroy hook has run | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_application_shutdown]` | method | Runs last during shutdown, best-effort | [Lifecycle](/fundamentals/lifecycle/) |
 
 ## HTTP

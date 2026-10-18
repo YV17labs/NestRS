@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -9,9 +9,13 @@ use async_trait::async_trait;
 use croner::Cron;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use nest_rs_core::__private::{
+    GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, Tail,
+    caught_problem, declare_handler, declare_site, dispatch, new_unit_context, settled,
+};
 use nest_rs_core::{
-    Container, Correlation, Discovery, JobTimedOut, ReachableProviders, Transport, Unanswered,
-    inventory, within,
+    Container, Correlation, Discovery, Failure, Handler, JobTimedOut, Outcome, Posture,
+    ReachableProviders, RequestScope, Transport, Unanswered, UnitContext, inventory, within,
 };
 use nest_rs_database::__private::run_unit_bounded;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec};
@@ -22,7 +26,7 @@ use tracing::Instrument;
 
 use crate::{
     BACKEND_REMEDY, CronJobMeta, Occurrence, OccurrenceClaim, OccurrenceLock, Replicas, RunFn,
-    ScheduledMethod, Trigger,
+    ScheduleView, ScheduledMethod, Trigger,
 };
 
 /// The shortest time an occurrence stays claimed: past the skew between two
@@ -67,14 +71,39 @@ enum Job {
 }
 
 /// What one fire runs, how long it may last, how its data-layer work is
-/// settled, and how many replicas fire it.
+/// settled, how many replicas fire it, and the site its decorator declared.
 #[derive(Clone, Copy)]
 struct Task {
     run: RunFn,
     timeout: Duration,
     transaction: TransactionPolicy,
     replicas: Replicas,
+    site: &'static Site,
 }
+
+/// The handler a job attached by hand as a [`CronJobMeta`] runs under: no
+/// decorator declared its site, so it binds no layer of its own and declares
+/// nothing, and the app's layers run around it.
+static ATTACHED: Handler = declare_handler(HandlerDeclaration {
+    unit: crate::unit::TICK,
+    host: TypeId::of::<CronJobMeta>(),
+    host_name: "CronJobMeta",
+    method: "",
+    address: "",
+    posture: Posture::System,
+    meta: MetaLevels::default,
+});
+
+/// The site of every job attached by hand.
+static ATTACHED_SITE: Site = declare_site(
+    &ATTACHED,
+    SiteDeclaration {
+        layers: SiteLayers::default,
+        global: GlobalLayers::ALL,
+        guard_stage: None,
+        class_gate: None,
+    },
+);
 
 /// A job, kept split so logs filter on the provider or the method alone, and
 /// the `key` that pins what it claims under.
@@ -188,13 +217,15 @@ const KEY_NEEDS_ONE: &str = "a key pins what a job firing once claims its occurr
      this job fires on every replica and claims none — declare `replicas = \"one\"` beside it, or \
      remove the key";
 
-impl From<&CronJobMeta> for Task {
-    fn from(meta: &CronJobMeta) -> Self {
+impl Task {
+    /// The task `meta` declares, run on `site`.
+    fn of(meta: &CronJobMeta, site: &'static Site) -> Self {
         Self {
             run: meta.run,
             timeout: meta.timeout,
             transaction: meta.transaction,
             replicas: meta.replicas,
+            site,
         }
     }
 }
@@ -237,7 +268,7 @@ impl Scheduler {
         }
     }
 
-    fn resolve(meta: &Arc<CronJobMeta>) -> Result<Job> {
+    fn resolve(meta: &Arc<CronJobMeta>, site: &'static Site) -> Result<Job> {
         let id = JobId {
             origin: meta.origin,
             provider: meta.provider,
@@ -265,7 +296,7 @@ impl Scheduler {
                 Job::Interval {
                     id,
                     period,
-                    task: Task::from(&**meta),
+                    task: Task::of(meta, site),
                 }
             }
             Trigger::Timeout(delay) => {
@@ -279,7 +310,7 @@ impl Scheduler {
                 Job::Timeout {
                     id,
                     delay,
-                    task: Task::from(&**meta),
+                    task: Task::of(meta, site),
                 }
             }
             Trigger::Cron { expr, tz } => {
@@ -294,7 +325,7 @@ impl Scheduler {
                     id,
                     schedule: Box::new(schedule),
                     tz,
-                    task: Task::from(&**meta),
+                    task: Task::of(meta, site),
                 }
             }
         })
@@ -315,7 +346,7 @@ impl Transport for Scheduler {
         let mut jobs: Vec<Job> = discovery
             .meta::<CronJobMeta>()
             .iter()
-            .map(|d| Scheduler::resolve(&d.meta))
+            .map(|d| Scheduler::resolve(&d.meta, &ATTACHED_SITE))
             .collect::<Result<Vec<_>>>()?;
         let reachable = container.get::<ReachableProviders>();
         for entry in inventory::iter::<ScheduledMethod>() {
@@ -342,7 +373,7 @@ impl Transport for Scheduler {
                 replicas: entry.replicas,
                 key: entry.key,
             });
-            jobs.push(Scheduler::resolve(&synthesized)?);
+            jobs.push(Scheduler::resolve(&synthesized, entry.site)?);
         }
 
         // Two jobs under one `Provider::method` would file lines nobody can tell
@@ -373,6 +404,11 @@ impl Transport for Scheduler {
             }
         }
 
+        // Composed once, from the final container, so a layer a job binds and
+        // nothing provides fails the boot; every tick reads them back.
+        for job in &jobs {
+            job.task().site.chains(container)?;
+        }
         self.jobs = jobs;
         self.lock = lock;
         for job in &self.jobs {
@@ -432,6 +468,8 @@ impl Transport for Scheduler {
 
         let runner = Runner {
             unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
+            scope: (!container.has_dynamic_scopes())
+                .then(|| Arc::new(RequestScope::new(container.clone()))),
             container,
             lock: self.lock,
         };
@@ -583,6 +621,9 @@ fn millis(duration: Duration) -> u64 {
 struct Runner {
     container: Container,
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
+    /// The request scope every tick shares when no provider is request-scoped
+    /// or transient; each opens its own otherwise.
+    scope: Option<Arc<RequestScope>>,
     lock: Option<Arc<dyn OccurrenceLock>>,
 }
 
@@ -1388,49 +1429,97 @@ impl Runner {
             method = id.method,
             occurrence,
         );
-        let scope = Arc::new(nest_rs_core::RequestScope::new(self.container.clone()));
+        let scope = self
+            .scope
+            .clone()
+            .unwrap_or_else(|| Arc::new(RequestScope::new(self.container.clone())));
         // Opened outside the run: a tick stopped at the shutdown bound is dropped
         // with this future, and the line's `Drop` says so.
         let line = TickLine::open(id, task.replicas, occurrence, span.clone());
-        nest_rs_core::with_request_scope(Some(scope), correlation, self.fire_inner(id, task, line))
-            .instrument(span)
-            .await
+        nest_rs_core::with_request_scope(
+            Some(scope),
+            correlation,
+            self.fire_inner(id, task, occurrence, line),
+        )
+        .instrument(span)
+        .await
     }
 
-    async fn fire_inner(&self, id: JobId, task: Task, line: TickLine) {
-        // A panic would otherwise end this job's schedule while the process
-        // reports healthy; the run starts inside the catch too.
+    async fn fire_inner(&self, id: JobId, task: Task, occurrence: Option<u64>, line: TickLine) {
+        let chains = match task.site.chains(&self.container) {
+            Ok(chains) => chains,
+            Err(refused) => {
+                line.file(nest_rs_core::operation_log::ERROR);
+                tracing::error!(
+                    target: crate::TARGET,
+                    provider = id.provider,
+                    method = id.method,
+                    error = %refused,
+                    "scheduled job failed",
+                );
+                return;
+            }
+        };
         let timeout = task.timeout;
-        // A replica runs one occurrence at a time, so a call that never answers
-        // would skip every later one for as long as the process lives.
+        let deadline = Instant::now() + timeout;
+        let occurred = occurrence.map(|ms| UNIX_EPOCH + Duration::from_millis(ms));
+        let mut view = ScheduleView::new(id.key().into(), occurred, task.replicas);
+        let mut tail = TickTail {
+            run: task.run,
+            container: &self.container,
+            ran: false,
+        };
+        // A panic would otherwise end this job's schedule while the process
+        // reports healthy; the run starts inside the catch too. A replica runs
+        // one occurrence at a time, so a call that never answers would skip
+        // every later one for as long as the process lives.
         let outcome = nest_rs_core::panic::contain(run_unit_bounded(
             self.unit_of_work.as_ref(),
             UnitSpec::new(crate::unit::TICK, ExecutorScope::Job, task.transaction),
-            Instant::now() + timeout,
-            async { (task.run)(&self.container).await },
+            deadline,
+            async {
+                let mut cx = new_unit_context(task.site.handler(), &mut view, None, Some(deadline));
+                dispatch(&mut cx, &chains, &mut tail).await
+            },
             Result::is_ok,
             // A transaction that could not settle wrote nothing: a failed tick.
             // Its retryability is reported, not acted on: a schedule has no budget.
-            |why| Err(anyhow::Error::new(why)),
-            move || Err(anyhow::Error::new(JobTimedOut::new(timeout))),
+            |why| Err(Failure::from(why)),
+            move || Err(Failure::from(JobTimedOut::new(timeout))),
         ))
         .await;
         line.file(match &outcome {
-            Ok(Ok(())) => nest_rs_core::operation_log::OK,
+            Ok(Ok(_)) => nest_rs_core::operation_log::OK,
             Ok(Err(_)) => nest_rs_core::operation_log::ERROR,
             Err(_) => nest_rs_core::operation_log::PANIC,
         });
         match outcome {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => tracing::error!(
+            Ok(Ok(_)) if !tail.ran => tracing::debug!(
                 target: crate::TARGET,
                 provider = id.provider,
                 method = id.method,
-                error = %nest_rs_core::error_message(&*err),
-                retryable = err
-                    .downcast_ref::<Unhonoured>()
+                "scheduled job skipped by a layer",
+            ),
+            Ok(Ok(_)) => {}
+            // A layer that answered the failure expected it: no error to page on.
+            Ok(Err(failure)) if failure.is_answered() || caught_problem(&failure).is_some() => {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    provider = id.provider,
+                    method = id.method,
+                    error = %nest_rs_core::error_message(failure.error()),
+                    "scheduled job failed; a layer answered it",
+                );
+            }
+            Ok(Err(failure)) => tracing::error!(
+                target: crate::TARGET,
+                provider = id.provider,
+                method = id.method,
+                error = %nest_rs_core::error_message(failure.error()),
+                retryable = failure
+                    .find::<Unhonoured>()
                     .map(|why| why.retryable)
-                    .or_else(|| err.is::<JobTimedOut>().then_some(true)),
+                    .or_else(|| failure.find::<JobTimedOut>().map(|_| true)),
                 "scheduled job failed",
             ),
             Err(panic) => nest_rs_core::contained_panic!(
@@ -1443,6 +1532,23 @@ impl Runner {
                 // downcast inside `panic_message` would miss.
             ),
         }
+    }
+}
+
+/// The last step of a tick's pipeline: the job's own run, called once.
+struct TickTail<'a> {
+    run: RunFn,
+    container: &'a Container,
+    ran: bool,
+}
+
+impl Tail for TickTail<'_> {
+    async fn call(&mut self, _: &mut UnitContext<'_>) -> Outcome {
+        self.ran = true;
+        (self.run)(self.container)
+            .await
+            .map(|()| settled())
+            .map_err(Failure::new)
     }
 }
 
@@ -1571,6 +1677,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::new(PanicsAnswering)),
         };
         let id = JobId {
@@ -1639,6 +1746,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::new(Granting)),
         };
         let id = JobId {
@@ -1652,6 +1760,7 @@ mod tests {
             timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
+            site: &ATTACHED_SITE,
         };
         let instant_ms = epoch_millis(wall_clock()) - 61_000;
 
@@ -1761,7 +1870,7 @@ mod tests {
             "Mars/Olympus_Mons",
         ];
         for name in CORPUS {
-            let boot = Scheduler::resolve(&cron_in(name));
+            let boot = Scheduler::resolve(&cron_in(name), &ATTACHED_SITE);
             assert_eq!(
                 boot.is_ok(),
                 jiff_tzdb::get(name).is_some(),
@@ -1813,6 +1922,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::new(GrantingAfterAStall)),
         };
         let id = JobId {
@@ -1826,6 +1936,7 @@ mod tests {
             timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
+            site: &ATTACHED_SITE,
         };
         // Late, but further from the hold's end than two clocks may disagree —
         // until the claim is answered.
@@ -1944,6 +2055,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::new(PanicsWhenCalled)),
         };
         let id = JobId {
@@ -1957,6 +2069,7 @@ mod tests {
             timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
+            site: &ATTACHED_SITE,
         };
         let now_ms = epoch_millis(wall_clock());
 
@@ -2008,6 +2121,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),
@@ -2023,6 +2137,7 @@ mod tests {
             timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
+            site: &ATTACHED_SITE,
         };
         let instant_ms = epoch_millis(wall_clock());
 
@@ -2060,6 +2175,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),
@@ -2110,6 +2226,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::clone(&lock) as Arc<dyn OccurrenceLock>),
         };
         let job = Job::Interval {
@@ -2125,6 +2242,7 @@ mod tests {
                 timeout: nest_rs_core::JOB_TIMEOUT,
                 transaction: TransactionPolicy::Pool,
                 replicas: Replicas::One,
+                site: &ATTACHED_SITE,
             },
         };
         let token = CancellationToken::new();
@@ -2191,6 +2309,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::new(GrantingAtShutdown {
                 shutdown: shutdown.clone(),
             })),
@@ -2206,6 +2325,7 @@ mod tests {
             timeout: nest_rs_core::JOB_TIMEOUT,
             transaction: TransactionPolicy::Pool,
             replicas: Replicas::One,
+            site: &ATTACHED_SITE,
         };
         let instant_ms = epoch_millis(wall_clock());
 
@@ -2239,6 +2359,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build().expect("the container builds"),
             unit_of_work: None,
+            scope: None,
             lock: Some(Arc::new(NeverAnswering {
                 claims: std::sync::atomic::AtomicUsize::new(0),
             })),

@@ -3,12 +3,11 @@
 //! `nest-rs-database`, `nest-rs-pipes` and `nest-rs-queue`, so the umbrella's
 //! `queue` feature must pull all four.
 
-use nest_rs::core::{
-    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
-    injectable, input,
-};
+use nest_rs::core::{injectable, input};
 use nest_rs::pipes::Valid;
 use nest_rs::queue::{Attempt, Checkpoint, QueueView, processor, queue};
+
+use crate::pipeline::{HygieneUnitAudit, HygieneUnitRefusal};
 
 #[input]
 #[derive(Clone)]
@@ -38,48 +37,22 @@ pub struct HygieneProcessor;
 /// A value `#[meta]` declares, read by type.
 pub struct HygieneLimit(pub u32);
 
-/// An interceptor `#[use_interceptors]` binds around a job, reading its view.
-#[injectable]
-#[derive(Default)]
-pub struct HygieneJobAudit;
-
-impl Layer for HygieneJobAudit {}
-
-#[async_trait]
-impl Interceptor for HygieneJobAudit {
-    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-        let _ = cx.switch_to::<QueueView>().map(QueueView::processor);
-        next.run(cx).await
-    }
-}
-
-/// An exception filter `#[use_exception_filters]` binds on a job.
-#[injectable]
-#[derive(Default)]
-pub struct HygieneJobRefusal;
-
-impl Layer for HygieneJobRefusal {}
-
-#[async_trait]
-impl ExceptionFilter for HygieneJobRefusal {
-    type Exception = dyn std::error::Error + Send + Sync;
-
-    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
-        Caught::Declined
-    }
+/// `QueueView`'s path through the umbrella.
+pub fn processor_of(view: &QueueView) -> &'static str {
+    view.processor()
 }
 
 #[processor]
 #[meta(HygieneLimit(100))]
-#[use_interceptors(HygieneJobAudit)]
-#[use_exception_filters(HygieneJobRefusal)]
+#[use_interceptors(HygieneUnitAudit)]
+#[use_exception_filters(HygieneUnitRefusal)]
 impl HygieneProcessor {
     /// `Valid<T>` reaches `nest-rs-pipes`; `transactional = false` names
     /// `TransactionPolicy` through `nest-rs-database`.
     #[process(queue = HygieneQueue, retries = 1, transactional = false)]
     #[meta(HygieneLimit(10))]
-    #[use_interceptors(HygieneJobAudit)]
-    #[use_exception_filters(HygieneJobRefusal)]
+    #[use_interceptors(HygieneUnitAudit)]
+    #[use_exception_filters(HygieneUnitRefusal)]
     async fn transcode(&self, job: Valid<HygieneCommand>) -> nest_rs::core::anyhow::Result<()> {
         let _ = job.into_inner().file;
         Ok(())

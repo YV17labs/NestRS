@@ -129,9 +129,6 @@ const NO_CALLER: &str =
 const WORKER_PIPES: &str = "a job's payload, a tick and an event take per-argument pipes alone \
      — bind `Piped<P, T>` or `Valid<T>` on the argument";
 
-/// A listener's outcome, until it can fail.
-const LISTENER_FILTERS: &str = "a listener returns nothing a filter could answer";
-
 /// GraphQL's variables meet the global pipes at the request.
 const GRAPHQL_PIPES: &str = "a GraphQL operation's variables are folded once per request — bind \
      `Piped<P, T>` or `Valid<T>` on the argument";
@@ -179,10 +176,11 @@ pub fn cell(pair: &DecoratorPair, scope: LayerScope, attribute: LayerAttribute) 
         }
         (P::Processor | P::Scheduled | P::Listeners, _, A::UsePipes) => Refused(WORKER_PIPES),
         (P::Processor | P::Scheduled | P::Listeners, _, A::UseFilters) => Refused(FILTERS),
-        (P::Listeners, _, A::UseExceptionFilters) => Refused(LISTENER_FILTERS),
-        (P::Scheduled, _, A::UseExceptionFilters)
-        | (P::Scheduled | P::Listeners, _, A::UseInterceptors) => Pending,
-        (P::Processor, _, A::UseInterceptors | A::UseExceptionFilters) => Built,
+        (
+            P::Processor | P::Scheduled | P::Listeners,
+            _,
+            A::UseInterceptors | A::UseExceptionFilters,
+        ) => Built,
         (P::Processor | P::Scheduled | P::Listeners, _, A::Meta) => Built,
     }
 }
@@ -392,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_unit_takes_no_guard_and_no_scoped_pipe() {
+    fn a_worker_unit_takes_its_layers_but_no_guard_and_no_scoped_pipe() {
         use crate::pair::{LISTENERS, PROCESSOR, SCHEDULED};
         for pair in [&PROCESSOR, &SCHEDULED, &LISTENERS] {
             for scope in SCOPES {
@@ -403,17 +401,15 @@ mod tests {
                 ] {
                     assert!(matches!(cell(pair, scope, attribute), Cell::Refused(_)));
                 }
-                assert_eq!(cell(pair, scope, LayerAttribute::Meta), Cell::Built);
+                for attribute in [
+                    LayerAttribute::UseInterceptors,
+                    LayerAttribute::UseExceptionFilters,
+                    LayerAttribute::Meta,
+                ] {
+                    assert_eq!(cell(pair, scope, attribute), Cell::Built);
+                }
             }
         }
-        assert_eq!(
-            cell(
-                &LISTENERS,
-                LayerScope::Method,
-                LayerAttribute::UseExceptionFilters
-            ),
-            Cell::Refused(LISTENER_FILTERS),
-        );
     }
 
     #[test]

@@ -29,6 +29,7 @@ mod replicas;
 mod scheduler;
 mod trigger;
 pub mod unit;
+mod view;
 
 pub use error::OccurrenceLockError;
 pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
@@ -40,6 +41,7 @@ pub use replicas::Replicas;
 pub use nest_rs_database;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};
+pub use view::ScheduleView;
 
 /// Orchestrator on a provider's `impl` block: each `#[every]`, `#[after]` or
 /// `#[cron]` method in it is a job the [`Scheduler`] fires.

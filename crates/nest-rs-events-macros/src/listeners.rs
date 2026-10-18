@@ -1,6 +1,7 @@
 //! `#[listeners]`: per `#[on_event]` method, a free `wire` fn and a
 //! `ListenerMethod` inventory entry.
 
+use nest_rs_codegen::layers::{LayerScope, take_layers};
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -44,8 +45,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let provider_name = provider_ident.unraw().to_string();
     let provider_snake = snake_case(&provider_name);
 
-    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
-        Ok(values) => values,
+    let host_layers = match take_layers(&pair::LISTENERS, LayerScope::Host, &mut item.attrs) {
+        Ok(layers) => layers,
         Err(err) => return err.to_compile_error().into(),
     };
     let mut emissions: Vec<TokenStream2> = Vec::new();
@@ -96,10 +97,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let declaration = proc_macro2::Literal::usize_unsuffixed(declaration_index);
         declaration_index += 1;
         let cfgs = cfg_attrs(&method.attrs);
-        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
-            Ok(values) => values,
-            Err(err) => return err.to_compile_error().into(),
-        };
+        let method_layers =
+            match take_layers(&pair::LISTENERS, LayerScope::Method, &mut method.attrs) {
+                Ok(layers) => layers,
+                Err(err) => return err.to_compile_error().into(),
+            };
         handler_consts.push(nest_rs_codegen::handler_const(
             &nest_rs_codegen::HandlerSite {
                 unit: quote!(::nest_rs_events::unit::DISPATCH),
@@ -108,11 +110,21 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 method: &method_ident,
                 address: quote!(::core::stringify!(#event_ty)),
                 posture: nest_rs_codegen::SitePosture::System,
-                host_meta: nest_rs_codegen::HostMeta::Values(&host_meta),
-                method_meta: &metas,
+                host_meta: nest_rs_codegen::HostMeta::Values(&host_layers.meta),
+                method_meta: &method_layers.meta,
                 cfgs: &cfgs,
             },
         ));
+        let site = nest_rs_codegen::ProviderSite {
+            self_ty: &self_ty,
+            method: &method_ident,
+            host: &host_layers,
+            method_layers: &method_layers,
+            cfgs: &cfgs,
+        };
+        handler_consts.push(nest_rs_codegen::site_const(&site));
+        emissions.push(nest_rs_codegen::host_layers_entry(&site));
+        let site_ref = nest_rs_codegen::site_ref(&self_ty, &method_ident);
         let call = await_if_async(
             &method.sig,
             quote!(<#self_ty>::#method_ident(&__provider, __event)),
@@ -129,7 +141,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             fn #wire_ident(
                 __container: &::nest_rs_core::Container,
                 __bus: &::nest_rs_events::EventBus,
-            ) {
+            ) -> ::nest_rs_core::anyhow::Result<()> {
                 let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
                     .expect(::std::concat!(
                         "listeners provider `",
@@ -139,6 +151,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     ));
                 ::nest_rs_events::__private::subscribe_named::<#event_ty, _, _>(
                     __bus,
+                    __container,
+                    #site_ref,
                     #qualified_name,
                     #policy,
                     #timeout,
@@ -149,7 +163,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             #answered
                         }
                     },
-                );
+                )
             }
 
             #(#cfgs)*

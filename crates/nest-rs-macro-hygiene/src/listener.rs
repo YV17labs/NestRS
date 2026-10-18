@@ -1,7 +1,10 @@
-//! `#[listeners]` + `#[on_event]`.
+//! `#[listeners]` + `#[on_event]`, with the layers a listener call takes on its
+//! block and its method.
 
 use nest_rs::core::injectable;
-use nest_rs::events::listeners;
+use nest_rs::events::{EventsView, listeners};
+
+use crate::pipeline::{HygieneUnitAudit, HygieneUnitRefusal};
 
 /// A bus event: plain `Clone`, no serde.
 #[derive(Clone)]
@@ -27,11 +30,20 @@ pub struct HygieneListener;
 /// A value `#[meta]` declares, read by type.
 pub struct HygieneLimit(pub u32);
 
+/// `EventsView`'s path through the umbrella.
+pub fn listener_of(view: &EventsView) -> &'static str {
+    view.listener()
+}
+
 #[listeners]
 #[meta(HygieneLimit(100))]
+#[use_interceptors(HygieneUnitAudit)]
+#[use_exception_filters(HygieneUnitRefusal)]
 impl HygieneListener {
     #[on_event]
     #[meta(HygieneLimit(10))]
+    #[use_interceptors(HygieneUnitAudit)]
+    #[use_exception_filters(HygieneUnitRefusal)]
     async fn on_hygiene(&self, event: HygieneEvent) {
         let _ = event.label;
     }

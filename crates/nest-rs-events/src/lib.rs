@@ -25,11 +25,15 @@ mod bus;
 mod error;
 mod inventory;
 mod module;
+#[cfg(test)]
+mod testing;
 pub mod unit;
+mod view;
 
 pub use bus::EventBus;
 pub use inventory::ListenerMethod;
 pub use module::{EventsModule, NO_BUS_REPORT};
+pub use view::EventsView;
 
 #[doc(hidden)]
 pub mod __private {

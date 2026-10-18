@@ -23,6 +23,11 @@ pub type RunFn =
 
 /// The metadata one running job carries, attached directly through
 /// `attach_meta::<…, CronJobMeta>` or built from each [`ScheduledMethod`].
+///
+/// A job attached by hand declares no site of its own: it binds no layer and
+/// no `#[meta]`, while the app's interceptors and exception filters run around
+/// it as around any tick, and its [`ScheduleView`](crate::ScheduleView) names
+/// it.
 pub struct CronJobMeta {
     /// `module_path!()` of the code declaring the job; its crate opens the job's
     /// identity unless `key` pins one.
@@ -79,6 +84,10 @@ pub struct ScheduledMethod {
     pub replicas: Replicas,
     /// The identity pinned by the `key` on its `#[every]` / `#[cron]`.
     pub key: Option<&'static str>,
+    /// The dispatch site its decorator declared, with the layers its method
+    /// and its block bind. Not API: written by `#[scheduled]` alone.
+    #[doc(hidden)]
+    pub site: &'static nest_rs_core::__private::Site,
 }
 
 ::nest_rs_core::inventory::collect!(ScheduledMethod);

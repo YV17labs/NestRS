@@ -1,0 +1,5 @@
+error: `#[force_guards]` is not taken on a `#[listeners]` block: a job, a tick and an event have no caller to gate — guard where the work is produced
+  --> tests/integration/diagnostics/events/force_guards_on_a_listeners_block.rs:17:1
+   |
+17 | #[force_guards(AllowAll)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^

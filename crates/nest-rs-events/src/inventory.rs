@@ -19,8 +19,10 @@ pub struct ListenerMethod {
     /// restores the written order the link-ordered registry loses.
     pub declaration_index: usize,
     /// Resolves the provider from the assembled container and subscribes a
-    /// closure to the bus for the method's event type.
-    pub wire: fn(&Container, &EventBus),
+    /// closure to the bus for the method's event type, around the pipeline
+    /// its site composes; a layer the site binds and nothing provides refuses
+    /// it, and the boot with it.
+    pub wire: fn(&Container, &EventBus) -> anyhow::Result<()>,
 }
 
 ::nest_rs_core::inventory::collect!(ListenerMethod);

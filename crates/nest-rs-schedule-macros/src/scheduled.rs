@@ -3,6 +3,7 @@
 //! link-time inventory, leaving the methods unchanged. The provider's own
 //! `#[injectable]` owns `Discoverable`.
 
+use nest_rs_codegen::layers::{LayerScope, take_layers};
 use nest_rs_codegen::pair;
 use std::str::FromStr;
 
@@ -44,8 +45,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let provider_name = provider.unraw().to_string();
-    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
-        Ok(values) => values,
+    let host_layers = match take_layers(&pair::SCHEDULED, LayerScope::Host, &mut item.attrs) {
+        Ok(layers) => layers,
         Err(err) => return err.to_compile_error().into(),
     };
 
@@ -113,10 +114,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let method_ident = method.sig.ident.clone();
         let method_name = method_ident.unraw().to_string();
         let cfgs = cfg_attrs(&method.attrs);
-        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
-            Ok(values) => values,
-            Err(err) => return err.to_compile_error().into(),
-        };
+        let method_layers =
+            match take_layers(&pair::SCHEDULED, LayerScope::Method, &mut method.attrs) {
+                Ok(layers) => layers,
+                Err(err) => return err.to_compile_error().into(),
+            };
         // The job's pinned key, else the provider and method its derived key ends with.
         let address = match &key {
             Some(key) => quote!(#key),
@@ -133,11 +135,21 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 method: &method_ident,
                 address,
                 posture: nest_rs_codegen::SitePosture::System,
-                host_meta: nest_rs_codegen::HostMeta::Values(&host_meta),
-                method_meta: &metas,
+                host_meta: nest_rs_codegen::HostMeta::Values(&host_layers.meta),
+                method_meta: &method_layers.meta,
                 cfgs: &cfgs,
             },
         ));
+        let site = nest_rs_codegen::ProviderSite {
+            self_ty: &self_ty,
+            method: &method_ident,
+            host: &host_layers,
+            method_layers: &method_layers,
+            cfgs: &cfgs,
+        };
+        handler_consts.push(nest_rs_codegen::site_const(&site));
+        submissions.push(nest_rs_codegen::host_layers_entry(&site));
+        let site_ref = nest_rs_codegen::site_ref(&self_ty, &method_ident);
         let key_tokens = match key {
             Some(key) => quote! { ::std::option::Option::Some(#key) },
             None => quote! { ::std::option::Option::None },
@@ -157,6 +169,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     transaction: #transaction_tokens,
                     replicas: #replicas_tokens,
                     key: #key_tokens,
+                    site: #site_ref,
                     run: |__container| ::std::boxed::Box::pin(async move {
                         let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
                             .expect(::std::concat!(

@@ -104,7 +104,7 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
             );
             continue;
         }
-        (entry.wire)(container, &bus);
+        (entry.wire)(container, &bus)?;
         tracing::debug!(
             target: crate::TARGET,
             listener = entry.name,

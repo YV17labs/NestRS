@@ -7,11 +7,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use nest_rs_core::__private::{
+    Site, Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled,
+};
 use nest_rs_core::tracing::Instrument;
+use nest_rs_core::{Container, Failure, Handler, Outcome, UnitContext};
 use nest_rs_database::__private::run_unit_bounded;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitSpec};
 use parking_lot::RwLock;
 
+use crate::EventsView;
 use crate::answer::ListenerAnswer;
 use crate::error::ListenerTimedOut;
 
@@ -22,7 +27,8 @@ type ListenerFuture = Pin<Box<dyn Future<Output = Answered> + Send>>;
 type ListenerFn = Arc<dyn Fn(BoxedEvent) -> ListenerFuture + Send + Sync>;
 
 /// One registered listener, carrying the `Provider::method` its unit of work is
-/// filed under and what its decorator declared of that unit.
+/// filed under, what its decorator declared of that unit, and the pipeline its
+/// site composed when it was subscribed.
 #[derive(Clone)]
 struct Listener {
     name: &'static str,
@@ -30,6 +36,10 @@ struct Listener {
     policy: TransactionPolicy,
     /// How long one call runs before it is cut.
     timeout: Duration,
+    /// The site its decorator declared.
+    handler: &'static Handler,
+    /// The layers that site runs, composed once from the app's container.
+    chains: Arc<UnitChains>,
     run: ListenerFn,
 }
 
@@ -146,24 +156,51 @@ async fn dispatch_one(
         started: std::time::Instant::now(),
         filed: false,
     };
+    let mut tail = ListenerTail { body: Some(body) };
     // Nested, never a fresh context, which would drop what the emitter carries.
     let outcome = nest_rs_core::with_request_scope(
         None,
         correlation,
-        nest_rs_core::panic::contain(run(listener.policy, listener.timeout, body)),
+        nest_rs_core::panic::contain(run(listener, event, &mut tail)),
     )
     .instrument(span)
     .await;
     match outcome {
-        Ok(Ok(())) => line.file(nest_rs_core::operation_log::OK),
-        Ok(Err(error)) => {
+        Ok(Ok(_)) => {
+            line.file(nest_rs_core::operation_log::OK);
+            if tail.body.is_some() {
+                continuation.enter(|| {
+                    tracing::debug!(
+                        target: crate::TARGET,
+                        event = event,
+                        listener = listener.name,
+                        "event listener skipped by a layer",
+                    );
+                });
+            }
+        }
+        // A layer that answered the failure expected it: no error to page on.
+        Ok(Err(failure)) if failure.is_answered() || caught_problem(&failure).is_some() => {
+            line.file(nest_rs_core::operation_log::ERROR);
+            continuation.enter(|| {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    event = event,
+                    listener = listener.name,
+                    error = %nest_rs_core::error_message(failure.error()),
+                    "event listener failed; a layer answered it — dispatch continues with the \
+                     next listener",
+                );
+            });
+        }
+        Ok(Err(failure)) => {
             line.file(nest_rs_core::operation_log::ERROR);
             continuation.enter(|| {
                 tracing::error!(
                     target: crate::TARGET,
                     event = event,
                     listener = listener.name,
-                    error = %nest_rs_core::error_message(&*error),
+                    error = %nest_rs_core::error_message(failure.error()),
                     "event listener failed — dispatch continues with the next listener",
                 );
             });
@@ -184,23 +221,43 @@ async fn dispatch_one(
 }
 
 /// One listener call as a unit of work of its own, opened by the binding its
-/// emitter ran under — bare with none — its body cut `timeout` after it
-/// started, never after the listeners queued before it.
-async fn run(policy: TransactionPolicy, timeout: Duration, body: ListenerFuture) -> Answered {
+/// emitter ran under — bare with none — around its pipeline, its body cut
+/// `timeout` after it started, never after the listeners queued before it.
+async fn run(listener: &Listener, event: &'static str, tail: &mut ListenerTail) -> Outcome {
+    let timeout = listener.timeout;
     let deadline = tokio::time::Instant::now() + timeout;
     let binding = nest_rs_database::current_unit_of_work();
     let scope = nest_rs_database::current_executor_scope().unwrap_or(ExecutorScope::Request);
-    let spec = UnitSpec::new(crate::unit::DISPATCH, scope, policy);
+    let spec = UnitSpec::new(crate::unit::DISPATCH, scope, listener.policy);
+    let mut view = EventsView::new(event, listener.name);
     run_unit_bounded(
         binding.as_ref(),
         spec,
         deadline,
-        body,
+        async {
+            let mut cx = new_unit_context(listener.handler, &mut view, None, Some(deadline));
+            dispatch(&mut cx, &listener.chains, tail).await
+        },
         Result::is_ok,
-        |why| Err(Box::new(why)),
-        move || Err(Box::new(ListenerTimedOut::new(timeout))),
+        |why| Err(Failure::from(why)),
+        move || Err(Failure::from(ListenerTimedOut::new(timeout))),
     )
     .await
+}
+
+/// The last step of a listener call's pipeline: the listener's own body,
+/// polled once.
+struct ListenerTail {
+    body: Option<ListenerFuture>,
+}
+
+impl Tail for ListenerTail {
+    async fn call(&mut self, _: &mut UnitContext<'_>) -> Outcome {
+        let Some(body) = self.body.take() else {
+            unreachable!("a unit runs its tail once");
+        };
+        body.await.map(|()| settled()).map_err(Failure::new)
+    }
 }
 
 /// One listener's `events.dispatch` line, filed exactly once — by the end the
@@ -246,20 +303,25 @@ impl Drop for DispatchLine<'_> {
 }
 
 /// Subscribe a listener on `bus` that files its unit of work under `name`, runs
-/// it under `policy` and cuts it `timeout` after it starts; the seam
-/// `#[listeners]` emits.
+/// it under `policy` around the pipeline `site` composes on `container`, and
+/// cuts it `timeout` after it starts; the seam `#[listeners]` emits. A layer
+/// the site binds and nothing provides refuses it.
 pub fn subscribe_named<E, H, Fut>(
     bus: &EventBus,
+    container: &Container,
+    site: &'static Site,
     name: &'static str,
     policy: TransactionPolicy,
     timeout: Duration,
     listener: H,
-) where
+) -> anyhow::Result<()>
+where
     E: Any + Send + 'static,
     H: Fn(E) -> Fut + Send + Sync + 'static,
     Fut: Future + Send + 'static,
     Fut::Output: ListenerAnswer,
 {
+    let chains = site.chains(container)?;
     let run: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
         #[expect(
             clippy::expect_used,
@@ -279,8 +341,11 @@ pub fn subscribe_named<E, H, Fut>(
             name,
             policy,
             timeout,
+            handler: site.handler(),
+            chains,
             run,
         });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -312,11 +377,14 @@ mod tests {
     {
         super::subscribe_named(
             bus,
+            &Container::default(),
+            &crate::testing::SITE,
             name,
             TransactionPolicy::PerUnit,
             nest_rs_core::JOB_TIMEOUT,
             listener,
-        );
+        )
+        .expect("a site binding no layer composes");
     }
 
     #[derive(Clone)]

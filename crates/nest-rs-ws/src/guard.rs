@@ -79,6 +79,12 @@ impl EventLayerTable {
         }
     }
 
+    /// `event` as a handler declares it — the name a line may carry — or `None`
+    /// for one no handler serves, which only the client named.
+    pub fn declared(&self, event: &str) -> Option<&'static str> {
+        self.by_event.get_key_value(event).map(|(&event, _)| event)
+    }
+
     /// Run every guard in the chain for `event` on its message, in order: what
     /// they attached and the message's `data` back when they all admit it — at
     /// once for an event with no chain — the first refusal's frame otherwise.

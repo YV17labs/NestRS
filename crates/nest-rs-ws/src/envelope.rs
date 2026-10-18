@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::opaque::Opaque;
 
+/// What an event no handler serves is answered.
+const UNKNOWN_EVENT: &str = "unknown event";
+
 /// `{ "event": ..., "data": ... }` — the wire shape every gateway message
 /// rides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,15 +173,17 @@ impl WsReply {
         )))
     }
 
-    /// The reply for an event with no registered handler — names the offending
-    /// event so a client can tell a typo from an auth failure.
-    pub fn unknown(event: &str) -> WsReply {
+    /// The reply for an event with no registered handler, so a client can tell
+    /// a typo from an auth failure; the frame answers on the event it sent, and
+    /// neither its text nor the `warn` repeats it, the event being only the
+    /// client's word.
+    pub fn unknown() -> WsReply {
         tracing::warn!(
             target: crate::TARGET,
-            event,
+            event = nest_rs_core::operation_log::OTHER,
             "subscribe_message dispatched to an unknown event",
         );
-        WsReply::Error(WsError::new(format!("unknown event `{event}`")))
+        WsReply::Error(WsError::new(UNKNOWN_EVENT))
     }
 
     /// The error frame a handler's `Err` produces, read off the vocabulary its
@@ -408,10 +413,12 @@ mod tests {
         }
     }
 
+    /// The event is the client's word: the frame answers on it, its text
+    /// repeats none of it.
     #[test]
-    fn unknown_event_message_names_the_event() {
-        match WsReply::unknown("chat:nope") {
-            WsReply::Error(err) => assert!(err.error.contains("chat:nope")),
+    fn unknown_event_message_names_no_event() {
+        match WsReply::unknown() {
+            WsReply::Error(err) => assert_eq!(err.error, UNKNOWN_EVENT),
             _ => panic!("expected Error"),
         }
     }

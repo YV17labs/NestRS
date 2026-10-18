@@ -549,7 +549,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 #[allow(unreachable_patterns)]
                 match __event {
                     #(#arms)*
-                    __other => ::nest_rs_ws::WsReply::unknown(__other),
+                    _ => ::nest_rs_ws::WsReply::unknown(),
                 }
             }
 

@@ -440,18 +440,22 @@ async fn unit_return_sends_none() {
     );
 }
 
+/// An event no handler declares is the client's own word: refused as
+/// unknown, and neither the frame's text nor the line repeats it.
 #[tokio::test]
 async fn unknown_event_returns_unknown_error() {
     let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
-        .dispatch(&WsClient::for_test(), "missing", serde_json::Value::Null)
+        .dispatch(
+            &WsClient::for_test(),
+            "marked:missing",
+            serde_json::Value::Null,
+        )
         .await;
     match reply {
         WsReply::Error(msg) => {
-            assert!(
-                msg.error.contains("missing") && msg.error.contains("unknown"),
-                "want 'unknown' + the event name in {msg}",
-            );
+            assert!(msg.error.contains("unknown event"), "{msg}");
+            assert!(!msg.error.contains("marked"), "{msg}");
         }
         _ => panic!("expected Error for an unrouted event"),
     }
@@ -461,7 +465,9 @@ async fn unknown_event_returns_unknown_error() {
         "subscribe_message dispatched to an unknown event",
     );
     assert_eq!(event.level, "warn");
-    assert_eq!(event.field("event").as_deref(), Some("missing"));
+    for (field, value) in &event.fields {
+        assert!(!value.contains("marked"), "{field} = {value}");
+    }
 }
 
 #[tokio::test]
@@ -2657,6 +2663,45 @@ async fn a_browser_upgrade_from_another_origin_is_refused_while_cors_is_off() {
             "the operator is told which settings decide it: {hint}",
         );
     }
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// The frame answers an unknown event on its own `event`, the envelope's
+/// correlation, and nothing the framework files repeats it: the message's
+/// line and span name it `_OTHER`.
+#[tokio::test]
+async fn an_event_no_handler_declares_is_said_other_and_never_quoted() {
+    let logs = LogCapture::install();
+    let app = socket_app::<SocketModule>().await;
+    let mut socket = app.socket("/socket").connect().await;
+
+    socket.send("marked:nope", serde_json::Value::Null).await;
+    let reply = socket.next_envelope().await;
+
+    assert_eq!(reply["event"], "marked:nope", "{reply}");
+    assert!(!reply["data"].to_string().contains("marked"), "{reply}");
+    for event in logs.events() {
+        for (field, value) in &event.fields {
+            assert!(
+                !value.contains("marked"),
+                "{}: {field} = {value}",
+                event.target
+            );
+        }
+    }
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(
+        line.field("event").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER)
+    );
+    let span = logs.expect_span("nest_rs::ws", nest_rs_ws::unit::MESSAGE.name());
+    assert_eq!(
+        span.field("ws.event").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER)
+    );
     app.shutdown().await.expect("the transport stops cleanly");
 }
 

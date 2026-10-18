@@ -13,6 +13,7 @@
 use std::fmt::Write;
 
 use http::{HeaderName, HeaderValue, Method, StatusCode, header};
+use nest_rs_core::operation_log::OTHER;
 use nest_rs_core::{Correlation, TraceParent, TraceState};
 
 use crate::request::Request;
@@ -105,12 +106,9 @@ fn is_minted_id(id: &str) -> bool {
     (16..=64).contains(&id.len()) && hex(id)
 }
 
-/// The word OpenTelemetry's HTTP conventions give a method they do not know.
-pub(crate) const OTHER_METHOD: &str = "_OTHER";
-
 /// `method` as the HTTP conventions name it: one they know — RFC 9110's, PATCH
 /// (RFC 5789) and QUERY — spelled exactly, methods being case-sensitive;
-/// [`OTHER_METHOD`] for any other, a token the client chose.
+/// [`OTHER`] for any other, a token the client chose.
 ///
 /// No override list: the router serves no method outside this set, so a
 /// method an app answers is never `_OTHER`.
@@ -126,7 +124,7 @@ pub(crate) fn method_name(method: &Method) -> &'static str {
         "PUT" => "PUT",
         "QUERY" => "QUERY",
         "TRACE" => "TRACE",
-        _ => OTHER_METHOD,
+        _ => OTHER,
     }
 }
 
@@ -186,7 +184,7 @@ pub(crate) fn request_span(
         otel.name = tracing::field::Empty,
         http.request.method = method,
         // The conventions require it wherever it differs from the method named.
-        http.request.method_original = (method == OTHER_METHOD).then(|| req.method().as_str()),
+        http.request.method_original = (method == OTHER).then(|| req.method().as_str()),
         // As addressed; never in `http.route`, which a backend groups on.
         url.path = req.uri().path(),
         // Filled by `name_route`; a 404 matched no route and leaves it empty.
@@ -223,7 +221,7 @@ pub(crate) fn request_span(
 /// Never the raw path: one scanner would fill a tracing backend with span names.
 pub(crate) fn name_route(span: &tracing::Span, method: &Method, route: Option<&str>) {
     let method = match method_name(method) {
-        OTHER_METHOD => "HTTP",
+        OTHER => "HTTP",
         known => known,
     };
     match route {
@@ -433,7 +431,7 @@ mod tests {
         }
         for other in ["get", "Get", "PROPFIND", "MARKED"] {
             let method = Method::from_bytes(other.as_bytes()).expect("a method token");
-            assert_eq!(method_name(&method), OTHER_METHOD, "{other}");
+            assert_eq!(method_name(&method), OTHER, "{other}");
         }
     }
 

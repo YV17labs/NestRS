@@ -368,6 +368,13 @@ pub const PANIC: &str = "panic";
 /// unit's future.
 pub const CANCELLED: &str = "cancelled";
 
+/// Not an outcome: the word a line names what a client addressed with when
+/// the server declares no name for it — a method outside the HTTP conventions'
+/// known set, an event no handler serves, a tool no host declares — since the
+/// client's own word is its value. OpenTelemetry's HTTP conventions spell it so
+/// for a method they do not know.
+pub const OTHER: &str = "_OTHER";
+
 /// Record on a unit's span how the unit ended, where OpenTelemetry reads it.
 ///
 /// Anything but [`OK`] becomes the span's `error.type` and an `Error` status.

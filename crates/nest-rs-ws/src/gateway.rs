@@ -786,6 +786,9 @@ async fn handle_text<G: Gateway>(
     };
     let WsEnvelope { event, data } = envelope;
     let event_ref = event.as_str();
+    // What the lines and the span name: the event a handler declares, never
+    // one only the client named.
+    let named = guards.declared(event_ref).unwrap_or(operation_log::OTHER);
     let conn_id = client.id();
     let body = async move {
         // The chain filed the denial while it still held it.
@@ -810,7 +813,7 @@ async fn handle_text<G: Gateway>(
         match deadline {
             Some((timeout, at)) => tokio::time::timeout_at(at, body)
                 .await
-                .unwrap_or_else(|_| timed_out(conn_id, event_ref, timeout)),
+                .unwrap_or_else(|_| timed_out(conn_id, named, timeout)),
             None => body.await,
         }
     };
@@ -840,7 +843,7 @@ async fn handle_text<G: Gateway>(
     let span = nest_rs_core::operation_span!(
         crate::unit::MESSAGE,
         &correlation,
-        ws.event = %event,
+        ws.event = %named,
         ws.connection_id = conn_id,
     );
     // The correlation is installed even without a container; only `Scoped<T>` goes without.
@@ -849,7 +852,7 @@ async fn handle_text<G: Gateway>(
         .as_ref()
         .map(|container| Arc::new(RequestScope::new(container.clone())));
     let line = UnitLine::open(
-        Unit::Message { event: &event },
+        Unit::Message { event: named },
         conn_id,
         correlation.clone(),
         span.clone(),
@@ -883,7 +886,7 @@ async fn handle_text<G: Gateway>(
                 Err(err) => {
                     tracing::warn!(
                         target: crate::TARGET,
-                        event = %envelope.event,
+                        event = %named,
                         error = %nest_rs_core::error_message(&err),
                         "failed to serialize reply",
                     );

@@ -184,7 +184,7 @@ lifecycle hook:
 | Unit | Canonical name | Names |
 |---|---|---|
 | HTTP request | `http.request` | method, route template, status, bytes |
-| WS message | `ws.message` | event, `conn_id` |
+| WS message | `ws.message` | event (`_OTHER` for one no handler serves), `conn_id` |
 | WS socket open | `ws.connect` | `conn_id` |
 | WS socket close | `ws.disconnect` | `conn_id` |
 | Scheduled tick | `schedule.tick` | provider, method, `replicas`, and the `occurrence` a job firing once claimed |

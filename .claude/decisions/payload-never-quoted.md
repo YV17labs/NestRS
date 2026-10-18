@@ -95,6 +95,13 @@ spelled it.
   9110's, `PATCH` and `QUERY`, spelled exactly — or `_OTHER`, the status, the
   bytes and the duration. `user_agent` left it: free text, which a log
   pipeline keeps whole.
+- **Every edge's line names what a client addressed by the server's own
+  name for it**, and `_OTHER` — the conventions' word for a method they do not
+  know — where the server declares none: a WebSocket message's line, its span
+  and its `warn`s name the event a handler declares, and an event no handler
+  serves is `_OTHER`, its error frame saying `unknown event`. The frame still
+  answers on the event the message named: a protocol's correlation key echoed
+  to its sender, on its own socket, is the protocol, as a JSON-RPC id is.
 - **The span keeps what the telemetry conventions require or recommend, as a
   stated exception.** The request span records `url.path` (required),
   `user_agent.original` (recommended) and, for a method outside the known

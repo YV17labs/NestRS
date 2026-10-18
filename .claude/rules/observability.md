@@ -142,9 +142,10 @@ error through its `SafeLink`; no sentence formats a raw `ValidationErrors`, a
 serde error, a driver's error or a configured string. Held by review: no lint
 reads a `Display`.
 
-**A request line carries the server's values only**: a value the client
-addressed reaches it as the server's own name for it — the route template, a
-method from the conventions' known set or `_OTHER` — and a refused value is
+**An edge's lines carry the server's values only**: what a client addressed
+reaches them as the server's own name for it — the route template, a method
+from the conventions' known set, the event or tool a handler declares — or
+`operation_log::OTHER` where the server declares none, and a refused value is
 said by kind, with the settings that would admit it. The span keeps what the
 telemetry conventions require or recommend, the one stated exception
 (`.claude/decisions/payload-never-quoted.md`). Held by each edge's line tests.

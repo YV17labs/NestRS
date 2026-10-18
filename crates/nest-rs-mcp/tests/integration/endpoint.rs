@@ -298,6 +298,116 @@ async fn a_request_the_transport_refuses_is_answered_without_what_it_carried() {
     }
 }
 
+/// rmcp's transport refuses some requests in constant sentences, quoting
+/// nothing the request carried — a missing `Accept`, a missing or unknown
+/// session, a body past the cap, the `_meta` keys the specification fixes:
+/// each is kept for the client, as the problem's `detail` or the JSON-RPC
+/// error's `message`.
+#[tokio::test]
+async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
+    let app = listening_on(nest_rs_mcp::McpConfig {
+        max_request_body_bytes: 256,
+        ..nest_rs_mcp::McpConfig::default()
+    })
+    .await;
+    let detail = |response: nest_rs_testing::TestResponse| async move {
+        let body = response.0.into_body().into_string().await.expect("a body");
+        let problem: serde_json::Value = serde_json::from_str(&body).expect("a problem document");
+        problem["detail"].clone()
+    };
+
+    let accepting_json_only = app
+        .http()
+        .post(LISTENING)
+        .header("host", "localhost")
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .body_json(&request("tools/list", serde_json::json!({})))
+        .send()
+        .await;
+    accepting_json_only.assert_status(StatusCode::NOT_ACCEPTABLE);
+    assert_eq!(
+        detail(accepting_json_only).await,
+        "Not Acceptable: Client must accept both application/json and text/event-stream",
+    );
+
+    let sessionless = app
+        .http()
+        .get(LISTENING)
+        .header("host", "localhost")
+        .header("accept", "text/event-stream")
+        .send()
+        .await;
+    sessionless.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        detail(sessionless).await,
+        "Bad Request: Session ID is required"
+    );
+
+    let unknown_session = nest_rs_testing::mcp::post_message(
+        app.http(),
+        LISTENING,
+        Some("no-such-session"),
+        None,
+        &request("tools/list", serde_json::json!({})),
+    )
+    .await;
+    unknown_session.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(
+        detail(unknown_session).await,
+        "Not Found: Session not found"
+    );
+
+    let oversized = nest_rs_testing::mcp::post_message(
+        app.http(),
+        LISTENING,
+        None,
+        None,
+        &request(
+            "tools/list",
+            serde_json::json!({ "padding": "x".repeat(512) }),
+        ),
+    )
+    .await;
+    oversized.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        detail(oversized).await,
+        "Payload Too Large: request body exceeds 256 bytes"
+    );
+
+    let without_meta = nest_rs_testing::mcp::post_message_with(
+        app.http(),
+        LISTENING,
+        None,
+        None,
+        &[
+            ("mcp-protocol-version", "2026-07-28"),
+            ("mcp-method", "tools/list"),
+        ],
+        &request("tools/list", serde_json::json!({})),
+    )
+    .await;
+    without_meta.assert_status(StatusCode::BAD_REQUEST);
+    let body = without_meta
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a body");
+    let refused: serde_json::Value = serde_json::from_str(&body).expect("a JSON-RPC error");
+    assert_eq!(
+        refused["error"]["code"],
+        serde_json::json!(-32602),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["error"]["message"],
+        "Invalid params: request _meta is missing or has malformed required fields: \
+         io.modelcontextprotocol/protocolVersion, io.modelcontextprotocol/clientCapabilities",
+        "{refused}",
+    );
+}
+
 /// The app's session store, failing to load every session.
 struct StoreDown;
 

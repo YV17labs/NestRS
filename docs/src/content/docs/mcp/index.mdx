@@ -316,7 +316,10 @@ quoting the name, the id or the header. The endpoint answers each by kind:
 `prompt not found`, still listing the prompts under `available_prompts`;
 `unknown task`; JSON-RPC's own words for the error's code, such as `Method not
 found`, its id and code kept; or, for a refusal that is no JSON-RPC error, the
-status's problem document.
+status's problem document. A refusal rmcp words without quoting the request —
+`Not Acceptable: Client must accept both application/json and
+text/event-stream`, `Not Found: Session not found`, the `_meta` keys the
+specification requires — keeps its sentence, as the `detail` or the message.
 
 ## Trait-based DI
 

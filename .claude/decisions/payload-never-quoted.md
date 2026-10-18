@@ -182,3 +182,20 @@ GraphQL grammar bounds.
   a task it does not hold as `unknown task: <id>`; the edge answers `unknown
   task`, matched on that wording against the id the request carried. The id
   reaches neither the span nor the line: no convention names it.
+- **A library's refusal quoting nothing the request carried keeps its
+  words**, matched exactly against the locked version's: rmcp's constant
+  transport sentences (a missing `Accept`, a missing or unknown session, a
+  body past the cap, a malformed `Host` or `Origin`) as the problem's
+  `detail`, and its JSON-RPC refusals listing only constant names — the
+  `_meta` keys the specification fixes, the headers it requires — as the
+  error's message. Anything else stays by kind: an allowlist, never a
+  denylist, since a reworded sentence must fall back to the kind rather
+  than pass a value.
+- **MCP's version-negotiation echo is a stated exception**, like a JSON-RPC
+  id. An unsupported protocol version is answered with `data: {supported,
+  requested}`, the version the client asked for echoed back to it: the
+  2025-11-25 lifecycle's example error, and the 2026-07-28 draft's
+  `UnsupportedProtocolVersionError`, whose `data.supported` and
+  `data.requested` are both required, at HTTP 400. The shape is the
+  specification's, the echo goes to the sender alone, and no framework line
+  carries it.

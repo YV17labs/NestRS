@@ -231,6 +231,76 @@ pub(crate) fn said_by_code(code: ErrorCode) -> Option<&'static str> {
     })
 }
 
+/// rmcp 3.5's streamable-HTTP refusals written as text, word for word, that
+/// quote nothing the request carried: what a client needs to fix its call.
+const TRANSPORT_SENTENCES: [&str; 15] = [
+    "Not Acceptable: Client must accept both application/json and text/event-stream",
+    "Not Acceptable: Client must accept text/event-stream",
+    "Unsupported Media Type: Content-Type must be application/json",
+    "Bad Request: Session ID is required",
+    "Not Found: Session not found",
+    "Bad Request: Invalid MCP-Protocol-Version header encoding",
+    "Bad Request: Invalid Host header encoding",
+    "Bad Request: Invalid Host header",
+    "Bad Request: missing Host header",
+    "Forbidden: Host header is not allowed",
+    "Forbidden: Invalid Origin header encoding",
+    "Forbidden: Invalid Origin header",
+    "Forbidden: Origin header is not allowed",
+    "Method Not Allowed",
+    "Unexpected message, expect initialize request",
+];
+
+/// rmcp's refusal of a body past the cap, the configured cap between the two.
+const TOO_LARGE: (&str, &str) = ("Payload Too Large: request body exceeds ", " bytes");
+
+/// rmcp 3.5's JSON-RPC refusals, word for word, that quote nothing the request
+/// carried.
+const TRANSPORT_MESSAGES: [&str; 7] = [
+    "Invalid Request: MCP-Protocol-Version header is not valid UTF-8",
+    "request _meta protocolVersion requires MCP-Protocol-Version header",
+    "Missing MCP-Protocol-Version header for request requiring per-request protocol metadata",
+    "Invalid params: request requires protocolVersion in request _meta",
+    "multiple Mcp-Method header values supplied; initialize requires exactly one",
+    "missing required Mcp-Method header",
+    "Mcp-Name header is not valid Base64",
+];
+
+/// rmcp's refusal of a request missing `_meta` keys, the keys it lists after.
+const META_MISSING: &str =
+    "Invalid params: request _meta is missing or has malformed required fields: ";
+
+/// The `_meta` keys MCP requires on a request from `2026-07-28`, as the
+/// specification names them.
+const REQUIRED_META_KEYS: [&str; 2] = [
+    "io.modelcontextprotocol/protocolVersion",
+    "io.modelcontextprotocol/clientCapabilities",
+];
+
+/// `text`, when it is one of rmcp's transport refusals quoting nothing the
+/// request carried.
+pub(crate) fn transport_sentence(text: &str) -> Option<&str> {
+    if TRANSPORT_SENTENCES.contains(&text) {
+        return Some(text);
+    }
+    let (opening, closing) = TOO_LARGE;
+    let cap = text.strip_prefix(opening)?.strip_suffix(closing)?;
+    (!cap.is_empty() && cap.bytes().all(|byte| byte.is_ascii_digit())).then_some(text)
+}
+
+/// Whether `message` is one of rmcp's JSON-RPC transport refusals quoting
+/// nothing the request carried: a constant, or the `_meta` keys it lists when
+/// each is one the specification fixes.
+pub(crate) fn is_transport_message(message: &str) -> bool {
+    TRANSPORT_MESSAGES.contains(&message)
+        || message.strip_prefix(META_MISSING).is_some_and(|keys| {
+            !keys.is_empty()
+                && keys
+                    .split(", ")
+                    .all(|key| REQUIRED_META_KEYS.contains(&key))
+        })
+}
+
 /// What an MCP operation answers: a `Result` whose error takes an [`McpError`],
 /// whatever the type is called.
 #[diagnostic::on_unimplemented(
@@ -300,6 +370,45 @@ mod tests {
     use nest_rs_core::Problem;
 
     use super::*;
+
+    /// rmcp's sentences quoting nothing are kept word for word; one quoting
+    /// what the request carried, or reworded, is not.
+    #[test]
+    fn a_transport_refusal_is_kept_only_in_rmcp_s_words_quoting_nothing() {
+        for kept in TRANSPORT_SENTENCES {
+            assert_eq!(transport_sentence(kept), Some(kept));
+        }
+        let too_large = "Payload Too Large: request body exceeds 4194304 bytes";
+        assert_eq!(transport_sentence(too_large), Some(too_large));
+        for refused in [
+            "Payload Too Large: request body exceeds marked bytes",
+            "Payload Too Large: request body exceeds  bytes",
+            "Bad Request: Unsupported MCP-Protocol-Version: marked",
+            "Not Found: Session not found marked",
+            "not found: session not found",
+            "",
+        ] {
+            assert_eq!(transport_sentence(refused), None, "{refused}");
+        }
+
+        for kept in TRANSPORT_MESSAGES {
+            assert!(is_transport_message(kept), "{kept}");
+        }
+        assert!(is_transport_message(
+            "Invalid params: request _meta is missing or has malformed required fields: \
+             io.modelcontextprotocol/clientCapabilities"
+        ));
+        for refused in [
+            "Invalid params: request _meta is missing or has malformed required fields: marked",
+            "Invalid params: request _meta is missing or has malformed required fields: \
+             io.modelcontextprotocol/protocolVersion, marked",
+            "Invalid params: request _meta is missing or has malformed required fields: ",
+            "Mcp-Method header `marked` does not match body method `initialize`",
+            "missing required Mcp-Name header for `tools/call`",
+        ] {
+            assert!(!is_transport_message(refused), "{refused}");
+        }
+    }
 
     #[test]
     fn a_failure_reaches_the_model_stripped_of_everything_it_said() {

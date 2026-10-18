@@ -22,7 +22,7 @@ use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
 use crate::config::McpConfig;
 use crate::context::{McpAmbient, McpToolContext};
-use crate::error::said_by_code;
+use crate::error::{is_transport_message, said_by_code, transport_sentence};
 use crate::propagate::PropagatingHandler;
 use crate::registry::MountIndex;
 use crate::sessions::{BoundedSessions, ReportedStore};
@@ -273,6 +273,8 @@ fn host_refused() {
 /// value, the method or name its body named — and its failures their cause.
 /// The status stays rmcp's; a JSON-RPC error keeps its id, code and data, and
 /// says its code's words; any other body is the status's problem document.
+/// A refusal in one of rmcp's sentences quoting nothing the request carried
+/// keeps it: the message, or the problem's `detail`.
 async fn said_by_kind(response: Response) -> Response {
     if response.status().is_success() {
         return response;
@@ -291,22 +293,33 @@ async fn said_by_kind(response: Response) -> Response {
         Some(answer) => nest_rs_http::Response::from_parts(head, Body::from(answer)),
         None => {
             head.headers.remove(header::CONTENT_TYPE);
-            normalize_error_response(nest_rs_http::Response::from_parts(head, Body::empty())).await
+            let detail = std::str::from_utf8(&refusal)
+                .ok()
+                .and_then(transport_sentence)
+                .map_or_else(Body::empty, |sentence| Body::from(sentence.to_owned()));
+            normalize_error_response(nest_rs_http::Response::from_parts(head, detail)).await
         }
     };
     response_to_poem(said)
 }
 
 /// `refusal` with its JSON-RPC error said by its code, when it is one: the
-/// code's words, else the status's reason phrase.
+/// code's words, else the status's reason phrase — rmcp's own message where
+/// it quotes nothing the request carried.
 fn jsonrpc_said_by_kind(refusal: &[u8], status: StatusCode) -> Option<Vec<u8>> {
     let mut answer: serde_json::Value = serde_json::from_slice(refusal).ok()?;
     let error = answer.get_mut("error")?.as_object_mut()?;
     let code = i32::try_from(error.get("code")?.as_i64()?).ok()?;
-    let said = said_by_code(ErrorCode(code))
-        .or_else(|| status.canonical_reason())
-        .unwrap_or("Error");
-    error.insert("message".to_owned(), said.into());
+    let kept = error
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(is_transport_message);
+    if !kept {
+        let said = said_by_code(ErrorCode(code))
+            .or_else(|| status.canonical_reason())
+            .unwrap_or("Error");
+        error.insert("message".to_owned(), said.into());
+    }
     serde_json::to_vec(&answer).ok()
 }
 

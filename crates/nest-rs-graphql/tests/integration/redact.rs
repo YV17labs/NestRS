@@ -74,6 +74,55 @@ impl ChargeResolver {
     async fn conflicted(&self) -> Result<u64, Taken> {
         Err(Taken)
     }
+
+    #[query]
+    #[public]
+    async fn by_role(&self, role: ProbeRole) -> bool {
+        matches!(role, ProbeRole::Admin)
+    }
+
+    #[query]
+    #[public]
+    async fn filtered(&self, filter: ProbeFilter) -> bool {
+        filter.name.is_some()
+    }
+
+    #[query]
+    #[public]
+    async fn coded(&self, code: ProbeCode) -> String {
+        code.0
+    }
+}
+
+#[derive(async_graphql::Enum, Clone, Copy, PartialEq, Eq)]
+enum ProbeRole {
+    Admin,
+}
+
+#[derive(async_graphql::InputObject)]
+struct ProbeFilter {
+    name: Option<String>,
+}
+
+/// A scalar written as async-graphql's own `UUID` is: a string it parses, its
+/// refusal quoting what it read, and any other value refused as the wrong type.
+struct ProbeCode(String);
+
+#[async_graphql::Scalar]
+impl async_graphql::ScalarType for ProbeCode {
+    fn parse(value: async_graphql::Value) -> async_graphql::InputValueResult<Self> {
+        match value {
+            async_graphql::Value::String(code) if code.starts_with("code-") => Ok(Self(code)),
+            async_graphql::Value::String(code) => Err(async_graphql::InputValueError::custom(
+                format!("not a code: {code}"),
+            )),
+            other => Err(async_graphql::InputValueError::expected_type(other)),
+        }
+    }
+
+    fn to_value(&self) -> async_graphql::Value {
+        async_graphql::Value::String(self.0.clone())
+    }
 }
 
 /// A domain error that says what its client may read.
@@ -143,6 +192,118 @@ async fn an_error_a_response_carries_says_a_decode_failure_without_its_value() {
         let body: serde_json::Value = resp.json().await.value().deserialize();
         assert_eq!(body["errors"][0]["message"], said, "{request}");
         assert!(!body.to_string().contains(SECRET), "{body}");
+    }
+}
+
+/// What every case below carries, and no reply may hold any part of.
+const MARKER: &str = "sk_live_marker";
+
+/// Each request carrying a marker in its `variables`, and the message its one
+/// error must carry: a value, or a key, said by kind.
+fn variable_cases() -> Vec<(serde_json::Value, &'static str)> {
+    let enumerated = "Invalid value for argument \"role\", enumeration type \"ProbeRole\" \
+                      does not contain the value sent";
+    let unknown_key = "Invalid value for argument \"filter\", an unknown field of type \
+                       \"ProbeFilter\"";
+    vec![
+        (
+            serde_json::json!({
+                "query": "query($role: ProbeRole!) { byRole(role: $role) }",
+                "variables": { "role": "sk_live_marker_enum" },
+            }),
+            enumerated,
+        ),
+        (
+            serde_json::json!({
+                "query": "query($filter: ProbeFilter!) { filtered(filter: $filter) }",
+                "variables": { "filter": { "sk_live_marker_key": 1 } },
+            }),
+            unknown_key,
+        ),
+        (
+            serde_json::json!({
+                "query": "query($filter: ProbeFilter!) { filtered(filter: $filter) }",
+                "variables": { "filter": { "a\" of type \"sk_live_marker": 1 } },
+            }),
+            unknown_key,
+        ),
+        (
+            serde_json::json!({
+                "query": "query($code: ProbeCode!) { coded(code: $code) }",
+                "variables": { "code": { "card": "sk_live_marker_scalar" } },
+            }),
+            "Expected input type \"ProbeCode\", found an object.",
+        ),
+        (
+            serde_json::json!({
+                "query": "query($code: ProbeCode!) { coded(code: $code) }",
+                "variables": { "code": { "x\". (occurred while parsing \"sk_live_marker\")": 1 } },
+            }),
+            "Expected input type \"ProbeCode\", found an object.",
+        ),
+        (
+            serde_json::json!({
+                "query": "query($code: ProbeCode!) { coded(code: $code) }",
+                "variables": { "code": "sk_live_marker_text" },
+            }),
+            "Failed to parse \"ProbeCode\": a value its type does not accept",
+        ),
+    ]
+}
+
+/// async-graphql's validation and input coercion quote the value a variable
+/// held — an enum's, a key of an input object's, a scalar's — and a scalar's
+/// own refusal may quote it too: each is said by kind.
+#[tokio::test]
+async fn a_variable_s_value_is_refused_without_quoting_it() {
+    let app = boot().await;
+    for (request, said) in variable_cases() {
+        let resp = app.http().post("/graphql").body_json(&request).send().await;
+        resp.assert_status_is_ok();
+        let body: serde_json::Value = resp.json().await.value().deserialize();
+        assert_eq!(body["errors"][0]["message"], said, "{request}");
+        assert!(!body.to_string().contains(MARKER), "{body}");
+    }
+}
+
+/// The socket executes through `execute_stream`; the values sit in the
+/// document there, which the same sentences quote.
+#[tokio::test]
+async fn a_value_an_operation_sent_over_the_socket_is_refused_without_quoting_it() {
+    let app = boot().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    for (id, query, said) in [
+        (
+            "enum",
+            "{ byRole(role: sk_live_marker_enum) }",
+            "Invalid value for argument \"role\", enumeration type \"ProbeRole\" does not \
+             contain the value sent",
+        ),
+        (
+            "key",
+            "{ filtered(filter: { sk_live_marker_key: 1 }) }",
+            "Invalid value for argument \"filter\", an unknown field of type \"ProbeFilter\"",
+        ),
+        (
+            "scalar",
+            "{ coded(code: { card: \"sk_live_marker_scalar\" }) }",
+            "Expected input type \"ProbeCode\", found an object.",
+        ),
+        (
+            "text",
+            "{ coded(code: \"sk_live_marker_text\") }",
+            "Failed to parse \"ProbeCode\": a value its type does not accept",
+        ),
+    ] {
+        socket.subscribe(id, query);
+        let item = socket.next_item(id).await.expect("the operation answers");
+        let errors = item
+            .get("errors")
+            .or_else(|| item.get("payload"))
+            .unwrap_or_else(|| panic!("an error: {item}"));
+        assert_eq!(errors[0]["message"], said, "{item}");
+        assert!(!item.to_string().contains(MARKER), "{item}");
     }
 }
 

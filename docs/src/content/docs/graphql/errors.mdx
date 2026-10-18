@@ -67,17 +67,23 @@ into an `async_graphql::Error` does not compile, because async-graphql's
 `Display` before the framework could answer it opaquely. Return the error itself
 (`Result<T, MyError>`) and let its type decide.
 
-The framework rewrites two messages, both for quoting what the request
-carried. A decode failure: serde's sentence quotes the value it refused — a
-resolver returning a `serde_json` error, or an anyhow chain holding one,
-async-graphql's own `Json<T>` scalar coercing an argument — so
-`errors[].message` says where and what kind instead:
-`invalid type: a string, expected u64 at line 1 column 24`, under the
-`INVALID_ARGUMENT` code. And an `operationName` the document holds no operation
-of: async-graphql's refusal quotes it, and the request's `operationName` is any
-text the client wrote, so the message reads
-`Unknown operation named by operationName`. Both hold on the socket as on
-`POST`.
+The framework rewrites every message that quotes a value the request carried.
+A decode failure: serde's sentence quotes the value it refused — a resolver
+returning a `serde_json` error, or an anyhow chain holding one, async-graphql's
+own `Json<T>` scalar coercing an argument — so `errors[].message` says where and
+what kind instead: `invalid type: a string, expected u64 at line 1 column 24`,
+under the `INVALID_ARGUMENT` code. A value from `variables`, or written in the
+document, that its argument's type refuses: async-graphql quotes it, and the
+message says it by kind — `enumeration type "Role" does not contain the value
+sent`, `an unknown field of type "PostFilter"`, `Expected input type "Int",
+found a string.`, and a scalar's own refusal as `Failed to parse "UUID": a
+value its type does not accept`. And an `operationName` the document holds no
+operation of: the request's `operationName` is any text the client wrote, so
+the message reads `Unknown operation named by operationName`. Every rewrite
+holds on the socket as on `POST`. A name the document spells — a field, an
+argument, a fragment, a variable — stays in the message, as the GraphQL
+specification's own errors name it; it is the sender's own document, and no
+log line carries it.
 
 ## Extensions and codes
 

@@ -150,3 +150,30 @@ spelled it.
   value's hash is a dictionary away from the value, and a prefix is the value's
   start; a switch putting the values back on the line, whose place is already
   the span in the deployment's own collector.
+
+## 2026-10-18 — a GraphQL variable's value by kind, the document's names and MCP's version echo as stated exceptions
+
+async-graphql's validation and input coercion quote what a variable held: an
+enum's value (`does not contain the value "…"`), an input object's key it does
+not declare (`unknown field "…"`), the value a scalar refused (`Expected input
+type "T", found …`), and a scalar's own message (`Failed to parse "T": …`),
+which may quote it too. These are values from the request's `variables` JSON,
+a key included, or written in the document — free text, not names the
+GraphQL grammar bounds.
+
+- **A value is said by kind, wherever the request carried it**: `does not
+  contain the value sent`, `an unknown field of type "T"`, `found a string`
+  (the kind read off how async-graphql renders it), and a scalar's message as
+  `DecodeError` reports any type's own — serde's sentence rebuilt without its
+  value, any other by its category. Matched on async-graphql 7.2's wording,
+  each shape by a unit test and the edge's test a marker, so a release that
+  rewords one fails a test rather than quoting again.
+- **The document's own names are a stated exception, in the reply alone.** A
+  field, an argument, a fragment, a variable or an operation name parsed under
+  the GraphQL Name grammar (`/[_A-Za-z][_0-9A-Za-z]*/`) may stay in an error
+  answered to the client that sent the document — the specification's
+  validation rules name them, and every GraphQL server's errors carry them —
+  and never on a line: the operation line names the operation's type, and no
+  framework line or span carries async-graphql's message (its `tracing`
+  feature is off). An `operationName` is the request's free text, not a parsed
+  Name, and is said by kind.

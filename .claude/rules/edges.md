@@ -133,9 +133,11 @@ Review a new edge, or a change to one, against it:
     `nest_rs_core::boxed_error`, never `.into()`, so its chain stays
     readable; every reply built from an error says a decode failure without
     its value (`DecodeError::redact`), and a library's refusal quoting what
-    the request named (rmcp's prompt, method and transport refusals,
-    async-graphql's unknown `operationName`) by kind. Held by each edge's
-    behaviour tests and a trybuild snapshot of the refused `?`.
+    the request sent — a value its variables held, a name or a header only
+    the request named — by kind, matched on the locked version's wording, the
+    stated exceptions aside (`.claude/decisions/payload-never-quoted.md`).
+    Held by each edge's behaviour tests and a trybuild snapshot of the
+    refused `?`.
 12. **Discovery and its gate** (`container.md`).
 13. **Aggregation**, as above.
 14. **A mount** — a `Transport` attached with

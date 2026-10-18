@@ -6,7 +6,7 @@
 //! | Kind | Methods | Behaviour |
 //! |---|---|---|
 //! | **Listing** | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list` | Every host is asked; the entries are concatenated in registration order onto the first host's envelope. |
-//! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that owns the name; failing that, offered to each host in turn until one does not answer *not-found*. |
+//! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that declares the name, whatever it answers; failing that, offered to each host in turn until one does not answer *not-found* (a prompt: asked of each host whose own listing names it). |
 //! | **Broadcast** | `logging/setLevel`, every notification | Delivered to every host. |
 //! | **Declaration** | `initialize`, `discover`, `get_info`, `supported_protocol_versions` | The resolved [`ResolvedIdentity`] states the identity; capabilities are unioned, protocol versions intersected, instructions declared-or-joined. |
 //!
@@ -36,11 +36,11 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
 use crate::McpError;
-use crate::error::{AVAILABLE_PROMPTS, prompt_not_found, refuses_prompt};
+use crate::error::{AVAILABLE_PROMPTS, prompt_not_found};
 use crate::guard::BoxFuture;
 use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
-use crate::registry::{McpHostMeta, ToolIndex};
+use crate::registry::{McpHostMeta, MountIndex, RouteIndex};
 
 /// One host as the mount resolved it.
 struct MountedHost {
@@ -52,8 +52,8 @@ struct MountedHost {
 pub struct CompositeHandler {
     /// The path's hosts, in registration order.
     hosts: Vec<MountedHost>,
-    /// Tool name → position in [`hosts`](Self::hosts), built once at mount.
-    tools: Arc<ToolIndex>,
+    /// What each of [`hosts`](Self::hosts) declares, read once at mount.
+    index: Arc<MountIndex>,
     /// What this endpoint was declared to be, app and host merged.
     identity: Arc<ResolvedIdentity>,
     path: Arc<str>,
@@ -64,7 +64,7 @@ impl CompositeHandler {
         container: &Container,
         path: Arc<str>,
         hosts: &[Arc<McpHostMeta>],
-        tools: Arc<ToolIndex>,
+        index: Arc<MountIndex>,
         identity: Arc<ResolvedIdentity>,
     ) -> Self {
         Self {
@@ -75,7 +75,7 @@ impl CompositeHandler {
                     host: meta.build(container),
                 })
                 .collect(),
-            tools,
+            index,
             identity,
             path,
         }
@@ -113,11 +113,19 @@ impl CompositeHandler {
         }
     }
 
-    /// The host that declares `name`, through the index built at mount.
-    fn owner_of_tool(&self, name: &str) -> Option<&MountedHost> {
-        self.tools
+    /// The host that declares `name` in `routes`, read at mount.
+    fn owner(&self, routes: &RouteIndex, name: &str) -> Option<&MountedHost> {
+        routes
             .owner(name)
             .and_then(|position| self.hosts.get(position))
+    }
+
+    /// The hosts whose `routes` the mount could not read.
+    fn unread<'a>(&'a self, routes: &'a RouteIndex) -> impl Iterator<Item = &'a MountedHost> {
+        routes
+            .unread()
+            .iter()
+            .filter_map(|position| self.hosts.get(*position))
     }
 
     /// Offer an addressed operation to each host in turn, returning the first
@@ -160,17 +168,6 @@ fn is_not_found(err: &McpError) -> bool {
     err.code == ErrorCode::METHOD_NOT_FOUND
         || err.code == ErrorCode::RESOURCE_NOT_FOUND
         || (err.code == ErrorCode::INVALID_PARAMS && err.message == "tool not found")
-}
-
-/// The prompts rmcp's refusal of a prompt lists under its `data`.
-fn listed_prompts(refusal: McpError) -> Vec<serde_json::Value> {
-    match refusal.data {
-        Some(serde_json::Value::Object(mut data)) => match data.remove(AVAILABLE_PROMPTS) {
-            Some(serde_json::Value::Array(prompts)) => prompts,
-            _ => Vec::new(),
-        },
-        _ => Vec::new(),
-    }
 }
 
 /// `a || b`, over two optional flags that are each *absent* rather than false.
@@ -352,7 +349,7 @@ impl ServerHandler for CompositeHandler {
         if let Some(only) = self.single() {
             return only.host.call_tool(request, context).await;
         }
-        if let Some(owner) = self.owner_of_tool(&request.name) {
+        if let Some(owner) = self.owner(&self.index.tools, &request.name) {
             return owner.host.call_tool(request, context).await;
         }
         // A host whose router the mount could not read still gets its turn.
@@ -362,9 +359,11 @@ impl ServerHandler for CompositeHandler {
 
     merged_listing!(list_tools, ListToolsResult, tools, "tools/list");
 
-    /// Offered to each host in turn, rmcp's refusal of a prompt a host does
-    /// not declare leaving the next its turn; none serving it, the refusal
-    /// lists every host's prompts and never the name sent.
+    /// Answered by the host declaring the prompt, whatever it answers — a code
+    /// meaning *not found* included; a host the mount could not read declares
+    /// what its own listing names. None declaring it, the refusal lists every
+    /// host's prompts, as `prompts/list` on the path does, and never the name
+    /// sent.
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
@@ -373,24 +372,28 @@ impl ServerHandler for CompositeHandler {
         if let Some(only) = self.single() {
             return only.host.get_prompt(request, context).await;
         }
-        let mut listed: Option<Vec<serde_json::Value>> = None;
-        let mut unhandled = None;
-        for host in &self.hosts {
-            match host.host.get_prompt(request.clone(), context.clone()).await {
-                Ok(prompt) => return Ok(prompt),
-                Err(err) if refuses_prompt(&err, &request.name) => listed
-                    .get_or_insert_with(Vec::new)
-                    .extend(listed_prompts(err)),
-                Err(err) if is_not_found(&err) => unhandled = Some(err),
-                Err(err) => return Err(err),
+        if let Some(owner) = self.owner(&self.index.prompts, &request.name) {
+            return owner.host.get_prompt(request, context).await;
+        }
+        for host in self.unread(&self.index.prompts) {
+            let listed = host.host.list_prompts(None, context.clone()).await?;
+            if listed
+                .prompts
+                .iter()
+                .any(|prompt| prompt.name == request.name)
+            {
+                return host.host.get_prompt(request, context).await;
             }
         }
-        match listed {
-            Some(listed) => Err(prompt_not_found(Some(
-                serde_json::json!({ AVAILABLE_PROMPTS: listed }),
-            ))),
-            None => Err(unhandled.unwrap_or_else(no_hosts)),
-        }
+        let listed = ServerHandler::list_prompts(self, None, context).await?;
+        let names: Vec<String> = listed
+            .prompts
+            .into_iter()
+            .map(|prompt| prompt.name)
+            .collect();
+        Err(prompt_not_found(Some(
+            serde_json::json!({ AVAILABLE_PROMPTS: names }),
+        )))
     }
     merged_listing!(list_prompts, ListPromptsResult, prompts, "prompts/list");
 
@@ -500,13 +503,11 @@ impl ServerHandler for CompositeHandler {
     /// Routed through the index, so it rebuilds one host's `ToolRouter`, or
     /// asks only the hosts the index could not read.
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        match self.owner_of_tool(name) {
+        match self.owner(&self.index.tools, name) {
             Some(owner) => owner.host.get_tool(name),
             None => self
-                .tools
-                .unread()
-                .iter()
-                .find_map(|position| self.hosts.get(*position)?.host.get_tool(name)),
+                .unread(&self.index.tools)
+                .find_map(|host| host.host.get_tool(name)),
         }
     }
 

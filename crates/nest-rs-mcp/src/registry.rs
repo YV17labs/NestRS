@@ -18,7 +18,7 @@ use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
 use nest_rs_http::{
     DetachedWork, HttpBootCheck, HttpEndpointMeta, HttpRoutes, normalize_mount_path,
 };
-use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerConfig, Tool};
+use rmcp::model::{Prompt, ProtocolVersion, ServerCapabilities, ServerConfig, Tool};
 
 use crate::composite::{CompositeHandler, common_protocol_versions};
 use crate::endpoint::{McpMount, endpoint};
@@ -68,9 +68,29 @@ pub static ENDPOINT: Handler = declare_endpoint(DEFAULT_PATH);
 /// Build one host instance from the live container, per MCP session.
 type BuildHost = fn(&Container) -> Arc<dyn McpHost>;
 
-/// The tools a host declares *statically* — its `#[tool_router]`, evaluated
-/// without an instance, for boot-time duplicate detection.
-type StaticTools = fn() -> Vec<Tool>;
+/// What a host declares *statically* — its routers, evaluated without an
+/// instance, for the mount's index and the boot's duplicate checks.
+type StaticRoutes = fn() -> DeclaredRoutes;
+
+/// The tools and prompts a host's routers declare, read without an instance.
+pub struct DeclaredRoutes {
+    tools: Vec<Tool>,
+    prompts: Vec<Prompt>,
+    complete: bool,
+}
+
+impl DeclaredRoutes {
+    /// `tools` and `prompts` as the host's routers list them; `complete` when
+    /// they are every tool and prompt the host serves, as `#[tools]` writes
+    /// its whole handler.
+    pub fn new(tools: Vec<Tool>, prompts: Vec<Prompt>, complete: bool) -> Self {
+        Self {
+            tools,
+            prompts,
+            complete,
+        }
+    }
+}
 
 /// One `#[mcp]` host's contribution to the endpoint at its path.
 pub struct McpHostMeta {
@@ -78,7 +98,7 @@ pub struct McpHostMeta {
     host: &'static str,
     identity: McpIdentity,
     build: BuildHost,
-    tools: StaticTools,
+    routes: StaticRoutes,
 }
 
 impl McpHostMeta {
@@ -100,7 +120,11 @@ impl McpHostMeta {
     /// The tools this host declares through rmcp's `#[tool_router]`; empty for
     /// a host that hand-writes `list_tools`/`call_tool`.
     pub fn declared_tools(&self) -> Vec<Tool> {
-        (self.tools)()
+        (self.routes)().tools
+    }
+
+    pub(crate) fn declared_routes(&self) -> DeclaredRoutes {
+        (self.routes)()
     }
 
     pub(crate) fn build(&self, container: &Container) -> Arc<dyn McpHost> {
@@ -118,6 +142,28 @@ pub trait DefaultToolRouter: Sized + Send + Sync + 'static {
 }
 
 impl<T: Send + Sync + 'static> DefaultToolRouter for T {}
+
+/// Empty fallback so `#[mcp]` can ask **any** host for its declared prompts:
+/// an inherent `prompt_router()` wins over this trait's.
+pub trait DefaultPromptRouter: Sized + Send + Sync + 'static {
+    /// No router of its own.
+    fn prompt_router() -> rmcp::handler::server::router::prompt::PromptRouter<Self> {
+        rmcp::handler::server::router::prompt::PromptRouter::default()
+    }
+}
+
+impl<T: Send + Sync + 'static> DefaultPromptRouter for T {}
+
+/// Fallback so `#[mcp]` can ask **any** host whether its routers are all it
+/// serves: only the `#[tools]` impl's inherent function answers yes.
+pub trait DefaultDeclaredRoutes: Sized + 'static {
+    /// A host writing rmcp's handler by hand may serve more than its routers.
+    fn __nestrs_mcp_declares_every_route() -> bool {
+        false
+    }
+}
+
+impl<T: 'static> DefaultDeclaredRoutes for T {}
 
 /// Empty fallback so the struct-level `#[mcp]` can ask **any** host which layers
 /// its operations declared; the `#[tools]` impl's inherent function wins. One
@@ -141,7 +187,7 @@ pub fn register_host<P: 'static>(
     host: &'static str,
     identity: McpIdentity,
     build: BuildHost,
-    tools: StaticTools,
+    routes: StaticRoutes,
 ) -> ContainerBuilder {
     let path = normalize_mount_path(match path {
         "" => DEFAULT_PATH,
@@ -159,7 +205,7 @@ pub fn register_host<P: 'static>(
         host,
         identity,
         build,
-        tools,
+        routes,
     });
 
     if claimed {
@@ -189,6 +235,7 @@ pub fn register_host<P: 'static>(
                 return Ok(());
             }
             check_duplicate_tools(path, &hosts)?;
+            check_duplicate_prompts(path, &hosts)?;
             warn_undeclared_tools(path, &hosts);
             check_protocol_versions(path, &hosts)
         }))
@@ -247,37 +294,57 @@ pub fn hosts_on(container: &Container, path: &str) -> Vec<Arc<McpHostMeta>> {
 }
 
 /// One host on a path, resolved **once** per boot pass and shared by every
-/// check: `build` runs the developer's constructor and `declared_tools` builds a
-/// whole `ToolRouter`.
+/// check: `build` runs the developer's constructor and `declared_routes`
+/// builds a whole router of each kind.
 struct ResolvedHost {
     meta: Arc<McpHostMeta>,
     name: &'static str,
-    declared: BTreeSet<String>,
+    tools: BTreeSet<String>,
+    prompts: BTreeSet<String>,
+    /// Whether its routers are every tool and prompt it serves.
+    complete: bool,
     instance: Arc<dyn McpHost>,
+}
+
+impl ResolvedHost {
+    /// Whether the boot can read the tools it serves off its router.
+    fn reads_tools(&self) -> bool {
+        self.complete || !self.tools.is_empty()
+    }
 }
 
 fn resolve(container: &Container, path: &str) -> Vec<ResolvedHost> {
     hosts_on(container, path)
         .into_iter()
-        .map(|meta| ResolvedHost {
-            name: meta.host(),
-            declared: declared_names(&meta).map(Cow::into_owned).collect(),
-            instance: meta.build(container),
-            meta,
+        .map(|meta| {
+            let routes = meta.declared_routes();
+            ResolvedHost {
+                name: meta.host(),
+                tools: tool_names(&routes).map(Cow::into_owned).collect(),
+                prompts: prompt_names(&routes).collect(),
+                complete: routes.complete,
+                instance: meta.build(container),
+                meta,
+            }
         })
         .collect()
 }
 
-fn declared_names(meta: &McpHostMeta) -> impl Iterator<Item = Cow<'static, str>> + use<> {
-    meta.declared_tools().into_iter().map(|tool| tool.name)
+fn tool_names(routes: &DeclaredRoutes) -> impl Iterator<Item = Cow<'static, str>> + '_ {
+    routes.tools.iter().map(|tool| tool.name.clone())
+}
+
+fn prompt_names(routes: &DeclaredRoutes) -> impl Iterator<Item = String> + '_ {
+    routes.prompts.iter().map(|prompt| prompt.name.clone())
 }
 
 fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &DetachedWork) {
     let hosts = hosts_on(container, path);
 
-    let mut tools = ToolIndex::default();
+    let mut index = MountIndex::default();
     for (position, host) in hosts.iter().enumerate() {
-        let names: Vec<Cow<'static, str>> = declared_names(host).collect();
+        let declared = host.declared_routes();
+        let names: Vec<Cow<'static, str>> = tool_names(&declared).collect();
         tracing::info!(
             target: nest_rs_http::target::ROUTES,
             kind = MCP_LABEL,
@@ -286,13 +353,14 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
             tools = names.join(", ").as_str(),
             "mounted mcp host",
         );
-        if names.is_empty() {
-            tools.unread.push(position);
-        }
-        for name in names {
-            // A duplicate already failed the boot.
-            tools.owners.entry(name.into_owned()).or_insert(position);
-        }
+        index.tools.read(
+            position,
+            names.into_iter().map(Cow::into_owned),
+            declared.complete,
+        );
+        index
+            .prompts
+            .read(position, prompt_names(&declared), declared.complete);
     }
 
     // A contested or unbacked identity already failed the boot in `check_identity`.
@@ -305,10 +373,10 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
         .get::<crate::McpConfig>()
         .unwrap_or_default()
         .warn_when_operations_outlast_the_window(window, path);
-    let tools = Arc::new(tools);
+    let index = Arc::new(index);
     let mount = McpMount::from_container(container)
         .stopped_with(detached.clone())
-        .declaring(tools.clone());
+        .declaring(index.clone());
     let shared_path: Arc<str> = Arc::from(path);
     let container = container.clone();
     routes.route_any_poem(
@@ -318,25 +386,49 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
                 &container,
                 shared_path.clone(),
                 &hosts,
-                tools.clone(),
+                index.clone(),
                 identity.clone(),
             )
         }),
     );
 }
 
-/// The tools the hosts on one path declare, read once at mount: rmcp's
-/// `#[tool_handler]` rebuilds the whole `ToolRouter` on every `get_tool`.
+/// What the hosts on one path declare, read once at mount: rmcp's handlers
+/// rebuild a whole router on every lookup.
 #[derive(Debug, Default)]
-pub(crate) struct ToolIndex {
-    /// Tool name → position in the path's host list.
+pub(crate) struct MountIndex {
+    /// The tools, by name.
+    pub(crate) tools: RouteIndex,
+    /// The prompts, by name.
+    pub(crate) prompts: RouteIndex,
+}
+
+/// The names one kind of route — a tool, a prompt — the hosts on one path
+/// declare.
+#[derive(Debug, Default)]
+pub(crate) struct RouteIndex {
+    /// Name → position in the path's host list.
     owners: HashMap<String, usize>,
-    /// The positions of the hosts declaring no `#[tool_router]`, whose tools
-    /// only their own `get_tool` can name.
+    /// The positions of the hosts whose routes no router says, which only
+    /// their own handler can name.
     unread: Vec<usize>,
 }
 
-impl ToolIndex {
+impl RouteIndex {
+    /// Record the host at `position` declaring `names`, every one it serves
+    /// when `complete`; a host neither declares nor says is unread.
+    fn read(&mut self, position: usize, names: impl IntoIterator<Item = String>, complete: bool) {
+        let mut any = false;
+        for name in names {
+            any = true;
+            // A duplicate already failed the boot.
+            self.owners.entry(name).or_insert(position);
+        }
+        if !any && !complete {
+            self.unread.push(position);
+        }
+    }
+
     /// The position of the host declaring `name`.
     pub(crate) fn owner(&self, name: &str) -> Option<usize> {
         self.owners.get(name).copied()
@@ -360,26 +452,45 @@ impl ToolIndex {
     }
 }
 
-/// Fail boot when two hosts on one path serve the same tool name. A host that
-/// declares no `#[tool_router]` is probed with `get_tool` for every candidate.
+/// Fail boot when two hosts on one path serve the same tool name. A host whose
+/// router the boot cannot read is probed with `get_tool` for every candidate.
 fn check_duplicate_tools(path: &str, hosts: &[ResolvedHost]) -> Result<(), String> {
-    let candidates: BTreeSet<&String> =
-        hosts.iter().flat_map(|host| host.declared.iter()).collect();
+    let candidates: BTreeSet<&String> = hosts.iter().flat_map(|host| host.tools.iter()).collect();
 
     let mut owners: BTreeMap<&String, Vec<&'static str>> = BTreeMap::new();
     for name in candidates {
         for host in hosts {
-            let owns = if host.declared.is_empty() {
-                host.instance.get_tool(name).is_some()
+            let owns = if host.reads_tools() {
+                host.tools.contains(name)
             } else {
-                host.declared.contains(name)
+                host.instance.get_tool(name).is_some()
             };
             if owns {
                 owners.entry(name).or_default().push(host.name);
             }
         }
     }
+    refuse_clashes(path, "tool", owners)
+}
 
+/// Fail boot when two hosts on one path declare the same prompt name: the
+/// index would route it to the first, the second's unreachable.
+fn check_duplicate_prompts(path: &str, hosts: &[ResolvedHost]) -> Result<(), String> {
+    let mut owners: BTreeMap<&String, Vec<&'static str>> = BTreeMap::new();
+    for host in hosts {
+        for name in &host.prompts {
+            owners.entry(name).or_default().push(host.name);
+        }
+    }
+    refuse_clashes(path, "prompt", owners)
+}
+
+/// The boot failure naming every `kind` name more than one host claims.
+fn refuse_clashes(
+    path: &str,
+    kind: &str,
+    owners: BTreeMap<&String, Vec<&'static str>>,
+) -> Result<(), String> {
     let clashes: Vec<String> = owners
         .into_iter()
         .filter(|(_, owners)| owners.len() > 1)
@@ -390,7 +501,7 @@ fn check_duplicate_tools(path: &str, hosts: &[ResolvedHost]) -> Result<(), Strin
         return Ok(());
     }
     Err(format!(
-        "duplicate MCP tool name on {path:?}: {} — a tool is addressed by bare \
+        "duplicate MCP {kind} name on {path:?}: {} — a {kind} is addressed by bare \
          name within an endpoint, so rename one of them or give each host its \
          own path",
         clashes.join(", "),
@@ -403,7 +514,7 @@ fn check_duplicate_tools(path: &str, hosts: &[ResolvedHost]) -> Result<(), Strin
 fn warn_undeclared_tools(path: &str, hosts: &[ResolvedHost]) {
     let opaque: Vec<&'static str> = hosts
         .iter()
-        .filter(|host| host.declared.is_empty())
+        .filter(|host| !host.reads_tools())
         .map(|host| host.name)
         .collect();
     if opaque.is_empty() {

@@ -24,7 +24,7 @@ use crate::config::McpConfig;
 use crate::context::{McpAmbient, McpToolContext};
 use crate::error::said_by_code;
 use crate::propagate::PropagatingHandler;
-use crate::registry::ToolIndex;
+use crate::registry::MountIndex;
 use crate::sessions::{BoundedSessions, ReportedStore};
 use nest_rs_database::UnitOfWork;
 
@@ -52,9 +52,9 @@ pub struct McpMount {
     /// Told and stopped by the HTTP transport; a hand-built [`endpoint`]'s is never
     /// told, so its operations end only with their clients' cancellations.
     detached: DetachedWork,
-    /// The tools the path's hosts declare, read at mount; a hand-built
+    /// What the path's hosts declare, read at mount; a hand-built
     /// [`endpoint`]'s handler is asked through `get_tool`.
-    tools: Option<Arc<ToolIndex>>,
+    index: Option<Arc<MountIndex>>,
 }
 
 impl McpMount {
@@ -67,7 +67,7 @@ impl McpMount {
             config: McpConfig::default(),
             session_store: None,
             detached: DetachedWork::new(),
-            tools: None,
+            index: None,
         }
     }
 
@@ -113,7 +113,7 @@ impl McpMount {
             config,
             session_store: container.get_dyn::<dyn SessionStore>(),
             detached: DetachedWork::new(),
-            tools: None,
+            index: None,
         }
     }
 
@@ -125,10 +125,10 @@ impl McpMount {
         self
     }
 
-    /// Name a tool an operation calls through `tools`, the index the mount
-    /// built of what its hosts declare.
-    pub(crate) fn declaring(mut self, tools: Arc<ToolIndex>) -> Self {
-        self.tools = Some(tools);
+    /// Name a tool an operation calls through `index`, what the mount read
+    /// its hosts declare.
+    pub(crate) fn declaring(mut self, index: Arc<MountIndex>) -> Self {
+        self.index = Some(index);
         self
     }
 }
@@ -154,7 +154,7 @@ where
         config,
         session_store,
         detached,
-        tools,
+        index,
     } = mount;
 
     let handler_context = context.clone();
@@ -181,7 +181,7 @@ where
                 unit_of_work.clone(),
                 detached.clone(),
                 operation_timeout,
-                tools.clone(),
+                index.clone(),
             ))
         },
         sessions.clone(),

@@ -100,7 +100,8 @@ pub mod __private {
     pub use crate::identity::declared_identity;
     pub use crate::operation::{description_is_blank, run_layered_mcp_chain};
     pub use crate::registry::{
-        DefaultOperationLayers, DefaultToolRouter, ENDPOINT, declare_endpoint, register_host,
+        DeclaredRoutes, DefaultDeclaredRoutes, DefaultOperationLayers, DefaultPromptRouter,
+        DefaultToolRouter, ENDPOINT, declare_endpoint, register_host,
     };
     pub use nest_rs_core::__private::install_pending;
 }

@@ -32,7 +32,8 @@ schedule, events), or container metadata (MCP: each host attaches `McpHostMeta`,
 the first on a path the one `HttpEndpointMeta` that mounts them all).
 
 - **Merging adds one failure: two contributions claiming one addressable name**,
-  a boot error naming both owners (a duplicate tool name within an MCP path).
+  a boot error naming both owners (a duplicate tool or prompt name within an
+  MCP path).
 - **The mount's identity belongs to the app**, never to whichever contribution
   registered first. The app declares it once; at most one contribution refines
   it for its own mount; a declaration replaces only what it states, so

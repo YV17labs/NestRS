@@ -175,8 +175,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let module = format_ident!("__nest_rs_mcp_{}", snake_case(&base.to_string()),);
     let generics = item.generics.split_for_impl();
 
-    // `pub(crate)` carries the router out of the generated module: the
-    // duplicate-tool boot check reads it from the parent.
+    // `pub(crate)` carries each router out of the generated module: the mount
+    // reads both from the parent, to route a name and check it is claimed once.
     let tool_impl = router_impl(
         &self_ty,
         &generics,
@@ -196,7 +196,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             attr: quote!(prompt_router),
             name: format_ident!("prompt_router"),
             ty: quote!(rmcp::handler::server::router::prompt::PromptRouter),
-            vis: quote!(),
+            vis: quote!(pub(crate)),
         },
     )?;
 
@@ -278,6 +278,13 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 -> (::std::vec::Vec<::core::any::TypeId>, ::std::vec::Vec<&'static str>)
             {
                 (::std::vec![#(#layer_keys),*], ::std::vec![#(#layer_labels),*])
+            }
+
+            // Read by the struct half: this host's routers are every tool and
+            // prompt it serves, since `#[tools]` writes its whole handler.
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_declares_every_route() -> bool {
+                true
             }
         }
 

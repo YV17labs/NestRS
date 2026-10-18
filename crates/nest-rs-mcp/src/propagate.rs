@@ -60,7 +60,7 @@ use crate::McpError;
 use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
 use crate::error::{method_not_found, prompt_not_found, refuses_method, refuses_prompt};
 use crate::guard::BoxFuture;
-use crate::registry::ToolIndex;
+use crate::registry::MountIndex;
 use nest_rs_core::__private::install_pending;
 
 /// Wraps a tool host so each operation runs with the request scope, what the
@@ -75,8 +75,8 @@ pub struct PropagatingHandler<H> {
     detached: DetachedWork,
     /// What one request operation may run for; `None` ⇒ no deadline.
     operation_timeout: Option<Duration>,
-    /// The tools the mount's hosts declare; `None` asks the host's `get_tool`.
-    tools: Option<Arc<ToolIndex>>,
+    /// What the mount's hosts declare; `None` asks the host's `get_tool`.
+    index: Option<Arc<MountIndex>>,
 }
 
 impl<H> PropagatingHandler<H> {
@@ -86,7 +86,7 @@ impl<H> PropagatingHandler<H> {
         unit_of_work: Option<Arc<dyn UnitOfWork>>,
         detached: DetachedWork,
         operation_timeout: Option<Duration>,
-        tools: Option<Arc<ToolIndex>>,
+        index: Option<Arc<MountIndex>>,
     ) -> Self {
         Self {
             inner,
@@ -94,7 +94,7 @@ impl<H> PropagatingHandler<H> {
             unit_of_work,
             detached,
             operation_timeout,
-            tools,
+            index,
         }
     }
 
@@ -156,7 +156,7 @@ impl<H> PropagatingHandler<H> {
             mcp.operation.name = addressed.spanned(),
         );
         let method = method.named();
-        let declared = addressed.declared(&self.inner, self.tools.as_deref());
+        let declared = addressed.declared(&self.inner, self.index.as_deref());
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
         let line = OperationLine::open(method, declared, correlation.clone(), operation.clone());
 
@@ -346,14 +346,14 @@ impl Addressed {
     }
 
     /// What a line names: a tool by the name `host` declares — read off the
-    /// mount's `tools`, or `host`'s `get_tool` where those cannot say — and
+    /// mount's `index`, or `host`'s `get_tool` where it cannot say — and
     /// [`OTHER`](operation_log::OTHER) for one it does not; nothing else the
     /// client named, which no declaration answers for.
-    fn declared(&self, host: &impl ServerHandler, tools: Option<&ToolIndex>) -> Option<&str> {
+    fn declared(&self, host: &impl ServerHandler, index: Option<&MountIndex>) -> Option<&str> {
         match self {
             Self::Tool(name) => {
-                let declared = tools
-                    .and_then(|tools| tools.declares(name))
+                let declared = index
+                    .and_then(|index| index.tools.declares(name))
                     .unwrap_or_else(|| host.get_tool(name).is_some());
                 Some(if declared { name } else { operation_log::OTHER })
             }

@@ -6,10 +6,11 @@ use std::sync::Arc;
 use nest_rs_core::{Discovery, module};
 use nest_rs_http::HttpEndpointMeta;
 use nest_rs_mcp::model::{
-    CallToolRequestParams, CallToolResponse, GetPromptResult, Implementation, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, PromptMessage, ProtocolVersion,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
+    CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
+    GetPromptResult, Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, Prompt, PromptMessage, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities,
+    ServerConfig, Tool,
 };
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
@@ -328,6 +329,168 @@ async fn a_prompt_reaches_its_host_past_another_host_s_refusal() {
         refused["error"]["data"]["available_prompts"],
         json!(["opening", "closing"]),
         "{refused}"
+    );
+}
+
+/// One `#[tools]` host on `$path` serving the prompt `$name`, whose body
+/// answers `$answer`.
+macro_rules! prompt_host {
+    ($host:ident, $path:literal, $name:ident, $answer:expr) => {
+        #[mcp(path = $path)]
+        #[derive(Clone, Default)]
+        struct $host;
+
+        #[tools]
+        impl $host {
+            /// A note.
+            #[prompt]
+            #[public]
+            async fn $name(&self) -> Result<GetPromptResult, McpError> {
+                $answer
+            }
+        }
+    };
+}
+
+/// Its prompt is gone: what a host serving it answers, in a code that also
+/// means *not found*.
+fn the_note_is_gone(note: &str) -> Result<GetPromptResult, McpError> {
+    Err(McpError::resource_not_found(
+        format!("the {note} note is gone"),
+        None,
+    ))
+}
+
+fn opening_note() -> Result<GetPromptResult, McpError> {
+    Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+        Role::User,
+        "opening body",
+    )]))
+}
+
+const NOTES: &str = "/mcp/notes";
+
+prompt_host!(NotesOpening, "/mcp/notes", opening, opening_note());
+prompt_host!(
+    NotesClosing,
+    "/mcp/notes",
+    closing,
+    the_note_is_gone("closing")
+);
+
+/// Writes rmcp's handler by hand, with no `prompt_router()`: the mount's index
+/// cannot read it, so its own listing says what it serves.
+#[mcp(path = "/mcp/notes")]
+#[derive(Clone)]
+struct DraftNotes;
+
+impl ServerHandler for DraftNotes {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_prompts().build())
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, McpError> {
+        Ok(ListPromptsResult::with_all_items(vec![Prompt::new(
+            "draft",
+            Some("A draft."),
+            None,
+        )]))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, McpError> {
+        match request.name.as_str() {
+            "draft" => Err(McpError::resource_not_found("the draft note is gone", None)),
+            _ => Err(McpError::method_not_found::<
+                rmcp::model::GetPromptRequestMethod,
+            >()),
+        }
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [NotesOpening, NotesClosing, DraftNotes])]
+struct NotesApp;
+
+const NOTES_REVERSED: &str = "/mcp/notes-reversed";
+
+prompt_host!(
+    ReversedClosing,
+    "/mcp/notes-reversed",
+    closing,
+    the_note_is_gone("closing")
+);
+prompt_host!(
+    ReversedOpening,
+    "/mcp/notes-reversed",
+    opening,
+    opening_note()
+);
+
+#[module(imports = [crate::open_mcp()], providers = [ReversedClosing, ReversedOpening])]
+struct ReversedNotesApp;
+
+/// `prompts/get` on `path`, answered through `session`.
+async fn get_prompt(app: &TestApp, path: &str, session: &str, name: &str) -> serde_json::Value {
+    result(
+        &call_method(
+            app.http(),
+            path,
+            session,
+            None,
+            "prompts/get",
+            json!({ "name": name }),
+        )
+        .await,
+    )
+}
+
+/// A prompt is answered by the host declaring it, whatever that host says —
+/// a code meaning *not found* included, which another host's refusal used to
+/// outrank — and in either host order; a host the mount's index cannot read
+/// is asked through its own listing.
+#[tokio::test]
+async fn a_prompt_is_answered_by_the_host_declaring_it_whatever_it_answers() {
+    let app = TestApp::for_module::<NotesApp>()
+        .await
+        .expect("three prompt hosts on one path boot");
+    let session = open_session(app.http(), NOTES, None).await;
+
+    let opening = get_prompt(&app, NOTES, &session, "opening").await;
+    assert!(opening.to_string().contains("opening body"), "{opening}");
+    for (name, said) in [
+        ("closing", "the closing note is gone"),
+        ("draft", "the draft note is gone"),
+    ] {
+        let answered = get_prompt(&app, NOTES, &session, name).await;
+        assert_eq!(answered["error"]["code"], json!(-32002), "{answered}");
+        assert_eq!(answered["error"]["message"], json!(said), "{answered}");
+    }
+
+    let unknown = get_prompt(&app, NOTES, &session, "marked-prompt").await;
+    assert!(!unknown.to_string().contains("marked"), "{unknown}");
+    assert_eq!(unknown["error"]["code"], json!(-32602), "{unknown}");
+    assert_eq!(
+        unknown["error"]["data"]["available_prompts"],
+        json!(["opening", "closing", "draft"]),
+        "every host's prompts, as prompts/list on the path lists them: {unknown}",
+    );
+
+    let reversed = TestApp::for_module::<ReversedNotesApp>()
+        .await
+        .expect("two prompt hosts on one path boot");
+    let session = open_session(reversed.http(), NOTES_REVERSED, None).await;
+    let closing = get_prompt(&reversed, NOTES_REVERSED, &session, "closing").await;
+    assert_eq!(
+        closing["error"]["message"],
+        json!("the closing note is gone"),
+        "{closing}"
     );
 }
 
@@ -1089,6 +1252,41 @@ async fn a_duplicate_tool_name_on_one_path_fails_boot() {
     );
     assert!(
         err.contains("FirstClashingTool") && err.contains("SecondClashingTool"),
+        "…and both owning providers: {err}",
+    );
+}
+
+prompt_host!(
+    FirstClashingPrompt,
+    "/prompt-clash",
+    shared_prompt,
+    opening_note()
+);
+prompt_host!(
+    SecondClashingPrompt,
+    "/prompt-clash",
+    shared_prompt,
+    opening_note()
+);
+
+#[module(providers = [FirstClashingPrompt, SecondClashingPrompt])]
+struct ClashingPromptModule;
+
+/// A prompt is routed to the host declaring it, so a second claim would be
+/// unreachable: the boot refuses it, as it refuses a tool's.
+#[tokio::test]
+async fn a_duplicate_prompt_name_on_one_path_fails_boot() {
+    let err = match TestApp::for_module::<ClashingPromptModule>().await {
+        Ok(_) => panic!("two hosts claiming one prompt name must not boot"),
+        Err(err) => err.to_string(),
+    };
+
+    assert!(
+        err.contains("duplicate MCP prompt name") && err.contains("shared_prompt"),
+        "the failure names the contested prompt: {err}",
+    );
+    assert!(
+        err.contains("FirstClashingPrompt") && err.contains("SecondClashingPrompt"),
         "…and both owning providers: {err}",
     );
 }

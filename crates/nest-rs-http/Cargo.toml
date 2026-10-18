@@ -64,6 +64,10 @@ futures-util.workspace = true
 # socket.
 hyper.workspace = true
 hyper-util.workspace = true
+# The HTTP/2 hyper serves: an error it ends a connection on is said without the
+# peer's GOAWAY debug data, which its `Display` appends. The suites drive it as
+# a client too, to read the server's SETTINGS frame.
+h2.workspace = true
 # The TLS listener: a handshake per accepted socket, the certificate read from a
 # resolver a renewal swaps without rebuilding the listener.
 tokio-rustls.workspace = true
@@ -111,9 +115,6 @@ reqwest.workspace = true
 # against the composition that defeated it rather than against a hand-set header.
 flate2.workspace = true
 futures-util.workspace = true
-# An HTTP/2 client that reads the server's SETTINGS frame, which no higher-level
-# client exposes.
-h2.workspace = true
 
 [lints]
 workspace = true

@@ -763,17 +763,15 @@ mod tests {
         }
     }
 
-    /// One HTTP/1.1 request answered by `endpoint` over a [`Recorded`] socket
-    /// under the connection's whole stack: what the peer read, and every write.
-    async fn answered_by(endpoint: impl Endpoint) -> (Bytes, Vec<Written>) {
+    /// `io` accepted from a loopback peer, to be served by `endpoint`: its
+    /// socket, and the connection that serves it once spawned.
+    fn accepted<Io>(
+        io: Io,
+        endpoint: impl Endpoint,
+    ) -> (crate::drain::DrainSocket<Io>, Connection) {
         let deadlines = Deadlines::default();
-        let (mut client, server) = tokio::io::duplex(64 * 1024);
-        let writes = Arc::new(Mutex::new(Vec::new()));
         let socket = Arc::new(Drain::default()).socket(
-            Recorded {
-                inner: server,
-                writes: Arc::clone(&writes),
-            },
+            io,
             Arc::new(Semaphore::new(1))
                 .try_acquire_owned()
                 .expect("a free place"),
@@ -788,6 +786,21 @@ mod tests {
             builder: Arc::new(builder(deadlines.send, TaskTracker::new())),
             shutdown: CancellationToken::new(),
         };
+        (socket, connection)
+    }
+
+    /// One HTTP/1.1 request answered by `endpoint` over a [`Recorded`] socket
+    /// under the connection's whole stack: what the peer read, and every write.
+    async fn answered_by(endpoint: impl Endpoint) -> (Bytes, Vec<Written>) {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let (socket, connection) = accepted(
+            Recorded {
+                inner: server,
+                writes: Arc::clone(&writes),
+            },
+            endpoint,
+        );
         let served = tokio::spawn(connection.serve(socket, None));
         client
             .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
@@ -801,6 +814,50 @@ mod tests {
         served.await.expect("the connection ends");
         let writes = std::mem::take(&mut *writes.lock().expect("unpoisoned"));
         (Bytes::from(response), writes)
+    }
+
+    /// A GOAWAY's debug data is the peer's own bytes, and h2's `Display`
+    /// appends them to the error the connection ends on.
+    #[tokio::test]
+    async fn a_connection_ended_by_the_peer_s_goaway_says_its_reason_without_its_debug_data() {
+        const DEBUG_DATA: &[u8] = b"sk_live_quoted";
+        let logs = LogCapture::install();
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let (socket, connection) = accepted(
+            server,
+            endpoint_fn(|_| async { Ok(Response::builder().body(Vec::new())) }),
+        );
+        let served = tokio::spawn(connection.serve(socket, None));
+
+        let mut frames = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec();
+        // An empty SETTINGS frame, then a GOAWAY: no stream, PROTOCOL_ERROR.
+        frames.extend_from_slice(&[0, 0, 0, 0x4, 0, 0, 0, 0, 0]);
+        let length = u8::try_from(8 + DEBUG_DATA.len()).expect("one byte of length");
+        frames.extend_from_slice(&[0, 0, length, 0x7, 0, 0, 0, 0, 0]);
+        frames.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0x1]);
+        frames.extend_from_slice(DEBUG_DATA);
+        client
+            .write_all(&frames)
+            .await
+            .expect("the frames are sent");
+        let mut answered = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut answered))
+            .await
+            .expect("the server closes the connection")
+            .expect("the answer is read");
+        served.await.expect("the connection ends");
+
+        let ended = logs.expect_one(crate::target::HTTP, "connection ended on an error");
+        let error = ended.field("error").expect("the error is said");
+        assert!(error.contains("connection error received"), "{error}");
+        assert!(
+            error.contains("unspecific protocol error detected"),
+            "the reason is said: {error}"
+        );
+        assert!(
+            !error.contains("sk_live"),
+            "the debug data is quoted: {error}"
+        );
     }
 
     /// The bench's JSON route: a body serialized into a buffer of its own.
@@ -855,24 +912,8 @@ mod tests {
             let body = body.clone();
             async move { Ok(Response::builder().body(body)) }
         });
-        let deadlines = Deadlines::default();
         let (mut client, server) = tokio::io::duplex(64 * 1024);
-        let socket = Arc::new(Drain::default()).socket(
-            server,
-            Arc::new(Semaphore::new(1))
-                .try_acquire_owned()
-                .expect("a free place"),
-            deadlines.send,
-        );
-        let connection = Connection {
-            peer: SocketAddr::from(([127, 0, 0, 1], 50_000)),
-            local: SocketAddr::from(([127, 0, 0, 1], 3_000)),
-            accepted: Instant::now(),
-            deadlines,
-            endpoint: BoxEndpoint::new(endpoint),
-            builder: Arc::new(builder(deadlines.send, TaskTracker::new())),
-            shutdown: CancellationToken::new(),
-        };
+        let (socket, connection) = accepted(server, endpoint);
         let held = crate::testing::Held::count();
         let served = tokio::spawn(connection.serve(socket, None));
         client

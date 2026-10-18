@@ -1091,6 +1091,29 @@ impl serde::de::Error for HeaderError {
 
 impl std::error::Error for HeaderError {}
 
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_h2) }
+
+/// A GOAWAY error of h2's, said as h2 says it without the debug data its
+/// `Display` appends — the peer's own bytes; every other h2 error says nothing
+/// it was sent.
+fn say_h2(link: &(dyn Error + 'static)) -> Option<String> {
+    let error = link.downcast_ref::<h2::Error>()?;
+    if !error.is_go_away() {
+        return None;
+    }
+    let initiator = if error.is_remote() {
+        "received"
+    } else if error.is_library() {
+        "detected"
+    } else {
+        "sent by user"
+    };
+    let reason = error
+        .reason()
+        .map_or_else(|| "no reason".to_owned(), |reason| reason.to_string());
+    Some(format!("connection error {initiator}: {reason}"))
+}
+
 #[cfg(test)]
 mod tests {
     use http::{HeaderValue, header};

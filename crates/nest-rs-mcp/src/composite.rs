@@ -6,8 +6,11 @@
 //! | Kind | Methods | Behaviour |
 //! |---|---|---|
 //! | **Listing** | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list` | Every host is asked; the entries are concatenated in registration order onto the first host's envelope. |
-//! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that declares the name, whatever it answers; failing that, offered to each host in turn until one does not answer *not-found* — a task, until one holds it; a prompt, to the host whose own listing names it. |
+//! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that declares the name, whatever it answers; failing that, offered to each host in turn until one does not answer *not-found* — a task, until one holds it; a prompt, to the host whose own listing names it. Refused by all, the first host serving the method answers. |
 //! | **Broadcast** | `logging/setLevel`, every notification | Delivered to every host. |
+//!
+//! Wherever several hosts answer *not-found*, a host that does not serve the
+//! method at all (`-32601`) never answers for one that does.
 //! | **Declaration** | `initialize`, `discover`, `get_info`, `supported_protocol_versions` | The resolved [`ResolvedIdentity`] states the identity; capabilities are unioned, protocol versions intersected, instructions declared-or-joined. |
 //!
 //! Pagination cursors are not merged across hosts: a host returning one on a
@@ -129,7 +132,7 @@ impl CompositeHandler {
     }
 
     /// Offer an addressed operation to each host in turn, returning the first
-    /// answer that is not *not-found*, else the last not-found.
+    /// answer that is not *not-found*, else the refusal `hold` keeps.
     async fn route<'a, T, F>(&'a self, call: F) -> Result<T, McpError>
     where
         F: Fn(&'a dyn McpHost) -> BoxFuture<'a, Result<T, McpError>>,
@@ -151,11 +154,11 @@ impl CompositeHandler {
         for host in &self.hosts {
             match call(host.host.as_ref()).await {
                 Ok(value) => return Ok(value),
-                Err(err) if is_not_found(&err) || misses(&err) => unhandled = Some(err),
+                Err(err) if is_not_found(&err) || misses(&err) => hold(&mut unhandled, Err(err)),
                 Err(err) => return Err(err),
             }
         }
-        Err(unhandled.unwrap_or_else(no_hosts))
+        unhandled.unwrap_or_else(|| Err(no_hosts()))
     }
 
     fn warn_cursor(&self, host: &MountedHost, method: &str) {
@@ -181,6 +184,17 @@ fn is_not_found(err: &McpError) -> bool {
     err.code == ErrorCode::METHOD_NOT_FOUND
         || err.code == ErrorCode::RESOURCE_NOT_FOUND
         || (err.code == ErrorCode::INVALID_PARAMS && err.message == TOOL_NOT_FOUND)
+}
+
+/// Keep `answer` as what the path says when no host answers otherwise, unless
+/// `held` is already a serving host's: a host that does not serve the method
+/// at all (`-32601`) never answers for one that does, whatever order they
+/// registered in, and the first serving host's answer stands.
+fn hold<T>(held: &mut Option<Result<T, McpError>>, answer: Result<T, McpError>) {
+    let serves_none = |held: &Result<T, McpError>| matches!(held, Err(refusal) if refusal.code == ErrorCode::METHOD_NOT_FOUND);
+    if held.as_ref().is_none_or(serves_none) {
+        *held = Some(answer);
+    }
 }
 
 /// `a || b`, over two optional flags that are each *absent* rather than false.
@@ -448,22 +462,19 @@ impl ServerHandler for CompositeHandler {
     addressed!(unsubscribe(UnsubscribeRequestParams) -> ());
 
     /// A host with nothing to complete answers an empty `Ok`, not *not-found*: the
-    /// first non-empty completion wins, an empty one or a refusal is the fallback.
+    /// first non-empty completion wins, an empty one or a refusal is the fallback
+    /// `hold` keeps.
     async fn complete(
         &self,
         request: CompleteRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CompleteResult, McpError> {
-        let mut fallback: Option<Result<CompleteResult, McpError>> = None;
+        let mut fallback = None;
         for host in &self.hosts {
             match host.host.complete(request.clone(), context.clone()).await {
                 Ok(result) if !result.completion.values.is_empty() => return Ok(result),
-                Ok(result) => {
-                    fallback.get_or_insert(Ok(result));
-                }
-                Err(err) if is_not_found(&err) => {
-                    fallback.get_or_insert(Err(err));
-                }
+                Ok(result) => hold(&mut fallback, Ok(result)),
+                Err(err) if is_not_found(&err) => hold(&mut fallback, Err(err)),
                 Err(err) => return Err(err),
             }
         }
@@ -471,7 +482,8 @@ impl ServerHandler for CompositeHandler {
     }
 
     /// Every host is told; accepted by any is accepted, but a real failure is
-    /// reported even when a peer accepted.
+    /// reported even when a peer accepted. Refused by all, the refusal `hold`
+    /// keeps answers.
     async fn set_level(
         &self,
         request: SetLevelRequestParams,
@@ -483,9 +495,7 @@ impl ServerHandler for CompositeHandler {
         for host in &self.hosts {
             match host.host.set_level(request.clone(), context.clone()).await {
                 Ok(()) => accepted = true,
-                Err(err) if is_not_found(&err) => {
-                    refusal.get_or_insert(err);
-                }
+                Err(err) if is_not_found(&err) => hold(&mut refusal, Err(err)),
                 Err(err) => {
                     failure.get_or_insert(err);
                 }
@@ -494,7 +504,7 @@ impl ServerHandler for CompositeHandler {
         match (failure, accepted) {
             (Some(err), _) => Err(err),
             (None, true) => Ok(()),
-            (None, false) => Err(refusal.unwrap_or_else(no_hosts)),
+            (None, false) => refusal.unwrap_or_else(|| Err(no_hosts())),
         }
     }
 
@@ -587,6 +597,53 @@ impl ServerHandler for CompositeHandler {
             merged.instructions = Some(declared.to_owned());
         }
         merged
+    }
+}
+
+#[cfg(test)]
+mod refusal_precedence {
+    use super::*;
+
+    fn refused(code: ErrorCode, message: &'static str) -> Result<(), McpError> {
+        Err(McpError::new(code, message, None))
+    }
+
+    /// What the path answers once every host answered `answers`, in order.
+    fn held(answers: Vec<Result<(), McpError>>) -> Result<(), McpError> {
+        let mut held = None;
+        for answer in answers {
+            hold(&mut held, answer);
+        }
+        held.expect("one answer at least")
+    }
+
+    #[test]
+    fn a_host_serving_the_method_answers_over_one_serving_none_in_either_order() {
+        let serving = || refused(ErrorCode::RESOURCE_NOT_FOUND, "serving");
+        let none = || refused(ErrorCode::METHOD_NOT_FOUND, "none");
+        for answers in [vec![serving(), none()], vec![none(), serving()]] {
+            assert_eq!(held(answers).unwrap_err().message, "serving");
+        }
+        assert_eq!(
+            held(vec![none(), Ok(()), none()]),
+            Ok(()),
+            "an empty answer is a serving host's"
+        );
+        assert_eq!(
+            held(vec![
+                serving(),
+                refused(ErrorCode::RESOURCE_NOT_FOUND, "later")
+            ])
+            .unwrap_err()
+            .message,
+            "serving",
+            "the first serving host's answer stands",
+        );
+        assert_eq!(
+            held(vec![none(), none()]).unwrap_err().code,
+            ErrorCode::METHOD_NOT_FOUND,
+            "no host serves it",
+        );
     }
 }
 

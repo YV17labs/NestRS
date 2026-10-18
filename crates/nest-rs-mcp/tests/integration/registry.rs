@@ -6,12 +6,12 @@ use std::sync::Arc;
 use nest_rs_core::{Discovery, module};
 use nest_rs_http::HttpEndpointMeta;
 use nest_rs_mcp::model::{
-    CallToolRequestParams, CallToolResponse, CancelTaskParams, GetPromptRequestParams,
-    GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, Implementation,
-    ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
-    PromptMessage, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-    ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
-    UpdateTaskParams,
+    CallToolRequestParams, CallToolResponse, CancelTaskParams, CompleteRequestParams,
+    CompleteResult, GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams,
+    GetTaskResult, Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, Prompt, PromptMessage, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities,
+    ServerConfig, Tool, UpdateTaskParams,
 };
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
@@ -669,6 +669,136 @@ async fn a_task_reaches_the_host_holding_it_past_another_host_s_refusal() {
         .await,
     );
     assert_eq!(got["result"]["taskId"], json!(task), "{got}");
+}
+
+/// Two hosts on `$path`: `$none` serves no method a test asks — rmcp's
+/// `-32601`, completion included, as a host written without them answers —
+/// and `$all` serves each, refusing a resource and a logger it does not hold
+/// and having nothing to complete.
+macro_rules! serving_hosts {
+    ($path:literal, $none:ident, $all:ident) => {
+        #[mcp(path = $path)]
+        #[derive(Clone)]
+        struct $none;
+
+        impl ServerHandler for $none {
+            async fn complete(
+                &self,
+                _request: CompleteRequestParams,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<CompleteResult, McpError> {
+                Err(McpError::method_not_found::<
+                    rmcp::model::CompleteRequestMethod,
+                >())
+            }
+        }
+
+        #[mcp(path = $path)]
+        #[derive(Clone)]
+        struct $all;
+
+        impl ServerHandler for $all {
+            async fn read_resource(
+                &self,
+                _request: ReadResourceRequestParams,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<ReadResourceResponse, McpError> {
+                Err(McpError::resource_not_found("unknown resource", None))
+            }
+
+            #[expect(
+                deprecated,
+                reason = "rmcp still routes the deprecated methods for legacy protocol versions"
+            )]
+            async fn set_level(
+                &self,
+                _request: rmcp::model::SetLevelRequestParams,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<(), McpError> {
+                Err(McpError::resource_not_found("unknown logger", None))
+            }
+        }
+    };
+}
+
+const SERVING_LAST: &str = "/mcp/serving-last";
+serving_hosts!("/mcp/serving-last", ServingNoneFirst, ServingAllLast);
+
+#[module(imports = [crate::open_mcp()], providers = [ServingNoneFirst, ServingAllLast])]
+struct ServingLastApp;
+
+const SERVING_FIRST: &str = "/mcp/serving-first";
+serving_hosts!("/mcp/serving-first", ServingNoneLast, ServingAllFirst);
+
+#[module(imports = [crate::open_mcp()], providers = [ServingAllFirst, ServingNoneLast])]
+struct ServingFirstApp;
+
+/// A host that does not serve a method (`-32601`) never answers for one that
+/// does, in either host order: a resource or a logger the serving host
+/// refuses is its refusal, and its empty completion the answer.
+#[tokio::test]
+async fn a_host_serving_no_method_never_answers_for_one_serving_it() {
+    let serving_last = TestApp::for_module::<ServingLastApp>()
+        .await
+        .expect("two hosts on one path boot");
+    let serving_first = TestApp::for_module::<ServingFirstApp>()
+        .await
+        .expect("two hosts on one path boot");
+    assert_eq!(
+        hosts_on(serving_first.container(), SERVING_FIRST)
+            .iter()
+            .map(|meta| meta.host())
+            .collect::<Vec<_>>(),
+        ["ServingAllFirst", "ServingNoneLast"],
+    );
+    for (app, path) in [
+        (&serving_last, SERVING_LAST),
+        (&serving_first, SERVING_FIRST),
+    ] {
+        let session = open_session(app.http(), path, None).await;
+        let session = session.as_str();
+        let call = |method: &'static str, params: serde_json::Value| async move {
+            result(&call_method(app.http(), path, session, None, method, params).await)
+        };
+
+        for (method, params, said) in [
+            (
+                "resources/read",
+                json!({ "uri": "serving://gone" }),
+                "unknown resource",
+            ),
+            (
+                "logging/setLevel",
+                json!({ "level": "info" }),
+                "unknown logger",
+            ),
+        ] {
+            let refused = call(method, params).await;
+            assert_eq!(
+                refused["error"]["code"],
+                json!(-32002),
+                "{path} {method}: {refused}"
+            );
+            assert_eq!(
+                refused["error"]["message"],
+                json!(said),
+                "{path} {method}: {refused}"
+            );
+        }
+        let completed = call(
+            "completion/complete",
+            json!({
+                "ref": { "type": "ref/prompt", "name": "any" },
+                "argument": { "name": "a", "value": "" },
+            }),
+        )
+        .await;
+        assert_eq!(
+            completed["result"]["completion"]["values"],
+            json!([]),
+            "{path}: {completed}"
+        );
+    }
 }
 
 #[tokio::test]

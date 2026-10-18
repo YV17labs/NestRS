@@ -102,13 +102,17 @@ spelled it.
   serves is `_OTHER`, its error frame saying `unknown event`. The frame still
   answers on the event the message named: a protocol's correlation key echoed
   to its sender, on its own socket, is the protocol, as a JSON-RPC id is.
+  A value with no declared counterpart stays off the line: a GraphQL
+  operation's name is the document's, so its line names the operation's type
+  and its root-field lines what ran.
 - **The span keeps what the telemetry conventions require or recommend, as a
   stated exception.** The request span records `url.path` (required),
   `user_agent.original` (recommended) and, for a method outside the known
   set, `http.request.method_original` (required whenever it differs from
-  `http.request.method`). Standards over invention: a tracing backend reads
-  those names, and the span goes to the deployment's own collector, never to
-  a client or a shared log. Beyond that set, a header the span records is
+  `http.request.method`); a GraphQL operation's span its
+  `graphql.operation.name` (recommended). Standards over invention: a tracing
+  backend reads those names, and the span goes to the deployment's own
+  collector, never to a client or a shared log. Beyond that set, a header the span records is
   recorded only once it parsed under its grammar — a `traceparent` the
   transport did not continue as the 55 hex characters it parsed to, an
   `X-Request-Id`, which no specification gives a grammar, only in the shape a

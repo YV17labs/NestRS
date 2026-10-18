@@ -379,13 +379,14 @@ impl From<AtomicError> for FieldFailed {
 }
 
 /// One operation's `graphql.operation` line, filed exactly once — by `Drop` as
-/// [`CANCELLED`] when dropped first.
+/// [`CANCELLED`] when dropped first. It names the operation's type, never its
+/// name: the document's, which the client writes, and which the span alone
+/// carries, as the GraphQL conventions ask.
 ///
 /// The correlation is held: a `Drop` runs while the future is torn down, not
 /// reliably inside the scope that future installed.
 struct OperationLine {
     ty: Option<&'static str>,
-    name: Option<String>,
     correlation: nest_rs_core::Correlation,
     span: tracing::Span,
     started: std::time::Instant,
@@ -400,7 +401,6 @@ impl OperationLine {
     ) -> Self {
         Self {
             ty: selected.type_name(),
-            name: selected.name,
             correlation,
             span,
             started: std::time::Instant::now(),
@@ -418,7 +418,6 @@ impl OperationLine {
         tracing::warn!(
             target: crate::TARGET,
             operation_type = self.ty,
-            operation_name = self.name.as_deref(),
             ?timeout,
             "graphql operation not answered by the request deadline; it is cut",
         );
@@ -433,7 +432,6 @@ impl OperationLine {
                 outcome: outcome,
                 started: self.started,
                 operation_type = self.ty,
-                operation_name = self.name.as_deref(),
             );
         });
     }

@@ -489,33 +489,50 @@ fn assert_query_span_failed(logs: &LogCapture, name: &str, outcome: &str) {
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
-/// The outcome the line of the operation `name` filed.
-fn outcome_of(lines: &[nest_rs_testing::CapturedEvent], name: &str) -> Option<String> {
+/// The outcome the line of the operation `name` filed, found by its span's
+/// ids: the line names no operation.
+fn outcome_of(
+    logs: &LogCapture,
+    lines: &[nest_rs_testing::CapturedEvent],
+    name: &str,
+) -> Option<String> {
+    let span_id = operation_span(logs, name).field("span_id");
     lines
         .iter()
-        .find(|line| line.field("operation_name").as_deref() == Some(name))
+        .find(|line| line.span_id.is_some() && line.span_id == span_id)
         .unwrap_or_else(|| panic!("`{name}` files a line: {lines:#?}"))
         .field("outcome")
 }
 
+/// The line names the operation's type; its name is the document's, the
+/// client's to write, so the line leaves it to the span, which the GraphQL
+/// conventions ask to carry it.
 #[tokio::test]
-async fn each_operation_files_one_line_naming_its_type_and_name_as_its_span_does() {
+async fn each_operation_files_one_line_naming_its_type_and_its_span_its_name() {
     let logs = LogCapture::install();
     let (app, _) = boot().await;
     post(
         &app,
-        json!({ "query": "mutation Named { b: write(fail: true) }" }),
+        json!({ "query": "mutation MarkedName { b: write(fail: true) }" }),
     )
     .await;
     post(&app, json!({ "query": "{ policy }" })).await;
 
     let lines = operation_lines(&logs);
     assert_eq!(lines.len(), 2, "{lines:#?}");
+    for event in logs.events() {
+        for (field, value) in &event.fields {
+            assert!(
+                !value.contains("Marked"),
+                "{}: {field} = {value}",
+                event.target
+            );
+        }
+    }
     assert_eq!(
         lines[0].field("operation_type").as_deref(),
         Some("mutation")
     );
-    assert_eq!(lines[0].field("operation_name").as_deref(), Some("Named"));
     assert_eq!(
         lines[0].field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::ERROR),
@@ -523,16 +540,11 @@ async fn each_operation_files_one_line_naming_its_type_and_name_as_its_span_does
     );
     assert_eq!(lines[1].field("operation_type").as_deref(), Some("query"));
     assert_eq!(
-        lines[1].field("operation_name"),
-        None,
-        "an anonymous operation"
-    );
-    assert_eq!(
         lines[1].field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::OK)
     );
 
-    let named = operation_span(&logs, "Named");
+    let named = operation_span(&logs, "MarkedName");
     assert_eq!(
         named.field("graphql.operation.type").as_deref(),
         Some("mutation")
@@ -628,11 +640,11 @@ async fn an_operation_torn_down_by_a_sibling_that_panics_files_cancelled() {
     let lines = operation_lines(&logs);
     assert_eq!(lines.len(), 2, "one line per operation: {lines:#?}");
     assert_eq!(
-        outcome_of(&lines, "Exploding").as_deref(),
+        outcome_of(&logs, &lines, "Exploding").as_deref(),
         Some(nest_rs_core::operation_log::PANIC)
     );
     assert_eq!(
-        outcome_of(&lines, "Waiting").as_deref(),
+        outcome_of(&logs, &lines, "Waiting").as_deref(),
         Some(nest_rs_core::operation_log::CANCELLED),
         "the sibling did not unwind"
     );
@@ -671,7 +683,11 @@ async fn a_mutation_past_the_request_deadline_is_cut_inside_its_unit_and_answere
     );
     assert_eq!(cut.level, "warn");
     assert_eq!(cut.field("operation_type").as_deref(), Some("mutation"));
-    assert_eq!(cut.field("operation_name").as_deref(), Some("Slow"));
+    assert_eq!(
+        cut.field("operation_name"),
+        None,
+        "the document's name is the client's"
+    );
     assert_eq!(
         cut.field("timeout").as_deref(),
         Some("1s"),

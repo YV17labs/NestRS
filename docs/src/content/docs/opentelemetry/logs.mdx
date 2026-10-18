@@ -190,7 +190,7 @@ lifecycle hook:
 | Scheduled tick | `schedule.tick` | provider, method, `replicas`, and the `occurrence` a job firing once claimed |
 | Queue job | `queue.job` | queue, processor, `job_id`, `backend_id`, attempt |
 | MCP operation | `mcp.operation` | the JSON-RPC method |
-| GraphQL operation | `graphql.operation` | `operation_type`, `operation_name` |
+| GraphQL operation | `graphql.operation` | `operation_type` |
 | GraphQL root field | `graphql.field` | role, operation |
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |
 | Event dispatch | `events.dispatch` | event, listener |
@@ -198,7 +198,10 @@ lifecycle hook:
 
 A GraphQL document files one `graphql.operation` line per query or mutation
 it runs — `error` when its response carries an error — and one `graphql.field`
-line per root field under it. A GraphQL `#[field_resolver]` files no line and
+line per root field under it. The operation's name is the document's, which
+the client writes, so it rides the operation's span as `graphql.operation.name`
+and never the line; the root fields' lines say what ran, by the names your
+schema declares. A GraphQL `#[field_resolver]` files no line and
 opens no span of its own: it runs once per row its parent returns, so a line
 per call would let one document fill the log. Its guards still run on every call, and its failure
 reaches the client as a field error.

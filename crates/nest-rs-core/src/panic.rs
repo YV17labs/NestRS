@@ -53,16 +53,22 @@ pub fn panic_message(payload: &(dyn Any + Send)) -> String {
 pub fn contain<F: Future>(fut: F) -> impl Future<Output = Result<F::Output, Box<dyn Any + Send>>> {
     // Not an `async fn`: its state keeps the argument beside the future built
     // from it, so every contained unit would weigh twice its size.
-    Contained { unit: fut }
+    Contained {
+        unit: fut,
+        unwound: false,
+    }
 }
 
 pin_project_lite::pin_project! {
     /// What [`contain`] returns. The unit is marked only while it is polled: a
     /// panic raised as it is dropped mid-flight — cancelled by a timeout or a
     /// `select!` — unwinds past no catch of its own, so the hook files it.
+    /// Once the unit panicked it is never resumed, where it would panic again
+    /// and be said twice.
     struct Contained<F> {
         #[pin]
         unit: F,
+        unwound: bool,
     }
 }
 
@@ -70,13 +76,20 @@ impl<F: Future> Future for Contained<F> {
     type Output = Result<F::Output, Box<dyn Any + Send>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let unit = self.project().unit;
+        let this = self.project();
+        assert!(
+            !*this.unwound,
+            "a contained unit was polled again after it panicked"
+        );
+        let unit = this.unit;
+        let unwound = this.unwound;
         CONTAINED.sync_scope(Cell::new(Vec::new()), || {
             let polled = std::panic::catch_unwind(AssertUnwindSafe(|| unit.poll(cx)));
             let mut seen = CONTAINED.with(Cell::take);
             let polled = match polled {
                 Ok(polled) => polled.map(Ok),
                 Err(payload) => {
+                    *unwound = true;
                     // The last panic raised with its message is the one that got here.
                     let message = panic_message(payload.as_ref());
                     if let Some(at) = seen.iter().rposition(|panic| panic.message == message) {
@@ -138,6 +151,35 @@ macro_rules! contained_panic {
             $($($field)*)?
         )
     }};
+}
+
+/// Hold tracing-core on its per-thread dispatch path for the rest of the
+/// process, where a dispatch re-entered on one thread is answered with no
+/// subscriber, once a subscriber is set.
+///
+/// While no scoped dispatcher was ever set, tracing-core hands the global
+/// subscriber out even inside its own dispatch: a layer holding a lock while it
+/// records a field whose `Display` panics would deadlock in [`hook`]'s own
+/// event. One scoped default, set on a thread that ends at once, keeps the
+/// per-thread path taken; the hook then finds no subscriber there and writes
+/// its stderr line.
+pub(crate) fn hold_dispatch_reentrance() {
+    static HELD: std::sync::Once = std::sync::Once::new();
+    HELD.call_once(|| {
+        let held = std::thread::Builder::new()
+            .name("nestrs-dispatch".to_owned())
+            .spawn(|| {
+                // Dropping the guard would hand the fast path back.
+                std::mem::forget(tracing::dispatcher::set_default(&tracing::Dispatch::none()));
+            })
+            .map(std::thread::JoinHandle::join);
+        if !matches!(held, Ok(Ok(()))) {
+            write_stderr_line(format_args!(
+                "nestrs: the dispatch re-entrance guard could not be set; a panic raised inside \
+                 a subscriber's own dispatch may deadlock the hook"
+            ));
+        }
+    });
 }
 
 /// The panic hook `#[nest_rs::main]` installs: a panic raised while a
@@ -338,6 +380,34 @@ mod tests {
         assert!(
             contained < alone + 64,
             "{contained} bytes to contain a {alone}-byte unit"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_unit_that_panicked_is_never_resumed() {
+        let polled = std::sync::atomic::AtomicUsize::new(0);
+        let unit = std::future::poll_fn(|_| -> Poll<()> {
+            polled.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            panic!("deliberate")
+        });
+        let mut contained = std::pin::pin!(contain(unit));
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        assert!(matches!(
+            contained.as_mut().poll(&mut cx),
+            Poll::Ready(Err(_))
+        ));
+
+        let again = std::panic::catch_unwind(AssertUnwindSafe(|| contained.as_mut().poll(&mut cx)));
+        let refused = again.expect_err("a second poll is refused, not run");
+        assert_eq!(
+            panic_message(refused.as_ref()),
+            "a contained unit was polled again after it panicked"
+        );
+        assert_eq!(
+            polled.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the unit itself ran once: its panic is said once"
         );
     }
 

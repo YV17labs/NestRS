@@ -224,6 +224,8 @@ impl App {
     pub fn new<M: Module + 'static>() -> Result<Self> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
+        // After the fallback, which reads whether a subscriber was set.
+        crate::panic::hold_dispatch_reentrance();
         let lifecycle = booting();
         // `collect` runs first so a module queuing a factory is refused below.
         let root = std::any::type_name::<M>();
@@ -956,6 +958,8 @@ impl AppBuilder {
     pub async fn build(self) -> Result<App> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
+        // After the fallback, which reads whether a subscriber was set.
+        crate::panic::hold_dispatch_reentrance();
         let lifecycle = booting();
         let AppBuilder {
             mut builder,

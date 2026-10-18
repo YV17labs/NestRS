@@ -43,8 +43,52 @@ async fn run_child(role: String) -> anyhow::Result<()> {
             tracing::info!(target: TARGET, value = %Unwritable, "never written");
             Ok(())
         }
+        "inside_a_locking_subscriber" => {
+            nest_rs_core::__private::install_global_subscriber(Locking::default());
+            tracing::info!(target: TARGET, value = %Unwritable, "never written");
+            Ok(())
+        }
         other => anyhow::bail!("no child role `{other}`"),
     }
+}
+
+/// A subscriber holding a lock while it records an event's fields, as a user's
+/// layer may.
+#[derive(Default)]
+struct Locking(std::sync::Mutex<()>);
+
+struct Formatting;
+
+impl tracing::field::Visit for Formatting {
+    fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        drop(format!("{value:?}"));
+    }
+}
+
+impl tracing::Subscriber for Locking {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let _held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        event.record(&mut Formatting);
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
 }
 
 /// A value whose text panics as the subscriber writes it.
@@ -121,10 +165,11 @@ fn a_panic_no_unit_contains_is_one_redacted_error_on_the_app_target() {
     );
 }
 
-/// The production shape: the console subscriber is the global one, which the
-/// hook files through while it is still writing the line that panicked.
+/// The production shape: the console subscriber is the global one, still
+/// writing the line that panicked when the hook runs. The hook finds no
+/// subscriber inside that dispatch and writes its stderr line.
 #[test]
-fn a_panic_inside_the_subscriber_s_own_dispatch_is_one_event_of_the_hook() {
+fn a_panic_inside_the_subscriber_s_own_dispatch_is_one_line_on_stderr() {
     let mut child = ChildProcess::spawn_with(
         CHILD_TEST,
         "inside_the_subscriber",
@@ -141,20 +186,39 @@ fn a_panic_inside_the_subscriber_s_own_dispatch_is_one_event_of_the_hook() {
     );
 
     let (code, stdout) = child.exit_within(Duration::from_secs(10));
+    let stderr = child.stderr();
 
-    assert_eq!(code, Some(101), "a panic's status: {stdout:#?}");
-    let errors: Vec<serde_json::Value> = stdout
+    assert_eq!(code, Some(101), "a panic's status: {stdout:#?} {stderr:#?}");
+    let errors = stdout
         .iter()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|event| event["level"] == "ERROR")
+        .count();
+    assert_eq!(errors, 0, "nothing re-entered the console: {stdout:#?}");
+    let said: Vec<&String> = stderr
+        .iter()
+        .filter(|line| line.starts_with("nestrs: panicked at "))
         .collect();
-    assert_eq!(errors.len(), 1, "one error, the hook's: {stdout:#?}");
-    assert_eq!(errors[0]["fields"]["message"], NO_UNIT, "{}", errors[0]);
-    assert_eq!(
-        errors[0]["fields"][FIELD], "the field's text panicked",
-        "{}",
-        errors[0]
-    );
+    assert_eq!(said.len(), 1, "one line, the hook's: {stderr:#?}");
+    assert!(said[0].contains("the field's text panicked"), "{}", said[0]);
+}
+
+/// A subscriber of the app's own that holds a lock while it records a field
+/// whose text panics: the hook's own event would wait on that lock forever.
+#[test]
+fn a_panic_inside_a_locking_subscriber_is_said_on_stderr_and_never_deadlocks() {
+    let mut child = ChildProcess::spawn(CHILD_TEST, "inside_a_locking_subscriber");
+
+    let (code, stdout) = child.exit_within(Duration::from_secs(20));
+    let stderr = child.stderr();
+
+    assert_eq!(code, Some(101), "a panic's status: {stdout:#?} {stderr:#?}");
+    let said: Vec<&String> = stderr
+        .iter()
+        .filter(|line| line.starts_with("nestrs: panicked at "))
+        .collect();
+    assert_eq!(said.len(), 1, "one line, the hook's: {stderr:#?}");
+    assert!(said[0].contains("the field's text panicked"), "{}", said[0]);
 }
 
 #[test]

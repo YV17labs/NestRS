@@ -4,16 +4,12 @@
 
 use std::process::{Command, Output};
 
-use nest_rs_core::panic::FIELD;
 use nest_rs_opentelemetry::{LogFormat, OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
 
 const CHILD_TEST: &str = "init::init_child_process";
 
 /// The variable a child reads its role from.
 const CHILD_ROLE: &str = "NEST_RS_OPENTELEMETRY_CHILD_ROLE";
-
-/// The hook's one sentence for a panic it files itself.
-const NO_UNIT: &str = "panicked where no unit of work contains it";
 
 /// A value whose text panics as the subscriber writes it.
 struct Unwritable;
@@ -56,30 +52,32 @@ fn child() -> Output {
 }
 
 /// The production shape with an exporter's subscriber: OpenTelemetry's is the
-/// global one, and the panic hook files through it while it is still writing
-/// the line that panicked — one event, the hook's, and the process exits.
+/// global one, and a panic while it is still writing the line that panicked
+/// never re-enters it — the hook says it in one line on stderr, and the
+/// process exits.
 #[test]
-fn a_panic_inside_the_subscriber_s_own_dispatch_is_one_event_of_the_hook() {
+fn a_panic_inside_the_subscriber_s_own_dispatch_is_one_line_on_stderr() {
     let output = child();
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(
         output.status.code(),
         Some(101),
-        "a panic's status: {stdout}"
+        "a panic's status: {stdout} {stderr}"
     );
-    let errors: Vec<serde_json::Value> = stdout
+    let errors = stdout
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|event| event["level"] == "ERROR")
+        .count();
+    assert_eq!(errors, 0, "nothing re-entered the subscriber: {stdout}");
+    let said: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("nestrs: panicked at "))
         .collect();
-    assert_eq!(errors.len(), 1, "one error, the hook's: {stdout}");
-    assert_eq!(errors[0]["fields"]["message"], NO_UNIT, "{}", errors[0]);
-    assert_eq!(
-        errors[0]["fields"][FIELD], "the field's text panicked",
-        "{}",
-        errors[0]
-    );
+    assert_eq!(said.len(), 1, "one line, the hook's: {stderr}");
+    assert!(said[0].contains("the field's text panicked"), "{}", said[0]);
 }
 
 /// A `log` logger that keeps every record to itself.

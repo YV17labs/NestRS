@@ -520,7 +520,9 @@ pub(crate) mod __private {
         // global subscriber is leaked, never dropped: the weak handle outlives
         // `subscriber` exactly when it was installed, whatever the bridge says.
         let installed = subscriber.downgrade();
-        match subscriber.try_init() {
+        let tried = subscriber.try_init();
+        crate::panic::hold_dispatch_reentrance();
+        match tried {
             Ok(()) => true,
             Err(error) if installed.upgrade().is_some() => {
                 tracing::warn!(

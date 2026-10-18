@@ -277,10 +277,11 @@ ERROR nest_rs::app: panicked where no unit of work contains it thread="tokio-rt-
 It also carries `backtrace` when `RUST_BACKTRACE` asks for one. Before any
 subscriber exists — while the `.env` cascade loads, say — the hook writes one
 line to stderr instead, `nestrs: panicked at <file:line:col>: <message>`, with
-the same message, so no panic goes unsaid. The hook files through the
-subscriber in place, even when the panic came from inside it — a field whose
-`Display` panics: the subscribers nestrs installs take that, and a layer of
-your own must not hold a lock while it records an event's fields.
+the same message, so no panic goes unsaid. It writes that line too for a
+panic raised inside the subscriber's own dispatch — a field whose `Display`
+panics as a layer records it: filing through the subscriber again there would
+wait on whatever the layer holds, so a layer of your own may lock while it
+records an event's fields.
 
 The unit's span says the same thing to a tracing backend: every span whose unit
 did not end `ok` carries OpenTelemetry's `error.type` — the same word as the

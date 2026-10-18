@@ -308,6 +308,15 @@ gets `internal error` instead of waiting out its own timeout, the
 `mcp.operation` line files `outcome="panic"`, and the panic's text goes to
 `nest_rs::mcp` at `error` — never to the model.
 
+What the client named is never handed back either. rmcp refuses a prompt no
+host declares, a method no host serves and a request its transport turns away
+— an `MCP-Protocol-Version` it does not know, an `Mcp-Method` or `Mcp-Name`
+header the body contradicts — in sentences quoting the name or the header.
+The endpoint answers each by kind: `prompt not found`, still listing the
+prompts under `available_prompts`; JSON-RPC's own words for the error's code,
+such as `Method not found`, its id and code kept; or, for a refusal that is no
+JSON-RPC error, the status's problem document.
+
 ## Trait-based DI
 
 Injecting `Arc<dyn WeatherService>` keeps the concrete provider

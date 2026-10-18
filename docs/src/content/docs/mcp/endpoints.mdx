@@ -46,7 +46,8 @@ INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="HelloTool" t
 Nothing in a host changes: it stays a plain `ServerHandler` and never learns
 that it shares. `tools/list`, `prompts/list` and `resources/list` are the union
 of every host on the path; a `tools/call` is routed to the host that declares
-the name; the endpoint's advertised capabilities are the union of theirs.
+the name, and a `prompts/get` to the host that serves the prompt; the
+endpoint's advertised capabilities are the union of theirs.
 **A single host on a path is served verbatim** — the merge only engages beyond
 one.
 

@@ -56,6 +56,7 @@ use nest_rs_core::__private::Withheld;
 use nest_rs_core::ToProblem;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
+use rmcp::model::ErrorCode;
 use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManagerError, SessionError,
 };
@@ -161,6 +162,58 @@ pub fn unresolvable_chain(label: &'static str) -> McpError {
         "mcp operation declares guards but the mount carries no container",
     );
     McpError::internal_error(OPAQUE, None)
+}
+
+/// Whether `error` is rmcp's `PromptRouter` refusing `name`, a prompt its host
+/// does not declare, in words quoting the name a client sent.
+pub(crate) fn refuses_prompt(error: &McpError, name: &str) -> bool {
+    error.code == ErrorCode::INVALID_PARAMS
+        && error
+            .message
+            .strip_prefix("prompt '")
+            .and_then(|rest| rest.strip_suffix("' not found"))
+            == Some(name)
+}
+
+/// The key under which rmcp's refusal of a prompt lists the prompts its host
+/// declares.
+pub(crate) const AVAILABLE_PROMPTS: &str = "available_prompts";
+
+/// The refusal of a prompt no host serves, said by kind, its `data` the
+/// prompts the hosts declare as rmcp lists them.
+pub(crate) fn prompt_not_found(data: Option<serde_json::Value>) -> McpError {
+    McpError::invalid_params("prompt not found", data)
+}
+
+/// Whether `error` is rmcp's default answer to a custom method no host serves,
+/// whose message is the method as a client sent it.
+pub(crate) fn refuses_method(error: &McpError, method: &str) -> bool {
+    error.code == ErrorCode::METHOD_NOT_FOUND && error.message == method
+}
+
+/// The refusal of a method no host serves, in JSON-RPC 2.0's words (§5.1).
+pub(crate) fn method_not_found() -> McpError {
+    McpError::new(ErrorCode::METHOD_NOT_FOUND, METHOD_NOT_FOUND, None)
+}
+
+/// JSON-RPC 2.0's words for an unknown method (§5.1).
+const METHOD_NOT_FOUND: &str = "Method not found";
+
+/// What a JSON-RPC error `code` says: JSON-RPC 2.0's words for its own codes
+/// (§5.1) and MCP's for the codes rmcp names; `None` for any other.
+pub(crate) fn said_by_code(code: ErrorCode) -> Option<&'static str> {
+    Some(match code {
+        ErrorCode::PARSE_ERROR => "Parse error",
+        ErrorCode::INVALID_REQUEST => "Invalid Request",
+        ErrorCode::METHOD_NOT_FOUND => METHOD_NOT_FOUND,
+        ErrorCode::INVALID_PARAMS => "Invalid params",
+        ErrorCode::INTERNAL_ERROR => "Internal error",
+        ErrorCode::RESOURCE_NOT_FOUND => "Resource not found",
+        ErrorCode::HEADER_MISMATCH => "Header mismatch",
+        ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY => "Missing required client capability",
+        ErrorCode::UNSUPPORTED_PROTOCOL_VERSION => "Unsupported protocol version",
+        _ => return None,
+    })
 }
 
 /// What an MCP operation answers: a `Result` whose error takes an [`McpError`],

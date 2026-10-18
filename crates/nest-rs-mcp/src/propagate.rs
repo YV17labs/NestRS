@@ -58,6 +58,7 @@ use tracing::Instrument;
 
 use crate::McpError;
 use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
+use crate::error::{method_not_found, prompt_not_found, refuses_method, refuses_prompt};
 use crate::guard::BoxFuture;
 use crate::registry::ToolIndex;
 use nest_rs_core::__private::install_pending;
@@ -359,6 +360,16 @@ impl Addressed {
             Self::Nothing | Self::Prompt(_) | Self::Resource(_) => None,
         }
     }
+
+    /// `error` as the client is answered: rmcp's own refusals of a name no
+    /// host serves quote it, so each is said by kind.
+    fn said_by_kind(&self, method: &Method, error: McpError) -> McpError {
+        match (method, self) {
+            (Method::Custom(sent), _) if refuses_method(&error, sent) => method_not_found(),
+            (_, Self::Prompt(name)) if refuses_prompt(&error, name) => prompt_not_found(error.data),
+            _ => error,
+        }
+    }
 }
 
 /// One operation's `mcp.operation` line, filed exactly once — by the end the
@@ -473,6 +484,7 @@ macro_rules! request_method {
                     self.inner.$name($($arg,)* context),
                 )
                 .await
+                .map_err(|error| addressed.said_by_kind(&method, error))
             }
         }
     };

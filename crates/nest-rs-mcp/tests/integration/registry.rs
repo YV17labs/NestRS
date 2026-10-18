@@ -17,7 +17,7 @@ use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule, McpOptions,
     McpSetup, ServerHandler, hosts_on, mcp, prompt, prompt_handler, prompt_router, tool,
-    tool_handler, tool_router,
+    tool_handler, tool_router, tools,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -255,6 +255,79 @@ async fn prompts_and_resources_survive_the_merge() {
     assert!(
         resources.contains("beta body"),
         "a resource read is routed to the host that owns the URI: {resources}",
+    );
+}
+
+const PROMPTS: &str = "/mcp/prompts";
+
+#[mcp(path = "/mcp/prompts")]
+#[derive(Clone, Default)]
+struct OpeningPrompts;
+
+#[tools]
+impl OpeningPrompts {
+    /// Open a note.
+    #[prompt]
+    #[public]
+    async fn opening(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "opening body",
+        )]))
+    }
+}
+
+#[mcp(path = "/mcp/prompts")]
+#[derive(Clone, Default)]
+struct ClosingPrompts;
+
+#[tools]
+impl ClosingPrompts {
+    /// Close a note.
+    #[prompt]
+    #[public]
+    async fn closing(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "closing body",
+        )]))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [OpeningPrompts, ClosingPrompts])]
+struct PromptsApp;
+
+/// rmcp's refusal of a prompt its host does not declare is no answer for the
+/// path: the next host serves its own, and a prompt no host declares is
+/// refused by kind, listing every host's prompts and never the name sent.
+#[tokio::test]
+async fn a_prompt_reaches_its_host_past_another_host_s_refusal() {
+    let app = TestApp::for_module::<PromptsApp>()
+        .await
+        .expect("two prompt hosts on one path boot");
+    let session = open_session(app.http(), PROMPTS, None).await;
+    let get = |name: &'static str| {
+        call_method(
+            app.http(),
+            PROMPTS,
+            &session,
+            None,
+            "prompts/get",
+            json!({ "name": name }),
+        )
+    };
+
+    let closing = get("closing").await;
+    assert!(closing.contains("closing body"), "{closing}");
+
+    let unknown = get("marked-prompt").await;
+    assert!(!unknown.contains("marked"), "{unknown}");
+    let refused = result(&unknown);
+    assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
+    assert_eq!(
+        refused["error"]["data"]["available_prompts"],
+        json!(["opening", "closing"]),
+        "{refused}"
     );
 }
 

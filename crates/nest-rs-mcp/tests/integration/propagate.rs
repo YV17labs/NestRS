@@ -26,15 +26,16 @@ use nest_rs_mcp::model::{
     CustomNotification, CustomRequest, CustomResult, DiscoverResult, GetPromptRequestParams,
     GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-    ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-    ReadResourceResult, ResourceContents, ServerCapabilities, ServerConfig, SetLevelRequestParams,
-    SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
+    ProgressNotificationParam, PromptMessage, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, ResourceContents, Role, ServerCapabilities,
+    ServerConfig, SetLevelRequestParams, SubscribeRequestParams, SubscriptionFilter, Tool,
+    UnsubscribeRequestParams, UpdateTaskParams,
 };
 use nest_rs_mcp::rmcp::serde_json::{self, json};
 use nest_rs_mcp::service::{NotificationContext, RequestContext, RoleServer};
 use nest_rs_mcp::{McpError, PropagatingHandler, ServerHandler, mcp, tools};
 use nest_rs_testing::TestClient;
-use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with};
+use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with, result};
 use nest_rs_testing::{LogCapture, TestApp};
 use poem::IntoEndpoint as _;
 use tokio::sync::Notify;
@@ -552,6 +553,57 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
     );
     assert_eq!(span("tasks/get").field("mcp.operation.name"), None);
     span("marked/custom");
+}
+
+const REFUSALS: &str = "/mcp/refusals";
+
+#[mcp(path = "/mcp/refusals")]
+#[derive(Clone, Default)]
+struct DraftPrompts;
+
+#[tools]
+impl DraftPrompts {
+    /// Draft a note.
+    #[prompt]
+    #[public]
+    async fn draft(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "draft",
+        )]))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [DraftPrompts])]
+struct DraftModule;
+
+/// rmcp refuses a prompt its host does not declare, and a method no host
+/// serves, in words quoting the name a client sent: each is answered by
+/// kind, the prompt's refusal still listing the prompts the host declares.
+#[tokio::test]
+async fn a_refusal_of_a_name_no_host_serves_quotes_none_of_it() {
+    let app = TestApp::for_module::<DraftModule>()
+        .await
+        .expect("a prompt host boots");
+    let session = open_session(app.http(), REFUSALS, None).await;
+    let call = |method: &'static str, params: serde_json::Value| {
+        call_method(app.http(), REFUSALS, &session, None, method, params)
+    };
+    let prompt = call("prompts/get", json!({ "name": "marked-prompt" })).await;
+    let custom = call("marked/custom", json!({})).await;
+
+    for body in [&prompt, &custom] {
+        assert!(!body.contains("marked"), "{body}");
+    }
+    let prompt = result(&prompt);
+    assert_eq!(prompt["error"]["code"], json!(-32602), "{prompt}");
+    assert_eq!(
+        prompt["error"]["data"]["available_prompts"],
+        json!(["draft"]),
+        "{prompt}"
+    );
+    let custom = result(&custom);
+    assert_eq!(custom["error"]["code"], json!(-32601), "{custom}");
 }
 
 /// POST one stateless `2026-07-28` request: no session id, the negotiated

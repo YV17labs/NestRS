@@ -67,12 +67,17 @@ into an `async_graphql::Error` does not compile, because async-graphql's
 `Display` before the framework could answer it opaquely. Return the error itself
 (`Result<T, MyError>`) and let its type decide.
 
-A decode failure is the one message the framework rewrites. serde's sentence
-quotes the value it refused — a resolver returning a `serde_json` error, or an
-anyhow chain holding one, async-graphql's own `Json<T>` scalar coercing an
-argument — so `errors[].message` says where and what kind instead:
+The framework rewrites two messages, both for quoting what the request
+carried. A decode failure: serde's sentence quotes the value it refused — a
+resolver returning a `serde_json` error, or an anyhow chain holding one,
+async-graphql's own `Json<T>` scalar coercing an argument — so
+`errors[].message` says where and what kind instead:
 `invalid type: a string, expected u64 at line 1 column 24`, under the
-`INVALID_ARGUMENT` code. It holds on the socket as on `POST`.
+`INVALID_ARGUMENT` code. And an `operationName` the document holds no operation
+of: async-graphql's refusal quotes it, and the request's `operationName` is any
+text the client wrote, so the message reads
+`Unknown operation named by operationName`. Both hold on the socket as on
+`POST`.
 
 ## Extensions and codes
 

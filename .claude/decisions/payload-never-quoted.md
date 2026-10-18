@@ -108,6 +108,19 @@ spelled it.
   GraphQL operation's name is the document's, so its line names the
   operation's type and its root-field lines what ran; an MCP prompt name,
   resource URI or task id, which no lookup answers for at dispatch.
+- **A library's reply the edge passes on names nothing only the client
+  named, as its line does.** rmcp refuses a prompt its host does not declare
+  as `prompt '<name>' not found`, a custom method no host serves with the
+  method as its message, and a request its transport turns away by quoting
+  the `MCP-Protocol-Version`, `Mcp-Method` or `Mcp-Name` it carried;
+  async-graphql refuses an `operationName` its document holds no operation of
+  by quoting it, the request's free text rather than a GraphQL name. The edge
+  says each by kind: `prompt not found`, the hosts' prompts still listed; a
+  JSON-RPC error in its code's words, JSON-RPC 2.0's or MCP's, its id and
+  code kept; any other refusal as its status's problem document; `Unknown
+  operation named by operationName`. The library's wording is matched as the
+  locked version writes it, and each edge's test sends a marker, so an upgrade
+  that rewords it fails a test rather than quoting again.
 - **The span keeps what the telemetry conventions require or recommend, as a
   stated exception.** The request span records `url.path` (required),
   `user_agent.original` (recommended) and, for a method outside the known

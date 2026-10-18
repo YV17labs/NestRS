@@ -5,19 +5,24 @@ use std::sync::Arc;
 use nest_rs_core::problem::code;
 use nest_rs_core::{Container, Correlation, Problem, current_request_scope};
 use nest_rs_http::__private::attached_pending;
-use nest_rs_http::__private::poem_bridge::{request_from_poem, request_to_poem, response_to_poem};
+use nest_rs_http::__private::poem_bridge::{
+    request_from_poem, request_to_poem, response_from_poem, response_to_poem,
+};
 use nest_rs_http::ResponseError as _;
-use nest_rs_http::{DetachedWork, Method, Request};
+use nest_rs_http::{
+    Body, DetachedWork, Method, Request, StatusCode, header, normalize_error_response,
+};
 use poem::endpoint::TowerCompatExt;
 use poem::{Endpoint, IntoEndpoint, Response, Result};
 use rmcp::ServerHandler;
-use rmcp::model::{ClientJsonRpcMessage, ClientRequest};
+use rmcp::model::{ClientJsonRpcMessage, ClientRequest, ErrorCode};
 use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
 use crate::config::McpConfig;
 use crate::context::{McpAmbient, McpToolContext};
+use crate::error::said_by_code;
 use crate::propagate::PropagatingHandler;
 use crate::registry::ToolIndex;
 use crate::sessions::{BoundedSessions, ReportedStore};
@@ -262,6 +267,49 @@ fn host_refused() {
     );
 }
 
+/// rmcp's answer to a request its transport turns away, said by kind.
+///
+/// Several of rmcp's refusals quote what the request carried — a header's
+/// value, the method or name its body named — and its failures their cause.
+/// The status stays rmcp's; a JSON-RPC error keeps its id, code and data, and
+/// says its code's words; any other body is the status's problem document.
+async fn said_by_kind(response: Response) -> Response {
+    if response.status().is_success() {
+        return response;
+    }
+    let (mut head, body) = response_from_poem(response).into_parts();
+    let refusal = body.into_bytes().await.unwrap_or_else(|error| {
+        tracing::warn!(
+            target: crate::TARGET,
+            error = %nest_rs_core::error_message(&error),
+            "mcp transport refusal unreadable; answered by its status alone",
+        );
+        Default::default()
+    });
+    head.headers.remove(header::CONTENT_LENGTH);
+    let said = match jsonrpc_said_by_kind(&refusal, head.status) {
+        Some(answer) => nest_rs_http::Response::from_parts(head, Body::from(answer)),
+        None => {
+            head.headers.remove(header::CONTENT_TYPE);
+            normalize_error_response(nest_rs_http::Response::from_parts(head, Body::empty())).await
+        }
+    };
+    response_to_poem(said)
+}
+
+/// `refusal` with its JSON-RPC error said by its code, when it is one: the
+/// code's words, else the status's reason phrase.
+fn jsonrpc_said_by_kind(refusal: &[u8], status: StatusCode) -> Option<Vec<u8>> {
+    let mut answer: serde_json::Value = serde_json::from_slice(refusal).ok()?;
+    let error = answer.get_mut("error")?.as_object_mut()?;
+    let code = i32::try_from(error.get("code")?.as_i64()?).ok()?;
+    let said = said_by_code(ErrorCode(code))
+        .or_else(|| status.canonical_reason())
+        .unwrap_or("Error");
+    error.insert("message".to_owned(), said.into());
+    serde_json::to_vec(&answer).ok()
+}
+
 /// Whether `body` is an `initialize` request, as rmcp decodes it.
 fn opens_a_session(body: &[u8]) -> bool {
     matches!(
@@ -306,7 +354,7 @@ where
         let standalone = req.method() == Method::GET;
 
         // Also installed here, for an operation rmcp resolves inline.
-        let mut response = nest_rs_core::with_request_scope(
+        let response = nest_rs_core::with_request_scope(
             scope,
             correlation,
             self.inner.call(request_to_poem(req)),
@@ -317,6 +365,7 @@ where
         if response.status() == poem::http::StatusCode::FORBIDDEN {
             host_refused();
         }
+        let mut response = said_by_kind(response).await;
         // Ended at the shutdown signal; a POST's stream ends with its answer.
         if standalone && response.status().is_success() {
             response

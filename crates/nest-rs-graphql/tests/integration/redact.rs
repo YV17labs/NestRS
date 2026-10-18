@@ -146,6 +146,22 @@ async fn an_error_a_response_carries_says_a_decode_failure_without_its_value() {
     }
 }
 
+/// An `operationName` is the request's own text, not a name its document
+/// declares: one the document holds no operation of is refused by kind.
+#[tokio::test]
+async fn an_unknown_operation_name_is_refused_without_quoting_it() {
+    let app = boot().await;
+    let request = serde_json::json!({
+        "query": "query A { charge(amount: 1) } query B { charge(amount: 2) }",
+        "operationName": "marked free text",
+    });
+    let resp = app.http().post("/graphql").body_json(&request).send().await;
+    resp.assert_status_is_ok();
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    assert_eq!(body["errors"].as_array().map(Vec::len), Some(1), "{body}");
+    assert!(!body.to_string().contains("marked"), "{body}");
+}
+
 /// The socket executes through `execute_stream`, not `execute`.
 #[tokio::test]
 async fn an_error_an_operation_answers_over_the_socket_says_it_without_the_value() {

@@ -232,6 +232,72 @@ async fn a_host_outside_the_allowlist_is_refused_and_said_without_its_value() {
     );
 }
 
+/// A JSON-RPC request, id `7`, calling `method` with `params`.
+fn request(method: &str, params: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params })
+}
+
+/// rmcp's transport refuses a request before any handler runs in sentences
+/// quoting what it carried — the `MCP-Protocol-Version` it named, an
+/// `Mcp-Method` or `Mcp-Name` header its body contradicts: each is answered
+/// by kind, its status, and a JSON-RPC error's code and id, kept.
+#[tokio::test]
+async fn a_request_the_transport_refuses_is_answered_without_what_it_carried() {
+    let app = listening_on(nest_rs_mcp::McpConfig::default()).await;
+    let session = nest_rs_testing::mcp::open_session(app.http(), LISTENING, None).await;
+    let meta = serde_json::json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { "name": "nest-rs-mcp", "version": "0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+    });
+    let cases = [
+        (
+            vec![("mcp-protocol-version", "marked-version")],
+            request("tools/list", serde_json::json!({})),
+            None,
+        ),
+        (
+            vec![
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "marked/method"),
+            ],
+            request("tools/list", serde_json::json!({ "_meta": meta })),
+            Some(-32020),
+        ),
+        (
+            vec![
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/call"),
+                ("mcp-name", "marked"),
+            ],
+            request(
+                "tools/call",
+                serde_json::json!({ "name": "ping", "arguments": {}, "_meta": meta }),
+            ),
+            Some(-32020),
+        ),
+    ];
+    for (headers, body, code) in cases {
+        let response = nest_rs_testing::mcp::post_message_with(
+            app.http(),
+            LISTENING,
+            Some(&session),
+            None,
+            &headers,
+            &body,
+        )
+        .await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        let said = response.0.into_body().into_string().await.expect("a body");
+        assert!(!said.contains("marked"), "{said}");
+        if let Some(code) = code {
+            let said: serde_json::Value = serde_json::from_str(&said).expect("a JSON-RPC error");
+            assert_eq!(said["error"]["code"], serde_json::json!(code), "{said}");
+            assert_eq!(said["id"], serde_json::json!(7), "{said}");
+        }
+    }
+}
+
 /// The app's session store, failing to load every session.
 struct StoreDown;
 

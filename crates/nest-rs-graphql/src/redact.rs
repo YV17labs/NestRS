@@ -1,9 +1,11 @@
 //! Every error a GraphQL response carries, said without a decode failure's
-//! value.
+//! value, nor the `operationName` a request sent.
 //!
 //! async-graphql builds an error's `message` from the failure's `Display`, and
 //! serde's sentence quotes the value; each message is said through
-//! [`DecodeError::redact`].
+//! [`DecodeError::redact`]. Its refusal of an `operationName` the document
+//! holds no operation of quotes that `operationName`, the request's own text
+//! rather than a name the document declares; it is said by kind.
 //!
 //! An [`Executor`] wrapper rather than an extension, which would be entered on
 //! every field of every request.
@@ -42,9 +44,23 @@ fn redacted(mut response: Response) -> Response {
     response
 }
 
+/// How async-graphql's refusal of an unknown `operationName` opens, the
+/// `operationName` following it.
+const UNKNOWN_OPERATION_QUOTED: &str = "Unknown operation named \"";
+
+/// What that refusal says instead.
+const UNKNOWN_OPERATION: &str = "Unknown operation named by operationName";
+
 /// One error's message, redacted against its source when it is serde's or an
 /// anyhow chain; any other source is read by serde's wording alone.
 fn redact(error: &mut ServerError) {
+    if error.source.is_none()
+        && error.path.is_empty()
+        && error.message.starts_with(UNKNOWN_OPERATION_QUOTED)
+    {
+        UNKNOWN_OPERATION.clone_into(&mut error.message);
+        return;
+    }
     let source = error.source.as_deref();
     let cause: Option<&(dyn std::error::Error + 'static)> = source
         .and_then(|source| source.downcast_ref::<serde_json::Error>())

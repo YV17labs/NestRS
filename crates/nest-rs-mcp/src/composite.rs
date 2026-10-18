@@ -36,6 +36,7 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
 use crate::McpError;
+use crate::error::{AVAILABLE_PROMPTS, prompt_not_found, refuses_prompt};
 use crate::guard::BoxFuture;
 use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
@@ -159,6 +160,17 @@ fn is_not_found(err: &McpError) -> bool {
     err.code == ErrorCode::METHOD_NOT_FOUND
         || err.code == ErrorCode::RESOURCE_NOT_FOUND
         || (err.code == ErrorCode::INVALID_PARAMS && err.message == "tool not found")
+}
+
+/// The prompts rmcp's refusal of a prompt lists under its `data`.
+fn listed_prompts(refusal: McpError) -> Vec<serde_json::Value> {
+    match refusal.data {
+        Some(serde_json::Value::Object(mut data)) => match data.remove(AVAILABLE_PROMPTS) {
+            Some(serde_json::Value::Array(prompts)) => prompts,
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
 }
 
 /// `a || b`, over two optional flags that are each *absent* rather than false.
@@ -350,7 +362,36 @@ impl ServerHandler for CompositeHandler {
 
     merged_listing!(list_tools, ListToolsResult, tools, "tools/list");
 
-    addressed!(get_prompt(GetPromptRequestParams) -> GetPromptResponse);
+    /// Offered to each host in turn, rmcp's refusal of a prompt a host does
+    /// not declare leaving the next its turn; none serving it, the refusal
+    /// lists every host's prompts and never the name sent.
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, McpError> {
+        if let Some(only) = self.single() {
+            return only.host.get_prompt(request, context).await;
+        }
+        let mut listed: Option<Vec<serde_json::Value>> = None;
+        let mut unhandled = None;
+        for host in &self.hosts {
+            match host.host.get_prompt(request.clone(), context.clone()).await {
+                Ok(prompt) => return Ok(prompt),
+                Err(err) if refuses_prompt(&err, &request.name) => listed
+                    .get_or_insert_with(Vec::new)
+                    .extend(listed_prompts(err)),
+                Err(err) if is_not_found(&err) => unhandled = Some(err),
+                Err(err) => return Err(err),
+            }
+        }
+        match listed {
+            Some(listed) => Err(prompt_not_found(Some(
+                serde_json::json!({ AVAILABLE_PROMPTS: listed }),
+            ))),
+            None => Err(unhandled.unwrap_or_else(no_hosts)),
+        }
+    }
     merged_listing!(list_prompts, ListPromptsResult, prompts, "prompts/list");
 
     addressed!(read_resource(ReadResourceRequestParams) -> ReadResourceResponse);

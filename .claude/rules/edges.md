@@ -132,8 +132,10 @@ Review a new edge, or a change to one, against it:
     `.opaque()?` infer. A handler's error is boxed with
     `nest_rs_core::boxed_error`, never `.into()`, so its chain stays
     readable; every reply built from an error says a decode failure without
-    its value (`DecodeError::redact`). Held by each edge's behaviour tests
-    and a trybuild snapshot of the refused `?`.
+    its value (`DecodeError::redact`), and a library's refusal quoting what
+    the request named (rmcp's prompt, method and transport refusals,
+    async-graphql's unknown `operationName`) by kind. Held by each edge's
+    behaviour tests and a trybuild snapshot of the refused `?`.
 12. **Discovery and its gate** (`container.md`).
 13. **Aggregation**, as above.
 14. **A mount** — a `Transport` attached with

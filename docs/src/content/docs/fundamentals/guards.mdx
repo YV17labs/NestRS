@@ -211,7 +211,7 @@ from the same provider — declare once, choose *where* it runs.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_guards_global([guard::<AuthnGuard>()])` in `main` | Per-route shaper, post-routing (self-mount edge for gateways) |
+| **Global** | `App::builder().use_guards_global([guard::<AuthnGuard>()])` in `main` | The route's guard stage, post-routing (a self-mount's request stage for gateways) |
 | **Controller / Resolver / Gateway** | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct — a resolver binds `AuthzGuard` alone, [authenticated in band](#a-guard-must-declare-the-transports-it-checks) | Container, at mount |
 | **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | Container, at mount |
 
@@ -315,7 +315,7 @@ impl AdminController {
 
 The value is built once, the first time a layer reads it, and every request
 reads that one copy — so it is `Send + Sync + 'static`, never cloned, and a
-guard attaching a value of the same type does not shadow it. Because the global pool runs post-routing at the `RouteShaper` (above), a
+guard attaching a value of the same type does not shadow it. Because the global pool runs post-routing in the route's guard stage (above), a
 global guard reads `#[meta(...)]` too — the route's declaration is carried
 before the chain runs, and it holds `#[public]` below as well.
 

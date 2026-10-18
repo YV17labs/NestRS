@@ -348,7 +348,7 @@ Three rules pin the contract:
 - The method's value of a type wins over its controller's, and a
   controller's value of another type still reads through.
 - Scope does not change what a guard reads. The pool executes
-  post-routing at the `RouteShaper`, which carries the route's
+  post-routing in the route's guard stage, which carries the route's
   declaration, so a guard bound with `use_guards_global` reads the
   route's `#[meta]` exactly as a `#[use_guards]` one does — see
   [the request lifecycle](/fundamentals/request-lifecycle/).

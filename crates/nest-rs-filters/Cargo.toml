@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "HTTP error-mapping filters for NestRS — one Layer System sub-trait that turns inner errors into responses, declared globally via `use_filters_global` or per-scope through `#[use_filters]`."
+description = "The poem-typed error mapper of NestRS 6, which `nest_rs::core::ExceptionFilter` replaced: nothing in the framework runs it, and the crate leaves in 7.0."
 keywords = ["framework", "nestrs", "filters", "error-handling", "web"]
 categories = ["web-programming", "rust-patterns"]
 
@@ -14,8 +14,7 @@ categories = ["web-programming", "rust-patterns"]
 async-trait.workspace = true
 poem.workspace = true
 nest-rs-core.workspace = true
-# `use_filters_global` attaches its transport-level wrap via
-# `HttpEndpointWrap`. Safe direction.
+# The crate-level example renders a `ProblemDetails`.
 nest-rs-http.workspace = true
 
 [dev-dependencies]

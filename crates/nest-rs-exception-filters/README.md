@@ -1,6 +1,6 @@
 # nest-rs-exception-filters
 
-Typed exception filters for NestRS — each filter declares the concrete error it claims and only catches matching errors; distinct from the unconditional error-mapping `Filter`.
+The poem-typed exception filter of NestRS 6, which `nest_rs::core::ExceptionFilter` replaced: nothing in the framework runs it, and the crate leaves in 7.0.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

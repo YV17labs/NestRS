@@ -37,11 +37,10 @@ deep on each.
 
 ## Request layers
 
-- **[Shaper](/fundamentals/request-lifecycle/)** — a macro-emitted
-  wrapper the `#[routes]` expansion installs around a handler to shape
-  the request or response: `RouteShaper` runs guards and pipes on the
-  way in, the ability shaper runs masking on the way out. A shaper is
-  plumbing the framework writes, never a unit you declare.
+- **[Shaper](/fundamentals/request-lifecycle/)** — the response mask the
+  `#[routes]` expansion arms for a route its posture shapes: the ability
+  shaper runs masking on the way out. A shaper is plumbing the framework
+  writes, never a unit you declare.
 - **[Guard](/fundamentals/guards/)** — a pre-handler gate; returns
   `Ok(())` to let the request through or a typed `Denial` mapped to
   401/403/429, and may attach context the handler reads through
@@ -65,10 +64,11 @@ deep on each.
   macro emits when a route declares `#[authorize(A, S)]` or takes that type
   as a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside
   the handler. [Layer order](/fundamentals/guards/#where-guards-run-in-the-chain).
-- **RouteShaper** — the per-route orchestrator inside `nest-rs-http`;
-  runs guards, the `#[authorize]` class gate and body pipes on the way in. The response-side families
-  wrap the endpoint outside it, not within. Documented on
-  [Guards](/fundamentals/guards/).
+- **Site** — one place a unit is dispatched: a route, a self-mount's
+  request, what the router answers itself. Its chains — the unit stage, the
+  guard stage and the class gate, the exception filters, the handler stage —
+  are composed once per app; the stages run in the order
+  [the request lifecycle](/fundamentals/request-lifecycle/#nesting-order) gives.
 - **Reflector** — the reader that pulls back the values a handler or its
   host declared with `#[meta(EXPR)]`, and its posture; a guard reaches it
   through `cx.reflector()` on every edge.

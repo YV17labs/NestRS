@@ -1,6 +1,6 @@
 # nest-rs-filters
 
-HTTP error-mapping filters for NestRS — one Layer System sub-trait that turns inner errors into responses, declared globally via `use_filters_global` or per-scope through `#[use_filters]`.
+The poem-typed error mapper of NestRS 6, which `nest_rs::core::ExceptionFilter` replaced: nothing in the framework runs it, and the crate leaves in 7.0.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

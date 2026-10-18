@@ -118,7 +118,7 @@ fn validate(
 }
 
 /// Boot check for one controller or gateway upgrade: compose the global pool
-/// with the host-scope specs (same dedup as the route shaper) and validate the
+/// with the host-scope specs (the dedup a route's guard stage composes) and validate the
 /// result. A host-scope spec no imported module provides fails it, naming the
 /// guard and `label`. A route whose method scope declares guards is validated
 /// again, whole, as it mounts.

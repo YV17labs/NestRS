@@ -1,6 +1,6 @@
 # nest-rs-interceptors
 
-Transport-spanning interceptors for NestRS — one Layer System sub-trait wrapping handler execution on HTTP, GraphQL, and WS, declared globally via `use_interceptors_global` or per-scope through `#[use_interceptors]`.
+The poem-typed interceptor of NestRS 6, which `nest_rs::core::Interceptor` replaced: nothing in the framework runs it, and the crate leaves in 7.0.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

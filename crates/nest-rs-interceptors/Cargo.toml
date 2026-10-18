@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Transport-spanning interceptors for NestRS — one Layer System sub-trait wrapping handler execution on HTTP, GraphQL, and WS, declared globally via `use_interceptors_global` or per-scope through `#[use_interceptors]`."
+description = "The poem-typed interceptor of NestRS 6, which `nest_rs::core::Interceptor` replaced: nothing in the framework runs it, and the crate leaves in 7.0."
 keywords = ["framework", "nestrs", "interceptors", "middleware", "web"]
 categories = ["web-programming", "rust-patterns"]
 
@@ -14,12 +14,9 @@ categories = ["web-programming", "rust-patterns"]
 async-trait.workspace = true
 poem.workspace = true
 nest-rs-core.workspace = true
-# `use_interceptors_global` attaches its transport-level wrap via
-# `HttpEndpointWrap`. Safe direction (nest-rs-http depends on no
-# trait crate any more).
+# The suite reads `StatusCode`; the two siblings are unused since the pipeline
+# replaced this crate, and leave with it in 7.0.
 nest-rs-http.workspace = true
-# A route's response-side layers compose here, interceptors outermost: the
-# filters and the exception filters it wraps. Neither depends on this crate.
 nest-rs-filters.workspace = true
 nest-rs-exception-filters.workspace = true
 

@@ -408,6 +408,273 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
     );
 }
 
+/// How many [`CountedTools`] hosts the mount built: one per session, and one
+/// per lookup rmcp's transport makes. Each test runs in its own process.
+static BUILT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts its own construction.
+#[derive(Clone)]
+struct Built;
+
+impl Default for Built {
+    fn default() -> Self {
+        BUILT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+const COUNTED: &str = "/mcp/counted";
+
+#[nest_rs_mcp::mcp(path = "/mcp/counted")]
+#[derive(Clone, Default)]
+struct CountedTools {
+    built: Built,
+}
+
+#[nest_rs_mcp::tools]
+impl CountedTools {
+    #[tool(description = "Answers at once.")]
+    #[public]
+    async fn ping(&self) -> Result<String, nest_rs_mcp::McpError> {
+        let Built = &self.built;
+        Ok("pong".to_owned())
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [CountedTools])]
+struct CountedModule;
+
+/// A `tools/call` at the standard-headers version, as a client sends it.
+async fn standard_call(app: &TestApp, name: &str) -> nest_rs_testing::TestResponse {
+    let meta = serde_json::json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { "name": "nest-rs-mcp", "version": "0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+    });
+    nest_rs_testing::mcp::post_message_with(
+        app.http(),
+        COUNTED,
+        None,
+        None,
+        &[
+            ("mcp-protocol-version", "2026-07-28"),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", name),
+        ],
+        &request(
+            "tools/call",
+            serde_json::json!({ "name": name, "arguments": {}, "_meta": meta }),
+        ),
+    )
+    .await
+}
+
+/// rmcp 3.5's transport looks up the schema of the tool a `tools/call` at
+/// the standard-headers version names, building a whole handler to ask, and
+/// keeps the answer — a miss included — in a map nothing bounds: one name per
+/// request grows it for good. A name no host on the mount declares is
+/// answered before rmcp sees it, as rmcp's own handler would answer it.
+#[tokio::test]
+async fn a_tool_call_naming_no_declared_tool_never_reaches_rmcp_s_schema_cache() {
+    let app = TestApp::for_module::<CountedModule>()
+        .await
+        .expect("the counted mount boots");
+    let before = BUILT.load(std::sync::atomic::Ordering::SeqCst);
+
+    let mut answers = Vec::new();
+    for n in 0..16 {
+        let response = standard_call(&app, &format!("unknown_{n}")).await;
+        let status = response.0.status();
+        let body = response.0.into_body().into_string().await.expect("a body");
+        answers.push((status, body));
+    }
+    assert_eq!(
+        BUILT.load(std::sync::atomic::Ordering::SeqCst) - before,
+        0,
+        "an undeclared name built a handler for rmcp's schema lookup, which keeps it",
+    );
+    for (status, body) in answers {
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let refused = nest_rs_testing::mcp::result(&body);
+        assert_eq!(refused["id"], serde_json::json!(7), "{refused}");
+        assert_eq!(
+            refused["error"]["code"],
+            serde_json::json!(-32602),
+            "{refused}"
+        );
+        assert_eq!(refused["error"]["message"], "tool not found", "{refused}");
+    }
+
+    let declared = standard_call(&app, "ping").await;
+    let body = declared.0.into_body().into_string().await.expect("a body");
+    assert!(
+        body.contains("pong"),
+        "a declared tool still reaches rmcp: {body}"
+    );
+}
+
+/// A `tools/call` at the standard-headers version naming `name`, whose id is
+/// `id` as written — raw JSON, a repeated key included — or absent.
+async fn raw_standard_call(
+    app: &TestApp,
+    name: &str,
+    id: Option<&str>,
+) -> nest_rs_testing::TestResponse {
+    let id = id.map_or_else(String::new, |id| format!("{id},"));
+    let body = format!(
+        r#"{{"jsonrpc":"2.0",{id}"method":"tools/call","params":{{"name":"{name}","arguments":{{}},"_meta":{{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{{"name":"nest-rs-mcp","version":"0"}},"io.modelcontextprotocol/clientCapabilities":{{}}}}}}}}"#
+    );
+    app.http()
+        .post(COUNTED)
+        .header("host", "localhost")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", name)
+        .body(body)
+        .send()
+        .await
+}
+
+/// rmcp takes a call whose id it cannot read — none, an object, `null`, a
+/// fraction, a repeated key — for a notification, and still looks its tool
+/// up: the gate decides on the method and the name alone. Such a call is
+/// input the server cannot accept, refused `400` with an error carrying no
+/// id, and files no operation, as rmcp's own transport refusals file none.
+#[tokio::test]
+async fn a_tool_call_with_no_id_rmcp_reads_never_reaches_rmcp_s_schema_cache() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<CountedModule>()
+        .await
+        .expect("the counted mount boots");
+    let before = BUILT.load(std::sync::atomic::Ordering::SeqCst);
+
+    let mut answers = Vec::new();
+    for (case, id) in [
+        None,
+        Some(r#""id":{}"#),
+        Some(r#""id":null"#),
+        Some(r#""id":1.5"#),
+        Some(r#""id":7,"id":8"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for n in 0..4 {
+            let response = raw_standard_call(&app, &format!("unknown_{case}_{n}"), id).await;
+            let status = response.0.status();
+            let body = response.0.into_body().into_string().await.expect("a body");
+            answers.push((id, status, body));
+        }
+    }
+    assert_eq!(
+        BUILT.load(std::sync::atomic::Ordering::SeqCst) - before,
+        0,
+        "an undeclared name built a handler for rmcp's schema lookup, which keeps it",
+    );
+    for (id, status, body) in answers {
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{id:?}: {body}");
+        let refused: serde_json::Value = serde_json::from_str(&body).expect("a JSON-RPC error");
+        assert_eq!(refused.get("id"), None, "{id:?}: {refused}");
+        assert_eq!(
+            refused["error"]["code"],
+            serde_json::json!(-32602),
+            "{refused}"
+        );
+        assert_eq!(refused["error"]["message"], "tool not found", "{refused}");
+    }
+    assert!(
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_mcp::unit::OPERATION.name(),
+        )
+        .is_empty(),
+        "an input refused for its shape is no operation",
+    );
+}
+
+/// A call the gate answers is still the operation the handler would have
+/// answered: it opens the `mcp.operation` span and files the line — the
+/// protocol's method, `_OTHER` for the tool, `error` — a unit of the request.
+#[tokio::test]
+async fn a_tool_call_answered_before_rmcp_files_its_operation_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<CountedModule>()
+        .await
+        .expect("the counted mount boots");
+
+    standard_call(&app, "marked_tool")
+        .await
+        .assert_status_is_ok();
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_mcp::unit::OPERATION.name(),
+    );
+    let [line] = lines.as_slice() else {
+        panic!("one line for the call: {lines:#?}");
+    };
+    assert_eq!(line.field("method").as_deref(), Some("tools/call"));
+    assert_eq!(
+        line.field("operation").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+    );
+    let request = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_http::unit::REQUEST.name(),
+    );
+    assert_eq!(line.trace_id, request.trace_id, "the request's trace");
+    assert_ne!(line.span_id, request.span_id, "a unit of its own");
+
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| span.name == nest_rs_mcp::unit::OPERATION.name())
+        .expect("an mcp.operation span");
+    assert_eq!(span.field("mcp.method.name").as_deref(), Some("tools/call"));
+    assert_eq!(
+        span.field("mcp.operation.name").as_deref(),
+        Some("marked_tool"),
+        "the conventions' tool name, as the handler's span records it",
+    );
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+    );
+    assert_eq!(span.field("parent_span_id"), request.span_id);
+}
+
+/// rmcp refuses a `Host` outside its allowlist before it looks any schema
+/// up: such a call is left to that refusal, so a page a rebound name serves
+/// learns nothing of which tools exist.
+#[tokio::test]
+async fn a_tool_call_from_a_host_rmcp_refuses_is_refused_for_its_host_first() {
+    let app = TestApp::for_module::<CountedModule>()
+        .await
+        .expect("the counted mount boots");
+    let rebound = app
+        .http()
+        .post(COUNTED)
+        .header("host", "rebound.example")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "unknown")
+        .body_json(&request(
+            "tools/call",
+            serde_json::json!({ "name": "unknown", "arguments": {} }),
+        ))
+        .send()
+        .await;
+    rebound.assert_status(StatusCode::FORBIDDEN);
+}
+
 /// The app's session store, failing to load every session.
 struct StoreDown;
 

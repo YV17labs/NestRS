@@ -231,6 +231,10 @@ pub(crate) fn said_by_code(code: ErrorCode) -> Option<&'static str> {
     })
 }
 
+/// rmcp's refusal of a tool no router declares, a `-32602` read as *not
+/// found*.
+pub(crate) const TOOL_NOT_FOUND: &str = "tool not found";
+
 /// rmcp 3.5's streamable-HTTP refusals written as text, word for word, that
 /// quote nothing the request carried: what a client needs to fix its call.
 const TRANSPORT_SENTENCES: [&str; 15] = [

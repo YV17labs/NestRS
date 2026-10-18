@@ -417,7 +417,12 @@ pub(crate) struct RouteIndex {
 impl RouteIndex {
     /// Record the host at `position` declaring `names`, every one it serves
     /// when `complete`; a host neither declares nor says is unread.
-    fn read(&mut self, position: usize, names: impl IntoIterator<Item = String>, complete: bool) {
+    pub(crate) fn read(
+        &mut self,
+        position: usize,
+        names: impl IntoIterator<Item = String>,
+        complete: bool,
+    ) {
         let mut any = false;
         for name in names {
             any = true;

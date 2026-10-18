@@ -36,7 +36,7 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
 use crate::McpError;
-use crate::error::{AVAILABLE_PROMPTS, prompt_not_found, refuses_task};
+use crate::error::{AVAILABLE_PROMPTS, TOOL_NOT_FOUND, prompt_not_found, refuses_task};
 use crate::guard::BoxFuture;
 use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
@@ -180,7 +180,7 @@ fn no_hosts() -> McpError {
 fn is_not_found(err: &McpError) -> bool {
     err.code == ErrorCode::METHOD_NOT_FOUND
         || err.code == ErrorCode::RESOURCE_NOT_FOUND
-        || (err.code == ErrorCode::INVALID_PARAMS && err.message == "tool not found")
+        || (err.code == ErrorCode::INVALID_PARAMS && err.message == TOOL_NOT_FOUND)
 }
 
 /// `a || b`, over two optional flags that are each *absent* rather than false.

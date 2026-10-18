@@ -378,6 +378,27 @@ impl Addressed {
     }
 }
 
+/// File the unit of a `tools/call` naming `name`, a tool no host on the mount
+/// declares, which the endpoint answered before rmcp dispatched it: its span
+/// and its line `error`, as [`PropagatingHandler`] files one it dispatches,
+/// a unit of `request`.
+pub(crate) fn file_undeclared_call(name: &str, request: &Correlation) {
+    let correlation = request.child();
+    let operation = nest_rs_core::operation_span!(
+        crate::unit::OPERATION,
+        &correlation,
+        mcp.method.name = CallToolRequestMethod::VALUE,
+        mcp.operation.name = name,
+    );
+    OperationLine::open(
+        CallToolRequestMethod::VALUE,
+        Some(operation_log::OTHER),
+        correlation,
+        operation,
+    )
+    .file(operation_log::ERROR);
+}
+
 /// One operation's `mcp.operation` line, filed exactly once — by the end the
 /// dispatch saw, else by `Drop` as [`CANCELLED`](operation_log::CANCELLED).
 /// It names the server's values only: the protocol's method or

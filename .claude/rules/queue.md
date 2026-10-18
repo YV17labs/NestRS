@@ -229,7 +229,8 @@ checked at compile time, and only `CronExpression` presets resolve at boot. The
 scheduler is a `Transport` attached with `ContainerBuilder::provide_transport`.
 
 - **A tick is a unit of the pipeline**, read through `ScheduleView`; a
-  failure a layer answered is said at `warn`, never acted on.
+  failure a layer answered with `skip` or a client's problem (a `4xx`) is said
+  at `warn`, any other at `error`, and none is acted on.
 - **A tick has no retry** — its retry is the next occurrence — and **a replica
   runs one occurrence of a job at a time**; an occurrence falling inside a run is
   skipped and counted. `concurrency` counts per replica. Work that must not be

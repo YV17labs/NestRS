@@ -7,9 +7,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
+use nest_rs_core::problem::code;
 use nest_rs_core::{
-    App, Caught, Correlation, ExceptionFilter, Interceptor, Layer, Next, Outcome, SpanId, TraceId,
-    UnitContext, async_trait, current_span_id, current_trace_id, injectable, module,
+    App, Caught, Correlation, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, SpanId,
+    TraceId, UnitContext, async_trait, current_span_id, current_trace_id, injectable, module,
     with_request_scope,
 };
 use nest_rs_events::{EventBus, EventsModule, EventsView, listeners};
@@ -24,6 +25,12 @@ struct Withdrawn;
 
 #[derive(Clone)]
 struct Archived;
+
+#[derive(Clone)]
+struct Relisted;
+
+#[derive(Clone)]
+struct Reindexed;
 
 /// What one layer read of the listener call it ran around.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +110,39 @@ impl ExceptionFilter for Expected {
     }
 }
 
+/// Says every failure is the client's: a `422`.
+#[injectable]
+#[derive(Default)]
+struct Unprocessable;
+
+impl Layer for Unprocessable {}
+
+#[async_trait]
+impl ExceptionFilter for Unprocessable {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(422, code::INVALID_ARGUMENT))
+    }
+}
+
+/// Says every failure is the server's: a `500`, as an app-wide filter mapping
+/// errors to problems does.
+#[injectable]
+#[derive(Default)]
+struct Internal;
+
+impl Layer for Internal {}
+
+#[async_trait]
+impl ExceptionFilter for Internal {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(500, code::INTERNAL))
+    }
+}
+
 #[injectable]
 #[derive(Default)]
 struct CatalogListeners;
@@ -138,9 +178,37 @@ impl ArchiveListeners {
     }
 }
 
+#[injectable]
+#[derive(Default)]
+struct IndexListeners;
+
+#[listeners]
+impl IndexListeners {
+    #[on_event]
+    #[use_exception_filters(Unprocessable)]
+    async fn on_relisted(&self, _event: Relisted) -> anyhow::Result<()> {
+        anyhow::bail!("the listing is not published yet")
+    }
+
+    #[on_event]
+    #[use_exception_filters(Internal)]
+    async fn on_reindexed(&self, _event: Reindexed) -> anyhow::Result<()> {
+        anyhow::bail!("the search index refused the connection")
+    }
+}
+
 #[module(
     imports = [EventsModule],
-    providers = [CatalogListeners, ArchiveListeners, Reading, Skipping, Expected]
+    providers = [
+        CatalogListeners,
+        ArchiveListeners,
+        IndexListeners,
+        Reading,
+        Skipping,
+        Expected,
+        Unprocessable,
+        Internal,
+    ]
 )]
 struct CatalogModule;
 
@@ -211,6 +279,54 @@ async fn a_failure_a_filter_answers_is_said_at_warn_and_never_at_error() {
     assert_eq!(
         said.field("error").as_deref(),
         Some("the catalog is read-only during the import"),
+    );
+}
+
+#[tokio::test]
+async fn a_failure_a_filter_says_is_the_clients_is_said_at_warn() {
+    let (_app, bus) = bus().await.expect("the app boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    bus.emit(Relisted).await;
+
+    let said = logs.expect_one(
+        nest_rs_events::TARGET,
+        "event listener failed; a layer answered it — dispatch continues with the next listener",
+    );
+    assert_eq!(said.level, "warn");
+    assert!(
+        logs.find(
+            nest_rs_events::TARGET,
+            "event listener failed — dispatch continues with the next listener",
+        )
+        .is_empty(),
+        "a client's problem is no error to page on: {:#?}",
+        logs.events(),
+    );
+}
+
+#[tokio::test]
+async fn a_failure_a_filter_says_is_the_servers_is_said_at_error() {
+    let (_app, bus) = bus().await.expect("the app boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    bus.emit(Reindexed).await;
+
+    let said = logs.expect_one(
+        nest_rs_events::TARGET,
+        "event listener failed — dispatch continues with the next listener",
+    );
+    assert_eq!(said.level, "error");
+    assert_eq!(
+        said.field("error").as_deref(),
+        Some("the search index refused the connection"),
+    );
+    assert!(
+        logs.find(
+            nest_rs_events::TARGET,
+            "event listener failed; a layer answered it — dispatch continues with the next listener",
+        )
+        .is_empty(),
+        "a server's problem is still an error: {:#?}",
+        logs.events(),
     );
 }
 

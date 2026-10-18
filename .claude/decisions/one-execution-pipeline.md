@@ -166,8 +166,10 @@ layer nothing provides fails the boot. Where it departs:
   decides it (a `4xx` other than `408` and `429` dead-letters) and a failure
   answered by `acknowledge` settles the job done, its writes rolled back. A
   tick has no retry and a listener no dead letter, so a failure a layer
-  answered there — `skip`, or a filter's problem — is one the app expected,
-  said at `warn` rather than `error`.
+  answered there — `skip`, or a filter's client problem (a `4xx`) — is one
+  the app expected, said at `warn` rather than `error`; a `5xx` problem stays
+  the server's failure, at `error`, so an app-wide filter mapping every error
+  to a problem never silences one.
 - **A job attached by hand as a `CronJobMeta` runs under the scheduler's own
   handler**, which declares nothing: no decorator declared its site, so it
   binds no layer of its own, and the app's run around it.

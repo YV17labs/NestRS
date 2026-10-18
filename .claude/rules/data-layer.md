@@ -140,8 +140,8 @@ writes. With nothing to wait for it dispatches before `emit` returns. **Each
 listener is a unit of its own, settled on its `Result` within its own
 deadline**: opened through the binding its emitter ran under
 (`current_unit_of_work`), bare under none, one transaction unless
-`transactional = false`, its `Err` rolled back and filed at `error` while the
-chain goes on — so an event a listener emits waits for that listener's commit.
+`transactional = false`, its `Err` rolled back and filed at `error` — at
+`warn` once a layer answered it — while the chain goes on — so an event a listener emits waits for that listener's commit.
 
 - **Waits:** every unit of its own — a mutating HTTP request, a GraphQL
   operation (a savepoint per mutation root field), a WS message or connection

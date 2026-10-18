@@ -7,9 +7,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use nest_rs_core::problem::code;
 use nest_rs_core::{
-    Caught, Container, ExceptionFilter, Interceptor, Layer, Next, Outcome, ReachableProviders,
-    Transport, UnitContext, async_trait, injectable,
+    Caught, Container, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem,
+    ReachableProviders, Transport, UnitContext, async_trait, injectable,
 };
 use nest_rs_schedule::{Replicas, ScheduleView, Scheduler, scheduled};
 use tokio_util::sync::CancellationToken;
@@ -93,6 +94,39 @@ impl ExceptionFilter for Expected {
     }
 }
 
+/// Says every failure is the client's: a `422`.
+#[injectable]
+#[derive(Default)]
+struct Unprocessable;
+
+impl Layer for Unprocessable {}
+
+#[async_trait]
+impl ExceptionFilter for Unprocessable {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(422, code::INVALID_ARGUMENT))
+    }
+}
+
+/// Says every failure is the server's: a `500`, as an app-wide filter mapping
+/// errors to problems does.
+#[injectable]
+#[derive(Default)]
+struct Internal;
+
+impl Layer for Internal {}
+
+#[async_trait]
+impl ExceptionFilter for Internal {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(500, code::INTERNAL))
+    }
+}
+
 #[injectable]
 #[derive(Default)]
 struct ViewedTasks;
@@ -134,6 +168,32 @@ impl FailingTasks {
     }
 }
 
+#[injectable]
+#[derive(Default)]
+struct ClientFailingTasks;
+
+#[scheduled]
+impl ClientFailingTasks {
+    #[after("100ms")]
+    #[use_exception_filters(Unprocessable)]
+    async fn refused(&self) -> anyhow::Result<()> {
+        anyhow::bail!("the report period is not closed yet")
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct ServerFailingTasks;
+
+#[scheduled]
+impl ServerFailingTasks {
+    #[after("100ms")]
+    #[use_exception_filters(Internal)]
+    async fn broken(&self) -> anyhow::Result<()> {
+        anyhow::bail!("the report store refused the connection")
+    }
+}
+
 /// Run every job of `host` the scheduler finds for half a second of paused
 /// time.
 async fn tick<H: Send + Sync + 'static>(host: H) -> Container {
@@ -145,6 +205,8 @@ async fn tick<H: Send + Sync + 'static>(host: H) -> Container {
         .provide(Reading)
         .provide(Skipping)
         .provide(Expected)
+        .provide(Unprocessable)
+        .provide(Internal)
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -226,6 +288,46 @@ async fn a_failure_a_filter_answers_is_said_at_warn_and_never_at_error() {
         line.field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::ERROR),
         "the tick failed, whatever a layer answered",
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failure_a_filter_says_is_the_clients_is_said_at_warn() {
+    let logs = nest_rs_testing::LogCapture::install();
+    tick(ClientFailingTasks).await;
+
+    let said = logs.expect_one(
+        nest_rs_schedule::TARGET,
+        "scheduled job failed; a layer answered it",
+    );
+    assert_eq!(said.level, "warn");
+    assert!(
+        logs.find(nest_rs_schedule::TARGET, "scheduled job failed")
+            .is_empty(),
+        "a client's problem is no error to page on: {:#?}",
+        logs.events(),
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failure_a_filter_says_is_the_servers_is_said_at_error() {
+    let logs = nest_rs_testing::LogCapture::install();
+    tick(ServerFailingTasks).await;
+
+    let said = logs.expect_one(nest_rs_schedule::TARGET, "scheduled job failed");
+    assert_eq!(said.level, "error");
+    assert_eq!(
+        said.field("error").as_deref(),
+        Some("the report store refused the connection"),
+    );
+    assert!(
+        logs.find(
+            nest_rs_schedule::TARGET,
+            "scheduled job failed; a layer answered it",
+        )
+        .is_empty(),
+        "a server's problem is still an error: {:#?}",
+        logs.events(),
     );
 }
 

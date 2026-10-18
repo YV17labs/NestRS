@@ -1494,8 +1494,13 @@ impl Runner {
                 "scheduled job skipped by a layer",
             ),
             Ok(Ok(_)) => {}
-            // A layer that answered the failure expected it: no error to page on.
-            Ok(Err(failure)) if failure.is_answered() || caught_problem(&failure).is_some() => {
+            // A failure a layer skipped, or said was the client's (a `4xx`), is one
+            // the app expected; a `5xx` it said is still the server's, at `error`.
+            Ok(Err(failure))
+                if failure.is_answered()
+                    || caught_problem(&failure)
+                        .is_some_and(|problem| !problem.is_server_error()) =>
+            {
                 tracing::warn!(
                     target: crate::TARGET,
                     provider = id.provider,

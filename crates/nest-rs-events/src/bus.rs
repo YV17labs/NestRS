@@ -99,12 +99,18 @@ impl EventBus {
     /// minutes unless its `#[on_event]` declares one; a commit never is. An
     /// event the listener emits waits for its commit in turn.
     ///
+    /// The app's interceptors and exception filters, then those its
+    /// `#[listeners]` block and its `#[on_event]` method bind, run around each
+    /// call, reading it through [`EventsView`], inside its transaction.
+    ///
     /// A failing listener — an `Err`, its timeout, a commit its driver could
     /// not honour — is logged at `error` on `nest_rs::events` with its whole
-    /// chain, and a panicking one is caught and logged there too; the chain
-    /// continues with the next listener either way, and `emit` returns to an
-    /// emitter whose own work stands. A slow listener delays the ones after it
-    /// and the emitter: work that must not block belongs on the queue.
+    /// chain, or at `warn` when a layer answered it with [`EventsView::skip`]
+    /// or a client's problem (a `4xx`); a panicking one is caught and logged
+    /// there too. The chain continues with the next listener either way, and
+    /// `emit` returns to an emitter whose own work stands. A slow listener
+    /// delays the ones after it and the emitter: work that must not block
+    /// belongs on the queue.
     pub async fn emit<E: Clone + Send + 'static>(&self, event: E) {
         if !self.wired.load(Ordering::Relaxed) {
             tracing::warn!(
@@ -181,8 +187,12 @@ async fn dispatch_one(
                 });
             }
         }
-        // A layer that answered the failure expected it: no error to page on.
-        Ok(Err(failure)) if failure.is_answered() || caught_problem(&failure).is_some() => {
+        // A failure a layer skipped, or said was the client's (a `4xx`), is one the
+        // app expected; a `5xx` it said is still the server's, at `error`.
+        Ok(Err(failure))
+            if failure.is_answered()
+                || caught_problem(&failure).is_some_and(|problem| !problem.is_server_error()) =>
+        {
             line.file(nest_rs_core::operation_log::ERROR);
             continuation.enter(|| {
                 tracing::warn!(

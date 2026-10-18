@@ -205,9 +205,11 @@ deadline through `cx.deadline()`. An interceptor returning `Ok(tick.skip())`
 settles the tick without running it, and the next occurrence fires as usual.
 
 A tick has no retry, so a failure is reported, never acted on. One a filter
-answers — with `tick.skip()`, or a `Problem` — is one the app expected: it is
-said at `warn` as `scheduled job failed; a layer answered it` rather than at
-`error`, and its transaction still rolls back. A job attached by hand as a
+answers with `tick.skip()`, or with a client's `Problem` (a `4xx`), is one the
+app expected: it is said at `warn` as `scheduled job failed; a layer answered
+it` rather than at `error`. A `5xx` problem is still the server's failure,
+logged at `error` like one no filter caught. Either way the tick's transaction
+rolls back. A job attached by hand as a
 `CronJobMeta` binds no layer of its own; the app's run around it all the same.
 
 ## Wire it in

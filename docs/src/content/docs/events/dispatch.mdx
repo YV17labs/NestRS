@@ -57,7 +57,9 @@ listeners were wired: dropped`. Three consequences worth naming:
 - **Failure is local** — a listener's `Err`, its timeout or a commit the
   database could not honour rolls back that listener's unit alone, and is
   logged at `error` on `nest_rs::events` with the event type, the listener and
-  the whole error chain. A **panicking** listener is contained the same way.
+  the whole error chain — at `warn` when a layer answered it, as
+  [Layers around a listener call](#layers-around-a-listener-call) says. A
+  **panicking** listener is contained the same way.
   The chain continues with the next listener, and `emit` returns normally:
   the emitter's work stands. There is no retry and no dead letter — side
   effects that must eventually happen belong on the [Queue](/queue/). A
@@ -83,11 +85,12 @@ interceptors and exception filters, then those a `#[listeners]` block and its
 then the listener. A layer reads the call through `EventsView` — the
 `event()` type and the `listener()` it calls — under the emitter's trace, and
 an interceptor returning `Ok(call.skip())` settles the call without running
-the listener. A failure a filter answers — with `call.skip()`, or a `Problem` —
-is one the app expected: it is said at `warn` as `event listener failed; a
-layer answered it — dispatch continues with the next listener`, and the call's
-transaction still rolls back. An event has no caller, so `#[use_guards]` there
-is a compile error naming why.
+the listener. A failure a filter answers with `call.skip()`, or with a
+client's `Problem` (a `4xx`), is one the app expected: it is said at `warn` as
+`event listener failed; a layer answered it — dispatch continues with the next
+listener`. A `5xx` problem is still the server's failure, logged at `error`
+like one no filter caught. Either way the call's transaction rolls back. An
+event has no caller, so `#[use_guards]` there is a compile error naming why.
 
 ## A transaction you opened yourself
 

@@ -65,6 +65,12 @@ tokio = { workspace = true, features = ["test-util"] }
 nestrs-hooks-probe = { path = "tests/hooks-probe" }
 # A `log` logger set before the console, which keeps the `log` records.
 log.workspace = true
+# What each unit pays the pipeline, measured in `benches/`.
+criterion.workspace = true
+
+[[bench]]
+name = "pipeline"
+harness = false
 
 [lints]
 workspace = true

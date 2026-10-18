@@ -147,6 +147,9 @@ heck = "0.5"
 tempfile = "3.27"
 tokio-rustls = "0.26"  # public in nest-rs-testing alone
 libc = "0.2"
+# The micro-benchmarks' harness (`nest-rs-core`'s `benches/`): warm-up,
+# sampling and outlier analysis; the plots and the thread pool they pull are off.
+criterion = { version = "0.8", default-features = false }
 
 # The embedded source of `nest-rs-static-files`: a folder compiled into the
 # binary. `debug-embed` embeds in a debug build too, so what a test serves is

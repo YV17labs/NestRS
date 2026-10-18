@@ -373,7 +373,7 @@ impl Transport for Scheduler {
                 replicas: entry.replicas,
                 key: entry.key,
             });
-            jobs.push(Scheduler::resolve(&synthesized, entry.site)?);
+            jobs.push(Scheduler::resolve(&synthesized, entry.__site)?);
         }
 
         // Two jobs under one `Provider::method` would file lines nobody can tell

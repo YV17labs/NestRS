@@ -169,7 +169,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     transaction: #transaction_tokens,
                     replicas: #replicas_tokens,
                     key: #key_tokens,
-                    site: #site_ref,
+                    __site: #site_ref,
                     run: |__container| ::std::boxed::Box::pin(async move {
                         let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
                             .expect(::std::concat!(

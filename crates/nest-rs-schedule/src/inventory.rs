@@ -87,7 +87,7 @@ pub struct ScheduledMethod {
     /// The dispatch site its decorator declared, with the layers its method
     /// and its block bind. Not API: written by `#[scheduled]` alone.
     #[doc(hidden)]
-    pub site: &'static nest_rs_core::__private::Site,
+    pub __site: &'static nest_rs_core::__private::Site,
 }
 
 ::nest_rs_core::inventory::collect!(ScheduledMethod);

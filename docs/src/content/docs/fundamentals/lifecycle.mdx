@@ -413,7 +413,8 @@ own:
 
 Raising a window means raising the pod's grace period with it, keeping 9.5
 seconds above the longest window for the half second, the hooks and the two
-flushes.
+flushes — plus the `preStop` delay, which Kubernetes counts inside the grace
+([below](#leaving-the-load-balancer-first)).
 
 **The kernel holds every transport to the bound it states.** A transport's
 `stop_bound` is read at the boot: one past a day — `Duration::MAX` among them —
@@ -507,6 +508,63 @@ Nothing runs after that line but the
 [console](/opentelemetry/logs/#a-console-that-stalls) writing what it still
 queues, that line included, within its one second — no later hook, no telemetry
 flush — since exiting at once is what was asked.
+
+## Leaving the load balancer first
+
+The way down begins at the signal, and the HTTP transport stops accepting right
+there. A platform that still routes requests to the replica after the signal
+sends them to a closed port, and their clients see a refused connection or a
+`502`. Kubernetes does exactly that on its own: it removes a terminating pod
+from its Service's endpoints while it sends `SIGTERM`, and kube-proxy and the
+ingress controllers catch up a few seconds later.
+
+So the replica leaves the rotation **before** the signal, and that half is the
+platform's. Each one has its hook:
+
+| Platform | Takes the replica out first with | Grace before the kill |
+|---|---|---|
+| Kubernetes 1.30+ | a `preStop` hook's `sleep` action, while the endpoint removal propagates | `terminationGracePeriodSeconds`, counted from the `preStop` hook: at least the sleep plus 29.5 s |
+| Amazon ECS behind a load balancer | itself: it deregisters the task and waits the target group's deregistration delay | `stopTimeout` after the signal, 30 s by default |
+| Nomad | the task's `shutdown_delay`, once its services are deregistered | `kill_timeout` after the signal, 5 s by default: raise it to `30s` |
+| Cloud Run | itself: new requests go to other instances | 10 s after the signal, which it does not let you raise |
+
+The 29.5 seconds are [the way down](#the-way-down) at the framework's defaults;
+a window you raise raises them. On Kubernetes, the sleep goes on every
+container that serves:
+
+```yaml title="deployment.yaml"
+spec:
+  template:
+    spec:
+      terminationGracePeriodSeconds: 35
+      containers:
+        - name: api
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+```
+
+Five seconds covers kube-proxy and an in-cluster ingress controller; a cloud
+load balancer that targets pod IPs can take longer to deregister one, so the
+sleep matches its deregistration time and the grace grows with it. The `sleep`
+action needs nothing in the image, so it works on a distroless one, where a
+`preStop` that runs `sleep` would find no binary. The
+[demo's chart](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo#graceful-shutdown)
+sets both, and refuses a grace that holds less.
+
+**Readiness does not take the replica out.** `/health/ready` answers `200`
+until the listener closes at the signal, and the port refuses after that, so a
+load balancer that polls it learns the replica is gone only once its probes
+fail, and routes requests to it meanwhile. The platform's hook is the one way
+out ahead of the signal.
+
+Cloud Run's ten seconds are fewer than the way down's bounds, and it offers no
+setting to raise them. Its traffic has moved when the signal lands, so the
+transports find little to drain, but what still runs at the tenth second — a
+long request, a hook, a flush — dies without its line. Lower the HTTP window
+there, `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, so a long request is cut with its
+`cancelled` line and the hooks still get their turn.
 
 ## Running without serving
 

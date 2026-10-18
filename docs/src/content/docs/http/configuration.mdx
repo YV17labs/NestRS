@@ -440,10 +440,11 @@ then three for the [telemetry flush](/opentelemetry/), then one for the
 [console](/opentelemetry/logs/#a-console-that-stalls) — 29.5 seconds, under the
 `30` a Kubernetes pod gets between `SIGTERM` and `SIGKILL`. Raise the window
 together with the pod's grace period, keeping the nine and a half seconds after
-it:
+it and any `preStop` delay before it, the sleep that takes the replica out of
+the load balancer before the signal:
 
 ```bash title=".env.production" frame="terminal"
-NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS=55    # beside terminationGracePeriodSeconds: 65
+NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS=55    # beside a 5 s preStop sleep and terminationGracePeriodSeconds: 70
 ```
 
 Whole seconds from `1` to `3600`; anything outside fails the boot naming the
@@ -505,8 +506,8 @@ When the window closes on open connections, one `warn` on `nest_rs::http`
 counts them: `cut`, the connections it closed, and `upgraded_open`, the sockets
 a hand-built self-mount left open. The shutdown hooks run once every transport has
 stopped, five seconds between all of them — see [Lifecycle](/fundamentals/lifecycle/#ordering-and-failure) —
-so keep the grace period above this window plus the half second, theirs and the
-flush's.
+so keep the grace period above this window plus the half second, theirs, the
+flushes' and any `preStop` delay.
 
 **A client that goes away mid-request is seen only if it resets.** The line of a
 request whose client stopped waiting depends on how the client left:

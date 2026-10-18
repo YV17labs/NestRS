@@ -77,6 +77,11 @@ the issuer a token is signed by, the audience it is minted for, the resource
 identifier discovery serves, the MCP `Host` allowlist — and each of those is
 some app's public origin, so the chart derives them from `apps.<name>.host`.
 
+Each app's pod sleeps five seconds in a `preStop` hook before its `SIGTERM`, so
+it leaves its Service while it still listens, and the 35-second grace holds that
+sleep and the framework's way down — see
+[leaving the load balancer first](/fundamentals/lifecycle/#leaving-the-load-balancer-first).
+
 Scaling the queue worker is the one decision the chart does not make for you.
 Each `#[process]` method runs at most its declared `concurrency` per pod — one
 unless it says otherwise — and Publish's processors are I/O, an S3 round-trip or

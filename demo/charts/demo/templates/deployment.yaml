@@ -60,6 +60,13 @@ spec:
             {{- include "demo.env" (dict "ctx" $ "app" $app) | nindent 12 }}
           envFrom:
             {{- include "demo.envFrom" (dict "ctx" $ "app" $app) | nindent 12 }}
+          {{- if $cfg.shutdownDelaySeconds }}
+          # The native sleep action: the distroless image has no `sleep` to exec.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $cfg.shutdownDelaySeconds }}
+          {{- end }}
           {{- include "demo.probes" $ | nindent 10 }}
           resources:
             {{- toYaml $cfg.resources | nindent 12 }}

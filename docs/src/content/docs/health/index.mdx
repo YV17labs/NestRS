@@ -71,6 +71,11 @@ liveness during boot); a temporarily overloaded app fails `ready` (so
 traffic drains) without flagging `live` (the process is fine — do not
 restart it).
 
+`ready` does not turn a replica away on its way down: it answers until the
+listener closes at the shutdown signal. Taking a replica out of rotation before
+it stops listening is the platform's — see
+[leaving the load balancer first](/fundamentals/lifecycle/#leaving-the-load-balancer-first).
+
 ## The JSON shape
 
 Every probe returns the same body. `info` holds the up indicators,

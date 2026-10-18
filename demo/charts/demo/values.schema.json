@@ -113,6 +113,7 @@
         "backoffLimit": { "type": "integer", "minimum": 0 },
         "hookWeight": { "type": "integer" },
         "replicas": { "type": "integer", "minimum": 0 },
+        "shutdownDelaySeconds": { "type": "integer", "minimum": 0 },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
         "podSecurityContext": { "type": "object" },
         "securityContext": { "type": "object" },

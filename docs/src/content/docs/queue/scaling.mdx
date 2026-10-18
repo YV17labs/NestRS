@@ -237,9 +237,9 @@ that bound this: a scale-down stabilization window at least as long as a job
 runs (`advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.stabilizationWindowSeconds`
 on the `ScaledObject`, and a `cooldownPeriod` for the last replica), and a pod
 `terminationGracePeriodSeconds` at least 9.5 seconds above the drain window,
-`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` (20 by default) — the shutdown
-hooks and the two flushes follow the drain — raised as far as a job's length
-when jobs are long.
+`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` (20 by default), plus any `preStop`
+delay — the shutdown hooks and the two flushes follow the drain — raised as far
+as a job's length when jobs are long.
 
 <Aside type="caution">
 **Scaling to zero strands work the trigger cannot see.** A job held back — a

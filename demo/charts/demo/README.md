@@ -12,8 +12,9 @@ helm install demo demo/charts/demo \
   --set secrets.REDIS__URL="rediss://redis:6379"
 ```
 
-`helm template` renders offline against Kubernetes 1.20 unless told otherwise,
-below this chart's floor — pass `--kube-version 1.31.0` when rendering locally.
+`helm template` renders against the Kubernetes version its Helm was built with,
+which may sit below this chart's floor — pass `--kube-version 1.31.0` when
+rendering locally.
 
 ## What it deploys
 
@@ -118,9 +119,10 @@ apps:
 ```
 
 — and keep `terminationGracePeriodSeconds` at least 9.5s above
-`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, for the shutdown hooks and the
-telemetry and console flushes that follow the drain, raising both toward a job's
-length when jobs are long (see [Graceful shutdown](#graceful-shutdown)).
+`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` plus `shutdownDelaySeconds`, for the
+shutdown hooks and the telemetry and console flushes that follow the drain,
+raising both toward a job's length when jobs are long (see
+[Graceful shutdown](#graceful-shutdown)).
 
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
 its own, and two of them would scale the same Deployment against each other.
@@ -146,11 +148,29 @@ idempotent. Set it to 0 knowing that.
 
 ## Graceful shutdown
 
-The framework installs a SIGTERM handler and drains its transports, so
-`terminationGracePeriodSeconds` is the window it gets. The default 30s holds
-every app's way down at the framework's defaults — 20s for the HTTP window or the
-worker's drain, half a second after it, five for the shutdown hooks, three
-for the telemetry flush and one for the console — `live`'s included: its
-sockets close with `1001 Going Away` at the signal, and their clients reconnect
-to a replica still serving. Raise an app's grace period with any window you
-raise, keeping 9.5s above it.
+**A pod leaves its Service before it stops listening.** Kubernetes removes a
+terminating pod from the Service's endpoints while it sends `SIGTERM`, and
+kube-proxy and the ingress controllers learn of it a few seconds later; the
+framework's HTTP transport stops accepting at the signal. Without a delay
+between the two, a rolling deploy sends some requests to a closed port, and
+their clients see a refused connection or a `502`. So every app's container
+sleeps `shutdownDelaySeconds` — 5 by default — in a `preStop` hook before the
+signal, still serving. It is the native `sleep` action: the distroless image has
+no `sleep` binary to exec, which is why the chart needs Kubernetes 1.30.
+Behind a load balancer that targets pod IPs and deregisters slower than that,
+raise the delay to its deregistration time; `0` renders no hook.
+
+`/health/ready` does not take the pod out sooner: it answers `200` until the
+listener closes at the signal, so a readiness probe learns the pod is gone only
+once it fails. The `preStop` delay is the one way out ahead of the signal.
+
+Then the framework drains its transports, so `terminationGracePeriodSeconds`,
+which Kubernetes counts from the start of the `preStop` hook, holds the delay
+and the way down. The default 35s holds the 5s delay and every app's way down
+at the framework's defaults — 20s for the HTTP window or the worker's drain,
+half a second after it, five for the shutdown hooks, three for the telemetry
+flush and one for the console — `live`'s included: its sockets close with
+`1001 Going Away` at the signal, and their clients reconnect to a replica still
+serving. Raise an app's grace period with any window or delay you raise,
+keeping it 9.5s above the window plus the delay; the chart refuses to render a
+grace under the delay plus 29.5s.

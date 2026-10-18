@@ -122,9 +122,10 @@ defaults:
       memory: 128Mi
     limits:
       memory: 512Mi
-  # The framework installs a SIGTERM handler and drains its transports; this is
-  # the window Kubernetes gives it before SIGKILL.
-  terminationGracePeriodSeconds: 30
+  # Serves on while the endpoint removal propagates; 0 renders no preStop.
+  shutdownDelaySeconds: 5
+  # Holds the delay plus the framework's 29.5s way down; the chart refuses less.
+  terminationGracePeriodSeconds: 35
   podAnnotations: {}
   podLabels: {}
   nodeSelector: {}

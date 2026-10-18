@@ -9,13 +9,15 @@ type: application
 
 # Chart version, bumped on chart changes. `appVersion` tracks the demo
 # workspace's own version (demo/Cargo.toml) and supplies the default image tag.
-version: 0.2.0
+version: 0.3.0
 appVersion: "7.0.0"
 
-# The honest floor, read off the API versions this chart writes: autoscaling/v2
-# (1.23), policy/v1 (1.21), networking.k8s.io/v1 (1.19). `helm template` renders
-# offline against 1.20 unless told otherwise, so pass --kube-version there.
-kubeVersion: ">= 1.23.0-0"
+# The honest floor, read off what this chart writes: the preStop `sleep` action
+# (1.30, on by default from its beta), autoscaling/v2 (1.23), policy/v1 (1.21),
+# networking.k8s.io/v1 (1.19). `helm template` renders against the Kubernetes
+# version its Helm was built with, which may sit below this floor, so pass
+# --kube-version there.
+kubeVersion: ">= 1.30.0-0"
 
 home: https://nestrs.dev
 sources:

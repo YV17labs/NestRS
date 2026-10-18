@@ -201,6 +201,12 @@ that installs cleanly and then misbehaves in a way no probe reports.
 {{- if and (eq $cfg.kind "deployment") (not $cfg.port) -}}
 {{- fail (printf "demo: apps.%s needs a `port`. Every app the framework runs mounts an HTTP transport — the worker included, for its probes — and this chart sets NESTRS_HTTP__PORT from that value." $app) -}}
 {{- end -}}
+{{- if eq $cfg.kind "deployment" -}}
+{{- $needed := ceil (addf $cfg.shutdownDelaySeconds 29.5) -}}
+{{- if lt (float64 $cfg.terminationGracePeriodSeconds) $needed -}}
+{{- fail (printf "demo: apps.%s has a terminationGracePeriodSeconds of %v, under the %v its way down needs. Kubernetes counts the preStop sleep inside the grace, so the %vs `shutdownDelaySeconds` comes first, then the framework's 29.5s from SIGTERM to exit at its defaults; a pod past its grace is killed mid-drain, with no line saying why. Raise the grace, or lower the delay." $app $cfg.terminationGracePeriodSeconds $needed $cfg.shutdownDelaySeconds) -}}
+{{- end -}}
+{{- end -}}
 {{- if and $cfg.autoscaling.enabled $cfg.keda.enabled -}}
 {{- fail (printf "demo: apps.%s enables both `autoscaling` and `keda`. KEDA owns an HPA of its own, so the two would scale the same Deployment against each other — pick one." $app) -}}
 {{- end -}}

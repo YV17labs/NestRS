@@ -57,19 +57,18 @@ whether you type it, not how the compiler resolves it.
 
 One grammar holds every decorator pair: each layer attribute is taken where
 its edge runs that family, and anywhere else it is a compile error that says
-why — never a layer that silently never runs. Two kinds of site do not read
-it yet: `#[processor]`, `#[scheduled]` and `#[listeners]`, and the WebSocket
-`#[on_connect]` / `#[on_disconnect]` hooks, take `#[meta]` alone, so a layer
-attribute there still meets the compiler's `cannot find attribute` rather
-than the reason the table gives.
+why — never a layer that silently never runs. One kind of site does not read
+it yet: the WebSocket `#[on_connect]` / `#[on_disconnect]` hooks take
+`#[meta]` alone, so a layer attribute there still meets the compiler's
+`cannot find attribute` rather than the reason the table gives.
 
 | Attribute | HTTP | GraphQL | WebSockets | MCP | Queue, schedule, events | Hooks, indicators |
 |---|---|---|---|---|---|---|
 | `#[use_guards]` | struct, method | struct, method | struct (the upgrade), method | struct, method | — no caller to gate | — |
 | `#[force_guards]` | method | method | method | method | — | — |
 | `#[use_pipes]` | struct, method | — bind a per-argument pipe | not yet | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
-| `#[use_interceptors]` | struct, method | not yet | not yet | not yet | not yet | — |
-| `#[use_exception_filters]` | struct, method | not yet | not yet | not yet | not yet; listeners — | — |
+| `#[use_interceptors]` | struct, method | not yet | not yet | not yet | impl block, method | — |
+| `#[use_exception_filters]` | struct, method | not yet | not yet | not yet | impl block, method | — |
 | `#[use_filters]` | struct, method | — use `#[use_exception_filters]` | — | — | — | — |
 | `#[meta]` | struct, method | struct, method | struct, method | struct, method | impl block, method | — |
 

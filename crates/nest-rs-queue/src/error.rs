@@ -152,11 +152,14 @@ impl QueueError {
 /// A job failure classified for the retry budget.
 ///
 /// A **retryable** failure ([`retry`](JobError::retry)) is a transient fault —
-/// the `#[process]` method returning `Err` — that another attempt might clear.
-/// A **non-retryable** failure ([`abort`](JobError::abort)) is *deterministic* —
-/// an unsupported wire-format version, an undeserializable payload, a missing
-/// provider — and another attempt would fail identically, so the attempt
-/// dead-letters at once instead of spending the budget on it.
+/// the `#[process]` method returning `Err`, unless it says otherwise — that
+/// another attempt might clear. A **non-retryable** failure
+/// ([`abort`](JobError::abort)) is *deterministic* — an unsupported
+/// wire-format version, an undeserializable payload, a missing provider, a
+/// client error (a [`Problem`](nest_rs_core::Problem) with a `4xx` other than
+/// `408` and `429`) — and another attempt would fail identically, so the
+/// attempt dead-letters at once instead of spending the budget on it. A method
+/// returning a `JobError` keeps the disposition it chose.
 pub struct JobError {
     /// Whether another attempt could clear the failure.
     pub retryable: bool,

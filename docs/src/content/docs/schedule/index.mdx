@@ -194,6 +194,22 @@ commit did not answer within the driver's bound is reported failed with
 `#[process]` takes the same key, with the same default and ceiling — see
 [How long an attempt runs](/queue/retries-and-failure/#how-long-an-attempt-runs).
 
+## Layers around a tick
+
+A tick runs through the same pipeline as a job: the app's interceptors and
+exception filters, then those a `#[scheduled]` block and its trigger bind
+(`#[use_interceptors]`, `#[use_exception_filters]`), then the method. A layer
+reads the tick through `ScheduleView` — its `job()`, as `key = "…"` spells it,
+the `occurrence()` a job firing once claimed, and its `replicas()` — and the
+deadline through `cx.deadline()`. An interceptor returning `Ok(tick.skip())`
+settles the tick without running it, and the next occurrence fires as usual.
+
+A tick has no retry, so a failure is reported, never acted on. One a filter
+answers — with `tick.skip()`, or a `Problem` — is one the app expected: it is
+said at `warn` as `scheduled job failed; a layer answered it` rather than at
+`error`, and its transaction still rolls back. A job attached by hand as a
+`CronJobMeta` binds no layer of its own; the app's run around it all the same.
+
 ## Wire it in
 
 The provider goes in its feature module like any other `#[injectable]`:

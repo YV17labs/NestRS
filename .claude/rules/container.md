@@ -76,7 +76,9 @@ framework half.
   before it is refused (`UnbuiltProviderError`) — app-wide infrastructure is a
   factory's output, and a gated provider is listed in `providers`. It
   governs `#[inject]`, optional or not — an optional dependency no module the
-  app reaches provides is absent, never a leak — the `#[use_*]` layer lists, and
+  app reaches provides is absent, never a leak — the `#[use_*]` layer lists (a
+  provider-hosted site's through the `HostLayers` entry its decorator
+  submits, since the host's struct is `#[injectable]`'s), and
   every provider a handler resolves through a parameter whose type implements
   `ResolvesProvider`, checked for reach but never for scope, since a request is
   its consumer; `Container::get` at runtime is an unchecked escape hatch. **A provider a module lists is built, or the boot
@@ -368,7 +370,8 @@ answers `Unhonoured::IN_DOUBT` past its settle net (`UnitOfWork::settle_net`,
 above every statement bound) — and for a failed unit whose body was cut before
 an atomic block's own commit answered — and waits for held work until the deadline; an
 edge timer wrapping a unit is armed that net past the deadline, and answers in
-doubt, never a retryable timeout. **A command whose
+doubt, never a retryable timeout — written once for the units no edge
+deadline bounds, `run_unit_bounded`. **A command whose
 answer is the only record of what it claimed is never cut** — a timeout does
 not undo it — so it waits on the socket's liveness
 instead (`queue.md`). **Every port method the framework awaits returns a

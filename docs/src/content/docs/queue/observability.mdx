@@ -115,6 +115,8 @@ carrying `queue` and, for a job, `job_id`:
 
 | Message | Level | When |
 |---|---|---|
+| `job acknowledged without running` | `debug` | A layer settled the job with `QueueView::acknowledge` before its method ran — the inbox pattern. |
+| `job failed; a layer acknowledged it, so it settles done and its writes rolled back` | `warn` | An exception filter answered the attempt's failure by acknowledging the job: it completes, and nothing it wrote stands. |
 | `job handed back to the queue` | `info` | A drain cut a running attempt, `reason="shutdown"`; its job is due at once for another replica. |
 | `queue receive waits for its throttle's next window` | `debug` | The method's throttle window is full; `window_left_ms` says how long this replica's reads wait. |
 | `job outcome not written: the delivery is no longer this worker's`, `job outcome not recorded yet; retrying` | `debug` | An outcome found its delivery gone once its lease was known lost or an earlier try had failed, or Redis has not answered it yet and it is tried again while the lease holds. |

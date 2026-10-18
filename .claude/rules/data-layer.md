@@ -258,6 +258,11 @@ dependency cycle.** What they guarantee:
 
 ## Queue attempts and ticks
 
+**The unit is the edge's own `run_unit` around the pipeline** — a queue
+attempt's, a tick's and a listener call's through `run_unit_bounded` — so the
+interceptors and exception filters run inside the transaction, and a failure
+a filter answers still rolls it back.
+
 **One transaction per attempt is the default**, settled through the same
 `finalize`: a job failing halfway leaves nothing for its retry to write again.
 Being lazy, it needs no safe/mutating verb — a job that never touches the

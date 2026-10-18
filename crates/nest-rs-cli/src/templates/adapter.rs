@@ -196,7 +196,9 @@ pub struct {{processor}};
 impl {{processor}} {
     // One attempt at a time per replica, the default: `concurrency = N` runs N
     // side by side in each replica, and more replicas scale the rest. `retries`
-    // is the budget the port counts, backing off between attempts.
+    // is the budget the port counts, backing off between attempts; an `Err`
+    // carrying a `Problem` with a 4xx other than 408 and 429 dead-letters the
+    // job at once, since no retry clears a client's error.
     #[process(queue = {{queue}}, retries = 3)]
     async fn handle(&self, job: {{command}}) -> Result<()> {
         let _ = job;

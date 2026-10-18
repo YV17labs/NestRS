@@ -27,6 +27,16 @@ drains on its own has taken semantics it does not own**, and a second adapter
 copies nothing. `nest_rs_testing::queue_kit!` holds every adapter to the
 contract (`.claude/decisions/queue-redis-streams.md`).
 
+- **An attempt is a unit of the pipeline**: the app's, the `#[processor]`
+  block's and the method's interceptors and exception filters run around it,
+  reading `QueueView`, and no guard — a job has no caller. **A failure's
+  disposition is the port's, one rule**: the problem an exception filter
+  answered, then a `JobError`'s own, then a `Problem` in the chain — a
+  method's error read by its type, a `ToProblem` error by the problem it says.
+  A `4xx` other than `408` and `429` dead-letters at once (RFC 9110 §15.5,
+  §15.5.9; RFC 6585 §4); every other failure retries within the budget. A
+  failure a layer answered with `QueueView::acknowledge` settles the job done,
+  at `warn`. Held by `nest-rs-queue`'s `view` and `consume` suites.
 - **Two budgets, never one.** `retries` counts attempts that answered, in the
   envelope; `STALL_LIMIT` counts deliveries that ended unanswered, off the
   backend's delivery count, which every re-filing resets. A job past it is
@@ -218,6 +228,8 @@ keys is `queue/layout.rs`'s `//!`.
 checked at compile time, and only `CronExpression` presets resolve at boot. The
 scheduler is a `Transport` attached with `ContainerBuilder::provide_transport`.
 
+- **A tick is a unit of the pipeline**, read through `ScheduleView`; a
+  failure a layer answered is said at `warn`, never acted on.
 - **A tick has no retry** — its retry is the next occurrence — and **a replica
   runs one occurrence of a job at a time**; an occurrence falling inside a run is
   skipped and counted. `concurrency` counts per replica. Work that must not be

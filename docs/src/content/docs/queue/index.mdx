@@ -210,6 +210,37 @@ writes already landed. See
 [Repo and the executor](/database/repo-and-executor/) and
 [Retries and failure](/queue/retries-and-failure/).
 
+## Layers around a job
+
+An attempt runs through the same pipeline as a request: the interceptors and
+exception filters the app lists, then those a `#[processor]` block and its
+method bind, then the method. A layer reads the job through `QueueView`:
+
+```rust title="crates/features/src/audio/queue/processor.rs"
+#[processor]
+#[use_interceptors(TranscodeMetrics)]
+impl AudioProcessor {
+    #[process(queue = AudioQueue, retries = 3)]
+    #[use_exception_filters(UnsupportedFormatFilter)]
+    async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
+        self.svc.transcode(&job.file).await
+    }
+}
+```
+
+`cx.switch_to::<QueueView>()` answers the attempt (`attempt()`, with the
+job's id and its number), the method (`processor()`) and the backend's record
+id (`backend_id()`). An interceptor that returns `Ok(job.acknowledge())`
+without running the rest settles the job as done — the inbox pattern, keyed on
+the job's id. A job has no caller, so `#[use_guards]` beside `#[process]` is a
+compile error saying so: guard where the work is produced. What a filter's
+answer does to the job is on
+[Retries and failure](/queue/retries-and-failure/#a-client-error-dead-letters-at-once).
+
+The app's own interceptors run around every job too, outermost. One that only
+means something for a request narrows itself with `Layer::serves`, which reads
+the unit — `nest_rs::queue::unit::JOB` is the attempt's.
+
 ## Several methods on the same provider
 
 The pattern the framework is built for: one `#[injectable]` declares

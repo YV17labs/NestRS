@@ -145,3 +145,29 @@ function in `nest-rs-http` (`request_stage`) rather than handed to a site as a
 `GuardStageFactory`, since no self-mount declares a site before
 `feat/http-on-pipeline`; that branch builds the factory over the same
 function rather than composing the stage again.
+
+**2026-10-18 — `feat/jobs-ticks-listeners-on-pipeline`.** A queue attempt, a
+scheduled tick and an event listener call run through `dispatch`, with no
+guard stage (`Posture::System`) and every app-wide layer, inside the unit of
+work `run_unit_bounded` opens — the one place the body is cut at the
+decorator's `timeout` and a commit unanswered its settle net past it is in
+doubt, which the three edges had each written by hand. The worker and the
+scheduler compose their sites at configure, the bus at its wiring step, so a
+layer nothing provides fails the boot. Where it departs:
+
+- **A provider-hosted site reports its layers through an inventory entry**
+  (`HostLayers`), read by the access graph beside each provider's injects:
+  the host's struct is `#[injectable]`'s, so no `Discoverable` the impl half
+  writes could carry them, and an impl half cannot know its siblings to
+  merge one per host.
+- **A worker view answers by settling the unit, never by a reply**:
+  `QueueView::acknowledge`, `ScheduleView::skip`, `EventsView::skip`. A job's
+  disposition is the queue's rendering of a failure, so a filter's problem
+  decides it (a `4xx` other than `408` and `429` dead-letters) and a failure
+  answered by `acknowledge` settles the job done, its writes rolled back. A
+  tick has no retry and a listener no dead letter, so a failure a layer
+  answered there — `skip`, or a filter's problem — is one the app expected,
+  said at `warn` rather than `error`.
+- **A job attached by hand as a `CronJobMeta` runs under the scheduler's own
+  handler**, which declares nothing: no decorator declared its site, so it
+  binds no layer of its own, and the app's run around it.

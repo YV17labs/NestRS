@@ -157,10 +157,11 @@ an exhaustive `match` over the pairs, each layer attribute and the two scopes
 meaningless (`a hook has no caller and no site`), read by `take_layers`, with a
 trybuild snapshot per refused cell and a hygiene use site per built one. An
 attribute a site does not take never runs as a silent no-op, nor reaches rustc
-as `cannot find attribute` — but at `#[processor]`, `#[scheduled]` and
-`#[listeners]`, which still read `#[meta]` alone, until their row lands with
-their units on the pipeline, and at the WebSocket `#[on_connect]` /
-`#[on_disconnect]` hooks, no row yet, until the hooks move onto it.
+as `cannot find attribute` — but at the WebSocket `#[on_connect]` /
+`#[on_disconnect]` hooks, no row yet, until the hooks move onto it. A
+provider-hosted pair (`#[processor]`, `#[scheduled]`, `#[listeners]`)
+declares each method's site through `nest_rs_codegen::site_const` and reports
+what it binds to the access graph through `host_layers_entry`.
 
 **`#[meta(EXPR)]` is read alike at every pair**: on the host (the struct, or
 the impl block a provider pair decorates) and on each dispatched method, into

@@ -89,8 +89,47 @@ budget once; the backend keeps no retry count of its own.
 
 A failure a retry cannot fix is **non-retryable** and dead-letters on the
 attempt it happens: a payload that does not deserialize, a pipe rejection, a
-missing provider. Every `Err` your method returns is retryable — the budget is
-how many times a transient fault gets another chance.
+missing provider, a client error ([below](#a-client-error-dead-letters-at-once)).
+Every other `Err` your method returns is retryable — the budget is how many
+times a transient fault gets another chance.
+
+## A client error dead-letters at once
+
+A job that fails for a reason no retry clears says so the way an HTTP handler
+does, with a `Problem`. A `4xx` is the client's error (RFC 9110 §15.5) and
+dead-letters the job on the attempt it happens; `408` and `429` invite a later
+try and retry, as does a `5xx`:
+
+```rust title="crates/features/src/audio/queue/processor.rs"
+#[process(queue = AudioQueue, retries = 3)]
+async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
+    if !job.file.ends_with(".wav") {
+        return Err(Problem::new(422, code::INVALID_ARGUMENT).into());
+    }
+    self.svc.transcode(&job.file).await
+}
+```
+
+What decides, in order:
+
+1. **The problem an exception filter answered**, when one catches the failure:
+   a filter mapping a domain error to `Problem::new(422, …)` dead-letters at
+   attempt one, one answering `503` retries.
+2. **A `JobError` the failure carries keeps its disposition** —
+   `JobError::abort(…)` returned from the method dead-letters, `retry` retries.
+3. **The method's error, read by its type**: a method returning a
+   `ToProblem` error — `Result<(), ServiceError>` — by the problem it says
+   (`ServiceError::Conflict` is a `409`, so it dead-letters), and any other —
+   an `anyhow::Error` above — by a `Problem` in its chain.
+4. Anything else retries within the budget.
+
+A method returning `Result<(), ServiceError>` dead-letters a `NotFound`, a
+`404`, too. A job pushed inside its producer's transaction can run before that
+commit and find nothing: push from a listener on the event the commit
+announces, or return the error as `JobError::retry`. An exception filter may also answer a failed attempt with
+`job.acknowledge()` through `QueueView`: the job settles as done, what it
+wrote rolls back, and the failure is said at `warn` as
+`job failed; a layer acknowledged it, so it settles done and its writes rolled back`.
 
 ## How long an attempt runs
 

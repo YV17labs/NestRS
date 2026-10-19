@@ -80,7 +80,7 @@ struct BackwardsModule;
 async fn a_misordered_upgrade_chain_fails_the_boot_naming_both_guards_and_the_gateway() {
     let err = match TestApp::for_module::<BackwardsModule>().await {
         Ok(_) => panic!("a gateway whose upgrade chain is misordered must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -172,9 +172,11 @@ impl UnprovidedGateway {
 #[module(imports = [WsModule], providers = [UnprovidedGateway])]
 struct UnprovidedModule;
 
+/// A mount has no `Result`: the message's site files its refusal on the
+/// container, and the boot fails on it once its transports are configured.
 #[tokio::test]
-async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_event() {
-    // Built by hand, so the access graph does not refuse first.
+async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_message() {
+    // Built by hand, so neither the access graph nor the wiring step refuses first.
     let container = nest_rs_core::Container::builder()
         .provide(WsConfig::default())
         .import::<UnprovidedModule>()
@@ -184,13 +186,16 @@ async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_eve
         &nest_rs_ws::nest_rs_http::HttpConfig::default(),
     )
     .expect("the defaults are in range");
-    let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
-        panic!("the event would run without the guard it declares");
+    nest_rs_core::Transport::configure(&mut transport, &container)
+        .await
+        .expect("the mount files its refusal rather than returning it");
+    let Some(err) = nest_rs_core::__private::take_site_refusal(&container) else {
+        panic!("the message would run without the guard it declares");
     };
     let chain = format!("{err:#}");
     assert!(
-        chain.contains("Unprovided") && chain.contains("ws ping"),
-        "the refusal names the guard and the event declaring it: {chain}",
+        chain.contains("Unprovided") && chain.contains("UnprovidedGateway::ping"),
+        "the refusal names the guard and the message declaring it: {chain}",
     );
     assert!(
         chain.contains("no imported module provides it"),

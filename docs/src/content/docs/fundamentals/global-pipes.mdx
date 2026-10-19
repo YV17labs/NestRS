@@ -81,7 +81,7 @@ request is an `http.request` like a route):
 |---|---|---|---|
 | `Body` | an HTTP request's JSON body | every route, after its guards; `#[no_pipes]` opts a route out | a `400` problem |
 | `Variables` | a `/graphql` operation's variables | at the endpoint, before any resolver — a POST, or an operation sent over the graphql-ws socket, a subscription included | a GraphQL error; on the socket, the protocol's `error` for that operation, which never starts |
-| `Data` | a WebSocket message's `data` | after the message's guards, before its handler | an error frame for the event |
+| `Data` | a WebSocket message's `data` | after the message's guards and its class gate, before its handler | an error frame for the event |
 
 `cx` is the unit's context, as a guard's is: `cx.edge()` and `cx.handler()`
 say which site the input is for, `cx.reflector()` reads its `#[meta]`, and

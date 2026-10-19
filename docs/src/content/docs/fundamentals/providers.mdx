@@ -160,14 +160,16 @@ request-scoped provider is the point of the parameter, so the boot checks where
 it comes from, never its scope. `nest_rs::seaorm::Bind<A, S>` is held the same
 way for the service `S` it loads through.
 
-HTTP, GraphQL, and MCP each install a fresh request scope per call
-(one per request for HTTP, one per operation for GraphQL and MCP).
-Within a scope, request-scoped providers are cached and shared; across
-scopes, fresh instances are built. GraphQL resolvers reach them with a
-`nest_rs::graphql::Scoped<T>` parameter — no schema argument, and inside the
-access contract as HTTP's is — MCP tools with `nest_rs::mcp::Scoped<T>`. A request-scoped provider may itself inject another
-request-scoped provider (both share the per-request cache); providers
-waiting on each other fail the boot, naming the chain (`ProviderCycleError`).
+HTTP, WebSockets, GraphQL, and MCP each install a fresh request scope per call
+(one per request for HTTP, one per message for WebSockets, one per operation
+for GraphQL and MCP). Within a scope, request-scoped providers are cached and
+shared; across scopes, fresh instances are built. A WebSocket message and a
+GraphQL resolver take them as a parameter, `nest_rs::ws::Scoped<T>` and
+`nest_rs::graphql::Scoped<T>` — no schema argument on GraphQL, and both inside
+the access contract as HTTP's is — MCP tools with `nest_rs::mcp::Scoped<T>`. A
+request-scoped provider may itself inject another request-scoped provider (both
+share the per-request cache); providers waiting on each other fail the boot,
+naming the chain (`ProviderCycleError`).
 
 <Aside type="caution">
 A `#[dataloader]` batch closure runs **off-task** (a spawned future)

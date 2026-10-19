@@ -101,7 +101,7 @@ Review a new edge, or a change to one, against it:
    the change that builds a family flips its cell.
 9. **Request scope and a unit of work** — `Scoped<T>`, a parameter the boot
    checks (its provider is inside the access contract, through
-   `ResolvesProvider` and the impl half's probe — HTTP's and GraphQL's
+   `ResolvesProvider` and the impl half's probe — HTTP's, GraphQL's and WS's
    today, as is the service HTTP's `Bind<A, S>` and GraphQL's
    `bind = Service` load through), a miss answered opaquely with the type on
    the operator's line, and each
@@ -200,13 +200,13 @@ executions; it chooses the **site**, by the family's nature:
 
 | Family | Global scope runs at | Controller / handler scope runs at |
 |---|---|---|
-| Guard | a route's guard stage; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`); a GraphQL root field's guard stage and the federation fields' | the same, plus each in-band operation's chain and a gateway's per-message table |
-| Pipe | a route's tail, over the body; `/graphql` variables (a POST or a graphql-ws operation) and WS `data` at their endpoint | a route's tail; per argument on the other edges |
-| Exception filter | around a route's or a GraphQL root field's handler stage; a self-mount's request; the fallback (`404`, `405`) | around the route's or the field's handler stage |
-| Interceptor | a route's or a GraphQL root field's handler stage, after the guards and the class gate | the same, inside the app's |
+| Guard | a route's, a WS message's and a GraphQL root field's guard stage, and the federation fields'; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`) | the same, plus each in-band operation's chain |
+| Pipe | a route's tail, over the body, and a WS message's, over its `data`; `/graphql` variables (a POST or a graphql-ws operation) at its endpoint | a route's or a WS message's tail; per argument on the other edges |
+| Exception filter | around a route's, a WS message's or a GraphQL root field's handler stage; a self-mount's request; the fallback (`404`, `405`) | around the route's, the message's or the field's handler stage |
+| Interceptor | a route's, a WS message's or a GraphQL root field's handler stage, after the guards and the class gate | the same, inside the app's |
 
-An HTTP unit — a route, a self-mount's request, the fallback — is one `Site`
-dispatched through core's pipeline inside `run_unit`
+An HTTP unit — a route, a self-mount's request, the fallback — and a WS
+message are each one `Site` dispatched through core's pipeline inside `run_unit`
 (`.claude/decisions/one-execution-pipeline.md`): the unit stage, the guard
 stage and class gate, the exception filters (method, host, app), the handler
 stage (the app's list, the modules' `#[interceptor]`s in import order, host,
@@ -295,10 +295,11 @@ the visible opening.
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
 `nest_rs::core::{Interceptor, ExceptionFilter}`, `#[interceptor]` (handler
 stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP, a GraphQL
-field, a job's attempt, a tick and a listener call run on it; WS and MCP move
-onto it each in its own change, a `Site` per dispatch site, and until then
-refuse `#[use_interceptors]` and `#[use_exception_filters]` by name and run
-none of the app's.
+field, a WS message, a job's attempt, a tick and a listener call run on it; MCP
+moves onto it in its own change, a `Site` per dispatch site, and until then
+refuses `#[use_interceptors]` and `#[use_exception_filters]` by name and runs
+none of the app's. A WS connection hook is a unit with no site yet: it carries
+what the upgrade attached and runs no layer.
 
 **A GraphQL root field is a unit nested in its `/graphql` request**
 (`graphql.field`, inside its operation's unit of work): its site folds the

@@ -46,7 +46,7 @@ site differs:
 | Family | Global scope | Controller / handler scope |
 |---|---|---|
 | Guard | the guard stage, after routing (reads `#[public]`); a self-mount's request | same site |
-| Pipe | before the handler, over the body; `/graphql` POST variables and a WS message's `data`, at their endpoint — a graphql-ws operation runs none | before the handler; per argument on the other edges |
+| Pipe | before the handler, over the body or a WS message's `data`, after its guards; `/graphql` POST variables, at the endpoint — a graphql-ws operation runs none | before the handler, over the body or a WS message's `data`; per argument on the other edges |
 | Exception filter | around the handler stage; a self-mount's request; what the router answers itself | around the handler stage |
 | Interceptor | the handler stage, after the guards | the handler stage, inside the app's |
 
@@ -60,13 +60,15 @@ guard, the pipe pool, an extractor — reads it under
 Two ways to be app-wide, both at the handler stage: `use_interceptors_global`
 is the app's list, and `#[interceptor]` is what a module import brings. Only
 an interceptor its module declares `#[interceptor(stage = unit)]` runs around
-the guards — on every HTTP unit, a `404` and a refusal included — and writing
-`stage = unit` is the visible line that opens it.
+the guards — on every HTTP unit and every WebSocket message, a `404` and a
+refusal included — and writing `stage = unit` is the visible line that opens
+it.
 
 ## Nesting order
 
 Every HTTP unit — a route, a self-mount's request, what the router answers
-itself — runs the same stages, outermost first:
+itself — and every [WebSocket message](/websockets/messages/#interceptors-filters-and-pipes)
+runs the same stages, outermost first:
 
 1. **The edge**: the request span and its operation line, the request scope,
    the deadline, panic containment.

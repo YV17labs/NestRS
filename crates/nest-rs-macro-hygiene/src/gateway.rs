@@ -1,11 +1,13 @@
 //! `#[gateway]` + `#[use_guards]` + `#[messages]`: the guard-layer emission,
-//! a guard `#[force_guards]` binds on a message alone, the message dispatch
-//! table and the versioned mount.
+//! a guard `#[force_guards]` binds on a message alone, the interceptors,
+//! exception filters and data pipes a gateway and its messages bind, a
+//! `Scoped<T>` parameter, the message sites and the versioned mount.
 
 use nest_rs::core::{Layer, UnitContext, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs::http::HttpView;
-use nest_rs::ws::{WsView, gateway, messages};
+use nest_rs::pipes::GlobalPipe;
+use nest_rs::ws::{Scoped, WsView, gateway, messages};
 
 /// Bound on the gateway struct, so it runs on the upgrade and owes
 /// `GuardFor<HttpView>`.
@@ -44,10 +46,28 @@ impl GuardFor<WsView> for HygieneMessageGuard {}
 /// A value `#[meta]` declares, read by type.
 pub struct HygieneLimit(pub u32);
 
-/// Gated, so the `#[use_guards]` wrap is emitted.
+/// Reads a message's `data` and changes nothing: the pipe a gateway and its
+/// messages bind.
+#[injectable]
+#[derive(Default)]
+pub struct HygieneDataPipe;
+
+impl Layer for HygieneDataPipe {}
+
+impl GlobalPipe for HygieneDataPipe {}
+
+/// Built for each message, read through a `Scoped<T>` parameter.
+#[injectable(scope = request)]
+pub struct HygieneMessageSession;
+
+/// Gated, so the `#[use_guards]` wrap is emitted; its interceptor, exception
+/// filter and pipe run around, and over, each of its messages.
 #[gateway(path = "/hygiene")]
 #[meta(HygieneLimit(100))]
 #[use_guards(HygieneWsGuard)]
+#[use_interceptors(crate::pipeline::HygieneUnitAudit)]
+#[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+#[use_pipes(HygieneDataPipe)]
 pub struct HygieneGateway;
 
 #[messages]
@@ -61,6 +81,16 @@ impl HygieneGateway {
     #[public]
     #[force_guards(HygieneMessageGuard)]
     async fn again(&self) {}
+
+    #[subscribe_message("hygiene.layered")]
+    #[public]
+    #[use_interceptors(crate::pipeline::HygieneUnitAudit)]
+    #[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+    #[use_pipes(HygieneDataPipe)]
+    async fn layered(&self, session: Scoped<HygieneMessageSession>, text: String) -> String {
+        let _ = session;
+        text
+    }
 
     #[subscribe_message("hygiene.sync")]
     #[public]
@@ -82,6 +112,7 @@ impl HygieneGateway {
     }
 
     #[on_connect]
+    #[meta(HygieneLimit(1))]
     fn connected(&self) {}
 
     /// A message compiled out takes its dispatch arm, chain and guard with it.

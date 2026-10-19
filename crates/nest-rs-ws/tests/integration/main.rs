@@ -1,5 +1,5 @@
-//! Integration tests mirroring `src/`; the `SocketContext` seam is exercised by
-//! `nest-rs-seaorm/tests/e2e/ws.rs`.
+//! Integration tests mirroring `src/`; a message's unit of work is exercised
+//! by `nest-rs-seaorm/tests/e2e/ws.rs`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -10,5 +10,6 @@
 
 mod gateway;
 mod guard_chain;
+mod message;
 mod module;
 mod unit;

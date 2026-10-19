@@ -35,11 +35,17 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let Layers { guards, meta, .. } =
-        match take_layers(&pair::WS, LayerScope::Host, &mut item.attrs) {
-            Ok(layers) => layers,
-            Err(err) => return err.to_compile_error().into(),
-        };
+    let Layers {
+        guards,
+        pipes,
+        interceptors,
+        exception_filters,
+        meta,
+        ..
+    } = match take_layers(&pair::WS, LayerScope::Host, &mut item.attrs) {
+        Ok(layers) => layers,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let host_meta = host_meta_fn(&meta);
 
     let InjectableBody {
@@ -56,12 +62,18 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    let layers = layer_deps(guards.iter());
+    // A layer is resolved at mount, so it joins the access graph like a field.
+    let layers = layer_deps(
+        [&guards, &interceptors, &exception_filters, &pipes]
+            .into_iter()
+            .flatten(),
+    );
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
 
     let edge_guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
+    let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_ws::__private::GlobalPipe));
     // The upgrade is an HTTP `GET`: a gateway-scope guard declares
     // `GuardFor<HttpView>`, not the `GuardFor<WsView>` per-event ones owe.
     let capability_bounds = guard_capability_bounds(
@@ -135,6 +147,31 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
                 -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
             {
                 #edge_guard_specs
+            }
+
+            /// The gateway's `#[use_interceptors(...)]`, around each of its messages.
+            #[doc(hidden)]
+            pub fn __nestrs_gateway_interceptor_specs()
+                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
+            {
+                ::std::vec![#(::nest_rs_core::interceptor::<#interceptors>()),*]
+            }
+
+            /// The gateway's `#[use_exception_filters(...)]`, around each of its
+            /// messages.
+            #[doc(hidden)]
+            pub fn __nestrs_gateway_exception_filter_specs()
+                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
+            {
+                ::std::vec![#(::nest_rs_core::exception_filter::<#exception_filters>()),*]
+            }
+
+            /// The gateway's `#[use_pipes(...)]`, over each of its messages' `data`.
+            #[doc(hidden)]
+            pub fn __nestrs_gateway_pipe_specs()
+                -> ::std::vec::Vec<::nest_rs_ws::__private::PipeSpec>
+            {
+                #pipe_specs
             }
 
             #from_container

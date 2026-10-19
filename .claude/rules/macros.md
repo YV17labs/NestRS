@@ -140,8 +140,12 @@ provider implements `nest_rs_core::ResolvesProvider`, and the impl half asks
 answers to `Discoverable::injected_per_request`, so the access graph checks it.
 Spelling decides only what no value can tell a macro, and each such reading is
 stated in the decorator's rustdoc: the wrapper async-graphql's derive itself
-reads by name, the shape a masked MCP or WS operation unwraps, and what an
-OpenAPI document infers (`#[api(response = T)]` states what spelling hides).
+reads by name, the shape a masked MCP or WS operation unwraps, which
+`#[subscribe_message]` parameter is the payload (`&WsClient` by its reference,
+`Scoped<T>` by its name — resolved through
+`nest_rs_ws::__private::scoped_parameter`, which returns that crate's own
+`Scoped`, so a namesake does not compile), and what an OpenAPI document infers
+(`#[api(response = T)]` states what spelling hides).
 
 ## Keys — one grammar, one refusal sentence
 
@@ -158,13 +162,12 @@ shows without the source frame. No value is handed to `syn`'s own sentence or to
 `format_ident!`, which names neither the decorator nor the key, or panics.
 
 **Every layer attribute is one cell of `nest_rs_codegen::__private::layers`'
-table** — an exhaustive `match` over the pairs, each layer attribute and the two scopes
-(the host, a method): built, pending or refused with the fact that makes it
-meaningless (`a hook has no caller and no site`), read by `take_layers`, with a
-trybuild snapshot per refused cell and a hygiene use site per built one. An
-attribute a site does not take never runs as a silent no-op, nor reaches rustc
-as `cannot find attribute` — but at the WebSocket `#[on_connect]` /
-`#[on_disconnect]` hooks, no row yet, until the hooks move onto it. A
+table** — an exhaustive `match` over the pairs, each layer attribute and the
+scopes (the host, a method, a gateway's connection hook): built, pending or
+refused with the fact that makes it meaningless (`a hook has no caller and no
+site`), read by `take_layers`, with a trybuild snapshot per refused cell and a
+hygiene use site per built one. An attribute a site does not take never runs
+as a silent no-op, nor reaches rustc as `cannot find attribute`. A
 provider-hosted pair (`#[processor]`, `#[scheduled]`, `#[listeners]`)
 declares each method's site through `nest_rs_codegen::__private::site_const`
 and reports what it binds to the access graph through `host_layers_entry`;

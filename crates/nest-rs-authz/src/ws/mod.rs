@@ -3,8 +3,10 @@
 //! [`masked_reply_for`] masks a message's reply. A gateway does not call it
 //! directly: `#[authorize(Action, Entity)]` beside a `#[subscribe_message]`
 //! makes `#[messages]` emit the class gate ([`class_gate`](crate::class_gate),
-//! every edge's) and the mask, exactly as `#[tools]` does on MCP,
-//! `#[operations]` on GraphQL and `#[routes]` on HTTP.
+//! every edge's), run in the message's guard stage, and the mask around its
+//! reply, exactly as `#[tools]` does on MCP, `#[operations]` on GraphQL and
+//! `#[routes]` on HTTP. `Gateway::dispatch`, below, calls the handler on its
+//! own, behind the class gate and inside the mask.
 //!
 //! ```
 //! # use std::sync::Arc;

@@ -34,9 +34,6 @@ nest-rs-pipes.workspace = true
 # renders a denial as its error frame.
 nest-rs-guards.workspace = true
 async-trait.workspace = true
-# Typed error for the per-message `Scoped<T>` bridge (`WsScopeError`) — the
-# house pattern: thiserror in libs.
-thiserror.workspace = true
 # `StreamExt`/`SinkExt` to split and drive the upgraded socket: the connection
 # loop reads while a spawned writer task drains the per-connection outbox.
 futures-util.workspace = true
@@ -66,6 +63,8 @@ nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # Both ends of a socket over an in-memory pipe, so a unit test drives the
 # connection loop past what a real peer can provoke (a writer that panics).
 tokio-tungstenite.workspace = true
+# The suites' domain errors, as an app writes them.
+thiserror.workspace = true
 
 [lints]
 workspace = true

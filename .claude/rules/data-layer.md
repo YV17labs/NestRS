@@ -108,8 +108,9 @@ pipeline, and so does a request carrying units of its own, `/graphql` and
 `/mcp`; what the router answers itself opens none); a GraphQL operation
 once it executed, each mutation root field in a savepoint of it rolled back
 when its answer carries an error (`.claude/decisions/graphql-transactions.md`);
-a WS message unless it answers an error frame, a connection hook unless it
-unwound; an MCP operation on `Ok` with no tool error in band (`isError`); a
+a WS message on its success — an error frame fails it, whatever a filter or an
+interceptor then answered — a connection hook unless it unwound or was cut at
+its deadline; an MCP operation on `Ok` with no tool error in band (`isError`); a
 queue attempt, a tick, a listener call and a lifecycle hook (system work,
 under the Job scope) on `Ok`. A unit of its own gets a **lazy** transaction —
 `BEGIN` deferred to the first data-layer touch, **a read included**. Guards

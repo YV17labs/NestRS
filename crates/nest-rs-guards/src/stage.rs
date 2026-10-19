@@ -93,6 +93,19 @@ async fn check_stage(
     gate: Option<ClassGate>,
     cx: &mut UnitContext<'_>,
 ) -> Result<Pending, Refused> {
+    check_guards(chain, gate, cx).await?;
+    Ok(take_pending(cx))
+}
+
+/// Run every guard of `chain` on the unit `cx` describes through
+/// [`Guard::check`], in order, then the posture's class `gate`, leaving what
+/// they attached on `cx` for the pipeline to install once its guard stage
+/// passed. The first refusal stops them.
+pub async fn check_guards(
+    chain: &[ResolvedLayer<dyn Guard>],
+    gate: Option<ClassGate>,
+    cx: &mut UnitContext<'_>,
+) -> Result<(), Refused> {
     for entry in chain {
         // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
         // blanket would nest a second boxed future per check.
@@ -105,5 +118,5 @@ async fn check_stage(
     if let Some(gate) = gate {
         gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;
     }
-    Ok(take_pending(cx))
+    Ok(())
 }

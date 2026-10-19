@@ -374,3 +374,73 @@ async fn a_handler_scoped_parameter_on_a_request_scoped_provider_it_imports_boot
         .await
         .expect("a request is the consumer, so a request-scoped provider is the point");
 }
+
+#[gateway(path = "/basket")]
+struct BasketGateway;
+
+#[messages]
+impl BasketGateway {
+    #[subscribe_message("basket")]
+    #[public]
+    async fn basket(&self, _basket: nest_rs_ws::Scoped<Basket>) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(imports = [WsModule], providers = [BasketGateway])]
+struct BasketWsModule;
+
+/// The basket's module is reached through a sibling, never imported by the
+/// gateway's own.
+#[module(imports = [BasketModule, BasketWsModule])]
+struct StrayBasketWsRoot;
+
+#[module(imports = [BasketModule, WsModule], providers = [BasketGateway])]
+struct ImportedBasketWsModule;
+
+#[tokio::test]
+async fn a_message_scoped_parameter_whose_module_is_not_imported_fails_the_boot() {
+    let access = built_boot_error::<StrayBasketWsRoot>("a message's `Scoped` parameter").await;
+    assert_eq!(access.consumer, "BasketGateway");
+    assert_eq!(access.owner, "BasketModule");
+}
+
+#[gateway(path = "/coupon")]
+struct CouponGateway;
+
+#[messages]
+impl CouponGateway {
+    #[subscribe_message("coupon")]
+    #[public]
+    async fn coupon(&self, _coupon: nest_rs_ws::Scoped<Coupon>) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(imports = [WsModule], providers = [CouponGateway])]
+struct CouponWsModule;
+
+#[tokio::test]
+async fn a_message_scoped_parameter_no_module_offers_fails_the_boot_naming_it() {
+    let missing = match App::builder().module::<CouponWsModule>().build().await {
+        Ok(_) => panic!("a `Scoped` parameter no module offers must fail the boot"),
+        Err(err) => err
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|err| panic!("not the unmet dependency: {err:#}")),
+    };
+    assert_eq!(missing.consumer, "CouponGateway");
+    assert!(
+        missing.dependency.ends_with("::Coupon"),
+        "{}",
+        missing.dependency
+    );
+}
+
+#[tokio::test]
+async fn a_message_scoped_parameter_on_a_request_scoped_provider_it_imports_boots() {
+    App::builder()
+        .module::<ImportedBasketWsModule>()
+        .build()
+        .await
+        .expect("a message is the consumer, so a request-scoped provider is the point");
+}

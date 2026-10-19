@@ -56,20 +56,20 @@ whether you type it, not how the compiler resolves it.
 
 One grammar holds every decorator pair: each layer attribute is taken where
 its edge runs that family, and anywhere else it is a compile error that says
-why — never a layer that silently never runs. One kind of site does not read
-it yet: the WebSocket `#[on_connect]` / `#[on_disconnect]` hooks take
-`#[meta]` alone, so a layer attribute there still meets the compiler's
-`cannot find attribute` rather than the reason the table gives.
+why — never a layer that silently never runs. The WebSocket `#[on_connect]` /
+`#[on_disconnect]` hooks are a site of their own: they take `#[meta]`, refuse a
+guard (the upgrade's guards admitted the socket) and a pipe (a hook has no
+payload), and run no interceptor or exception filter yet.
 
 | Attribute | HTTP | GraphQL | WebSockets | MCP | Queue, schedule, events | Hooks, indicators |
 |---|---|---|---|---|---|---|
-| `#[use_guards]` | struct, method | struct, method | struct (the upgrade), method | struct, method | — no caller to gate | — |
+| `#[use_guards]` | struct, method | struct, method | struct (the upgrade), method; — on a connection hook | struct, method | — no caller to gate | — |
 | `#[force_guards]` | method | method | method | method | — | — |
-| `#[use_pipes]` | struct, method | — bind a per-argument pipe | not yet | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
-| `#[use_interceptors]` | struct, method | struct, method | not yet | not yet | impl block, method | — |
-| `#[use_exception_filters]` | struct, method | struct, method | not yet | not yet | impl block, method | — |
+| `#[use_pipes]` | struct, method | — bind a per-argument pipe | struct, method; — on a connection hook | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
+| `#[use_interceptors]` | struct, method | struct, method | struct, method; not yet on a connection hook | not yet | impl block, method | — |
+| `#[use_exception_filters]` | struct, method | struct, method | struct, method; not yet on a connection hook | not yet | impl block, method | — |
 | `#[use_filters]` | — use `#[use_exception_filters]` | — | — | — | — | — |
-| `#[meta]` | struct, method | struct, method | struct, method | struct, method | impl block, method | — |
+| `#[meta]` | struct, method | struct, method | struct, method, connection hook | struct, method | impl block, method | — |
 
 **Not yet** marks a family the edge does not run yet: the compiler refuses it
 today, as a silent no-op would be worse, and the edge takes it once it runs it.

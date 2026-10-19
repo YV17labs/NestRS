@@ -7,6 +7,9 @@
 //!
 //! [`message_timeout`](WsConfig::message_timeout) bounds what one message may
 //! hold its socket for: the read loop answers one message at a time.
+//! [`connect_timeout`](WsConfig::connect_timeout) and
+//! [`disconnect_timeout`](WsConfig::disconnect_timeout) bound the connection
+//! hooks the same way, each unit by its own deadline.
 
 use std::time::Duration;
 
@@ -27,13 +30,29 @@ const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
 pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
 /// The HTTP request timeout's default, ordered the same way: inside the
-/// shutdown window, above every net a message waits under.
-const DEFAULT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(20);
+/// shutdown window, above every net a message or a hook waits under.
+const DEFAULT_UNIT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The message deadline's range and the variable that sets it.
 const MESSAGE_TIMEOUT: DurationBounds = DurationBounds::secs(
     "MESSAGE_TIMEOUT_SECS",
     "WsConfig::message_timeout",
+    nest_rs_http::UNIT_TIMEOUT_FLOOR,
+    nest_rs_http::UNIT_TIMEOUT_CEILING,
+);
+
+/// The connect hook's deadline's range and the variable that sets it.
+const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "CONNECT_TIMEOUT_SECS",
+    "WsConfig::connect_timeout",
+    nest_rs_http::UNIT_TIMEOUT_FLOOR,
+    nest_rs_http::UNIT_TIMEOUT_CEILING,
+);
+
+/// The disconnect hook's deadline's range and the variable that sets it.
+const DISCONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "DISCONNECT_TIMEOUT_SECS",
+    "WsConfig::disconnect_timeout",
     nest_rs_http::UNIT_TIMEOUT_FLOOR,
     nest_rs_http::UNIT_TIMEOUT_CEILING,
 );
@@ -62,6 +81,17 @@ pub struct WsConfig {
     /// deadline past the HTTP shutdown window, or none, is said at boot with a
     /// `warn`.
     pub message_timeout: Option<Duration>,
+    /// Wall-clock deadline for the `#[on_connect]` hook; past it the hook's
+    /// work is dropped and rolled back, and the socket is closed unserved with
+    /// 1011, as when the hook panics. `None` ⇒ no deadline. Read from
+    /// `<PREFIX>_WS__CONNECT_TIMEOUT_SECS`, on `message_timeout`'s range and
+    /// with its default, 20 seconds.
+    pub connect_timeout: Option<Duration>,
+    /// Wall-clock deadline for the `#[on_disconnect]` hook; past it the hook's
+    /// work is dropped and rolled back, and the close goes on. `None` ⇒ no
+    /// deadline. Read from `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS`, on
+    /// `message_timeout`'s range and with its default, 20 seconds.
+    pub disconnect_timeout: Option<Duration>,
 }
 
 impl Default for WsConfig {
@@ -69,31 +99,37 @@ impl Default for WsConfig {
         Self {
             max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
-            message_timeout: Some(DEFAULT_MESSAGE_TIMEOUT),
+            message_timeout: Some(DEFAULT_UNIT_TIMEOUT),
+            connect_timeout: Some(DEFAULT_UNIT_TIMEOUT),
+            disconnect_timeout: Some(DEFAULT_UNIT_TIMEOUT),
         }
     }
 }
 
 impl WsConfig {
-    /// One boot `warn` for the gateway at `path` when
-    /// [`message_timeout`](Self::message_timeout) is off or outlasts the HTTP
-    /// shutdown `window`: a message admitted just before a stop can then be cut
-    /// unanswered. Not a refusal — a deployment may accept it knowingly.
-    pub(crate) fn warn_when_messages_outlast_the_window(&self, window: Duration, path: &str) {
-        if self
-            .message_timeout
-            .is_some_and(|timeout| timeout <= window)
-        {
-            return;
+    /// One boot `warn` for the gateway at `path` per unit whose deadline is off
+    /// or outlasts the HTTP shutdown `window`: a unit admitted just before a
+    /// stop can then be cut unanswered. Not a refusal — a deployment may accept
+    /// it knowingly.
+    pub(crate) fn warn_when_units_outlast_the_window(&self, window: Duration, path: &str) {
+        for (unit, timeout) in [
+            (crate::unit::MESSAGE, self.message_timeout),
+            (crate::unit::CONNECT, self.connect_timeout),
+            (crate::unit::DISCONNECT, self.disconnect_timeout),
+        ] {
+            if timeout.is_some_and(|timeout| timeout <= window) {
+                continue;
+            }
+            tracing::warn!(
+                target: crate::TARGET,
+                path,
+                unit = unit.name(),
+                timeout_secs = timeout.map_or(0, |timeout| timeout.as_secs()),
+                shutdown_timeout_secs = window.as_secs(),
+                "a websocket unit's deadline outlasts the shutdown window: one admitted just \
+                 before a stop can be cut unanswered",
+            );
         }
-        tracing::warn!(
-            target: crate::TARGET,
-            path,
-            message_timeout_secs = self.message_timeout.map_or(0, |timeout| timeout.as_secs()),
-            shutdown_timeout_secs = window.as_secs(),
-            "the message timeout outlasts the shutdown window: a message admitted just before a \
-             stop can be cut unanswered",
-        );
     }
 }
 
@@ -108,10 +144,18 @@ impl Config for WsConfig {
         let message_timeout = MESSAGE_TIMEOUT
             .read_optional(env, base.message_timeout)?
             .map(|read| read.value);
+        let connect_timeout = CONNECT_TIMEOUT
+            .read_optional(env, base.connect_timeout)?
+            .map(|read| read.value);
+        let disconnect_timeout = DISCONNECT_TIMEOUT
+            .read_optional(env, base.disconnect_timeout)?
+            .map(|read| read.value);
         Ok(Self {
             max_connection,
             max_message_bytes,
             message_timeout,
+            connect_timeout,
+            disconnect_timeout,
         })
     }
 }
@@ -126,6 +170,8 @@ mod tests {
             max_connection: Some(Duration::from_secs(60)),
             max_message_bytes: 999,
             message_timeout: Some(Duration::from_secs(5)),
+            connect_timeout: Some(Duration::from_secs(6)),
+            disconnect_timeout: Some(Duration::from_secs(7)),
         };
         let cfg = WsConfig::from_env(
             &ConfigService::with_vars("ws", [("MAX_MESSAGE_BYTES", "2048")]),
@@ -189,18 +235,55 @@ mod tests {
     }
 
     /// The "default is ordered" half of the deadline rule, as HTTP's request
-    /// timeout holds it: a message admitted just before a stop is answered
-    /// inside the window.
+    /// timeout holds it: a unit admitted just before a stop is answered inside
+    /// the window.
     #[test]
-    fn the_default_message_timeout_fits_the_default_shutdown_window() {
-        let timeout = WsConfig::default()
-            .message_timeout
-            .expect("a message is bounded by default");
+    fn every_default_unit_timeout_fits_the_default_shutdown_window() {
+        let config = WsConfig::default();
         let window = nest_rs_http::HttpConfig::default().shutdown_timeout;
-        assert!(
-            timeout <= window,
-            "{timeout:?} outlasts the {window:?} window"
+        for timeout in [
+            config.message_timeout,
+            config.connect_timeout,
+            config.disconnect_timeout,
+        ] {
+            let timeout = timeout.expect("every unit is bounded by default");
+            assert!(
+                timeout <= window,
+                "{timeout:?} outlasts the {window:?} window"
+            );
+        }
+    }
+
+    #[test]
+    fn each_hook_deadline_reads_its_own_variable_and_refuses_outside_its_range() {
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars(
+                "ws",
+                [
+                    ("CONNECT_TIMEOUT_SECS", "3"),
+                    ("DISCONNECT_TIMEOUT_SECS", "0"),
+                ],
+            ),
+            Default::default(),
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.connect_timeout, Some(Duration::from_secs(3)));
+        assert_eq!(cfg.disconnect_timeout, None, "`0` is the off sentinel");
+        assert_eq!(
+            cfg.message_timeout,
+            WsConfig::default().message_timeout,
+            "a hook's deadline is its own"
         );
+        for setting in ["CONNECT_TIMEOUT_SECS", "DISCONNECT_TIMEOUT_SECS"] {
+            let var = nest_rs_config::var_name("ws", setting);
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", [(setting, "3601")]),
+                Default::default(),
+            )
+            .expect_err("past an hour")
+            .to_string();
+            assert!(refused.contains(&var), "{refused}");
+        }
     }
 
     #[test]

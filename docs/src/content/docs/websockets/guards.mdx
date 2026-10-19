@@ -70,9 +70,9 @@ the page — and the CORS layer's `403` files no `warn`
 anything but a browser — is not concerned.
 
 Because the connection is captured **after** connection-level guards,
-anything those guards attach (the principal, an ambient ability) is
-re-installed around every message dispatch and connection hook on the
-connection, and each runs as a unit of work of its own, on an executor the
+anything those guards attach (the principal, an ambient ability, the tenant)
+is carried into every message and connection hook on the connection — no seam
+to bind — and each runs as a unit of work of its own, on an executor the
 gateway opens for it. Without that capture, a per-message guard like
 `AuthzGuard` — whose `check` reads the ambient ability and fails closed —
 would see `None` once the upgrade request had unwound.
@@ -177,9 +177,10 @@ known, `retryAfterSeconds`.
 
 ## Mount-time dedup
 
-The `#[messages]` macro composes each event's per-message guard chain at mount
-time from **two** sources: app-global guards and the guards listed on the
-**message** itself. Guards bound on the gateway struct are **not** in this
+Each message is a site of the [pipeline](/websockets/messages/#interceptors-filters-and-pipes),
+whose guard stage is composed once, at boot, from **two** sources: app-global
+guards and the guards listed on the **message** itself, then the class gate its
+posture declares. Guards bound on the gateway struct are **not** in this
 chain — they run once at the upgrade (`check_http`), never per message.
 Duplicates are removed by `TypeId`, so a guard registered globally and also
 listed on a specific message runs **once** per dispatch. Redeclaring on a
@@ -189,14 +190,16 @@ does not share the same globals still carries its own.
 ```text frame="none"
 ConnUpgrade ── check_http ── on_connect
                                   │
-                                  ├── Envelope ── check (global ∪ message, dedup) ── dispatch
-                                  └── Envelope ── check (...) ── dispatch
+                                  ├── Envelope ── check (global ∪ message, dedup) ── gate ── layers ── handler
+                                  └── Envelope ── check (...) ── gate ── layers ── handler
                                   └── on_disconnect ── close
 ```
 
 A guard chain that returns `Err(Denial)` short-circuits at the first
-denial — later guards do not run, the handler is skipped, the error
-frame is sent.
+denial — later guards do not run, nor the class gate, nor any exception filter
+or handler-stage interceptor, the handler is skipped, and the error frame is
+sent. A unit-stage interceptor still reads that frame, as it reads a route's
+`403`.
 
 <Aside type="note">
 The same `Guard` trait runs across every transport, so a guard that
@@ -232,7 +235,7 @@ See [Security](/security/) for the strategy + ability composition, and
 - [`WsView`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/view.rs) —
   the message a per-message guard reads.
 - [`crates/nest-rs-ws/src/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/guard.rs) —
-  the per-event guard chains a gateway composes once at mount and runs on
+  the guard stage each message's site composes once at boot and runs on
   every message.
 - [`crates/features/src/chat/ws/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/ws/guard.rs) —
   a per-message guard worked end to end.

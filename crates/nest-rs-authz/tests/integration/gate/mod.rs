@@ -19,7 +19,7 @@ use nest_rs_http::{HttpView, async_trait, controller, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool_as;
-use nest_rs_ws::{WsError, WsReply, gateway, messages};
+use nest_rs_ws::{WsError, gateway, messages};
 
 use crate::widget;
 
@@ -188,22 +188,28 @@ async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_ev
         "MCP: {mcp}"
     );
 
-    let ws = crate::ws::dispatch_with(&WidgetsGateway, Arc::new(too_narrow()), "read").await;
-    let WsReply::Error(refused) = ws else {
-        panic!("WS: the gate refuses the message");
-    };
-    assert_eq!(refused.error, TOO_NARROW, "WS: {refused:?}");
+    let ws = TestApp::builder()
+        .module::<WsEdgeModule>()
+        .use_guards_global([guard::<NarrowToken>()])
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let frame = crate::ws::message_as(&ws, "/ws/widgets", None, "read").await;
+    ws.shutdown().await.expect("the transport stops cleanly");
+    let refused = &frame["data"];
+    assert_eq!(refused["error"], TOO_NARROW, "WS: {frame}");
     assert_eq!(
-        refused.errors.as_ref().map(|errors| &errors["code"]),
-        Some(&serde_json::json!("INSUFFICIENT_SCOPE")),
-        "WS: {refused:?}",
+        refused["errors"]["code"], "INSUFFICIENT_SCOPE",
+        "WS: {frame}"
     );
     assert_eq!(
-        refused
-            .errors
-            .as_ref()
-            .map(|errors| &errors["requiredScopes"]),
-        Some(&serde_json::json!(NEEDED)),
-        "WS: {refused:?}",
+        refused["errors"]["requiredScopes"],
+        serde_json::json!(NEEDED),
+        "WS: {frame}",
     );
 }
+
+/// The WebSocket edge, on a socket of its own: the pool attaches the token at
+/// the upgrade, and the message's gate reads it.
+#[module(imports = [nest_rs_ws::WsModule], providers = [NarrowToken, WidgetsGateway])]
+struct WsEdgeModule;

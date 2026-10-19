@@ -1325,7 +1325,7 @@ async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_o
     assert_eq!(cut.level, "warn");
     assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
     assert_eq!(cut.field("event").as_deref(), Some("stall"));
-    assert_eq!(cut.field("message_timeout_secs").as_deref(), Some("1"));
+    assert_eq!(cut.field("timeout_secs").as_deref(), Some("1"));
 
     app.shutdown().await.expect("the transport stops cleanly");
 }
@@ -1974,22 +1974,30 @@ async fn leaving_app() -> nest_rs_testing::ws::WsApp {
 }
 
 /// The sentence a gateway's boot check files for a deadline the window cannot hold.
-const OUTLASTS_THE_WINDOW: &str = "the message timeout outlasts the shutdown window: a message \
+const OUTLASTS_THE_WINDOW: &str = "a websocket unit's deadline outlasts the shutdown window: one \
                                    admitted just before a stop can be cut unanswered";
 
 #[tokio::test]
-async fn a_message_deadline_past_the_shutdown_window_is_said_at_boot() {
+async fn each_unit_deadline_past_the_shutdown_window_is_said_at_boot() {
     let logs = LogCapture::install();
     let app = leaving_app().await;
 
-    let said = logs.expect_one("nest_rs::ws", OUTLASTS_THE_WINDOW);
-    assert_eq!(said.level, "warn");
-    assert_eq!(said.field("path").as_deref(), Some("/leaving"));
-    assert_eq!(said.field("message_timeout_secs").as_deref(), Some("20"));
+    let said = logs.find("nest_rs::ws", OUTLASTS_THE_WINDOW);
+    let units: Vec<_> = said.iter().filter_map(|line| line.field("unit")).collect();
     assert_eq!(
-        said.field("shutdown_timeout_secs").as_deref(),
-        Some(WINDOW.as_secs().to_string().as_str()),
+        units,
+        ["ws.message", "ws.connect", "ws.disconnect"],
+        "{said:#?}"
     );
+    for line in &said {
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("path").as_deref(), Some("/leaving"));
+        assert_eq!(line.field("timeout_secs").as_deref(), Some("20"));
+        assert_eq!(
+            line.field("shutdown_timeout_secs").as_deref(),
+            Some(WINDOW.as_secs().to_string().as_str()),
+        );
+    }
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
@@ -2875,51 +2883,8 @@ impl Guard for AdmittingGuard {
 
 impl GuardFor<nest_rs_http::HttpView> for AdmittingGuard {}
 
-/// What the socket context read at the upgrade, re-installed around each
-/// message under a type of its own: the connection carries `Admitted` to its
-/// messages whatever `capture` saw.
-#[derive(Debug)]
-struct SeenAtCapture {
-    admitted: Option<&'static str>,
-    path: String,
-}
-
-impl nest_rs_core::AmbientValue for SeenAtCapture {}
-
-/// Captures the upgrade's `Admitted`, as a data context captures the caller's
-/// ability.
-#[injectable]
-#[derive(Default)]
-struct AdmittedContext;
-
-impl nest_rs_ws::SocketContext for AdmittedContext {
-    fn capture(&self, req: &nest_rs_http::Request) -> nest_rs_ws::Captured {
-        std::sync::Arc::new(SeenAtCapture {
-            admitted: nest_rs_core::ambient::<Admitted>().map(|admitted| admitted.0),
-            path: req.uri().path().to_owned(),
-        })
-    }
-
-    fn around<'a>(
-        &'a self,
-        captured: &'a nest_rs_ws::Captured,
-        inner: nest_rs_ws::BoxFuture<'a, WsReply>,
-    ) -> nest_rs_ws::BoxFuture<'a, WsReply> {
-        match std::sync::Arc::clone(captured).downcast::<SeenAtCapture>() {
-            Ok(seen) => Box::pin(nest_rs_core::with_ambient(seen, inner)),
-            Err(_) => inner,
-        }
-    }
-}
-
-fn seen_at_capture() -> &'static str {
-    nest_rs_core::ambient::<SeenAtCapture>()
-        .and_then(|seen| seen.admitted)
-        .unwrap_or("nobody")
-}
-
-fn captured_path() -> String {
-    nest_rs_core::ambient::<SeenAtCapture>().map_or_else(String::new, |seen| seen.path.clone())
+fn admitted() -> &'static str {
+    nest_rs_core::ambient::<Admitted>().map_or("nobody", |admitted| admitted.0)
 }
 
 #[gateway(path = "/admitted/by-gateway")]
@@ -2931,13 +2896,7 @@ impl GuardedUpgradeGateway {
     #[subscribe_message("whoami")]
     #[public]
     async fn whoami(&self, _ask: String) -> String {
-        seen_at_capture().to_owned()
-    }
-
-    #[subscribe_message("whereami")]
-    #[public]
-    async fn whereami(&self, _ask: String) -> String {
-        captured_path()
+        admitted().to_owned()
     }
 }
 
@@ -2949,33 +2908,26 @@ impl PooledUpgradeGateway {
     #[subscribe_message("whoami")]
     #[public]
     async fn whoami(&self, _ask: String) -> String {
-        seen_at_capture().to_owned()
+        admitted().to_owned()
     }
 }
 
 #[module(
     imports = [WsModule],
-    providers = [
-        AdmittingGuard,
-        AdmittedContext as dyn nest_rs_ws::SocketContext,
-        GuardedUpgradeGateway,
-        PooledUpgradeGateway,
-    ],
+    providers = [AdmittingGuard, GuardedUpgradeGateway, PooledUpgradeGateway],
 )]
 struct AdmittedModule;
 
 async fn whoami(app: &nest_rs_testing::ws::WsApp, path: &str) -> serde_json::Value {
-    ask(app, path, "whoami").await
-}
-
-async fn ask(app: &nest_rs_testing::ws::WsApp, path: &str, event: &str) -> serde_json::Value {
     let mut socket = app.socket(path).connect().await;
-    socket.send(event, serde_json::json!("?")).await;
+    socket.send("whoami", serde_json::json!("?")).await;
     socket.next_envelope().await["data"].clone()
 }
 
+/// No seam is bound: the connection carries what its upgrade's guards
+/// attached into every message.
 #[tokio::test]
-async fn a_socket_context_captures_what_the_gateways_upgrade_guards_attached() {
+async fn every_message_reads_what_the_gateways_upgrade_guards_attached() {
     let app = TestApp::builder()
         .module::<AdmittedModule>()
         .build_ws()
@@ -2985,23 +2937,18 @@ async fn a_socket_context_captures_what_the_gateways_upgrade_guards_attached() {
     assert_eq!(
         whoami(&app, "/admitted/by-gateway").await,
         "alice",
-        "the gateway's own chain attached it, ambient where the upgrade is captured",
+        "the gateway's own chain attached it at the upgrade",
     );
     assert_eq!(
         whoami(&app, "/admitted/by-pool").await,
         "nobody",
-        "an upgrade no guard ran on captures nothing",
-    );
-    assert_eq!(
-        ask(&app, "/admitted/by-gateway", "whereami").await,
-        "/admitted/by-gateway",
-        "the context captures off the upgrade request itself",
+        "an upgrade no guard ran on attaches nothing",
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
 #[tokio::test]
-async fn a_socket_context_captures_what_the_app_wide_pool_attached_at_the_upgrade() {
+async fn every_message_reads_what_the_app_wide_pool_attached_at_the_upgrade() {
     let app = TestApp::builder()
         .module::<AdmittedModule>()
         .use_guards_global([nest_rs_guards::guard::<AdmittingGuard>()])
@@ -3012,7 +2959,7 @@ async fn a_socket_context_captures_what_the_app_wide_pool_attached_at_the_upgrad
     assert_eq!(
         whoami(&app, "/admitted/by-pool").await,
         "alice",
-        "the pool runs at the edge, around the gateway that captures",
+        "the pool runs at the upgrade, and the connection carries what it attached",
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }

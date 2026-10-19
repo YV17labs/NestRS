@@ -65,6 +65,11 @@ parses each frame's envelope, matches the event, deserializes `data`,
 calls the handler, and serializes the return into a reply frame on the
 same event name.
 
+Each message runs through the same [pipeline](/fundamentals/interceptors/) a
+route does, as a unit of its own: the app's interceptors and exception filters
+wrap it, and so do the ones the gateway and the message bind — see
+[Messages](/websockets/messages/#interceptors-filters-and-pipes).
+
 Wire it in like any other provider:
 
 ```rust title="apps/api/src/module.rs"
@@ -162,6 +167,8 @@ each field:
 | `<PREFIX>_WS__MAX_CONNECTION_SECS` | `14400` (4 h) | a socket's lifetime, so a credential checked at the upgrade expires with it; whole seconds from `1` to `86400`, `0` ⇒ unlimited |
 | `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | one inbound frame, refused before it is buffered |
 | `<PREFIX>_WS__MESSAGE_TIMEOUT_SECS` | `20` | one message — its guards, pipes and handler — counted once its envelope is decoded; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `20` | the `#[on_connect]` hook, on the message timeout's range |
+| `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS` | `20` | the `#[on_disconnect]` hook, on the message timeout's range |
 
 A socket answers one message at a time, so a handler that never returns would
 hold its socket until the connection's lifetime ran out. Past the message
@@ -175,10 +182,22 @@ the message's event, and the socket goes on serving the next one:
 The `ws.message` line files `error`, and one `warn` on `nest_rs::ws` names the
 event and the timeout with `reason="timeout"`. The default is the HTTP request
 timeout's, inside the 20-second shutdown window; a timeout past
-`<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, is said once per gateway at
-boot, since a message admitted just before a stop could then be cut
+`<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, is said once per gateway and
+unit at boot, since a unit admitted just before a stop could then be cut
 unanswered. A handler that legitimately runs longer raises the timeout and the
 window together.
+
+A statement the database cancelled at its own bound answers the same `code`,
+`UNAVAILABLE`, which is what a client branches on, retrying the message. Only the
+gateway's own deadline adds `reason: "timeout"`: the cancelled statement is the
+service's answer, rendered as every [problem](/websockets/messages/) is, with
+its `retryAfterSeconds` when the bound gives one.
+
+The connection hooks are bounded the same way, each by its own timeout: past
+it, the hook's work is dropped and rolled back, its `ws.connect` or
+`ws.disconnect` line files `error`, and one `warn` names the unit. A connect hook
+cut there leaves the socket set up halfway, so it closes unserved, as one that
+panicked does; a disconnect hook cut there lets the close go on.
 
 ## When the server refuses a handshake
 
@@ -213,7 +232,7 @@ so a client can tell a deliberate close from the `1006` a network fault leaves:
 | The client took nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) | none can reach it — it reads `1006` | reconnects |
 | A message past `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `1009 Message Too Big` | sends smaller messages |
 | A read failed on broken framing | `1011 Internal Error` | reconnects |
-| `#[on_connect]` panicked | `1011 Internal Error` | reconnects |
+| `#[on_connect]` panicked, or outlasted `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `1011 Internal Error` | reconnects |
 
 A handler that panics does not close the socket: its `ws.message` line files
 `panic`, the client gets an error frame saying `internal error`, and the panic's

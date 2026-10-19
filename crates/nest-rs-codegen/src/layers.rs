@@ -94,6 +94,9 @@ pub enum LayerScope {
     Host,
     /// One dispatched method.
     Method,
+    /// A connection hook beside the dispatched methods: a gateway's
+    /// `#[on_connect]` / `#[on_disconnect]`.
+    Hook,
 }
 
 /// What one cell of the table answers.
@@ -120,6 +123,16 @@ const HOOK: &str = "a lifecycle hook has no caller and no site, so no layer runs
 /// A probe is one part of the health endpoint's answer.
 const INDICATOR: &str = "an indicator runs inside the health endpoint, whose layers are the \
      endpoint's — no layer runs around one probe, and nothing reads a value declared on it";
+
+/// A connection hook runs once the upgrade's guards admitted its socket.
+const CONNECTION_HOOK_GUARDS: &str = "a connection hook runs on a socket its upgrade's guards \
+     admitted — gate the upgrade with `#[use_guards]` on the `#[gateway]`";
+
+/// A connection hook is handed no payload.
+const CONNECTION_HOOK_PIPES: &str = "a connection hook takes no payload for a pipe to read";
+
+/// Only a gateway's `#[messages]` block carries connection hooks.
+const NO_CONNECTION_HOOK: &str = "only a gateway's `#[messages]` block carries connection hooks";
 
 /// Guards gate a caller; a worker's unit has none.
 const NO_CALLER: &str =
@@ -149,25 +162,31 @@ const FILTERS: &str = "an exception filter whose `Exception` is `dyn Error + Sen
 pub fn cell(pair: &DecoratorPair, scope: LayerScope, attribute: LayerAttribute) -> Cell {
     use Cell::{Built, Pending, Refused};
     use LayerAttribute as A;
-    use LayerScope::Host;
+    use LayerScope::{Hook, Host};
     use PairKind as P;
     match (pair.kind(), scope, attribute) {
         (P::Hooks, _, _) => Refused(HOOK),
         (P::Indicators, _, _) => Refused(INDICATOR),
+
+        (P::Ws, Hook, A::Meta) => Built,
+        (P::Ws, Hook, A::UseGuards | A::ForceGuards) => Refused(CONNECTION_HOOK_GUARDS),
+        (P::Ws, Hook, A::UsePipes) => Refused(CONNECTION_HOOK_PIPES),
+        (P::Ws, Hook, A::UseInterceptors | A::UseExceptionFilters) => Pending,
+        (_, Hook, A::UseFilters) => Refused(FILTERS),
+        (_, Hook, _) => Refused(NO_CONNECTION_HOOK),
 
         (P::Http | P::Graphql | P::Ws | P::Mcp, Host, A::ForceGuards) => Refused(FORCE_ON_A_HOST),
         (P::Http | P::Graphql | P::Ws | P::Mcp, _, A::UseGuards | A::ForceGuards | A::Meta) => {
             Built
         }
 
-        (P::Http, _, A::UsePipes | A::UseInterceptors | A::UseExceptionFilters) => Built,
+        (P::Http | P::Ws, _, A::UsePipes | A::UseInterceptors | A::UseExceptionFilters) => Built,
         (_, _, A::UseFilters) => Refused(FILTERS),
 
         (P::Graphql, _, A::UseInterceptors | A::UseExceptionFilters) => Built,
         (P::Graphql, _, A::UsePipes) => Refused(GRAPHQL_PIPES),
         (P::Mcp, _, A::UsePipes) => Refused(MCP_PIPES),
-        (P::Ws, _, A::UsePipes) => Pending,
-        (P::Ws | P::Mcp, _, A::UseInterceptors | A::UseExceptionFilters) => Pending,
+        (P::Mcp, _, A::UseInterceptors | A::UseExceptionFilters) => Pending,
 
         (P::Processor | P::Scheduled | P::Listeners, _, A::UseGuards | A::ForceGuards) => {
             Refused(NO_CALLER)
@@ -187,6 +206,7 @@ fn written_at(pair: &DecoratorPair, scope: LayerScope) -> String {
         (LayerScope::Host, false) => format!("beside `{}`", pair.host()),
         (LayerScope::Host, true) => format!("on a `{}` block", pair.operations()),
         (LayerScope::Method, _) => format!("on a `{}` method", pair.operations()),
+        (LayerScope::Hook, _) => "on an `#[on_connect]` / `#[on_disconnect]` hook".to_owned(),
     }
 }
 
@@ -225,6 +245,11 @@ fn refusal_at(
     let name = attribute.name();
     match cell(pair, scope, attribute) {
         Cell::Built => None,
+        Cell::Pending if scope == LayerScope::Hook => Some(format!(
+            "`#[{name}]` does not run around a connection hook yet, so on one it would be a \
+             silent no-op. Remove it, or bind it on the `#[gateway]` or beside a \
+             `#[subscribe_message]`, where it runs around each message"
+        )),
         Cell::Pending => Some(format!(
             "`#[{name}]` does not run on {edge} yet, so {at} it would be a silent no-op. \
              Remove it, or bind the layer on an HTTP `#[controller]` / `#[routes]`, where it \
@@ -343,12 +368,13 @@ mod tests {
     use super::*;
     use crate::pair::ALL;
 
+    /// Where a pair's host and its dispatched methods take layers.
     const SCOPES: [LayerScope; 2] = [LayerScope::Host, LayerScope::Method];
 
     #[test]
     fn every_cell_is_built_or_refused_with_a_sentence_naming_its_attribute() {
         for pair in ALL {
-            for scope in SCOPES {
+            for scope in [LayerScope::Host, LayerScope::Method, LayerScope::Hook] {
                 for &attribute in LayerAttribute::ALL {
                     let sentence = refusal(pair, scope, attribute);
                     match cell(pair, scope, attribute) {
@@ -421,6 +447,55 @@ mod tests {
                 cell(pair, LayerScope::Host, LayerAttribute::ForceGuards),
                 Cell::Refused(FORCE_ON_A_HOST),
             );
+        }
+    }
+
+    #[test]
+    fn a_gateway_and_its_messages_take_every_family_but_the_retired_filter() {
+        use crate::pair::WS;
+        for scope in SCOPES {
+            for attribute in [
+                LayerAttribute::UsePipes,
+                LayerAttribute::UseInterceptors,
+                LayerAttribute::UseExceptionFilters,
+            ] {
+                assert_eq!(cell(&WS, scope, attribute), Cell::Built, "{scope:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_connection_hook_takes_its_meta_and_names_why_it_takes_no_guard_or_pipe() {
+        use crate::pair::WS;
+        assert_eq!(
+            cell(&WS, LayerScope::Hook, LayerAttribute::Meta),
+            Cell::Built
+        );
+        for (attribute, fact) in [
+            (LayerAttribute::UseGuards, "upgrade's guards"),
+            (LayerAttribute::ForceGuards, "upgrade's guards"),
+            (LayerAttribute::UsePipes, "no payload"),
+        ] {
+            let sentence = refusal(&WS, LayerScope::Hook, attribute).unwrap_or_default();
+            assert!(sentence.contains(fact), "{sentence}");
+            assert!(sentence.contains("`#[on_connect]`"), "{sentence}");
+        }
+        for attribute in [
+            LayerAttribute::UseInterceptors,
+            LayerAttribute::UseExceptionFilters,
+        ] {
+            assert_eq!(cell(&WS, LayerScope::Hook, attribute), Cell::Pending);
+            let sentence = refusal(&WS, LayerScope::Hook, attribute).unwrap_or_default();
+            assert!(
+                sentence.contains("around a connection hook yet"),
+                "{sentence}"
+            );
+        }
+        for pair in ALL.iter().filter(|pair| pair.kind() != PairKind::Ws) {
+            assert!(matches!(
+                cell(pair, LayerScope::Hook, LayerAttribute::Meta),
+                Cell::Refused(_)
+            ));
         }
     }
 

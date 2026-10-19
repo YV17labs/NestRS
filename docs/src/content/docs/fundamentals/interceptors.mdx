@@ -32,12 +32,13 @@ not compile. `next.run(cx)` consumes `next`, so the rest of the unit runs once.
 
 <Aside type="caution">
 **HTTP routes, [GraphQL fields](#around-a-graphql-field),
+[WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
 [jobs](/queue/#layers-around-a-job),
 [ticks](/schedule/#layers-around-a-tick) and
 [listener calls](/events/dispatch/#layers-around-a-listener-call) run them
-today.** WebSocket and MCP move onto the same pipeline during 7.0; until an
-edge has, `#[use_interceptors]` beside its decorator is a compile error naming
-the edge, and the app's global interceptors do not reach its units.
+today.** MCP moves onto the same pipeline during 7.0; until it has,
+`#[use_interceptors]` beside its decorator is a compile error naming the edge,
+and the app's global interceptors do not reach its units.
 </Aside>
 
 Same vocabulary as a guard, different shape:
@@ -170,7 +171,8 @@ pub struct Timing;
 
 It runs on every HTTP unit — a route, a self-mount's request (`/graphql`,
 `/mcp`, a gateway's upgrade, the OpenAPI document) and what the router answers
-itself (a `404`, a `405`) — and observes what the guards refused. It is the
+itself (a `404`, a `405`) — and on every WebSocket message, and observes what
+the guards refused. It is the
 place for what must see every answer: `Server-Timing` and the RFC 9728
 challenge `nest-rs-oauth-resource` adds to a `401` sit there. Writing
 `stage = unit` is the visible line that opens it; an app-listed global

@@ -34,15 +34,40 @@ impl ChatGateway {
 }
 ```
 
-The macro reads three things from the signature:
+The macro reads four things from the signature:
 
 - **The event name** — the literal in `#[subscribe_message(...)]`.
-- **The payload type** — the first non-receiver, non-`&WsClient`
-  argument. Deserialized from `envelope.data` with `serde`.
+- **The payload type** — the one argument that is neither `&WsClient` nor a
+  `Scoped<T>`. Deserialized from `envelope.data` with `serde`.
+- **The request-scoped providers** — each `Scoped<T>` argument, resolved from
+  the message's own scope (below).
 - **The return type** — drives the reply, per the contract below.
 
 A `&WsClient` parameter is the [per-connection handle](/websockets/rooms/);
-it can appear in any position alongside the payload.
+it can appear in any position alongside the payload. The macro tells the three
+apart by their shape — a reference, a type named `Scoped`, anything else — since
+it reads tokens, not types; a `Scoped` of another crate does not compile.
+
+### Request-scoped providers
+
+A message is a request of its own: an `#[injectable(scope = request)]` provider
+is built once per message and shared by everything that message runs, and a
+handler takes it as a parameter:
+
+```rust title="crates/features/src/chat/ws/gateway.rs"
+use nest_rs::ws::Scoped;
+
+#[subscribe_message("seq")]
+#[public]
+async fn seq(&self, seq: Scoped<RequestSeq>) -> u64 {
+    seq.value()
+}
+```
+
+`Scoped<T>` is part of the boot's access contract, as an `#[inject]` field is:
+a `T` no module the gateway's module imports offers fails the boot, naming it.
+With no request-scoped provider anywhere in the app, every message shares one
+scope, which has nothing to build.
 
 The `#[public]` above is the message's **access posture**, and it is not
 optional — see the next section.
@@ -69,12 +94,12 @@ reason: silence is not a decision. A handler nobody thought about the
 access of must not ship rows no ability ever filtered.
 
 **`#[authorize(Action, Entity)]` emits two things you would otherwise
-write by hand.** Before the payload is even deserialized, a class-level
-gate asks the caller's ambient `Ability` whether it may perform `Action`
-on `Entity`; a refusal is an error frame and the body never runs. After
-the handler returns, the reply is masked — rows the ability refuses are
-dropped, columns a field grant withholds are stripped. **You write no
-masking call.**
+write by hand.** Right after the message's guards, before any interceptor,
+exception filter or pipe, a class-level gate asks the caller's ambient
+`Ability` whether it may perform `Action` on `Entity`; a refusal is an error
+frame and nothing else runs. After the handler returns, the reply is masked —
+rows the ability refuses are dropped, columns a field grant withholds are
+stripped. **You write no masking call.**
 
 **`#[public]` is a declaration, not a shortcut.** Unlike an HTTP route
 there is no anonymous fast path to take on WebSockets; what `#[public]`
@@ -221,7 +246,10 @@ alongside the frame — a pipe rejection, a payload that does not deserialize, a
 unknown event and a handler's answered `Err` at `warn` on `nest_rs::ws`, a
 guard's denial at `warn` on `nest_rs::layers`, an opaque failure at `error`, as
 is the chain behind a `5xx` problem — so a denied dispatch shows up in logs
-without extra instrumentation.
+without extra instrumentation. A handler's `Err` is filed once its answer is
+final: an [exception filter](#interceptors-filters-and-pipes) that answers it
+as a refusal files nothing, and one answering a `5xx` files the chain it
+withholds.
 
 A type **alias** over `Result` behaves the same. `pub type ServiceResult<T> =
 Result<T, MyError>` produces the identical error frame and the identical
@@ -332,6 +360,63 @@ error's `Display` is never what decides. The wire shape stays the same
 envelope — clients branch on the presence of `data.error`, on
 `data.errors.code` for the class, and read the field entries under
 `data.errors` when they need to point at a field.
+
+## Interceptors, filters and pipes
+
+A message runs through the same [pipeline](/fundamentals/interceptors/) a route
+does, outermost first: the unit stage (`#[interceptor(stage = unit)]`), the
+guard stage — the app's pool, the message's `#[use_guards]`, then the class
+gate its posture declares — the exception filters (the message's, the
+gateway's, the app's), the handler stage (the app's interceptors, the ones
+modules bring, the gateway's, the message's), and last the message itself: its
+data pipes, its payload's own pipe, the call and the mask.
+
+Bound on the `#[gateway]` struct, a layer runs around every message of the
+gateway; bound beside a `#[subscribe_message]`, around that one. Each runs once
+per message, whichever scopes list it:
+
+```rust title="crates/features/src/catalog/ws/gateway.rs"
+use std::sync::Arc;
+
+use nest_rs::ws::{gateway, messages};
+
+#[gateway(path = "/ws/catalog")]
+#[use_interceptors(Timing)]
+#[use_exception_filters(OutOfStockFilter)]
+pub struct CatalogGateway {
+    #[inject]
+    svc: Arc<CatalogService>,
+}
+
+#[messages]
+impl CatalogGateway {
+    #[subscribe_message("buy")]
+    #[public]
+    #[use_pipes(StripUnknownFields)]
+    async fn buy(&self, order: OrderDto) -> Result<ReceiptDto, OutOfStock> {
+        self.svc.buy(order).await
+    }
+}
+```
+
+An exception filter reads the handler's error by its type and answers the
+client in place of the frame the error would have answered — a
+`Caught::Problem` as `{ "error": …, "errors": { "code": … } }`, or a reply it
+writes through `WsView::respond`. The message still failed, so whatever it
+wrote rolls back. An interceptor reads the message through `WsView` — its
+connection, its event, its `data` — and the reply once the rest of the message
+ran; one may answer the message itself with `WsView::respond` and skip the
+rest.
+
+The [global pipes](/fundamentals/global-pipes/) the app lists fold over every
+message's `data`, after its guards and its gate; `#[use_pipes]` adds pipes for
+one gateway or one message, each once. A rejection is an error frame, as a
+payload's own pipe's is.
+
+The connection hooks take a `#[meta]` value, and no layer yet:
+`#[use_interceptors]` and `#[use_exception_filters]` beside `#[on_connect]` are
+named compile errors, as are a guard (the upgrade's guards admitted the socket)
+and a pipe (a hook has no payload).
 
 ## The envelope itself
 

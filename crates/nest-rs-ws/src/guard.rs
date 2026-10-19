@@ -1,147 +1,116 @@
 //! A gateway's guards: the upgrade's, run on the HTTP `GET` that opens a
-//! socket, and each `#[subscribe_message]` event's per-message chain, composed
-//! and deduped once at gateway mount through the `compose_chain` dedup every
-//! other site uses.
-//!
-//! `#[messages]`' boot check refuses a declaration no imported module provides
-//! before the gateway mounts; the mount itself, which has no `Result`, files
-//! the same refusal and denies, so it never runs a chain without a layer.
+//! socket, and each message's guard stage — the app-wide pool and the
+//! message's own `#[use_guards]`, composed through the guards crate's
+//! site-chain composition, then the posture's class gate — run by the
+//! pipeline as its site's guard stage.
 
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::sync::Arc;
 
+use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
-    ClassGate, Pending, ResolvedLayer, compose_chain, dedup_bucket, new_unit_context,
-    refuse_unresolved, resolve_scoped,
+    ClassGate, GuardStage, ResolvedLayer, new_unit_context, report_unresolved,
 };
-use nest_rs_core::layer_chain::LayerSite;
-use nest_rs_core::{Container, Handler, Peer};
+use nest_rs_core::{Container, Failure, Handler, Peer, UnitContext};
 use nest_rs_guards::__private::{
-    boot_validate_guards, client_message, denial_of, failure_chain, resolve_global_guards,
-    run_stage, structured_reason,
+    GlobalBucket, Refused, SiteChainSources, boot_validate_guards, check_guards, client_message,
+    compose_site_chain, denial_of, failure_chain, structured_reason,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use nest_rs_http::__private::OriginRefused;
 
-use crate::envelope::WsError;
+use crate::envelope::{WsError, WsReply};
+use crate::message::message_site;
 use crate::server::WsClient;
 use crate::view::WsView;
-
-/// What an event's chain is named in boot logs and refusals.
-fn event_site(event: &str) -> String {
-    format!("ws {event}")
-}
 
 /// What a gateway's upgrade chain is named in boot logs and refusals.
 fn upgrade_site(path: &str) -> String {
     format!("the {path} gateway upgrade")
 }
 
-/// One event's per-message chain, as the gateway runs it.
-pub enum EventChain {
-    /// The app-wide pool and the event's own `#[use_guards]`, deduped, run as
-    /// the unit its message's `handler` declares.
-    Composed {
-        /// The event's declaration.
-        handler: &'static Handler,
-        /// The guards, in the order they run.
-        guards: Vec<ResolvedLayer<dyn Guard>>,
-    },
-    /// The chain did not compose: every message of the event is refused,
-    /// opaquely.
-    Refused,
+/// What a message's guard stage composes, as `#[messages]` collects it.
+pub struct MessageGuards {
+    /// `#[use_guards]` beside the message, `#[force_guards]` included.
+    pub method: Vec<GuardSpec>,
+    /// `#[force_guards]`: the guards the message re-runs.
+    pub force: Vec<TypeId>,
+    /// The class gate the message's posture declares.
+    pub gate: Option<ClassGate>,
 }
 
-/// Per-gateway event-name → guard chain, built once at mount by `#[messages]`.
-#[derive(Default)]
-pub struct EventLayerTable {
-    by_event: HashMap<&'static str, EventChain>,
+/// The guard stage of the message `handler` declares: the app-wide pool and
+/// the message's own guards, each once unless `#[force_guards]` replays one,
+/// then its class gate — `None` when it runs none. The gateway's own guards
+/// ran at the upgrade.
+pub fn message_guard_stage(
+    container: &Container,
+    handler: &Handler,
+    declared: MessageGuards,
+) -> nest_rs_core::anyhow::Result<Option<Arc<dyn GuardStage>>> {
+    let sources = SiteChainSources {
+        provider: Vec::new(),
+        method: declared.method,
+        force: declared.force,
+    };
+    let guards = compose_site_chain(
+        container,
+        &message_site(handler),
+        sources,
+        GlobalBucket::Fold,
+    )
+    .inspect_err(report_unresolved)?;
+    if guards.is_empty() && declared.gate.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(MessageGuardStage {
+        guards,
+        gate: declared.gate,
+    })))
 }
 
-impl EventLayerTable {
-    /// An empty table.
-    pub fn new() -> Self {
-        Self::default()
-    }
+/// A message's guards, then its class gate, as the pipeline runs a site's
+/// guard stage: a refusal is answered into the message's view, so no
+/// exception filter maps it.
+struct MessageGuardStage {
+    guards: Vec<ResolvedLayer<dyn Guard>>,
+    gate: Option<ClassGate>,
+}
 
-    /// Register the resolved guard chain for one event name.
-    pub fn insert(&mut self, event: &'static str, chain: EventChain) {
-        self.by_event.insert(event, chain);
-    }
-
-    /// The event a handler serves under `event`, and the unit its message is
-    /// declared as — `None` for an event no handler serves, or one whose
-    /// chain did not compose.
-    pub fn handler(&self, event: &str) -> Option<(&'static str, &'static Handler)> {
-        match self.by_event.get_key_value(event)? {
-            (&event, EventChain::Composed { handler, .. }) => Some((event, *handler)),
-            (_, EventChain::Refused) => None,
-        }
-    }
-
-    /// `event` as a handler declares it — the name a line may carry — or `None`
-    /// for one no handler serves, which only the client named.
-    pub fn declared(&self, event: &str) -> Option<&'static str> {
-        self.by_event.get_key_value(event).map(|(&event, _)| event)
-    }
-
-    /// Run every guard in the chain for `event` on its message, in order: what
-    /// they attached and the message's `data` back when they all admit it — at
-    /// once for an event with no chain — the first refusal's frame otherwise.
-    pub async fn check(
-        &self,
-        client: &WsClient,
-        event: &str,
-        data: serde_json::Value,
-    ) -> Result<(Pending, serde_json::Value), WsError> {
-        let Some((&event, chain)) = self.by_event.get_key_value(event) else {
-            return Ok((Pending::default(), data));
-        };
-        let (handler, guards) = match chain {
-            EventChain::Composed { handler, guards } => (*handler, guards),
-            EventChain::Refused => {
-                return Err(denial_to_ws_error(Denial::internal(
-                    "the event's guard chain did not compose",
-                )));
+impl GuardStage for MessageGuardStage {
+    fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
+        Box::pin(async move {
+            match check_guards(&self.guards, self.gate, cx).await {
+                Ok(()) => Ok(()),
+                Err(refused) => Err(refuse(cx, refused)),
             }
-        };
-        if guards.is_empty() {
-            return Ok((Pending::default(), data));
-        }
-        let mut view = WsView::new(client.clone(), event, data);
-        let peer = Peer::new(None, Some(client.id()));
-        let mut cx = new_unit_context(handler, &mut view, Some(peer), None);
-        let attached = run_stage(guards, None, &mut cx).await.map_err(|refused| {
-            denial_to_ws_error(refused.into_denial(|guard, denial| {
-                // Structural floor mirroring the HTTP edge's, filed where the
-                // denial is still held; its text never reaches the line.
-                tracing::warn!(
-                    target: nest_rs_core::target::LAYERS,
-                    guard,
-                    conn_id = client.id(),
-                    event,
-                    status = denial.http_status(),
-                    error = failure_chain(denial),
-                    "guard denied the message",
-                );
-            }))
-        })?;
-        Ok((attached, view.take_data()))
+        })
     }
 }
 
-/// Run the posture's class `gate` on a message `client` sent to the event
-/// `handler` declares, before its payload is read: the refusal's error frame,
-/// the gate's own line filed.
-pub fn class_gate(
-    client: &WsClient,
-    handler: &'static Handler,
-    gate: ClassGate,
-) -> Result<(), WsError> {
-    let mut view = WsView::piped(client.clone(), handler.address());
-    let peer = Peer::new(None, Some(client.id()));
-    let mut cx = new_unit_context(handler, &mut view, Some(peer), None);
-    gate(&mut cx).map_err(|refused| denial_to_ws_error(denial_of(&refused)))
+/// The refused message's answer: the denial filed by the stage when its guard
+/// filed none, rendered into the view, the unit failed with it, answered.
+fn refuse(cx: &mut UnitContext<'_>, refused: Refused) -> Failure {
+    let connection = cx.peer().and_then(|peer| peer.connection);
+    let event = cx.handler().address();
+    let denial = refused.into_denial(|guard, denial| {
+        // Structural floor mirroring the HTTP edge's, filed where the denial
+        // is still held; its text never reaches the line.
+        tracing::warn!(
+            target: nest_rs_core::target::LAYERS,
+            guard,
+            conn_id = connection,
+            event,
+            status = denial.http_status(),
+            error = failure_chain(denial),
+            "guard denied the message",
+        );
+    });
+    let frame = denial_to_ws_error(denial.clone());
+    match WsView::of(cx) {
+        Ok(view) => Failure::from(denial).answered(view.respond(WsReply::Error(frame))),
+        Err(viewless) => viewless,
+    }
 }
 
 /// Render a guard's [`Denial`] as the error frame one message answers with.
@@ -160,56 +129,33 @@ pub fn denial_to_ws_error(denial: Denial) -> WsError {
     )
 }
 
-/// The boot check `#[messages]` emits for a gateway: its upgrade chain is
-/// phase-validated (an HTTP `GET`, the entry the check reads), and a guard no
-/// imported module provides — on the upgrade or on any event — refuses, named
-/// with its site. A message deadline the shutdown window cannot hold is said
-/// at `warn`.
-pub fn check_ws_gateway(
+/// The posture's class `gate` the message `handler` declares, run alone on
+/// `data`, arrived on `client` — no guard runs — as `Gateway::dispatch` runs
+/// it: `data` back, or the frame its refusal answers, the gate filing its own.
+pub(crate) fn gate_alone(
+    client: &WsClient,
+    handler: &'static Handler,
+    gate: ClassGate,
+    data: serde_json::Value,
+) -> Result<serde_json::Value, WsError> {
+    let mut view = WsView::new(client.clone(), handler.address(), data);
+    let peer = Peer::new(None, Some(client.id()));
+    let gated = gate(&mut new_unit_context(handler, &mut view, Some(peer), None));
+    match gated {
+        Ok(()) => Ok(view.take_data()),
+        Err(refused) => Err(denial_to_ws_error(denial_of(&refused))),
+    }
+}
+
+/// The upgrade's guards of the gateway at `path`, phase-validated (an HTTP
+/// `GET`, the entry the check reads) and resolvable on `container`.
+pub(crate) fn validate_upgrade(
     container: &Container,
     path: &str,
     upgrade: &[GuardSpec],
-    events: &[(&'static str, Vec<GuardSpec>)],
-) -> Result<(), String> {
-    boot_validate_guards(container, upgrade, &upgrade_site(path))?;
-    for (event, method) in events {
-        resolve_scoped(container, method, LayerSite::Method, &event_site(event))
-            .map_err(|unresolved| unresolved.to_string())?;
-    }
-    let window = container
-        .get::<nest_rs_http::HttpConfig>()
-        .unwrap_or_default()
-        .shutdown_timeout;
-    container
-        .get::<crate::WsConfig>()
-        .unwrap_or_default()
-        .warn_when_messages_outlast_the_window(window, path);
-    Ok(())
-}
-
-/// One event's per-message chain: the app-wide pool and the event's own
-/// `#[use_guards]`, deduped unless `#[force_guards]` replays one, run as the
-/// unit `handler` declares.
-pub fn ws_event_chain(
-    container: &Container,
-    method: &[GuardSpec],
-    force: &[TypeId],
-    event: &'static str,
-    handler: &'static Handler,
-) -> EventChain {
-    let site = event_site(event);
-    let method = match resolve_scoped(container, method, LayerSite::Method, &site) {
-        Ok(method) => method,
-        Err(unresolved) => {
-            refuse_unresolved(container, unresolved);
-            return EventChain::Refused;
-        }
-    };
-    let global = dedup_bucket(resolve_global_guards(container));
-    EventChain::Composed {
-        handler,
-        guards: compose_chain::<dyn Guard>(global, Vec::new(), method, force, &site),
-    }
+) -> nest_rs_core::anyhow::Result<()> {
+    boot_validate_guards(container, upgrade, &upgrade_site(path))
+        .map_err(nest_rs_core::anyhow::Error::msg)
 }
 
 /// A gateway's upgrade from a browser origin the transport's policy refuses,
@@ -220,10 +166,9 @@ pub fn refused_origin(refused: &OriginRefused) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
-    use nest_rs_core::{AmbientValue, Layer, Posture, UnitContext};
+    use nest_rs_core::layer_chain::LayerSite;
+    use nest_rs_core::{AmbientValue, Layer, Posture};
     use nest_rs_guards::async_trait;
     use serde_json::json;
 
@@ -275,62 +220,65 @@ mod tests {
         }
     }
 
-    fn table() -> EventLayerTable {
-        let mut table = EventLayerTable::new();
-        table.insert(
-            "send",
-            EventChain::Composed {
-                handler: &SEND,
-                guards: vec![ResolvedLayer {
-                    type_id: TypeId::of::<Numbers>(),
-                    name: "Numbers",
-                    source: LayerSite::Method,
-                    layer: Arc::new(Numbers),
-                }],
-            },
-        );
-        table.insert("broken", EventChain::Refused);
-        table
+    fn stage_of<G: Guard + 'static>(guard: G) -> MessageGuardStage {
+        MessageGuardStage {
+            guards: vec![ResolvedLayer {
+                type_id: TypeId::of::<G>(),
+                name: std::any::type_name::<G>(),
+                source: LayerSite::Method,
+                layer: Arc::new(guard),
+            }],
+            gate: None,
+        }
     }
 
-    #[tokio::test]
-    async fn an_unguarded_event_passes_its_data_through() {
-        let (attached, data) = table()
-            .check(&WsClient::for_test(), "anything", json!("text"))
-            .await
-            .expect("no chain, no refusal");
-        assert!(attached.is_empty());
-        assert_eq!(data, json!("text"));
+    /// Run `stage` on a message of `data`: what it came to, and the view.
+    async fn checked(
+        stage: &MessageGuardStage,
+        client: &WsClient,
+        data: serde_json::Value,
+    ) -> (Result<(), Failure>, WsView, Option<std::sync::Arc<Seen>>) {
+        let mut view = WsView::new(client.clone(), "send", data);
+        let peer = nest_rs_core::Peer::new(None, Some(client.id()));
+        let (checked, seen) = {
+            let mut cx = new_unit_context(&SEND, &mut view, Some(peer), None);
+            let checked = stage.check(&mut cx).await;
+            let seen = cx.ambient::<Seen>();
+            (checked, seen)
+        };
+        (checked, view, seen)
     }
 
     #[tokio::test]
     async fn a_guard_reads_the_message_and_its_connection_and_attaches_for_the_handler() {
         let client = WsClient::for_test();
-        let (attached, data) = table()
-            .check(&client, "send", json!(7))
-            .await
-            .expect("a number is admitted");
-        assert_eq!(data, json!(7), "the handler gets the data back");
+        let (checked, view, seen) = checked(&stage_of(Numbers), &client, json!(7)).await;
+        assert!(checked.is_ok());
         assert_eq!(
-            attached.get::<Seen>().as_deref(),
-            Some(&Seen("send", client.id())),
+            view.data(),
+            Some(&json!(7)),
+            "the handler gets the data back"
         );
+        assert_eq!(seen.as_deref(), Some(&Seen("send", client.id())));
     }
 
     #[tokio::test]
     async fn a_denial_answers_the_frame_and_is_filed() {
         let logs = nest_rs_testing::LogCapture::install();
-        let Err(refused) = table()
-            .check(&WsClient::for_test(), "send", json!("text"))
-            .await
-        else {
-            panic!("text is refused");
+        let (checked, view, _) =
+            checked(&stage_of(Numbers), &WsClient::for_test(), json!("text")).await;
+        let failure = checked.expect_err("text is refused");
+        assert!(failure.is_answered(), "the stage answered it");
+        let (reply, line) = view.into_answer();
+        let Some(crate::WsReply::Error(refused)) = reply else {
+            panic!("a refusal answers an error frame");
         };
         assert_eq!(refused.error, "a number, please");
         assert_eq!(
             refused.errors.as_ref().map(|e| &e["code"]),
             Some(&json!("FORBIDDEN"))
         );
+        assert!(line.is_none(), "the stage filed the denial itself");
         let event = logs.expect_one("nest_rs::layers", "guard denied the message");
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("event").as_deref(), Some("send"));
@@ -368,21 +316,11 @@ mod tests {
     #[tokio::test]
     async fn a_denial_keeping_its_cause_files_the_chain_and_answers_without_it() {
         let logs = nest_rs_testing::LogCapture::install();
-        let mut table = EventLayerTable::new();
-        table.insert(
-            "send",
-            EventChain::Composed {
-                handler: &SEND,
-                guards: vec![ResolvedLayer {
-                    type_id: TypeId::of::<StoreDown>(),
-                    name: "StoreDown",
-                    source: LayerSite::Method,
-                    layer: Arc::new(StoreDown),
-                }],
-            },
-        );
-        let Err(refused) = table.check(&WsClient::for_test(), "send", json!(1)).await else {
-            panic!("a store that is down refuses the message");
+        let (checked, view, _) =
+            checked(&stage_of(StoreDown), &WsClient::for_test(), json!(1)).await;
+        assert!(checked.is_err(), "a store that is down refuses the message");
+        let Some(crate::WsReply::Error(refused)) = view.into_answer().0 else {
+            panic!("a refusal answers an error frame");
         };
         assert_eq!(refused.error, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
         let event = logs.expect_one("nest_rs::layers", "guard denied the message");
@@ -390,17 +328,6 @@ mod tests {
             event.field("error").as_deref(),
             Some("the identity store did not answer: the identity store refused the connection"),
         );
-    }
-
-    #[tokio::test]
-    async fn an_event_whose_chain_did_not_compose_refuses_every_message_opaquely() {
-        let Err(refused) = table()
-            .check(&WsClient::for_test(), "broken", json!(1))
-            .await
-        else {
-            panic!("an event whose chain did not compose is refused");
-        };
-        assert_eq!(refused.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
     }
 
     /// What an unavailable dependency's refusal said of it stays on the server.

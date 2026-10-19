@@ -231,3 +231,36 @@ app's interceptors now run. Where it departs:
   ambient ability the class gate checked — a subscription's items the one its
   opening captured, since they arrive outside its unit — and the GraphQL
   context no longer carries one.
+
+**2026-10-19 — `feat/websocket-on-pipeline`: a WebSocket message runs on it.**
+Each `#[subscribe_message]` is one `Site` `#[messages]` declares in a `static`,
+dispatched inside the `run_unit` the message opens, cut at its
+`message_timeout`; `SocketContext`, `Captured` and the per-event guard table
+are gone, and what the upgrade's guards attached reaches each message and hook
+through the connection alone. Where it departs:
+
+- **The class gate runs inside the message's guard stage**, as a route's does,
+  rather than as the site's `class_gate`: the stage answers a refusal into the
+  message's view, so a unit-stage interceptor reads the frame that goes out.
+- **The data pipes are the tail's**, after the guards and the gate, where they
+  ran after the guards alone: a refused caller pays for no pipe.
+- **A handler's error is rendered by its type at the tail** (its `ToProblem`,
+  the framework's vocabulary in its chain, else opaquely) and fails the unit
+  answered, carrying the error itself for the exception filters; an error
+  that cannot cross threads crosses as its chain's sentence. The line the
+  frame owes is filed once the answer is final, so a failure a filter answers
+  as a refusal files nothing.
+- **`Gateway::dispatch` stays the handler's own call behind its posture** —
+  the class gate, then parameters, pipes, call, mask; no guard, no layer —
+  which a test calls. The socket runs the site around the handler, the gate in
+  its guard stage, so nothing runs twice; a `dispatch` without the gate would
+  run an `#[authorize]` write with no decision at the edge.
+- **The connection hooks are units with no site**: they carry the
+  connection's ambient and their own deadline (`connect_timeout`,
+  `disconnect_timeout`), take `#[meta]`, refuse a guard and a pipe, and run no
+  interceptor or exception filter yet (their cells are pending).
+- **The gateway's boot check is a wiring**, which composes every message's site:
+  a layer nothing provides, or two `#[meta]` values of one type, fail the boot
+  of any app importing the gateway, whatever it serves.
+- **An event no handler serves runs no site**: it has no handler to declare
+  one, so it meets no layer and answers the unknown-event frame.

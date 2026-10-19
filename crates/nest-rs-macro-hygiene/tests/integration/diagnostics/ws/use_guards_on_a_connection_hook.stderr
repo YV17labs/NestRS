@@ -1,0 +1,5 @@
+error: `#[use_guards]` is not taken on an `#[on_connect]` / `#[on_disconnect]` hook: a connection hook runs on a socket its upgrade's guards admitted — gate the upgrade with `#[use_guards]` on the `#[gateway]`
+  --> tests/integration/diagnostics/ws/use_guards_on_a_connection_hook.rs:14:5
+   |
+14 |     #[use_guards(AllowAll)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

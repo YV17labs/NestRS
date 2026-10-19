@@ -102,6 +102,10 @@
 //!   `Guard::check` on the message's [`WsView`] (global + per-message, deduped
 //!   by `TypeId`) each time the event fires.
 //!
+//! `#[use_interceptors]`, `#[use_exception_filters]` and `#[use_pipes]` bind on
+//! the gateway, for each of its messages, and beside a `#[subscribe_message]`,
+//! for that one.
+//!
 //! `#[on_connect]` / `#[on_disconnect]` on the `#[messages]` impl block are the
 //! lifecycle hooks; `on_disconnect` runs while the connection is still registered.
 //!
@@ -121,16 +125,27 @@
 //! [`Global`]). `#[gateway(namespace = MyNs)]` mounts against its own
 //! `WsServer<MyNs>`, a separate registry also owned by [`WsModule`].
 //!
-//! # Ambient request state and units of work
+//! # The pipeline, and units of work
+//!
+//! The upgrade runs as the HTTP transport's self-mount: its app-wide unit
+//! stage, its guard stage (the app's pool and the gateway's `#[use_guards]`)
+//! and the app's exception filters. Each message then runs through the same
+//! pipeline as a route, as a `ws.message` unit: the unit stage, its guard stage
+//! (the app's pool, the message's own guards, then the class gate its posture
+//! declares), its exception filters (the message's, the gateway's, the app's),
+//! its handler stage (the app's interceptors, the modules', the gateway's
+//! `#[use_interceptors]`, the message's) and its tail — the data pipes, the
+//! handler's own pipes, the call and the mask. A layer reads the message
+//! through [`WsView`] and may answer it through [`WsView::respond`].
 //!
 //! The connection loop runs after the upgrade completes, under what the
 //! upgrade carried into a [`Connection`](nest_rs_core::Continuation::Connection):
 //! its trace, its actor, the ability its guards attached and every value that
 //! crosses reach each hook and message, never its scope or its transaction.
 //! Each message and each connection hook is a unit of work of its own, run
-//! through the bound `nest_rs_database::UnitOfWork`: a message commits unless it
-//! answers an error frame, a hook unless it unwound. The [`SocketContext`] seam
-//! captures from the post-guard upgrade request and wraps each message's unit.
+//! through the bound `nest_rs_database::UnitOfWork` and cut at its deadline: a
+//! message commits unless it fails — an error frame, however a layer answered
+//! it — a hook unless it unwound or was cut.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -147,11 +162,10 @@ pub mod target {
 }
 
 mod config;
-mod context;
 mod envelope;
-mod error;
 mod gateway;
 mod guard;
+mod message;
 mod module;
 mod namespace;
 mod opaque;
@@ -161,12 +175,10 @@ pub mod unit;
 mod view;
 
 pub use config::WsConfig;
-pub use context::{BoxFuture, Captured, SocketContext};
 pub use envelope::{
-    ErrorReport, ErrorReportChain, ErrorReportFallback, ReplyOutcome, ReplyValue,
-    ReplyValueFallback, WsEnvelope, WsError, WsReply,
+    ErrorReport, ErrorReportChain, ErrorReportFallback, ErrorReportLocal, HandlerFailed,
+    ReplyOutcome, ReplyValue, ReplyValueFallback, WsEnvelope, WsError, WsReply,
 };
-pub use error::WsScopeError;
 pub use gateway::Gateway;
 pub use guard::denial_to_ws_error;
 pub use module::{WsModule, WsSetup};
@@ -181,11 +193,12 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::gateway::gateway_endpoint;
-    pub use crate::guard::{
-        EventChain, EventLayerTable, check_ws_gateway, class_gate, refused_origin, ws_event_chain,
-    };
+    pub use crate::gateway::{gateway_endpoint, wire_gateway};
+    pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};
+    pub use crate::message::{DeclaredMessage, MessageTable};
     pub use crate::namespace::WsNamespaceEntry;
+    pub use crate::scope::scoped_parameter;
+    pub use nest_rs_pipes::{GlobalPipe, PipeSpec};
 }
 
 // Re-exported so macro-generated code resolves these through the framework.
@@ -217,6 +230,13 @@ pub use nest_rs_http;
 pub use nest_rs_core::input;
 
 /// Bind a `#[gateway]` impl block's message handlers.
+///
+/// A handler's parameters are read by their shape: a reference is the
+/// `&`[`WsClient`], a [`Scoped<T>`] a request-scoped provider the boot checks,
+/// and the one other parameter the payload `data` is decoded into.
+/// [`Gateway::dispatch`] calls a handler on its own, behind its posture's
+/// class gate — no guard, no layer — as a test does; on a socket each message
+/// runs through its site.
 ///
 /// ```
 /// use nest_rs_core::Discoverable;
@@ -285,8 +305,10 @@ pub use nest_rs_ws_macros::messages;
 /// # }
 /// ```
 ///
-/// `#[use_interceptors(...)]` / `#[use_filters(...)]` are **HTTP-only** and
-/// rejected on a gateway at compile time:
+/// `#[use_interceptors(...)]`, `#[use_exception_filters(...)]` and
+/// `#[use_pipes(...)]` on the struct run around each of its messages;
+/// `#[use_filters(...)]`, an untyped error mapper an exception filter replaced,
+/// is refused at compile time:
 ///
 /// ```compile_fail
 /// use nest_rs_ws::gateway;

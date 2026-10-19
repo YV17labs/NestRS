@@ -158,7 +158,8 @@ impl SiteChainCell {
     }
 }
 
-/// Resolve, dedup and order one in-band site's chain.
+/// Resolve, dedup and order one site's chain — an in-band operation's or a
+/// WebSocket message's.
 ///
 /// The app-wide pool is folded in: this site runs each guard's
 /// [`check`](Guard::check), which the endpoint request's `check_http` never

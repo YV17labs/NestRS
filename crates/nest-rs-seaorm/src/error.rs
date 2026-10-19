@@ -1241,7 +1241,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_cancelled_statement_tells_a_websocket_client_its_wait() {
         let reply = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
-            nest_rs_ws::ErrorReport(ServiceError::from(cancelled_statement())).into_frame("sync")
+            nest_rs_ws::ErrorReport::new(ServiceError::from(cancelled_statement()))
+                .into_failure()
+                .into_reply("sync")
         })
         .await;
         let nest_rs_ws::WsReply::Error(frame) = reply else {

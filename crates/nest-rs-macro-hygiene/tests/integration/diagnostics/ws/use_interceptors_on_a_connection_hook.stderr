@@ -1,0 +1,5 @@
+error: `#[use_interceptors]` does not run around a connection hook yet, so on one it would be a silent no-op. Remove it, or bind it on the `#[gateway]` or beside a `#[subscribe_message]`, where it runs around each message
+  --> tests/integration/diagnostics/ws/use_interceptors_on_a_connection_hook.rs:15:5
+   |
+15 |     #[use_interceptors(Audit)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nest_rs::core::error_message;
-use nest_rs::ws::{Scoped, WsClient, WsScopeError, gateway, messages, serde_json};
+use nest_rs::ws::{Scoped, WsClient, gateway, messages, serde_json};
 
 use super::guard::ModerationGuard;
 use super::request_seq::RequestSeq;
@@ -51,8 +51,8 @@ impl ChatGateway {
 
     #[subscribe_message("seq")]
     #[public]
-    async fn seq(&self) -> Result<u64, WsScopeError> {
-        Ok(Scoped::<RequestSeq>::from_context()?.value())
+    async fn seq(&self, seq: Scoped<RequestSeq>) -> u64 {
+        seq.value()
     }
 
     #[subscribe_message("typing")]

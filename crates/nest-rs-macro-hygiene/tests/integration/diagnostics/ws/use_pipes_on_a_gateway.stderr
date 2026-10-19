@@ -1,5 +1,0 @@
-error: `#[use_pipes]` does not run on WebSockets yet, so beside `#[gateway]` it would be a silent no-op. Remove it, or bind the layer on an HTTP `#[controller]` / `#[routes]`, where it runs
-  --> tests/integration/diagnostics/ws/use_pipes_on_a_gateway.rs:12:1
-   |
-12 | #[use_pipes(SomePipe)]
-   | ^^^^^^^^^^^^^^^^^^^^^^

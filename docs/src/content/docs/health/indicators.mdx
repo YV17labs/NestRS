@@ -77,7 +77,7 @@ The dividing rule matches every other adapter: a file lives in
 
 | Scope                                    | Home                                              | Example                              |
 |------------------------------------------|---------------------------------------------------|--------------------------------------|
-| Framework primitive (any nestrs project) | `crates/nest-rs-<concern>/` behind a Cargo feature | `HealthModule` (next section) |
+| Framework primitive (any nestrs project) | `crates/nest-rs-<concern>/` behind a Cargo feature | `RedisHealthModule` (next section) |
 | Product feature (any app of this repo)   | `crates/features/<feature>/health/`               | `UpstreamHealthIndicator` above       |
 | App-specific glue (this binary only)     | `apps/<x>/<feature>/health/` (exception)          | a deployment-quirk check              |
 
@@ -87,51 +87,135 @@ would belong to no `#[module]`. See [Monorepo
 layout](/fundamentals/modules/#extract-a-feature) for
 the full rule.
 
-## Framework-shipped: `SeaOrmHealthModule`
+## Framework-shipped indicators
 
-A framework concern — a pool ping, a queue connection probe — belongs
-in the crate that owns the dependency, behind a Cargo feature so an
-app that does not import `HealthModule` does not pay for the
-indicator. The SeaORM pool ping is the first one to ship.
+A resource the framework opens ships its check in the crate that opens it,
+behind that crate's `health` feature — which `cargo add nest-rs --features
+health` turns on beside the resource's own feature, so the manifest still names
+the umbrella alone. Each check is a bare import beside `HealthModule`, and
+none is code of yours:
 
-`nest-rs-seaorm` exposes it as `SeaOrmHealthModule`, which registers
-`SeaOrmHealthIndicator`. The indicator runs `DatabaseConnection::ping` on
-both `#[readiness]` and `#[startup]` — exactly what most apps want and
-zero code in the app:
+| Resource | Import | Key | Check |
+|---|---|---|---|
+| The SeaORM pool | `SeaOrmHealthModule` | `seaorm` | `DatabaseConnection::ping` |
+| A Redis instance | `RedisHealthModule` | `redis` | `PING` on the instance's connection |
+| A named Redis instance | `RedisHealthModule::<Cache>` | `redis:cache` | the same, on that instance |
+| The object store | `StorageHealthModule` | `storage` | one page of the bucket's listing |
 
-```toml title="apps/api/Cargo.toml"
-nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "health"] }
-```
-
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
+use nest_rs::redis::{RedisHealthModule, RedisModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
+use nest_rs::storage::{StorageHealthModule, StorageModule};
 
 #[module(
     imports = [
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
         SeaOrmHealthModule,
+        RedisModule::for_root(None),
+        RedisHealthModule,
+        StorageModule,
+        StorageHealthModule,
         HealthModule,
     ],
 )]
 pub struct ApiModule;
 ```
 
-An unreachable pool drops readiness and startup to `503` until the
-connection comes back; liveness stays `up` (the orchestrator should
-not restart the pod just because the database blinked). See
-[Database / Health](/database/health/) for the full integration.
+```bash frame="terminal"
+$ curl -s http://localhost:3000/health/ready | jq '.details | keys'
+[ "redis", "seaorm", "storage" ]
+```
+
+Each one runs on `/health/ready` and `/health/startup`, never on
+`/health/live`: the orchestrator should not restart a pod because the
+database or a Valkey blinked. A check answers within the ceilings of
+[Health](/health/#configuration), and its resource's own budget bounds what it
+sends — the Redis connection's
+`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, for one.
+
+**A key names the resource, never the probe.** A framework indicator is named
+for the crate owning the resource, plus `:` and the instance for a
+[named one](/queue/topologies/#a-second-valkey) — `redis:cache` for
+`RedisHealthModule::<Cache>` — so a readiness `503` says which Valkey went
+away. Your own indicator keeps its method name: a method named `redis` beside
+`RedisHealthModule` fails the boot naming both, and the fix is to drop yours.
+
+**A binding needs its resource open.** `RedisHealthModule::<Cache>` without
+`RedisModule::for_root((Cache, None))`, or `StorageHealthModule` without
+`StorageModule`, fails the boot naming the import that opens it. A test that
+overrides `Storage` opens no store, and `StorageHealthModule` then probes
+nothing.
+
+**What each check reads.**
+
+- The pool's is a round-trip, `SELECT 1`.
+- A Redis instance's is a `PING`, which every binding's ACL rule already
+  grants. On a Cluster it reaches every primary, so a primary down reads
+  `down` until its replica takes over.
+- The store's is one attempt of the proof it passed at boot: a page of the
+  bucket's listing under the URL's prefix. A store reached over verified TLS
+  reads up even when it refuses the listing itself — a policy granting no
+  `s3:ListBucket` — as it boots, and the probe that first meets that refusal
+  files the boot's `warn` naming the credential variables, so credentials
+  revoked under a running app are said once; a bucket gone, a redirect, or no
+  answer reads down. It sends that request on every probe, so a store billing per request
+  bills the orchestrator's probes too. A `memory:///` store has nothing to reach
+  and reads up.
+
+See [Database health](/database/health/) for the pool end to end.
+
+## An indicator a module attaches
+
+`#[indicators]` names a check after its method, and a link-time registry
+holds no generic type — so a resource opened once per instance cannot be
+checked that way. A package that opens one ships its check as the framework
+does: its binding module attaches an `IndicatorEntry` from its `register`,
+which runs only when an app imports it, so the check is gated like every
+other discovered item. Its key is rooted at the package's crate, as every name
+it owns is ([Naming a package](/semver/#naming-a-package)): `nestrs_acme`, and
+`nestrs_acme:<instance>` for a named one.
+
+```rust title="src/health/module.rs"
+use nest_rs::core::{Container, ContainerBuilder, Module, Registering};
+use nest_rs::health::{IndicatorEntry, IndicatorFuture, ProbeKind};
+
+use crate::AcmeClient;
+
+fn ping(container: &Container) -> IndicatorFuture<'_> {
+    Box::pin(async move {
+        let client = container.get::<AcmeClient>().ok_or_else(|| {
+            anyhow::anyhow!("AcmeHealthModule: import AcmeModule, which opens the client")
+        })?;
+        client.ping().await
+    })
+}
+
+pub struct AcmeHealthModule;
+
+impl Module for AcmeHealthModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(IndicatorEntry::new::<Self>("nestrs_acme", ProbeKind::Readiness, ping))
+            .provide_meta(IndicatorEntry::new::<Self>("nestrs_acme", ProbeKind::Startup, ping))
+    }
+}
+```
+
+Both registries answer the same probes and pass one name check at boot: two
+indicators claiming a key on one probe fail it naming the method's module and
+the binding's type.
 
 ## What `#[indicators]` does
 
 The orchestrator decorator walks the impl block, finds each method
 tagged with exactly one probe attribute, strips the attribute, and
 submits one `HealthIndicator` entry per method to the link-time
-inventory `HealthService` drains at probe time. The method stays on
-the impl block unchanged — still a regular method you can call from
-anywhere.
+inventory the boot reads once, beside the entries modules attach. The
+method stays on the impl block unchanged — still a regular method you can
+call from anywhere.
 
 - **`#[injectable]`** makes the indicator an ordinary DI provider —
   same `#[inject]` shape as any other service.
@@ -146,31 +230,24 @@ anywhere.
   infallible — always `up`.
 
 Multiple decorated methods on the same impl block share the
-provider's `#[inject]` dependencies — pool a DB ping, a Redis ping,
-and a migration check on one `AppHealth` rather than writing a struct
-per check:
+provider's `#[inject]` dependencies — pool an upstream check and a
+migration check on one `AppHealth` rather than writing a struct per
+check:
 
-```rust title="apps/api/src/app_health.rs"
+```rust title="crates/features/src/app_health/indicator.rs"
 #[injectable]
 pub struct AppHealth {
     #[inject]
     db: Arc<DatabaseConnection>,
     #[inject]
-    redis: Arc<RedisConnection>,
+    upstream: Arc<UpstreamClient>,
 }
 
 #[indicators]
 impl AppHealth {
     #[readiness]
-    async fn db(&self) -> Result<(), sea_orm::DbErr> {
-        self.db.ping().await
-    }
-
-    #[readiness]
-    async fn redis(&self) -> redis::RedisResult<()> {
-        redis::cmd("PING")
-            .query_async(&mut RedisConnection::clone(&self.redis))
-            .await
+    async fn upstream(&self) -> anyhow::Result<()> {
+        self.upstream.ping().await
     }
 
     #[startup]
@@ -181,15 +258,8 @@ impl AppHealth {
 }
 ```
 
-`RedisConnection` is the connection every Redis binding over its instance
-shares, so a command sent on a clone of it answers or fails within that
-instance's budget — `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, or
-`<PREFIX>_REDIS__CACHE__CONNECT_TIMEOUT_SECS` for
-[a second Valkey](/queue/topologies/#a-second-valkey) injected as
-`RedisConnection<Cache>` — like the framework's own. Sending one
-names the `redis` crate in your source, so your manifest carries it — on the
-line `nest-rs-redis` builds against, 0.32, whose `ConnectionLike` the connection
-implements.
+A check of a resource the framework opens is already shipped: import its
+binding (above) rather than writing a second ping of the pool or of Valkey.
 
 A worker app or an MCP app that imports the feature's data layer
 without its `HealthModule` ships no probe surface for that feature —

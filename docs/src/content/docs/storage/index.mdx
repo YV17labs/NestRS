@@ -108,6 +108,17 @@ page of its listing under the URL's prefix, within `OPERATION_TIMEOUT_SECS`:
 and the other servers speaking its API answer the same requests, but no test of
 ours runs against them.
 
+### On every readiness probe
+
+`StorageHealthModule`, imported beside `HealthModule`, gates `/health/ready`
+and `/health/startup` on one attempt of that proof, under the key `storage`:
+what the boot refuses reads `down`, what it boots on reads `up` — a store
+refusing the listing itself included, with the boot's `warn` filed by the
+probe that first meets the refusal, never by every probe — and what it would
+retry reads `down` until the store answers again. One listing request per
+probe; see
+[Indicators](/health/indicators/#framework-shipped-indicators).
+
 ## Presigned uploads
 
 The canonical flow keeps bytes off the API. A handler injects `Storage`
@@ -313,7 +324,7 @@ carrying the SigV4 signature. Point it at an `https://` endpoint, or set
 
 - `crates/nest-rs-storage/` — `Storage`, `SignedPut`, `PresignedRequest`,
   `ObjectMetadata`, `ObjectEntry`, `StorageConfig`, `StorageModule`,
-  `StorageError`.
+  `StorageError`, and `StorageHealthModule` under the `health` feature.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
   — mints the key, presigns an upload bound to `audio/mpeg`, and the worker
   reads the stored object and writes a derived one.

@@ -203,7 +203,9 @@ holds on the server each binding reaches. Each instance is a connection of its
 own: its budget is held under the nets of the bindings over it, its refusals
 name its variables, and every line it files carries `instance` — `cache` here,
 empty for the default. Its users are created on its own servers, with the rules
-of the bindings it carries.
+of the bindings it carries. Its readiness is its own too: `RedisHealthModule::<Cache>`
+answers the probes as `redis:cache`, beside the default's `redis`
+([Indicators](/health/indicators/#framework-shipped-indicators)).
 
 ## ACL on Sentinel and Cluster
 

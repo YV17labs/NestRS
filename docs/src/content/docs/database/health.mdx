@@ -31,18 +31,23 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 pub struct AppModule;
 ```
 
-That's it. Importing the module registers `SeaOrmHealthIndicator` as both a
-**readiness** and a **startup** indicator — `HealthModule` discovers them
-through the inventory seam and mounts the probes automatically.
+That's it. Importing the module attaches the pool's indicator, `seaorm`, to
+both the **readiness** and the **startup** probe — `HealthModule` runs it beside
+every other indicator the app imports, and refuses the boot when a second one
+claims the name. Without `SeaOrmModule::for_root`, the import fails the boot
+naming it: there is no pool to ping.
 
 ## What gets probed
 
 Two endpoints exit the box with the database wired in:
 
-| Endpoint           | Indicator runs       | Failure              |
-|--------------------|----------------------|----------------------|
-| `GET /health/ready`   | `SeaOrmHealthIndicator::db`       | `503` while unreachable |
-| `GET /health/startup` | `SeaOrmHealthIndicator::db_ready` | `503` until first ping succeeds |
+| Endpoint              | Key      | Failure                         |
+|-----------------------|----------|---------------------------------|
+| `GET /health/ready`   | `seaorm` | `503` while unreachable         |
+| `GET /health/startup` | `seaorm` | `503` until first ping succeeds |
+
+One key on both probes: the probe is the route, so the name says which
+resource answered — the crate that owns the pool — never which probe asked.
 
 The liveness probe (`GET /health/live`) deliberately does not depend on the
 database — a brief DB outage should not kill the pod.
@@ -51,8 +56,8 @@ database — a brief DB outage should not kill the pod.
 
 ```bash frame="terminal"
 $ curl -s http://localhost:3000/health/ready
-{"status":"up","info":{"db":{"name":"db","status":"up"}},"error":{},
- "details":{"db":{"name":"db","status":"up"}}}
+{"status":"up","info":{"seaorm":{"name":"seaorm","status":"up"}},"error":{},
+ "details":{"seaorm":{"name":"seaorm","status":"up"}}}
 ```
 
 When the ping fails the indicator moves from `info` to `error`, the overall

@@ -8,9 +8,10 @@ mod indicators;
 
 /// Walks the methods; for each one
 /// tagged with `#[liveness]`, `#[readiness]`, or `#[startup]`, submits a
-/// `HealthIndicator` to the link-time inventory the
-/// [`HealthService`](../nest_rs_health/struct.HealthService.html) drains at
-/// probe time. The struct itself must be a regular `#[injectable]`.
+/// `HealthIndicator` to the link-time inventory the health wiring reads once
+/// at boot, beside the entries modules attach, for
+/// [`HealthService`](../nest_rs_health/struct.HealthService.html) to run. The
+/// struct itself must be a regular `#[injectable]`.
 ///
 /// Per-method probe attributes (exactly one per method):
 ///

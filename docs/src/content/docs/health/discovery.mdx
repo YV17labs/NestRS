@@ -8,11 +8,14 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 `#[indicators]` submits each tagged method to a link-time registry.
-At probe time, `HealthService` drains that registry and filters it
+At boot, `HealthModule` reads that registry once and filters it
 against `ReachableProviders` — the access-graph-derived set of every
 provider reachable from the running app's root module. The same
 module-gating every transport uses for `#[controller]`, `#[resolver]`,
-or `#[processor]` applies here.
+or `#[processor]` applies here. The checks a framework binding ships —
+`SeaOrmHealthModule`, `RedisHealthModule`, `StorageHealthModule` — are
+attached by the binding's module itself, so they exist only in an app that
+imports it.
 
 ## The rule
 
@@ -64,8 +67,7 @@ dependency's indicator reports at `debug` instead, because it is not your
 mistake here: one that a crate your app depends on ships — the framework, a
 package, a shared `features` crate several binaries link — and whose module this
 app does not import (`cause="dependency"`, with that module in the `hint`). A
-DB-less app is not told twice per boot to go bind `nest_rs_seaorm`'s, nor a
-binary about another binary's. The boot reads which modules your app imports,
+binary is not told about another binary's. The boot reads which modules your app imports,
 never a crate's name. Probing then skips in silence. When a shared crate's indicator does not appear, read
 `nest_rs::health` at `debug`: the usual cause is a missing `<Feature>HealthModule`
 import in `AppModule` — the feature's data module imports the service, not the
@@ -76,7 +78,7 @@ imported, the indicator's name appears under `details` on its probe:
 
 ```bash frame="terminal"
 $ curl -s http://localhost:3000/health/ready | jq '.details | keys'
-[ "db", "upstream" ]
+[ "seaorm", "upstream" ]
 ```
 
 Missing key, missing import. Present key with `status: "down"`,

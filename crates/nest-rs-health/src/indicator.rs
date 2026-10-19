@@ -132,8 +132,8 @@ pub struct HealthIndicator {
 ///
 /// Its name is the probe body's key, read off the crate owning the resource
 /// and the instance, never chosen: `seaorm`, `redis`, `redis:cache`,
-/// `storage`. An app's own indicator keeps its method name through
-/// [`indicators`](crate::indicators).
+/// `storage` — a package's rooted at its crate, `nestrs_acme`. An app's own
+/// indicator keeps its method name through [`indicators`](crate::indicators).
 ///
 /// ```
 /// use nest_rs_core::{App, Container, ContainerBuilder, Module, Registering, module};

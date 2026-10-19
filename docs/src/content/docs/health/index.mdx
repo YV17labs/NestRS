@@ -15,7 +15,8 @@ finished booting?* The probes ship as routes on the
 each returning `200` and a JSON body when every indicator passes,
 `503` with the same shape and `error` populated when any indicator
 fails. Discovery uses [`inventory`](https://crates.io/crates/inventory)
-gated by the access graph.
+gated by the access graph, beside the checks the modules an app imports
+attach — the database's, each Redis instance's, the object store's.
 
 ## Install
 
@@ -85,12 +86,12 @@ $ curl -s http://localhost:3000/health/ready | jq
 {
   "status": "up",
   "info": {
-    "db":       { "name": "db",       "status": "up" },
+    "seaorm":   { "name": "seaorm",   "status": "up" },
     "upstream": { "name": "upstream", "status": "up" }
   },
   "error": {},
   "details": {
-    "db":       { "name": "db",       "status": "up" },
+    "seaorm":   { "name": "seaorm",   "status": "up" },
     "upstream": { "name": "upstream", "status": "up" }
   }
 }
@@ -110,7 +111,7 @@ $ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/health/ready
 $ curl -s http://localhost:3000/health/ready | jq
 {
   "status": "down",
-  "info": { "db": { "name": "db", "status": "up" } },
+  "info": { "seaorm": { "name": "seaorm", "status": "up" } },
   "error": {
     "upstream": {
       "name": "upstream",
@@ -118,7 +119,7 @@ $ curl -s http://localhost:3000/health/ready | jq
       "error": "check failed"
     }
   },
-  "details": { "db": { /* ... */ }, "upstream": { /* ... */ } }
+  "details": { "seaorm": { /* ... */ }, "upstream": { /* ... */ } }
 }
 ```
 

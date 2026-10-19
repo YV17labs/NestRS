@@ -393,12 +393,22 @@ declares no net. **A resource the framework opens proves itself at boot through
 `nest_rs_core::prove`**: what every attempt would meet refuses at once, the
 rest is retried within the resource's budget, and the resource's crate says
 each attempt on its own target, naming the endpoint, never a URL; a resource
-exempt from the proof says why in its `//!`. **A loop retrying a backend waits
-`nest_rs_core::Backoff`'s curve** — exponential, ±20 % jitter drawn from a
-seed, gRPC's connection backoff — never a doubling of its own: a reconnect loop
-seeds it with
-`process_seed()`, so replicas come back apart; a loop its library owns
-(redis's `ConnectionManager`, object_store) stays the library's.
+exempt from the proof says why in its `//!`. **A resource the boot proves
+ships its indicator in its own crate**, behind a `health` feature the umbrella
+forwards weakly: its health binding (`RedisHealthModule<I>`) attaches an
+`IndicatorEntry` from its `register` — gated by construction, generic over the
+instance where the resource is — on the readiness and startup probes, never
+liveness, named for the crate subject owning the resource plus `:` and the
+instance for a named one (`seaorm`, `redis`, `redis:cache`, `storage`), and
+reading what the proof reads, one attempt per probe. A resource exempt from
+the proof ships none, for the reason its `//!` gives: an outage that must not
+stop the boot — the OTLP collector, an authorization server, a social provider
+— must not take every replica out of rotation either. **A loop retrying a
+backend waits `nest_rs_core::Backoff`'s curve** — exponential, ±20 % jitter
+drawn from a seed, gRPC's connection backoff — never a doubling of its own: a
+reconnect loop seeds it with `process_seed()`, so replicas come back apart; a
+loop its library owns (redis's `ConnectionManager`, object_store) stays the
+library's.
 **An outbound client the framework
 opens follows one policy**, and is private to the crate whose protocol needs it
 (OAuth's exchange, the JWK Set, the OTLP export, storage) — never an outbound

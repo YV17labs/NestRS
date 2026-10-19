@@ -489,3 +489,257 @@ mod the_endpoint_guards_speak_the_request_vocabulary {
             .assert_string("name a tenant");
     }
 }
+
+/// What the POST answers on the wire, as 6.x answered it through
+/// async-graphql-poem 7.2.1: JSON, `200` whatever `errors` holds,
+/// `cache-control` from the schema's hints only when every operation
+/// succeeded, then every header a resolver set.
+mod the_answer_on_the_wire {
+    use nest_rs_core::module;
+    use nest_rs_graphql::async_graphql::{self, Context, Upload};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+    use nest_rs_http::{HttpConfig, HttpModule, StatusCode, header};
+    use nest_rs_testing::{TestApp, TestForm, TestFormField, TestResponse};
+    use serde_json::json;
+
+    #[derive(async_graphql::SimpleObject)]
+    #[graphql(cache_control(max_age = 60))]
+    struct Cached {
+        value: i32,
+    }
+
+    #[resolver]
+    struct WireResolver;
+
+    #[operations]
+    impl WireResolver {
+        #[query]
+        #[public]
+        async fn cached(&self) -> Cached {
+            Cached { value: 1 }
+        }
+
+        #[query]
+        #[public]
+        async fn tagged(&self, ctx: &Context<'_>) -> i32 {
+            ctx.append_http_header("x-graphql-tag", "first");
+            ctx.append_http_header("x-graphql-tag", "second");
+            2
+        }
+
+        #[query]
+        #[public]
+        async fn refused(&self) -> async_graphql::Result<i32> {
+            Err(async_graphql::Error::new("refused on purpose"))
+        }
+
+        #[mutation]
+        #[public]
+        async fn upload_size(
+            &self,
+            ctx: &Context<'_>,
+            file: Upload,
+        ) -> async_graphql::Result<usize> {
+            let upload = file
+                .value(ctx)
+                .map_err(|unread| async_graphql::Error::new(unread.to_string()))?;
+            Ok(upload.content.len())
+        }
+    }
+
+    /// The cap the multipart tests send under and over.
+    const CAP: usize = 4096;
+
+    #[module(
+        imports = [
+            HttpModule::for_root(HttpConfig { max_body_bytes: Some(CAP), ..HttpConfig::default() }),
+            GraphqlModule::for_root(GraphqlConfig { max_batch_size: 2, ..GraphqlConfig::default() }),
+        ],
+        providers = [WireResolver],
+    )]
+    struct WireModule;
+
+    async fn boot() -> TestApp {
+        TestApp::for_module::<WireModule>().await.expect("boots")
+    }
+
+    fn values(resp: &TestResponse, name: header::HeaderName) -> Vec<String> {
+        resp.0
+            .headers()
+            .get_all(name)
+            .iter()
+            .map(|value| value.to_str().expect("a visible header").to_owned())
+            .collect()
+    }
+
+    async fn body(resp: TestResponse) -> serde_json::Value {
+        let text = resp.0.into_body().into_string().await.expect("a body");
+        serde_json::from_str(&text).unwrap_or_else(|_| panic!("a JSON body: {text}"))
+    }
+
+    #[tokio::test]
+    async fn the_response_header_set_matches_6x() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!({ "query": "{ cached { value } tagged }" }))
+            .send()
+            .await;
+
+        resp.assert_status_is_ok();
+        let mut names: Vec<&str> = resp.0.headers().keys().map(|name| name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, SIX_X_HEADER_SET);
+        assert_eq!(
+            values(&resp, header::CONTENT_TYPE),
+            ["application/json; charset=utf-8"]
+        );
+        assert_eq!(values(&resp, header::CACHE_CONTROL), ["max-age=60"]);
+        assert_eq!(
+            values(&resp, header::HeaderName::from_static("x-graphql-tag")),
+            ["first", "second"],
+            "every value a resolver appended, in order",
+        );
+        assert_eq!(
+            body(resp).await,
+            json!({ "data": { "cached": { "value": 1 }, "tagged": 2 } })
+        );
+    }
+
+    /// The header names a POST answering `cached` and `tagged` carried in 6.x.
+    const SIX_X_HEADER_SET: [&str; 9] = [
+        "cache-control",
+        "content-type",
+        "cross-origin-opener-policy",
+        "cross-origin-resource-policy",
+        "referrer-policy",
+        "traceresponse",
+        "x-content-type-options",
+        "x-frame-options",
+        "x-graphql-tag",
+    ];
+
+    #[tokio::test]
+    async fn an_answer_holding_errors_is_200_and_carries_no_cache_control() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!({ "query": "{ cached { value } refused }" }))
+            .send()
+            .await;
+
+        resp.assert_status_is_ok();
+        resp.assert_header_is_not_exist(header::CACHE_CONTROL);
+        let body = body(resp).await;
+        assert_eq!(body["errors"][0]["message"], "refused on purpose", "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_batch_answers_each_operation_in_order_with_every_header_set() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!([{ "query": "{ tagged }" }, { "query": "{ refused }" }]))
+            .send()
+            .await;
+
+        resp.assert_status_is_ok();
+        resp.assert_header_is_not_exist(header::CACHE_CONTROL);
+        assert_eq!(
+            values(&resp, header::HeaderName::from_static("x-graphql-tag")),
+            ["first", "second"],
+        );
+        let body = body(resp).await;
+        assert_eq!(body[0], json!({ "data": { "tagged": 2 } }), "{body}");
+        assert_eq!(
+            body[1]["errors"][0]["message"], "refused on purpose",
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_batch_past_its_size_is_413_and_executes_nothing() {
+        let app = boot().await;
+        let operation = json!({ "query": "{ tagged }" });
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!([operation, operation, operation]))
+            .send()
+            .await;
+
+        resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+        resp.assert_content_type("application/problem+json");
+        resp.assert_header_is_not_exist("x-graphql-tag");
+    }
+
+    /// The GraphQL multipart request specification's three parts: the
+    /// operation, the map of files onto its variables, and the file.
+    fn upload_of(bytes: usize) -> TestForm {
+        TestForm::new()
+            .text(
+                "operations",
+                json!({
+                    "query": "mutation ($file: Upload!) { uploadSize(file: $file) }",
+                    "variables": { "file": null },
+                })
+                .to_string(),
+            )
+            .text("map", json!({ "0": ["variables.file"] }).to_string())
+            .field(
+                TestFormField::bytes(vec![7_u8; bytes])
+                    .name("0")
+                    .filename("notes.txt"),
+            )
+    }
+
+    #[tokio::test]
+    async fn a_multipart_upload_under_the_cap_reaches_its_resolver() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .multipart(upload_of(1024))
+            .send()
+            .await;
+
+        resp.assert_status_is_ok();
+        assert_eq!(body(resp).await, json!({ "data": { "uploadSize": 1024 } }));
+    }
+
+    /// A refusal of the multipart reader keeps its fixed sentence.
+    #[tokio::test]
+    async fn a_multipart_request_without_its_map_is_refused_naming_the_part() {
+        let app = boot().await;
+        let form = TestForm::new().text("operations", json!({ "query": "{ tagged }" }).to_string());
+
+        let resp = app.http().post("/graphql").multipart(form).send().await;
+
+        resp.assert_status(StatusCode::BAD_REQUEST);
+        resp.assert_content_type("application/json");
+        assert_eq!(
+            body(resp).await,
+            json!({ "errors": [{ "message": "the body is not a GraphQL request: Missing \"map\" part" }] })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_multipart_upload_over_the_cap_is_413() {
+        let app = boot().await;
+
+        app.http()
+            .post("/graphql")
+            .multipart(upload_of(CAP * 16))
+            .send()
+            .await
+            .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+}

@@ -83,7 +83,6 @@ parking_lot = "0.12"
 # error: a `?` in a resolver body would otherwise ship a foreign error's
 # sentence before the wrapper could answer it opaquely.
 async-graphql = { version = "=7.2.1", default-features = false, features = ["custom-error-conversion", "dataloader", "playground"] }
-async-graphql-poem = "=7.2.1"
 inventory = "0.3"  # public
 
 argon2 = "0.6"

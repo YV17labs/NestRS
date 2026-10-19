@@ -9,6 +9,7 @@
 
 mod context;
 mod duplicate_operation;
+mod endpoint;
 mod federation;
 mod global_pipe;
 mod guard;

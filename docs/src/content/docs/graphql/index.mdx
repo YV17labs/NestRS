@@ -15,9 +15,8 @@ itself from a link-time registry, the playground self-mounts in dev,
 and the SDL is committed.
 
 `nest-rs-graphql` builds on [async-graphql](https://docs.rs/async-graphql)
-(served through [async-graphql-poem](https://docs.rs/async-graphql-poem))
 — the framework wraps it so resolvers register themselves and inject
-providers like any other struct.
+providers like any other struct, and serves it over its own HTTP transport.
 
 ## Install
 

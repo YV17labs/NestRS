@@ -8,9 +8,8 @@
 //!
 //! `src/resolver.rs` reads async-graphql's registry internals, so the workspace
 //! pins the exact version, held by a compile-time canary in `resolver.rs` and the
-//! `tests/integration/sdl_snapshot.rs` snapshot. To bump it: raise the pin for
-//! `async-graphql` **and** `async-graphql-poem`, fix the canary until the crate
-//! compiles, then review the SDL snapshot diff.
+//! `tests/integration/sdl_snapshot.rs` snapshot. To bump it: raise the pin, fix
+//! the canary until the crate compiles, then review the SDL snapshot diff.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -72,7 +71,6 @@ pub mod __private {
 }
 
 pub use async_graphql;
-pub use async_graphql_poem;
 pub use async_trait::async_trait;
 
 /// Generate a resolver's standard CRUD operations on its impl block, in place

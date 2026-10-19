@@ -41,16 +41,13 @@ async-trait.workspace = true
 # The edge runs its guards itself: the pool at the request, each field's chain,
 # the federation gate; it renders a denial in GraphQL's error form.
 nest-rs-guards.workspace = true
-# Re-exported so the GraphqlModule mount code can name the poem integration
-# through the framework, keeping it out of every app's manifest.
-async-graphql-poem.workspace = true
 # The graphql-ws loop is this crate's own — the one place a socket's end can
-# enter the protocol — so it splits the socket and reads both halves as streams.
-futures-util.workspace = true
+# enter the protocol — so it splits the socket and reads both halves as streams;
+# `io` reads a multipart request's body as the `AsyncRead` async-graphql parses.
+futures-util = { workspace = true, features = ["io"] }
 # Re-exported so `#[resolver]`-generated `inventory::submit!` resolves through
 # the framework without apps depending on `inventory` directly.
 inventory.workspace = true
-poem.workspace = true
 # GraphqlModule logs the boot-time SDL emit through the framework's tracing.
 tracing.workspace = true
 # A DataLoader batch is spawned onto the runtime, under what its request

@@ -1,8 +1,7 @@
 //! [`GetEndpoint`] — what `GET` on the GraphQL path answers.
 
-use nest_rs_http::__private::poem_bridge::{error_to_poem, request_from_poem, response_to_poem};
 use nest_rs_http::__private::websocket;
-use poem::{Endpoint, IntoResponse, Request, Response};
+use nest_rs_http::{Body, Bytes, Endpoint, HeaderValue, HttpError, Request, Response, StatusCode};
 
 use crate::subscription::SubscriptionEndpoint;
 
@@ -11,33 +10,28 @@ use crate::subscription::SubscriptionEndpoint;
 pub(crate) struct GetEndpoint<E> {
     subscriptions: SubscriptionEndpoint<E>,
     /// Rendered once at mount; `None` when the playground is off (the default).
-    playground: Option<String>,
+    playground: Option<Bytes>,
 }
 
 impl<E> GetEndpoint<E> {
     pub(crate) fn new(subscriptions: SubscriptionEndpoint<E>, playground: Option<String>) -> Self {
         Self {
             subscriptions,
-            playground,
+            playground: playground.map(Bytes::from),
         }
     }
 }
 
 impl<E: async_graphql::Executor> Endpoint for GetEndpoint<E> {
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> poem::Result<Response> {
+    async fn call(&self, req: Request) -> nest_rs_http::Result<Response> {
         if websocket::requested(req.headers()) {
-            return nest_rs_http::Endpoint::call(&self.subscriptions, request_from_poem(req))
-                .await
-                .map(response_to_poem)
-                .map_err(error_to_poem);
+            return self.subscriptions.call(req).await;
         }
         match &self.playground {
-            Some(html) => Ok(poem::web::Html(html.clone()).into_response()),
-            None => Err(poem::Error::from_status(
-                poem::http::StatusCode::METHOD_NOT_ALLOWED,
-            )),
+            Some(html) => Ok(Response::builder()
+                .content_type(HeaderValue::from_static("text/html; charset=utf-8"))
+                .body(Body::from_bytes(html.clone()))),
+            None => Err(HttpError::from_status(StatusCode::METHOD_NOT_ALLOWED)),
         }
     }
 }

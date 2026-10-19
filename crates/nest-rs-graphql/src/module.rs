@@ -175,8 +175,8 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             // request to the operations' own gates while a presented bearer is
             // still verified.
             routes
-                .route_poem(Method::POST, options.path.as_str(), post)
-                .route_poem(Method::GET, options.path.as_str(), get);
+                .route(Method::POST, options.path.as_str(), post)
+                .route(Method::GET, options.path.as_str(), get);
         })
         .carries::<GraphqlView>()
         .runs_detached(carried),

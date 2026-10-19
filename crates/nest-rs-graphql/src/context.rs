@@ -7,20 +7,22 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_graphql::{BatchRequest, Data, Executor, Request as GqlRequest};
-use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
+use async_graphql::http::{MultipartOptions, receive_batch_body};
+use async_graphql::{
+    BatchRequest, BatchResponse, Data, Executor, ParseRequestError, Request as GqlRequest,
+};
+use futures_util::TryStreamExt;
 use nest_rs_core::__private::serde::Serialize;
 use nest_rs_core::__private::serde::de::DeserializeOwned;
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{Container, Discovery, Handler, Posture, ReachableProviders, UnitContext};
 use nest_rs_guards::__private::global_guards_active;
-use nest_rs_http::__private::poem_bridge::{
-    request_from_poem, response_from_poem, response_to_poem,
-};
 use nest_rs_http::__private::{EndpointGuardsMeta, with_view};
-use nest_rs_http::{HeaderValue, Request, RequestDeadline, Response, StatusCode};
+use nest_rs_http::{
+    Body, BodyError, Endpoint, HeaderValue, HttpError, Request, RequestDeadline, Response,
+    ResponseError, StatusCode, current_body_limit, header,
+};
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
-use poem::{Endpoint, Error, FromRequest, IntoResponse, RequestBody, Result};
 
 use crate::module::GraphqlModule;
 use crate::operation_units::OperationUnits;
@@ -105,10 +107,10 @@ pub(crate) struct OperationBridge {
     connection_seeds: Arc<[ContextSeed]>,
 }
 
-/// The `/graphql` endpoint: `async_graphql_poem::GraphQL`'s GET / POST / batch
-/// handling with every seed folded over the request first, each operation run
-/// as its own unit. The `multipart/mixed` incremental-delivery path (`@defer` /
-/// `@stream`) is not reproduced.
+/// `POST` on the GraphQL path: a JSON request or batch, or a GraphQL multipart
+/// request, with every seed folded over each operation first, each operation
+/// run as its own unit. The `multipart/mixed` incremental-delivery answer
+/// (`@defer` / `@stream`) is not offered.
 pub(crate) struct ContextEndpoint<E> {
     units: OperationUnits<E>,
     bridge: Arc<OperationBridge>,
@@ -287,7 +289,7 @@ pub(crate) fn fold_variables<T: Serialize + DeserializeOwned>(
     clippy::map_err_ignore,
     reason = "the refusal describes the body; the read and decode errors would quote it"
 )]
-async fn read_batch(req: &Request, body: &mut RequestBody) -> Result<BatchRequest, Response> {
+async fn read_batch(req: &Request, body: Body) -> Result<BatchRequest, Response> {
     let multipart = req.content_type().filter(|value| {
         value
             .trim_start()
@@ -295,30 +297,17 @@ async fn read_batch(req: &Request, body: &mut RequestBody) -> Result<BatchReques
             .is_some_and(|kind| kind.eq_ignore_ascii_case("multipart/"))
     });
     if let Some(content_type) = multipart {
-        // The adapter's extractor reads the method, the query and the content type alone.
-        let head = poem::Request::builder()
-            .method(req.method().clone())
-            .uri(req.uri().clone())
-            .content_type(content_type)
-            .finish();
-        return GraphQLBatchRequest::from_request(&head, body)
+        // A file is never larger than the body the transport's cap admits.
+        let options = MultipartOptions::default().max_file_size(current_body_limit());
+        let stream = std::pin::pin!(body.into_stream());
+        return receive_batch_body(Some(content_type), stream.into_async_read(), options)
             .await
-            .map(|batch| batch.0)
-            .map_err(|refusal| {
-                let reason = match refusal.downcast_ref::<async_graphql::ParseRequestError>() {
-                    Some(parse) => multipart_refusal(parse),
-                    None => UNREADABLE.to_owned(),
-                };
-                refused(&reason, refusal.status())
-            });
+            .map_err(|refusal| multipart_refused(&refusal));
     }
-    let bytes = match body.take() {
-        Ok(taken) => taken
-            .into_vec()
-            .await
-            .map_err(|_| refused(UNREADABLE, StatusCode::BAD_REQUEST))?,
-        Err(_) => return Err(refused(UNREADABLE, StatusCode::BAD_REQUEST)),
-    };
+    let bytes = body
+        .into_bytes()
+        .await
+        .map_err(|_| refused(UNREADABLE, StatusCode::BAD_REQUEST))?;
     serde_json::from_slice::<BatchRequest>(&bytes)
         .map_err(|_| refused(&what_it_is_not(&bytes), StatusCode::BAD_REQUEST))
 }
@@ -326,11 +315,23 @@ async fn read_batch(req: &Request, body: &mut RequestBody) -> Result<BatchReques
 /// What a body that failed to read is said as; the body cap answers `413` itself.
 const UNREADABLE: &str = "the request body could not be read";
 
+/// The answer to a multipart body that is not a GraphQL request: a file past
+/// the cap as the cap answers, any other refusal said by [`multipart_refusal`].
+fn multipart_refused(refusal: &ParseRequestError) -> Response {
+    match refusal {
+        ParseRequestError::PayloadTooLarge => BodyError::TooLarge {
+            limit: current_body_limit(),
+        }
+        .as_response(),
+        refusal => refused(&multipart_refusal(refusal), StatusCode::BAD_REQUEST),
+    }
+}
+
 /// Why a multipart body is not a GraphQL request, read by variant: the
 /// `operations` and `map` parts' decoders wrap serde's sentence, which quotes
 /// the part; every other variant's own sentence is fixed.
-fn multipart_refusal(parse: &async_graphql::ParseRequestError) -> String {
-    use async_graphql::ParseRequestError as Refused;
+fn multipart_refusal(parse: &ParseRequestError) -> String {
+    use ParseRequestError as Refused;
 
     fn part(name: &str, source: &(dyn std::error::Error + Send + Sync + 'static)) -> String {
         match source.downcast_ref::<serde_json::Error>() {
@@ -406,19 +407,10 @@ fn variable_pipe_error_response(err: &PipeError) -> Box<Response> {
 }
 
 impl<E: Executor> Endpoint for ContextEndpoint<E> {
-    type Output = poem::Response;
-
-    async fn call(&self, req: poem::Request) -> Result<poem::Response> {
-        let (req, body) = req.split();
-        let mut req = request_from_poem(req);
-        self.answer(&mut req, body).await.map(response_to_poem)
-    }
-}
-
-impl<E: Executor> ContextEndpoint<E> {
     /// Read, pipe, seed and execute the request its guards admitted.
-    async fn answer(&self, req: &mut Request, mut body: RequestBody) -> Result<Response> {
-        let batch = match read_batch(req, &mut body).await {
+    async fn call(&self, mut req: Request) -> nest_rs_http::Result<Response> {
+        let body = req.take_body();
+        let batch = match read_batch(&req, body).await {
             Ok(batch) => batch,
             Err(refusal) => return Ok(refusal),
         };
@@ -426,26 +418,47 @@ impl<E: Executor> ContextEndpoint<E> {
         if let BatchRequest::Batch(rs) = &batch
             && rs.len() > self.max_batch_size
         {
-            return Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
+            return Err(HttpError::from_status(StatusCode::PAYLOAD_TOO_LARGE));
         }
-        let batch = match self.pipe_variables(req, batch) {
+        let batch = match self.pipe_variables(&mut req, batch) {
             Ok(batch) => batch,
             Err(resp) => return Ok(*resp),
         };
         let batch = match batch {
-            BatchRequest::Single(r) => BatchRequest::Single(self.bridge.seed(req, r)),
+            BatchRequest::Single(r) => BatchRequest::Single(self.bridge.seed(&req, r)),
             BatchRequest::Batch(rs) => {
-                BatchRequest::Batch(rs.into_iter().map(|r| self.bridge.seed(req, r)).collect())
+                BatchRequest::Batch(rs.into_iter().map(|r| self.bridge.seed(&req, r)).collect())
             }
         };
         let executed = self
             .units
             .execute_batch_within(batch, req.extensions().get::<RequestDeadline>())
             .await;
-        Ok(response_from_poem(
-            GraphQLBatchResponse(executed).into_response(),
-        ))
+        batch_response(&executed)
     }
+}
+
+/// `executed` as GraphQL over HTTP's JSON answer: `200` whatever `errors`
+/// holds, the schema's `cache-control` hint when every operation succeeded,
+/// then each header a resolver set, added beside the answer's own rather than
+/// replacing them.
+fn batch_response(executed: &BatchResponse) -> nest_rs_http::Result<Response> {
+    let body = serde_json::to_vec(executed)
+        .map_err(|err| HttpError::new(err, StatusCode::INTERNAL_SERVER_ERROR))?;
+    let mut response = Response::builder()
+        .content_type(HeaderValue::from_static("application/json; charset=utf-8"))
+        .body(body);
+    let headers = response.headers_mut();
+    if executed.is_ok()
+        && let Some(hint) = executed.cache_control().value()
+        && let Ok(hint) = HeaderValue::try_from(hint)
+    {
+        headers.insert(header::CACHE_CONTROL, hint);
+    }
+    for (name, value) in &executed.http_headers() {
+        headers.append(name, value.clone());
+    }
+    Ok(response)
 }
 
 /// Forward a value the request's guards attached — the authentication guard's
@@ -580,5 +593,18 @@ mod tests {
         assert!(!message.contains("sk_live"), "never the value: {message}");
         let error = variable_pipe_error(&refusal);
         assert_eq!(error["message"], message, "{error}");
+    }
+
+    /// A file past the cap is answered as the cap answers a body past it; the
+    /// transport's own read usually stops first, the body holding the file.
+    #[test]
+    fn a_file_past_the_cap_is_413_as_the_cap_answers() {
+        let refused = multipart_refused(&ParseRequestError::PayloadTooLarge);
+
+        assert_eq!(refused.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            refused.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/problem+json")),
+        );
     }
 }

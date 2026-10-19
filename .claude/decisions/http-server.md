@@ -216,3 +216,19 @@ which no app writes and the next adapter would have to keep; and a gateway
 registered for every method, which answered another method behind the
 guards, with an `Allow` beside the table's.
 
+## 2026-10-19 — GraphQL over HTTP without async-graphql-poem
+
+`/graphql`'s `POST` and `GET` endpoints implement the transport's `Endpoint`
+and register on the route table with `HttpRoutes::route`; async-graphql-poem
+leaves the workspace, and with it the last request for poem's `websocket`
+feature, so tokio-tungstenite 0.27 leaves both lockfiles. The answer is written
+as async-graphql-poem wrote it for 6.x, pinned by a header-set test: JSON as
+`application/json; charset=utf-8`, `200` whatever `errors` holds, the schema's
+cache hint as `Cache-Control` when every operation succeeded, then each header
+a resolver set, copied from the `HeaderMap` async-graphql holds rather than
+through the string round trip the adapter made. A multipart request is read by
+async-graphql's own `receive_batch_body` over the body's stream, a file held to
+the transport's body cap. What the endpoint refuses — a batch past
+`max_batch_size`, a `GET` it cannot serve — reaches the self-mount's site as an
+`HttpError`, where the app's exception filters read it, instead of being
+rendered inside a poem leaf first.

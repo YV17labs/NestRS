@@ -757,18 +757,8 @@ async fn an_initialize_past_the_session_cap_is_refused_until_a_session_closes() 
         &nest_rs_testing::mcp::initialize_request(),
     )
     .await;
-    refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    refused.assert_header(nest_rs_http::header::RETRY_AFTER, "5");
-    refused.assert_content_type("application/problem+json");
-    let problem: serde_json::Value = refused.json().await.value().deserialize();
-    assert_eq!(problem["status"], 503, "{problem}");
-    assert_eq!(problem["code"], "UNAVAILABLE", "{problem}");
-    let event = logs.expect_one(
-        "nest_rs::mcp",
-        "mcp session refused: the mount holds its maximum",
-    );
-    assert_eq!(event.level, "warn");
-    assert_eq!(event.field("max_concurrent_sessions").as_deref(), Some("2"));
+    assert_refused_at_the_cap(refused).await;
+    expect_the_cap_said(&logs, "2");
 
     let answered = nest_rs_testing::mcp::call_method(
         app.http(),
@@ -794,6 +784,144 @@ async fn an_initialize_past_the_session_cap_is_refused_until_a_session_closes() 
         .await
         .assert_status(StatusCode::ACCEPTED);
     nest_rs_testing::mcp::open_session(app.http(), LISTENING, None).await;
+}
+
+/// The cap's refusal: `503`, a wait to take, and the `UNAVAILABLE` problem.
+async fn assert_refused_at_the_cap(refused: nest_rs_testing::TestResponse) {
+    refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    refused.assert_header(nest_rs_http::header::RETRY_AFTER, "5");
+    refused.assert_content_type("application/problem+json");
+    let problem: serde_json::Value = refused.json().await.value().deserialize();
+    assert_eq!(problem["status"], 503, "{problem}");
+    assert_eq!(problem["code"], "UNAVAILABLE", "{problem}");
+}
+
+/// The cap's one line, naming the maximum `max` it holds.
+fn expect_the_cap_said(logs: &nest_rs_testing::LogCapture, max: &str) {
+    let event = logs.expect_one(
+        "nest_rs::mcp",
+        "mcp session refused: the mount holds its maximum",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("max_concurrent_sessions").as_deref(), Some(max));
+}
+
+fn one_session() -> nest_rs_mcp::McpConfig {
+    nest_rs_mcp::McpConfig {
+        max_concurrent_sessions: 1,
+        ..nest_rs_mcp::McpConfig::default()
+    }
+}
+
+/// The app's session store, holding every session a client names, as one
+/// another instance stored.
+struct StoredElsewhere;
+
+#[async_trait::async_trait]
+impl SessionStore for StoredElsewhere {
+    async fn load(&self, _: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        let state = serde_json::json!({
+            "initialize_params": {
+                "protocolVersion": nest_rs_testing::mcp::PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "elsewhere", "version": "0" },
+            },
+        });
+        Ok(Some(serde_json::from_value(state)?))
+    }
+
+    async fn store(&self, _: &str, _: &SessionState) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+
+    async fn delete(&self, _: &str) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+}
+
+/// A session restored from the app's store takes a place like one opened
+/// here: past the cap, the session manager refuses it, and the client reads
+/// the cap's refusal rather than rmcp's `500`.
+#[tokio::test]
+async fn a_session_restored_past_the_cap_is_refused_as_the_cap_refuses() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::builder()
+        .provide(one_session())
+        .provide_dyn::<dyn SessionStore>(std::sync::Arc::new(StoredElsewhere))
+        .module::<ListeningModule>()
+        .build()
+        .await
+        .expect("boots");
+    nest_rs_testing::mcp::open_session(app.http(), LISTENING, None).await;
+
+    let refused = nest_rs_testing::mcp::post_message(
+        app.http(),
+        LISTENING,
+        Some("stored-elsewhere"),
+        None,
+        &serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await;
+
+    assert_refused_at_the_cap(refused).await;
+    expect_the_cap_said(&logs, "1");
+}
+
+/// An `initialize` whose body rmcp can read only once `released` fires; it
+/// says on `reading` when rmcp starts to, past every check in front of it.
+fn held_initialize(
+    reading: tokio::sync::oneshot::Sender<()>,
+    released: tokio::sync::oneshot::Receiver<()>,
+) -> nest_rs_http::Body {
+    let initialize = serde_json::to_vec(&nest_rs_testing::mcp::initialize_request())
+        .expect("an initialize serializes");
+    nest_rs_http::Body::from_stream(futures_util::stream::once(async move {
+        let _ = reading.send(());
+        let _ = released.await;
+        Ok::<_, std::io::Error>(nest_rs_http::Bytes::from(initialize))
+    }))
+}
+
+/// Two `initialize`s racing for the last place both pass the check in front
+/// of rmcp, which reads no body while a place is free; the session manager
+/// refuses the second, which the client reads as the check's refusal.
+#[tokio::test]
+async fn the_loser_of_a_race_for_the_last_place_is_refused_as_the_cap_refuses() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = listening_on(one_session()).await;
+    let initialize = |body: nest_rs_http::Body| {
+        app.http()
+            .post(LISTENING)
+            .header("host", "localhost")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(body)
+            .send()
+    };
+    let (first_reading, first_read) = tokio::sync::oneshot::channel();
+    let (first_release, first_released) = tokio::sync::oneshot::channel();
+    let (second_reading, second_read) = tokio::sync::oneshot::channel();
+    let (second_release, second_released) = tokio::sync::oneshot::channel();
+
+    let (first, second, ()) = tokio::join!(
+        initialize(held_initialize(first_reading, first_released)),
+        initialize(held_initialize(second_reading, second_released)),
+        async {
+            first_read.await.expect("rmcp reads the first body");
+            second_read.await.expect("rmcp reads the second body");
+            let _ = first_release.send(());
+            let _ = second_release.send(());
+        },
+    );
+
+    let (served, refused) = if first.0.status() == StatusCode::OK {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    served.assert_status_is_ok();
+    assert_refused_at_the_cap(refused).await;
+    expect_the_cap_said(&logs, "1");
 }
 
 /// The cap counts sessions, so what opens none is served at it: a

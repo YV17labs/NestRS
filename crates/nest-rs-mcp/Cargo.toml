@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Model Context Protocol server support for NestRS — wraps the rmcp SDK behind the NestRS DI container and exposes a poem endpoint."
+description = "Model Context Protocol server support for NestRS — wraps the rmcp SDK behind the NestRS DI container and mounts it on the HTTP transport."
 keywords = ["framework", "nestrs", "mcp", "rmcp", "ai"]
 categories = ["web-programming", "api-bindings"]
 
@@ -33,7 +33,8 @@ futures-util.workspace = true
 # rmcp's `SessionStore` is an `async_trait`, which the store reporting an app's
 # failures implements.
 async-trait.workspace = true
-poem.workspace = true
+# The `Host` a request names, read as rmcp's DNS-rebinding check reads it.
+http.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
 # `Parameters<P>` is the framework's own, so an operation's arguments are decoded

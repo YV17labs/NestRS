@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nest_rs_core::module;
-use nest_rs_http::__private::poem_bridge::from_poem;
 
 use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::model::{
@@ -37,7 +36,6 @@ use nest_rs_mcp::{McpError, PropagatingHandler, ServerHandler, mcp, tools};
 use nest_rs_testing::TestClient;
 use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with, result};
 use nest_rs_testing::{LogCapture, TestApp};
-use poem::IntoEndpoint as _;
 use tokio::sync::Notify;
 
 type Seen = Arc<Mutex<BTreeSet<&'static str>>>;
@@ -363,9 +361,7 @@ async fn await_seen(seen: &Seen, expected: &[&str]) {
 async fn every_server_handler_method_reaches_the_wrapped_host() {
     let seen: Seen = Arc::default();
     let host = ProbeHandler { seen: seen.clone() };
-    let client = TestClient::new(from_poem(
-        endpoint(McpMount::new(), move || host.clone()).into_endpoint(),
-    ));
+    let client = TestClient::new(endpoint(McpMount::new(), move || host.clone()));
 
     // A legacy session: the capabilities reachable through `initialize`.
     let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
@@ -466,9 +462,7 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
     let host = ProbeHandler {
         seen: Arc::default(),
     };
-    let client = TestClient::new(from_poem(
-        endpoint(McpMount::new(), move || host.clone()).into_endpoint(),
-    ));
+    let client = TestClient::new(endpoint(McpMount::new(), move || host.clone()));
     let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
 
     let requests: &[(&str, serde_json::Value)] = &[

@@ -1095,8 +1095,7 @@ async fn the_same_identity_declared_twice_fails_the_boot_naming_both_imports() {
     );
 }
 
-/// `/mcp/` and `/mcp` are one endpoint; poem's `Route::nest` panics on the
-/// duplicate mount rather than reporting it.
+/// `/mcp/` and `/mcp` are one endpoint, mounted once.
 #[mcp(path = "/mcp/")]
 #[derive(Clone)]
 struct TrailingSlashTool;

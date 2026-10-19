@@ -167,7 +167,7 @@ pub struct McpConfig {
     /// of a one-tool host, debug and release builds alike), so the default
     /// holds about 110 MiB at most. Two `initialize`s racing for the last place
     /// both pass the check that answers `503`; the second is then refused by
-    /// the session manager, which rmcp answers `500`.
+    /// the session manager, and answered the same `503`.
     pub max_concurrent_sessions: usize,
     /// How long a session may go without a message before it is closed, its
     /// place under [`max_concurrent_sessions`](Self::max_concurrent_sessions)

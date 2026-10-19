@@ -2,6 +2,8 @@
 //! [`ReportedStore`], the app's session store. Each says the failures it hands
 //! rmcp, whose own lines are clamped.
 
+use std::cell::Cell;
+use std::future::Future;
 use std::sync::Arc;
 
 use futures_util::Stream;
@@ -19,6 +21,13 @@ use rmcp::transport::streamable_http_server::session::{
 use tokio::sync::Mutex;
 
 use crate::error::SessionsError;
+
+tokio::task_local! {
+    /// Set when a manager refuses a session at the cap while
+    /// [`BoundedSessions::watching`] runs a request's answer: rmcp turns the
+    /// refusal into a `500`, which the endpoint answers as the cap's `503`.
+    static REFUSED_AT_CAP: Cell<bool>;
+}
 
 /// rmcp's local session manager, refusing a session past `max` with
 /// [`SessionsError::Full`].
@@ -49,8 +58,8 @@ impl BoundedSessions {
         self.inner.sessions.read().await.len() >= self.max
     }
 
-    /// Say a session refused at the cap: by the check that answers `503`, or
-    /// by this manager past it, which rmcp answers `500`.
+    /// Say a session refused at the cap: by the check in front of rmcp, or by
+    /// this manager past it; the client reads one `503` either way.
     pub(crate) fn say_full(&self) {
         tracing::warn!(
             target: crate::TARGET,
@@ -59,10 +68,26 @@ impl BoundedSessions {
         );
     }
 
-    /// `SessionsError::Full`, said.
+    /// `SessionsError::Full`, said, and marked on the request being answered.
     fn full(&self) -> SessionsError {
         self.say_full();
+        // Outside `watching`, no answer reads the mark.
+        REFUSED_AT_CAP
+            .try_with(|refused| refused.set(true))
+            .unwrap_or_default();
         SessionsError::Full
+    }
+
+    /// `answering`, the answer to one request, and whether a manager refused
+    /// a session at the cap while it ran: rmcp creates and restores the
+    /// request's session on the task answering it.
+    pub(crate) async fn watching<F: Future>(answering: F) -> (F::Output, bool) {
+        REFUSED_AT_CAP
+            .scope(Cell::new(false), async {
+                let answer = answering.await;
+                (answer, REFUSED_AT_CAP.with(Cell::get))
+            })
+            .await
     }
 }
 
@@ -403,6 +428,35 @@ mod tests {
         assert!(
             matches!(sessions.create_session().await, Err(SessionsError::Full)),
             "the manager refuses past the cap even when no pre-check ran",
+        );
+    }
+
+    /// Two creations racing for the last place on two threads: the count and
+    /// the insert are one step, so exactly one is let in.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn two_creations_racing_for_the_last_place_let_exactly_one_in() {
+        let sessions = Arc::new(one_place());
+        let start = Arc::new(tokio::sync::Barrier::new(2));
+        let racer = || {
+            let sessions = Arc::clone(&sessions);
+            let start = Arc::clone(&start);
+            tokio::spawn(async move {
+                start.wait().await;
+                sessions.create_session().await.map(|_| ())
+            })
+        };
+        let (first, second) = tokio::join!(racer(), racer());
+
+        let outcomes = [
+            first.expect("the first racer ran"),
+            second.expect("the second racer ran"),
+        ];
+        assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+        assert!(
+            outcomes
+                .iter()
+                .any(|outcome| matches!(outcome, Err(SessionsError::Full))),
+            "the other is refused at the cap",
         );
     }
 

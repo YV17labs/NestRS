@@ -4,14 +4,13 @@
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{Container, RequestScope};
-use nest_rs_http::__private::poem_bridge::from_poem;
+use nest_rs_http::{BoxEndpoint, Endpoint, endpoint_fn};
 use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, McpError, Scoped, ServerHandler, tool, tool_handler, tool_router,
 };
 use nest_rs_testing::TestClient;
 use nest_rs_testing::mcp::call_tool;
-use poem::{Endpoint, EndpointExt, IntoEndpoint};
 use tracing::Instrument;
 
 struct Probe;
@@ -36,14 +35,13 @@ impl ScopeProbeTool {
 impl ServerHandler for ScopeProbeTool {}
 
 /// Mirrors the HTTP transport edge, which installs the request scope.
-fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
+fn with_scope_extension(inner: BoxEndpoint) -> impl Endpoint {
     let container = Container::builder()
         .provide_scoped::<Probe, _>(|_| Probe)
         .build()
         .expect("the container builds");
-    let inner = Arc::new(inner.into_endpoint().map_to_response());
-    poem::endpoint::make(move |req| {
-        let inner = Arc::clone(&inner);
+    endpoint_fn(move |req| {
+        let inner = inner.clone();
         let scope = Arc::new(RequestScope::new(container.clone()));
         let correlation = nest_rs_core::Correlation::minted(None);
         async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
@@ -53,7 +51,7 @@ fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
 #[tokio::test]
 async fn ambient_request_scope_reaches_a_tool_body() {
     let app = with_scope_extension(endpoint(McpMount::new(), || ScopeProbeTool));
-    let client = TestClient::new(from_poem(app));
+    let client = TestClient::new(app);
 
     let body = call_tool(&client, "/", "probe_scope", None).await;
 
@@ -90,10 +88,9 @@ impl SpanProbeTool {
 impl ServerHandler for SpanProbeTool {}
 
 /// Mirrors the OTel interceptor's `http.request` span around the whole request.
-fn under_span(inner: impl IntoEndpoint, span: tracing::Span) -> impl Endpoint {
-    let inner = Arc::new(inner.into_endpoint().map_to_response());
-    poem::endpoint::make(move |req| {
-        let inner = Arc::clone(&inner);
+fn under_span(inner: BoxEndpoint, span: tracing::Span) -> impl Endpoint {
+    endpoint_fn(move |req| {
+        let inner = inner.clone();
         let span = span.clone();
         async move { inner.call(req).instrument(span).await }
     })
@@ -111,7 +108,7 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         tracing::info_span!("http.request"),
     );
 
-    call_tool(&TestClient::new(from_poem(app)), "/", "probe_span", None).await;
+    call_tool(&TestClient::new(app), "/", "probe_span", None).await;
 
     let (span_name, trace_id) = seen
         .lock()

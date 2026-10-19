@@ -1,7 +1,7 @@
 //! The wrapper that carries ambient request state across rmcp's spawn.
 //!
 //! rmcp dispatches every operation on its own task, where a task-local installed
-//! around the poem endpoint is gone; [`PropagatingHandler`] re-installs it inside
+//! around the HTTP endpoint is gone; [`PropagatingHandler`] re-installs it inside
 //! the dispatch. A method it does not delegate silently reverts to rmcp's default,
 //! so the impl carries `#[deny(clippy::missing_trait_methods)]`.
 //!

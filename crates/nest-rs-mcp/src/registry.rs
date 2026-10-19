@@ -7,12 +7,10 @@
 //! tool context, [`McpConfig`](crate::McpConfig) and the session store resolve
 //! once per path, when its [`McpMount`] is built from the container.
 
-use std::any::TypeId;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{Container, ContainerBuilder, Discovery, Handler, Posture};
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
 use nest_rs_http::{
@@ -39,15 +37,7 @@ pub const DEFAULT_PATH: &str = "/mcp";
 /// guard refuses an anonymous call. `#[mcp]` declares one per host, the first
 /// host on a path the one its requests run as.
 pub const fn declare_endpoint(path: &'static str) -> Handler {
-    declare_handler(HandlerDeclaration {
-        unit: nest_rs_http::unit::REQUEST,
-        host: TypeId::of::<McpModule>(),
-        host_name: "McpModule",
-        method: "",
-        address: mount_address(path),
-        posture: Posture::Gated,
-        meta: MetaLevels::default,
-    })
+    nest_rs_http::declare_endpoint::<McpModule>("McpModule", mount_address(path), Posture::Gated)
 }
 
 /// The address an endpoint declared at `path` is mounted at: the default for
@@ -375,7 +365,7 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
         .declaring(index.clone());
     let shared_path: Arc<str> = Arc::from(path);
     let container = container.clone();
-    routes.route_any_poem(
+    routes.route_any(
         path,
         endpoint(mount, move || {
             CompositeHandler::build(

@@ -2904,6 +2904,7 @@ version = "7.0.0"
 dependencies = [
  "async-trait",
  "futures-util",
+ "http",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-database",
@@ -2911,7 +2912,6 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-mcp-macros",
  "nest-rs-pipes",
- "poem",
  "rmcp",
  "schemars",
  "serde",

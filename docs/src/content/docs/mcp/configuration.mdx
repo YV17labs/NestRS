@@ -96,14 +96,18 @@ next request is answered `404`, and its client opens a new one. A
 `2026-07-28` request is served statelessly and opens no session, so the cap
 never refuses it; with `<PREFIX>_MCP__LEGACY_SESSION_MODE=false`, no session
 opens at all. A session restored from a `SessionStore` takes a place like
-one opened here.
+one opened here, and past the cap it is refused the same way. A request that
+names the same session while another request restores it waits for that
+restore, and when the cap refuses it, rmcp answers the waiting request `404`
+rather than the cap's `503`: its client opens a new session, which the cap
+then refuses `503`.
 
 An idle session costs about 110 KiB, so the default cap holds about 110 MiB
-at most. Two `initialize`s racing for the last place are both admitted by the
-check that answers `503`; the session manager then refuses the second, which
-rmcp answers `500`, said by the same `warn` on `nest_rs::mcp` as the check's
-refusal. The wait for the `initialize` itself is 60 seconds, set
-in code so an rmcp release cannot move it.
+at most. Two `initialize`s racing for the last place both pass the check in
+front of rmcp; the session manager then refuses the second, and its client
+reads the same `503` and the same `warn` on `nest_rs::mcp`. The wait for the
+`initialize` itself is 60 seconds, set in code so an rmcp release cannot
+move it.
 
 ## The host allowlist
 

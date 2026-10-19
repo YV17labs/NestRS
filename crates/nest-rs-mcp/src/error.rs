@@ -332,7 +332,8 @@ pub fn refused<R: OperationAnswer>(error: McpError) -> R {
 
 /// Why a mount's session manager refused: its cap, or rmcp's own manager.
 ///
-/// rmcp writes the `Display` into the `500` it answers a refused session with,
+/// rmcp writes the `Display` into the `500` it answers a refused session with
+/// — which the endpoint answers as the cap's `503` for [`Full`](Self::Full) —
 /// so neither variant names the session.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SessionsError {

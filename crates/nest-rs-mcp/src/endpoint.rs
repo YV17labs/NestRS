@@ -1,21 +1,17 @@
-//! The poem endpoint that serves an MCP handler over streamable HTTP.
+//! The endpoint that serves an MCP handler over streamable HTTP.
 
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use http::uri::Authority;
 use nest_rs_core::problem::code;
 use nest_rs_core::{Container, Correlation, Problem, current_request_scope};
-use nest_rs_http::__private::poem_bridge::{
-    request_from_poem, request_to_poem, response_from_poem, response_to_poem,
-};
 use nest_rs_http::__private::{attached_pending, framework_sentence};
 use nest_rs_http::ResponseError as _;
 use nest_rs_http::{
-    Body, DetachedWork, HeaderValue, Method, Request, StatusCode, header, normalize_error_response,
+    Body, BoxEndpoint, DetachedWork, Endpoint, HeaderValue, Method, Request, Response, Result,
+    StatusCode, header, normalize_error_response,
 };
-use poem::endpoint::TowerCompatExt;
-use poem::http::uri::Authority;
-use poem::{Endpoint, IntoEndpoint, Response, Result};
 use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestMethod, ClientJsonRpcMessage, ClientRequest, ConstString, ErrorCode,
@@ -145,11 +141,11 @@ impl Default for McpMount {
     }
 }
 
-/// Mount `factory`'s handler as a poem endpoint, wrapped per `mount`; the
+/// Mount `factory`'s handler as an endpoint, wrapped per `mount`; the
 /// transport runs the request's origin check and guards in front of it.
 ///
 /// `factory` runs on every new MCP session, so per-session state stays fresh.
-pub fn endpoint<F, H>(mount: McpMount, factory: F) -> impl IntoEndpoint
+pub fn endpoint<F, H>(mount: McpMount, factory: F) -> BoxEndpoint
 where
     F: Fn() -> H + Send + Sync + 'static,
     H: ServerHandler + Send + 'static,
@@ -198,8 +194,7 @@ where
         sessions.clone(),
         server_config,
     );
-    let inner = service.compat();
-    SessionEndpoint {
+    BoxEndpoint::new(SessionEndpoint {
         context,
         session_cap: SessionCap {
             sessions,
@@ -207,18 +202,18 @@ where
             max_request_body_bytes: config.max_request_body_bytes,
         },
         undeclared,
-        inner,
-    }
+        service,
+    })
 }
 
 /// The streamable-HTTP service behind the session cap, each request carrying
 /// what its operations re-install on rmcp's own tasks.
-struct SessionEndpoint<E> {
+struct SessionEndpoint<H: ServerHandler> {
     context: Option<Arc<dyn McpToolContext>>,
     session_cap: SessionCap,
     /// `None` on a hand-built [`endpoint`], whose mount read no declarations.
     undeclared: Option<UndeclaredTools>,
-    inner: E,
+    service: StreamableHttpService<PropagatingHandler<H>, BoundedSessions>,
 }
 
 /// What refuses an `initialize` before rmcp opens a session past the cap.
@@ -236,9 +231,10 @@ impl SessionCap {
     ///
     /// Only a full mount reads the body, and only of a `POST` naming no session:
     /// an `initialize` is the one message that opens a session, and a stateless
-    /// request is served at the cap. A creation racing past this check is
-    /// refused by [`BoundedSessions`] itself, which rmcp answers `500`.
-    async fn refusal(&self, req: &mut Request) -> Option<nest_rs_http::Response> {
+    /// request is served at the cap. A creation racing past this check, or a
+    /// session restored from the app's store past the cap, is refused by
+    /// [`BoundedSessions`] itself, and answered [`refused`](Self::refused) too.
+    async fn refusal(&self, req: &mut Request) -> Option<Response> {
         if !self.legacy
             || req.method() != Method::POST
             || req.headers().contains_key(HEADER_SESSION_ID)
@@ -259,11 +255,15 @@ impl SessionCap {
             return None;
         }
         self.sessions.say_full();
-        Some(
-            Problem::new(503, code::UNAVAILABLE)
-                .with_retry_after(SESSION_RETRY_AFTER_SECS)
-                .as_response(),
-        )
+        Some(Self::refused())
+    }
+
+    /// The answer to a session refused at the cap: `503`, and the wait the
+    /// client takes before it tries again.
+    fn refused() -> Response {
+        Problem::new(503, code::UNAVAILABLE)
+            .with_retry_after(SESSION_RETRY_AFTER_SECS)
+            .as_response()
     }
 }
 
@@ -290,11 +290,7 @@ impl UndeclaredTools {
     /// version rmcp would look its schema up at — the body read and handed
     /// back otherwise. A call answered on its id is the operation the
     /// handler would have answered, filed as a unit of `request`.
-    async fn refusal(
-        &self,
-        req: &mut Request,
-        request: &Correlation,
-    ) -> Option<nest_rs_http::Response> {
+    async fn refusal(&self, req: &mut Request, request: &Correlation) -> Option<Response> {
         if req.method() != Method::POST
             || !looks_up_schemas(req)
             || !host_admitted(req, &self.allowed_hosts)
@@ -450,7 +446,7 @@ fn looked_up(body: &[u8]) -> Option<(String, Option<RequestId>)> {
 /// rmcp's own answer to a call of a tool no host declares, on the call's id.
 /// A call with no id rmcp reads is input the server cannot accept: refused
 /// `400`, its error carrying no id, as the streamable-HTTP transport answers it.
-fn tool_not_found(id: Option<RequestId>) -> nest_rs_http::Response {
+fn tool_not_found(id: Option<RequestId>) -> Response {
     let status = if id.is_some() {
         StatusCode::OK
     } else {
@@ -458,7 +454,7 @@ fn tool_not_found(id: Option<RequestId>) -> nest_rs_http::Response {
     };
     let refusal = JsonRpcError::new(id, McpError::invalid_params(TOOL_NOT_FOUND, None));
     match serde_json::to_vec(&refusal) {
-        Ok(body) => nest_rs_http::Response::builder()
+        Ok(body) => Response::builder()
             .status(status)
             .content_type(HeaderValue::from_static("application/json"))
             .body(body),
@@ -493,7 +489,7 @@ async fn said_by_kind(response: Response) -> Response {
     if response.status().is_success() {
         return response;
     }
-    let (mut head, body) = response_from_poem(response).into_parts();
+    let (mut head, body) = response.into_parts();
     let refusal = body.into_bytes().await.unwrap_or_else(|error| {
         tracing::warn!(
             target: crate::TARGET,
@@ -503,19 +499,18 @@ async fn said_by_kind(response: Response) -> Response {
         Default::default()
     });
     head.headers.remove(header::CONTENT_LENGTH);
-    let said = match jsonrpc_said_by_kind(&refusal, head.status) {
-        Some(answer) => nest_rs_http::Response::from_parts(head, Body::from(answer)),
+    match jsonrpc_said_by_kind(&refusal, head.status) {
+        Some(answer) => Response::from_parts(head, Body::from(answer)),
         None => {
             head.headers.remove(header::CONTENT_TYPE);
             let detail = std::str::from_utf8(&refusal)
                 .ok()
                 .and_then(transport_sentence)
                 .map_or_else(Body::empty, |sentence| Body::from(sentence.to_owned()));
-            let refusal = nest_rs_http::Response::from_parts(head, detail);
+            let refusal = Response::from_parts(head, detail);
             normalize_error_response(framework_sentence(refusal)).await
         }
-    };
-    response_to_poem(said)
+    }
 }
 
 /// `refusal` with its JSON-RPC error said by its code, when it is one: the
@@ -547,16 +542,13 @@ fn opens_a_session(body: &[u8]) -> bool {
     )
 }
 
-impl<E> Endpoint for SessionEndpoint<E>
+impl<H> Endpoint for SessionEndpoint<H>
 where
-    E: Endpoint<Output = Response>,
+    H: ServerHandler + Send + 'static,
 {
-    type Output = Response;
-
-    async fn call(&self, req: poem::Request) -> Result<Self::Output> {
-        let mut req = request_from_poem(req);
+    async fn call(&self, mut req: Request) -> Result<Response> {
         if let Some(refused) = self.session_cap.refusal(&mut req).await {
-            return Ok(response_to_poem(refused));
+            return Ok(refused);
         }
         // Read once: two reads would mint two ids for one operation.
         let correlation = nest_rs_core::__private::current_correlation()
@@ -564,7 +556,7 @@ where
         if let Some(undeclared) = &self.undeclared
             && let Some(refused) = undeclared.refusal(&mut req, &correlation).await
         {
-            return Ok(response_to_poem(refused));
+            return Ok(refused);
         }
 
         // Post-guard, while the ambient executor and ability are reachable; rmcp
@@ -587,15 +579,20 @@ where
         let standalone = req.method() == Method::GET;
 
         // Also installed here, for an operation rmcp resolves inline.
-        let response = nest_rs_core::with_request_scope(
-            scope,
-            correlation,
-            self.inner.call(request_to_poem(req)),
-        )
-        .await?;
+        let (response, refused_at_cap) =
+            BoundedSessions::watching(nest_rs_core::with_request_scope(
+                scope,
+                correlation,
+                self.service.handle(req.into_http()),
+            ))
+            .await;
+        if refused_at_cap {
+            return Ok(SessionCap::refused());
+        }
+        let response = Response::from(response);
         // rmcp answers `403` to a `Host` outside the allowlist alone, the
         // endpoint keeping its `Origin` check off.
-        if response.status() == poem::http::StatusCode::FORBIDDEN {
+        if response.status() == StatusCode::FORBIDDEN {
             host_refused();
         }
         let mut response = said_by_kind(response).await;

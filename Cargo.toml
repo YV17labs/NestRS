@@ -48,7 +48,7 @@ figment = "0.10"
 
 # Past the 12-month bar (3.1.12, 2025-07-28): 4.0 (poem-web/poem#1200) at its
 # release, or none by 2027-01-31 and `.claude/decisions/http-server.md` applies.
-poem = { version = "3.1", features = ["tower-compat", "anyhow", "compression", "multipart"] }
+poem = { version = "3.1", features = ["anyhow", "compression", "multipart"] }
 rustls = "0.23"  # public in nest-rs-testing alone
 rustls-native-certs = "0.8"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }

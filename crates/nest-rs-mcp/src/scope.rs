@@ -1,7 +1,7 @@
 //! Per-operation request-scope bridge for MCP tool methods — the MCP mirror of
 //! [`nest_rs_http::Scoped<T>`].
 //!
-//! A tool method receives no poem request, so the endpoint installs the
+//! A tool method receives no HTTP request, so the endpoint installs the
 //! per-operation `RequestScope` as a task-local and a tool reads it back with
 //! [`Scoped::<T>::from_context`].
 //!

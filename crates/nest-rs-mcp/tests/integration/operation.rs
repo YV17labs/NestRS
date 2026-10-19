@@ -497,26 +497,22 @@ impl OrphanTool {
 async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_says_why() {
     use std::sync::Arc;
 
-    use poem::{Endpoint, EndpointExt, IntoEndpoint};
+    use nest_rs_http::Endpoint as _;
 
     // Built by hand, so the access graph does not refuse first; the request
     // scope stands in for the edge that installs it.
     let container = nest_rs_core::Container::builder()
         .build()
         .expect("the container builds");
-    let inner = Arc::new(
-        nest_rs_mcp::__private::endpoint(nest_rs_mcp::__private::McpMount::new(), || OrphanTool)
-            .into_endpoint()
-            .map_to_response(),
-    );
-    let scoped = poem::endpoint::make(move |req| {
-        let inner = Arc::clone(&inner);
+    let inner =
+        nest_rs_mcp::__private::endpoint(nest_rs_mcp::__private::McpMount::new(), || OrphanTool);
+    let scoped = nest_rs_http::endpoint_fn(move |req| {
+        let inner = inner.clone();
         let scope = Arc::new(nest_rs_core::RequestScope::new(container.clone()));
         let correlation = nest_rs_core::Correlation::minted(None);
         async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
     });
-    let client =
-        nest_rs_testing::TestClient::new(nest_rs_http::__private::poem_bridge::from_poem(scoped));
+    let client = nest_rs_testing::TestClient::new(scoped);
     let logs = nest_rs_testing::LogCapture::install();
 
     let body = call_tool(&client, "/", "reveal", None).await;

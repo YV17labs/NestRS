@@ -211,7 +211,7 @@ struct McpStepUpServer;
 
 #[tokio::test]
 async fn an_mcp_scope_denial_carries_the_same_challenge() {
-    // `/mcp` runs the global pool in band, and its refusal is a poem `Err`.
+    // `/mcp` is a self-mount: the transport's request stage runs the global pool.
     let app = TestApp::builder()
         .module::<McpStepUpServer>()
         .use_guards_global([guard::<TokenTooNarrow>()])

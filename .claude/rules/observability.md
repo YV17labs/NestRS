@@ -106,8 +106,9 @@ and declaring a field nothing fills is the same defect with the opposite sign.
 - **The span reports the route template, never the path as addressed.**
   `http.route` is what a backend groups latency on, so an id in it is one group
   per id; the addressed path is `url.path`. The exported name is `otel.name`,
-  `{method} {route}` once the router has matched, and the method alone when
-  nothing matched — naming an unmatched span after its URL lets one scanner fill
+  `{method} {route}` once the router has matched — the router's fallback is
+  named for its mount's catch-all, `/{*path}` — and the method alone when
+  nothing matched: naming an unmatched span after its URL lets one scanner fill
   a tracing backend; a method outside the known set reads `HTTP` there.
 - **`otel.kind` values are constants in `operation_log::kind`**, and only the
   kinds this framework emits are declared; the edge that first needs another

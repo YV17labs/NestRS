@@ -19,12 +19,13 @@ use nest_rs_core::{Container, Handler, Posture};
 
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::Result;
+use crate::matched::MatchedRoute;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::route_template::{segment_parameter, unescape};
 use crate::site::SiteTail;
-use crate::transport::{SELF_MOUNT, normalize_mount_path};
+use crate::transport::{SELF_MOUNT, join_path, normalize_mount_path};
 use crate::versioning::{VersionRefused, route_matches};
 
 /// What the router answers itself — a path no route claims, a method an
@@ -170,6 +171,9 @@ impl Claims {
 /// The router's fallback, mounted.
 pub(crate) struct Fallback {
     path: String,
+    /// The catch-all under its path, which names a request it answers as a
+    /// route's template names one the router matched.
+    template: Arc<str>,
     claims: Claims,
     endpoint: BoxEndpoint,
 }
@@ -183,6 +187,7 @@ impl Fallback {
             .filter(|route| !prefixes.iter().any(|(prefix, _)| is_under(route, prefix)))
             .collect();
         Self {
+            template: Arc::from(join_path(&path, "/{*path}")),
             path,
             claims: Claims { prefixes, routes },
             endpoint,
@@ -210,6 +215,9 @@ impl<E: Endpoint> Endpoint for WithFallback<E> {
     async fn call(&self, req: Request) -> Result<Response> {
         match &self.fallback {
             Some(fallback) if fallback.answers(req.uri().path()) => {
+                if let Some(matched) = req.extensions().get::<MatchedRoute>() {
+                    matched.note(&fallback.template);
+                }
                 fallback.endpoint.call(req).await
             }
             _ => self.routes.call(req).await,

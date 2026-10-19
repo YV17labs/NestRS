@@ -8,7 +8,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use nest_rs_core::{Container, Handler};
+use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+use nest_rs_core::{Container, Handler, Posture};
 use nest_rs_guards::GuardSpec;
 
 use crate::detached::DetachedWork;
@@ -202,8 +203,9 @@ pub(crate) struct OriginGate {
 }
 
 impl HttpEndpointMeta {
-    /// Declare a self-mount at `path`, its posture the one `handler` declares;
-    /// `path` and `label` may be owned, read from config. The surface answers
+    /// Declare a self-mount at `path`, its posture the one `handler` declares
+    /// ([`declare_endpoint`] builds it); `path` and `label` may be owned, read
+    /// from config. The surface answers
     /// under `path` whole, so it is one literal address: a template fails the
     /// boot, naming the owner.
     pub fn new<F>(
@@ -337,6 +339,58 @@ impl HttpEndpointMeta {
     }
 }
 
+/// The [`Handler`] a self-mount's requests run as, for the `static` its
+/// [`HttpEndpointMeta`] names: `M`, the type that mounts it, written out as
+/// `name` (`type_name` is not `const`), at `address`, its mount path, under
+/// `posture`. Its unit is [`REQUEST`](crate::unit::REQUEST); it names no
+/// method and declares no metadata.
+///
+/// ```
+/// use nest_rs_core::{ContainerBuilder, Handler, Module, Posture, Registering};
+/// use nest_rs_http::{HttpEndpointMeta, Method, Response, declare_endpoint, endpoint_fn};
+/// # use nest_rs_testing::TestApp;
+///
+/// pub struct StatusPageModule;
+///
+/// static PAGE: Handler =
+///     declare_endpoint::<StatusPageModule>("StatusPageModule", "/status", Posture::Public);
+///
+/// impl Module for StatusPageModule {
+///     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+///         builder.provide_meta(HttpEndpointMeta::new(&PAGE, "/status", "status", |_, routes| {
+///             routes.route(
+///                 Method::GET,
+///                 "/status",
+///                 endpoint_fn(|_req| async { Ok(Response::builder().body("up")) }),
+///             );
+///         }))
+///     }
+/// }
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+///
+/// assert_eq!(PAGE.posture(), Posture::Public);
+/// let app = TestApp::for_module::<StatusPageModule>().await?;
+/// app.http().get("/status").send().await.assert_text("up").await;
+/// # Ok(())
+/// # }
+/// ```
+pub const fn declare_endpoint<M: 'static>(
+    name: &'static str,
+    address: &'static str,
+    posture: Posture,
+) -> Handler {
+    declare_handler(HandlerDeclaration {
+        unit: crate::unit::REQUEST,
+        host: TypeId::of::<M>(),
+        host_name: name,
+        method: "",
+        address,
+        posture,
+        meta: MetaLevels::default,
+    })
+}
+
 /// `meta`, its own guards — a gateway's `#[use_guards]`, whose emitter asserts
 /// each one checks HTTP requests — run at its request after the global pool, a
 /// guard the pool lists running once, at the pool's place.
@@ -359,8 +413,6 @@ pub fn checks_origin(
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::Posture;
-
     use super::*;
 
     #[test]
@@ -387,27 +439,23 @@ mod tests {
 
     struct Mounts;
 
-    static UPGRADE: Handler =
-        nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
-            unit: crate::unit::REQUEST,
-            host: std::any::TypeId::of::<Mounts>(),
-            host_name: "Mounts",
-            method: "",
-            address: "/ws",
-            posture: Posture::Gated,
-            meta: nest_rs_core::__private::MetaLevels::default,
-        });
+    static UPGRADE: Handler = declare_endpoint::<Mounts>("Mounts", "/ws", Posture::Gated);
 
-    static DOCUMENT: Handler =
-        nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
-            unit: crate::unit::REQUEST,
-            host: std::any::TypeId::of::<Mounts>(),
-            host_name: "Mounts",
-            method: "",
-            address: "/api",
-            posture: Posture::Public,
-            meta: nest_rs_core::__private::MetaLevels::default,
-        });
+    static DOCUMENT: Handler = declare_endpoint::<Mounts>("Mounts", "/api", Posture::Public);
+
+    /// What a mount varies is what it declares; the rest is every
+    /// self-mount's: a request unit, no method, no metadata.
+    #[test]
+    fn a_self_mount_s_site_is_declared_from_what_its_mount_varies() {
+        assert_eq!(DOCUMENT.unit(), crate::unit::REQUEST);
+        assert_eq!(DOCUMENT.host(), TypeId::of::<Mounts>());
+        assert_eq!(DOCUMENT.host_name(), "Mounts");
+        assert_eq!(DOCUMENT.method(), "");
+        assert_eq!(DOCUMENT.address(), "/api");
+        assert_eq!(DOCUMENT.posture(), Posture::Public);
+        assert_eq!(UPGRADE.posture(), Posture::Gated);
+        assert!(DOCUMENT.reflector().get::<Mounts>().is_none());
+    }
 
     struct Socket;
 

@@ -417,7 +417,10 @@ INFO nest_rs::operation: http.request method=GET route="/users" status=401 bytes
 
 `route` is the template the router matched — `/posts/{id}`, never
 `/posts/42` — so the line groups the way a dashboard does and never repeats a
-value the client chose. A request no route matched carries no `route` at all.
+value the client chose. A request the router's fallback answers — the
+[static files](/http/static-files/), say — carries its mount's catch-all,
+`/{*path}` at the root. A request neither a route nor the fallback claims
+carries no `route` at all.
 
 The line carries the server's values only. `method` is one of the methods
 OpenTelemetry's HTTP conventions know (`GET`, `POST`, `PATCH`, `QUERY` and the

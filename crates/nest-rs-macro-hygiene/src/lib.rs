@@ -24,6 +24,8 @@ pub mod controller;
 pub mod crud;
 #[cfg(feature = "graphql")]
 pub mod dataloader;
+#[cfg(feature = "http")]
+pub mod endpoint;
 #[cfg(feature = "seaorm")]
 pub mod entity;
 pub mod entry;

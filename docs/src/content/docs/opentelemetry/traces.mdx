@@ -138,9 +138,11 @@ minted as hex or as a UUID included — is recorded as a minted id would be.
 
 It is named `{method} {route}` through `otel.name`. `tracing` fixes a span
 name to a literal, and one literal for every route makes a trace list
-unreadable. A request that matched
-nothing is named by its method alone, never by the URL, and a method outside
-the known set reads `HTTP` there, as the conventions spell it.
+unreadable. A request the router's fallback
+answers is named for its mount's catch-all, `GET /{*path}` at the root. A
+request neither a route nor the fallback claims is named by its method alone,
+never by the URL, and a method outside the known set reads `HTTP` there, as
+the conventions spell it.
 
 Body size and duration are measured at **end-of-body**, not at handler return, so
 a half-streamed response and a client disconnect both still produce one access

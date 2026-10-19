@@ -141,6 +141,36 @@ async fn routes_take_precedence_and_the_fallback_answers_the_rest() {
     );
 }
 
+/// A request the fallback answers is named for the catch-all under its path,
+/// as a route's is for its template: never for its method alone, nor for the
+/// path a client sent.
+#[tokio::test]
+async fn a_request_the_fallback_answers_is_named_for_its_mount() {
+    #[module(providers = [AssetsFallback])]
+    struct AssetsModule;
+
+    for (served, path, named) in [
+        (crate::boot::<AppModule>().await, "/logo.svg", "/{*path}"),
+        (
+            crate::boot::<AssetsModule>().await,
+            "/assets/logo.svg",
+            "/assets/{*path}",
+        ),
+    ] {
+        let logs = LogCapture::install();
+
+        assert_eq!(text(&served, path).await.0, StatusCode::OK, "{path}");
+
+        let line = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_http::unit::REQUEST.name(),
+        );
+        assert_eq!(line.field("route").as_deref(), Some(named), "{path}");
+        let span = logs.expect_span("nest_rs::http", "http.request");
+        assert_eq!(span.field("http.route").as_deref(), Some(named), "{path}");
+    }
+}
+
 #[tokio::test]
 async fn the_fallback_is_handed_the_request_whole() {
     let client = crate::boot::<AppModule>().await;

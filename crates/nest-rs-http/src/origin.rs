@@ -12,7 +12,7 @@
 use std::net::{IpAddr, Ipv6Addr};
 
 use http::header::{self, HeaderMap};
-use http::uri::{Authority, Scheme};
+use http::uri::Authority;
 use nest_rs_core::Container;
 
 use crate::HttpConfig;
@@ -107,14 +107,14 @@ impl OriginPolicy {
     /// `Ok` when `request` carries no `Origin`, its own, or one the CORS policy
     /// lists; otherwise the refusal, which answers `403`. A second `Origin`
     /// field, or one that is no origin serialization, is refused.
-    pub fn allows(&self, request: &impl OriginFacts) -> Result<(), OriginRefused> {
+    pub fn allows(&self, request: &crate::Request) -> Result<(), OriginRefused> {
         let mut sent = request.headers().get_all(header::ORIGIN).iter();
         let Some(origin) = sent.next() else {
             return Ok(());
         };
         let trusted_proxy = request
-            .peer()
-            .is_some_and(|peer| self.trusted_proxies.contains(&peer));
+            .peer_addr()
+            .is_some_and(|peer| self.trusted_proxies.contains(&peer.ip()));
         let refused = |reason, scheme| Err(OriginRefused::new(reason, scheme, trusted_proxy));
         if sent.next().is_some() {
             return refused(OriginRefusedReason::OriginRepeated, None);
@@ -151,7 +151,7 @@ impl OriginPolicy {
 
     /// The origin the request was sent to: its `Host` and the scheme it
     /// arrived over, or what a trusted proxy forwarded of them.
-    fn own(&self, request: &impl OriginFacts, proxied: bool) -> Option<Tuple> {
+    fn own(&self, request: &crate::Request, proxied: bool) -> Option<Tuple> {
         let headers = request.headers();
         let (proto, host) = if proxied {
             forwarded(headers)
@@ -161,7 +161,7 @@ impl OriginPolicy {
         let scheme = proto.unwrap_or_else(|| request.scheme().as_str());
         let host = host
             .or_else(|| headers.get(header::HOST)?.to_str().ok())
-            .or_else(|| request.authority())?;
+            .or_else(|| request.original_uri().authority().map(Authority::as_str))?;
         Tuple::of(scheme, host)
     }
 }
@@ -232,56 +232,6 @@ impl Endpoint for OriginChecked {
             return Ok(refused.as_response());
         }
         self.inner.call(req).await
-    }
-}
-
-/// What [`OriginPolicy::allows`] reads off a request: its headers, the
-/// authority its target named, the scheme it arrived over and its peer.
-pub trait OriginFacts {
-    /// The request's header fields.
-    fn headers(&self) -> &HeaderMap;
-    /// The authority the request target named — HTTP/2's `:authority` — when
-    /// it named one.
-    fn authority(&self) -> Option<&str>;
-    /// The scheme the request arrived over.
-    fn scheme(&self) -> &Scheme;
-    /// The address of the direct peer, when there is one.
-    fn peer(&self) -> Option<IpAddr>;
-}
-
-impl OriginFacts for crate::Request {
-    fn headers(&self) -> &HeaderMap {
-        crate::Request::headers(self)
-    }
-
-    fn authority(&self) -> Option<&str> {
-        self.original_uri().authority().map(Authority::as_str)
-    }
-
-    fn scheme(&self) -> &Scheme {
-        crate::Request::scheme(self)
-    }
-
-    fn peer(&self) -> Option<IpAddr> {
-        self.peer_addr().map(|addr| addr.ip())
-    }
-}
-
-impl OriginFacts for poem::Request {
-    fn headers(&self) -> &HeaderMap {
-        poem::Request::headers(self)
-    }
-
-    fn authority(&self) -> Option<&str> {
-        self.original_uri().authority().map(Authority::as_str)
-    }
-
-    fn scheme(&self) -> &Scheme {
-        poem::Request::scheme(self)
-    }
-
-    fn peer(&self) -> Option<IpAddr> {
-        self.remote_addr().as_socket_addr().map(|addr| addr.ip())
     }
 }
 

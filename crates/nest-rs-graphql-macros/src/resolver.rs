@@ -931,11 +931,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 .chain(&method_exception_filters)
                 .map(|layer| (cfgs.clone(), layer.clone())),
         );
-        scoped_params.extend(
-            scoped_args(&method.sig)
-                .into_iter()
-                .map(|(_, ty)| (cfgs.clone(), ty)),
-        );
         let is_field = verb_attr.path().is_ident("field_resolver");
         if is_field && !metas.is_empty() {
             return Err(syn::Error::new_spanned(
@@ -979,6 +974,13 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         normalize_forwarded_args(sig.inputs.iter_mut())?;
         let sig = sig;
         let method_name = method.sig.ident.clone();
+        // Off the normalized signature, the one the wrapper resolves them from:
+        // `Scoped(x): Scoped<T>` is a `Scoped<T>` whatever its pattern.
+        scoped_params.extend(
+            scoped_args(&sig)
+                .into_iter()
+                .map(|(_, ty)| (cfgs.clone(), ty)),
+        );
 
         if is_field {
             if authorize_spec.is_some() || is_public {
@@ -1139,6 +1141,14 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 }
                 None => None,
             };
+            // The bound service resolves per call, so the boot checks its
+            // provider as it checks a `Scoped<T>` parameter's.
+            if let Some((service, ..)) = &bind_info {
+                scoped_params.push((
+                    cfgs.clone(),
+                    parse_quote!(::nest_rs_graphql::Scoped<#service>),
+                ));
+            }
             let piped = piped_args(&sig);
             let scoped = scoped_args(&sig);
             // On the wire, the bound subject becomes its `id` string and each pipe its

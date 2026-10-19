@@ -289,7 +289,10 @@ the `Authorized` proof are enforcement plumbing the decision flows into.
 
 The `#[authorize(Update, bind = PostsService)]` form is a shorthand: it keeps
 the posture explicit **and** binds the `Authorized<A, E>` subject for you from
-the container-resolved service, so the body never calls `bind_required` itself.
+the service, so the body never calls `bind_required` itself. The service is
+resolved as the HTTP `Bind<A, S>` resolves it, through the request's scope, and
+the boot checks it like an injected one: a resolver whose module does not import
+the service's own fails the boot rather than its first call.
 It also **synthesises the `id: String!` SDL argument** — so the method must not
 declare an `id` parameter of its own:
 

@@ -13,6 +13,7 @@
 mod database;
 mod error;
 mod expose;
+mod graphql;
 mod http;
 mod module;
 mod savepoint;

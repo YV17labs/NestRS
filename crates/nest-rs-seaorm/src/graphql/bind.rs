@@ -42,8 +42,12 @@ fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
 
 /// Turn a by-id argument into the loaded, authorized entity (the resolver
 /// analog of [`crate::Bind`]). Outcomes: no row → `Ok(None)`; denied →
-/// `FORBIDDEN` (existence not hidden); else `Ok(Some(model))`. Without an
-/// ambient ability it errors rather than behave as anonymous.
+/// `FORBIDDEN` (existence not hidden); else `Ok(Some(model))`.
+///
+/// The service resolves as [`crate::Bind`]'s does, through the request's scope
+/// — the container's over a graphql-ws socket, which carries none. A wiring
+/// defect — no provider for it, no ability on the field's unit — answers the
+/// opaque internal error and is filed at `error`, never as anonymous.
 pub async fn bind<A, S>(
     ctx: &Context<'_>,
     id: &str,
@@ -53,10 +57,18 @@ where
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     A: ActionMarker,
 {
-    let service = ctx
-        .data_unchecked::<Container>()
-        .get::<S>()
-        .ok_or_else(|| Error::new("no provider registered for the bound service"))?;
+    let service = match nest_rs_core::current_request_scope() {
+        Some(scope) => scope.get::<S>(),
+        None => ctx.data_unchecked::<Container>().get::<S>(),
+    };
+    let Some(service) = service else {
+        tracing::error!(
+            target: crate::target::ORM,
+            provider = std::any::type_name::<S>(),
+            "no provider for the bound service — add it to a module's providers",
+        );
+        return Err(problem_error(&Problem::new(500, code::INTERNAL)));
+    };
     bind_with::<A, S>(&service, id).await
 }
 
@@ -66,11 +78,7 @@ where
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     A: ActionMarker,
 {
-    if nest_rs_authz::current_ability().is_none() {
-        return Err(Error::new(
-            "missing request `Ability` — does a guard attach one at the /graphql request?",
-        ));
-    }
+    nest_rs_authz::graphql::ability()?;
     let id = parse_v7(id)?;
     match service
         .access(A::ACTION, id)

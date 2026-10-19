@@ -102,7 +102,9 @@ Review a new edge, or a change to one, against it:
 9. **Request scope and a unit of work** — `Scoped<T>`, a parameter the boot
    checks (its provider is inside the access contract, through
    `ResolvesProvider` and the impl half's probe — HTTP's and GraphQL's
-   today), a miss answered opaquely with the type on the operator's line, and each
+   today, as is the service HTTP's `Bind<A, S>` and GraphQL's
+   `bind = Service` load through), a miss answered opaquely with the type on
+   the operator's line, and each
    dispatch run through `nest_rs_database::run_unit` over the `dyn UnitOfWork`
    resolved at mount, committing on the edge's own outcome, so commit and
    rollback cannot drift (`data-layer.md`).

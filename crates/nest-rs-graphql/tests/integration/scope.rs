@@ -168,6 +168,7 @@ async fn a_field_resolver_reaches_the_request_scoped_instance_its_root_field_did
 /// one: unimported, or offered by no module, it refuses the boot.
 mod access_contract {
     use nest_rs_core::{AccessGraphError, MissingDependencyError, injectable, module};
+    use nest_rs_graphql::async_graphql::SimpleObject;
     use nest_rs_graphql::{GraphqlModule, Scoped, operations, resolver};
     use nest_rs_testing::TestApp;
 
@@ -251,5 +252,80 @@ mod access_contract {
             "{}",
             missing.dependency,
         );
+    }
+
+    #[resolver]
+    struct DestructuringResolver;
+
+    #[operations]
+    impl DestructuringResolver {
+        #[query]
+        #[public]
+        async fn trail_length(&self, Scoped(trail): Scoped<AuditTrail>) -> i32 {
+            trail.entries()
+        }
+    }
+
+    #[module(imports = [GraphqlModule::for_root(None)], providers = [DestructuringResolver])]
+    struct DestructuringModule;
+
+    #[module(imports = [AuditTrailModule, DestructuringModule])]
+    struct DestructuringRoot;
+
+    /// A pattern binds the parameter, never hides it: `Scoped(x): Scoped<T>`
+    /// is checked as `x: Scoped<T>` is.
+    #[tokio::test]
+    async fn a_destructured_scoped_parameter_is_inside_the_access_contract() {
+        let refused = TestApp::for_module::<DestructuringRoot>()
+            .await
+            .err()
+            .expect("the field would reach a provider its module does not import");
+        let leak = refused
+            .downcast::<AccessGraphError>()
+            .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+        assert_eq!(leak.consumer, "DestructuringResolver");
+        assert_eq!(leak.owner, "AuditTrailModule");
+    }
+
+    #[derive(SimpleObject)]
+    #[graphql(complex)]
+    struct Ledger {
+        balance: i32,
+    }
+
+    #[resolver]
+    struct LedgerResolver;
+
+    #[operations]
+    impl LedgerResolver {
+        #[query]
+        #[public]
+        async fn ledger(&self) -> Ledger {
+            Ledger { balance: 1 }
+        }
+
+        #[field_resolver]
+        async fn audited(&self, parent: &Ledger, Scoped(trail): Scoped<AuditTrail>) -> i32 {
+            parent.balance + trail.entries()
+        }
+    }
+
+    #[module(imports = [GraphqlModule::for_root(None)], providers = [LedgerResolver])]
+    struct LedgerModule;
+
+    #[module(imports = [AuditTrailModule, LedgerModule])]
+    struct LedgerRoot;
+
+    #[tokio::test]
+    async fn a_field_resolvers_destructured_scoped_parameter_is_inside_the_access_contract() {
+        let refused = TestApp::for_module::<LedgerRoot>()
+            .await
+            .err()
+            .expect("the field resolver would reach a provider its module does not import");
+        let leak = refused
+            .downcast::<AccessGraphError>()
+            .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+        assert_eq!(leak.consumer, "LedgerResolver");
+        assert_eq!(leak.owner, "AuditTrailModule");
     }
 }

@@ -112,9 +112,10 @@ pub(crate) fn build_document(
                 global_guards,
                 version_parameter,
             );
+            let method = route.method().as_str();
             // OpenAPI 3.1 §4.8.10.1: an id is unique across the document. One id on one
             // address is a duplicate mount, the transport's to name.
-            let address = (key.clone(), route.method().as_str());
+            let address = (key.clone(), method);
             if let Some(previous) = operation_ids.insert(id.clone(), address.clone())
                 && previous != address
                 && reported.ids.insert(id.clone())
@@ -123,7 +124,7 @@ pub(crate) fn build_document(
                     target: crate::TARGET,
                     operation_id = id.as_str(),
                     path = key.as_str(),
-                    method = route.method().as_str(),
+                    method = method,
                     conflicting_path = previous.0.as_str(),
                     conflicting_method = previous.1,
                     hint = DUPLICATE_ID_REMEDY,
@@ -132,14 +133,13 @@ pub(crate) fn build_document(
             }
             // OpenAPI keys one operation per (path, method): name the version dropped.
             if selection.is_some()
-                && let Some(previous) =
-                    described.insert((key.clone(), route.method().as_str()), version)
+                && let Some(previous) = described.insert((key.clone(), method), version)
                 && previous != version
             {
                 tracing::warn!(
                     target: crate::TARGET,
                     path = key.as_str(),
-                    method = route.method().as_str(),
+                    method = method,
                     described = version_label(version),
                     omitted = version_label(previous),
                     hint = contested_path_remedy().as_str(),
@@ -150,7 +150,7 @@ pub(crate) fn build_document(
                 .entry(key)
                 .or_insert_with(|| Value::Object(Map::new()));
             if let Value::Object(methods) = item {
-                methods.insert(route.method().as_str().to_ascii_lowercase(), operation);
+                methods.insert(method.to_ascii_lowercase(), operation);
             }
         }
     }

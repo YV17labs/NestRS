@@ -626,30 +626,9 @@ mod tests {
 
     fn route(scoped_guarded: bool, public: bool) -> HttpRouteMeta {
         http_route_meta(HttpRouteParts {
-            method: Method::POST,
-            path: "/",
-            handler: "create",
-            summary: None,
-            description: None,
-            tags: &[],
-            request_body: None,
-            response: None,
-            response_content_type: None,
-            error_responses: &[],
-            masked: false,
-            path_params: &[],
-            query_params: &[],
-            header_params: &[],
-            may_conflict: false,
-            throttled: false,
-            sets_location: false,
-            sets_next_link: false,
-            response_headers: &[],
-            success_status: 200,
             scoped_guarded,
             public,
-            deprecation: None,
-            versions: &[],
+            ..show_parts()
         })
     }
 

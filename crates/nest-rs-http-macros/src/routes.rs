@@ -28,7 +28,8 @@ use crate::attr::opt_str;
 
 /// One route handler.
 struct RouteHandler {
-    verb: syn::Ident,
+    /// The `http::Method` constant the route answers (`GET`).
+    method: syn::Ident,
     wrapper: syn::Ident,
     /// The `Deprecation` header value Rust's `#[deprecated]` on the method states.
     deprecation_header: Option<String>,
@@ -198,6 +199,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             declared_verb.clone()
         };
+        let method_const =
+            syn::Ident::new(&verb_ident.to_string().to_uppercase(), verb_ident.span());
 
         let written_path = match route_path(&attr, &declared_verb) {
             Ok(path) => path,
@@ -493,7 +496,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let shaper_selection = shaper_selection(&probe_types);
 
         let handler = RouteHandler {
-            verb: verb_ident.clone(),
+            method: method_const.clone(),
             deprecation_header: deprecation.as_ref().map(|(_, header)| header.clone()),
             is_sse,
             wrapper: wrapper_name.clone(),
@@ -517,14 +520,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // here without `#[cfg]`, and by rustc through the marker when both compile.
         let served: Vec<String> = method_versions.iter().map(LitStr::value).collect();
         let route = match served.as_slice() {
-            [] => format!(
-                "{} {}",
-                verb_ident.to_string().to_uppercase(),
-                route_path.value()
-            ),
+            [] => format!("{method_const} {}", route_path.value()),
             versions => format!(
-                "{} {} #[version({})]",
-                verb_ident.to_string().to_uppercase(),
+                "{method_const} {} #[version({})]",
                 route_path.value(),
                 versions
                     .iter()
@@ -577,9 +575,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 handlers: vec![handler],
             }),
         }
-
-        let method_const =
-            syn::Ident::new(&verb_ident.to_string().to_uppercase(), verb_ident.span());
 
         let summary = opt_str(&api.summary);
         let description = opt_str(&api.description);
@@ -828,12 +823,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let path = &group.mount;
         let mut arms: Vec<TokenStream2> = Vec::new();
         for handler in &group.handlers {
-            let method = syn::Ident::new(
-                &handler.verb.to_string().to_uppercase(),
-                handler.verb.span(),
-            );
-            let EmittedRoute { items, mount } =
-                emitted_route(handler, &self_ty, &ctrl_name, &method);
+            let EmittedRoute { items, mount } = emitted_route(handler, &self_ty, &ctrl_name);
             wrappers.push(items);
             let versions = &handler.versions;
             let cfgs = &handler.cfgs;
@@ -1152,14 +1142,9 @@ struct EmittedRoute {
     mount: TokenStream2,
 }
 
-fn emitted_route(
-    handler: &RouteHandler,
-    self_ty: &Type,
-    ctrl_name: &syn::Ident,
-    method: &syn::Ident,
-) -> EmittedRoute {
+fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident) -> EmittedRoute {
     let RouteHandler {
-        verb: _,
+        method,
         param_types: _,
         deprecation_header,
         versions: _,

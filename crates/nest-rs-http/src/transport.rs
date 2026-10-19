@@ -477,21 +477,22 @@ impl Transport for HttpTransport {
         let mut get_routes: Vec<(String, &'static str)> = Vec::new();
         let hand_route = hand_route(container, unit_of_work.clone())?;
         for d in discovery.meta::<HttpControllerMeta>() {
+            let controller = d.meta.controller();
             let at_root = literal_prefix(d.meta.path()) == "/";
             if !at_root {
                 // The address a non-URI version selector is called at.
-                claims.prefix(d.meta.path(), d.meta.controller());
+                claims.prefix(d.meta.path(), controller);
             }
             for version in d.meta.mounted_versions() {
                 let prefix = d.meta.effective_prefix(version);
                 if !at_root {
-                    claims.prefix(&prefix, d.meta.controller());
+                    claims.prefix(&prefix, controller);
                 }
                 claim_exclusive_path(
                     &mut prefix_owner,
                     "controller prefix",
-                    &template_of(&prefix, d.meta.controller())?,
-                    d.meta.controller().to_owned(),
+                    &template_of(&prefix, controller)?,
+                    controller.to_owned(),
                     &prefix_remedy(version),
                 )?;
                 for r in d.meta.routes() {
@@ -499,7 +500,7 @@ impl Transport for HttpTransport {
                         continue;
                     }
                     let path = join_path(&prefix, r.path());
-                    let template = template_of(&path, d.meta.controller())?;
+                    let template = template_of(&path, controller)?;
                     // Under a non-URI selector a versioned route is called unversioned.
                     let addresses = match version {
                         Some(_) => vec![path.clone(), join_path(d.meta.path(), r.path())],
@@ -507,7 +508,7 @@ impl Transport for HttpTransport {
                     };
                     for address in addresses {
                         if r.method() == Method::GET {
-                            get_routes.push((address.clone(), d.meta.controller()));
+                            get_routes.push((address.clone(), controller));
                         }
                         if at_root {
                             claims.route(address);
@@ -517,12 +518,7 @@ impl Transport for HttpTransport {
                         true => versioned_routes.push(path.clone()),
                         false => unversioned_routes.push(path.clone()),
                     }
-                    claim_route(
-                        &mut route_owner,
-                        &template,
-                        d.meta.controller(),
-                        r.handler(),
-                    )?;
+                    claim_route(&mut route_owner, &template, controller, r.handler())?;
                     // Under a non-URI strategy `/v{n}` is where the route mounts, not
                     // what a client calls, so the version is logged as its own field.
                     let (logged, version) = match &self.version_selector {
@@ -531,7 +527,7 @@ impl Transport for HttpTransport {
                     };
                     tracing::info!(
                         target: crate::target::ROUTES,
-                        controller = d.meta.controller(),
+                        controller = controller,
                         method = r.method().as_str(),
                         path = routes.served(&logged).as_str(),
                         version = version,
@@ -548,7 +544,7 @@ impl Transport for HttpTransport {
                     }
                 }
             }
-            routes.for_controller(d.meta.controller(), Some(Arc::clone(&hand_route)));
+            routes.for_controller(controller, Some(Arc::clone(&hand_route)));
             d.meta.mount(container, &mut routes);
             routes.settle()?;
         }

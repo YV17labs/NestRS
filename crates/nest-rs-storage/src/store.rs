@@ -494,13 +494,19 @@ mod tests {
         <Name>bucket</Name><Prefix></Prefix><KeyCount>0</KeyCount><MaxKeys>1000</MaxKeys>\
         <IsTruncated>false</IsTruncated></ListBucketResult>";
 
-    /// What an S3 double heard: the request line of each request it read.
+    /// What an S3 double heard: the request line of each request it read, and
+    /// how many connections it accepted — a refusal at once is one, whatever
+    /// the handshake or the machine's load costs it.
     #[derive(Clone, Default)]
-    struct Heard(Arc<Mutex<Vec<String>>>);
+    struct Heard(Arc<Mutex<Vec<String>>>, Arc<std::sync::atomic::AtomicUsize>);
 
     impl Heard {
         fn lines(&self) -> Vec<String> {
             self.0.lock().expect("heard").clone()
+        }
+
+        fn connections(&self) -> usize {
+            self.1.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -530,6 +536,7 @@ mod tests {
         let kept = heard.clone();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
+                kept.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let (acceptor, kept) = (acceptor.clone(), kept.clone());
                 let listing = listing.load(Ordering::SeqCst);
                 tokio::spawn(async move {
@@ -659,15 +666,10 @@ mod tests {
     async fn a_certificate_no_trusted_authority_signed_refuses_at_once_naming_the_remedy() {
         let authority = nest_rs_testing::TestAuthority::new();
         let (endpoint, heard) = store_presenting(&authority, 200).await;
-        let started = tokio::time::Instant::now();
         let refused = Store::open(&reaching(&endpoint, "s3://bucket", ClientTls::default()))
             .await
             .expect_err("a certificate no trusted authority signed is not talked to");
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "{:?}",
-            started.elapsed()
-        );
+        assert_eq!(heard.connections(), 1, "never retried");
         assert!(
             heard.lines().is_empty(),
             "no request crossed the failed handshake"
@@ -685,16 +687,14 @@ mod tests {
     async fn a_redirect_without_a_location_refuses_at_once_naming_the_region_and_the_endpoint() {
         let authority = nest_rs_testing::TestAuthority::new();
         let (endpoint, heard) = store_presenting(&authority, 301).await;
-        let started = tokio::time::Instant::now();
         let refused = Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
             .await
             .expect_err("a store sending the bucket elsewhere is not proved");
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "{:?}",
-            started.elapsed()
+        assert_eq!(
+            (heard.connections(), heard.lines().len()),
+            (1, 1),
+            "never retried"
         );
-        assert_eq!(heard.lines().len(), 1, "never retried");
         let chain = nest_rs_core::error_message(&refused);
         assert!(
             matches!(refused, StorageError::Refused { .. })
@@ -711,16 +711,14 @@ mod tests {
     async fn a_status_every_attempt_would_meet_refuses_at_once_saying_it() {
         let authority = nest_rs_testing::TestAuthority::new();
         let (endpoint, heard) = store_presenting(&authority, 400).await;
-        let started = tokio::time::Instant::now();
         let refused = Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
             .await
             .expect_err("a store answering 400 is not proved");
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "{:?}",
-            started.elapsed()
+        assert_eq!(
+            (heard.connections(), heard.lines().len()),
+            (1, 1),
+            "never retried"
         );
-        assert_eq!(heard.lines().len(), 1, "never retried");
         let chain = nest_rs_core::error_message(&refused);
         assert!(
             matches!(refused, StorageError::Refused { .. })

@@ -42,6 +42,16 @@
 //!    then fails closed with [`AtomicError::Unsupported`].
 //! 6. Match [`ExecutorScope`] and [`TransactionPolicy`] with a `_` arm that
 //!    fails closed: both can grow within 7.x.
+//! 7. Keep the queue port's transactional outbox, so a job pushed inside a
+//!    unit is filed after its commit and never on its rollback: implement
+//!    [`OutboxStore`] over a table of your own, bind it as
+//!    `Arc<dyn OutboxStore>` beside your unit of work and import the queue
+//!    port's `OutboxModule`, which attaches the relay draining it; then
+//!    override [`Executor::write_outbox`] and its two `remove_outbox` methods
+//!    on every handle a unit settles a transaction for, writing on that
+//!    transaction once the store is armed, and the removals on the pool
+//!    handles your units install too, for a cancel there. Without them a push
+//!    is filed at once, and a rollback leaves its job behind.
 //!
 //! A new ORM integration ships its own row-level-filter equivalent: the
 //! SeaORM pieces (`Repo`, `condition_for`, `Bind<A, S>`) are unreachable from it.
@@ -51,14 +61,16 @@
 mod atomic;
 mod error;
 mod executor;
+mod outbox;
 mod unit;
 
 pub use atomic::{AtomicBlock, atomic};
-pub use error::{AtomicError, Unhonoured};
+pub use error::{AtomicError, OutboxError, Unhonoured};
 pub use executor::{
     Deferred, Executor, ExecutorScope, after_commit, current_executor, current_executor_scope,
     with_executor, with_job_executor, with_request_executor,
 };
+pub use outbox::{ClaimedRecord, OutboxClaim, OutboxRecord, OutboxStore};
 pub use unit::{
     BACKEND_REMEDY, JobRef, OpenUnit, Settlement, TransactionPolicy, UnitOfWork, UnitSpec,
     current_unit_of_work, provide_unit_of_work, run_unit,

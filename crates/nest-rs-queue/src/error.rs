@@ -132,6 +132,11 @@ pub enum QueueError {
         /// Why they were refused.
         reason: &'static str,
     },
+    /// The unit the push ran in keeps an outbox, and it refused the job's
+    /// record — or, for a cancel, its removal: nothing was kept, and the unit
+    /// cannot commit.
+    #[error("the unit's outbox refused the job's record")]
+    Outbox(#[source] nest_rs_database::OutboxError),
 }
 
 impl QueueError {

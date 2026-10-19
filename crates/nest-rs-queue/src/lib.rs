@@ -61,6 +61,13 @@
 //! delivers some twice — a lease lapsed after a crash, an acknowledgement lost —
 //! and none promises more: a `#[process]` handler is idempotent.
 //!
+//! **A push inside a transaction is filed after its commit.** A data driver
+//! keeping an outbox writes the job into the caller's transaction, and the
+//! [`OutboxRelay`], which [`OutboxModule`] attaches, files it once the unit
+//! committed, at least once; a backend needs nothing for it beyond
+//! [`JobProducer::enqueue`]'s contract, an envelope whose job it holds filed
+//! once.
+//!
 //! A value the backend's storage cannot hold — a name its own rules refuse, a
 //! window finer than it keeps — is refused by the backend, naming that fact.
 //! The walkthrough is the docs' *Writing a queue driver*.
@@ -91,6 +98,7 @@ mod inventory;
 mod job;
 mod job_id;
 mod module;
+mod outbox;
 mod process_options;
 mod producer;
 mod push_options;
@@ -119,6 +127,7 @@ pub use inventory::ProcessMethod;
 pub use job::Job;
 pub use job_id::JobId;
 pub use module::{QueueModule, QueueSetup};
+pub use outbox::{OutboxConfig, OutboxModule, OutboxRelay, OutboxSetup};
 pub use process_options::{ProcessOptions, Throttle};
 pub use producer::{ENQUEUE_BATCH, JobProducer, JobProducerExt};
 pub use push_options::{Delay, PushOptions};

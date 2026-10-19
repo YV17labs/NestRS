@@ -58,6 +58,26 @@ impl std::fmt::Display for Unhonoured {
 
 impl std::error::Error for Unhonoured {}
 
+/// Why the outbox could not keep a record, or hand one over.
+///
+/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum OutboxError {
+    /// The store's table is not there; `remedy` says how to create it.
+    #[error("the outbox table `{table}` is missing: {remedy}")]
+    Missing {
+        /// The table the store keeps its records in.
+        table: &'static str,
+        /// What creates it, as the driver's tooling spells it.
+        remedy: &'static str,
+    },
+    /// The store's database refused a statement, or never answered it; the
+    /// source says why, by kind, without a value.
+    #[error("the outbox store's database failed")]
+    Database(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
 /// Why an atomic block could not keep its promise.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]

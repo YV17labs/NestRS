@@ -11,16 +11,27 @@
 //! **Every call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at
 //! most**, then answers [`QueueError::Unanswered`], naming the queue — or
 //! [`QueueError::Panicked`] for a backend that panicked answering.
+//!
+//! **A push inside a unit of work holding a transaction is written into it.**
+//! Where the data driver keeps an outbox
+//! ([`Executor::write_outbox`](nest_rs_database::Executor::write_outbox)), the
+//! sealed jobs become records of the caller's transaction: they are filed
+//! after its commit by the [`OutboxRelay`](crate::OutboxRelay), and never on
+//! its rollback. Anywhere else — a pool, no data driver — the backend files
+//! them at once.
+
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use nest_rs_database::OutboxRecord;
 use serde_json::Value;
 
 use crate::backend::bounded;
 use crate::error::Unimplemented;
 use crate::push_options::check_unique_key;
 use crate::{
-    Capabilities, Capability, Destination, Envelope, JobId, PushOptions, PushReceipt, QueueBackend,
-    QueueError, QueueName, TARGET, envelope,
+    Capabilities, Capability, Delay, Destination, Envelope, JobId, PushOptions, PushReceipt,
+    QueueBackend, QueueError, QueueName, TARGET, envelope,
 };
 
 /// The most jobs the port hands a backend's [`JobProducer::enqueue`] in one
@@ -143,6 +154,15 @@ pub trait JobProducerExt: JobProducer {
     /// push mints a new id, so the backend cannot tell the second from a new job —
     /// unless the push carries a unique key: the same at-least-once the worker's
     /// side has, met at the push.
+    ///
+    /// **Inside a unit of work whose data driver keeps an outbox**, the job is
+    /// written into the unit's transaction instead, so it is filed after the
+    /// commit and never on a rollback, and the receipt names a job that exists
+    /// exactly when the caller's writes do. The backend is not asked then: a
+    /// write the outbox refuses is [`QueueError::Outbox`], and a unique key
+    /// another job holds is checked once the unit committed — the record is
+    /// then dropped, said at `info` naming both jobs, and no error reaches the
+    /// caller.
     async fn push<D, O>(
         &self,
         destination: D,
@@ -163,11 +183,14 @@ pub trait JobProducerExt: JobProducer {
     /// [`ENQUEUE_BATCH`] jobs at most, in order, returning one receipt per job in
     /// input order.
     ///
-    /// Not atomic. A failure after the backend accepted some of its calls is
-    /// [`QueueError::PartiallyQueued`], carrying the receipts of the jobs of
-    /// those calls — queued, and to be left out of a retry — beside the failure
-    /// that stopped the push; the jobs of the failing call may be queued too,
-    /// and no receipt says which, so retrying them can queue one twice. Each
+    /// Not atomic on its own. A failure after the backend accepted some of its
+    /// calls is [`QueueError::PartiallyQueued`], carrying the receipts of the
+    /// jobs of those calls — queued, and to be left out of a retry — beside the
+    /// failure that stopped the push; the jobs of the failing call may be queued
+    /// too, and no receipt says which, so retrying them can queue one twice.
+    /// Inside a unit of work whose data driver keeps an outbox, every job is
+    /// written into its transaction in one write, so the push commits or rolls
+    /// back whole with it. Each
     /// call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at most. A delay applies to
     /// every job; a unique key names one job and is refused here with
     /// [`QueueError::InvalidOptions`] — push jobs that each need one with
@@ -221,6 +244,10 @@ pub trait JobProducerExt: JobProducer {
 
     /// Cancel the job `receipt` names, so it never starts.
     ///
+    /// Inside a unit of work whose data driver keeps an outbox, a record of the
+    /// job no relay has filed yet is deleted first, on the unit's transaction,
+    /// then the backend is asked; either answers `true`.
+    ///
     /// `Ok(true)`: the job had not started, and now never will — whether it was
     /// waiting on its queue, or on the schedule a delay or a retry holds it on.
     /// Cancelling is the job's terminal outcome, so its unique key, if it held
@@ -237,10 +264,12 @@ pub trait JobProducerExt: JobProducer {
         let queue = receipt.queue();
         self.backend()
             .check(Capabilities::NONE.with(Capability::Cancellation))?;
+        let unkept = unkeep(queue, Unkeep::Job(receipt.id())).await?;
         let removed = bounded(queue, "JobProducer::remove", async {
             self.remove(queue, receipt.id()).await
         })
-        .await?;
+        .await?
+            || unkept;
         if removed {
             tracing::info!(
                 target: TARGET,
@@ -256,7 +285,8 @@ pub trait JobProducerExt: JobProducer {
     /// [`cancel`](Self::cancel), naming the job by its key rather than its
     /// receipt, with the same answer: `Ok(true)` when it had not started and now
     /// never will, which frees the key; `Ok(false)` when it already started,
-    /// already finished, or no job holds the key.
+    /// already finished, or no job holds the key. A record carrying the key in
+    /// the unit's outbox is deleted too.
     ///
     /// Fails with [`QueueError::InvalidUniqueKey`] for a key no push could file,
     /// and with [`QueueError::Unsupported`] on a backend without unique jobs or
@@ -274,10 +304,12 @@ pub trait JobProducerExt: JobProducer {
                 .with(Capability::UniquePush)
                 .with(Capability::Cancellation),
         )?;
+        let unkept = unkeep(&queue, Unkeep::Key(key)).await?;
         let removed = bounded(&queue, "JobProducer::remove_unique", async {
             self.remove_unique(&queue, key).await
         })
-        .await?;
+        .await?
+            || unkept;
         if removed {
             tracing::info!(
                 target: TARGET,
@@ -316,6 +348,9 @@ async fn push_values<P: JobProducer + ?Sized>(
         .iter()
         .map(|envelope| PushReceipt::new(queue.clone(), envelope.id().clone()))
         .collect();
+    if let Some(kept) = keep(queue, &envelopes, options).await {
+        return kept.map(|()| receipts);
+    }
     let mut envelopes = envelopes.into_iter();
     let mut accepted = 0;
     loop {
@@ -348,8 +383,63 @@ async fn push_value<P: JobProducer + ?Sized>(
     refuse_what_no_push_may_carry(producer.backend(), options)?;
     let envelope = envelope::seal(payload, JobId::mint(), options.unique_key());
     let receipt = PushReceipt::new(queue.clone(), envelope.id().clone());
-    enqueue(producer, queue, vec![envelope], options).await?;
+    let envelopes = vec![envelope];
+    match keep(queue, &envelopes, options).await {
+        Some(kept) => kept?,
+        None => enqueue(producer, queue, envelopes, options).await?,
+    }
     Ok(receipt)
+}
+
+/// Write `envelopes` into the outbox of the unit the push runs in, so they are
+/// filed after its commit and never on its rollback — `None` when the unit
+/// keeps none, and the backend files them now. Each record is sealed only once
+/// the handle reads it, so a push filed at once seals nothing twice. A delay is
+/// kept as what is left of it, which the relay hands the backend once the unit
+/// committed.
+async fn keep(
+    queue: &QueueName,
+    envelopes: &[Envelope],
+    options: &PushOptions,
+) -> Option<Result<(), QueueError>> {
+    let executor = nest_rs_database::current_executor()?;
+    let delay = options.delay().map_or(Duration::ZERO, |delay| match delay {
+        Delay::For(wait) => wait,
+        Delay::Until(at) => at.duration_since(SystemTime::now()).unwrap_or_default(),
+    });
+    let written = executor.write_outbox(&mut envelopes.iter().map(|envelope| {
+        OutboxRecord::new(
+            queue.as_str(),
+            envelope.id().uuid(),
+            envelope.sealed(),
+            envelope.unique_key().map(str::to_owned),
+            delay,
+        )
+    }))?;
+    Some(written.await.map_err(QueueError::Outbox))
+}
+
+/// Remove the record of a job not yet filed from the outbox of the unit the
+/// cancel runs in, answering whether there was one; `false` where the unit
+/// keeps no outbox.
+async fn unkeep(queue: &QueueName, which: Unkeep<'_>) -> Result<bool, QueueError> {
+    let Some(executor) = nest_rs_database::current_executor() else {
+        return Ok(false);
+    };
+    let removing = match which {
+        Unkeep::Job(id) => executor.remove_outbox(queue.as_str(), id.uuid()),
+        Unkeep::Key(key) => executor.remove_outbox_unique(queue.as_str(), key),
+    };
+    match removing {
+        Some(removing) => removing.await.map_err(QueueError::Outbox),
+        None => Ok(false),
+    }
+}
+
+/// The record a cancel names: by its job, or by its unique key.
+enum Unkeep<'a> {
+    Job(&'a JobId),
+    Key(&'a str),
 }
 
 /// One call to the backend's [`JobProducer::enqueue`], under the net.
@@ -367,7 +457,7 @@ async fn enqueue<P: JobProducer + ?Sized>(
 
 /// Refuse options no backend could honour, and those `backend` does not
 /// declare — before anything reaches it.
-fn refuse_what_no_push_may_carry(
+pub(crate) fn refuse_what_no_push_may_carry(
     backend: &QueueBackend,
     options: &PushOptions,
 ) -> Result<(), QueueError> {

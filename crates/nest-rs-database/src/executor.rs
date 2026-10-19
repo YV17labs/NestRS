@@ -3,9 +3,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
+use futures_util::future::BoxFuture;
 use nest_rs_core::{AmbientValue, Continuation};
 
 use crate::atomic::AtomicBlock;
+use crate::error::OutboxError;
+use crate::outbox::OutboxRecord;
 use crate::unit::Bound;
 
 /// Work held until the ambient unit of work commits — what [`after_commit`]
@@ -59,6 +62,53 @@ pub trait Executor: Any + Send + Sync + 'static {
     /// [`AtomicError::Unsupported`](crate::AtomicError::Unsupported). Opening
     /// sends nothing: the block's first statement does.
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
+        None
+    }
+
+    /// Write `records` on the transaction this executor's unit holds, so they
+    /// commit or roll back with its writes — or `None` when it keeps no
+    /// outbox: a pool, a transaction its caller opened, a driver binding no
+    /// [`OutboxStore`](crate::OutboxStore), or one whose store no relay armed.
+    /// The queue port then files the jobs at once.
+    ///
+    /// `records` are built as they are read, each job sealed then: a handle
+    /// answering `None` reads none, so a push it files at once pays nothing
+    /// for them. A driver that writes reads them all before it answers, and
+    /// owes the rest: the records land in the store exactly when the unit
+    /// commits, the relay's [`written`](crate::OutboxStore::written) wakes once
+    /// it did, and a unit that never opened its transaction opens it, since
+    /// the write is a touch. A failed write fails the unit as a failed
+    /// statement does.
+    fn write_outbox(
+        &self,
+        records: &mut dyn Iterator<Item = OutboxRecord>,
+    ) -> Option<BoxFuture<'_, Result<(), OutboxError>>> {
+        let _unread = records;
+        None
+    }
+
+    /// Delete the record of job `id` on `queue` that no relay has filed yet, on
+    /// this executor's unit, answering whether there was one — or `None` when
+    /// the handle keeps no outbox. A record a relay is filing is waited for:
+    /// the removal answers once that relay settled, deleting the record it
+    /// left, or finding none once the backend holds the job.
+    fn remove_outbox<'a>(
+        &'a self,
+        queue: &'a str,
+        id: uuid::Uuid,
+    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
+        let _ = (queue, id);
+        None
+    }
+
+    /// [`remove_outbox`](Self::remove_outbox) for the record carrying the
+    /// unique key `key` on `queue`.
+    fn remove_outbox_unique<'a>(
+        &'a self,
+        queue: &'a str,
+        key: &'a str,
+    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
+        let _ = (queue, key);
         None
     }
 }
@@ -262,6 +312,17 @@ mod tests {
 
     fn stub() -> Arc<dyn Executor> {
         Arc::new(StubExecutor)
+    }
+
+    #[test]
+    fn a_handle_keeping_no_outbox_hands_every_job_back_to_be_filed_at_once() {
+        let mut unread = std::iter::from_fn(|| -> Option<OutboxRecord> {
+            panic!("a handle keeping no outbox builds no record")
+        });
+        let handle = StubExecutor;
+        assert!(handle.write_outbox(&mut unread).is_none());
+        assert!(handle.remove_outbox("notify", uuid::Uuid::nil()).is_none());
+        assert!(handle.remove_outbox_unique("notify", "key").is_none());
     }
 
     #[tokio::test]

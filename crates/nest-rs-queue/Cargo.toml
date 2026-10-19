@@ -71,6 +71,10 @@ nest-rs-pipes = { path = "../nest-rs-pipes" }
 # The HTTP edge's default request timeout, which `BACKEND_TIMEOUT` sits under
 # (tests/integration/producer.rs).
 nest-rs-http = { path = "../nest-rs-http" }
+# A unit's handle keeping an outbox, which a push inside it writes to
+# (tests/integration/producer.rs), and the relay's store
+# (tests/integration/outbox/relay.rs).
+nest-rs-database = { path = "../nest-rs-database" }
 
 [lints]
 workspace = true

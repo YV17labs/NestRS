@@ -1,9 +1,12 @@
 //! The push and cancel surface through a backend that records what it is
 //! handed, and the net under every call, on a paused clock.
 
-use std::sync::Mutex;
-use std::time::Duration;
+use std::future::Future;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
+use futures_util::future::BoxFuture;
+use nest_rs_database::{Executor as DatabaseExecutor, OutboxError, OutboxRecord};
 use nest_rs_http::HttpConfig;
 use nest_rs_queue::{
     BACKEND_TIMEOUT, Capabilities, Capability, ENQUEUE_BATCH, Envelope, JobId, JobProducer,
@@ -886,5 +889,331 @@ async fn a_push_of_many_the_net_cuts_short_stops_at_the_batch_never_answered() {
     assert!(
         unanswered(&refused, "transcode", "JobProducer::enqueue"),
         "{refused:?}"
+    );
+}
+
+/// A unit's handle keeping an outbox: it records what the port writes there
+/// and removes, and fails a write when told to.
+#[derive(Default)]
+struct Keeping {
+    written: Mutex<Vec<Vec<OutboxRecord>>>,
+    /// What the port asked it to remove: `queue:id`, or `queue:key`.
+    removed: Mutex<Vec<String>>,
+    refuses: bool,
+}
+
+impl Keeping {
+    fn refusing() -> Self {
+        Self {
+            refuses: true,
+            ..Self::default()
+        }
+    }
+
+    fn written(&self) -> Vec<Vec<OutboxRecord>> {
+        self.written.lock().expect("lock").clone()
+    }
+
+    /// Whether a record of job `id` on `queue` is still kept.
+    fn keeps(&self, queue: &str, id: uuid::Uuid) -> bool {
+        self.written
+            .lock()
+            .expect("lock")
+            .iter()
+            .flatten()
+            .any(|record| record.queue == queue && record.id == id)
+    }
+}
+
+impl DatabaseExecutor for Keeping {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn write_outbox(
+        &self,
+        records: &mut dyn Iterator<Item = OutboxRecord>,
+    ) -> Option<BoxFuture<'_, Result<(), OutboxError>>> {
+        let answer = if self.refuses {
+            Err(OutboxError::Database("the transaction is aborted".into()))
+        } else {
+            self.written.lock().expect("lock").push(records.collect());
+            Ok(())
+        };
+        Some(Box::pin(std::future::ready(answer)))
+    }
+
+    fn remove_outbox<'a>(
+        &'a self,
+        queue: &'a str,
+        id: uuid::Uuid,
+    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
+        self.removed
+            .lock()
+            .expect("lock")
+            .push(format!("{queue}:{id}"));
+        let mut written = self.written.lock().expect("lock");
+        let kept = written.iter().flatten().count();
+        for records in written.iter_mut() {
+            records.retain(|record| !(record.queue == queue && record.id == id));
+        }
+        let removed = written.iter().flatten().count() < kept;
+        Some(Box::pin(std::future::ready(Ok(removed))))
+    }
+
+    fn remove_outbox_unique<'a>(
+        &'a self,
+        queue: &'a str,
+        key: &'a str,
+    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
+        self.removed
+            .lock()
+            .expect("lock")
+            .push(format!("{queue}:{key}"));
+        let mut written = self.written.lock().expect("lock");
+        let kept = written.iter().flatten().count();
+        for records in written.iter_mut() {
+            records.retain(|record| {
+                !(record.queue == queue && record.unique_key.as_deref() == Some(key))
+            });
+        }
+        let removed = written.iter().flatten().count() < kept;
+        Some(Box::pin(std::future::ready(Ok(removed))))
+    }
+}
+
+/// A unit's handle keeping no outbox, as a pool's.
+struct OnThePool;
+
+impl DatabaseExecutor for OnThePool {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `push` run with `executor` as the ambient one.
+async fn inside<F: Future>(executor: Arc<dyn DatabaseExecutor>, push: F) -> F::Output {
+    nest_rs_database::with_request_executor(executor, push).await
+}
+
+#[tokio::test]
+async fn a_push_inside_a_unit_keeping_an_outbox_is_written_there_and_never_reaches_the_backend() {
+    let producer = RecordingProducer::on(&FULL);
+    let keeping = Arc::new(Keeping::default());
+    let receipt = inside(keeping.clone(), producer.push(TranscodeQueue, song(), None))
+        .await
+        .expect("written to the outbox");
+
+    assert!(
+        producer.filed().is_empty(),
+        "the backend sees it after the commit, from the relay"
+    );
+    let written = keeping.written();
+    assert_eq!(written.len(), 1, "one write");
+    let [record] = written[0].as_slice() else {
+        panic!("one record for one push: {written:?}");
+    };
+    assert_eq!(record.queue, "transcode");
+    assert_eq!(
+        record.id.to_string(),
+        receipt.id().to_string(),
+        "the receipt names the record's job"
+    );
+    assert_eq!(record.unique_key, None);
+    assert_eq!(record.delay, Duration::ZERO);
+    let sealed: Value = serde_json::from_str(&record.sealed).expect("the sealed job is JSON");
+    assert_eq!(sealed["payload"], json!({ "file": "song.wav" }));
+    assert_eq!(sealed["id"], json!(receipt.id().to_string()));
+    assert_eq!(sealed["v"], json!(WIRE_FORMAT_VERSION));
+}
+
+#[tokio::test]
+async fn a_push_of_many_inside_such_a_unit_is_one_write_with_a_record_per_receipt() {
+    let producer = RecordingProducer::on(&FULL);
+    let keeping = Arc::new(Keeping::default());
+    let receipts = inside(
+        keeping.clone(),
+        producer.push_many(
+            TranscodeQueue,
+            (0..=ENQUEUE_BATCH).map(|n| TranscodeCommand {
+                file: format!("{n}.wav"),
+            }),
+            None,
+        ),
+    )
+    .await
+    .expect("written to the outbox");
+
+    assert!(producer.filed().is_empty());
+    let written = keeping.written();
+    assert_eq!(
+        written.len(),
+        1,
+        "one write, so the whole push commits or rolls back with its unit"
+    );
+    let ids: Vec<String> = written[0]
+        .iter()
+        .map(|record| record.id.to_string())
+        .collect();
+    let receipted: Vec<String> = receipts
+        .iter()
+        .map(|receipt| receipt.id().to_string())
+        .collect();
+    assert_eq!(ids, receipted, "one record per receipt, in input order");
+}
+
+#[tokio::test]
+async fn a_push_on_a_handle_keeping_no_outbox_is_filed_at_once() {
+    let producer = RecordingProducer::on(&FULL);
+    let receipt = inside(
+        Arc::new(OnThePool),
+        producer.push(TranscodeQueue, song(), None),
+    )
+    .await
+    .expect("filed");
+    let filed = producer.filed();
+    assert_eq!(
+        filed.len(),
+        1,
+        "a pool keeps no outbox: the backend files it now"
+    );
+    assert_eq!(filed[0].1[0]["id"], json!(receipt.id().to_string()));
+}
+
+#[tokio::test]
+async fn a_push_keeps_its_options_on_the_record_and_is_refused_what_the_backend_lacks_first() {
+    let producer = RecordingProducer::on(&FULL);
+    let keeping = Arc::new(Keeping::default());
+    let at = SystemTime::now() + Duration::from_secs(600);
+    inside(keeping.clone(), async {
+        producer
+            .push(
+                TranscodeQueue,
+                song(),
+                PushOptions::default()
+                    .with_delay(Duration::from_secs(60))
+                    .with_unique(HELD_KEY),
+            )
+            .await
+            .expect("a delay and a key the backend declares");
+        producer
+            .push(
+                TranscodeQueue,
+                song(),
+                PushOptions::default().with_delay(at),
+            )
+            .await
+            .expect("an instant the backend declares");
+    })
+    .await;
+    let written: Vec<OutboxRecord> = keeping.written().into_iter().flatten().collect();
+    assert_eq!(written[0].delay, Duration::from_secs(60));
+    assert_eq!(written[0].unique_key.as_deref(), Some(HELD_KEY));
+    assert!(
+        written[1].delay <= Duration::from_secs(600) && written[1].delay > Duration::from_secs(590),
+        "an instant is kept as what is left of the wait: {:?}",
+        written[1].delay,
+    );
+
+    let bare = RecordingProducer::on(&BARE);
+    let keeping = Arc::new(Keeping::default());
+    let refused = inside(
+        keeping.clone(),
+        bare.push(
+            TranscodeQueue,
+            song(),
+            PushOptions::default().with_delay(Duration::from_secs(60)),
+        ),
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(QueueError::Unsupported { .. })),
+        "refused at the push, before the outbox: {refused:?}"
+    );
+    assert!(keeping.written().is_empty());
+}
+
+#[tokio::test]
+async fn a_key_another_job_holds_is_not_refused_at_a_push_the_outbox_keeps() {
+    let producer = RecordingProducer::on(&FULL);
+    producer
+        .push(
+            TranscodeQueue,
+            song(),
+            PushOptions::default().with_unique(HELD_KEY),
+        )
+        .await
+        .expect("the first job holds the key");
+    let keeping = Arc::new(Keeping::default());
+    inside(
+        keeping.clone(),
+        producer.push(
+            TranscodeQueue,
+            song(),
+            PushOptions::default().with_unique(HELD_KEY),
+        ),
+    )
+    .await
+    .expect("the relay checks the key once the unit committed");
+    assert_eq!(keeping.written().len(), 1);
+}
+
+#[tokio::test]
+async fn a_write_the_outbox_refuses_fails_the_push() {
+    let producer = RecordingProducer::on(&FULL);
+    let refused = inside(
+        Arc::new(Keeping::refusing()),
+        producer.push(TranscodeQueue, song(), None),
+    )
+    .await
+    .expect_err("nothing was kept");
+    assert!(matches!(refused, QueueError::Outbox(_)), "{refused:?}");
+    assert!(
+        producer.filed().is_empty(),
+        "never filed behind its unit's back"
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_inside_a_unit_removes_a_record_not_yet_filed_then_asks_the_backend() {
+    let producer = RecordingProducer::on(&FULL);
+    let keeping = Arc::new(Keeping::default());
+    let cancelled = inside(keeping.clone(), async {
+        let receipt = producer
+            .push(TranscodeQueue, song(), None)
+            .await
+            .expect("written to the outbox");
+        assert!(keeping.keeps(
+            "transcode",
+            receipt.id().to_string().parse().expect("a uuid")
+        ));
+        producer.cancel(&receipt).await
+    })
+    .await;
+    assert!(
+        cancelled.expect("cancelled"),
+        "it never reached the backend"
+    );
+    assert!(keeping.written().iter().flatten().next().is_none());
+    assert_eq!(producer.removed().len(), 1, "the backend is asked too");
+
+    let keeping = Arc::new(Keeping::default());
+    let cancelled = inside(keeping.clone(), async {
+        producer
+            .push(
+                TranscodeQueue,
+                song(),
+                PushOptions::default().with_unique(HELD_KEY),
+            )
+            .await
+            .expect("written to the outbox");
+        producer.cancel_unique(TranscodeQueue, HELD_KEY).await
+    })
+    .await;
+    assert!(cancelled.expect("cancelled"));
+    assert!(keeping.written().iter().flatten().next().is_none());
+    assert_eq!(
+        keeping.removed.lock().expect("lock").as_slice(),
+        [format!("transcode:{HELD_KEY}")],
     );
 }

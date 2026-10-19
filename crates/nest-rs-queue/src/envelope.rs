@@ -154,6 +154,34 @@ impl Envelope {
     pub fn into_json(self) -> Value {
         self.json
     }
+
+    /// The envelope as the text an outbox keeps until its unit commits.
+    pub(crate) fn sealed(&self) -> String {
+        self.json.to_string()
+    }
+
+    /// The envelope an outbox kept as `sealed` for job `id`: refused when the
+    /// text is no JSON object, or names another job — a record nothing can
+    /// file as the job its unit pushed.
+    pub(crate) fn from_outbox(sealed: &str, id: uuid::Uuid) -> Result<Self, Unkept> {
+        let json: Value = serde_json::from_str(sealed)
+            .map_err(|error| Unkept::Undecodable(nest_rs_core::DecodeError::new(&error)))?;
+        let id = identify(&json)
+            .id
+            .filter(|named| named.uuid() == id)
+            .ok_or(Unkept::Misnamed)?;
+        Ok(Self { json, id })
+    }
+}
+
+/// Why an outbox record holds no job a relay can file — said by kind, never
+/// by the record's text.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Unkept {
+    #[error("the record is no JSON: {0}")]
+    Undecodable(nest_rs_core::DecodeError),
+    #[error("the record's envelope names another job, or none")]
+    Misnamed,
 }
 
 /// Wrap a serialized payload in the wire envelope, stamped with the ambient

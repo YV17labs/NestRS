@@ -31,26 +31,30 @@ async fn each_probe_is_documented_under_one_health_tag() {
     let routes: Vec<_> = nest_rs_core::Discovery::new(app.container())
         .meta::<nest_rs_http::HttpControllerMeta>()
         .into_iter()
-        .flat_map(|d| d.meta.routes.clone())
+        .flat_map(|d| d.meta.routes().to_vec())
         .collect();
     assert_eq!(routes.len(), 3, "the three probes");
     for route in &routes {
-        assert_eq!(route.tags, ["health"], "{}", route.handler);
-        assert!(route.summary.is_some(), "{} has a summary", route.handler);
+        assert_eq!(route.tags(), ["health"], "{}", route.handler());
         assert!(
-            route.response.is_some(),
+            route.summary().is_some(),
+            "{} has a summary",
+            route.handler()
+        );
+        assert!(
+            route.response().is_some(),
             "{} types its report",
-            route.handler
+            route.handler()
         );
         assert_eq!(
             route
-                .error_responses
+                .error_responses()
                 .iter()
                 .map(|(s, _)| *s)
                 .collect::<Vec<_>>(),
             [503],
             "{} documents the report a failing probe answers with",
-            route.handler,
+            route.handler(),
         );
     }
 }

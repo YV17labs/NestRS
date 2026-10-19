@@ -1319,7 +1319,7 @@ struct HandBuilt;
 
 impl nest_rs_core::Discoverable for HandBuilt {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        let meta = nest_rs_http::HttpControllerMeta::new(
+        let meta = nest_rs_http::__private::http_controller_meta(
             "HandBuilt",
             "hand_built",
             "/hand",

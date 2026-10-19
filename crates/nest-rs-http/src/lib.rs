@@ -201,7 +201,7 @@ pub use config::{
     SSE_KEEP_ALIVE_FLOOR, UNIT_TIMEOUT_CEILING, UNIT_TIMEOUT_FLOOR,
 };
 pub use context::{Ctx, RejectedCredential};
-pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, RequestBodyMeta};
+pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
 pub use cors::HttpCors;
 pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
@@ -250,7 +250,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::controller::{SchemaFn, schema_of};
+    pub use crate::controller::{HttpRouteParts, http_controller_meta, http_route_meta, schema_of};
     pub use crate::deprecation::deprecated_route;
     pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
@@ -357,9 +357,9 @@ pub use nest_rs_http_macros::controller;
 ///
 /// # let app = TestApp::for_module::<UsersModule>().await?;
 /// let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
-/// let route = &controllers[0].meta.routes[0];
-/// assert_eq!((&route.method, route.path, route.handler), (&Method::GET, "/", "list"));
-/// assert!(route.response.is_some());
+/// let route = &controllers[0].meta.routes()[0];
+/// assert_eq!((route.method(), route.path(), route.handler()), (&Method::GET, "/", "list"));
+/// assert!(route.response().is_some());
 ///
 /// app.http().get("/users").send().await.assert_json(["ada"]).await;
 /// # Ok(())

@@ -371,9 +371,9 @@ async fn a_route_records_the_method_its_decorator_names() {
         nest_rs_core::Discovery::new(app.container()).meta::<nest_rs_http::HttpControllerMeta>();
     let recorded: Vec<(&str, Method)> = controllers[0]
         .meta
-        .routes
+        .routes()
         .iter()
-        .map(|route| (route.handler, route.method.clone()))
+        .map(|route| (route.handler(), route.method().clone()))
         .collect();
     assert_eq!(recorded, METHODS, "`#[sse]` is a `GET`");
 }

@@ -51,7 +51,7 @@ pub(crate) fn build_document(
         // The last write wins a contested path, so the highest version is described.
         // Not under the URI strategy: reordering would rewrite a committed document.
         entries.sort_by(|(a_meta, a), (b_meta, b)| {
-            compare_versions(*a, *b).then_with(|| a_meta.path.cmp(b_meta.path))
+            compare_versions(*a, *b).then_with(|| a_meta.path().cmp(b_meta.path()))
         });
     }
 
@@ -67,21 +67,21 @@ pub(crate) fn build_document(
         }
         // Under a non-URI strategy the mounted `/v1/posts` answers `404`.
         let prefix = match &selection {
-            Some(_) => meta.path.to_owned(),
+            Some(_) => meta.path().to_owned(),
             None => meta.effective_prefix(version),
         };
-        for route in &meta.routes {
+        for route in meta.routes() {
             if !HttpControllerMeta::serves(route, version) {
                 continue;
             }
-            let full = join_path(&prefix, route.path);
+            let full = join_path(&prefix, route.path());
             let full = match RouteTemplate::parse(&full) {
                 Ok(template) => template,
                 Err(refused) => {
                     tracing::warn!(
                         target: crate::TARGET,
-                        controller = meta.controller,
-                        handler = route.handler,
+                        controller = meta.controller(),
+                        handler = route.handler(),
                         error = %nest_rs_core::error_message(&refused),
                         "route omitted from the document: its path is not a route template",
                     );
@@ -91,8 +91,8 @@ pub(crate) fn build_document(
             let Some(key) = openapi_path(&full).map(str::to_owned) else {
                 tracing::warn!(
                     target: crate::TARGET,
-                    controller = meta.controller,
-                    handler = route.handler,
+                    controller = meta.controller(),
+                    handler = route.handler(),
                     path = %full,
                     "route omitted from the document: an OpenAPI path template names one \
                      segment's value, so a catch-all or a literal brace cannot be described",
@@ -103,7 +103,7 @@ pub(crate) fn build_document(
                 (Some(selection), Some(version)) => Some(selection.parameter(version, route)),
                 _ => None,
             };
-            let id = operation_id(meta.token, route.handler, version);
+            let id = operation_id(meta.token(), route.handler(), version);
             let operation = operation_object(
                 route,
                 &full,
@@ -114,7 +114,7 @@ pub(crate) fn build_document(
             );
             // OpenAPI 3.1 §4.8.10.1: an id is unique across the document. One id on one
             // address is a duplicate mount, the transport's to name.
-            let address = (key.clone(), route.method.as_str());
+            let address = (key.clone(), route.method().as_str());
             if let Some(previous) = operation_ids.insert(id.clone(), address.clone())
                 && previous != address
                 && reported.ids.insert(id.clone())
@@ -123,7 +123,7 @@ pub(crate) fn build_document(
                     target: crate::TARGET,
                     operation_id = id.as_str(),
                     path = key.as_str(),
-                    method = route.method.as_str(),
+                    method = route.method().as_str(),
                     conflicting_path = previous.0.as_str(),
                     conflicting_method = previous.1,
                     hint = DUPLICATE_ID_REMEDY,
@@ -133,13 +133,13 @@ pub(crate) fn build_document(
             // OpenAPI keys one operation per (path, method): name the version dropped.
             if selection.is_some()
                 && let Some(previous) =
-                    described.insert((key.clone(), route.method.as_str()), version)
+                    described.insert((key.clone(), route.method().as_str()), version)
                 && previous != version
             {
                 tracing::warn!(
                     target: crate::TARGET,
                     path = key.as_str(),
-                    method = route.method.as_str(),
+                    method = route.method().as_str(),
                     described = version_label(version),
                     omitted = version_label(previous),
                     hint = contested_path_remedy().as_str(),
@@ -150,7 +150,7 @@ pub(crate) fn build_document(
                 .entry(key)
                 .or_insert_with(|| Value::Object(Map::new()));
             if let Value::Object(methods) = item {
-                methods.insert(route.method.as_str().to_ascii_lowercase(), operation);
+                methods.insert(route.method().as_str().to_ascii_lowercase(), operation);
             }
         }
     }
@@ -345,7 +345,7 @@ impl VersionSelection {
                 ),
                 format!(
                     "{}; {MEDIA_TYPE_PARAM}={version}",
-                    route.response_content_type.unwrap_or(JSON_MEDIA_TYPE),
+                    route.response_content_type().unwrap_or(JSON_MEDIA_TYPE),
                 ),
             ),
             _ => (
@@ -422,7 +422,7 @@ fn problem_details_schema() -> Value {
 }
 
 fn route_is_guarded(route: &HttpRouteMeta, global_guards: bool) -> bool {
-    (route.scoped_guarded || global_guards) && !route.public
+    (route.scoped_guarded() || global_guards) && !route.public()
 }
 
 fn operation_object(
@@ -435,21 +435,25 @@ fn operation_object(
 ) -> Value {
     let mut op = Map::new();
     op.insert("operationId".into(), json!(operation_id));
-    op.insert("tags".into(), json!(route.tags));
-    if let Some(summary) = route.summary {
+    op.insert("tags".into(), json!(route.tags()));
+    if let Some(summary) = route.summary() {
         op.insert("summary".into(), json!(summary));
     }
-    if let Some(description) = route.description {
+    if let Some(description) = route.description() {
         op.insert("description".into(), json!(description));
     }
-    if route.deprecation.is_some() {
+    if route.deprecation().is_some() {
         op.insert("deprecated".into(), json!(true));
     }
 
-    let mut parameters = typed_path_parameters(full_path, route.path_params, generator);
-    parameters.extend(expand_object_params(route.query_params, "query", generator));
+    let mut parameters = typed_path_parameters(full_path, route.path_params(), generator);
     parameters.extend(expand_object_params(
-        route.header_params,
+        route.query_params(),
+        "query",
+        generator,
+    ));
+    parameters.extend(expand_object_params(
+        route.header_params(),
         "header",
         generator,
     ));
@@ -462,7 +466,7 @@ fn operation_object(
         op.insert("parameters".into(), Value::Array(parameters));
     }
 
-    if let Some(body) = route.request_body {
+    if let Some(body) = route.request_body() {
         let schema = match body.schema() {
             Some(schema_fn) => schema_fn(generator).to_value(),
             // A bare `Multipart`: the media type is known, the parts are not.
@@ -476,20 +480,20 @@ fn operation_object(
 
     if route_is_guarded(route, global_guards) {
         op.insert("security".into(), json!([{ "bearerAuth": [] }]));
-    } else if route.public {
+    } else if route.public() {
         // OpenAPI 3.1 §4.8.10.1: an empty list removes any requirement, the
         // `#[public]` opening stated in the document as in the code.
         op.insert("security".into(), json!([]));
     }
 
     let mut responses = Map::new();
-    let status = route.success_status;
+    let status = route.success_status();
     let mut ok = Map::new();
     let has_body = status != 204 && !is_redirect(status);
-    let schema = has_body.then_some(route.response).flatten();
+    let schema = has_body.then_some(route.response()).flatten();
     ok.insert(
         "description".into(),
-        json!(match (route.masked, schema.is_some()) {
+        json!(match (route.masked(), schema.is_some()) {
             (true, true) => format!(
                 "{} — field-level authorization applies: properties the caller's ability \
                  does not grant are omitted from the response.",
@@ -498,8 +502,8 @@ fn operation_object(
             _ => reason_phrase(status).to_owned(),
         }),
     );
-    let media = route.response_content_type.unwrap_or(JSON_MEDIA_TYPE);
-    match (schema, route.response_content_type) {
+    let media = route.response_content_type().unwrap_or(JSON_MEDIA_TYPE);
+    match (schema, route.response_content_type()) {
         (Some(schema_fn), _) => {
             ok.insert(
                 "content".into(),
@@ -536,7 +540,7 @@ fn operation_object(
     }
     // A body the handler writes itself sits beside the framework's problem
     // document for that status, when both can answer.
-    for (status, schema_fn) in route.error_responses {
+    for (status, schema_fn) in route.error_responses() {
         let schema = schema_fn(generator).to_value();
         let response = responses
             .entry(status.to_string())
@@ -559,7 +563,7 @@ fn operation_object(
 /// every segment has one: a `Bind<_, _>` leaves fewer and would misalign.
 fn typed_path_parameters(
     path: &RouteTemplate,
-    path_params: &[nest_rs_http::__private::SchemaFn],
+    path_params: &[nest_rs_http::SchemaFn],
     generator: &mut SchemaGenerator,
 ) -> Vec<Value> {
     let names: Vec<&str> = path.parameters().collect();
@@ -583,7 +587,7 @@ fn typed_path_parameters(
 /// Expand each payload struct into one parameter per property of its object
 /// schema, filed under `location` (`query` or `header`).
 fn expand_object_params(
-    params: &[nest_rs_http::__private::SchemaFn],
+    params: &[nest_rs_http::SchemaFn],
     location: &str,
     generator: &mut SchemaGenerator,
 ) -> Vec<Value> {
@@ -629,13 +633,13 @@ fn error_statuses(
     requires_parameter: bool,
 ) -> Vec<(&'static str, &'static str)> {
     let mut out = Vec::new();
-    if route.request_body.is_some() || requires_parameter {
+    if route.request_body().is_some() || requires_parameter {
         // Edge validation answers `400`, never `422` (`nest_rs_http::pipe::reject`).
         out.push(("400", "Bad Request"));
     }
     // The transport's body cap, whatever the media type.
     let content_too_large = route
-        .request_body
+        .request_body()
         .is_some()
         .then_some(("413", "Content Too Large"));
     if route_is_guarded(route, global_guards) {
@@ -646,11 +650,11 @@ fn error_statuses(
     if full_path.parameters().next().is_some() {
         out.push(("404", "Not Found"));
     }
-    if route.may_conflict {
+    if route.may_conflict() {
         out.push(("409", "Conflict"));
     }
     out.extend(content_too_large);
-    if route.throttled {
+    if route.throttled() {
         out.push(("429", "Too Many Requests"));
     }
     // A handler's `Err` answers an opaque `500`; not `default`, which would
@@ -728,10 +732,10 @@ fn retry_after_header() -> Value {
 /// The headers the success response carries on the framework's behalf.
 fn success_headers(route: &HttpRouteMeta, status: u16) -> Map<String, Value> {
     let mut headers = Map::new();
-    if route.sets_location {
+    if route.sets_location() {
         headers.insert("Location".into(), location_header(status));
     }
-    if route.sets_next_link {
+    if route.sets_next_link() {
         headers.insert(
             "Link".into(),
             json!({
@@ -741,7 +745,7 @@ fn success_headers(route: &HttpRouteMeta, status: u16) -> Map<String, Value> {
             }),
         );
     }
-    if let Some(deprecation) = route.deprecation {
+    if let Some(deprecation) = route.deprecation() {
         headers.insert(
             "Deprecation".into(),
             json!({
@@ -751,12 +755,12 @@ fn success_headers(route: &HttpRouteMeta, status: u16) -> Map<String, Value> {
             }),
         );
     }
-    for (name, value) in route.response_headers {
+    for (name, value) in route.response_headers() {
         // RFC 9110 §5.3: `Set-Cookie` alone is sent as several fields, so no
         // one value describes it.
         let several = name.eq_ignore_ascii_case("set-cookie")
             || route
-                .response_headers
+                .response_headers()
                 .iter()
                 .filter(|(n, _)| n == name)
                 .count()
@@ -849,6 +853,7 @@ fn openapi_path(template: &RouteTemplate) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_http::__private::{HttpRouteParts, http_controller_meta, http_route_meta};
     use nest_rs_http::{DEFAULT_VERSION_HEADER, Method, RequestBodyMeta};
     use schemars::JsonSchema;
     use schemars::generate::SchemaSettings;
@@ -961,8 +966,8 @@ mod tests {
         generator.subschema_for::<OptionalHeader>()
     }
 
-    fn route(handler: &'static str, path: &'static str) -> HttpRouteMeta {
-        HttpRouteMeta {
+    fn route(handler: &'static str, path: &'static str) -> HttpRouteParts {
+        HttpRouteParts {
             method: Method::GET,
             path,
             handler,
@@ -993,14 +998,14 @@ mod tests {
     const HOST_TOKEN: &str = "test";
 
     fn operation(
-        route: &HttpRouteMeta,
+        route: &HttpRouteParts,
         full_path: &str,
         generator: &mut SchemaGenerator,
         global_guards: bool,
         version_parameter: Option<Value>,
     ) -> Value {
         operation_object(
-            route,
+            &http_route_meta(route.clone()),
             &template(full_path),
             &operation_id(HOST_TOKEN, route.handler, None),
             generator,
@@ -1012,7 +1017,7 @@ mod tests {
     #[test]
     fn a_path_param_segment_advertises_404_but_a_literal_segment_does_not() {
         let bound = error_statuses(
-            &route("get_user", "/users/{id}"),
+            &http_route_meta(route("get_user", "/users/{id}")),
             &template("/users/{id}"),
             false,
             false,
@@ -1023,7 +1028,7 @@ mod tests {
         );
 
         let literal = error_statuses(
-            &route("weird", "/a-b/list"),
+            &http_route_meta(route("weird", "/a-b/list")),
             &template("/a-b/list"),
             false,
             false,
@@ -1102,7 +1107,12 @@ mod tests {
 
     #[test]
     fn an_unthrottled_route_does_not_advertise_429() {
-        let statuses = error_statuses(&route("list", "/audio"), &template("/audio"), false, false);
+        let statuses = error_statuses(
+            &http_route_meta(route("list", "/audio")),
+            &template("/audio"),
+            false,
+            false,
+        );
         assert!(
             !statuses.iter().any(|(s, _)| *s == "429"),
             "a route with no ThrottlerGuard must not advertise 429",
@@ -1718,13 +1728,13 @@ mod tests {
     fn the_version_header_is_required_only_where_no_default_answers_for_it() {
         let stated = selection(ApiVersioning::Header, None, None).expect("a selection");
         assert_eq!(
-            stated.parameter("2", &route("list", "/posts"))["required"],
+            stated.parameter("2", &http_route_meta(route("list", "/posts")))["required"],
             true,
             "with no default version the caller must state one",
         );
         let defaulted = selection(ApiVersioning::Header, Some("1"), None).expect("a selection");
         assert_eq!(
-            defaulted.parameter("1", &route("list", "/posts"))["required"],
+            defaulted.parameter("1", &http_route_meta(route("list", "/posts")))["required"],
             false,
             "a default version answers for a caller that states none",
         );
@@ -1733,7 +1743,7 @@ mod tests {
     #[test]
     fn the_header_strategy_documents_the_configured_header_and_its_versions() {
         let selection = selection(ApiVersioning::Header, None, None).expect("a selection");
-        let parameter = selection.parameter("2", &route("list", "/posts"));
+        let parameter = selection.parameter("2", &http_route_meta(route("list", "/posts")));
         assert_eq!(parameter["name"], DEFAULT_VERSION_HEADER);
         assert_eq!(parameter["in"], "header");
         assert_eq!(
@@ -1746,7 +1756,7 @@ mod tests {
     #[test]
     fn the_media_type_strategy_documents_the_accept_header_it_reads() {
         let selection = selection(ApiVersioning::MediaType, None, None).expect("a selection");
-        let parameter = selection.parameter("2", &route("list", "/posts"));
+        let parameter = selection.parameter("2", &http_route_meta(route("list", "/posts")));
         assert_eq!(parameter["name"], "accept");
         assert_eq!(
             parameter["schema"]["enum"],
@@ -1762,7 +1772,7 @@ mod tests {
         let mut streamed = route("events", "/audio/events");
         streamed.response_content_type = Some("text/event-stream");
         assert_eq!(
-            selection.parameter("2", &streamed)["schema"]["enum"],
+            selection.parameter("2", &http_route_meta(streamed))["schema"]["enum"],
             json!(["text/event-stream; version=2"]),
         );
     }
@@ -1798,7 +1808,7 @@ mod tests {
             "/posts",
             &mut g,
             false,
-            Some(selection.parameter("2", &r)),
+            Some(selection.parameter("2", &http_route_meta(r.clone()))),
         );
         assert_eq!(op["parameters"][0]["name"], DEFAULT_VERSION_HEADER);
         assert!(op["responses"].get("400").is_some(), "{op}");
@@ -1861,12 +1871,13 @@ mod tests {
         token: &'static str,
         path: &'static str,
         versions: &'static [&'static str],
-        routes: Vec<HttpRouteMeta>,
+        routes: Vec<HttpRouteParts>,
     ) -> HttpControllerMeta {
-        HttpControllerMeta::new(name, token, path, versions, routes, |_, _| {})
+        let routes = routes.into_iter().map(http_route_meta).collect();
+        http_controller_meta(name, token, path, versions, routes, |_, _| {})
     }
 
-    fn crud_routes() -> Vec<HttpRouteMeta> {
+    fn crud_routes() -> Vec<HttpRouteParts> {
         let mut list = route("list", "/");
         let mut get = route("get", "/{id}");
         let mut create = route("create", "/");

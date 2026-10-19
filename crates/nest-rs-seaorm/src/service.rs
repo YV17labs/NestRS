@@ -144,9 +144,9 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// # let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
 /// # let routes: Vec<_> = controllers[0]
 /// #     .meta
-/// #     .routes
+/// #     .routes()
 /// #     .iter()
-/// #     .map(|route| (route.method.clone(), route.path, route.handler))
+/// #     .map(|route| (route.method().clone(), route.path(), route.handler()))
 /// #     .collect();
 ///
 /// assert_eq!(

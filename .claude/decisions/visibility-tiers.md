@@ -43,3 +43,9 @@ that does. Review alone holds that a public doc names no `__private` item:
 rustdoc resolves a link into a `#[doc(hidden)]` module without a warning, even
 under `-D warnings`, and renders it as plain text or a dead path, so a public
 doc says what such an item does in words.
+
+**2026-10-19 — `SchemaFn` is API.** The route record became a read API whose
+accessors hand the schema builders out, and nest-rs-openapi, its reader, named
+their type through `__private`: a hidden alias in a public signature leaves
+its reader nothing to look up. `nest_rs_http::SchemaFn` is tier 1;
+`schema_of`, which only `#[routes]` emits, stays in `__private`.

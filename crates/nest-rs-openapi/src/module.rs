@@ -204,7 +204,7 @@ mod tests {
     fn deployment(config: HttpConfig, versions: &'static [&'static str]) -> Container {
         nest_rs_core::Container::builder()
             .provide(config)
-            .provide_meta(nest_rs_http::HttpControllerMeta::new(
+            .provide_meta(nest_rs_http::__private::http_controller_meta(
                 "PostsController",
                 "posts",
                 "/posts",

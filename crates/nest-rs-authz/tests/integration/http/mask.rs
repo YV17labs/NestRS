@@ -517,7 +517,7 @@ async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked(
     let controllers = discovery.meta::<nest_rs_http::HttpControllerMeta>();
     let routes: Vec<_> = controllers
         .iter()
-        .flat_map(|d| d.meta.routes.iter())
+        .flat_map(|d| d.meta.routes().iter())
         .collect();
     assert!(!routes.is_empty(), "the controller is discovered at all");
 
@@ -528,17 +528,17 @@ async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked(
 
     for route in routes {
         assert!(
-            route.masked,
+            route.masked(),
             "every route here is shaped, so every one is masked: {}",
-            route.handler,
+            route.handler(),
         );
-        if OPAQUE_BY_CONSTRUCTION.contains(&route.handler) {
+        if OPAQUE_BY_CONSTRUCTION.contains(&route.handler()) {
             continue;
         }
         assert!(
-            route.response.is_some(),
+            route.response().is_some(),
             "a masked route publishes the shape a caller may see a subset of: {}",
-            route.handler,
+            route.handler(),
         );
     }
 }

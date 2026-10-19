@@ -92,15 +92,15 @@ pub(crate) fn report_prefixed_probe_paths(container: &Container) {
     };
 
     let served: Vec<String> = meta
-        .routes
+        .routes()
         .iter()
-        .map(|route| join_path(&prefix, &join_path(meta.path, route.path)))
+        .map(|route| join_path(&prefix, &join_path(meta.path(), route.path())))
         .collect();
     tracing::warn!(
         target: crate::TARGET,
         prefix = prefix.as_str(),
         served = served.join(", ").as_str(),
-        declared = meta.path,
+        declared = meta.path(),
         hint = "point the liveness/readiness/startup probes at the served paths",
         "health probes are served under the HTTP global prefix",
     );

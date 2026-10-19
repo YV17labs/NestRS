@@ -216,7 +216,7 @@ pub fn declared_versions(container: &Container) -> Vec<String> {
     let mut versions: Vec<String> = Discovery::new(container)
         .meta::<crate::HttpControllerMeta>()
         .iter()
-        .flat_map(|d| d.meta.versions)
+        .flat_map(|d| d.meta.versions())
         .map(|v| (*v).to_owned())
         .collect();
     versions.sort();

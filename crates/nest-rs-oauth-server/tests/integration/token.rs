@@ -111,10 +111,10 @@ async fn the_route_documents_the_access_token_response_it_returns() {
     let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
     let route = controllers
         .iter()
-        .flat_map(|controller| controller.meta.routes.iter())
-        .find(|route| route.handler == "token")
+        .flat_map(|controller| controller.meta.routes().iter())
+        .find(|route| route.handler() == "token")
         .expect("the token route is discovered");
-    let schema_of = route.response.expect("a documented response");
+    let schema_of = route.response().expect("a documented response");
 
     let mut generator = schemars::SchemaGenerator::default();
     let documented = schema_of(&mut generator);

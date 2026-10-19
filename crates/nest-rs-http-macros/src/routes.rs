@@ -622,13 +622,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             (Some(ty), _) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Multipart(
                     ::core::option::Option::Some(
-                        ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn,
+                        ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
                     ),
                 ))
             },
             (None, Some(ty)) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Json(
-                    ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn,
+                    ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
                 ))
             },
             (None, None) if takes_multipart(&inputs) => quote! {
@@ -639,7 +639,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             (None, None) => match &form_body {
                 Some(ty) => quote! {
                     ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Form(
-                        ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn,
+                        ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
                     ))
                 },
                 None => quote! { ::core::option::Option::None },
@@ -652,7 +652,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .or_else(|| response_payload(&method.sig.output))
         {
             Some(ty) => quote! {
-                ::core::option::Option::Some(::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn)
+                ::core::option::Option::Some(::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn)
             },
             None => quote! { ::core::option::Option::None },
         };
@@ -675,7 +675,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             None => quote! { ::core::option::Option::None },
         };
         let error_responses = api.errors.iter().map(|(status, ty)| {
-            quote! { (#status, ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn) }
+            quote! { (#status, ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn) }
         });
         let error_responses = quote! { &[#(#error_responses),*] };
         let response_content_type = match &api.response_content_type {
@@ -691,19 +691,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let path_params = if path_param_tys.is_empty() {
             quote! { &[] }
         } else {
-            quote! { &[#(::nest_rs_http::__private::schema_of::<#path_param_tys> as ::nest_rs_http::__private::SchemaFn),*] }
+            quote! { &[#(::nest_rs_http::__private::schema_of::<#path_param_tys> as ::nest_rs_http::SchemaFn),*] }
         };
         let query_param_tys = extractor_payloads(&inputs, "Query");
         let query_params = if query_param_tys.is_empty() {
             quote! { &[] }
         } else {
-            quote! { &[#(::nest_rs_http::__private::schema_of::<#query_param_tys> as ::nest_rs_http::__private::SchemaFn),*] }
+            quote! { &[#(::nest_rs_http::__private::schema_of::<#query_param_tys> as ::nest_rs_http::SchemaFn),*] }
         };
         let header_param_tys = extractor_payloads(&inputs, "Header");
         let header_params = if header_param_tys.is_empty() {
             quote! { &[] }
         } else {
-            quote! { &[#(::nest_rs_http::__private::schema_of::<#header_param_tys> as ::nest_rs_http::__private::SchemaFn),*] }
+            quote! { &[#(::nest_rs_http::__private::schema_of::<#header_param_tys> as ::nest_rs_http::SchemaFn),*] }
         };
 
         let route_versions = quote! { &[#(#method_versions),*] };
@@ -730,7 +730,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         route_metas.push(quote! {
             #(#cfgs)*
-            ::nest_rs_http::HttpRouteMeta {
+            ::nest_rs_http::__private::http_route_meta(::nest_rs_http::__private::HttpRouteParts {
                 method: ::nest_rs_http::Method::#method_const,
                 path: #route_path,
                 handler: #method_name_lit,
@@ -757,7 +757,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 public: #is_public,
                 deprecation: #deprecation_meta,
                 versions: #route_versions,
-            }
+            })
         });
     }
 
@@ -921,7 +921,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
-                let __meta = ::nest_rs_http::HttpControllerMeta::new(
+                let __meta = ::nest_rs_http::__private::http_controller_meta(
                     #ctrl_tag,
                     #ctrl_token,
                     <#self_ty>::PATH,

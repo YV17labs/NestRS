@@ -55,8 +55,8 @@ pub(crate) fn build_document(
         });
     }
 
-    let mut described: HashMap<(String, &'static str), Option<&'static str>> = HashMap::new();
-    let mut operation_ids: HashMap<String, (String, &'static str)> = HashMap::new();
+    let mut described: HashMap<(String, &str), Option<&'static str>> = HashMap::new();
+    let mut operation_ids: HashMap<String, (String, &str)> = HashMap::new();
     let mut paths: Map<String, Value> = Map::new();
     for (meta, version) in &entries {
         let version = *version;
@@ -114,7 +114,7 @@ pub(crate) fn build_document(
             );
             // OpenAPI 3.1 §4.8.10.1: an id is unique across the document. One id on one
             // address is a duplicate mount, the transport's to name.
-            let address = (key.clone(), route.verb.as_str());
+            let address = (key.clone(), route.method.as_str());
             if let Some(previous) = operation_ids.insert(id.clone(), address.clone())
                 && previous != address
                 && reported.ids.insert(id.clone())
@@ -123,7 +123,7 @@ pub(crate) fn build_document(
                     target: crate::TARGET,
                     operation_id = id.as_str(),
                     path = key.as_str(),
-                    method = route.verb.as_str(),
+                    method = route.method.as_str(),
                     conflicting_path = previous.0.as_str(),
                     conflicting_method = previous.1,
                     hint = DUPLICATE_ID_REMEDY,
@@ -133,13 +133,13 @@ pub(crate) fn build_document(
             // OpenAPI keys one operation per (path, method): name the version dropped.
             if selection.is_some()
                 && let Some(previous) =
-                    described.insert((key.clone(), route.verb.as_str()), version)
+                    described.insert((key.clone(), route.method.as_str()), version)
                 && previous != version
             {
                 tracing::warn!(
                     target: crate::TARGET,
                     path = key.as_str(),
-                    method = route.verb.as_str(),
+                    method = route.method.as_str(),
                     described = version_label(version),
                     omitted = version_label(previous),
                     hint = contested_path_remedy().as_str(),
@@ -150,7 +150,7 @@ pub(crate) fn build_document(
                 .entry(key)
                 .or_insert_with(|| Value::Object(Map::new()));
             if let Value::Object(methods) = item {
-                methods.insert(route.verb.as_str().to_ascii_lowercase(), operation);
+                methods.insert(route.method.as_str().to_ascii_lowercase(), operation);
             }
         }
     }
@@ -849,7 +849,7 @@ fn openapi_path(template: &RouteTemplate) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_http::{DEFAULT_VERSION_HEADER, HttpVerb, RequestBodyMeta};
+    use nest_rs_http::{DEFAULT_VERSION_HEADER, Method, RequestBodyMeta};
     use schemars::JsonSchema;
     use schemars::generate::SchemaSettings;
     use serde::Serialize;
@@ -963,7 +963,7 @@ mod tests {
 
     fn route(handler: &'static str, path: &'static str) -> HttpRouteMeta {
         HttpRouteMeta {
-            verb: HttpVerb::Get,
+            method: Method::GET,
             path,
             handler,
             tags: &[],
@@ -1052,7 +1052,7 @@ mod tests {
     fn a_create_route_declares_the_location_header_on_its_201() {
         let mut g = generator();
         let mut r = route("create", "/orgs");
-        r.verb = HttpVerb::Post;
+        r.method = Method::POST;
         r.success_status = 201;
         r.sets_location = true;
         let op = operation(&r, "/orgs", &mut g, false, None);
@@ -1164,7 +1164,7 @@ mod tests {
     fn a_multipart_body_is_documented_under_its_own_media_type() {
         let mut g = generator();
         let mut r = route("upload", "/audio/uploads/direct");
-        r.verb = HttpVerb::Post;
+        r.method = Method::POST;
         r.request_body = Some(RequestBodyMeta::Multipart(Some(schema_for_dummy)));
         let op = operation(&r, "/audio/uploads/direct", &mut g, false, None);
         assert!(
@@ -1183,7 +1183,7 @@ mod tests {
     fn an_untyped_multipart_body_still_declares_its_media_type() {
         let mut g = generator();
         let mut r = route("upload", "/uploads");
-        r.verb = HttpVerb::Post;
+        r.method = Method::POST;
         r.request_body = Some(RequestBodyMeta::Multipart(None));
         let op = operation(&r, "/uploads", &mut g, false, None);
         let schema = &op["requestBody"]["content"]["multipart/form-data"]["schema"];
@@ -1423,7 +1423,7 @@ mod tests {
     fn a_route_taking_a_body_advertises_the_cap_it_can_hit() {
         let mut g = generator();
         let mut r = route("upload", "/uploads");
-        r.verb = HttpVerb::Post;
+        r.method = Method::POST;
         r.request_body = Some(RequestBodyMeta::Multipart(None));
         let op = operation(&r, "/uploads", &mut g, false, None);
         assert_eq!(
@@ -1570,7 +1570,7 @@ mod tests {
         let mut search = route("search", "/");
         search.query_params = &[schema_for_dummy];
         let mut submit = route("submit", "/");
-        submit.verb = HttpVerb::Post;
+        submit.method = Method::POST;
         submit.request_body = Some(RequestBodyMeta::Json(schema_for_optional));
         let container = deployment(vec![controller(
             "ThingsController",
@@ -1870,11 +1870,11 @@ mod tests {
         let mut list = route("list", "/");
         let mut get = route("get", "/{id}");
         let mut create = route("create", "/");
-        create.verb = HttpVerb::Post;
+        create.method = Method::POST;
         let mut update = route("update", "/{id}");
-        update.verb = HttpVerb::Put;
+        update.method = Method::PUT;
         let mut delete = route("delete", "/{id}");
-        delete.verb = HttpVerb::Delete;
+        delete.method = Method::DELETE;
         list.tags = &["crud"];
         get.tags = &["crud"];
         vec![list, get, create, update, delete]

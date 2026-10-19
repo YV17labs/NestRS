@@ -578,14 +578,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }),
         }
 
-        let verb_variant = match verb_ident.to_string().as_str() {
-            "get" => quote!(::nest_rs_http::HttpVerb::Get),
-            "post" => quote!(::nest_rs_http::HttpVerb::Post),
-            "put" => quote!(::nest_rs_http::HttpVerb::Put),
-            "delete" => quote!(::nest_rs_http::HttpVerb::Delete),
-            "patch" => quote!(::nest_rs_http::HttpVerb::Patch),
-            _ => unreachable!("verb_ident filtered above"),
-        };
+        let method_const =
+            syn::Ident::new(&verb_ident.to_string().to_uppercase(), verb_ident.span());
 
         let summary = opt_str(&api.summary);
         let description = opt_str(&api.description);
@@ -737,7 +731,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         route_metas.push(quote! {
             #(#cfgs)*
             ::nest_rs_http::HttpRouteMeta {
-                verb: #verb_variant,
+                method: ::nest_rs_http::Method::#method_const,
                 path: #route_path,
                 handler: #method_name_lit,
                 summary: #summary,

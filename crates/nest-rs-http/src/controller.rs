@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use http::Method;
 use nest_rs_core::Container;
 
 use crate::routes::HttpRoutes;
@@ -10,34 +11,6 @@ pub trait Controller: 'static {
     /// Register this controller's routes (under its `PATH`) on `routes`,
     /// resolving handler dependencies from `container`.
     fn mount(container: &Container, routes: &mut HttpRoutes);
-}
-
-/// The HTTP method a route answers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HttpVerb {
-    /// `GET`.
-    Get,
-    /// `POST`.
-    Post,
-    /// `PUT`.
-    Put,
-    /// `DELETE`.
-    Delete,
-    /// `PATCH`.
-    Patch,
-}
-
-impl HttpVerb {
-    /// The uppercase method token (`"GET"`, `"POST"`, …).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Get => "GET",
-            Self::Post => "POST",
-            Self::Put => "PUT",
-            Self::Delete => "DELETE",
-            Self::Patch => "PATCH",
-        }
-    }
 }
 
 /// Builds the schema for a request body or response, recording named component
@@ -85,7 +58,7 @@ impl RequestBodyMeta {
     }
 }
 
-/// Declarative description of a handler in a controller — verb/path/name plus
+/// Declarative description of a handler in a controller — method, path and name plus
 /// the OpenAPI facets `#[routes]` extracts, so a doc generator (nest-rs-openapi)
 /// builds a spec from discovery alone.
 ///
@@ -94,7 +67,7 @@ impl RequestBodyMeta {
 #[derive(Clone)]
 pub struct HttpRouteMeta {
     /// The method this route answers.
-    pub verb: HttpVerb,
+    pub method: Method,
     /// The route's template (`/{id}`), relative to the controller prefix,
     /// normalized as the router serves it.
     pub path: &'static str,
@@ -269,23 +242,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn http_verb_as_str_renders_each_method_name() {
-        assert_eq!(HttpVerb::Get.as_str(), "GET");
-        assert_eq!(HttpVerb::Post.as_str(), "POST");
-        assert_eq!(HttpVerb::Put.as_str(), "PUT");
-        assert_eq!(HttpVerb::Delete.as_str(), "DELETE");
-        assert_eq!(HttpVerb::Patch.as_str(), "PATCH");
-    }
-
-    #[test]
-    fn http_verb_is_value_type_for_equality_and_clone() {
-        let a = HttpVerb::Get;
-        let b = a;
-        assert_eq!(a, b);
-        assert_eq!(format!("{a:?}"), "Get");
-    }
-
-    #[test]
     fn schema_of_records_a_subschema_for_the_payload_type() {
         let mut generator = schemars::SchemaGenerator::default();
         let schema = schema_of::<String>(&mut generator);
@@ -375,7 +331,7 @@ mod tests {
 
     fn route_meta() -> HttpRouteMeta {
         HttpRouteMeta {
-            verb: HttpVerb::Get,
+            method: Method::GET,
             path: "/{id}",
             handler: "show",
             summary: Some("Fetch one"),
@@ -443,7 +399,7 @@ mod tests {
 
     fn route(scoped_guarded: bool, public: bool) -> HttpRouteMeta {
         HttpRouteMeta {
-            verb: HttpVerb::Post,
+            method: Method::POST,
             path: "/",
             handler: "create",
             summary: None,

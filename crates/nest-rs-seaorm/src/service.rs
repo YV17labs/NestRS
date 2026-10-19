@@ -87,7 +87,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// use nest_rs_http::{controller, crud};
 /// use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
 /// # use nest_rs_core::{Discovery, module};
-/// # use nest_rs_http::{HttpControllerMeta, HttpVerb};
+/// # use nest_rs_http::{HttpControllerMeta, Method};
 /// # use nest_rs_testing::TestApp;
 /// # mod users {
 /// #     use nest_rs_seaorm::expose;
@@ -146,17 +146,17 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// #     .meta
 /// #     .routes
 /// #     .iter()
-/// #     .map(|route| (route.verb, route.path, route.handler))
+/// #     .map(|route| (route.method.clone(), route.path, route.handler))
 /// #     .collect();
 ///
 /// assert_eq!(
 ///     routes,
 ///     [
-///         (HttpVerb::Get, "/", "list"),
-///         (HttpVerb::Get, "/{id}", "get"),
-///         (HttpVerb::Post, "/", "create"),
-///         (HttpVerb::Put, "/{id}", "update"),
-///         (HttpVerb::Delete, "/{id}", "delete"),
+///         (Method::GET, "/", "list"),
+///         (Method::GET, "/{id}", "get"),
+///         (Method::POST, "/", "create"),
+///         (Method::PUT, "/{id}", "update"),
+///         (Method::DELETE, "/{id}", "delete"),
 ///     ],
 /// );
 /// # Ok(())

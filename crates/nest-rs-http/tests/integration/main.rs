@@ -42,8 +42,8 @@ mod versioning;
 mod websocket;
 
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
-use nest_rs_core::{App, Handler, Module, Posture, Transport};
-use nest_rs_http::{HttpConfig, HttpTransport};
+use nest_rs_core::{App, Handler, Module, Posture, Transport, module};
+use nest_rs_http::{HttpConfig, HttpTransport, controller, routes};
 use nest_rs_testing::TestClient;
 
 /// The suite's own self-mounts.
@@ -70,6 +70,47 @@ pub(crate) static PUBLIC_MOUNT: Handler = declare_handler(HandlerDeclaration {
     posture: Posture::Public,
     meta: MetaLevels::default,
 });
+
+/// One handler per method decorator `#[routes]` reads.
+#[controller(path = "/methods")]
+#[derive(Default)]
+pub(crate) struct MethodsController;
+
+#[routes]
+impl MethodsController {
+    #[get("/")]
+    async fn read(&self) -> String {
+        String::new()
+    }
+
+    #[post("/")]
+    async fn create(&self) -> String {
+        String::new()
+    }
+
+    #[put("/")]
+    async fn replace(&self) -> String {
+        String::new()
+    }
+
+    #[delete("/")]
+    async fn remove(&self) -> String {
+        String::new()
+    }
+
+    #[patch("/")]
+    async fn amend(&self) -> String {
+        String::new()
+    }
+
+    #[sse("/events")]
+    async fn events(&self) -> nest_rs_http::SseStream {
+        nest_rs_http::SseStream::new(futures_util::stream::empty())
+    }
+}
+
+#[module(providers = [MethodsController])]
+pub(crate) struct MethodsModule;
 
 /// Boot `M` through a real `HttpTransport` and hand back a client over the
 /// composed endpoint; `nest-rs-testing`'s `TestApp` would be a dependency cycle.

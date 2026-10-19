@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use http::Method;
 use http::header::{HeaderName, HeaderValue, SERVER};
 use nest_rs_core::__private::{
     GlobalLayers, GuardStage, SiteDeclaration, SiteLayers, UnitChains, compose_site,
@@ -505,7 +506,7 @@ impl Transport for HttpTransport {
                         None => vec![path.clone()],
                     };
                     for address in addresses {
-                        if r.verb == crate::HttpVerb::Get {
+                        if r.method == Method::GET {
                             get_routes.push((address.clone(), d.meta.controller));
                         }
                         if at_root {
@@ -526,7 +527,7 @@ impl Transport for HttpTransport {
                     tracing::info!(
                         target: crate::target::ROUTES,
                         controller = d.meta.controller,
-                        method = r.verb.as_str(),
+                        method = r.method.as_str(),
                         path = routes.served(&logged).as_str(),
                         version = version,
                         handler = r.handler,
@@ -535,7 +536,7 @@ impl Transport for HttpTransport {
                     if r.access_is_implicit(global_guards) {
                         unguarded.push(format!(
                             "{} {} ({})",
-                            r.verb.as_str(),
+                            r.method.as_str(),
                             routes.served(&path),
                             r.handler
                         ));

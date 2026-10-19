@@ -1359,3 +1359,26 @@ async fn a_route_a_controller_registers_by_hand_runs_inside_a_unit_of_work() {
         "its write in a transaction, as a #[routes] route's",
     );
 }
+
+#[tokio::test]
+async fn the_route_log_prints_the_method_token() {
+    let logs = LogCapture::install();
+    let _client = crate::boot::<crate::MethodsModule>().await;
+    let logged: Vec<(String, String)> = logs
+        .find(nest_rs_http::target::ROUTES, "mounted route")
+        .into_iter()
+        .filter_map(|line| Some((line.field("handler")?, line.field("method")?)))
+        .collect();
+    assert_eq!(
+        logged,
+        [
+            ("read", "GET"),
+            ("create", "POST"),
+            ("replace", "PUT"),
+            ("remove", "DELETE"),
+            ("amend", "PATCH"),
+            ("events", "GET"),
+        ]
+        .map(|(handler, method)| (handler.to_owned(), method.to_owned())),
+    );
+}

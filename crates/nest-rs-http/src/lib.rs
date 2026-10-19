@@ -201,7 +201,7 @@ pub use config::{
     SSE_KEEP_ALIVE_FLOOR, UNIT_TIMEOUT_CEILING, UNIT_TIMEOUT_FLOOR,
 };
 pub use context::{Ctx, RejectedCredential};
-pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, RequestBodyMeta};
+pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, RequestBodyMeta};
 pub use cors::HttpCors;
 pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
@@ -334,7 +334,7 @@ pub use nest_rs_http_macros::controller;
 ///
 /// ```
 /// # use nest_rs_core::{Discoverable, Discovery, module};
-/// # use nest_rs_http::{Controller, HttpControllerMeta, HttpVerb, Json, controller, routes};
+/// # use nest_rs_http::{Controller, HttpControllerMeta, Json, Method, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// #[controller(path = "/users")]
 /// #[derive(Default)]
@@ -358,7 +358,7 @@ pub use nest_rs_http_macros::controller;
 /// # let app = TestApp::for_module::<UsersModule>().await?;
 /// let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
 /// let route = &controllers[0].meta.routes[0];
-/// assert_eq!((route.verb, route.path, route.handler), (HttpVerb::Get, "/", "list"));
+/// assert_eq!((&route.method, route.path, route.handler), (&Method::GET, "/", "list"));
 /// assert!(route.response.is_some());
 ///
 /// app.http().get("/users").send().await.assert_json(["ada"]).await;

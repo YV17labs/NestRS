@@ -2,7 +2,7 @@
 //! reuse the wrapper's local names, so compiling them is half the assertion.
 
 use nest_rs_core::module;
-use nest_rs_http::{ClientIp, Json, Path, Query, controller, routes};
+use nest_rs_http::{ClientIp, Json, Method, Path, Query, controller, routes};
 use nest_rs_testing::TestClient;
 use serde::Deserialize;
 
@@ -292,7 +292,6 @@ async fn path_binds_by_position_and_name() {
 #[tokio::test]
 async fn a_route_identity_is_the_address_the_table_serves() {
     use nest_rs_codegen::__private::RoutePath;
-    use nest_rs_http::Method;
 
     /// A template and a request it serves.
     type Probe = (&'static str, &'static str);
@@ -349,4 +348,32 @@ async fn a_route_identity_is_the_address_the_table_serves() {
             "the table's reading of `{a}` and `{b}`"
         );
     }
+}
+
+/// Each handler of `MethodsController` and the method it answers.
+const METHODS: [(&str, Method); 6] = [
+    ("read", Method::GET),
+    ("create", Method::POST),
+    ("replace", Method::PUT),
+    ("remove", Method::DELETE),
+    ("amend", Method::PATCH),
+    ("events", Method::GET),
+];
+
+#[tokio::test]
+async fn a_route_records_the_method_its_decorator_names() {
+    let app = nest_rs_core::App::builder()
+        .module::<crate::MethodsModule>()
+        .build()
+        .await
+        .expect("the module boots");
+    let controllers =
+        nest_rs_core::Discovery::new(app.container()).meta::<nest_rs_http::HttpControllerMeta>();
+    let recorded: Vec<(&str, Method)> = controllers[0]
+        .meta
+        .routes
+        .iter()
+        .map(|route| (route.handler, route.method.clone()))
+        .collect();
+    assert_eq!(recorded, METHODS, "`#[sse]` is a `GET`");
 }

@@ -86,6 +86,11 @@ from the Redis binding, so each compiles and runs in the framework's suite.
    panic once at `error` — so answer your client's failure as an error, never an
    `unwrap`. Checkpoint: a push answers a receipt naming the job.
 
+   The skip is also what the outbox leans on: a job pushed inside a
+   transaction reaches `enqueue` from the port's relay after the commit, and a
+   relay that dies before deleting its record sends the same envelope again.
+   Your backend owes the outbox nothing more.
+
 3. **Hand jobs over under a lease.** Implement `JobConsumer`. The worker asks;
    your storage answers in the backend's own words:
 

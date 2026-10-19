@@ -162,6 +162,11 @@ is the schedule's binding, not a worker's: the occurrence lock the timer
 claims through, because the API's replicas fire that enqueue once per
 occurrence between them rather than once each.
 
+Binding `SeaOrmDatabaseModule` beside the queue also attaches the outbox relay,
+with nothing listed: a push inside one of the app's transactions waits in the
+database for its commit, and the relay files it from this process — see [A push
+inside a transaction](/queue/producing-jobs/#a-push-inside-a-transaction).
+
 ## Module-gating across the shared crate
 
 The worker depends on the shared `features` crate, so `AudioController`

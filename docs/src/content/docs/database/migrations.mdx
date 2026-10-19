@@ -121,6 +121,15 @@ impl MigratorTrait for Migrator {
 Writing a migration by hand means writing both — the one you forget is the one
 that silently never runs.
 
+### The framework's own
+
+With the `queue` feature beside `seaorm`, the framework keeps a table of its
+own, `nestrs_outbox`, where a job pushed inside a transaction waits for its
+commit. Its migration ships with the framework,
+`nest_rs::seaorm::queue::OutboxMigration`, so it has no file in your crate: one
+entry in `migrations()`, at its date's place, registers it. An app binding a
+queue backend refuses to boot without the table, and says how to create it.
+
 ## Run them
 
 ```bash

@@ -40,6 +40,10 @@ its callers must clear; the method's doc is the authority, not this list.
   every unit of work — keeps an injected `Arc<DatabaseConnection>`, because no
   executor exists there. A lifecycle hook is a unit, and reaches `Repo` like
   any handler.
+- **The transactional outbox** (`SeaOrmOutbox`) — the framework's statements
+  on its own table, `nestrs_outbox`: a push's record and a cancel's removal
+  join the transaction the caller's unit already holds, and the relay claims
+  on a transaction of its own. No developer row is read or written.
 
 No webhook ingress exists; `Repo::unscoped`'s rustdoc states the bar a
 signature-authenticated one must clear before it ships. Auditing the escapes
@@ -120,7 +124,7 @@ guard stage attaches, and
 scoped fails closed — and `nest-rs-http` knows nothing of authz or the ORM
 (`.claude/decisions/unmasked-reply-withholds-the-ability.md`).
 
-## What waits for the commit — the event, and nothing else
+## What waits for the commit — the event and the job
 
 Only the unit of work holding the transaction knows whether its writes
 landed. `nest_rs_database::after_commit(work)` hands work to the ambient
@@ -161,17 +165,25 @@ deadline**: opened through the binding its emitter ran under
   after-commit work to the enclosing unit on release and drops it on
   rollback; on the pool it is a transaction of its own and settles its work
   like any boundary.
-- **Refused:** `JobProducer::push`, a WS broadcast, a storage write. Each is a
-  call whose answer its caller reads — a receipt, `UniqueKeyHeld`, a send
-  failure, an object key — and a deferred call would report `Ok` for work that
-  may never be filed. Inside a transaction it happens where it is written; the
-  price is a job a later rollback leaves behind. Work that must follow the
-  commit is an event whose listener pushes.
+- **Written into it:** a job pushed inside a transaction the binding opened
+  (`push`, `push_many`) is a record of that transaction, filed by the queue
+  port's relay once it committed and never on its rollback, so its receipt is
+  honest; a unique key is checked then, a record whose key another job holds
+  superseded at `info`. A pool, a transaction the caller opened itself and a
+  binding keeping no outbox file it at once
+  (`.claude/decisions/transactional-outbox.md`).
+- **Refused:** a WS broadcast, a storage write. Each is a call whose answer its
+  caller reads — a send failure, an object key — and a deferred call would
+  report `Ok` for work that may never be done. Inside a transaction it happens
+  where it is written; work that must follow the commit is an event whose
+  listener does it.
 - **Another ORM's driver** owes `Executor::after_commit` on every handle its
   boundaries settle; the trait's default runs the work at once, which is right
   for a pool only. What it holds runs under the `Commit` capture taken where
   the work was registered, its own pool re-installed inside under the scope
-  read there (the trait method's rustdoc).
+  read there (the trait method's rustdoc). It owes `write_outbox` on the same
+  handles, with an `OutboxStore` its binding binds beside the relay's module,
+  or its pushes are filed at once.
 
 ## Write capability is segregated, never a placeholder
 

@@ -17,6 +17,10 @@ from `demo/` with `nestrs run db <recipe>`.
   and `down`, and is **registered twice, in chronological order**: its `mod`
   line in `lib.rs` and its entry in `migrator.rs`'s `migrations()`. Missing the
   second, it never runs.
+- **A framework migration is one `migrator.rs` entry, at its date's place,
+  and no file**: `nest_rs::seaorm::queue::OutboxMigration`
+  (`m20261009_000001_nestrs_outbox`) creates the outbox's table, and the
+  `nestrs_` prefix is the framework's alone.
 - **House columns:** `created_at` / `updated_at` defaulting to
   `current_timestamp`; a nullable `deleted_at` for soft delete.
 - **A value unique among a soft-deleted table's rows is unique among its live

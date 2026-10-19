@@ -109,6 +109,14 @@ promises more; this is how the Redis backend keeps it, on Redis Streams
   what the worker received; a reclaim bumps the count, a renewal never does.
   The outcome, the filing of the job's next record and the release of what it
   held are the one script, so there is no order between them to get wrong.
+- **A push inside a transaction is filed after its commit, at least once.**
+  The data driver writes it into the caller's transaction, and the port's
+  relay (`OutboxRelay`, attached by the `OutboxModule` the driver's binding
+  imports) claims what committed, files it, then settles; dying between a
+  call and its settle, it sends the record again, which the id contract above
+  files once while the job is held and the handler's idempotency covers once
+  it ended (`.claude/decisions/transactional-outbox.md`). A backend owes the
+  outbox nothing more.
 - **No record outlives its job, and none needs an expiry.** The transition that
   ends a job removes every record of it but its dead letter, so a job is never
   delivered after it ended; a second delivery happens only once a lease lapsed

@@ -128,6 +128,18 @@ queue still holds — on the stream, running, or held back in `…:delayed` — 
 a push the client sends again after its answer was lost files nothing twice.
 Once the job ended, the same job is filed as a new one.
 
+### Filed after the commit
+
+A job pushed inside a transaction waits in the outbox table until that
+transaction commits ([A push inside a
+transaction](/queue/producing-jobs/#a-push-inside-a-transaction)). The relay
+then claims committed records with `FOR UPDATE SKIP LOCKED`, so replicas never
+share one, files them, and deletes what was filed. A relay that dies between
+the push and its delete leaves the record to the next pass, which sends the
+same job again: the push script above files it once while the queue holds it.
+On the way down the relay starts no push; the one in flight answers within the
+port's 18 s net.
+
 <Aside type="caution">
 **Delivery is at least once, so a handler is idempotent.** A worker that
 crashes between a database commit and its outcome leaves the job to its lease,
@@ -303,13 +315,17 @@ ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +eval +xra
 
 ## Configuration
 
-`RedisQueueModule::for_root(RedisQueueConfig { .. })` and
-`QueueModule::for_root(QueueConfig { .. })`, or the environment:
+`RedisQueueModule::for_root(RedisQueueConfig { .. })`,
+`QueueModule::for_root(QueueConfig { .. })` and
+`OutboxModule::for_root(OutboxConfig { .. })`, or the environment:
 
 | Variable | Default | What it bounds |
 |---|---|---|
 | `<PREFIX>_REDIS__QUEUE__LEASE_SECS` | `30` | How long a delivery holds its job without a renewal — so how long a crashed replica's job waits before another runs it; at least `1`, at most `3600`, and more than one and a half times `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, since a renewal sent a third into the lease may wait out the whole budget |
 | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` | `20` | The drain window, hand-backs included; at least `1`, at most `3600` |
+| `<PREFIX>_QUEUE__OUTBOX__SWEEP_INTERVAL_MS` | `1000` | How long the relay waits for a commit to wake it before it looks for due records anyway; at least `100`, at most `60000` |
+| `<PREFIX>_QUEUE__OUTBOX__BATCH_SIZE` | `100` | How many records one pass claims and holds locked while it files them; at least `1`, at most `100` |
+| `<PREFIX>_QUEUE__OUTBOX__STALL_WARNING_SECS` | `300` | How long records wait unfiled before the relay says so at `error`; at least `1`, at most `86400` |
 
 A value out of its bounds fails the boot, whether the environment set it or
 `for_root` pinned it, naming the variable.

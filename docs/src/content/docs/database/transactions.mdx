@@ -148,14 +148,15 @@ committed, and a slow listener never turns a committed write into a timeout
 (a `debug` line on `nest_rs::orm`: `after-commit work outlived the unit's
 deadline`).
 
-A `push`, a WebSocket broadcast and a storage write do **not** wait, and
-cannot: each answers its caller — a receipt, `UniqueKeyHeld`, a send failure,
-an object key — and that answer only exists once the backend has been asked.
-Inside a transaction they happen where they are written. A push that fails
-fails the request, so its writes roll back and nothing is lost; the price is
-a job a later rollback leaves behind. When the work must follow the commit,
-emit an event and push from its listener — the demo's publish does exactly
-that.
+A job you push waits too: with the `queue` feature, the push is written into
+the transaction as an outbox record and filed once it commits — see [A push
+inside a transaction](/queue/producing-jobs/#a-push-inside-a-transaction).
+
+A WebSocket broadcast and a storage write do **not** wait, and cannot: each
+answers its caller — a send failure, an object key — and that answer only
+exists once the socket or the store has been asked. Inside a transaction they
+happen where they are written; when the work must follow the commit, emit an
+event and do it in its listener.
 
 An [atomic block](#atomic-blocks) holds what is emitted inside it: when it
 keeps its writes, the events join the request's and wait for the request's
@@ -235,9 +236,10 @@ the time a conflict surfaces. Two consequences:
 
 1. **The request's unit observes the conflict, it does not retry it.** The
    failed commit has already consumed its handle, and the handler's
-   non-transactional side effects — a queued job, an object written to
-   storage — would replay with it. (An emitted event is not among them: it
-   waits for the commit, and a failed one drops it.)
+   non-transactional side effects — an object written to storage, a call
+   to another service — would replay with it. (An emitted event and a pushed
+   job are not among them: both wait for the commit, and a failed one drops
+   them.)
 2. **Retrying is the service's job.** Only the service knows which
    boundary is replayable, so the replayable closure owns that boundary
    itself.
@@ -265,9 +267,9 @@ distinctly from a generic commit error.
 <Aside type="note">
 **The flag observes; it never retries** — which is why it is named for what
 it does. Replaying a commit-time conflict means re-running the whole handler,
-and a handler may already have pushed a job or written an object. Neither
-rolls back with the transaction, so a transparent retry would duplicate them
-silently. The framework will not make that call on your
+and a handler may already have written an object to storage or called
+another service. Neither rolls back with the transaction, so a transparent
+retry would duplicate them silently. The framework will not make that call on your
 behalf; the response fails closed with a `500` after the `warn` line, and
 retrying is the service's decision at a boundary it knows is replayable.
 </Aside>

@@ -35,6 +35,8 @@ A driver implements the port rather than consuming it, so it takes `database` wi
   `transactional = false` and on a safe HTTP method.
 - Optionally, the atomic block `nest_rs::database::atomic` runs on — which a
   GraphQL mutation needs.
+- Optionally, the outbox a job pushed inside a unit is written to, so it is
+  filed after the commit.
 - A `SafeLink` that says your store's errors without the values its server
   quotes.
 
@@ -442,6 +444,32 @@ What a block owes, in order of how badly it goes wrong without it:
 
 `crates/nest-rs-seaorm/src/savepoint.rs` and `crates/nest-rs-seaorm/src/turn.rs`
 are the reference shape.
+
+## Step 7 — The outbox (optional)
+
+A job pushed inside a unit is filed after its commit only where the driver
+keeps an outbox: the queue port hands the sealed jobs to
+`Executor::write_outbox`, whose default answers `None` — the job is then filed
+at once, and a rollback leaves it behind. To keep one:
+
+- **A store**, `nest_rs::database::OutboxStore`, over a table of your own:
+  `arm` proves the table and arms your handles, `written` wakes once a unit
+  that wrote records committed, and `claim` locks due records no other relay
+  holds, oldest first, until its `OutboxClaim` settles. Bind it as
+  `Arc<dyn OutboxStore>` beside your unit of work, and import
+  `nest_rs::queue::OutboxModule` from both phases of your module: it attaches
+  the relay that drains the store.
+- **`write_outbox` on every handle a unit settles a transaction for**, once the
+  store is armed: read the records it hands you — each is sealed as you read
+  it — write them on that transaction, in its turn, and wake the relay after
+  its commit. `remove_outbox` and `remove_outbox_unique` delete a record no
+  relay has filed, for a cancel, on those handles and on the pool ones your
+  units install: one a relay holds is waited for, never skipped, or a cancel
+  would answer `false` for a job filed a moment later.
+
+The records are opaque: write them as you receive them, and never log the
+`sealed` text, which carries the job's payload. `crates/nest-rs-seaorm/src/queue/outbox.rs`
+is the reference shape.
 
 ## A query helper (sketch)
 

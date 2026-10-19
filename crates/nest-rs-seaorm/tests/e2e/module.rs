@@ -9,8 +9,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
 use nest_rs_core::{App, BudgetPastNetError, hooks, injectable, module};
+use nest_rs_http::Request;
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmModule};
-use poem::Request;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 /// A strategy that injects the pool, as one looking an identity up does.

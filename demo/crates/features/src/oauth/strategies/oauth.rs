@@ -3,16 +3,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nest_rs::authn::{AuthError, Strategy};
 use nest_rs::core::injectable;
+use nest_rs::http::{Body, FromRequest, Query, Request, RequestBody, header};
 use nest_rs::oauth::client::OAuthClient;
-use poem::Request;
-use poem::http::header;
 use serde::Deserialize;
 
 use super::super::service::{Caller, OAuthService};
 
 pub type OAuthGuard = nest_rs::authn::AuthnGuard<OAuthStrategy>;
 
-#[derive(Default, Deserialize)]
+#[derive(Deserialize)]
 struct CallbackQuery {
     code: Option<String>,
     state: Option<String>,
@@ -30,10 +29,16 @@ impl Strategy for OAuthStrategy {
 
     async fn authenticate(&self, req: &mut Request) -> Result<Caller, AuthError> {
         let provider = req
-            .raw_path_param("provider")
+            .path_param("provider")
             .ok_or_else(|| AuthError::Failed("OAuth callback missing provider".into()))?
             .to_owned();
-        let query: CallbackQuery = req.params().unwrap_or_default();
+        let Ok(Query(query)) =
+            Query::<CallbackQuery>::from_request(req, &mut RequestBody::new(Body::empty())).await
+        else {
+            return Err(AuthError::Failed(
+                "OAuth callback query does not decode".into(),
+            ));
+        };
         let code = query
             .code
             .ok_or_else(|| AuthError::Failed("OAuth callback missing code".into()))?;

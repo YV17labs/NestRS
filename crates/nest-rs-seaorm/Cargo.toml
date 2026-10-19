@@ -73,7 +73,7 @@ sea-orm = { workspace = true, features = ["with-chrono"] }
 sqlx.workspace = true
 chrono.workspace = true
 # `PageParams` (the `?first&after` cursor query) derives `Deserialize` so the
-# generated `#[crud]` list handler can read it with poem's `Query<…>`.
+# generated `#[crud]` list handler can read it with `Query<…>`.
 serde.workspace = true
 # `ServiceError`'s RFC-9457 `problem+json` rendering serializes `validator`
 # field errors into an `errors` extension member.
@@ -146,9 +146,6 @@ nest-rs-queue = { path = "../nest-rs-queue" }
 # `test-util` (not part of tokio's `full`) pauses time, so the instant each
 # conflicting call retries at is read off the clock its backoff sleeps on.
 tokio = { workspace = true, features = ["test-util"] }
-# The suites' authentication strategies read poem's request, as `Strategy`
-# still takes it.
-poem.workspace = true
 
 [lints]
 workspace = true

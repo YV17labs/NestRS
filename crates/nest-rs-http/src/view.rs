@@ -163,18 +163,6 @@ pub fn with_view<R>(
     answer
 }
 
-/// `view`'s request as poem's, taken out of it for a reader still typed on
-/// poem (an authentication `Strategy`), and put back with [`put_poem`].
-pub fn take_poem(view: &mut HttpView) -> poem::Request {
-    let request = std::mem::replace(&mut view.request, Request::builder().finish());
-    crate::poem_bridge::request_to_poem(request)
-}
-
-/// The request [`take_poem`] took, back in `view`.
-pub fn put_poem(view: &mut HttpView, request: poem::Request) {
-    view.request = crate::poem_bridge::request_from_poem(request);
-}
-
 /// Say once per site that an HTTP entry ran on a unit with no HTTP view.
 fn report_viewless(cx: &UnitContext<'_>) {
     static REPORTED: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(Default::default);

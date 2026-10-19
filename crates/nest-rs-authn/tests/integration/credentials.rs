@@ -6,18 +6,18 @@ use nest_rs_authn::{basic_credentials, bearer_token};
 #[test]
 fn bearer_token_extracts_non_empty_value() {
     let req = crate::request(&[("Authorization", "Bearer token-123")]);
-    assert_eq!(bearer_token(&req), Some("token-123"));
+    assert_eq!(bearer_token(req.headers()), Some("token-123"));
 }
 
 #[test]
 fn bearer_token_rejects_missing_blank_and_malformed() {
-    assert_eq!(bearer_token(&crate::request(&[])), None);
+    assert_eq!(bearer_token(crate::request(&[]).headers()), None);
     assert_eq!(
-        bearer_token(&crate::request(&[("Authorization", "Bearer   ")])),
+        bearer_token(crate::request(&[("Authorization", "Bearer   ")]).headers()),
         None
     );
     assert_eq!(
-        bearer_token(&crate::request(&[("Authorization", "Basic abc")])),
+        bearer_token(crate::request(&[("Authorization", "Basic abc")]).headers()),
         None
     );
 }
@@ -27,7 +27,7 @@ fn basic_credentials_decodes_id_and_secret() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"client-id:client-secret");
     let req = crate::request(&[("Authorization", &format!("Basic {encoded}"))]);
     assert_eq!(
-        basic_credentials(&req),
+        basic_credentials(req.headers()),
         Some(("client-id".into(), "client-secret".into()))
     );
 }
@@ -39,14 +39,14 @@ fn basic_credentials_matches_scheme_case_insensitively() {
     for scheme in ["basic", "BASIC", "BaSiC"] {
         let req = crate::request(&[("Authorization", &format!("{scheme} {encoded}"))]);
         assert_eq!(
-            basic_credentials(&req),
+            basic_credentials(req.headers()),
             Some(("client-id".into(), "client-secret".into())),
             "scheme `{scheme}` must be accepted",
         );
     }
     // A different scheme still refuses.
     let req = crate::request(&[("Authorization", &format!("Bearer {encoded}"))]);
-    assert_eq!(basic_credentials(&req), None);
+    assert_eq!(basic_credentials(req.headers()), None);
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn basic_credentials_allows_colons_in_secret() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"id:sec:ret:with:colons");
     let req = crate::request(&[("Authorization", &format!("Basic {encoded}"))]);
     assert_eq!(
-        basic_credentials(&req),
+        basic_credentials(req.headers()),
         Some(("id".into(), "sec:ret:with:colons".into()))
     );
 }
@@ -68,7 +68,7 @@ fn basic_credentials_form_urldecode_both_halves() {
     let encoded = base64::engine::general_purpose::STANDARD.encode("cli%20ent:a+b%2Bc%25d");
     let req = crate::request(&[("Authorization", &format!("Basic {encoded}"))]);
     assert_eq!(
-        basic_credentials(&req),
+        basic_credentials(req.headers()),
         Some(("cli ent".into(), "a b+c%d".into())),
     );
 }
@@ -80,7 +80,7 @@ fn a_credential_with_no_escapes_is_untouched() {
     let encoded = base64::engine::general_purpose::STANDARD.encode("demo-service:s3cr3t-value");
     let req = crate::request(&[("Authorization", &format!("Basic {encoded}"))]);
     assert_eq!(
-        basic_credentials(&req),
+        basic_credentials(req.headers()),
         Some(("demo-service".into(), "s3cr3t-value".into())),
     );
 }
@@ -92,7 +92,10 @@ fn a_credential_with_no_escapes_is_untouched() {
 fn a_malformed_escape_is_left_verbatim() {
     let encoded = base64::engine::general_purpose::STANDARD.encode("id:100%");
     let req = crate::request(&[("Authorization", &format!("Basic {encoded}"))]);
-    assert_eq!(basic_credentials(&req), Some(("id".into(), "100%".into())));
+    assert_eq!(
+        basic_credentials(req.headers()),
+        Some(("id".into(), "100%".into()))
+    );
 }
 
 /// RFC 3986 §2.1: `pct-encoded = "%" HEXDIG HEXDIG`. A sign is no hex digit, so
@@ -109,7 +112,7 @@ fn a_signed_escape_is_not_a_hex_escape() {
     ] {
         let encoded = base64::engine::general_purpose::STANDARD.encode(format!("id:{raw}"));
         let req = crate::request(&[("Authorization", &format!("Basic {encoded}"))]);
-        let (_, secret) = basic_credentials(&req).expect("credentials");
+        let (_, secret) = basic_credentials(req.headers()).expect("credentials");
         assert_eq!(secret, expected, "{raw} must not decode as a hex escape");
         assert_ne!(
             secret, "\u{1}",

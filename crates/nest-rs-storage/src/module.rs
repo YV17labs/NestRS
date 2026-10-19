@@ -69,8 +69,8 @@ mod tests {
 
     use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
     use nest_rs_core::{App, BudgetPastNetError, injectable};
+    use nest_rs_http::Request;
     use nest_rs_http::async_trait;
-    use nest_rs_http::poem::Request;
 
     use super::*;
 

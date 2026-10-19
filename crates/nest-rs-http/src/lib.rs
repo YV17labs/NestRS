@@ -266,7 +266,7 @@ pub mod __private {
         RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,
     };
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
-    pub use crate::view::{put_poem, take_poem, with_view};
+    pub use crate::view::with_view;
     pub use nest_rs_guards::__private::global_guards_active;
     pub use nest_rs_pipes::PipeSpec;
 

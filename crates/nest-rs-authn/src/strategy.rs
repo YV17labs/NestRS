@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use nest_rs_core::AmbientValue;
-use poem::Request;
+use nest_rs_http::Request;
 
 use crate::PrincipalIdentity;
 use crate::error::AuthError;
@@ -46,5 +46,7 @@ pub trait Strategy: Send + Sync + 'static {
 
     /// Map the request to a principal, or return why authentication failed.
     /// Must not issue a transport response — a pure request → principal step.
+    /// The request is the one the edge holds, body included: a strategy that
+    /// reads the body sets it back for the handler.
     async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError>;
 }

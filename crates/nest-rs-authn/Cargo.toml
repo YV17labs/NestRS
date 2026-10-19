@@ -22,11 +22,10 @@ nest-rs-core.workspace = true
 # `reqwest` is `ClientTls`, what the JWK Set endpoint's certificate chains to
 # and the certificate presented to it, converted for the client fetching it.
 nest-rs-config = { workspace = true, features = ["reqwest"] }
-# `Strategy` reads the `poem::Request`; `AuthnGuard` reads it through the HTTP
-# edge's view.
+# `Strategy` reads the request the HTTP edge's view holds, which is how
+# `AuthnGuard` lends it.
 nest-rs-http.workspace = true
 nest-rs-guards.workspace = true
-poem.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on
 # jsonwebtoken directly). Its `jwk` module reads an issuer's JWK Set.

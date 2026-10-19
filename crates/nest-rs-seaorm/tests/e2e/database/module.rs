@@ -11,10 +11,10 @@ use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
 use nest_rs_authz::Action;
 use nest_rs_core::{App, BudgetPastNetError, Module, hooks, injectable, module};
 use nest_rs_events::{EventBus, EventsModule, listeners};
+use nest_rs_http::Request;
 use nest_rs_seaorm::{
     Creatable, CreateModel, CrudService, Repo, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule,
 };
-use poem::Request;
 use sea_orm::prelude::Uuid;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set};
 

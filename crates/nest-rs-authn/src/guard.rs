@@ -10,9 +10,7 @@ use nest_rs_core::{
     UnitContext, within,
 };
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardFor, GuardPhase, PrincipalClaim};
-use nest_rs_http::__private::{put_poem, take_poem};
-use nest_rs_http::{HttpView, RejectedCredential, async_trait};
-use poem::Request;
+use nest_rs_http::{HttpView, RejectedCredential, Request, async_trait};
 
 use crate::error::{AuthError, UNAVAILABLE};
 use crate::strategy::{AUTHENTICATE_TIMEOUT, Strategy};
@@ -156,11 +154,9 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         let strategy = std::any::type_name::<S>();
         let posture = cx.reflector().posture();
         let is_public = posture == Posture::Public;
-        // `Strategy::authenticate` still takes poem's request, so the view
-        // lends it out and takes it back.
-        let mut req = take_poem(HttpView::of(cx)?);
-        let outcome = self.authenticate(strategy, &mut req).await;
-        put_poem(HttpView::of(cx)?, req);
+        let outcome = self
+            .authenticate(strategy, HttpView::of(cx)?.request_mut())
+            .await;
         // Nothing was decided about the credential: the same 503 as an
         // unreachable store, on every route. `authenticate` already said why.
         let Some(outcome) = outcome else {

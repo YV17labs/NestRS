@@ -18,7 +18,6 @@ async-trait.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 parking_lot.workspace = true
-poem.workspace = true
 tokio.workspace = true
 sea-orm.workspace = true
 chrono.workspace = true

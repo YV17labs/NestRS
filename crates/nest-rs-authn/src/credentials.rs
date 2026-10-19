@@ -1,11 +1,20 @@
 //! HTTP credential extractors shared by bearer and basic-auth [`Strategy`](crate::Strategy) impls.
 
 use base64::Engine as _;
-use poem::{Request, http::header};
+use nest_rs_http::{HeaderMap, header};
 
 /// Pull a token out of `Authorization: Bearer <token>`, if non-empty.
-pub fn bearer_token(req: &Request) -> Option<&str> {
-    let value = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
+///
+/// ```
+/// use nest_rs_authn::bearer_token;
+/// use nest_rs_http::{HeaderMap, HeaderValue, header};
+///
+/// let mut headers = HeaderMap::new();
+/// headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer t0k3n"));
+/// assert_eq!(bearer_token(&headers), Some("t0k3n"));
+/// ```
+pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("bearer") {
         return None;
@@ -20,8 +29,21 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 ///
 /// Both halves are then form-urldecoded, as RFC 6749 §2.3.1 says they were
 /// encoded (OAuth 2.1 §2.4.1 keeps it).
-pub fn basic_credentials(req: &Request) -> Option<(String, String)> {
-    let value = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
+///
+/// ```
+/// use nest_rs_authn::basic_credentials;
+/// use nest_rs_http::{HeaderMap, HeaderValue, header};
+///
+/// let mut headers = HeaderMap::new();
+/// // `client:s3cr%3At` in base64: the secret's `%3A` decodes to a colon.
+/// headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic Y2xpZW50OnMzY3IlM0F0"));
+/// assert_eq!(
+///     basic_credentials(&headers),
+///     Some(("client".to_owned(), "s3cr:t".to_owned())),
+/// );
+/// ```
+pub fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     // RFC 7235: auth schemes are case-insensitive.
     let (scheme, encoded) = value.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("basic") {

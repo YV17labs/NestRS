@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::{AmbientValue, injectable};
-use poem::Request;
+use nest_rs_http::Request;
 use serde::de::DeserializeOwned;
 
 use crate::JwtService;
@@ -38,7 +38,7 @@ impl<C: DeserializeOwned + PrincipalIdentity + AmbientValue + Clone> Strategy fo
     type Principal = C;
 
     async fn authenticate(&self, req: &mut Request) -> Result<C, AuthError> {
-        let token = bearer_token(req).ok_or(AuthError::MissingCredentials)?;
+        let token = bearer_token(req.headers()).ok_or(AuthError::MissingCredentials)?;
         let claims: C = self.svc.verify(token).await?;
         Ok(claims)
     }

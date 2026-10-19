@@ -98,7 +98,7 @@ so authentication stays a pure request → principal mapping.
 ```rust title="crates/features/src/authn/strategies/api_key.rs"
 use nest_rs::authn::{AuthError, PrincipalIdentity, Strategy};
 use nest_rs::core::{AmbientValue, async_trait, injectable};
-use nest_rs::http::poem::Request;
+use nest_rs::http::Request;
 
 #[injectable]
 pub struct ApiKeyStrategy {
@@ -111,8 +111,7 @@ impl Strategy for ApiKeyStrategy {
     type Principal = ApiKey;
 
     async fn authenticate(&self, req: &mut Request) -> Result<ApiKey, AuthError> {
-        let key = req.headers().get("x-api-key").and_then(|h| h.to_str().ok());
-        match key.and_then(|k| self.svc.lookup(k)) {
+        match req.header("x-api-key").and_then(|k| self.svc.lookup(k)) {
             Some(api_key) => Ok(api_key),
             None => Err(AuthError::MissingCredentials),
         }
@@ -177,7 +176,10 @@ async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthE
 ```
 
 A strategy maps a request to a principal and nothing else — it never
-issues a transport response. The two protocol styles both fit:
+issues a transport response. The request is the one the edge holds, body
+included, so a strategy verifying a signed webhook reads the body and sets
+it back (`req.take_body()`, then `req.set_body(bytes)`) for the handler to
+read. The two protocol styles both fit:
 
 - **Bearer protocols** return `Ok(principal)` on a valid token,
   `Err(AuthError)` on a missing or invalid one — the guard turns the
@@ -230,9 +232,9 @@ decision is covered at three layers: boot, test, review.
 `nest-rs-authn` exposes two header extractors so a `Strategy` does not
 re-parse them:
 
-- `bearer_token(&req) -> Option<&str>` — pulls the token out of
+- `bearer_token(req.headers()) -> Option<&str>` — pulls the token out of
   `Authorization: Bearer <token>` after trimming.
-- `basic_credentials(&req) -> Option<(String, String)>` — decodes
+- `basic_credentials(req.headers()) -> Option<(String, String)>` — decodes
   `Authorization: Basic <base64>` and returns `(client_id,
   client_secret)`, splitting on the first colon (RFC 7617).
 

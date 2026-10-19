@@ -161,11 +161,12 @@ redis-throttler = ["redis", "throttler", "nest-rs-redis/throttler"]
 redis-schedule = ["redis", "schedule", "nest-rs-redis/schedule"]
 schedule = ["dep:nest-rs-schedule"]
 events = ["dep:nest-rs-events"]
-# `Strategy::authenticate` takes a `poem::Request` and a custom strategy's
-# neighbouring guard names `nest_rs::guards` — both are types the developer has
-# to *write*, so the capability closes over `http` (which brings `guards`) the
-# way every other capability row does. Without it the extension point the docs
-# teach cannot be spelled, and the error is an unresolved import at their `use`.
+# `Strategy::authenticate` takes a `nest_rs::http::Request` and a custom
+# strategy's neighbouring guard names `nest_rs::guards` — both are types the
+# developer has to *write*, so the capability closes over `http` (which brings
+# `guards`) the way every other capability row does. Without it the extension
+# point the docs teach cannot be spelled, and the error is an unresolved import
+# at their `use`.
 authn = ["dep:nest-rs-authn", "http"]
 # The OAuth 2.0 *client* role: obtaining a token from somebody else's
 # authorization server. Its transaction cookie is `JwtService`-signed, hence
@@ -173,7 +174,7 @@ authn = ["dep:nest-rs-authn", "http"]
 oauth-client = ["dep:nest-rs-oauth-client", "authn"]
 # The OAuth 2.0 *authorization server* role: RFC 6749 §5.1's access token
 # response, §5.2's token-endpoint error set and §2.3.1 client authentication.
-# Both bodies render themselves as poem responses, and `TokenError` marks its
+# Both bodies render themselves as nestrs responses, and `TokenError` marks its
 # own `NoBearerChallenge`, so the capability closes over `http` the way every
 # other request-shaped row does.
 oauth-server = ["dep:nest-rs-oauth-server", "http"]

@@ -15,10 +15,11 @@ use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, i
 use nest_rs_core::{AmbientValue, Handler, Posture, injectable, module};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::{attached, attached_pending, check_request};
-use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpConfig, HttpModule, RejectedCredential, controller, routes};
+use nest_rs_http::{
+    Ctx, HttpConfig, HttpModule, RawBody, RejectedCredential, Request, StatusCode, controller,
+    routes,
+};
 use nest_rs_testing::{LogCapture, TestApp};
-use poem::Request;
 
 /// A principal with an audit identity.
 #[derive(Clone, Debug, PartialEq)]
@@ -648,6 +649,99 @@ async fn a_route_is_refused_at_the_bound() {
     );
 }
 
+/// The sender a signed webhook authenticates as.
+#[derive(Clone, Debug)]
+struct Sender(String);
+
+impl AmbientValue for Sender {}
+
+impl PrincipalIdentity for Sender {
+    fn actor_id(&self) -> Option<String> {
+        Some(self.0.clone())
+    }
+}
+
+/// The mark a signed delivery's body opens with.
+const SIGNED: &[u8] = b"signed:";
+
+/// Authenticates a webhook delivery as the path's `{sender}` when its body is
+/// signed, reading the body the edge holds and setting it back for the handler.
+#[injectable]
+#[derive(Default)]
+struct WebhookStrategy;
+
+#[async_trait]
+impl Strategy for WebhookStrategy {
+    type Principal = Sender;
+
+    async fn authenticate(&self, req: &mut Request) -> Result<Sender, AuthError> {
+        let sender = req
+            .path_param("sender")
+            .ok_or(AuthError::MissingCredentials)?
+            .to_owned();
+        let Ok(body) = req.take_body().into_bytes().await else {
+            return Err(AuthError::MissingCredentials);
+        };
+        let signed = body.starts_with(SIGNED);
+        req.set_body(body);
+        if signed {
+            Ok(Sender(sender))
+        } else {
+            Err(AuthError::InvalidSignature)
+        }
+    }
+}
+
+type WebhookAuthn = AuthnGuard<WebhookStrategy>;
+
+#[controller(path = "/hooks")]
+#[use_guards(WebhookAuthn)]
+struct HooksController;
+
+#[routes]
+impl HooksController {
+    #[post("/{sender}")]
+    async fn deliver(&self, sender: Ctx<Sender>, body: RawBody) -> String {
+        format!(
+            "{} sent {}",
+            sender.0.0,
+            String::from_utf8_lossy(&body.into_inner())
+        )
+    }
+}
+
+#[module(
+    imports = [HttpModule::for_root(edge())],
+    providers = [WebhookStrategy, WebhookAuthn, HooksController],
+)]
+struct HooksModule;
+
+/// A strategy reads the request the edge holds — the route's parameters, the
+/// body — and what it sets back is what the handler reads.
+#[tokio::test]
+async fn a_strategy_reads_the_routed_request_and_leaves_its_body_to_the_handler() {
+    let app = TestApp::for_module::<HooksModule>()
+        .await
+        .expect("a controller binding the guard boots");
+
+    let delivered = app
+        .http()
+        .post("/hooks/billing")
+        .body("signed:invoice paid")
+        .send()
+        .await;
+    delivered.assert_status(StatusCode::OK);
+    let body = delivered.0.into_body().into_string().await.expect("a body");
+    assert_eq!(body, "billing sent signed:invoice paid");
+
+    app.http()
+        .post("/hooks/billing")
+        .body("invoice paid")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
 mod graphql {
     use async_trait::async_trait;
     use nest_rs_authn::{AuthError, AuthnGuard, Strategy};
@@ -656,9 +750,9 @@ mod graphql {
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_guards::guard;
     use nest_rs_http::HttpModule;
+    use nest_rs_http::Request;
     use nest_rs_http::{StatusCode, header};
     use nest_rs_testing::{LogCapture, TestApp};
-    use poem::Request;
 
     use super::{
         REACHED, StalledAuthn, StalledStrategy, assert_refused_at_the_bound,
@@ -918,7 +1012,7 @@ mod nets {
     use async_trait::async_trait;
     use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
     use nest_rs_core::{App, Budget, BudgetPastNetError, injectable, module};
-    use poem::Request;
+    use nest_rs_http::Request;
 
     /// A store a strategy resolves identities in, waiting what it holds for an
     /// answer.

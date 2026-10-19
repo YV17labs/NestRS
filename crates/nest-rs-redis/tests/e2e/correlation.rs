@@ -11,7 +11,7 @@ use nest_rs_queue::{
     JobProducer, JobProducerExt, PushOptions, Queue, QueueModule, QueueName, QueueWorker,
     WIRE_FORMAT_VERSION, processor, queue,
 };
-use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer};
+use nest_rs_redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
 use nest_rs_testing::HeadlessApp;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -62,7 +62,11 @@ impl CorrelationProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, QueueModule::for_root(None)],
+    imports = [
+        RedisModule::for_root(crate::at_default_budget(crate::redis_config())),
+        RedisQueueModule,
+        QueueModule::for_root(None),
+    ],
     providers = [CorrelationProcessor],
 )]
 struct CorrelationModule;
@@ -82,11 +86,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
 
     // Enqueue *under an ambient context*, the way an HTTP handler does. This id
     // is the one the consumer must end up running under.
-    let conn = RedisQueueProducer::new(
-        RedisConnection::connect(&crate::redis_config())
-            .await
-            .expect("connect"),
-    );
+    let conn = RedisQueueProducer::new(crate::connect().await);
     let correlation = nest_rs_core::Correlation::minted(None);
     // This run's own marker, so a job left behind by an earlier run cannot be
     // mistaken for it — see `SEEN`.

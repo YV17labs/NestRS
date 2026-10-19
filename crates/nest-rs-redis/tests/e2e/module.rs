@@ -14,7 +14,10 @@ use nest_rs_redis::{
 use nest_rs_throttler::{Throttle, ThrottlerStore};
 use redis::aio::ConnectionLike;
 
-use crate::{DB_SELECT_RETRIED, connect, connect_on, redis_config, redis_config_on, unique_key};
+use crate::{
+    DB_SELECT_RETRIED, at_default_budget, connect, connect_on, redis_config, redis_config_on,
+    unique_key,
+};
 
 /// The suite's one named instance: two markers reading `cache` in one binary
 /// would be refused as twins.
@@ -27,9 +30,9 @@ pub(crate) struct Cache;
 /// is deleted before the test ends. No `<PREFIX>_REDIS__CACHE__*` variable of
 /// the suite's reaches the pin.
 #[module(imports = [
-    RedisModule::for_root(redis_config()),
+    RedisModule::for_root(at_default_budget(redis_config())),
     RedisQueueModule,
-    RedisModule::for_root((Cache, redis_config_on(DB_SELECT_RETRIED))),
+    RedisModule::for_root((Cache, at_default_budget(redis_config_on(DB_SELECT_RETRIED)))),
     RedisThrottlerModule::<Cache>,
 ])]
 struct QueueAndCache;

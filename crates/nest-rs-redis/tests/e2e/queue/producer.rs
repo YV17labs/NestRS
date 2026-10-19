@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use nest_rs_queue::{
     JobId, JobProducer, JobProducerExt, PushOptions, PushReceipt, QueueError, QueueName,
 };
-use nest_rs_redis::{RedisConfig, RedisConnection, RedisQueueProducer};
+use nest_rs_redis::{RedisConfig, RedisQueueProducer};
 use serde_json::json;
 
 /// The holder a refused push names, or a panic saying what came back instead.
@@ -264,12 +264,11 @@ mod standalone {
     async fn a_push_through_a_silent_redis_fails_within_one_budget_naming_it() {
         let proxy = crate::DarkeningProxy::start().await;
         let budget = Duration::from_secs(1);
-        let mut conn = RedisConnection::connect(&RedisConfig {
+        let mut conn = crate::connected(&RedisConfig {
             connect_timeout: budget,
             ..crate::through(proxy.url())
         })
-        .await
-        .expect("connect through the proxy");
+        .await;
         let producer = RedisQueueProducer::new(conn.clone());
 
         proxy.go_dark();

@@ -821,7 +821,7 @@ async fn a_dead_letter_filed_back_takes_its_unique_key_again_or_names_its_holder
     let queue = format!("nestrs-e2e-refile-unique-{}", crate::this_run());
     let user = crate::acl_user(OPERATOR_USER);
     let config = crate::documented_user("queue/delivery.mdx", "operator", &user, 0).await;
-    let mut operator = nest_rs_redis::RedisConnection::connect(&config)
+    let mut operator = nest_rs_redis::RedisConnection::connect(&crate::at_default_budget(config))
         .await
         .expect("the page's user passes the boot's proof");
     let dead = crate::key_of(&queue, "dead");

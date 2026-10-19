@@ -405,12 +405,11 @@ mod standalone {
     async fn a_command_waiting_on_a_reconnection_that_never_answers_times_out_within_the_budget() {
         let proxy = crate::DarkeningProxy::start().await;
         let budget = Duration::from_millis(500);
-        let mut conn = RedisConnection::connect(&RedisConfig {
+        let mut conn = crate::connected(&RedisConfig {
             connect_timeout: budget,
             ..crate::through(proxy.url())
         })
-        .await
-        .expect("connect through the proxy");
+        .await;
         redis::cmd("PING")
             .query_async::<()>(&mut conn)
             .await
@@ -465,13 +464,12 @@ mod standalone {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_command_redis_holds_fails_at_the_budget_and_the_connection_outlives_it() {
         let budget = Duration::from_millis(300);
-        let mut conn = RedisConnection::connect(&RedisConfig {
+        let mut conn = crate::connected(&RedisConfig {
             url: crate::redis_url(),
             connect_timeout: budget,
             ..RedisConfig::default()
         })
-        .await
-        .expect("connect to the dev container Redis");
+        .await;
         let mut admin = crate::connect().await;
         let key = crate::unique_key("held-write");
 

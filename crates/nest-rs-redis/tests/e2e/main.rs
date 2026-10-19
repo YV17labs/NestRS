@@ -204,6 +204,20 @@ async fn connect() -> RedisConnection {
         .expect("connect to the dev container Redis")
 }
 
+/// The connection `config` opens, for a test whose subject is what its budget
+/// bounds once open: the boot's proof shares that budget, and a loaded machine
+/// can spend a short one on the dial alone, which says nothing of the subject.
+async fn connected(config: &RedisConfig) -> RedisConnection {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match RedisConnection::connect(config).await {
+            Ok(conn) => return conn,
+            Err(_) if Instant::now() < deadline => {}
+            Err(refused) => panic!("the dev container Redis was not reached: {refused}"),
+        }
+    }
+}
+
 /// [`connect`], on database `db`.
 async fn connect_on(db: u8) -> RedisConnection {
     RedisConnection::connect(&at_default_budget(redis_config_on(db)))

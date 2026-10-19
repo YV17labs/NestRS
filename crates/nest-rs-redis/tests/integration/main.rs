@@ -1,9 +1,10 @@
 //! `nest-rs-redis`'s suite in process, without a Redis: [`connection`] for the
 //! boot against a scripted server and the budget's place below the ports' nets,
 //! [`module`] for a named instance opened beside the default one,
-//! [`tls`] for a certificate refused at the handshake, and [`queue`] and
-//! [`schedule`] and [`throttler`] for what their bindings' composition refuses
-//! before Redis is dialled. What only a live Redis shows is in `e2e`.
+//! [`tls`] for a certificate refused at the handshake, [`queue`], [`schedule`]
+//! and [`throttler`] for what their bindings' composition refuses before Redis
+//! is dialled, and [`health`] for each instance's indicator answering the
+//! probes under its own name. What only a live Redis shows is in `e2e`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -15,6 +16,7 @@
 mod connection;
 #[path = "../harness/mod.rs"]
 mod harness;
+mod health;
 mod module;
 mod queue;
 mod schedule;

@@ -19,6 +19,9 @@
 //! - **schedule** — [`RedisScheduleModule`] binds the `dyn OccurrenceLock` a
 //!   scheduled job declared `replicas = "one"` claims each occurrence through,
 //!   so one replica of the deployment fires it.
+//! - **health** — [`RedisHealthModule`] attaches the instance's indicator,
+//!   which `HealthModule` runs on the readiness and startup probes: a `PING`,
+//!   answering as `redis`, or `redis:cache` for a named instance.
 //!
 //! A binding pulls its port's crate, which an app using Redis for another port
 //! does not compile.
@@ -56,6 +59,8 @@ mod cluster;
 mod config;
 mod connection;
 mod error;
+#[cfg(feature = "health")]
+mod health;
 mod instance;
 mod millis;
 mod module;
@@ -77,6 +82,8 @@ mod url;
 pub use config::RedisConfig;
 pub use connection::RedisConnection;
 pub use error::RedisError;
+#[cfg(feature = "health")]
+pub use health::RedisHealthModule;
 pub use module::{RedisModule, RedisSetup};
 #[cfg(feature = "queue")]
 pub use queue::{RedisQueueConfig, RedisQueueModule, RedisQueueProducer, RedisQueueSetup};

@@ -6,9 +6,15 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Object storage for NestRS: an injectable Storage client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) over the `object_store` crate, whose backend the store's URL picks — s3:// for AWS S3 and servers speaking its API, memory:/// for development and tests — proved at boot."
+description = "Object storage for NestRS: an injectable Storage client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) over the `object_store` crate, whose backend the store's URL picks — s3:// for AWS S3 and servers speaking its API, memory:/// for development and tests — proved at boot, and its readiness indicator (StorageHealthModule, feature `health`)."
 keywords = ["framework", "nestrs", "storage", "s3", "object-store"]
 categories = ["web-programming", "filesystem"]
+
+# docs.rs builds default features only, so the health binding, and every link
+# naming it, would be missing from the published page. The CI rustdoc gate
+# builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -43,10 +49,22 @@ futures-util.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 # A cancelled `put_stream` is dropped mid-part, and `Drop` cannot await — so the
-# abort is handed to a detached task on the runtime that was driving it.
+# abort is handed to a detached task on the runtime that was driving it; and a
+# health probe's listing holds the probe client alone across its answer.
 tokio = { workspace = true }
+# `health` feature only: the metadata the store's indicator is attached as,
+# which `HealthModule` runs on the readiness and startup probes.
+nest-rs-health = { workspace = true, optional = true }
+
+[features]
+# The store's readiness and startup indicator: a page of its bucket's listing.
+health = ["dep:nest-rs-health"]
 
 [dev-dependencies]
+# Self dev-dependency: the suite runs with the health binding on.
+nest-rs-storage = { path = ".", features = ["health"] }
+# The suite mounts the probes the health binding's indicator answers on.
+nest-rs-health = { path = "../nest-rs-health" }
 # `test-util` stops the clock once a silent store has taken the connection, so
 # the budget is waited out without the suite waiting it.
 tokio = { workspace = true, features = ["test-util"] }
@@ -59,8 +77,9 @@ reqwest.workspace = true
 # emits — which means collecting events with a `Layer` of its own.
 tracing-subscriber.workspace = true
 # `LogCapture`, for the unit half of the same problem: what the abort-on-drop
-# guard says when it is dropped with no runtime to abort on.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# guard says when it is dropped with no runtime to abort on; `http` drives the
+# probes the health binding gates.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
 # The suite's proxy names the store it dials over TLS, to stop an answer where
 # its body starts.
 rustls.workspace = true

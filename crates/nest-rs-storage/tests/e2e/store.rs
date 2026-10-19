@@ -43,8 +43,8 @@ async fn a_secret_the_store_refuses_opens_with_one_warn_naming_the_credentials()
     let warned = logs.expect_one(
         nest_rs_storage::TARGET,
         "the object store refused to list its bucket — its credentials are refused, or its \
-         policy grants no s3:ListBucket on the prefix; booting on, and the first call will say \
-         which",
+         policy grants no s3:ListBucket on the prefix; read as answering, and the next call will \
+         say which",
     );
     assert_eq!(warned.level, "warn");
     assert!(

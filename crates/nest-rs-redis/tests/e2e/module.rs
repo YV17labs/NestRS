@@ -16,8 +16,10 @@ use redis::aio::ConnectionLike;
 
 use crate::{DB_SELECT_RETRIED, connect, connect_on, redis_config, redis_config_on, unique_key};
 
+/// The suite's one named instance: two markers reading `cache` in one binary
+/// would be refused as twins.
 #[instance]
-struct Cache;
+pub(crate) struct Cache;
 
 /// The suite's Valkey has no logical database to spare, so the cache reuses
 /// [`DB_SELECT_RETRIED`], whose test only proves a connection: the one key

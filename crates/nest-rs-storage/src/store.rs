@@ -1,7 +1,8 @@
 //! [`Store`] — the object store a [`StorageConfig`] names, opened through the
 //! object_store backend its URL's scheme picks, and proved at boot: an `s3://`
 //! store lists one page under its prefix, so a bucket that does not exist
-//! refuses the boot instead of the first call.
+//! refuses the boot instead of the first call. The same listing, one attempt
+//! at a time, is what a health probe reads.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -52,6 +53,9 @@ pub(crate) struct Store {
     /// What presigns, on a backend that can; it addresses the bucket's root,
     /// so a key is joined to [`prefix`](Self::prefix) first.
     signer: Option<AmazonS3>,
+    /// What proves the store answers, on a backend with a server to reach:
+    /// the boot's proof, then each health probe.
+    probe: Option<Probe>,
     /// The prefix every key is addressed under.
     prefix: Path,
     /// The URL's scheme, naming the backend.
@@ -66,49 +70,81 @@ impl Store {
     /// Open the store `config` names, refusing what the boot refuses, and prove
     /// an `s3://` one answers within the operation budget.
     pub(crate) async fn open(config: &StorageConfig) -> Result<Self> {
-        let (store, backend) = Self::built(config)?;
+        let store = Self::built(config)?;
         tracing::info!(
             target: crate::TARGET,
             store = %store.shown,
             backend = store.backend,
             "opening the object store",
         );
-        if let Backend::S3 { bucket, prefix } = backend {
-            proved(config, &bucket, &prefix, &store.shown).await?;
+        if let Some(probe) = &store.probe {
+            proved(probe, config.operation_timeout, &store.shown).await?;
         }
         Ok(store)
     }
 
-    /// The store `config` names, built and not yet proved, and the backend
-    /// its URL picks.
-    pub(crate) fn built(config: &StorageConfig) -> Result<(Self, Backend)> {
+    /// The store `config` names, built and not yet proved.
+    pub(crate) fn built(config: &StorageConfig) -> Result<Self> {
         let backend = config
             .backend()
             .map_err(|refused| StorageError::Init(Box::new(refused)))?;
         let url = endpoint_shown(&config.url);
-        let (objects, signer, prefix, shown) = match &backend {
-            Backend::Memory { prefix } => {
-                (confined(InMemory::new(), prefix), None, prefix, url.clone())
-            }
+        let (objects, signer, probe, prefix, shown) = match &backend {
+            Backend::Memory { prefix } => (
+                confined(InMemory::new(), prefix),
+                None,
+                None,
+                prefix,
+                url.clone(),
+            ),
             Backend::S3 { bucket, prefix } => {
                 let retries = retries_within(config.operation_timeout);
                 let s3 = s3(config, bucket, ReqwestConnector::default(), retries)?;
+                let probe = Probe::new(config, bucket, prefix)?;
                 let shown = match &config.endpoint {
                     Some(endpoint) => format!("{url} at {}", endpoint_shown(endpoint)),
                     None => url.clone(),
                 };
-                (confined(s3.clone(), prefix), Some(s3), prefix, shown)
+                (
+                    confined(s3.clone(), prefix),
+                    Some(s3),
+                    Some(probe),
+                    prefix,
+                    shown,
+                )
             }
         };
-        let store = Self {
+        Ok(Self {
             objects,
             signer,
+            probe,
             prefix: prefix.clone(),
             backend: backend.scheme(),
             url,
             shown,
+        })
+    }
+
+    /// Whether the store answers its listing now: one attempt of the boot's
+    /// proof, read as the proof reads it — a store reached over verified TLS
+    /// answers, even one refusing the listing itself (its credentials, or a
+    /// policy granting no `s3:ListBucket`), as it boots, with the boot's
+    /// `warn` filed again whenever the store starts refusing; an in-process
+    /// store has nothing to reach.
+    #[cfg(feature = "health")]
+    pub(crate) async fn answers(&self) -> Result<()> {
+        let Some(probe) = &self.probe else {
+            return Ok(());
         };
-        Ok((store, backend))
+        let env = ConfigService::for_namespace(StorageConfig::NAMESPACE);
+        match probe.listed(&env, &self.shown).await {
+            Ok(()) => Ok(()),
+            Err(Attempt::Refused(refused)) => Err(refused),
+            Err(Attempt::Failed(error)) => Err(StorageError::List {
+                store: self.shown.clone(),
+                source: Box::new(error),
+            }),
+        }
     }
 
     /// What presigns, or the refusal of a backend that cannot.
@@ -125,6 +161,7 @@ impl Store {
         Self {
             objects,
             signer: None,
+            probe: None,
             prefix: Path::default(),
             backend: "memory",
             url: "memory:///".to_owned(),
@@ -197,7 +234,7 @@ fn s3<C: HttpConnector>(
         .map_err(|refused| StorageError::Init(Box::new(refused)))
 }
 
-/// How the boot's proof of a bucket ended, short of a refusal.
+/// How one listing of a bucket ended, short of a refusal.
 enum Listed {
     /// The bucket answered its first page.
     Answered,
@@ -206,48 +243,68 @@ enum Listed {
     Forbidden(object_store::Error),
 }
 
-/// Prove the bucket answers one page of its listing under `prefix` within
-/// the operation budget, through a client of its own that reads each answer's
-/// status: object_store does not say a listing's. That client never retries,
-/// so each attempt's failure is classified the moment it is met.
-async fn proved(config: &StorageConfig, bucket: &str, prefix: &Path, shown: &str) -> Result<()> {
-    let status = Arc::new(Mutex::new(None));
-    let probe = s3(
-        config,
-        bucket,
-        Witnessed {
-            status: Arc::clone(&status),
-        },
-        RetryConfig {
-            max_retries: 0,
-            ..RetryConfig::default()
-        },
-    )?;
-    let budget = config.operation_timeout;
-    let env = ConfigService::for_namespace(StorageConfig::NAMESPACE);
-    let listed = prove(
-        budget,
-        Backoff::RECONNECT,
-        process_seed(),
-        said(shown, budget),
-        |_left| {
-            let (probe, status, env) = (&probe, &status, &env);
-            async move {
-                *status.lock().unwrap_or_else(PoisonError::into_inner) = None;
-                let prefix = (!prefix.as_ref().is_empty()).then_some(prefix);
-                let Some(Err(error)) = probe.list(prefix).next().await else {
-                    return Ok(Listed::Answered);
-                };
-                let answered = *status.lock().unwrap_or_else(PoisonError::into_inner);
+/// What lists a bucket to prove it answers, through a client of its own that
+/// reads each answer's status: object_store does not say a listing's. That
+/// client never retries, so each attempt's failure is classified the moment it
+/// is met.
+#[derive(Debug)]
+struct Probe {
+    client: AmazonS3,
+    /// The status of the last answer the store gave the client.
+    status: Arc<Mutex<Option<StatusCode>>>,
+    /// Whether the store refused the last listing. Held across one listing,
+    /// so the status read is that listing's (a readiness and a startup probe
+    /// may ask at once) and a store refusing on every probe is said once.
+    refusing: tokio::sync::Mutex<bool>,
+    /// The prefix the store's keys live under, listed alone.
+    prefix: Path,
+}
+
+impl Probe {
+    /// The probe of `bucket` under `prefix`, dialing as `config` says.
+    fn new(config: &StorageConfig, bucket: &str, prefix: &Path) -> Result<Self> {
+        let status = Arc::new(Mutex::new(None));
+        let client = s3(
+            config,
+            bucket,
+            Witnessed {
+                status: Arc::clone(&status),
+            },
+            RetryConfig {
+                max_retries: 0,
+                ..RetryConfig::default()
+            },
+        )?;
+        Ok(Self {
+            client,
+            status,
+            refusing: tokio::sync::Mutex::new(false),
+            prefix: prefix.clone(),
+        })
+    }
+
+    /// List one page under the prefix, once: `Ok` when the store answered it
+    /// or refused it, and a refusal is said at the listing that first meets
+    /// it — the boot's, or the probe's after the store stopped listing.
+    async fn listed(
+        &self,
+        env: &ConfigService,
+        shown: &str,
+    ) -> std::result::Result<(), Attempt<object_store::Error, StorageError>> {
+        let mut refusing = self.refusing.lock().await;
+        *self.status.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        let prefix = (!self.prefix.as_ref().is_empty()).then_some(&self.prefix);
+        let listed = match self.client.list(prefix).next().await {
+            Some(Err(error)) => {
+                let answered = *self.status.lock().unwrap_or_else(PoisonError::into_inner);
                 classify(error, answered, env, shown)
             }
-        },
-    )
-    .await;
-    match listed {
-        Ok(Listed::Answered) => Ok(()),
-        Ok(Listed::Forbidden(error)) => {
-            tracing::warn!(
+            _ => Ok(Listed::Answered),
+        };
+        let was_refusing =
+            std::mem::replace(&mut *refusing, matches!(listed, Ok(Listed::Forbidden(_))));
+        match listed? {
+            Listed::Forbidden(error) if !was_refusing => tracing::warn!(
                 target: crate::TARGET,
                 store = %shown,
                 credentials = %format!(
@@ -257,11 +314,29 @@ async fn proved(config: &StorageConfig, bucket: &str, prefix: &Path, shown: &str
                 ),
                 error = %nest_rs_core::error_message(&error),
                 "the object store refused to list its bucket — its credentials are refused, or \
-                 its policy grants no s3:ListBucket on the prefix; booting on, and the first \
-                 call will say which",
-            );
-            Ok(())
+                 its policy grants no s3:ListBucket on the prefix; read as answering, and the \
+                 next call will say which",
+            ),
+            Listed::Answered | Listed::Forbidden(_) => {}
         }
+        Ok(())
+    }
+}
+
+/// Prove the bucket answers one page of its listing under its prefix within
+/// `budget`, through `probe`.
+async fn proved(probe: &Probe, budget: Duration, shown: &str) -> Result<()> {
+    let env = ConfigService::for_namespace(StorageConfig::NAMESPACE);
+    let listed = prove(
+        budget,
+        Backoff::RECONNECT,
+        process_seed(),
+        said(shown, budget),
+        |_left| probe.listed(&env, shown),
+    )
+    .await;
+    match listed {
+        Ok(()) => Ok(()),
         Err(Unproved::Refused(refused)) => Err(refused),
         Err(Unproved::Spent { last, .. }) => Err(StorageError::Unreachable {
             store: shown.to_owned(),
@@ -385,9 +460,16 @@ impl HttpService for Witness {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU16, Ordering};
+
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     use super::*;
+
+    /// What a store refusing its listing is said as, on this crate's target.
+    const REFUSED_TO_LIST: &str = "the object store refused to list its bucket — its credentials \
+         are refused, or its policy grants no s3:ListBucket on the prefix; read as answering, and \
+         the next call will say which";
 
     #[test]
     fn the_last_backoff_ends_within_the_budget_whatever_the_budget() {
@@ -429,6 +511,16 @@ mod tests {
         authority: &nest_rs_testing::TestAuthority,
         listing: u16,
     ) -> (String, Heard) {
+        store_answering(authority, Arc::new(AtomicU16::new(listing))).await
+    }
+
+    /// [`store_presenting`], answering a listing with the status `listing`
+    /// holds when its connection arrives — each answer closes its connection,
+    /// so that is the listing's own.
+    async fn store_answering(
+        authority: &nest_rs_testing::TestAuthority,
+        listing: Arc<AtomicU16>,
+    ) -> (String, Heard) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a port");
@@ -439,6 +531,7 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let (acceptor, kept) = (acceptor.clone(), kept.clone());
+                let listing = listing.load(Ordering::SeqCst);
                 tokio::spawn(async move {
                     let Ok(mut tls) = acceptor.accept(stream).await else {
                         return;
@@ -550,12 +643,7 @@ mod tests {
                 .await
                 .expect("a least-privilege policy is no reason to refuse the boot");
         }
-        let warned = logs.find(
-            crate::TARGET,
-            "the object store refused to list its bucket — its credentials are refused, or its \
-             policy grants no s3:ListBucket on the prefix; booting on, and the first call will \
-             say which",
-        );
+        let warned = logs.find(crate::TARGET, REFUSED_TO_LIST);
         assert_eq!(warned.len(), 2, "one per boot: {:#?}", logs.events());
         for warn in warned {
             assert_eq!(warn.level, "warn");
@@ -671,6 +759,106 @@ mod tests {
                     .is_empty(),
             "{:#?}",
             logs.events()
+        );
+    }
+
+    /// The store a probe reads, built without the boot's proof.
+    fn unproved(endpoint: &str, authority: &nest_rs_testing::TestAuthority) -> Store {
+        Store::built(&reaching(endpoint, "s3://bucket", authority.client_tls()))
+            .expect("the store builds")
+    }
+
+    #[tokio::test]
+    async fn a_probe_reads_a_bucket_answering_its_listing_with_one_request() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let (endpoint, heard) = store_presenting(&authority, 200).await;
+        unproved(&endpoint, &authority)
+            .answers()
+            .await
+            .expect("the bucket answers");
+        assert_eq!(heard.lines().len(), 1, "{:?}", heard.lines());
+    }
+
+    #[tokio::test]
+    async fn a_probe_reads_a_store_refusing_the_listing_itself_as_answering_as_the_boot_does() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        for status in [403, 401] {
+            let (endpoint, _) = store_presenting(&authority, status).await;
+            unproved(&endpoint, &authority)
+                .answers()
+                .await
+                .expect("a least-privilege policy is no reason to turn traffic away");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_store_starting_to_refuse_the_listing_is_said_once_by_the_probe_that_meets_it() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let listing = Arc::new(AtomicU16::new(403));
+        let (endpoint, _) = store_answering(&authority, Arc::clone(&listing)).await;
+        let logs = nest_rs_testing::LogCapture::install();
+        let store = Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
+            .await
+            .expect("a least-privilege policy is no reason to refuse the boot");
+        assert_eq!(
+            logs.find(crate::TARGET, REFUSED_TO_LIST).len(),
+            1,
+            "the boot's"
+        );
+        for (status, said) in [(403, 1), (200, 1), (401, 2), (401, 2), (500, 2), (403, 3)] {
+            listing.store(status, Ordering::SeqCst);
+            let answered = store.answers().await;
+            assert_eq!(answered.is_ok(), status != 500, "{status}: {answered:?}");
+            let warned = logs.find(crate::TARGET, REFUSED_TO_LIST);
+            assert_eq!(warned.len(), said, "after {status}: {:#?}", logs.events());
+        }
+        for warn in logs.find(crate::TARGET, REFUSED_TO_LIST) {
+            assert_eq!(warn.level, "warn");
+            let credentials = warn.field("credentials").unwrap_or_default();
+            assert!(
+                credentials.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY"))
+                    && credentials.contains(&nest_rs_config::var_name("storage", "SECRET_KEY")),
+                "{credentials}"
+            );
+            assert!(warn.field("error").is_some_and(|chain| !chain.is_empty()));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_probe_reads_a_missing_bucket_as_the_boot_refuses_it() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let (endpoint, heard) = store_presenting(&authority, 404).await;
+        let refused = unproved(&endpoint, &authority)
+            .answers()
+            .await
+            .expect_err("no bucket to list");
+        assert!(
+            matches!(refused, StorageError::Refused { .. }),
+            "{refused:?}"
+        );
+        assert!(
+            nest_rs_core::error_message(&refused).contains(&format!(
+                "the bucket {} names does not exist",
+                nest_rs_config::var_name("storage", "URL")
+            )),
+            "{refused}"
+        );
+        assert_eq!(heard.lines().len(), 1, "never retried");
+    }
+
+    #[tokio::test]
+    async fn a_probe_reads_a_failing_store_once_naming_the_listing() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let (endpoint, heard) = store_presenting(&authority, 500).await;
+        let failed = unproved(&endpoint, &authority)
+            .answers()
+            .await
+            .expect_err("a store answering 500 does not answer");
+        assert!(matches!(failed, StorageError::List { .. }), "{failed:?}");
+        assert_eq!(
+            heard.lines().len(),
+            1,
+            "a probe is one attempt: the orchestrator asks again"
         );
     }
 

@@ -11,6 +11,7 @@
 )]
 
 mod client;
+mod health;
 mod store;
 mod transfer;
 

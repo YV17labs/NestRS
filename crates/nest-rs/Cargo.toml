@@ -150,7 +150,8 @@ queue = [
     "nest-rs-seaorm?/queue",
 ]
 # The one Redis connection (`RedisModule`, `RedisConnection`) and nothing else:
-# an app that sends its own commands, or a health check, compiles no port.
+# an app that sends its own commands compiles no port. Beside `health`, its
+# indicator's binding (`RedisHealthModule`) compiles too.
 redis = ["dep:nest-rs-redis"]
 # `redis-<port>`: one feature per binding of `nest-rs-redis`, read off its
 # folder, each closing over the port it binds — the binding is imported beside
@@ -196,7 +197,17 @@ social = ["dep:nest-rs-social", "authn", "oauth-client"]
 # `opentelemetry` feature.
 opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-testing?/opentelemetry"]
 openapi = ["dep:nest-rs-openapi", "http"]
-health = ["dep:nest-rs-health", "http", "nest-rs-seaorm?/health"]
+# A resource the framework opens ships its indicator in its own crate, behind
+# a `health` feature forwarded weakly here: beside `seaorm`, `redis` or
+# `storage`, each binding (`SeaOrmHealthModule`, `RedisHealthModule`,
+# `StorageHealthModule`) compiles; without `health`, none does.
+health = [
+    "dep:nest-rs-health",
+    "http",
+    "nest-rs-seaorm?/health",
+    "nest-rs-redis?/health",
+    "nest-rs-storage?/health",
+]
 # HTTP only: `ThrottlerGuard` checks every edge through one `check`, and
 # declares it once for every view, so no edge's feature reaches it.
 throttler = ["dep:nest-rs-throttler", "http"]

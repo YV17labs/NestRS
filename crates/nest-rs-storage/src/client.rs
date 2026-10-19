@@ -715,7 +715,7 @@ mod tests {
         /// for the tests of what a call does once it is open.
         fn unproved(config: StorageConfig) -> Self {
             Self {
-                store: Arc::new(Store::built(&config).expect("the store builds").0),
+                store: Arc::new(Store::built(&config).expect("the store builds")),
                 config: Arc::new(config),
             }
         }

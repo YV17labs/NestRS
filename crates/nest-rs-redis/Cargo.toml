@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Redis for nest-rs: one shared connection (RedisModule) to one Valkey server, Sentinel or a Cluster, and one binding per port over it, each a feature — the job queue on Redis Streams (RedisQueueModule, feature `queue`), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`)."
+description = "Redis for nest-rs: one shared connection (RedisModule) to one Valkey server, Sentinel or a Cluster, and one binding per port over it, each a feature — the job queue on Redis Streams (RedisQueueModule, feature `queue`), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`), and each instance's readiness indicator (RedisHealthModule, feature `health`)."
 keywords = ["framework", "nestrs", "redis", "queue", "streams"]
 categories = ["asynchronous", "database"]
 
@@ -46,6 +46,9 @@ nest-rs-throttler = { workspace = true, optional = true }
 # `replicas = "one"` claims its occurrences through, and the remedy sentence
 # every lock binding shares.
 nest-rs-schedule = { workspace = true, optional = true }
+# `health` feature only: the metadata an instance's indicator is attached as,
+# which `HealthModule` runs on the readiness and startup probes.
+nest-rs-health = { workspace = true, optional = true }
 # The client every binding runs on, and the user-facing Redis surface
 # (`redis::RedisError`, the `aio::ConnectionLike` `RedisConnection` implements,
 # the command API a caller runs on it).
@@ -76,14 +79,20 @@ queue = ["dep:nest-rs-queue", "dep:futures-util", "dep:serde_json", "dep:uuid"]
 throttler = ["dep:nest-rs-throttler"]
 # The occurrence lock for scheduled jobs that fire once across replicas.
 schedule = ["dep:nest-rs-schedule"]
+# Each instance's readiness and startup indicator, a `PING`.
+health = ["dep:nest-rs-health"]
 
 [dev-dependencies]
 # A dead-lettered job that logs nothing passes every outcome assertion —
 # `LogCapture` covers the event half of the worker's contract; `queue` is the
 # behaviour kit every queue backend runs.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["queue", "tls"] }
+# `http` drives the probes the health binding gates, as an orchestrator reads
+# them.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "queue", "tls"] }
 # Self dev-dependency: the suite runs with every binding on.
-nest-rs-redis = { path = ".", features = ["queue", "throttler", "schedule"] }
+nest-rs-redis = { path = ".", features = ["queue", "throttler", "schedule", "health"] }
+# The suite mounts the probes the health binding's indicators answer on.
+nest-rs-health = { path = "../nest-rs-health" }
 nest-rs-core = { path = "../nest-rs-core" }
 # Per-argument pipe on a `#[process]` job argument (`Piped<P, T>` / `Valid<T>`).
 nest-rs-pipes = { path = "../nest-rs-pipes" }

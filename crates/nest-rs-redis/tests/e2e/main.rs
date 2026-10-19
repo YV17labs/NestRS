@@ -7,8 +7,9 @@
 //! by users confined to the framework's keys as the docs prescribe them, its
 //! producer and its consumer under the port's worker, the behaviour kit every
 //! queue backend runs included — [`correlation`] for the
-//! trace context that crosses the producer/consumer boundary, and [`schedule`]
-//! for the occurrence lock a job firing once across replicas claims through.
+//! trace context that crosses the producer/consumer boundary, [`schedule`]
+//! for the occurrence lock a job firing once across replicas claims through,
+//! and [`health`] for the probes each instance's indicator gates.
 //! Under Sentinel and on a Cluster, a `mutual_tls` module asks every data node
 //! for a client certificate, one test at a time once every other is done.
 //!
@@ -33,6 +34,7 @@ mod connection;
 mod correlation;
 #[path = "../harness/mod.rs"]
 mod harness;
+mod health;
 mod module;
 mod queue;
 mod schedule;

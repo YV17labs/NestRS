@@ -47,6 +47,8 @@ pub mod prelude;
 pub mod processor;
 #[cfg(all(feature = "queue", feature = "testing"))]
 pub mod queue_kit;
+#[cfg(feature = "redis-health")]
+pub mod redis_health;
 #[cfg(feature = "redis-queue")]
 pub mod redis_queue;
 #[cfg(feature = "redis-schedule")]

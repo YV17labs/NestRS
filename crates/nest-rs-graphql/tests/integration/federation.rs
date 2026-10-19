@@ -1462,3 +1462,103 @@ mod keyed_outside_a_subgraph {
         );
     }
 }
+
+/// A federation field is a `graphql.field` unit of role `federation`, inside
+/// the app's interceptors and exception filters.
+mod around_the_federation_fields {
+    use std::sync::Mutex;
+
+    use nest_rs_core::problem::code;
+    use nest_rs_core::{
+        Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
+        exception_filter, injectable, interceptor, module,
+    };
+    use nest_rs_graphql::{FieldRole, GraphqlView};
+    use nest_rs_guards::async_trait;
+    use nest_rs_testing::TestApp;
+
+    use super::{FederatedModule, entities_for, service_sdl};
+
+    static SEEN: Mutex<Vec<(&'static str, &'static str, FieldRole)>> = Mutex::new(Vec::new());
+
+    /// Records the unit, field and role of each unit it runs around.
+    #[injectable]
+    #[derive(Default)]
+    struct Recorder;
+
+    impl Layer for Recorder {}
+
+    #[async_trait]
+    impl Interceptor for Recorder {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            let seen = cx
+                .switch_to::<GraphqlView>()
+                .map(|view| (cx.unit().name(), view.field(), view.role()));
+            if let Some(seen) = seen {
+                SEEN.lock().unwrap().push(seen);
+            }
+            next.run(cx).await
+        }
+    }
+
+    /// Answers every failure it is offered as a conflict.
+    #[injectable]
+    #[derive(Default)]
+    struct EveryFailure;
+
+    impl Layer for EveryFailure {}
+
+    #[async_trait]
+    impl ExceptionFilter for EveryFailure {
+        type Exception = dyn std::error::Error + Send + Sync;
+
+        async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+            Caught::Problem(Problem::new(409, code::CONFLICT))
+        }
+    }
+
+    #[module(imports = [FederatedModule], providers = [Recorder, EveryFailure])]
+    struct LayeredModule;
+
+    #[tokio::test]
+    async fn the_apps_interceptor_runs_around_the_sdl_field_as_a_federation_unit() {
+        SEEN.lock().unwrap().clear();
+        let app = TestApp::builder()
+            .module::<LayeredModule>()
+            .use_interceptors_global([interceptor::<Recorder>()])
+            .build()
+            .await
+            .expect("boots");
+
+        let sdl = service_sdl(&app).await;
+
+        assert!(sdl.contains("@key"), "{sdl}");
+        assert_eq!(
+            *SEEN.lock().unwrap(),
+            [("graphql.field", "_service", FieldRole::Federation)],
+        );
+    }
+
+    /// `Entity not found.` is async-graphql's own answer, met before any
+    /// entity body: only the federation field's site can see it fail.
+    #[tokio::test]
+    async fn the_apps_exception_filter_answers_a_failed_entities_field() {
+        let app = TestApp::builder()
+            .module::<LayeredModule>()
+            .use_exception_filters_global([exception_filter::<EveryFailure>()])
+            .build()
+            .await
+            .expect("boots");
+
+        let body = entities_for(
+            &app,
+            vec![serde_json::json!({ "__typename": "NotAType", "id": 1 })],
+        )
+        .await;
+
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "CONFLICT",
+            "{body}"
+        );
+    }
+}

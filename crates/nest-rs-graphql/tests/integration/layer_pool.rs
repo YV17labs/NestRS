@@ -179,18 +179,21 @@ async fn a_unit_stage_interceptor_runs_around_the_graphql_post() {
 /// The interceptors and exception filters a resolver binds, and the app's own,
 /// around its root fields and its field resolvers.
 mod pipeline {
+    use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use nest_rs_core::problem::code;
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
-        injectable, interceptor, module,
+        exception_filter, injectable, interceptor, module,
     };
+    use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
     use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
     use nest_rs_graphql::{FieldRole, GraphqlModule, GraphqlView, operations, resolver};
     use nest_rs_http::async_trait;
     use nest_rs_testing::TestApp;
+    use tokio::sync::broadcast;
 
     static AROUND_ROOT_FIELDS: AtomicUsize = AtomicUsize::new(0);
     static AROUND_LABELS: AtomicUsize = AtomicUsize::new(0);
@@ -320,6 +323,15 @@ mod pipeline {
         async fn label(&self, parent: &Shelf) -> String {
             format!("shelf {}", parent.id)
         }
+
+        #[field_resolver]
+        #[use_exception_filters(LedgerConflict)]
+        async fn balance(&self, parent: &Shelf) -> Result<i32, LedgerRefused> {
+            match parent.id {
+                2 => Err(LedgerRefused),
+                id => Ok(id),
+            }
+        }
     }
 
     #[module(
@@ -416,6 +428,219 @@ mod pipeline {
             logs.find("nest_rs::graphql", "graphql operation failed")
                 .is_empty(),
             "a failure a filter answered 4xx files nothing",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_field_resolvers_own_exception_filter_answers_its_parent_row() {
+        let _serial = SERIAL.lock().await;
+        let app = TestApp::for_module::<ShelfModule>().await.expect("boots");
+
+        let body = post(&app, "{ shelves { id balance } }").await;
+
+        assert_eq!(body["data"]["shelves"][0]["balance"], 1, "{body}");
+        assert!(body["data"]["shelves"][1]["balance"].is_null(), "{body}");
+        let error = &body["errors"][0];
+        assert_eq!(error["extensions"]["code"], "CONFLICT", "{body}");
+        assert_eq!(
+            error["path"],
+            serde_json::json!(["shelves", 1, "balance"]),
+            "{body}"
+        );
+        assert!(!body.to_string().contains("10.0.0.9"), "{body}");
+    }
+
+    static MODULE_WIDE: AtomicUsize = AtomicUsize::new(0);
+
+    /// A module's own `#[interceptor]`: app-wide, at the handler stage.
+    #[interceptor]
+    #[derive(Default)]
+    struct ModuleWide;
+
+    impl Layer for ModuleWide {}
+
+    #[async_trait]
+    impl Interceptor for ModuleWide {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            MODULE_WIDE.fetch_add(1, Ordering::SeqCst);
+            next.run(cx).await
+        }
+    }
+
+    #[module(
+        imports = [ShelfModule],
+        providers = [ModuleWide],
+    )]
+    struct ModuleWideRoot;
+
+    #[tokio::test]
+    async fn a_modules_interceptor_runs_around_each_root_field_once() {
+        let _serial = SERIAL.lock().await;
+        MODULE_WIDE.store(0, Ordering::SeqCst);
+        let app = TestApp::for_module::<ModuleWideRoot>()
+            .await
+            .expect("boots");
+
+        let body = post(&app, "{ count shelves { label } }").await;
+
+        assert_eq!(body["data"]["count"], 3, "{body}");
+        assert_eq!(
+            MODULE_WIDE.load(Ordering::SeqCst),
+            2,
+            "once per root field — none at the request, none per parent row: {body}",
+        );
+    }
+
+    static OPENINGS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Counts each subscription opening it runs around.
+    #[injectable]
+    #[derive(Default)]
+    struct CountOpenings;
+
+    impl Layer for CountOpenings {}
+
+    #[async_trait]
+    impl Interceptor for CountOpenings {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            OPENINGS.fetch_add(1, Ordering::SeqCst);
+            next.run(cx).await
+        }
+    }
+
+    #[derive(Clone, Debug, SimpleObject)]
+    struct Entry {
+        n: i32,
+    }
+
+    #[injectable]
+    struct Entries {
+        tx: broadcast::Sender<Entry>,
+    }
+
+    impl Default for Entries {
+        fn default() -> Self {
+            Self {
+                tx: broadcast::channel(8).0,
+            }
+        }
+    }
+
+    /// Every field it declares answers through the filter it binds.
+    #[resolver]
+    #[use_exception_filters(LedgerConflict)]
+    struct VaultResolver {
+        #[inject]
+        entries: Arc<Entries>,
+    }
+
+    #[operations]
+    impl VaultResolver {
+        #[mutation]
+        #[public]
+        async fn seal(&self) -> Result<bool, LedgerRefused> {
+            Err(LedgerRefused)
+        }
+
+        #[subscription]
+        #[public]
+        #[use_interceptors(CountOpenings)]
+        async fn entries(&self) -> impl Stream<Item = Entry> {
+            stream::unfold(self.entries.tx.subscribe(), |mut rx| async move {
+                rx.recv().await.ok().map(|entry| (entry, rx))
+            })
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [LedgerConflict, CountOpenings, Entries, VaultResolver],
+    )]
+    struct VaultModule;
+
+    #[tokio::test]
+    async fn a_resolvers_exception_filter_answers_its_root_field() {
+        let _serial = SERIAL.lock().await;
+        let app = TestApp::for_module::<VaultModule>().await.expect("boots");
+
+        let body = post(&app, "mutation { seal }").await;
+
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "CONFLICT",
+            "{body}"
+        );
+        assert!(!body.to_string().contains("10.0.0.9"), "{body}");
+    }
+
+    #[resolver]
+    struct BareLedgerResolver;
+
+    #[operations]
+    impl BareLedgerResolver {
+        #[mutation]
+        #[public]
+        async fn settle(&self) -> Result<bool, LedgerRefused> {
+            Err(LedgerRefused)
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [LedgerConflict, BareLedgerResolver],
+    )]
+    struct BareLedgerModule;
+
+    #[tokio::test]
+    async fn the_apps_exception_filter_answers_a_root_field() {
+        let _serial = SERIAL.lock().await;
+        let app = TestApp::builder()
+            .module::<BareLedgerModule>()
+            .use_exception_filters_global([exception_filter::<LedgerConflict>()])
+            .build()
+            .await
+            .expect("boots");
+
+        let body = post(&app, "mutation { settle }").await;
+
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "CONFLICT",
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_subscriptions_layers_run_at_its_opening_never_per_item() {
+        let _serial = SERIAL.lock().await;
+        OPENINGS.store(0, Ordering::SeqCst);
+        let app = TestApp::for_module::<VaultModule>().await.expect("boots");
+        let entries = app.container().get::<Entries>().expect("provided");
+        let mut socket = app.graphql_socket().open();
+        socket.connect().await;
+        socket.subscribe("1", "subscription { entries { n } }");
+        let emit = async {
+            nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+                entries.tx.receiver_count() >= 1
+            })
+            .await;
+            for n in 1..=3 {
+                entries
+                    .tx
+                    .send(Entry { n })
+                    .expect("the subscriber is live");
+            }
+        };
+
+        let (first, ()) = tokio::join!(socket.next_item("1"), emit);
+        let mut received = vec![first.expect("an item")];
+        for _ in 1..3 {
+            received.push(socket.next_item("1").await.expect("an item"));
+        }
+
+        assert_eq!(received[2]["data"]["entries"]["n"], 3, "{received:?}");
+        assert_eq!(
+            OPENINGS.load(Ordering::SeqCst),
+            1,
+            "once at the opening, none per item",
         );
     }
 }

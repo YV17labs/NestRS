@@ -40,10 +40,9 @@ graphql = [
     "nest-rs-authz/graphql",
     "nest-rs-seaorm-macros/graphql",
 ]
-# Liveness/readiness pool ping (`SeaOrmHealthIndicator`) wired through
-# `nest-rs-health`'s `#[indicators]` registry. The connection's `ping`
-# round-trips a `SELECT 1`, so an unreachable DB drops the readiness probe
-# to `503`.
+# The pool's readiness and startup indicator, `seaorm`, attached by
+# `SeaOrmHealthModule` as `nest-rs-health` metadata. The connection's `ping`
+# round-trips a `SELECT 1`, so an unreachable DB drops both probes to `503`.
 health = ["dep:nest-rs-health"]
 # The queue port's transactional outbox in the app's Postgres: `SeaOrmOutbox`,
 # which `SeaOrmDatabaseModule` binds as `dyn OutboxStore` beside the relay's

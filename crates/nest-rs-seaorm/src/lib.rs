@@ -10,7 +10,8 @@
 //!   MCP operation, a queue attempt, a scheduled tick — and every lifecycle hook
 //!   runs its unit of work through, on an ambient [`Executor`]: the pool, or a
 //!   transaction opened on the unit's first data-layer touch.
-//! - [`SeaOrmHealthModule`] (bare, feature `health`) binds a health indicator.
+//! - [`SeaOrmHealthModule`] (bare, feature `health`) binds the health port: the
+//!   pool's indicator, `seaorm`, on the readiness and startup probes.
 //! - Under the `queue` feature, [`SeaOrmDatabaseModule`] also keeps the queue
 //!   port's outbox, [`queue::SeaOrmOutbox`]: a job pushed inside a unit's
 //!   transaction is written there and filed after its commit;
@@ -100,7 +101,7 @@ pub use time::now;
 pub use unit::SeaOrmUnitOfWork;
 
 #[cfg(feature = "health")]
-pub use health::{SeaOrmHealthIndicator, SeaOrmHealthModule};
+pub use health::SeaOrmHealthModule;
 #[cfg(feature = "http")]
 pub use http::Bind;
 

@@ -1,26 +1,31 @@
-use std::sync::Arc;
+//! The pool's indicator: a round-trip on the readiness and startup probes,
+//! under the crate's own name on both — the probe is the route.
 
-use nest_rs_core::injectable;
-use nest_rs_health::indicators;
+use nest_rs_core::Container;
+use nest_rs_health::IndicatorFuture;
 use sea_orm::DatabaseConnection;
 
-/// Health indicator that pings the pool on the readiness and startup probes, so
-/// an unreachable database drops those probes to `503`.
-#[injectable]
-pub struct SeaOrmHealthIndicator {
-    #[inject]
-    db: Arc<DatabaseConnection>,
+use crate::module::SUBSTRATE_REMEDY;
+
+/// The probe body's key: the crate owning the pool, never a probe-suffixed
+/// name (`db_ready`).
+pub(crate) const NAME: &str = "seaorm";
+
+/// Ping the pool [`SeaOrmModule`](crate::SeaOrmModule) opened, so an
+/// unreachable database reads down.
+pub(crate) fn ping(container: &Container) -> IndicatorFuture<'_> {
+    Box::pin(async move {
+        let db = present(container)?;
+        db.ping().await?;
+        Ok(())
+    })
 }
 
-#[indicators]
-impl SeaOrmHealthIndicator {
-    #[readiness]
-    async fn db(&self) -> Result<(), sea_orm::DbErr> {
-        self.db.ping().await
-    }
-
-    #[startup]
-    async fn db_ready(&self) -> Result<(), sea_orm::DbErr> {
-        self.db.ping().await
-    }
+/// The pool, or the refusal naming the import that opens it.
+pub(crate) fn present(container: &Container) -> anyhow::Result<std::sync::Arc<DatabaseConnection>> {
+    container.get::<DatabaseConnection>().ok_or_else(|| {
+        anyhow::anyhow!(
+            "SeaOrmHealthModule: no `DatabaseConnection` in the container — {SUBSTRATE_REMEDY}"
+        )
+    })
 }

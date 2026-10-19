@@ -21,11 +21,6 @@ help: the following other types implement trait `ProviderResidency`
    | #[injectable]
    | ^^^^^^^^^^^^^ `HealthService`
    |
-  ::: $WORKSPACE/crates/nest-rs-seaorm/src/health/indicator.rs
-   |
-   | #[injectable]
-   | ^^^^^^^^^^^^^ `SeaOrmHealthIndicator`
-   |
   ::: $WORKSPACE/crates/nest-rs-authz/src/guard.rs
    |
    | #[injectable]

@@ -1,0 +1,71 @@
+error[E0277]: `RawHost` declares this beside its `#[mcp]`, but no `#[tools]` impl declares an operation it would reach
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:58:3
+   |
+58 | #[use_guards(Shut)]
+   |   ^^^^^^^^^^ reaches no operation of `RawHost`
+   |
+help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented for `RawHost`
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:63:1
+   |
+63 | struct RawHost;
+   | ^^^^^^^^^^^^^^
+   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools and prompts under `#[tools]`
+note: required by a bound in `_::__nestrs_assert_tools_host`
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:58:3
+   |
+58 | #[use_guards(Shut)]
+   |   ^^^^^^^^^^ required by this bound in `__nestrs_assert_tools_host`
+
+error[E0277]: `RawHost` declares this beside its `#[mcp]`, but no `#[tools]` impl declares an operation it would reach
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:59:3
+   |
+59 | #[use_interceptors(Around)]
+   |   ^^^^^^^^^^^^^^^^ reaches no operation of `RawHost`
+   |
+help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented for `RawHost`
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:63:1
+   |
+63 | struct RawHost;
+   | ^^^^^^^^^^^^^^
+   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools and prompts under `#[tools]`
+note: required by a bound in `_::__nestrs_assert_tools_host`
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:59:3
+   |
+59 | #[use_interceptors(Around)]
+   |   ^^^^^^^^^^^^^^^^ required by this bound in `__nestrs_assert_tools_host`
+
+error[E0277]: `RawHost` declares this beside its `#[mcp]`, but no `#[tools]` impl declares an operation it would reach
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:60:3
+   |
+60 | #[use_exception_filters(Declines)]
+   |   ^^^^^^^^^^^^^^^^^^^^^ reaches no operation of `RawHost`
+   |
+help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented for `RawHost`
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:63:1
+   |
+63 | struct RawHost;
+   | ^^^^^^^^^^^^^^
+   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools and prompts under `#[tools]`
+note: required by a bound in `_::__nestrs_assert_tools_host`
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:60:3
+   |
+60 | #[use_exception_filters(Declines)]
+   |   ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__nestrs_assert_tools_host`
+
+error[E0277]: `RawHost` declares this beside its `#[mcp]`, but no `#[tools]` impl declares an operation it would reach
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:61:3
+   |
+61 | #[meta(Limit(10))]
+   |   ^^^^ reaches no operation of `RawHost`
+   |
+help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented for `RawHost`
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:63:1
+   |
+63 | struct RawHost;
+   | ^^^^^^^^^^^^^^
+   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools and prompts under `#[tools]`
+note: required by a bound in `_::__nestrs_assert_tools_host`
+  --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:61:3
+   |
+61 | #[meta(Limit(10))]
+   |   ^^^^ required by this bound in `__nestrs_assert_tools_host`

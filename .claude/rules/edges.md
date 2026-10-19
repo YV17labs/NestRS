@@ -326,7 +326,10 @@ stage, never a second unit stage; `subscriptions/listen` and the
 notifications run none. Every operation's site is composed at the wiring step,
 so a layer it declares that does not resolve, or two `#[meta]` values of one
 type, refuse the boot. A generic `#[mcp]` struct or `#[tools]` impl is
-refused: its operations' sites are `static`s no parameter reaches.
+refused: its operations' sites are `static`s no parameter reaches. A host
+writing its `ServerHandler` by hand has no site: a layer or a `#[meta]` beside
+its `#[mcp]` would reach nothing, and is a compile error, so its endpoint is
+guarded by the pool and the `EndpointGuards` alone.
 
 ## Posture inside an operation
 

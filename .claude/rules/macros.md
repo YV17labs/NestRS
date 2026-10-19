@@ -104,6 +104,9 @@ an empty fallback. A host's advertised capabilities are derived from the roles
 present (`#[tool]` ⇒ `tools`, `#[prompt]` ⇒ `prompts`), never restated. A host
 that owns its `ServerHandler` (resources, completion) writes rmcp directly and
 has no `#[tools]` block; `#[tools]` on a trait impl is a compile error saying so.
+Such a host declares no operation for its layers to reach, so a layer or a
+`#[meta]` beside its `#[mcp]` is a compile error at the attribute: the struct
+half asks the host for `ToolsHost`, which only `#[tools]` implements.
 `demo`'s `posts` host stays on that raw shape as its witness.
 
 ## The impl half — one method grammar at every member

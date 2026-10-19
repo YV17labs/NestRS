@@ -184,6 +184,21 @@ pub trait DefaultDeclaredRoutes: Sized + 'static {
 
 impl<T: 'static> DefaultDeclaredRoutes for T {}
 
+/// A host whose operations a `#[tools]` impl declares: the one place the
+/// layers its `#[mcp]` binds run. `#[tools]` implements it, and `#[mcp]` asks
+/// it of a host binding a layer, so a host writing rmcp's handler by hand
+/// cannot bind one that would run nowhere.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` declares this beside its `#[mcp]`, but no `#[tools]` impl declares an \
+               operation it would reach",
+    label = "reaches no operation of `{Self}`",
+    note = "a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host \
+            writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate \
+            nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the \
+            app's global guards, or move its tools and prompts under `#[tools]`"
+)]
+pub trait ToolsHost {}
+
 /// Empty fallback so the struct-level `#[mcp]` can ask **any** host which layers
 /// its operations declared; the `#[tools]` impl's inherent function wins. One
 /// tuple, so keys and names stay index-aligned.

@@ -304,6 +304,9 @@ stage. Where it departs:
   and so is a generic `#[mcp]` struct: each operation's site is a `static` no
   parameter reaches, so its instances would share one site and one list of
   layers.
+- **A host writing rmcp's handler by hand binds no layer**: it has no site,
+  so a layer or a `#[meta]` beside its `#[mcp]` is a compile error rather
+  than one that runs nowhere — a guard there used to gate nothing.
 - **The futures rmcp holds stay boxed**: rmcp keeps every method's future in
   its serve loop, so each request's future is a pointer there whatever the
   operation runs; unboxed, a debug build overflowed a test thread's stack.

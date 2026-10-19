@@ -109,7 +109,7 @@ pub mod __private {
     };
     pub use crate::registry::{
         DeclaredRoutes, DefaultDeclaredRoutes, DefaultOperationLayers, DefaultPromptRouter,
-        DefaultToolRouter, ENDPOINT, declare_endpoint, register_host,
+        DefaultToolRouter, ENDPOINT, ToolsHost, declare_endpoint, register_host,
     };
     pub use crate::scope::scoped;
     pub use rmcp::handler::server::prompt::IntoGetPromptResult;

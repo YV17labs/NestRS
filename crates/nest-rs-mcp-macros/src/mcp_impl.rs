@@ -326,6 +326,11 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
         }
 
+        impl #impl_generics ::nest_rs_mcp::__private::ToolsHost for #self_ty #ty_generics
+            #where_clause
+        {
+        }
+
         #[doc(hidden)]
         mod #module {
             use super::*;

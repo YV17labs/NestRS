@@ -37,6 +37,13 @@ uses rmcp's `#[tool_router]` / `#[tool_handler]` directly, since `#[tools]`
 cannot generate a second `ServerHandler` beside a hand-written one. `demo`'s
 `posts/mcp/tool.rs` is that host.
 
+Such a host declares no operation for a layer to run on, so
+`#[use_guards]`, `#[use_interceptors]`, `#[use_exception_filters]` and
+`#[meta]` beside its `#[mcp]` do not compile: a guard there would gate
+nothing. Its endpoint is guarded where every MCP request is — the app's
+global guards, or [`EndpointGuards<McpView, G>`](/security/authorization/endpoint-guards/)
+from a module, as `AuthzMcpModule` declares them.
+
 Either way the guarantee is the same one the tool gets. `CrudService::list`
 above writes no organization filter — the ambient ability applies it, so a
 caller from another org gets an empty prompt, and `read_resource` answers

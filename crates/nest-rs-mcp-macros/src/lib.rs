@@ -24,6 +24,11 @@ mod mcp_impl;
 /// struct is concrete: each operation's site is a `static`, which no parameter
 /// of a generic struct reaches.
 ///
+/// `#[use_guards]`, `#[use_interceptors]`, `#[use_exception_filters]` and
+/// `#[meta]` below it reach the operations a [`macro@tools`] impl declares, so
+/// a host writing its `ServerHandler` by hand — which declares none — binding
+/// one does not compile: a guard there would gate nothing.
+///
 /// # Expands to
 ///
 /// The struct unchanged, a hidden constructor, the host's layer lists the impl

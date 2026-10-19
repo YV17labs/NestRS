@@ -1,10 +1,13 @@
 use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{quote, quote_spanned};
+use syn::spanned::Spanned;
 use syn::{Expr, ItemStruct, LitStr};
 
-use nest_rs_codegen::__private::layers::{LayerAttribute, LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::layers::{
+    Cell, LayerAttribute, LayerScope, Layers, cell, take_layers,
+};
 use nest_rs_codegen::__private::{
     InjectableBody, MCP_GRAMMAR, MountPath, VersionedEdge, build_injectable_body,
     from_container_method, guard_capability_bounds, host_meta_fn, injected_keys_with_layers,
@@ -25,14 +28,19 @@ pub(crate) fn tools(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => crate::mcp_impl::mcp_impl(args, item),
         Err(err) => err.to_compile_error().into(),
     };
-    // The struct half bounds the host on `McpHost`, so a refused block still emits
-    // a default `ServerHandler` or the refusal gains an unsatisfied-bound error.
+    // The struct half bounds the host on `McpHost`, and on `ToolsHost` where it
+    // binds a layer, so a refused block still emits a default `ServerHandler`
+    // and the marker, or the refusal gains an unsatisfied-bound error.
     pair::MCP
         .keep_item_on_refusal(written, expansion.into(), &["tool", "prompt"], |item| {
             let self_ty = &item.self_ty;
             let (impl_generics, _, where_clause) = item.generics.split_for_impl();
             quote! {
                 impl #impl_generics ::nest_rs_mcp::ServerHandler for #self_ty #where_clause {}
+                impl #impl_generics ::nest_rs_mcp::__private::ToolsHost for #self_ty
+                    #where_clause
+                {
+                }
             }
         })
         .into()
@@ -54,6 +62,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         return refused_beside(err, item);
     }
 
+    let runs_on_operations = runs_on_operations(&item);
     let Layers {
         guards,
         interceptors,
@@ -111,6 +120,8 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         #item
 
         #capability_bounds
+
+        #(#runs_on_operations)*
 
         #residency
 
@@ -212,6 +223,35 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         }
     }
     .into()
+}
+
+/// One assertion per layer attribute the host binds that its `#[tools]` impl
+/// declares operations for it to run on, spanned at the attribute: a host
+/// writing rmcp's handler by hand has none, so a guard there would gate
+/// nothing.
+fn runs_on_operations(item: &ItemStruct) -> Vec<TokenStream2> {
+    item.attrs
+        .iter()
+        .filter(|attr| {
+            attr.path().segments.last().is_some_and(|last| {
+                LayerAttribute::ALL.iter().any(|&layer| {
+                    last.ident == layer.name()
+                        && cell(&pair::MCP, LayerScope::Host, layer) == Cell::Built
+                })
+            })
+        })
+        .map(|attr| {
+            // The host named at the attribute, so the refusal points at it.
+            let mut host = item.ident.clone();
+            host.set_span(attr.path().span());
+            quote_spanned! {attr.path().span()=>
+                const _: () = {
+                    fn __nestrs_assert_tools_host<T: ::nest_rs_mcp::__private::ToolsHost>() {}
+                    let _ = __nestrs_assert_tools_host::<#host>;
+                };
+            }
+        })
+        .collect()
 }
 
 /// A refused `#[mcp(..)]` argument, reported beside the struct as written so the

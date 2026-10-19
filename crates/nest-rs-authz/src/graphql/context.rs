@@ -1,37 +1,22 @@
-//! Per-request [`Ability`] bridge into the GraphQL context. The auth guard
-//! chain on `/graphql` attaches it; the seed forwards it into every GraphQL
-//! operation's context.
+//! The [`Ability`] a GraphQL field runs under — the one its unit carries,
+//! which its class gate checked — and GraphQL's denial shape.
 
 use std::sync::Arc;
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{Edge, Problem};
-use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
-use nest_rs_graphql::{GraphqlContextSeed, SeedLifetime};
+use nest_rs_graphql::async_graphql::{Error, ErrorExtensions, Result};
 use nest_rs_guards::Denial;
 
 use crate::Ability;
 use crate::gate::Refusal;
 
-// `owner_type_id: None`: the ambient ability is framework-level. App principal
-// types go through `forward_principal!`, module-gated by the app's auth guard.
-nest_rs_core::inventory::submit! {
-    GraphqlContextSeed {
-        owner_type_id: || None,
-        // The ability is the caller's, so it lives as long as the connection.
-        lifetime: SeedLifetime::Connection,
-        seed: |_req, _container, gql| match crate::current_ability() {
-            Some(ability) => gql.data(ability),
-            None => gql,
-        },
-    }
-}
-
-/// The request-scoped [`Ability`] in a resolver. A wiring defect when absent —
-/// no ability guard ran on `/graphql`'s request — refused opaquely and filed
-/// at `error`, never a client error.
-pub fn ability(ctx: &Context<'_>) -> Result<Arc<Ability>> {
-    ctx.data_opt::<Arc<Ability>>().cloned().ok_or_else(|| {
+/// The [`Ability`] the running field's unit carries — what the guards at its
+/// request or at the field itself attached, the one its class gate checked. A
+/// wiring defect when absent — no ability guard ran — refused opaquely and
+/// filed at `error`, never a client error.
+pub fn ability() -> Result<Arc<Ability>> {
+    crate::current_ability().ok_or_else(|| {
         // Every GraphQL fail-closed exit funnels through here.
         crate::gate::error_unreached(Refusal {
             remedy: Some(UNREACHED),

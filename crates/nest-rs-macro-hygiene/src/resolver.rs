@@ -1,4 +1,6 @@
-//! `#[resolver]` + `#[operations]`, through the umbrella alone.
+//! `#[resolver]` + `#[operations]`, through the umbrella alone: a resolver's
+//! and its fields' interceptors and exception filters, and a request-scoped
+//! parameter, included.
 //!
 //! `#[operations]` wraps async-graphql's `#[Object]`, which roots its paths at
 //! the call site's manifest, falling back to a bare `::async_graphql`; this
@@ -6,7 +8,7 @@
 
 use nest_rs::graphql::async_graphql::SimpleObject;
 use nest_rs::graphql::async_graphql::futures_util::stream::{self, Stream};
-use nest_rs::graphql::{operations, resolver};
+use nest_rs::graphql::{Scoped, operations, resolver};
 
 /// The federated type; its `@key` comes from the entity resolver's arguments.
 #[derive(SimpleObject)]
@@ -128,5 +130,42 @@ impl ParcelResolver {
     #[field_resolver]
     fn gone(&self, parent: &Parcel) -> crate::does_not_exist::Output {
         crate::does_not_exist::answer(parent)
+    }
+}
+
+#[derive(SimpleObject)]
+#[graphql(complex, crate = "::nest_rs::graphql::async_graphql")]
+pub struct Shelf {
+    pub id: i32,
+}
+
+/// Per request: what a field reaches through a `Scoped<T>` parameter.
+#[nest_rs::core::injectable(scope = request)]
+#[derive(Default)]
+pub struct HygieneShelfCount;
+
+/// A resolver binding the pipeline's layers on itself, on a root field and on
+/// a field resolver.
+#[resolver]
+#[use_interceptors(crate::pipeline::HygieneUnitAudit)]
+#[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+pub struct ShelfResolver;
+
+#[operations]
+impl ShelfResolver {
+    #[query]
+    #[public]
+    #[use_interceptors(crate::pipeline::HygieneCache)]
+    #[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+    fn shelf(&self, count: Scoped<HygieneShelfCount>) -> Shelf {
+        let _ = count;
+        Shelf { id: 2 }
+    }
+
+    #[field_resolver]
+    #[use_interceptors(crate::pipeline::HygieneUnitAudit)]
+    fn label(&self, parent: &Shelf, count: Scoped<HygieneShelfCount>) -> String {
+        let _ = count;
+        format!("shelf {}", parent.id)
     }
 }

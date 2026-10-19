@@ -609,7 +609,7 @@ mod graphql {
             let logs = nest_rs_testing::LogCapture::install();
             for failure in crate::error::tests::opaque_over_a_decode_failure() {
                 let wrapped = anyhow::Error::from(failure).context("syncing the ledger");
-                let error = ErrorReport(wrapped).into_graphql_error();
+                let error = ErrorReport(wrapped).into_failure().into_answer();
                 assert_eq!(error.message, OPAQUE_CLIENT_MESSAGE);
                 let extensions = serde_json::to_value(&error.extensions).expect("serialize");
                 assert_eq!(extensions[CODE_EXTENSION], code::INTERNAL.as_str());

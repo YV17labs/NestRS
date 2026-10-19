@@ -163,7 +163,7 @@ whole request.
 | The principal and its `Ability` | Carried, for the connection's life |
 | The trace and the `actor_id` | Carried — the socket opens one `graphql.subscription` span under the upgrade's trace |
 | A database handle | Carried, always **outside** the upgrade's transaction |
-| `RequestScope` (`Scoped<T>`) | **Not** carried — reported as absent |
+| `RequestScope` (`Scoped<T>`) | **Not** carried — the field is refused |
 
 The middle row is what makes a `Repo`-backed subscription work at all: the
 `101` is answered before the connection task starts, so the request
@@ -178,8 +178,13 @@ one at. See [Correlation](/fundamentals/correlation/).
 
 The last row is deliberate too. A request-scoped provider built once at
 connect and shared by every operation for four hours is not request-scoped
-— so `Scoped<T>` says the scope is absent rather than handing back
-something that looks right and is not.
+— so a `Scoped<T>` parameter on the socket is refused opaquely, the provider
+named on the operator's line, rather than handing back something that looks
+right and is not.
+
+A subscription's guards, class gate, exception filters and interceptors run at
+its **opening** — the call answering the stream — never per item: each item
+is masked, and that is all it runs.
 
 ## Configuration
 

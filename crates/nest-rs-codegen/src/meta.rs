@@ -307,7 +307,7 @@ pub fn handler_ref(self_ty: &Type, method: &Ident) -> TokenStream {
 /// The hidden function `role` declares beside `method`'s site:
 /// `__nestrs_<role>_<method>`, cased as a function's is, since a method may be
 /// named in any case.
-pub(crate) fn site_fn_ident(role: &str, method: &Ident) -> Ident {
+pub fn site_fn_ident(role: &str, method: &Ident) -> Ident {
     format_ident!(
         "__nestrs_{}_{}",
         role,
@@ -317,7 +317,7 @@ pub(crate) fn site_fn_ident(role: &str, method: &Ident) -> Ident {
 
 /// The hidden const `role` declares beside `method`'s site:
 /// `__NESTRS_<ROLE>_<METHOD>`, cased as a const's is.
-pub(crate) fn site_const_ident(role: &str, method: &Ident) -> Ident {
+pub fn site_const_ident(role: &str, method: &Ident) -> Ident {
     format_ident!(
         "__NESTRS_{}_{}",
         role.to_uppercase(),

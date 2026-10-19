@@ -101,7 +101,8 @@ Review a new edge, or a change to one, against it:
    the change that builds a family flips its cell.
 9. **Request scope and a unit of work** — `Scoped<T>`, a parameter the boot
    checks (its provider is inside the access contract, through
-   `ResolvesProvider` and the impl half's probe — HTTP's today), and each
+   `ResolvesProvider` and the impl half's probe — HTTP's and GraphQL's
+   today), a miss answered opaquely with the type on the operator's line, and each
    dispatch run through `nest_rs_database::run_unit` over the `dyn UnitOfWork`
    resolved at mount, committing on the edge's own outcome, so commit and
    rollback cannot drift (`data-layer.md`).
@@ -197,10 +198,10 @@ executions; it chooses the **site**, by the family's nature:
 
 | Family | Global scope runs at | Controller / handler scope runs at |
 |---|---|---|
-| Guard | a route's guard stage; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`); the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
+| Guard | a route's guard stage; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`); a GraphQL root field's guard stage and the federation fields' | the same, plus each in-band operation's chain and a gateway's per-message table |
 | Pipe | a route's tail, over the body; `/graphql` variables (a POST or a graphql-ws operation) and WS `data` at their endpoint | a route's tail; per argument on the other edges |
-| Exception filter | around a route's handler stage; a self-mount's request; the fallback (`404`, `405`) | around the route's handler stage |
-| Interceptor | a route's handler stage, after the guards and the class gate | the same, inside the app's |
+| Exception filter | around a route's or a GraphQL root field's handler stage; a self-mount's request; the fallback (`404`, `405`) | around the route's or the field's handler stage |
+| Interceptor | a route's or a GraphQL root field's handler stage, after the guards and the class gate | the same, inside the app's |
 
 An HTTP unit — a route, a self-mount's request, the fallback — is one `Site`
 dispatched through core's pipeline inside `run_unit`
@@ -232,8 +233,9 @@ the visible opening.
   type, at the kernel's wiring step (`provide_wiring`), in every app whatever it
   serves; so does a global guard pool listed out of phase order.
   **No site runs without a layer it declares**: one composed at boot (a route, a
-  gateway's upgrade and messages) fails the boot naming the layer and the site,
-  one composed on its first dispatch (a GraphQL or MCP operation) refuses that
+  gateway's upgrade and messages, a GraphQL field at the wiring step) fails the
+  boot naming the layer and the site, one composed on its first dispatch (an
+  MCP operation, a GraphQL field of a container built by hand) refuses that
   unit opaquely and files one `error` naming both. **A surface beyond the
   route table is a self-mount**, the transport's one other mount (it is built
   from `HttpConfig` alone, with no builder), and declares a `static` `Handler`
@@ -246,10 +248,11 @@ the visible opening.
   modules declare for the in-band units it carries, each guard once and in
   phase order, behind the browser-origin check where the mount owes one — a
   refused origin pays for no guard. An endpoint never runs a guard of its own.
-- **The in-band edges also run a per-operation chain**, composed once per site in
-  a shared `SiteChainCell` from the app-wide pool, the provider's `#[use_guards]`
-  and the operation's own — one `compose`, no per-transport switch over where the
-  pool runs. **An in-band endpoint's guards check the request; the site checks
+- **The in-band edges also run a per-operation chain**, composed once per site
+  from the app-wide pool, the provider's `#[use_guards]` and the operation's
+  own — one `compose`, no per-transport switch over where the pool runs: a
+  GraphQL field's `Site` guard stage, an MCP operation's shared
+  `SiteChainCell`. **An in-band endpoint's guards check the request; the site checks
   the operation**: `check_http` once per request, `check` once per operation,
   and neither stands in for the other. What a request's guards attach
   (`cx.attach`) is ambient for every unit the request carries.
@@ -289,25 +292,41 @@ the visible opening.
 
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
 `nest_rs::core::{Interceptor, ExceptionFilter}`, `#[interceptor]` (handler
-stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP, a job's
-attempt, a tick and a listener call run on it; GraphQL, WS and MCP move onto it
-each in its own change, a `Site` per dispatch site, and until then refuse
-`#[use_interceptors]` and `#[use_exception_filters]` by name and run none of
-the app's.
+stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP, a GraphQL
+field, a job's attempt, a tick and a listener call run on it; WS and MCP move
+onto it each in its own change, a `Site` per dispatch site, and until then
+refuse `#[use_interceptors]` and `#[use_exception_filters]` by name and run
+none of the app's.
+
+**A GraphQL root field is a unit nested in its `/graphql` request**
+(`graphql.field`, inside its operation's unit of work): its site folds the
+app's exception filters and handler-stage interceptors, never the unit stage
+the request ran. Each family subtracts the same bucket at the same places,
+and names where it ran: a `#[field_resolver]` — no unit, once per parent row —
+runs its resolver's and its own guards, and only the interceptors and
+exception filters declared on it, none of the app's nor its resolver's; an
+`#[entity]` folds no pool where the federation site ran it; a
+`#[subscription]`'s layers run at its opening, never per item. Every field's
+site is composed at the wiring step, so a layer it declares that does not
+resolve, or two `#[meta]` values of one type, refuse the boot. A field's
+`Ability` is the unit's — the one its class gate checked — and its mask and
+`bind` read it there, never off the GraphQL context.
 
 ## Posture inside an operation
 
 The posture is not a layer: the impl half turns it into a class gate and a mask.
-Order is fixed: **chain → gate → pipes → call → mask**. **The chain runs whatever
+Order is fixed: **chain → gate → filters, interceptors → pipes → call →
+mask**. **The chain runs whatever
 the operation returns** — the failure channel is the emitted wrapper's, never the
 developer's method, so a bare `T` answers through a `Result` like any other
 (`.claude/decisions/operation-chain-any-return.md`).
 
-**GraphQL's federation root fields are a guard site of their own.** `_service`
-and `_entities` resolve in async-graphql's own root, out of reach of any
-`#[operations]` body, so a schema `Extension` runs the app-wide pool there once
-per field — the whole chain at that site, since the field belongs to no
-resolver. An `#[entity]` body therefore composes everything but the pool, and a
+**GraphQL's federation root fields are sites of their own.** `_service` and
+`_entities` resolve in async-graphql's own root, out of reach of any
+`#[operations]` body, so a subgraph's schema `Extension` dispatches each
+through its own `Site`, a `graphql.field` unit of role `federation`: the
+app-wide pool its whole guard stage, since the field belongs to no resolver,
+the app's filters and interceptors around it. An `#[entity]` body therefore composes everything but the pool, and a
 `#[field_resolver]` too, naming where the pool ran (the root field that produced
 its parent) — never once per parent row; its resolver's own `#[use_guards]` still
 run. No site subtracts a bucket without naming where it ran. A guard's `check`

@@ -14,13 +14,12 @@ use async_graphql::{
 use futures_util::TryStreamExt;
 use nest_rs_core::__private::serde::Serialize;
 use nest_rs_core::__private::serde::de::DeserializeOwned;
-use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{Container, Discovery, Handler, Posture, ReachableProviders, UnitContext};
 use nest_rs_guards::__private::global_guards_active;
 use nest_rs_http::__private::{EndpointGuardsMeta, with_view};
 use nest_rs_http::{
     Body, BodyError, Endpoint, HeaderValue, HttpError, Request, RequestDeadline, Response,
-    ResponseError, StatusCode, current_body_limit, header,
+    ResponseError, StatusCode, current_body_limit, declare_endpoint, header,
 };
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 
@@ -47,26 +46,13 @@ pub struct GraphqlContextSeed {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeedLifetime {
     /// The upgrade request's own state — forwarded on the POST path, and
-    /// **dropped** on a socket, where `Scoped<T>` then reports the scope absent.
+    /// **dropped** on a socket.
     Request,
     /// The caller's identity — a principal, an `Ability` — forwarded on both paths.
     Connection,
 }
 
 inventory::collect!(GraphqlContextSeed);
-
-// Forwards the HTTP edge's `RequestScope` for `Scoped<T>`. It reaches resolver
-// bodies only: a `#[dataloader]` batch runs off-task.
-inventory::submit! {
-    GraphqlContextSeed {
-        owner_type_id: || None,
-        lifetime: SeedLifetime::Request,
-        seed: |_req, _container, gql| match nest_rs_http::current_request_scope() {
-            Some(scope) => gql.data(scope),
-            None => gql,
-        },
-    }
-}
 
 /// A boxed, `Send` future: what the endpoint holds a socket's serving behind,
 /// and what a DataLoader batch runs as.
@@ -80,15 +66,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Its address is the default mount, `/graphql`, wherever
 /// [`GraphqlConfig::path`](crate::GraphqlConfig::path) moves it: an app serves
 /// one schema, so the address names one endpoint either way.
-pub static ENDPOINT: Handler = declare_handler(HandlerDeclaration {
-    unit: nest_rs_http::unit::REQUEST,
-    host: TypeId::of::<GraphqlModule>(),
-    host_name: "GraphqlModule",
-    method: "",
-    address: "/graphql",
-    posture: Posture::InBand,
-    meta: MetaLevels::default,
-});
+pub static ENDPOINT: Handler =
+    declare_endpoint::<GraphqlModule>("GraphqlModule", "/graphql", Posture::InBand);
 
 /// The per-request step one [`GraphqlContextSeed`] contributes.
 type ContextSeed = fn(&Request, &Container, GqlRequest) -> GqlRequest;

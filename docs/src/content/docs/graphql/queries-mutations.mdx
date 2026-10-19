@@ -220,8 +220,23 @@ commit ([GraphQL: one unit per operation](/database/transactions/#graphql-one-un
 
 A resolver method takes an optional `ctx: &Context<'_>` first
 non-receiver argument. The context exposes per-request data the auth
-chain seeded (a principal, the assembled `Ability`) and is the entry
-point to typed batch loaders.
+chain seeded (a principal) and is the entry point to typed batch loaders.
+The caller's `Ability` is not on it: the field's unit carries it, the one its
+class gate checked, and its mask and every read under it see that one.
+
+A request-scoped provider is a parameter, as on a route: `Scoped<T>` is no
+schema argument, and the boot checks its provider like an `#[inject]`ed one —
+see [Providers](/fundamentals/providers/).
+
+```rust title="crates/features/src/profile/graphql/resolver.rs"
+use nest_rs::graphql::{Scoped, operations, resolver};
+
+#[query]
+#[public]
+async fn visits(&self, counter: Scoped<crate::VisitCounter>) -> u32 {
+    counter.bump()
+}
+```
 
 ```rust title="crates/features/src/profile/graphql/resolver.rs"
 use async_graphql::{Context, Result};

@@ -167,7 +167,9 @@ as `cannot find attribute` — but at the WebSocket `#[on_connect]` /
 `#[on_disconnect]` hooks, no row yet, until the hooks move onto it. A
 provider-hosted pair (`#[processor]`, `#[scheduled]`, `#[listeners]`)
 declares each method's site through `nest_rs_codegen::__private::site_const`
-and reports what it binds to the access graph through `host_layers_entry`.
+and reports what it binds to the access graph through `host_layers_entry`;
+`#[operations]` declares one per field beside its handler, its guard stage
+included, and submits them for the boot to compose.
 
 **`#[meta(EXPR)]` is read alike at every pair**: on the host (the struct, or
 the impl block a provider pair decorates) and on each dispatched method, into

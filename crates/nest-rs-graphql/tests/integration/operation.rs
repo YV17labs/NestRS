@@ -542,3 +542,100 @@ async fn a_field_denial_keeping_its_cause_files_the_chain() {
         Some(crate::STORE_DOWN_CHAIN)
     );
 }
+
+/// A field resolver that unwinds reaches the containment its root field's
+/// unit runs under: the request is answered as a handler that unwound.
+mod nested_panic {
+    use nest_rs_core::module;
+    use nest_rs_graphql::async_graphql::{self, Result as GqlResult};
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_http::StatusCode;
+    use nest_rs_testing::TestApp;
+
+    #[derive(async_graphql::SimpleObject)]
+    #[graphql(complex)]
+    struct Crate {
+        id: i32,
+    }
+
+    #[resolver]
+    struct CrateResolver;
+
+    #[operations]
+    impl CrateResolver {
+        #[query]
+        #[public]
+        async fn crates(&self) -> GqlResult<Vec<Crate>> {
+            Ok(vec![Crate { id: 1 }])
+        }
+
+        #[field_resolver]
+        async fn contents(&self, parent: &Crate) -> GqlResult<String> {
+            tokio::task::yield_now().await;
+            panic!("crate {} is empty", parent.id)
+        }
+    }
+
+    #[module(imports = [GraphqlModule::for_root(None)], providers = [CrateResolver])]
+    struct CrateModule;
+
+    #[tokio::test]
+    async fn a_field_resolver_that_panics_is_answered_as_a_handler_that_unwound() {
+        let app = TestApp::for_module::<CrateModule>().await.expect("boots");
+
+        app.http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ crates { id contents } }" }))
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}
+
+/// A root field composes its site at boot, so two values of one type it
+/// declares at one level refuse the boot rather than its first operation.
+mod meta_twice {
+    use nest_rs_core::{DuplicateMetaError, module};
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_testing::TestApp;
+
+    /// A value whose expression hides its type from `#[operations]`.
+    struct Tag;
+
+    impl Tag {
+        fn new() -> Self {
+            Self
+        }
+    }
+
+    #[resolver]
+    struct TaggedTwiceResolver;
+
+    #[operations]
+    impl TaggedTwiceResolver {
+        #[query]
+        #[public]
+        #[meta(Tag::new())]
+        #[meta(Tag::new())]
+        async fn tagged(&self) -> i32 {
+            1
+        }
+    }
+
+    #[module(imports = [GraphqlModule::for_root(None)], providers = [TaggedTwiceResolver])]
+    struct TaggedTwiceModule;
+
+    #[tokio::test]
+    async fn two_values_of_one_hidden_type_on_a_root_field_fail_the_boot_naming_it_and_the_field() {
+        let refused = TestApp::for_module::<TaggedTwiceModule>()
+            .await
+            .err()
+            .expect("the field would run with a value read by nothing");
+        let refused = refused
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<DuplicateMetaError>())
+            .unwrap_or_else(|| panic!("the site's own refusal: {refused:#}"));
+        assert_eq!(refused.type_name, std::any::type_name::<Tag>());
+        assert_eq!(refused.declared_on, "TaggedTwiceResolver::tagged");
+    }
+}

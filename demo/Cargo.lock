@@ -2788,6 +2788,7 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-pipes",
+ "pin-project-lite",
  "serde_json",
  "tokio",
  "tracing",

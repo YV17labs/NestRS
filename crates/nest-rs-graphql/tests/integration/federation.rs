@@ -466,7 +466,7 @@ async fn an_entity_without_the_subgraph_flag_fails_the_boot() {
         .await
         .err()
         .expect("declaring an entity while claiming not to be a subgraph is refused");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("UnflaggedResolver") && message.contains("#[entity]"),
@@ -504,7 +504,7 @@ async fn two_entity_resolvers_for_one_type_fail_the_boot() {
         .await
         .err()
         .expect("two resolvers keying one type is a duplicate, not a merge");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("entity \"Widget\" keyed by"),
@@ -556,7 +556,7 @@ async fn two_entity_methods_on_one_resolver_fail_the_boot_too() {
         .await
         .err()
         .expect("one resolver claiming a key twice is still a duplicate");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("entity \"Widget\" keyed by \"id\""),
@@ -665,7 +665,7 @@ async fn two_resolvers_whose_key_shapes_overlap_fail_the_boot() {
         .await
         .err()
         .expect("two resolvers whose key shapes overlap cannot both be reachable");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains(r#"entity "Gizmo" keyed by "id""#)
@@ -730,7 +730,7 @@ async fn two_overlapping_keys_on_one_resolver_fail_the_boot_too() {
         .await
         .err()
         .expect("one resolver may not claim two overlapping shapes either");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains(r#"entity "Gadget" keyed by "id""#)
@@ -750,7 +750,7 @@ async fn a_permuted_compound_key_is_the_same_claim_twice() {
         .await
         .err()
         .expect("one field set claimed twice is one claim too many");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains(r#"entity "Doodad" keyed by"#)
@@ -895,7 +895,7 @@ async fn an_entity_that_resolves_to_a_list_fails_the_boot() {
         .await
         .err()
         .expect("an `#[entity]` async-graphql keys nothing on is refused");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("ListEntityResolver::find_widgets_by_id"),
@@ -933,7 +933,7 @@ async fn an_entity_that_resolves_to_a_scalar_fails_the_boot() {
         .await
         .err()
         .expect("an `#[entity]` resolving to a scalar is refused");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("ScalarEntityResolver::find_count_by_id") && message.contains("Int"),

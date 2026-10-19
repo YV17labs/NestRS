@@ -57,23 +57,16 @@ where
         .data_unchecked::<Container>()
         .get::<S>()
         .ok_or_else(|| Error::new("no provider registered for the bound service"))?;
-    bind_with::<A, S>(&service, ctx, id).await
+    bind_with::<A, S>(&service, id).await
 }
 
-async fn bind_with<A, S>(
-    service: &S,
-    ctx: &Context<'_>,
-    id: &str,
-) -> Result<Option<<S::Entity as EntityTrait>::Model>>
+async fn bind_with<A, S>(service: &S, id: &str) -> Result<Option<<S::Entity as EntityTrait>::Model>>
 where
     S: CrudService + 'static,
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     A: ActionMarker,
 {
-    if ctx
-        .data_opt::<std::sync::Arc<nest_rs_authz::Ability>>()
-        .is_none()
-    {
+    if nest_rs_authz::current_ability().is_none() {
         return Err(Error::new(
             "missing request `Ability` — does a guard attach one at the /graphql request?",
         ));

@@ -1,8 +1,9 @@
 //! GraphQL error rendering shared by every rejection site, and the one rule a
-//! resolver's `Err` is answered by.
+//! field's failure is answered by.
 //!
 //! A resolver's error is rendered **by its type**, where the `#[operations]`
-//! wrapper names it, each tier taken only when the one above does not apply:
+//! wrapper names it ([`ErrorReport`]), each tier taken only when the one above
+//! does not apply:
 //!
 //! 1. an `async_graphql::Error` — the edge's own deliberate error — as built;
 //! 2. a [`ToProblem`] error: the problem it says ([`problem_error`]), or opaque
@@ -13,7 +14,10 @@
 //!    one `error` on `nest_rs::graphql` carrying the whole chain.
 //!
 //! A `5xx` problem answers the sentence an opaque failure answers, so the chain
-//! behind it is filed the same way; a bare `Problem` withholds nothing.
+//! behind it is filed the same way; a bare `Problem` withholds nothing. What a
+//! field answers is final only once its unit ran — an exception filter may
+//! answer it otherwise — so a chain is filed there, by the answer the client
+//! gets.
 //!
 //! An error that is none of these — a `Display` type that is no
 //! `std::error::Error` — does not compile.
@@ -23,9 +27,9 @@
 use std::error::Error as StdError;
 
 use async_graphql::{Error, ErrorExtensions};
-use nest_rs_core::__private::Withheld;
+use nest_rs_core::__private::{Withheld, caught_problem};
 use nest_rs_core::problem::code;
-use nest_rs_core::{DecodeError, Problem, ToProblem};
+use nest_rs_core::{DecodeError, Failure, Problem, ToProblem};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 
@@ -170,6 +174,123 @@ fn chain_error(error: &(dyn StdError + 'static)) -> Error {
     opaque_error(error)
 }
 
+/// Why a field's tail failed: the failure the pipeline carries, which its
+/// exception filters read, and the answer only the error's type could say,
+/// held until the field's unit decides whether it goes out.
+pub struct FieldFailure {
+    pub(crate) failure: Failure,
+    pub(crate) reply: Option<Box<Reply>>,
+}
+
+/// An answer a field wrote, with the chain it keeps from the client — filed
+/// only if it is the one sent.
+pub(crate) struct Reply {
+    pub(crate) error: Error,
+    withheld: Option<Withheld>,
+}
+
+impl Reply {
+    /// The answer, its withheld chain filed: it is the one sent.
+    pub(crate) fn filed(self) -> Error {
+        match self.withheld {
+            Some(Withheld::Failed(said)) => failed(&said),
+            Some(Withheld::Unavailable(said)) => unavailable(&said),
+            None => {}
+        }
+        self.error
+    }
+}
+
+impl FieldFailure {
+    /// A failure the edge's one rule answers once the unit ran.
+    pub(crate) fn unanswered(failure: Failure) -> Self {
+        Self {
+            failure,
+            reply: None,
+        }
+    }
+
+    /// What a field failing with this answers when no exception filter
+    /// answers it, the chain it withholds filed.
+    pub fn into_answer(self) -> Error {
+        match self.reply {
+            Some(reply) => reply.filed(),
+            None => unanswered(&self.failure),
+        }
+    }
+}
+
+/// The edge's own error, as built: its own answer.
+impl From<Error> for FieldFailure {
+    fn from(error: Error) -> Self {
+        Self {
+            failure: Failure::from(DeliberateError),
+            reply: Some(Box::new(Reply {
+                error,
+                withheld: None,
+            })),
+        }
+    }
+}
+
+/// A per-argument pipe's refusal, answered as one.
+impl From<PipeError> for FieldFailure {
+    fn from(refused: PipeError) -> Self {
+        Self::unanswered(Failure::from(refused))
+    }
+}
+
+/// What the pipeline carries for a field that answered its own
+/// `async_graphql::Error`: the answer is that error, as built, so the failure
+/// names no more than this.
+#[derive(Debug)]
+pub(crate) struct DeliberateError;
+
+impl std::fmt::Display for DeliberateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the field answered its own GraphQL error")
+    }
+}
+
+impl StdError for DeliberateError {}
+
+/// What a field whose unit failed answers: an exception filter's problem over
+/// whatever it wrote, else the answer it wrote, else the edge's one rule —
+/// each filing the chain it keeps from the client.
+pub(crate) fn answer(failure: &Failure, reply: Option<Box<Reply>>) -> Error {
+    if let Some(problem) = caught_problem(failure) {
+        return answered(problem, failure.error());
+    }
+    match reply {
+        Some(reply) if failure.is_answered() => reply.filed(),
+        _ => unanswered(failure),
+    }
+}
+
+/// The edge's one rule for a failure nothing answered: a refusal as its
+/// denial, the vocabulary its chain carries, else the opaque answer.
+fn unanswered(failure: &Failure) -> Error {
+    match failure.find::<Denial>() {
+        Some(denial) => denial_to_graphql_error(denial.clone()),
+        None => chain_error(failure.error()),
+    }
+}
+
+/// The answer to `error`'s [`ToProblem`] — the problem it says, or the opaque
+/// answer when it says none — and the chain it keeps from the client.
+fn problem_reply<E: ToProblem>(error: &E) -> Reply {
+    match error.to_problem() {
+        Some(problem) => Reply {
+            error: rendered(&problem),
+            withheld: nest_rs_core::__private::withheld(&problem, error),
+        },
+        None => Reply {
+            error: rendered(&Problem::new(500, code::INTERNAL)),
+            withheld: Some(Withheld::Failed(nest_rs_core::error_message(error))),
+        },
+    }
+}
+
 /// A resolver's error, rendered by its type (the module's tiers): the inherent
 /// method takes a [`ToProblem`] error, [`ErrorReportDeliberate`] an
 /// `async_graphql::Error`, [`ErrorReportChain`] any other error.
@@ -177,20 +298,24 @@ pub struct ErrorReport<E>(pub E);
 
 impl<E: ToProblem> ErrorReport<E> {
     /// Tier 2: the problem the error says, or the opaque answer.
-    pub fn into_graphql_error(self) -> Error {
-        problem_error(&self.0)
+    pub fn into_failure(self) -> FieldFailure {
+        let reply = Box::new(problem_reply(&self.0));
+        FieldFailure {
+            failure: Failure::from(self.0),
+            reply: Some(reply),
+        }
     }
 }
 
 /// Tier 1 of [`ErrorReport`]: the edge's own error, as built.
 pub trait ErrorReportDeliberate {
     /// The error itself.
-    fn into_graphql_error(self) -> Error;
+    fn into_failure(self) -> FieldFailure;
 }
 
 impl ErrorReportDeliberate for ErrorReport<Error> {
-    fn into_graphql_error(self) -> Error {
-        self.0
+    fn into_failure(self) -> FieldFailure {
+        FieldFailure::from(self.0)
     }
 }
 
@@ -198,15 +323,15 @@ impl ErrorReportDeliberate for ErrorReport<Error> {
 /// [`ErrorReportDeliberate`] do not take.
 pub trait ErrorReportChain {
     /// The vocabulary its chain carries, else the opaque answer.
-    fn into_graphql_error(self) -> Error;
+    fn into_failure(self) -> FieldFailure;
 }
 
 impl<E> ErrorReportChain for ErrorReport<E>
 where
     E: Into<Box<dyn StdError + Send + Sync>> + 'static,
 {
-    fn into_graphql_error(self) -> Error {
-        chain_error(&*nest_rs_core::boxed_error(self.0))
+    fn into_failure(self) -> FieldFailure {
+        FieldFailure::unanswered(Failure::new(self.0))
     }
 }
 
@@ -359,16 +484,20 @@ mod tests {
     fn each_error_is_rendered_by_its_type() {
         use super::ErrorReportDeliberate as _;
 
-        let deliberate = ErrorReport(Error::new("bad input")).into_graphql_error();
+        let deliberate = ErrorReport(Error::new("bad input"))
+            .into_failure()
+            .into_answer();
         assert_eq!(deliberate.message, "bad input");
         assert!(deliberate.extensions.is_none());
 
-        let declined = ErrorReport(Payment::Declined).into_graphql_error();
+        let declined = ErrorReport(Payment::Declined).into_failure().into_answer();
         assert_eq!(declined.message, "payment declined");
         assert_eq!(extensions(&declined)[CODE_EXTENSION], "PAYMENT_DECLINED");
 
         let logs = nest_rs_testing::LogCapture::install();
-        let ledger = ErrorReport(Payment::Ledger(Ledger)).into_graphql_error();
+        let ledger = ErrorReport(Payment::Ledger(Ledger))
+            .into_failure()
+            .into_answer();
         assert_eq!(ledger.message, OPAQUE_CLIENT_MESSAGE);
         let event = logs.expect_one(crate::TARGET, "graphql operation failed");
         assert_eq!(event.level, "error");
@@ -410,7 +539,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let failed = || logs.find(crate::TARGET, "graphql operation failed");
 
-        let outage = ErrorReport(Outage(Ledger)).into_graphql_error();
+        let outage = ErrorReport(Outage(Ledger)).into_failure().into_answer();
         assert_eq!(outage.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
         assert_eq!(extensions(&outage)[CODE_EXTENSION], "UNAVAILABLE");
         let unavailable = logs.expect_one(crate::TARGET, "graphql operation unavailable");
@@ -425,7 +554,7 @@ mod tests {
 
         let carried = nest_rs_core::anyhow::Error::from(Problem::new(500, code::INTERNAL))
             .context("charging the card");
-        let charged = ErrorReport(carried).into_graphql_error();
+        let charged = ErrorReport(carried).into_failure().into_answer();
         assert_eq!(charged.message, OPAQUE_CLIENT_MESSAGE);
         let lines = failed();
         assert_eq!(lines.len(), 1, "{lines:#?}");
@@ -452,20 +581,24 @@ mod tests {
 
         let wrapped = nest_rs_core::anyhow::Error::from(Problem::new(404, code::NOT_FOUND))
             .context("loading the post");
-        let found = ErrorReport(wrapped).into_graphql_error();
+        let found = ErrorReport(wrapped).into_failure().into_answer();
         assert_eq!(found.message, "not found");
         assert_eq!(extensions(&found)[CODE_EXTENSION], "NOT_FOUND");
 
-        let piped = ErrorReport(PipeError::new("must be a valid UUID")).into_graphql_error();
+        let piped = ErrorReport(PipeError::new("must be a valid UUID"))
+            .into_failure()
+            .into_answer();
         assert_eq!(piped.message, "must be a valid UUID");
 
         let decode = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
-        let said = ErrorReport(decode).into_graphql_error();
+        let said = ErrorReport(decode).into_failure().into_answer();
         assert!(!said.message.contains("sk_live"), "{}", said.message);
         assert_eq!(extensions(&said)[CODE_EXTENSION], "INVALID_ARGUMENT");
 
         let logs = nest_rs_testing::LogCapture::install();
-        let secret = ErrorReport(std::io::Error::other("secret 42")).into_graphql_error();
+        let secret = ErrorReport(std::io::Error::other("secret 42"))
+            .into_failure()
+            .into_answer();
         assert_eq!(secret.message, OPAQUE_CLIENT_MESSAGE);
         assert_eq!(extensions(&secret)[CODE_EXTENSION], "INTERNAL");
         let event = logs.expect_one(crate::TARGET, "graphql operation failed");

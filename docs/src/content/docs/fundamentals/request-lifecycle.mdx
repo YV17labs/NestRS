@@ -90,6 +90,14 @@ stage either. What the router answers itself — a `404`, a `405`, a module's
 fallback — runs the edge, the unit stage and the exception filters alone: no
 unit of work, no guard.
 
+A GraphQL root field is a unit nested in the `/graphql` request (and in its
+operation's unit of work): it runs stages 4 to 7 — its guard stage the app's
+pool, the resolver's and the field's guards, each one's `check`, then the
+field's class gate; the exception filters and the handler stage with the
+app's own; then its argument pipes, the call and the mask. A
+`#[field_resolver]` runs only what is declared on it, no app-wide layer, once
+per parent row.
+
 The operation span is outside all of it: the transport opens it before routing,
 so every stage above logs under one `trace_id` — see
 [Correlation](/fundamentals/correlation/).
@@ -142,10 +150,10 @@ that serves no HTTP included, naming the type: the check runs at the boot's
 wiring step, before any hook.
 
 A layer a site declares — on a controller, a route, a gateway or one of its
-messages — that no imported module provides fails the boot too, naming the
-layer and the site; a GraphQL or MCP operation, which composes its chain on its
-first call, refuses that call opaquely and logs one `error` naming both. No
-site ever runs without a layer it declares.
+messages, a GraphQL field — that no imported module provides fails the boot
+too, naming the layer and the site; an MCP operation, which composes its chain
+on its first call, refuses that call opaquely and logs one `error` naming
+both. No site ever runs without a layer it declares.
 
 A route whose guards are misordered — an authorization guard listed before the
 authentication guard whose principal it reads, at any scope — fails the boot

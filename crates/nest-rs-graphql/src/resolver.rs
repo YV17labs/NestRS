@@ -27,6 +27,8 @@ use async_graphql::{
     CacheControl, ContainerType, Context, ContextSelectionSet, ObjectType, OutputType, Positioned,
     Response, SDLExportOptions, Schema, ServerResult, SubscriptionType, Value,
 };
+use nest_rs_core::__private::Site;
+use nest_rs_core::anyhow;
 use nest_rs_core::{Container, ReachableProviders};
 
 use crate::config::GraphqlConfig;
@@ -140,6 +142,37 @@ pub(crate) fn unreachable_resolvers(container: &Container) -> Vec<&'static str> 
         .filter(|d| !reachable.0.contains(&(d.resolver)()))
         .map(|d| d.name)
         .collect()
+}
+
+/// The fields one `#[operations]` block dispatches, each a `Site` — submitted
+/// so the boot composes them before any operation runs.
+pub struct GraphqlSiteRegistration {
+    /// The resolver struct's type, read against the reachable providers.
+    pub resolver: fn() -> TypeId,
+    /// Every field's site, root fields and field resolvers alike.
+    pub sites: fn() -> Vec<&'static Site>,
+}
+
+inventory::collect!(GraphqlSiteRegistration);
+
+/// Compose the site of every field a reachable resolver declares, so a layer
+/// no imported module provides, or two `#[meta]` values of one type at one
+/// level, refuse the boot naming the field rather than its first operation.
+/// Without [`ReachableProviders`] nothing is composed here: each site then
+/// composes on its first operation.
+pub(crate) fn compose_sites(container: &Container) -> anyhow::Result<()> {
+    let Some(reachable) = container.get::<ReachableProviders>() else {
+        return Ok(());
+    };
+    for registration in inventory::iter::<GraphqlSiteRegistration>() {
+        if !reachable.0.contains(&(registration.resolver)()) {
+            continue;
+        }
+        for site in (registration.sites)() {
+            site.chains(container)?;
+        }
+    }
+    Ok(())
 }
 
 /// One generated resolver object, submitted by `#[operations]` and
@@ -699,9 +732,7 @@ pub(crate) fn build_schema(
     ));
     // Whatever `config.federation` says: async-graphql serves those fields from
     // the keys alone.
-    if let Some(gate) =
-        crate::federation::FederationExtensionFactory::from_container(&container, config)
-    {
+    if let Some(gate) = crate::federation::FederationExtensionFactory::for_config(config) {
         builder = builder.extension(gate);
     }
     if let Some(d) = config.max_depth {

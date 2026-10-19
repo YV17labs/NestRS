@@ -85,11 +85,10 @@ impl TickResolver {
     #[public]
     async fn scoped_ticks(
         &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> Result<impl futures_stream::Stream<Item = i32>, async_graphql::Error> {
-        let scoped = nest_rs_graphql::Scoped::<TickResolverState>::from_context(ctx)?;
+        scoped: nest_rs_graphql::Scoped<TickResolverState>,
+    ) -> impl futures_stream::Stream<Item = i32> {
         let count = scoped.tx.receiver_count() as i32;
-        Ok(futures_stream::iter([count]))
+        futures_stream::iter([count])
     }
 }
 
@@ -162,6 +161,7 @@ async fn a_synchronous_subscription_streams_like_an_async_one() {
 
 #[tokio::test]
 async fn a_subscription_does_not_inherit_the_upgrades_request_scope() {
+    let logs = LogCapture::install();
     let app = boot().await;
     let mut socket = app.graphql_socket().open();
     socket.connect().await;
@@ -173,8 +173,16 @@ async fn a_subscription_does_not_inherit_the_upgrades_request_scope() {
         .expect("the operation answers");
     let rendered = message.to_string();
     assert!(
-        rendered.contains("request scope not installed"),
-        "the socket reports the scope as absent rather than resolving one: {rendered}",
+        rendered.contains(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
+        "the socket refuses the provider rather than resolving one: {rendered}",
+    );
+    assert!(!rendered.contains("TickResolverState"), "{rendered}");
+    let line = logs.expect_one("nest_rs::graphql", "graphql operation failed");
+    assert!(
+        line.field("error")
+            .is_some_and(|error| error.contains("TickResolverState")),
+        "the operator reads which provider: {:?}",
+        line.fields,
     );
 }
 

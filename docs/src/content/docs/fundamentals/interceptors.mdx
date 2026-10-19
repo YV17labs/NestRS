@@ -31,13 +31,13 @@ of the unit or answering it mints one: an interceptor that does neither does
 not compile. `next.run(cx)` consumes `next`, so the rest of the unit runs once.
 
 <Aside type="caution">
-**HTTP routes, [jobs](/queue/#layers-around-a-job),
+**HTTP routes, [GraphQL fields](#around-a-graphql-field),
+[jobs](/queue/#layers-around-a-job),
 [ticks](/schedule/#layers-around-a-tick) and
 [listener calls](/events/dispatch/#layers-around-a-listener-call) run them
-today.** GraphQL, WebSocket and MCP move onto the same pipeline during 7.0;
-until an edge has, `#[use_interceptors]` beside its decorator is a compile
-error naming the edge, and the app's global interceptors do not reach its
-units.
+today.** WebSocket and MCP move onto the same pipeline during 7.0; until an
+edge has, `#[use_interceptors]` beside its decorator is a compile error naming
+the edge, and the app's global interceptors do not reach its units.
 </Aside>
 
 Same vocabulary as a guard, different shape:
@@ -176,6 +176,62 @@ challenge `nest-rs-oauth-resource` adds to a `401` sit there. Writing
 `stage = unit` is the visible line that opens it; an app-listed global
 interceptor never runs before the access decision.
 
+## Around a GraphQL field
+
+Each root field of a GraphQL operation — a `#[query]`, a `#[mutation]`, an
+`#[entity]`, and the federation fields `_service` and `_entities` — is a unit
+of its own, `graphql.field`, inside the `/graphql` request that carried it.
+The app's interceptors, the modules' `#[interceptor]`s, the resolver's and the
+field's own run around it, after its guards and its class gate, exactly as
+around a route. `cx.unit()` names the unit, and `GraphqlView` says which field
+and the role it plays:
+
+```rust title="apps/api/src/interceptor.rs"
+use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};
+use nest_rs::graphql::{GraphqlView, unit};
+
+#[injectable]
+#[derive(Default)]
+pub struct FieldTiming;
+
+impl Layer for FieldTiming {}
+
+#[async_trait]
+impl Interceptor for FieldTiming {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let started = std::time::Instant::now();
+        let outcome = next.run(cx).await;
+        if cx.unit() == unit::FIELD
+            && let Some(view) = cx.switch_to::<GraphqlView>()
+        {
+            tracing::info!(field = view.field(), elapsed = ?started.elapsed(), "field timed");
+        }
+        outcome
+    }
+}
+```
+
+On a resolver it reads the same as on a controller:
+
+```rust title="crates/features/src/users/graphql/resolver.rs"
+#[resolver]
+#[use_interceptors(FieldTiming)]
+pub struct UsersResolver {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+```
+
+Three places run less, each because of what it is:
+
+- **The `/graphql` request** is an HTTP self-mount: the unit stage runs around
+  it, the handler stage does not — its fields are where the work is.
+- **A `#[field_resolver]`** is no unit: it runs once per parent row, so only
+  the interceptors declared on it run around it, never the app's nor its
+  resolver's. Bind one on the method when a field resolver must be wrapped.
+- **A `#[subscription]`'s** interceptors wrap its opening — the stream it
+  answers — never each item the stream yields.
+
 ## What an interceptor cannot change
 
 The data unit of work wraps the whole pipeline, guards included, and commits
@@ -193,7 +249,9 @@ rolls its writes back.
   body is gone once the handler read it.
 - **Time the call** — measure latency by route, emit a metric.
 - **Answer instead** — a cache answers through `HttpView::of(cx)?.respond(..)`
-  and returns its `Settled` without running the rest of the unit.
+  and returns its `Settled` without running the rest of the unit. A GraphQL
+  field has no reply an interceptor writes: its value is typed, so it fails
+  the field or runs it.
 - **Audit** — record what the unit answered, as the demo's posts controller
   does.
 

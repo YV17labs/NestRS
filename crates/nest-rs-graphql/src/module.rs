@@ -3,15 +3,16 @@
 use std::sync::Arc;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering};
+use nest_rs_core::anyhow;
+use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
-use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta, Method};
+use nest_rs_http::{DetachedWork, HttpEndpointMeta, Method};
 
 use crate::config::GraphqlConfig;
 use crate::context::{ENDPOINT, OperationBridge};
 use crate::endpoint::GetEndpoint;
 use crate::operation_units::OperationUnits;
-use crate::resolver::{build_schema, check_operations};
+use crate::resolver::{build_schema, check_operations, compose_sites};
 use crate::subscription::SubscriptionEndpoint;
 use crate::view::GraphqlView;
 
@@ -73,61 +74,7 @@ impl Module for GraphqlModule {
 
 fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuilder {
     let log_path = options.path.clone();
-    // A linked `#[resolver]` no reachable module lists is filtered out of the
-    // schema; reported only when a schema mounts.
-    let strict = options.strict_resolver_membership;
-    let builder = builder.provide_meta(HttpBootCheck::new(move |container| {
-        let unreachable = crate::resolver::unreachable_resolvers(container);
-        if unreachable.is_empty() {
-            return Ok(());
-        }
-        if strict {
-            let var = nest_rs_config::var_name("graphql", "STRICT_RESOLVER_MEMBERSHIP");
-            return Err(format!(
-                "strict resolver-membership check failed: {unreachable:?} linked into the \
-                 binary but in no reachable module. Add each to a reachable feature module's \
-                 `#[module(providers = [...])]`, or clear \
-                 `GraphqlConfig::strict_resolver_membership` (`{var}=false`) if the link is \
-                 intentional — a workspace shipping several apps over one feature library \
-                 legitimately links resolvers a given binary does not serve."
-            ));
-        }
-        for resolver in unreachable {
-            tracing::warn!(
-                target: crate::TARGET,
-                resolver,
-                hint = "add it to a feature module's `#[module(providers = [...])]` if you meant to expose it",
-                "unreachable resolver skipped from the GraphQL schema",
-            );
-        }
-        Ok(())
-    }));
-    // Two contributions claiming one name fail the boot, before the mount below
-    // composes a schema whose SDL and dispatch would disagree.
-    //
-    // async-graphql serves `_service` and `_entities` as soon as an entity
-    // resolver calls `add_keys` (`schema.rs`'s `enable_federation ||
-    // has_entities()`), so an `#[entity]` without `federation` is refused.
-    let federation = options.federation;
-    let builder = builder.provide_meta(HttpBootCheck::new(
-        move |container| match check_operations(container)? {
-            Some(resolver) if !federation => {
-                let introspection = nest_rs_config::var_name("graphql", "DISABLE_INTROSPECTION");
-                let federation_var = nest_rs_config::var_name("graphql", "FEDERATION");
-                Err(format!(
-                    "`{resolver}` declares an `#[entity]`, but this schema is not configured as a \
-                     subgraph. An entity resolver *is* the federation surface: async-graphql \
-                     serves `_service` and `_entities` the moment one exists, so the endpoint \
-                     would publish its own SDL — `_service` is not covered by \
-                     `{introspection}` — while the committed SDL carried the federation plumbing \
-                     without the `@key` a router needs. Set `GraphqlConfig::federation = true` \
-                     (or `{federation_var}=true`) and serve it behind a router, or remove the \
-                     `#[entity]`."
-                ))
-            }
-            _ => Ok(()),
-        },
-    ));
+    let builder = builder.provide_wiring("nest_rs::graphql::schema", wire_schema);
     // Every graphql-ws socket (outliving the HTTP connection that upgraded it) and
     // DataLoader batch (on its own task), so the transport stops them at shutdown.
     let carried = DetachedWork::new();
@@ -183,6 +130,66 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
         OriginCheck::Upgrades,
         refused_origin,
     ))
+}
+
+/// The schema's wiring, at the kernel's wiring step: what the resolvers the app
+/// reaches declare is checked, and every field's site composed, before any
+/// transport is built.
+fn wire_schema(container: &Container) -> anyhow::Result<()> {
+    let config = ConfigModule::resolved::<GraphqlConfig>(container)?;
+    check_membership(container, config.strict_resolver_membership)?;
+    // Two contributions claiming one name fail the boot, before the mount
+    // composes a schema whose SDL and dispatch would disagree.
+    //
+    // async-graphql serves `_service` and `_entities` as soon as an entity
+    // resolver calls `add_keys` (`schema.rs`'s `enable_federation ||
+    // has_entities()`), so an `#[entity]` without `federation` is refused.
+    if let Some(resolver) = check_operations(container).map_err(anyhow::Error::msg)?
+        && !config.federation
+    {
+        let introspection = nest_rs_config::var_name("graphql", "DISABLE_INTROSPECTION");
+        let federation_var = nest_rs_config::var_name("graphql", "FEDERATION");
+        anyhow::bail!(
+            "`{resolver}` declares an `#[entity]`, but this schema is not configured as a \
+             subgraph. An entity resolver *is* the federation surface: async-graphql serves \
+             `_service` and `_entities` the moment one exists, so the endpoint would publish \
+             its own SDL — `_service` is not covered by `{introspection}` — while the \
+             committed SDL carried the federation plumbing without the `@key` a router needs. \
+             Set `GraphqlConfig::federation = true` (or `{federation_var}=true`) and serve it \
+             behind a router, or remove the `#[entity]`."
+        );
+    }
+    compose_sites(container)?;
+    crate::federation::compose_sites(container)
+}
+
+/// A linked `#[resolver]` no reachable module lists is filtered out of the
+/// schema: a boot failure when `strict`, a `warn` each otherwise.
+fn check_membership(container: &Container, strict: bool) -> anyhow::Result<()> {
+    let unreachable = crate::resolver::unreachable_resolvers(container);
+    if unreachable.is_empty() {
+        return Ok(());
+    }
+    if strict {
+        let var = nest_rs_config::var_name("graphql", "STRICT_RESOLVER_MEMBERSHIP");
+        anyhow::bail!(
+            "strict resolver-membership check failed: {unreachable:?} linked into the binary but \
+             in no reachable module. Add each to a reachable feature module's \
+             `#[module(providers = [...])]`, or clear \
+             `GraphqlConfig::strict_resolver_membership` (`{var}=false`) if the link is \
+             intentional — a workspace shipping several apps over one feature library \
+             legitimately links resolvers a given binary does not serve."
+        );
+    }
+    for resolver in unreachable {
+        tracing::warn!(
+            target: crate::TARGET,
+            resolver,
+            hint = "add it to a feature module's `#[module(providers = [...])]` if you meant to expose it",
+            "unreachable resolver skipped from the GraphQL schema",
+        );
+    }
+    Ok(())
 }
 
 /// A graphql-ws upgrade from a browser origin the transport's policy refuses,

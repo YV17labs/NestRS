@@ -212,6 +212,18 @@ a constant message on the wire, under the same `INTERNAL` code an internal
 denial carries — so a client cannot tell an unexpected failure from a
 refusal it was owed no explanation for.
 
+## An exception filter answers first
+
+Every rule above is what a field answers when nothing answered it. An
+[exception filter](/fundamentals/exception-filters/#on-a-graphql-field) bound
+on the resolver, the field or the app reads the failure before them: one
+claiming the error's type answers with a `Problem`, which the field renders
+in this page's form — its sentence on `message`, its code on
+`extensions.code` — while the operation's other fields resolve as they would.
+The chain behind a `5xx` the filter answers is filed as for any other; one it
+answers `4xx` files nothing. A field that failed stays failed, so a mutation
+field's savepoint rolls back whatever the filter answered.
+
 ## Authorization denials
 
 A guard's denial reads the same on every edge. On GraphQL it answers its

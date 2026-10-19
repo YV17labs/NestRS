@@ -1,8 +1,8 @@
 //! The per-site guard chain: what an in-band edge composes once and then runs
 //! on every operation.
 //!
-//! GraphQL and MCP have no mount seam to compose a chain at, so each site
-//! memoizes its chain in a [`SiteChainCell`] the decorator emits as a `static`:
+//! MCP has no mount seam to compose a chain at, so each site memoizes its
+//! chain in a [`SiteChainCell`] the decorator emits as a `static`:
 //! composed once per site, then one atomic load and one `Weak` upgrade per
 //! operation.
 //!

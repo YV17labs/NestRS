@@ -39,7 +39,7 @@ where
     E::Model: Serialize + DeserializeOwned,
     O: Serialize + DeserializeOwned,
 {
-    let ability = ability(ctx)?;
+    let ability = ability()?;
     let action = A::ACTION;
     let wire = serde_json::to_value(&item).map_err(|err| {
         mask_failure::<E>(
@@ -110,7 +110,7 @@ where
     E::Model: Serialize + DeserializeOwned,
     O: Serialize + DeserializeOwned,
 {
-    let ability = ability(ctx)?;
+    let ability = ability()?;
     let action = A::ACTION;
     let wire = serde_json::to_value(&value).map_err(|err| {
         mask_failure::<E>(

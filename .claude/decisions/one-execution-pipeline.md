@@ -202,3 +202,31 @@ dispatched inside `run_unit` over the binding the transport resolves at mount;
 - **A self-mount folds no handler stage** until its edge's own units move
   (GraphQL, MCP): the app's global interceptors reach a route's handler,
   never a self-mount's request.
+
+**2026-10-19 — `feat/graphql-on-pipeline`: a GraphQL field runs on it.** Each
+root field — a `#[query]`, a `#[mutation]`, an `#[entity]`, `_service` and
+`_entities` — is a `Site` dispatched as a `graphql.field` unit nested in its
+`/graphql` request and its operation's unit of work: its guards' `check`, its
+class gate, the app's exception filters and handler-stage interceptors with
+the resolver's and its own, then its argument pipes, the call and the mask. The
+`/graphql` request still folds no handler stage: its fields are where the
+app's interceptors now run. Where it departs:
+
+- **A field's sites are composed at the kernel's wiring step**, every field of
+  every reachable resolver, rather than on first dispatch: a declared layer no
+  module provides, or two `#[meta]` values of one type, refuse the boot naming
+  the field. A container built by hand, with no reachable set, still composes
+  on the first dispatch and refuses that field opaquely.
+- **The tail writes the field's typed value into a slot of the field's own**,
+  since a GraphQL field has no reply a layer writes through a view. A failure
+  only its type can answer — the edge's own `async_graphql::Error`, a
+  `ToProblem` error — goes out answered with that rendering, and the chain it
+  withholds is filed only if it is the answer sent: an exception filter's
+  problem replaces it, filed by its own status.
+- **A `#[field_resolver]` folds no app-wide layer and none of its resolver's
+  interceptors or filters** — it runs once per parent row — only its own and
+  the guards it ran before; **a `#[subscription]`'s layers run at its
+  opening**, never per item.
+- **The ability is read off the unit**: the field mask and `bind` read the
+  ambient ability the class gate checked, and the GraphQL context no longer
+  carries one.

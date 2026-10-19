@@ -139,7 +139,8 @@ pub mod __private {
     pub use crate::mcp::{MCP_GRAMMAR, mcp_answers};
     pub use crate::meta::{
         HandlerDeclaration, HandlerSite, HostMeta, SitePosture, declared_handler, handler_const,
-        handler_ref, host_meta_fn, reject_meta_on_operations, take_meta,
+        handler_ref, host_meta_fn, reject_meta_on_operations, site_const_ident, site_fn_ident,
+        take_meta,
     };
     pub use crate::mount::{MountPath, reject_path};
     pub use crate::on_event::{ON_EVENT_GRAMMAR, OnEventArgs, parse_on_event_args};

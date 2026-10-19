@@ -53,6 +53,9 @@ tracing.workspace = true
 # A DataLoader batch is spawned onto the runtime, under what its request
 # carries into it.
 tokio.workspace = true
+# A root field's line is filed by a hand-written future around its unit, so a
+# debug build holds the field's own future once.
+pin-project-lite.workspace = true
 
 [dev-dependencies]
 # Boot the schema in-process and fire GraphQL requests at it (the ContextSeed

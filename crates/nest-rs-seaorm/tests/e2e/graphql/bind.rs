@@ -192,3 +192,94 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
         event.fields,
     );
 }
+
+/// The ability a field's own guard attaches is the one `bind` loads under:
+/// the unit's, which the class gate checked — never one off the GraphQL
+/// context.
+mod ability_of_the_unit {
+    use nest_rs_authz::{AbilityBuilder, Action, Read};
+    use nest_rs_core::{Layer, UnitContext, injectable, module};
+    use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+    use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
+    use nest_rs_testing::{LogCapture, TestApp};
+
+    use super::{Ghost, GhostsService, QUERY, ghost};
+
+    /// Attaches, at the field, an ability reading every ghost.
+    #[injectable]
+    #[derive(Default)]
+    struct FieldAbility;
+
+    impl Layer for FieldAbility {}
+
+    #[async_trait]
+    impl Guard for FieldAbility {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let mut builder = AbilityBuilder::new();
+            builder.can(Action::Read, ghost::Entity);
+            cx.attach(builder.build().expect("a valid ability"));
+            Ok(())
+        }
+    }
+
+    impl GuardFor<GraphqlView> for FieldAbility {}
+
+    #[resolver]
+    struct FieldGhostsResolver;
+
+    #[operations]
+    impl FieldGhostsResolver {
+        #[query]
+        #[authorize(Read, ghost::Entity)]
+        #[use_guards(FieldAbility)]
+        async fn ghost(&self, ctx: &Context<'_>, id: String) -> GqlResult<Option<Ghost>> {
+            Ok(
+                nest_rs_seaorm::graphql::bind::<Read, GhostsService>(ctx, &id)
+                    .await?
+                    .map(Ghost::from),
+            )
+        }
+    }
+
+    #[module(
+        imports = [
+            SeaOrmModule::for_root(SeaOrmConfig {
+                url: crate::harness::url(),
+                ..Default::default()
+            }),
+            SeaOrmDatabaseModule,
+            GraphqlModule::for_root(GraphqlConfig::default()),
+        ],
+        providers = [GhostsService, FieldAbility, FieldGhostsResolver],
+    )]
+    struct FieldGhostModule;
+
+    #[tokio::test]
+    async fn bind_loads_under_the_ability_the_class_gate_checked() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<FieldGhostModule>()
+            .await
+            .expect("boots");
+
+        let id = sea_orm::prelude::Uuid::now_v7().to_string();
+        let body: serde_json::Value = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": QUERY, "variables": { "id": id } }))
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize();
+
+        assert_eq!(
+            body["errors"][0]["message"],
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+            "the load ran, and the absent table failed it: {body}",
+        );
+        logs.expect_one(nest_rs_seaorm::target::ORM, "by-id access load failed");
+    }
+}

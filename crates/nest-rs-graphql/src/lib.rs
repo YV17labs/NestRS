@@ -51,20 +51,20 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::context::{ENDPOINT, connection_data};
-    pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate};
+    pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
     pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};
     pub use crate::operation::{
-        GraphqlSite, IsStreamReturn, answers_a_stream, field_name, run_field,
-        run_layered_graphql_chain,
+        FieldGuards, GraphqlSite, IsStreamReturn, ROOT_FIELD, answers_a_stream, field_guard_stage,
+        field_name, run_field, run_nested,
     };
     pub use crate::resolver::{
         GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
-        GraphqlSubscriptionObject, ResolverDescriptor,
+        GraphqlSiteRegistration, GraphqlSubscriptionObject, ResolverDescriptor,
     };
+    pub use crate::scope::{FromScope, unprovided};
     pub use crate::subscription::{compose_schema, keep_masked_item};
 
     pub use inventory;
-    pub use nest_rs_core::__private::install_pending;
     pub use nest_rs_core::ambient;
     // For `#[crud]`-generated ops, so the consumer needs no nest-rs-pipes dependency.
     pub use nest_rs_pipes::__private::{MaybeValidateFallback, ValidateProbe};
@@ -154,7 +154,8 @@ pub use nest_rs_graphql_macros::dataloader;
 /// ```
 pub use nest_rs_graphql_macros::operations;
 /// Mark a GraphQL resolver struct: built from the container, its
-/// `#[use_guards(...)]` the resolver-scope layer.
+/// `#[use_guards(...)]`, `#[use_interceptors(...)]` and
+/// `#[use_exception_filters(...)]` the resolver-scope layers.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -206,14 +207,16 @@ pub use nest_rs_graphql_macros::operations;
 /// # }
 /// ```
 ///
-/// `#[use_interceptors(...)]` / `#[use_filters(...)]` are **HTTP-only** and
-/// rejected on a resolver at compile time:
+/// Its interceptors and exception filters wrap each of its root fields, inside
+/// the app's own; a `#[field_resolver]` runs only those declared on it.
+/// `#[use_filters(...)]` is refused at compile time: an exception filter
+/// catching `dyn Error + Send + Sync` takes its place.
 ///
 /// ```compile_fail
 /// use nest_rs_graphql::resolver;
 ///
 /// #[resolver]
-/// #[use_interceptors(SomeInterceptor)]
+/// #[use_filters(SomeFilter)]
 /// struct BadResolver;
 /// ```
 pub use nest_rs_graphql_macros::resolver;

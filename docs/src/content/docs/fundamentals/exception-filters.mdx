@@ -35,13 +35,14 @@ pub trait ExceptionFilter: Layer {
 <Aside type="caution">
 **HTTP runs them today**, on a route, a self-mount's request (`/graphql`,
 `/mcp`, a WS upgrade) and what the router answers itself, and so do
-[jobs](/queue/#layers-around-a-job), [ticks](/schedule/#layers-around-a-tick)
+[GraphQL fields](#on-a-graphql-field), [jobs](/queue/#layers-around-a-job),
+[ticks](/schedule/#layers-around-a-tick)
 and [listener calls](/events/dispatch/#layers-around-a-listener-call). Inside
-GraphQL an operation's error is shaped by
-[its own error handling](/graphql/errors/), inside WS by the
-[message error frame](/websockets/messages/), until those edges move onto the
-same pipeline during 7.0; until then `#[use_exception_filters]` beside their
-decorators is a compile error naming the edge.
+WS a message's error is shaped by the
+[message error frame](/websockets/messages/), until that edge moves onto the
+same pipeline during 7.0, and MCP likewise; until then
+`#[use_exception_filters]` beside their decorators is a compile error naming
+the edge.
 </Aside>
 
 ## Install
@@ -199,6 +200,28 @@ async fn domain(&self) -> Result<&'static str, DomainError> {
 
 That answers `422` with `caught: domain failure: boom`.
 
+### On a GraphQL field
+
+A resolver binds filters as a controller does — `#[use_exception_filters]` on
+the `#[resolver]` struct or beside a root field — and the app's run there too.
+A field has no reply a filter writes through a view, so a filter answers with
+a `Problem`: the field's error then carries its message and its code under
+`extensions.code`, while the operation's other fields resolve as they would:
+
+```rust title="crates/features/src/orders/graphql/exception_filter.rs"
+#[async_trait]
+impl ExceptionFilter for LedgerConflict {
+    type Exception = LedgerRefused;
+
+    async fn catch(&self, _: &LedgerRefused, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(409, code::CONFLICT).with_detail("the ledger is busy"))
+    }
+}
+```
+
+A `#[field_resolver]` runs only the filters declared on it. What no filter
+answers keeps [GraphQL's own rule](/graphql/errors/).
+
 ### Every error: the catch-all
 
 `type Exception = dyn Error + Send + Sync` claims every failure — the
@@ -222,8 +245,8 @@ impl ExceptionFilter for Envelope {
 
 ### Closest first
 
-The method's filters are tried first, then the controller's, then the app's;
-the first that answers wins. A typed filter on a route therefore answers
+The method's filters are tried first, then the controller's — or the
+resolver's — then the app's; the first that answers wins. A typed filter on a route therefore answers
 before a catch-all on its controller, and a `Declined` hands the failure on.
 
 ### A failed unit stays failed

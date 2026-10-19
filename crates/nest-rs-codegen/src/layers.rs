@@ -163,10 +163,11 @@ pub fn cell(pair: &DecoratorPair, scope: LayerScope, attribute: LayerAttribute) 
         (P::Http, _, A::UsePipes | A::UseInterceptors | A::UseExceptionFilters) => Built,
         (_, _, A::UseFilters) => Refused(FILTERS),
 
+        (P::Graphql, _, A::UseInterceptors | A::UseExceptionFilters) => Built,
         (P::Graphql, _, A::UsePipes) => Refused(GRAPHQL_PIPES),
         (P::Mcp, _, A::UsePipes) => Refused(MCP_PIPES),
         (P::Ws, _, A::UsePipes) => Pending,
-        (P::Graphql | P::Ws | P::Mcp, _, A::UseInterceptors | A::UseExceptionFilters) => Pending,
+        (P::Ws | P::Mcp, _, A::UseInterceptors | A::UseExceptionFilters) => Pending,
 
         (P::Processor | P::Scheduled | P::Listeners, _, A::UseGuards | A::ForceGuards) => {
             Refused(NO_CALLER)
@@ -446,6 +447,22 @@ mod tests {
             ),
             (2, 1, 1, 1, 1),
         );
+    }
+
+    #[test]
+    fn a_resolver_and_its_operations_take_interceptors_and_exception_filters() {
+        for scope in SCOPES {
+            for attribute in [
+                LayerAttribute::UseInterceptors,
+                LayerAttribute::UseExceptionFilters,
+            ] {
+                assert_eq!(
+                    cell(&crate::pair::GRAPHQL, scope, attribute),
+                    Cell::Built,
+                    "{scope:?} {attribute:?}",
+                );
+            }
+        }
     }
 
     #[test]

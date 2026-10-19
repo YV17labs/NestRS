@@ -98,6 +98,13 @@ impl UsersResolver {
 If `avatar_for` does one DB call per parent, you have an N+1 — move
 the lookup behind a `#[dataloader]`. See [Dataloaders](/database/dataloaders/).
 
+A `Scoped<T>` parameter reaches a request-scoped provider here as on a root
+field. A field resolver is no unit of its own — it runs once per parent row,
+inside the root field that produced its parent — so it runs its resolver's and
+its own `#[use_guards]`, and only the interceptors and exception filters
+declared on it: never the app's pool, nor the resolver's interceptors, which
+would run once per row.
+
 ## The single-`ComplexObject` rule
 
 <Aside type="caution">

@@ -1,14 +1,17 @@
-//! What stands in front of the two federation root fields — the guard chain, and
-//! the ceiling on how many references one call may carry.
+//! What runs the two federation root fields — each its own site on the
+//! pipeline — and the ceiling on how many references one call may carry.
 //!
 //! `_service` and `_entities` are resolved by async-graphql's own `QueryRoot`,
 //! *above* [`DiscoveredQuery`](crate::resolver::DiscoveredQuery), so no
-//! resolver's chain sees them. A schema [`Extension`] is the one seam in front of
-//! a root field: the chain runs on `resolve`, the ceiling on `parse_query`.
+//! resolver's wrapper sees them. A schema [`Extension`] is the one seam in
+//! front of a root field: the field's unit runs on `resolve`, the ceiling on
+//! `parse_query`.
 //!
-//! A federation field belongs to no resolver, so its chain is the app-wide pool
-//! alone, which an `#[entity]`'s own site therefore stops composing.
+//! A federation field belongs to no resolver, so its guard stage is the
+//! app-wide pool alone, which an `#[entity]`'s own site therefore stops
+//! composing.
 
+use std::any::TypeId;
 use std::sync::{Arc, Mutex};
 
 use async_graphql::async_trait::async_trait;
@@ -17,19 +20,21 @@ use async_graphql::extensions::{
     ResolveInfo,
 };
 use async_graphql::parser::types::{ExecutableDocument, OperationType, Selection, SelectionSet};
-use async_graphql::{Name, Positioned, Request, ServerError, ServerResult, Value, Variables};
-use std::any::TypeId;
-
-use nest_rs_core::__private::{
-    HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler, install_pending,
-    new_unit_context,
+use async_graphql::{
+    Error, Name, Positioned, Request, ServerError, ServerResult, Value, Variables,
 };
+use nest_rs_core::__private::{
+    GuardStage, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, declare_handler,
+    declare_site,
+};
+use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Handler, Posture};
-use nest_rs_guards::__private::{failure_chain, resolve_global_chain, run_stage};
-use nest_rs_guards::{Guard, GuardSpecs};
+use nest_rs_guards::__private::resolve_global_chain;
+use nest_rs_guards::GuardSpecs;
 
 use crate::config::GraphqlConfig;
-use crate::error::denial_to_graphql_error;
+use crate::error::FieldFailure;
+use crate::operation::{FieldGuardStage, FieldUnit, Floor, ROOT_FIELD, in_field_unit};
 use crate::view::{FieldRole, GraphqlView};
 
 /// The `Query`-root field a router calls to read a subgraph's SDL.
@@ -45,13 +50,27 @@ pub(crate) fn gate_runs(container: &Container) -> bool {
     container.get::<GuardSpecs>().is_some()
 }
 
-/// The site `_service` runs as.
+/// The handler `_service` runs as.
 static SERVICE: Handler = federation_field(SERVICE_FIELD);
-/// The site `_entities` runs as.
+/// The handler `_entities` runs as.
 static ENTITIES: Handler = federation_field(ENTITIES_FIELD);
 
-/// A federation root field's declaration: a field no resolver declares, gated
-/// by the app-wide pool alone.
+/// The site `_service` runs.
+static SERVICE_SITE: Site = declare_site(&SERVICE, FEDERATION_FIELD);
+/// The site `_entities` runs.
+static ENTITIES_SITE: Site = declare_site(&ENTITIES, FEDERATION_FIELD);
+
+/// A federation root field's declaration: a root field no resolver declares,
+/// gated by the app-wide pool alone, inside the app's filters and
+/// interceptors.
+const FEDERATION_FIELD: SiteDeclaration = SiteDeclaration {
+    layers: SiteLayers::default,
+    global: ROOT_FIELD,
+    guard_stage: Some(federation_guard_stage),
+    class_gate: None,
+};
+
+/// A federation root field's handler: a field no resolver declares.
 const fn federation_field(field: &'static str) -> Handler {
     declare_handler(HandlerDeclaration {
         unit: crate::unit::FIELD,
@@ -64,24 +83,41 @@ const fn federation_field(field: &'static str) -> Handler {
     })
 }
 
-/// Installs [`FederationExtension`] on the served schema.
+/// The app-wide pool, the whole chain of a field that belongs to no resolver;
+/// none when the app lists no pool, so an `#[entity]` folds it itself.
+fn federation_guard_stage(
+    container: &Container,
+    _: &Handler,
+) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
+    if !gate_runs(container) {
+        return Ok(None);
+    }
+    let chain = resolve_global_chain(container, "POST /graphql (federation)");
+    Ok(FieldGuardStage::of(chain, Floor::Federation))
+}
+
+/// Compose both federation sites against `container`, so a layer they fold
+/// that does not resolve refuses the boot.
+pub(crate) fn compose_sites(container: &Container) -> anyhow::Result<()> {
+    SERVICE_SITE.chains(container)?;
+    ENTITIES_SITE.chains(container)?;
+    Ok(())
+}
+
+/// Installs [`FederationExtension`] on a subgraph's schema.
 pub(crate) struct FederationExtensionFactory {
-    pool: Option<Arc<[ResolvedLayer<dyn Guard>]>>,
     max_representations: Option<usize>,
 }
 
 impl FederationExtensionFactory {
-    /// `None` when the app declared no global guards **and** left the ceiling
-    /// unlimited: an idle extension still costs every field a boxed indirection.
-    pub(crate) fn from_container(container: &Container, config: &GraphqlConfig) -> Option<Self> {
-        let pool = gate_runs(container)
-            .then(|| resolve_global_chain(container, "POST /graphql (federation)").into());
+    /// `None` unless the schema is a subgraph: only a subgraph serves the
+    /// federation fields, and an idle extension costs every field a boxed
+    /// indirection.
+    pub(crate) fn for_config(config: &GraphqlConfig) -> Option<Self> {
         // A pinned `Some(0)` never passes through `ConfigService::count`, which
         // maps the environment's `0` to unlimited.
-        let max_representations = config.max_representations.filter(|max| *max > 0);
-        (pool.is_some() || max_representations.is_some()).then_some(Self {
-            pool,
-            max_representations,
+        config.federation.then(|| Self {
+            max_representations: config.max_representations.filter(|max| *max > 0),
         })
     }
 }
@@ -89,7 +125,6 @@ impl FederationExtensionFactory {
 impl ExtensionFactory for FederationExtensionFactory {
     fn create(&self) -> Arc<dyn Extension> {
         Arc::new(FederationExtension {
-            pool: self.pool.clone(),
             max_representations: self.max_representations,
             operation_name: Mutex::new(None),
         })
@@ -97,9 +132,6 @@ impl ExtensionFactory for FederationExtensionFactory {
 }
 
 struct FederationExtension {
-    /// The app-wide pool, the whole chain of a field that belongs to no
-    /// resolver.
-    pool: Option<Arc<[ResolvedLayer<dyn Guard>]>>,
     max_representations: Option<usize>,
     /// The operation this request selected, captured in `prepare_request` — the
     /// one hook that carries it — so the ceiling can be charged to the operation
@@ -107,6 +139,10 @@ struct FederationExtension {
     /// (`ExtensionFactory::create`), so this holds one request's answer.
     operation_name: Mutex<Option<String>>,
 }
+
+/// The error a federation field answered itself, carried through its unit as
+/// it was built: its path and locations are async-graphql's to keep.
+struct Answered(ServerError);
 
 #[async_trait]
 impl Extension for FederationExtension {
@@ -151,32 +187,47 @@ impl Extension for FederationExtension {
     ) -> ServerResult<Option<Value>> {
         // A nested `_entities` is an app's own field, with its own chain.
         let site = match (info.parent_type, info.name) {
-            ("Query", SERVICE_FIELD) => Some(&SERVICE),
-            ("Query", ENTITIES_FIELD) => Some(&ENTITIES),
-            _ => None,
+            ("Query", SERVICE_FIELD) => &SERVICE_SITE,
+            ("Query", ENTITIES_FIELD) => &ENTITIES_SITE,
+            _ => return next.run(ctx, info).await,
         };
-        let (Some(site), Some(pool)) = (site, self.pool.as_deref()) else {
+        let Some(container) = ctx.data_opt::<Container>() else {
             return next.run(ctx, info).await;
         };
-        let mut view =
-            GraphqlView::new(site.address(), OperationType::Query, FieldRole::Federation);
-        let mut cx = new_unit_context(site, &mut view, None, None);
-        let attached = run_stage(pool, None, &mut cx).await.map_err(|refused| {
-            let denial = refused.into_denial(|guard, denial| {
-                // Same structural floor as a resolver site's chain.
-                tracing::warn!(
-                    target: nest_rs_core::target::LAYERS,
-                    guard,
-                    route = "POST /graphql (federation)",
-                    field = site.address(),
-                    status = denial.http_status(),
-                    error = failure_chain(denial),
-                    "guard denied the federation field",
-                );
-            });
-            denial_to_graphql_error(denial).into_server_error(info.field.name.pos)
-        })?;
-        install_pending(attached, next.run(ctx, info)).await
+        let position = info.field.name.pos;
+        let field = info.name;
+        let unit = FieldUnit {
+            site,
+            container,
+            view: GraphqlView::new(
+                site.handler().address(),
+                OperationType::Query,
+                FieldRole::Federation,
+            ),
+        };
+        let tail = move || async move {
+            next.run(ctx, info).await.map_err(|answered| {
+                let carried = Error {
+                    message: answered.message.clone(),
+                    source: Some(Arc::new(Answered(answered))),
+                    extensions: None,
+                };
+                FieldFailure::from(carried)
+            })
+        };
+        in_field_unit("federation", field, async move {
+            unit.run(tail).await.map_err(|error| {
+                match error
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.downcast_ref::<Answered>())
+                {
+                    Some(Answered(answered)) => answered.clone(),
+                    None => error.into_server_error(position),
+                }
+            })
+        })
+        .await
     }
 }
 

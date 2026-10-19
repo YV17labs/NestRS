@@ -66,8 +66,8 @@ it yet: the WebSocket `#[on_connect]` / `#[on_disconnect]` hooks take
 | `#[use_guards]` | struct, method | struct, method | struct (the upgrade), method | struct, method | — no caller to gate | — |
 | `#[force_guards]` | method | method | method | method | — | — |
 | `#[use_pipes]` | struct, method | — bind a per-argument pipe | not yet | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
-| `#[use_interceptors]` | struct, method | not yet | not yet | not yet | impl block, method | — |
-| `#[use_exception_filters]` | struct, method | not yet | not yet | not yet | impl block, method | — |
+| `#[use_interceptors]` | struct, method | struct, method | not yet | not yet | impl block, method | — |
+| `#[use_exception_filters]` | struct, method | struct, method | not yet | not yet | impl block, method | — |
 | `#[use_filters]` | — use `#[use_exception_filters]` | — | — | — | — | — |
 | `#[meta]` | struct, method | struct, method | struct, method | struct, method | impl block, method | — |
 
@@ -90,7 +90,7 @@ re-exports it, so import it from the one the file already uses
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
-| `#[resolver]` | struct | Marks a resolver provider and declares its resolver-scope guards | [GraphQL](/graphql/) |
+| `#[resolver]` | struct | Marks a resolver provider and declares its resolver-scope guards, interceptors and exception filters | [GraphQL](/graphql/) |
 | `#[operations]` | impl block | Orchestrates the block's `#[query]` / `#[mutation]` / `#[subscription]` / `#[entity]` / `#[field_resolver]` methods | [GraphQL](/graphql/) |
 | `#[query]` | method | Root query operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |

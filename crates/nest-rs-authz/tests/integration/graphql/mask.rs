@@ -962,3 +962,78 @@ async fn an_entity_refuses_a_caller_with_no_rule() {
         "and it is refused rather than answered empty: {json}",
     );
 }
+
+/// The ability a field's own guard attaches is the one its class gate checks
+/// and its mask reads: one place, the unit's.
+mod ability_of_the_unit {
+    use super::{WidgetDto, widget};
+    use nest_rs_authz::{AbilityBuilder, Action, Read};
+    use nest_rs_core::{Layer, UnitContext, injectable, module};
+    use nest_rs_graphql::async_graphql::Result as GqlResult;
+    use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_http::async_trait;
+    use nest_rs_testing::TestApp;
+
+    use super::super::query;
+
+    /// Attaches, at the field, an ability reading widgets' `id` alone.
+    #[injectable]
+    #[derive(Default)]
+    struct FieldAbility;
+
+    impl Layer for FieldAbility {}
+
+    #[async_trait]
+    impl Guard for FieldAbility {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let mut builder = AbilityBuilder::new();
+            builder
+                .can(Action::Read, widget::Entity)
+                .fields([widget::Column::Id]);
+            cx.attach(builder.build().expect("a valid ability"));
+            Ok(())
+        }
+    }
+
+    impl GuardFor<GraphqlView> for FieldAbility {}
+
+    #[resolver]
+    struct FieldAbilityResolver;
+
+    #[operations]
+    impl FieldAbilityResolver {
+        #[query]
+        #[authorize(Read, widget::Entity)]
+        #[use_guards(FieldAbility)]
+        async fn own_widget(&self) -> GqlResult<WidgetDto> {
+            Ok(WidgetDto {
+                id: 7,
+                name: Some("ada".into()),
+            })
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [FieldAbility, FieldAbilityResolver],
+    )]
+    struct FieldAbilityModule;
+
+    #[tokio::test]
+    async fn the_mask_reads_the_ability_the_class_gate_checked() {
+        let app = TestApp::for_module::<FieldAbilityModule>()
+            .await
+            .expect("boots");
+
+        let json = query(&app, "", "{ ownWidget { id name } }").await;
+
+        assert!(json.get("errors").is_none(), "{json}");
+        assert_eq!(json["data"]["ownWidget"]["id"], 7, "{json}");
+        assert_eq!(
+            json["data"]["ownWidget"]["name"],
+            serde_json::Value::Null,
+            "masked by the ability the field's guard attached: {json}",
+        );
+    }
+}

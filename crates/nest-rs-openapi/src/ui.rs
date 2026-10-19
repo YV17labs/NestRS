@@ -1,8 +1,7 @@
 //! Bundled Swagger UI and spec endpoint. `index.html` references the spec and
 //! assets by **relative** path, so they resolve under any `global_prefix`.
 
-use poem::endpoint::make_sync;
-use poem::{Endpoint, Response, handler};
+use nest_rs_http::{Bytes, Endpoint, HeaderValue, Response, endpoint_fn, header};
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
 const SWAGGER_CSS: &str = concat!(
@@ -21,54 +20,70 @@ pub(crate) const DOCS_CONTENT_SECURITY_POLICY: &str = "default-src 'none'; scrip
      style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; \
      connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
-#[handler]
-pub(crate) fn swagger_index() -> Response {
+const HTML: HeaderValue = HeaderValue::from_static("text/html; charset=utf-8");
+const CSS: HeaderValue = HeaderValue::from_static("text/css");
+const JAVASCRIPT: HeaderValue = HeaderValue::from_static("application/javascript");
+const JSON: HeaderValue = HeaderValue::from_static("application/json");
+
+/// The bundled assets never change under one build: a year, never revalidated.
+const IMMUTABLE: HeaderValue = HeaderValue::from_static("public, max-age=31536000, immutable");
+
+pub(crate) fn swagger_index() -> impl Endpoint {
     // Kept under a deployment's own policy: the edge's defaults fill only what a
     // response leaves unset.
-    Response::builder()
-        .content_type("text/html; charset=utf-8")
-        .header("content-security-policy", DOCS_CONTENT_SECURITY_POLICY)
-        .body(INDEX_HTML)
-}
-
-#[handler]
-pub(crate) fn swagger_css() -> Response {
-    asset("text/css", SWAGGER_CSS.as_bytes())
-}
-
-#[handler]
-pub(crate) fn swagger_initializer() -> Response {
-    asset("application/javascript", SWAGGER_INITIALIZER_JS)
-}
-
-#[handler]
-pub(crate) fn swagger_bundle() -> Response {
-    asset("application/javascript", SWAGGER_BUNDLE_JS)
-}
-
-#[handler]
-pub(crate) fn swagger_preset() -> Response {
-    asset("application/javascript", SWAGGER_PRESET_JS)
-}
-
-pub(crate) fn spec_endpoint(spec: String) -> impl Endpoint {
-    make_sync(move |_req| {
-        Response::builder()
-            .content_type("application/json")
-            .body(spec.clone())
+    endpoint_fn(|_req| async {
+        Ok(Response::builder()
+            .content_type(HTML)
+            .header(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static(DOCS_CONTENT_SECURITY_POLICY),
+            )
+            .body(Bytes::from_static(INDEX_HTML.as_bytes())))
     })
 }
 
-fn asset(content_type: &'static str, body: &'static [u8]) -> Response {
+pub(crate) fn swagger_css() -> impl Endpoint {
+    asset(CSS, SWAGGER_CSS.as_bytes())
+}
+
+pub(crate) fn swagger_initializer() -> impl Endpoint {
+    asset(JAVASCRIPT, SWAGGER_INITIALIZER_JS)
+}
+
+pub(crate) fn swagger_bundle() -> impl Endpoint {
+    asset(JAVASCRIPT, SWAGGER_BUNDLE_JS)
+}
+
+pub(crate) fn swagger_preset() -> impl Endpoint {
+    asset(JAVASCRIPT, SWAGGER_PRESET_JS)
+}
+
+/// The document, serialized once at mount and shared by every request.
+pub(crate) fn spec_endpoint(spec: String) -> impl Endpoint {
+    let spec = Bytes::from(spec);
+    endpoint_fn(move |_req| {
+        let spec = spec.clone();
+        async move { Ok(Response::builder().content_type(JSON).body(spec)) }
+    })
+}
+
+fn asset(content_type: HeaderValue, body: &'static [u8]) -> impl Endpoint {
+    endpoint_fn(move |_req| {
+        let content_type = content_type.clone();
+        async move { Ok(cached(content_type, body)) }
+    })
+}
+
+fn cached(content_type: HeaderValue, body: &'static [u8]) -> Response {
     Response::builder()
         .content_type(content_type)
-        .header("cache-control", "public, max-age=31536000, immutable")
-        .body(body)
+        .header(header::CACHE_CONTROL, IMMUTABLE)
+        .body(Bytes::from_static(body))
 }
 
 #[cfg(test)]
 mod tests {
-    use poem::http::StatusCode;
+    use nest_rs_http::{Request, StatusCode};
 
     use super::*;
 
@@ -119,9 +134,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn asset_response_sets_long_lived_cache_header() {
-        let resp = asset("text/css", b"body{}");
+    #[tokio::test]
+    async fn asset_response_sets_long_lived_cache_header() {
+        let resp = asset(CSS, b"body{}")
+            .call(Request::builder().finish())
+            .await
+            .expect("an asset answers");
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers()
@@ -139,8 +157,17 @@ mod tests {
         assert!(cache.contains("31536000"), "missing 1y max-age: {cache}");
     }
 
-    #[test]
-    fn spec_endpoint_constructs_without_panic() {
-        let _ = spec_endpoint(r#"{"openapi":"3.1.0"}"#.into());
+    #[tokio::test]
+    async fn the_document_is_served_as_serialized() {
+        let document = r#"{"openapi":"3.1.0"}"#;
+        let resp = spec_endpoint(document.into())
+            .call(Request::builder().finish())
+            .await
+            .expect("the document answers");
+        assert_eq!(resp.headers()["content-type"], "application/json");
+        assert_eq!(
+            resp.into_body().into_string().await.expect("a body"),
+            document
+        );
     }
 }

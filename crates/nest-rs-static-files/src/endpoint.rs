@@ -7,15 +7,14 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_http::__private::poem_bridge::error_to_poem;
-use nest_rs_http::Opaque;
-use poem::error::{MethodNotAllowedError, NotFoundError, ResponseError};
-use poem::http::header::{
+use nest_rs_http::header::{
     ACCEPT, ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
     IF_RANGE, LAST_MODIFIED, RANGE, VARY,
 };
-use poem::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use poem::{Body, Endpoint, Request, Response};
+use nest_rs_http::{
+    Body, Endpoint, HeaderMap, HeaderName, HeaderValue, IntoResponse, Method, Opaque,
+    ProblemDetails, Request, Response, Result, StatusCode,
+};
 use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 
@@ -93,9 +92,7 @@ impl Served {
 }
 
 impl Endpoint for StaticFilesEndpoint {
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> poem::Result<Response> {
+    async fn call(&self, req: Request) -> Result<Response> {
         let served = &*self.0;
         let read = matches!(*req.method(), Method::GET | Method::HEAD);
         let path = match RequestPath::parse(served.below_mount(req.uri().path())) {
@@ -105,12 +102,7 @@ impl Endpoint for StaticFilesEndpoint {
         // Whether a miss here may be a page — what `Accept` then decides.
         let may_fall_back = read && served.spa_fallback && !path.names_a_file();
         let fallback = may_fall_back && is_navigation(req.headers());
-        let found = served
-            .files
-            .find(&path, fallback)
-            .await
-            .opaque()
-            .map_err(error_to_poem)?;
+        let found = served.files.find(&path, fallback).await.opaque()?;
         let varies = may_fall_back && matches!(found, Found::Fallback(_) | Found::Missing);
         let mut resp = match found {
             Found::Asset(asset) if read => {
@@ -131,7 +123,7 @@ impl Endpoint for StaticFilesEndpoint {
 
 /// The answer to a `GET` or `HEAD` of `asset`: its preconditions, then its
 /// range, then the bytes — none for a `HEAD`.
-fn answer(asset: Asset, req: &Request, cache_control: HeaderValue) -> poem::Result<Response> {
+fn answer(asset: Asset, req: &Request, cache_control: HeaderValue) -> Result<Response> {
     let headers = req.headers();
     if let Some(validators) = &asset.validators {
         match validators.evaluate(headers) {
@@ -152,7 +144,7 @@ fn answer(asset: Asset, req: &Request, cache_control: HeaderValue) -> poem::Resu
         ByteRange::Unsatisfiable => {
             return Ok(Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header(CONTENT_RANGE, format!("bytes */{}", asset.len))
+                .header(CONTENT_RANGE, text(format!("bytes */{}", asset.len))?)
                 .finish());
         }
     };
@@ -161,11 +153,16 @@ fn answer(asset: Asset, req: &Request, cache_control: HeaderValue) -> poem::Resu
         .header(CONTENT_TYPE, asset.content_type)
         .header(CACHE_CONTROL, cache_control)
         .header(ACCEPT_RANGES, BYTES)
-        .header(CONTENT_LENGTH, part.end - part.start);
+        .header(CONTENT_LENGTH, HeaderValue::from(part.end - part.start));
     if status == StatusCode::PARTIAL_CONTENT {
         builder = builder.header(
             CONTENT_RANGE,
-            format!("bytes {}-{}/{}", part.start, part.end - 1, asset.len),
+            text(format!(
+                "bytes {}-{}/{}",
+                part.start,
+                part.end - 1,
+                asset.len
+            ))?,
         );
     }
     if let Some(validators) = &asset.validators {
@@ -175,9 +172,15 @@ fn answer(asset: Asset, req: &Request, cache_control: HeaderValue) -> poem::Resu
         }
     }
     if head {
-        return Ok(builder.body(Body::empty()));
+        return Ok(builder.finish());
     }
-    Ok(builder.body(body(asset.body, part).opaque().map_err(error_to_poem)?))
+    Ok(builder.body(body(asset.body, part).opaque()?))
+}
+
+/// A header value the endpoint wrote itself: digits and ASCII punctuation,
+/// which every value admits.
+fn text(value: String) -> Result<HeaderValue> {
+    HeaderValue::try_from(value).opaque()
 }
 
 /// Whether the `Range` applies: a file without validators cannot be checked
@@ -208,9 +211,7 @@ fn body(source: AssetBody, part: Range<u64>) -> io::Result<Body> {
                 file.seek(SeekFrom::Start(part.start))?;
             }
             let file = tokio::fs::File::from_std(file).take(part.end - part.start);
-            Ok(Body::from_bytes_stream(ReaderStream::with_capacity(
-                file, CHUNK,
-            )))
+            Ok(Body::from_stream(ReaderStream::with_capacity(file, CHUNK)))
         }
     }
 }
@@ -289,11 +290,13 @@ fn escaped() -> Response {
 /// The router's own `404`, word for word, so a miss here says nothing about
 /// what is mounted.
 fn not_found() -> Response {
-    NotFoundError.as_response()
+    ProblemDetails::from_status(StatusCode::NOT_FOUND).into_response()
 }
 
+/// The router's own `405`, with the methods the files serve (RFC 9110
+/// §15.5.6).
 fn method_not_allowed() -> Response {
-    let mut resp = MethodNotAllowedError.as_response();
+    let mut resp = ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).into_response();
     resp.headers_mut().insert(ALLOW, ALLOWED);
     resp
 }

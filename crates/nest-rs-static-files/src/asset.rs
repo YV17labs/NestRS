@@ -2,7 +2,7 @@
 //! [`Found`], every outcome of looking one up.
 
 use bytes::Bytes;
-use poem::http::HeaderValue;
+use nest_rs_http::HeaderValue;
 
 use crate::validators::Validators;
 

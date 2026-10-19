@@ -2877,7 +2877,6 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-testing",
- "poem",
  "serde",
  "serde_json",
  "tokio",
@@ -3081,7 +3080,6 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-testing",
- "poem",
  "schemars",
  "serde",
  "serde_json",
@@ -3316,6 +3314,7 @@ name = "nest-rs-static-files"
 version = "7.0.0"
 dependencies = [
  "bytes",
+ "headers",
  "libc",
  "nest-rs-config",
  "nest-rs-core",
@@ -3324,7 +3323,6 @@ dependencies = [
  "nest-rs-interceptors",
  "nest-rs-openapi",
  "nest-rs-testing",
- "poem",
  "rust-embed",
  "tempfile",
  "thiserror 2.0.21",

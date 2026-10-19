@@ -14,10 +14,8 @@ finished booting?* The probes ship as routes on the
 `GET /health/live`, `GET /health/ready`, `GET /health/startup` —
 each returning `200` and a JSON body when every indicator passes,
 `503` with the same shape and `error` populated when any indicator
-fails. Routing rides on [`poem`](https://crates.io/crates/poem) (the
-same engine `HttpModule` mounts), and discovery uses
-[`inventory`](https://crates.io/crates/inventory) gated by the access
-graph.
+fails. Discovery uses [`inventory`](https://crates.io/crates/inventory)
+gated by the access graph.
 
 ## Install
 

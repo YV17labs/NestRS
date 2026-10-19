@@ -21,7 +21,6 @@ serde.workspace = true
 # discovered HttpControllerMeta — the same pattern GraphqlModule uses. No cycle:
 # nest-rs-http does not depend on us.
 nest-rs-http.workspace = true
-poem.workspace = true
 # Generates the component schemas from the `Json<T>` payload types `#[routes]`
 # captured. `openapi3()` settings emit `$ref`s at `#/components/schemas/...`.
 schemars.workspace = true

@@ -171,6 +171,64 @@ async fn a_current_copy_is_answered_not_modified() {
         .assert_status(StatusCode::PRECONDITION_FAILED);
 }
 
+/// RFC 9110 §13.2.2's order: a date is read only where the entity tag
+/// beside it is absent, so a tag the file fails wins over a date it passes,
+/// and a tag it passes over a date it fails.
+#[tokio::test]
+async fn a_tag_decides_before_the_date_beside_it() {
+    let dir = site();
+    let app = serve(dir.path(), StaticFilesConfig::default()).await;
+    let first = app.http().get("/assets/app.js").send().await;
+    let etag = header(&first, "etag").unwrap();
+    let last_modified = header(&first, "last-modified").unwrap();
+    let before = "Thu, 01 Jan 1970 00:00:00 GMT";
+
+    app.http()
+        .get("/assets/app.js")
+        .header("if-none-match", "\"stale\"")
+        .header("if-modified-since", &last_modified)
+        .send()
+        .await
+        .assert_status_is_ok();
+    app.http()
+        .get("/assets/app.js")
+        .header("if-match", &etag)
+        .header("if-unmodified-since", before)
+        .send()
+        .await
+        .assert_status_is_ok();
+    app.http()
+        .get("/assets/app.js")
+        .header("if-unmodified-since", before)
+        .send()
+        .await
+        .assert_status(StatusCode::PRECONDITION_FAILED);
+    app.http()
+        .get("/assets/app.js")
+        .header("if-match", &etag)
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_MODIFIED);
+}
+
+/// A method the files do not serve is the router's own `405`, word for word:
+/// the problem document an API client parses, and the methods it may use.
+#[tokio::test]
+async fn a_refused_method_is_the_router_s_own_405() {
+    let dir = site();
+    let app = serve(dir.path(), StaticFilesConfig::default()).await;
+
+    let resp = app.http().post("/assets/app.js").send().await;
+    resp.assert_status(StatusCode::METHOD_NOT_ALLOWED);
+    resp.assert_header("allow", "GET, HEAD");
+    resp.assert_content_type("application/problem+json");
+    let problem = resp.json().await;
+    let problem = problem.value().object();
+    assert_eq!(problem.get("status").i64(), 405);
+    problem.get("title").assert_string("Method Not Allowed");
+}
+
 #[tokio::test]
 async fn a_range_is_answered_partially_or_refused_when_it_reaches_nothing() {
     let dir = site();

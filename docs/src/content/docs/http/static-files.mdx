@@ -10,9 +10,9 @@ import { Aside } from '@astrojs/starlight/components';
 Your front end's `dist/` and your public files ship with the API: one
 binary, one port, no second server. `StaticFilesModule` serves them as the
 HTTP router's fallback, so every route answers first, and holds what it
-serves to the rules a public folder needs. Requests are answered through
-[poem](https://docs.rs/poem); a folder compiled into the binary is
-[rust-embed](https://docs.rs/rust-embed)'s.
+serves to the rules a public folder needs. Conditional requests are read
+with [headers](https://docs.rs/headers), hyper's typed headers; a folder
+compiled into the binary is [rust-embed](https://docs.rs/rust-embed)'s.
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
@@ -126,7 +126,9 @@ Each rule holds for both sources, and none has a switch:
 A refused climb out of the root and a link leaving it are logged at `warn` on
 `nest_rs::static_files`, with a `reason` field and never the path, which the
 request's span already carries. A hidden name asked for is a scanner's
-background noise, logged at `debug`.
+background noise, logged at `debug`. Every request the files answer is named
+for the mount's catch-all, `GET /{*path}` at the root, on its span's
+`http.route` and its access line, so a tracing backend groups them as one.
 
 ## Caching and ranges
 
@@ -183,8 +185,8 @@ field.
 - One module serves one folder at one path.
 - A segment carrying an encoded `/`, `\` or control character is refused,
   even as a client-side route.
-- With the transport's [`compression`](/http/compression/) on, poem encodes a
-  ranged `206` like any other response, under the same `ETag`: leave
+- With the transport's [`compression`](/http/compression/) on, a ranged
+  `206` is encoded like any other response, under the same `ETag`: leave
   compression to the proxy in front when you serve ranges.
 
 ## What fails if you get it wrong

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::{Duration, UNIX_EPOCH};
 
 use bytes::Bytes;
-use poem::http::HeaderValue;
+use nest_rs_http::HeaderValue;
 use rust_embed::{EmbeddedFile, RustEmbed};
 
 use crate::asset::{Asset, AssetBody, Found};

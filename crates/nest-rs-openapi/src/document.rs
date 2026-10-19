@@ -9,7 +9,7 @@ use nest_rs_http::{
     ApiVersioning, HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
     declared_versions, join_path,
 };
-use poem::http::{StatusCode, header};
+use nest_rs_http::{StatusCode, header};
 use schemars::SchemaGenerator;
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};

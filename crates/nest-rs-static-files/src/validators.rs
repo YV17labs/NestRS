@@ -4,12 +4,12 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use poem::http::header::IF_RANGE;
-use poem::http::{HeaderMap, HeaderValue};
-use poem::web::headers::{
+use headers::{
     ETag, Header, HeaderMapExt, IfMatch, IfModifiedSince, IfNoneMatch, IfUnmodifiedSince,
     LastModified,
 };
+use nest_rs_http::header::{IF_RANGE, LAST_MODIFIED};
+use nest_rs_http::{HeaderMap, HeaderValue};
 
 /// A representation's validators, as the fields that carry them: a strong
 /// entity tag, and the time it last changed when that is known.
@@ -128,7 +128,7 @@ impl Validators {
 fn with_header(modified: SystemTime) -> Option<(SystemTime, HeaderValue)> {
     let mut headers = HeaderMap::new();
     headers.typed_insert(LastModified::from(modified));
-    let header = headers.remove(poem::http::header::LAST_MODIFIED)?;
+    let header = headers.remove(LAST_MODIFIED)?;
     Some((modified, header))
 }
 
@@ -136,7 +136,8 @@ fn with_header(modified: SystemTime) -> Option<(SystemTime, HeaderValue)> {
 mod tests {
     use std::time::Duration;
 
-    use poem::http::header::{IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_UNMODIFIED_SINCE};
+    use nest_rs_http::HeaderName;
+    use nest_rs_http::header::{IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_UNMODIFIED_SINCE};
 
     use super::*;
 
@@ -152,7 +153,7 @@ mod tests {
         validators.etag().to_str().unwrap()
     }
 
-    fn headers(fields: &[(poem::http::HeaderName, &str)]) -> HeaderMap {
+    fn headers(fields: &[(HeaderName, &str)]) -> HeaderMap {
         let mut map = HeaderMap::new();
         for (name, value) in fields {
             map.insert(name.clone(), HeaderValue::from_str(value).unwrap());

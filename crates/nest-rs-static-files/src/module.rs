@@ -5,7 +5,6 @@ use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering};
-use nest_rs_http::__private::poem_bridge::from_poem;
 use nest_rs_http::{BoxEndpoint, HttpFallbackMeta};
 
 use crate::config::StaticFilesConfig;
@@ -154,11 +153,13 @@ fn fallback(config: &StaticFilesConfig, files: Files) -> HttpFallbackMeta {
         "serving static files",
     );
     let path = config.path.clone();
-    let endpoint =
-        StaticFilesEndpoint::new(path.clone(), files, config.max_age, config.spa_fallback);
-    HttpFallbackMeta::new(path, "StaticFilesModule", move |_| {
-        BoxEndpoint::new(from_poem(endpoint.clone()))
-    })
+    let endpoint = BoxEndpoint::new(StaticFilesEndpoint::new(
+        path.clone(),
+        files,
+        config.max_age,
+        config.spa_fallback,
+    ));
+    HttpFallbackMeta::new(path, "StaticFilesModule", move |_| endpoint.clone())
 }
 
 #[cfg(test)]

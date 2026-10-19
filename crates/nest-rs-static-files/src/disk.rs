@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use bytes::Bytes;
-use poem::http::HeaderValue;
+use nest_rs_http::HeaderValue;
 
 use crate::asset::{Asset, AssetBody, Found};
 use crate::config::StaticFilesConfig;
@@ -50,16 +50,26 @@ impl DiskRoot {
     pub(crate) async fn find(&self, path: &RequestPath<'_>, fallback: bool) -> io::Result<Found> {
         let root = Arc::clone(&self.root);
         let candidate = root.join(path.relative());
-        // `?` takes tokio's conversion, which says a panic without its payload.
-        tokio::task::spawn_blocking(move || match resolve(&root, &candidate)? {
+        blocking(move || match resolve(&root, &candidate)? {
             Found::Missing if fallback => Ok(match resolve(&root, &root)? {
                 Found::Asset(index) => Found::Fallback(index),
                 other => other,
             }),
             found => Ok(found),
         })
-        .await?
+        .await
     }
+}
+
+/// `work`, run on a thread that may block; a panic in it is an error saying
+/// so, its payload left to the panic hook.
+async fn blocking<T, F>(work: F) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    // `?` takes tokio's conversion, which says a panic without its payload.
+    tokio::task::spawn_blocking(work).await?
 }
 
 /// A candidate path, opened and held to the root.
@@ -184,5 +194,23 @@ fn or_missing<T>(result: io::Result<T>) -> io::Result<Option<T>> {
             Ok(None)
         }
         Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lookup that panics off the executor answers an error saying so,
+    /// never the panic's payload, which the panic hook has already filed.
+    #[tokio::test]
+    async fn a_lookup_that_panics_is_an_error_without_its_payload() {
+        let failed = blocking(|| -> io::Result<()> { panic!("payload-marker") })
+            .await
+            .expect_err("a panic is no answer");
+
+        let said = failed.to_string();
+        assert!(!said.contains("payload-marker"), "{said}");
+        assert!(said.contains("panicked"), "{said}");
     }
 }

@@ -1,14 +1,11 @@
 //! `OpenApiModule` — self-mounts `/api` (Swagger UI) + `/api-json` (the document)
 //! over the HTTP transport. Both endpoints are **public** (`Posture::Public`).
 
-use std::any::TypeId;
-
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{
     Collecting, Container, ContainerBuilder, Handler, Module, Posture, Registering,
 };
-use nest_rs_http::{HttpEndpointMeta, Method, join_path, version_path};
+use nest_rs_http::{HttpEndpointMeta, Method, declare_endpoint, join_path, version_path};
 
 use crate::config::OpenApiConfig;
 use crate::document::{Reported, build_document, versioned_documents};
@@ -95,17 +92,17 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
                 });
             }
             routes
-                .route_poem(Method::GET, SPEC_PATH, ui::spec_endpoint(default))
-                .route_poem(Method::GET, DOCS_PATH, ui::swagger_index)
-                .route_poem(Method::GET, CSS_PATH, ui::swagger_css)
-                .route_poem(Method::GET, BUNDLE_PATH, ui::swagger_bundle)
-                .route_poem(Method::GET, PRESET_PATH, ui::swagger_preset)
-                .route_poem(Method::GET, INITIALIZER_PATH, ui::swagger_initializer);
+                .route(Method::GET, SPEC_PATH, ui::spec_endpoint(default))
+                .route(Method::GET, DOCS_PATH, ui::swagger_index())
+                .route(Method::GET, CSS_PATH, ui::swagger_css())
+                .route(Method::GET, BUNDLE_PATH, ui::swagger_bundle())
+                .route(Method::GET, PRESET_PATH, ui::swagger_preset())
+                .route(Method::GET, INITIALIZER_PATH, ui::swagger_initializer());
             // OpenAPI keys operations by path, so a version the path does not
             // carry needs a document of its own.
             for version in versioned_documents(container) {
                 let spec = spec(container, &options, Some(&version), &mut reported);
-                routes.route_poem(
+                routes.route(
                     Method::GET,
                     &document_path(&version),
                     ui::spec_endpoint(spec),
@@ -127,15 +124,8 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
 
 /// The site the document and its UI answer as: public by design, a development
 /// surface no guard gates.
-static DOCUMENT: Handler = declare_handler(HandlerDeclaration {
-    unit: nest_rs_http::unit::REQUEST,
-    host: TypeId::of::<OpenApiModule>(),
-    host_name: "OpenApiModule",
-    method: "",
-    address: DOCS_PATH,
-    posture: Posture::Public,
-    meta: MetaLevels::default,
-});
+static DOCUMENT: Handler =
+    declare_endpoint::<OpenApiModule>("OpenApiModule", DOCS_PATH, Posture::Public);
 
 fn spec(
     container: &Container,

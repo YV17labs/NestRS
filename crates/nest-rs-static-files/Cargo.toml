@@ -17,8 +17,9 @@ nest-rs-core.workspace = true
 nest-rs-config.workspace = true
 # Mounts as the router's fallback through `HttpFallbackMeta`.
 nest-rs-http.workspace = true
-# The endpoint and its typed conditional headers; no poem type is public.
-poem.workspace = true
+# The conditional fields (RFC 9110 §13.1), read and compared as their grammar
+# says; no type of it is public.
+headers.workspace = true
 # `#[derive(Embed)]` and the trait the embedded source is read through,
 # re-exported so a use site names neither the crate nor a version.
 rust-embed.workspace = true

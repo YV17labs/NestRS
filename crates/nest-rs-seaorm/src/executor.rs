@@ -704,6 +704,17 @@ impl ConnectionTrait for Executor {
 }
 
 impl Executor {
+    /// The pool this handle's statements run on, a block's or a lazy
+    /// transaction's included; `None` inside a caller's own transaction.
+    pub(crate) fn pool(&self) -> Option<&DatabaseConnection> {
+        match self {
+            Executor::Pool(pool) => Some(pool),
+            Executor::Lazy(lazy) => lazy.pool(),
+            Executor::Savepoint(block) => block.root().pool(),
+            Executor::Txn(_) => None,
+        }
+    }
+
     /// The transaction of its own an atomic block on this pool runs on; `None`
     /// on a handle that is no pool.
     pub(crate) fn own_block(&self) -> Option<Arc<LazyTransaction>> {

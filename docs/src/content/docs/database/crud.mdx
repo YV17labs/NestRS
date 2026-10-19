@@ -229,7 +229,9 @@ the write a `404` (`NOT_FOUND`), a create the row-level re-check rolled back
 a `403` (`FORBIDDEN`), and a statement Postgres cancelled at its bound
 (`57014`, `<PREFIX>_SEAORM__STATEMENT_TIMEOUT_SECS`) a `503` (`UNAVAILABLE`),
 filed at `warn` — the server could not serve it in time, and another attempt
-may. Anything else is a `500` — `"internal error"` under
+may: as the request timeout's own `503` names the budget that ran out, it
+names the statement bound as its wait, `Retry-After` on HTTP and
+`retryAfterSeconds` on GraphQL. Anything else is a `500` — `"internal error"` under
 `INTERNAL` on GraphQL — and its error is filed once at `error` on
 `nest_rs::orm`, said by its SQLSTATE and the constraint, table and column the
 server named. The server's own message never reaches the client or the log,

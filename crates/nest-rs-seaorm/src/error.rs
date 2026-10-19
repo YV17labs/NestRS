@@ -411,10 +411,28 @@ impl nest_rs_core::ToProblem for ServiceError {
             Self::Conflict(_) => Problem::new(409, code::CONFLICT),
             Self::Forbidden(_) => Problem::new(403, code::FORBIDDEN),
             Self::NotFound(_) => Problem::new(404, code::NOT_FOUND),
-            Self::Db(_) if self.is_unavailable() => Problem::new(503, code::UNAVAILABLE),
+            Self::Db(_) if self.is_unavailable() => unavailable(),
             Self::Db(_) | Self::Masking { .. } | Self::Internal { .. } => return None,
         };
         Some(problem.with_detail(self.to_string()))
+    }
+}
+
+/// What a statement Postgres cancelled answers on every edge: `503`,
+/// `UNAVAILABLE`, and the wait the HTTP edge's own deadline names — the budget
+/// that ran out, here the statement bound of the pool the unit ran on, in whole
+/// seconds rounded up. Outside a unit, or on a pool with no bound, no wait is
+/// invented.
+fn unavailable() -> nest_rs_core::Problem {
+    let problem = nest_rs_core::Problem::new(503, nest_rs_core::problem::code::UNAVAILABLE);
+    let bound = crate::executor::current_executor()
+        .and_then(|executor| executor.pool().and_then(crate::module::statement_bound));
+    match bound {
+        Some(bound) => {
+            let whole = bound.as_secs() + u64::from(bound.subsec_nanos() > 0);
+            problem.with_retry_after(u32::try_from(whole.max(1)).unwrap_or(u32::MAX))
+        }
+        None => problem,
     }
 }
 
@@ -447,7 +465,7 @@ fn crud_problem(err: &DbErr) -> nest_rs_core::Problem {
                 error = %nest_rs_core::error_message(err),
                 "crud operation unavailable",
             );
-            Problem::new(503, code::UNAVAILABLE)
+            unavailable()
         }
         DbOutcome::Internal if matches!(err, DbErr::RecordNotInserted) => {
             Problem::new(403, code::FORBIDDEN)
@@ -523,6 +541,29 @@ mod graphql {
             );
         }
 
+        #[tokio::test]
+        async fn a_cancelled_statement_tells_a_graphql_client_its_wait() {
+            use crate::error::tests::{
+                STATEMENT_BOUND, cancelled_statement, on_a_pool_bounding_statements,
+            };
+
+            let (crud, service) = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
+                (
+                    crud_error(cancelled_statement()),
+                    nest_rs_graphql::problem_error(&crate::ServiceError::from(
+                        cancelled_statement(),
+                    )),
+                )
+            })
+            .await;
+            for error in [crud, service] {
+                let extensions =
+                    serde_json::to_value(&error.extensions).expect("extensions serialize");
+                assert_eq!(extensions[CODE_EXTENSION], code::UNAVAILABLE.as_str());
+                assert_eq!(extensions["retryAfterSeconds"], 3, "{extensions}");
+            }
+        }
+
         #[test]
         fn anything_else_answers_opaquely_and_files_its_error_once_without_the_value() {
             let logs = nest_rs_testing::LogCapture::install();
@@ -581,9 +622,8 @@ mod graphql {
 
 #[cfg(feature = "http")]
 mod http {
-    use std::borrow::Cow;
-
-    use nest_rs_core::ToProblem;
+    use nest_rs_core::problem::code;
+    use nest_rs_core::{Problem, ToProblem};
     use nest_rs_http::{
         HttpError, IntoResponse, ProblemDetails, Response, ResponseError, StatusCode,
     };
@@ -606,22 +646,22 @@ mod http {
             }
         }
 
-        /// Render the failure as an RFC 9457 `application/problem+json` whose
-        /// `detail` is a business variant's message, or the constant every
-        /// edge answers an opaque one with; the one place an opaque variant's
+        /// Render the failure as an RFC 9457 `application/problem+json`: the
+        /// problem it says, with its code, its wait and a validation failure's
+        /// `errors` member, or an opaque one's `500` under `INTERNAL`, as a
+        /// `#[crud]` operation answers it; the one place an opaque variant's
         /// cause is logged.
         fn as_response(&self) -> Response {
-            let status = self.status();
             log_opaque(self);
-            let detail = self.to_problem().map_or(
-                Cow::Borrowed(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
-                |problem| problem.client_message(),
-            );
-            let mut problem = ProblemDetails::from_status(status).with_detail(detail);
-            if let Some(fields) = self.field_errors() {
-                problem = problem.with_extension("errors", fields);
+            let Some(problem) = self.to_problem() else {
+                return ResponseError::as_response(&Problem::new(500, code::INTERNAL));
+            };
+            match self.field_errors() {
+                Some(fields) => ProblemDetails::from_problem(&problem)
+                    .with_extension("errors", fields)
+                    .into_response(),
+                None => ResponseError::as_response(&problem),
             }
-            problem.into_response()
         }
     }
 
@@ -811,7 +851,14 @@ mod http {
         }
 
         async fn body_json(err: ServiceError) -> (StatusCode, Option<String>, serde_json::Value) {
-            let resp = err.as_response();
+            body_of(err.as_response()).await
+        }
+
+        async fn body_json_of(err: HttpError) -> (StatusCode, Option<String>, serde_json::Value) {
+            body_of(err.into_response()).await
+        }
+
+        async fn body_of(resp: Response) -> (StatusCode, Option<String>, serde_json::Value) {
             let status = resp.status();
             let ct = resp
                 .headers()
@@ -837,6 +884,8 @@ mod http {
             assert_eq!(body["detail"], "insufficient credit balance");
         }
 
+        /// An opaque failure answers the document a `#[crud]` operation
+        /// answers for the same class: its code, and no detail.
         #[tokio::test]
         async fn db_error_renders_a_500_problem_without_leaking_the_driver_detail() {
             let (status, ct, body) = body_json(ServiceError::Db(sea_orm::DbErr::Custom(
@@ -846,7 +895,13 @@ mod http {
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
             assert_eq!(ct.as_deref(), Some("application/problem+json"));
             assert_eq!(body["status"], 500);
-            assert_eq!(body["detail"], nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+            assert_eq!(body["code"], code::INTERNAL.as_str(), "{body}");
+            assert!(body.get("detail").is_none(), "a 5xx says no detail: {body}");
+            let (_, _, crud) = body_json_of(crud_error(sea_orm::DbErr::Custom(
+                "SELECT password_hash FROM user".into(),
+            )))
+            .await;
+            assert_eq!(body, crud);
             assert!(
                 !body.to_string().contains("password_hash"),
                 "the driver message must not reach the wire: {body}",
@@ -854,7 +909,7 @@ mod http {
         }
 
         #[tokio::test]
-        async fn an_internal_500_answers_the_constant_and_files_its_detail_and_cause() {
+        async fn an_internal_500_answers_its_code_and_files_its_detail_and_cause() {
             let logs = nest_rs_testing::LogCapture::install();
             let refused = std::io::Error::other("the key store refused the connection");
             let (status, _, body) = body_json(ServiceError::internal_because(
@@ -863,7 +918,8 @@ mod http {
             ))
             .await;
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-            assert_eq!(body["detail"], nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+            assert_eq!(body["code"], code::INTERNAL.as_str(), "{body}");
+            assert!(body.get("detail").is_none(), "{body}");
             assert!(!body.to_string().contains("key store"), "{body}");
 
             let event = logs.expect_one(crate::target::ORM, "service error surfaced as 500");
@@ -876,16 +932,35 @@ mod http {
             );
         }
 
+        /// A cancelled statement answers the class every edge names it by and,
+        /// like the edge's own deadline, the bound that ran out as its wait.
         #[tokio::test]
         async fn a_statement_cancelled_at_its_bound_renders_a_503_said_at_warn() {
+            use crate::error::tests::{
+                STATEMENT_BOUND, cancelled_statement, on_a_pool_bounding_statements,
+            };
+
             let logs = nest_rs_testing::LogCapture::install();
-            let (status, _, body) = body_json(ServiceError::from(
-                crate::error::tests::cancelled_statement(),
-            ))
+            let (service, crud) = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
+                (
+                    ServiceError::from(cancelled_statement()).as_response(),
+                    crud_error(cancelled_statement()).into_response(),
+                )
+            })
             .await;
-            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-            assert_eq!(body["status"], 503);
-            assert_eq!(body["detail"], nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+            for resp in [service, crud] {
+                assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert_eq!(resp.headers()[nest_rs_http::header::RETRY_AFTER], "3");
+                let body: serde_json::Value =
+                    serde_json::from_slice(&resp.into_body().into_bytes().await.expect("a body"))
+                        .expect("problem json");
+                assert_eq!(body["status"], 503);
+                assert_eq!(
+                    body["code"],
+                    nest_rs_core::problem::code::UNAVAILABLE.as_str()
+                );
+                assert!(body.get("detail").is_none(), "a 5xx says no detail: {body}");
+            }
             let line = logs.expect_one(crate::target::ORM, "service error surfaced as 503");
             assert_eq!(line.level, "warn");
             assert!(
@@ -893,14 +968,27 @@ mod http {
                     .is_some_and(|said| said.contains("57014")),
                 "{line:?}"
             );
-            assert_eq!(
-                crud_error(crate::error::tests::cancelled_statement())
-                    .into_response()
-                    .status(),
-                StatusCode::SERVICE_UNAVAILABLE,
-            );
             let crud = logs.expect_one(crate::target::ORM, "crud operation unavailable");
             assert_eq!(crud.level, "warn");
+        }
+
+        /// A business variant answers its code beside its sentence, as a
+        /// `#[crud]` operation's and every other edge's do.
+        #[tokio::test]
+        async fn a_business_variant_answers_its_code() {
+            for (error, code) in [
+                (
+                    ServiceError::conflict("taken"),
+                    nest_rs_core::problem::code::CONFLICT,
+                ),
+                (
+                    ServiceError::NotFound("post".into()),
+                    nest_rs_core::problem::code::NOT_FOUND,
+                ),
+            ] {
+                let (_, _, body) = body_json(error).await;
+                assert_eq!(body["code"], code.as_str(), "{body}");
+            }
         }
 
         #[tokio::test]
@@ -1104,6 +1192,73 @@ mod tests {
         assert!(
             crate::retry::is_transient_failure(&cancelled_statement()),
             "a fresh attempt may meet the statement in its bound"
+        );
+    }
+
+    /// `read` under a unit's ambient executor over a pool whose statements
+    /// Postgres cancels past `bound`, which a cancelled statement's wait is
+    /// read off. Nothing is dialled.
+    pub(crate) async fn on_a_pool_bounding_statements<T>(
+        bound: std::time::Duration,
+        read: impl FnOnce() -> T,
+    ) -> T {
+        let mut options = sea_orm::ConnectOptions::new("postgres://nestrs@127.0.0.1:1/nowhere");
+        options.connect_lazy(true).statement_timeout(bound);
+        let pool = sea_orm::Database::connect(options)
+            .await
+            .expect("a lazy pool dials nothing");
+        crate::executor::with_executor(crate::executor::Executor::Pool(pool), async move { read() })
+            .await
+    }
+
+    /// The bound every edge's test below runs its unit's pool under: a wait of
+    /// three whole seconds, rounded up.
+    pub(crate) const STATEMENT_BOUND: std::time::Duration = std::time::Duration::from_millis(2500);
+
+    /// A statement Postgres cancelled waits the bound that cut it, as the HTTP
+    /// edge's deadline names the budget that ran out; outside a unit no wait is
+    /// invented.
+    #[tokio::test]
+    async fn a_cancelled_statement_waits_the_bound_of_the_pool_it_ran_on() {
+        let problem = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
+            nest_rs_core::ToProblem::to_problem(&ServiceError::from(cancelled_statement()))
+        })
+        .await
+        .expect("an unavailable answer");
+        assert_eq!(
+            (problem.status(), problem.code(), problem.retry_after()),
+            (503, nest_rs_core::problem::code::UNAVAILABLE, Some(3)),
+        );
+        let outside =
+            nest_rs_core::ToProblem::to_problem(&ServiceError::from(cancelled_statement()))
+                .expect("an unavailable answer");
+        assert_eq!(outside.retry_after(), None);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_statement_tells_a_websocket_client_its_wait() {
+        let reply = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
+            nest_rs_ws::ErrorReport(ServiceError::from(cancelled_statement())).into_frame("sync")
+        })
+        .await;
+        let nest_rs_ws::WsReply::Error(frame) = reply else {
+            panic!("a handler's error answers an error frame");
+        };
+        assert_eq!(
+            frame.errors,
+            Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 3 })),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_statement_tells_an_mcp_client_its_wait() {
+        let error = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
+            nest_rs_mcp::problem_error(&ServiceError::from(cancelled_statement()))
+        })
+        .await;
+        assert_eq!(
+            error.data,
+            Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 3 })),
         );
     }
 

@@ -115,7 +115,7 @@ pub(crate) fn budgets(reach: BudgetReach) -> [Budget; 2] {
 /// How long a statement on `db`'s pool runs before Postgres cancels it, read
 /// off the options its connections open with; `None` for a connection holding
 /// no pool, or one opened without the bound.
-fn statement_bound(db: &DatabaseConnection) -> Option<Duration> {
+pub(crate) fn statement_bound(db: &DatabaseConnection) -> Option<Duration> {
     match db.inner {
         DatabaseConnectionType::SqlxPostgresPoolConnection(_) => statement_timeout_in(
             db.get_postgres_connection_pool()

@@ -134,14 +134,14 @@ Everything above decides how an error is *shaped*. `Opaque` decides whether
 the client sees it at all.
 
 `ServiceError` is wire-safe by construction — its `Db`, `Masking` and
-`Internal` variants answer the constant `"internal error"` and display no
-cause, even wrapped in an error of yours, and its log line says the
-database's failure by its SQLSTATE, never by the server's message, which
-quotes the input it refused. A failure of your own that is no database error
-keeps its cause the same way:
+`Internal` variants answer a `500` whose `code` is `INTERNAL`, with no
+`detail`, and display no cause, even wrapped in an error of yours; its log
+line says the database's failure by its SQLSTATE, never by the server's
+message, which quotes the input it refused. A failure of your own that is no
+database error keeps its cause the same way:
 `ServiceError::internal_because("could not sign the export", err)` answers
-`"internal error"` whatever `err` holds, and the operator's line reads the
-detail, then `err`'s chain. **A feature's own error
+that `500` whatever `err` holds, and the operator's line reads the detail,
+then `err`'s chain. **A feature's own error
 type has no such discipline imposed on it**, and a `Display` that wraps a
 driver error carries SQL, column names and sometimes row values into the
 response body.
@@ -173,7 +173,7 @@ on a handler that calls a service without a single line of conversion code:
 
 | Error | Source | Renders as |
 |-------|--------|------------|
-| `nest_rs::seaorm::ServiceError` | Repo, CrudService, dataloader | `problem+json` — `422` validation/invalid, `409` conflict (a unique violation among them), `403` forbidden, `404` not found, `500` else (validation field errors ride as `errors`) |
+| `nest_rs::seaorm::ServiceError` | Repo, CrudService, dataloader | `problem+json` with its `code` — `422` validation/invalid, `409` conflict (a unique violation among them), `403` forbidden, `404` not found, `503` a statement Postgres cancelled at its bound (with the bound as its `Retry-After`), `500` else (validation field errors ride as `errors`) |
 | `nest_rs::oauth::server::TokenError` | OAuth token endpoint | `ResponseError` — `application/json` per RFC 6749 §5.2 — `400` bad grant/scope, `401` `invalid_client`, `500` signing/backend |
 | `nest_rs::authn::AuthError` | Strategy authentication | `ResponseError` — `401` challenge (`503`, with a `Retry-After` when known, when the identity store or provider is unavailable) |
 

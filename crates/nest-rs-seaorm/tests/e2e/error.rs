@@ -3,10 +3,17 @@
 //! unique violation is a conflict — what no unit test can build, `PgDatabaseError`
 //! having no public constructor.
 
-use nest_rs_core::error_message;
-use nest_rs_seaorm::{DbOutcome, ServiceError};
+use std::time::Duration;
+
+use nest_rs_core::problem::code;
+use nest_rs_core::{error_message, module};
+use nest_rs_http::{StatusCode, header};
+use nest_rs_seaorm::{DbOutcome, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
+use nest_rs_testing::TestApp;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
 use uuid::Uuid;
+
+use crate::harness::{ProbeController, ProbeHandler, answered};
 
 const TABLE: &str = "error_probe_accounts";
 const UNIQUE: &str = "error_probe_accounts_email_key";
@@ -122,4 +129,38 @@ async fn a_not_null_violation_names_its_column() {
     for named in [format!("table \"{TABLE}\""), "column \"email\"".to_owned()] {
         assert!(said.contains(&named), "{named} in {said}");
     }
+}
+
+#[module(
+    imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule],
+    providers = [ProbeController],
+)]
+struct BoundedProbeModule;
+
+/// A statement Postgres cancels at its pool's bound, answered through a route:
+/// the wait the client reads is the bound of the pool the request's unit ran
+/// on, read where the edge renders the error.
+#[tokio::test]
+async fn a_route_whose_statement_is_cancelled_answers_its_pools_bound_as_the_wait() {
+    let app = TestApp::builder()
+        .provide(crate::module::bounding_statements(Duration::from_secs(1)))
+        .provide(ProbeHandler::new(|| async {
+            nest_rs_seaorm::current_executor()
+                .expect("the handler runs with an ambient executor")
+                .execute_unprepared("SELECT pg_sleep(3)")
+                .await
+                .map_err(ServiceError::from)?;
+            Ok(answered(StatusCode::OK))
+        }))
+        .module::<BoundedProbeModule>()
+        .build()
+        .await
+        .expect("the probe app boots against live Postgres");
+
+    let resp = app.http().post("/probe").send().await;
+    resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    resp.assert_header(header::RETRY_AFTER, "1");
+    let body = resp.json().await.value().deserialize::<serde_json::Value>();
+    assert_eq!(body["code"], code::UNAVAILABLE.as_str(), "{body}");
+    assert!(body.get("detail").is_none(), "a 5xx says no detail: {body}");
 }

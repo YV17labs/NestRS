@@ -71,7 +71,7 @@ impl<E: EntityTrait> Repo<E> {
     /// pre-filter, committing an out-of-scope row.
     pub fn conn() -> Result<Executor, DbErr> {
         current_executor().ok_or_else(|| {
-            // Logged: on the wire it is the constant `"internal error"`.
+            // Logged: on the wire it is the opaque `INTERNAL` answer.
             const HINT: &str = "a Repo query runs against the executor of the unit of work its \
                  edge runs it in — an HTTP request, a WS message or hook, an MCP operation, a \
                  queue attempt, a scheduled tick, a lifecycle hook — which each opens through \

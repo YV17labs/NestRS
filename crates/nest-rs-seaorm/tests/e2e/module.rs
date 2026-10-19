@@ -122,7 +122,7 @@ async fn a_pool_no_executor_installs_is_not_held_under_a_strategy_injecting_noth
 }
 
 /// A pool whose statements Postgres cancels past `statement_timeout`.
-fn bounding_statements(bound: Duration) -> SeaOrmConfig {
+pub(crate) fn bounding_statements(bound: Duration) -> SeaOrmConfig {
     SeaOrmConfig {
         statement_timeout_secs: Some(bound.as_secs()),
         ..config(None)

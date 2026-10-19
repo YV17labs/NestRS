@@ -330,7 +330,9 @@ fn merge_subscription_type_info<T: SubscriptionType>(
 ///
 /// Field names come from `type_info`, the source `merge_type_info` reads, so
 /// async-graphql's `rename_rule` is not reimplemented. Returns the first
-/// reachable resolver that declared an `#[entity]`.
+/// reachable resolver whose types key an entity — an `#[entity]`, or an
+/// object it returns carrying async-graphql's own `#[graphql(entity)]` — which
+/// makes the schema serve the federation fields.
 pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static str>, String> {
     let reachable = container.get::<ReachableProviders>().map(|p| p.0.clone());
     // A scratch registry: registering is a side effect the served schema must not see.
@@ -343,7 +345,7 @@ pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static 
     let mut claims: HashMap<String, Vec<(String, &'static str)>> = HashMap::new();
     // `#[entity]` methods the registry keyed nothing for.
     let mut unkeyed: Vec<String> = Vec::new();
-    let mut first_entity: Option<&'static str> = None;
+    let mut first_keyed: Option<&'static str> = None;
 
     for reg in inventory::iter::<GraphqlResolverRegistration>() {
         if let Some(set) = reachable.as_ref()
@@ -356,9 +358,11 @@ pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static 
         let before = keyed_types(&scratch);
         let type_info = (reg.type_info)(&mut scratch);
         let after = keyed_types(&scratch);
+        if first_keyed.is_none() && serves_entities(&scratch) {
+            first_keyed = Some(reg.resolver_name);
+        }
         // `add_keys` is a silent no-op on anything not an object or interface.
         for (method, resolved) in (reg.entities)() {
-            first_entity.get_or_insert(reg.resolver_name);
             if !after.contains_key(&resolved) {
                 unkeyed.push(format!(
                     "`{}::{method}` resolves {resolved:?}",
@@ -458,7 +462,24 @@ pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static 
         ));
     }
 
-    Ok(first_entity)
+    Ok(first_keyed)
+}
+
+/// Whether async-graphql serves `_service` and `_entities` for the types
+/// `registry` holds, `federation` aside: 7.2.1's `Registry::has_entities`,
+/// crate-private there.
+fn serves_entities(registry: &Registry) -> bool {
+    registry.types.values().any(|ty| match ty {
+        MetaType::Object {
+            keys: Some(keys),
+            resolvable: true,
+            ..
+        }
+        | MetaType::Interface {
+            keys: Some(keys), ..
+        } => !keys.is_empty(),
+        _ => false,
+    })
 }
 
 /// The claim pairs on one type whose key shapes are neither equal nor
@@ -730,9 +751,9 @@ pub(crate) fn build_schema(
         container.clone(),
         batches.clone(),
     ));
-    // Whatever `config.federation` says: async-graphql serves those fields from
-    // the keys alone.
-    if let Some(gate) = crate::federation::FederationExtensionFactory::for_config(config) {
+    if let Some(gate) =
+        crate::federation::FederationExtensionFactory::for_schema(&container, config)
+    {
         builder = builder.extension(gate);
     }
     if let Some(d) = config.max_depth {

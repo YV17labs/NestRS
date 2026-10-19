@@ -323,8 +323,9 @@ developer's method, so a bare `T` answers through a `Result` like any other
 
 **GraphQL's federation root fields are sites of their own.** `_service` and
 `_entities` resolve in async-graphql's own root, out of reach of any
-`#[operations]` body, so a subgraph's schema `Extension` dispatches each
-through its own `Site`, a `graphql.field` unit of role `federation`: the
+`#[operations]` body, so a schema `Extension` — a subgraph's, and any
+schema's under a guard pool, the condition an `#[entity]`'s site reads to skip
+it — dispatches each through its own `Site`, a `graphql.field` unit of role `federation`: the
 app-wide pool its whole guard stage, since the field belongs to no resolver,
 the app's filters and interceptors around it. An `#[entity]` body therefore composes everything but the pool, and a
 `#[field_resolver]` too, naming where the pool ran (the root field that produced
@@ -339,8 +340,12 @@ invisible. It is a role, not a modifier (with `#[mutation]` or `#[subscription]`
 it is a compile error), and it refuses `bind = Service` (an existence oracle on a
 field addressed by key), `key = …` (inferred from the arguments), a
 `#[graphql(…)]` of its own (it would replace the one the decorator emits), and an
-empty argument list. The boot refuses an `#[entity]` without
-`GraphqlConfig::federation`, one whose type registers no key, and two claims
+empty argument list; every other role refuses async-graphql's own
+`#[graphql(entity)]`, which would key a type with none of this. The boot refuses
+a keyed schema without `GraphqlConfig::federation` — an `#[entity]`, or an object
+a field returns carrying `#[graphql(entity)]`, since async-graphql serves the
+federation fields from a key alone — an `#[entity]` whose type registers no
+key, and two claims
 whose **key shapes** are equal or overlap, within a resolver or across them:
 `find_entity` matches by the presence of top-level key fields, so overlapping
 shapes make one body unreachable and run the other's posture — narrower than

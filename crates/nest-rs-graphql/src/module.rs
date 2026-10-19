@@ -141,22 +141,23 @@ fn wire_schema(container: &Container) -> anyhow::Result<()> {
     // Two contributions claiming one name fail the boot, before the mount
     // composes a schema whose SDL and dispatch would disagree.
     //
-    // async-graphql serves `_service` and `_entities` as soon as an entity
-    // resolver calls `add_keys` (`schema.rs`'s `enable_federation ||
-    // has_entities()`), so an `#[entity]` without `federation` is refused.
+    // async-graphql serves `_service` and `_entities` as soon as a type is
+    // keyed (`schema.rs`'s `enable_federation || has_entities()`), so a keyed
+    // schema without `federation` is refused.
     if let Some(resolver) = check_operations(container).map_err(anyhow::Error::msg)?
         && !config.federation
     {
         let introspection = nest_rs_config::var_name("graphql", "DISABLE_INTROSPECTION");
         let federation_var = nest_rs_config::var_name("graphql", "FEDERATION");
         anyhow::bail!(
-            "`{resolver}` declares an `#[entity]`, but this schema is not configured as a \
-             subgraph. An entity resolver *is* the federation surface: async-graphql serves \
-             `_service` and `_entities` the moment one exists, so the endpoint would publish \
-             its own SDL — `_service` is not covered by `{introspection}` — while the \
-             committed SDL carried the federation plumbing without the `@key` a router needs. \
-             Set `GraphqlConfig::federation = true` (or `{federation_var}=true`) and serve it \
-             behind a router, or remove the `#[entity]`."
+            "`{resolver}` keys an entity — an `#[entity]`, or an object it returns carrying \
+             `#[graphql(entity)]` — but this schema is not configured as a subgraph. An \
+             entity resolver *is* the federation surface: async-graphql serves `_service` and \
+             `_entities` the moment one exists, so the endpoint would publish its own SDL — \
+             `_service` is not covered by `{introspection}` — while the committed SDL carried \
+             the federation plumbing without the `@key` a router needs. Set \
+             `GraphqlConfig::federation = true` (or `{federation_var}=true`) and serve it \
+             behind a router, or remove the key."
         );
     }
     compose_sites(container)?;

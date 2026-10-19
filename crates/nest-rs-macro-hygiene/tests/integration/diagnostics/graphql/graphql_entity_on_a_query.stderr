@@ -1,0 +1,5 @@
+error: `#[graphql(entity)]` beside `#[query]` keys its type behind the decorator's back: async-graphql then serves `_service` and `_entities` whatever `GraphqlConfig::federation` says, outside the guard pool the federation fields run and the boot's subgraph check. Write the method as an `#[entity]`, which declares its posture and is served only by a subgraph
+  --> tests/integration/diagnostics/graphql/graphql_entity_on_a_query.rs:15:15
+   |
+15 |     #[graphql(entity)]
+   |               ^^^^^^

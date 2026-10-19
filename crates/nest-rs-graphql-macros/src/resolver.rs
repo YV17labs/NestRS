@@ -787,6 +787,34 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
     Ok(())
 }
 
+/// async-graphql's `#[graphql(entity)]` on any role but `#[entity]`: it keys
+/// the returned type, so the schema serves `_service` and `_entities` from a
+/// method no entity posture, federation site or boot check reads.
+fn refuse_entity_by_hand(role: &Attribute, attrs: &[Attribute]) -> syn::Result<()> {
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident("graphql")) {
+        let Ok(list) = attr.meta.require_list() else {
+            continue;
+        };
+        let metas = list.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        )?;
+        if let Some(entity) = metas.iter().find(|meta| meta.path().is_ident("entity")) {
+            let role = key_as_written(role.path());
+            return Err(syn::Error::new_spanned(
+                entity,
+                format!(
+                    "`#[graphql(entity)]` beside `#[{role}]` keys its type behind the \
+                     decorator's back: async-graphql then serves `_service` and `_entities` \
+                     whatever `GraphqlConfig::federation` says, outside the guard pool the \
+                     federation fields run and the boot's subgraph check. Write the method as \
+                     an `#[entity]`, which declares its posture and is served only by a subgraph"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `#[operations]` on the impl: split `#[query]`/`#[mutation]` methods into
 /// generated `#[Object]` roots and register them.
 fn resolver_impl(item: ItemImpl) -> TokenStream {
@@ -877,6 +905,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         let is_entity = verb_attr.path().is_ident("entity");
         if is_entity {
             entity_refusals(&verb_attr, &method.attrs, &method.sig)?;
+        } else {
+            refuse_entity_by_hand(&verb_attr, &method.attrs)?;
         }
 
         let Layers {

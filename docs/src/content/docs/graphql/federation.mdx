@@ -81,7 +81,10 @@ role specifically.
 
 `#[entity]` is a role, not a modifier: it cannot be combined with `#[mutation]`
 or `#[subscription]`, because `_entities` lives on the `Query` root and no
-other root has it. Writing both is a compile error naming both.
+other root has it. Writing both is a compile error naming both. The reverse
+holds too: async-graphql's own `#[graphql(entity)]` beside `#[query]`,
+`#[mutation]`, `#[subscription]` or `#[field_resolver]` is a compile error, since
+it would key a type with none of what an `#[entity]` owes.
 
 ## Turning it on
 
@@ -95,13 +98,14 @@ GraphqlModule::for_root(GraphqlConfig {
 or `<PREFIX>_GRAPHQL__FEDERATION=true` — the same dual path every module config
 has. Default **off**.
 
-**The flag does not switch the federation surface on — the `#[entity]` does.**
-async-graphql serves `_service` and `_entities` the moment one resolver has
-registered its keys, whatever the flag says. So the two are declared together or
-not at all: an `#[entity]` with `federation: false` **fails the boot**, naming
-the resolver. Without that check the flag would be a comment, and an app that
-added one entity would publish its own SDL while its config said it was not a
-subgraph.
+**The flag does not switch the federation surface on — a key does.**
+async-graphql serves `_service` and `_entities` the moment a type in the schema
+is keyed, whatever the flag says. So the two are declared together or not at
+all: a keyed schema with `federation: false` **fails the boot**, naming the
+resolver whose types key it — an `#[entity]`, or an object an operation returns
+that carries async-graphql's own `#[graphql(entity)]`. Without that check the
+flag would be a comment, and an app that added one entity would publish its own
+SDL while its config said it was not a subgraph.
 
 What the flag itself decides:
 
@@ -150,7 +154,9 @@ overlaps `@key(fields: "id")`.
 *above* the merged root this framework composes — so the chain `#[operations]`
 emits inside a resolver body is not where they are gated. **The app-wide guard
 pool runs in front of both**, once per field, through a schema extension
-`GraphqlModule` installs. A `use_guards_global([AuthnGuard])` therefore refuses
+`GraphqlModule` installs on a subgraph and wherever the app lists a pool. Each
+field is a `graphql.field` unit of role `federation`, inside the app's exception
+filters and interceptors. A `use_guards_global([AuthnGuard])` therefore refuses
 `_service` and `_entities` exactly as it refuses a `#[query]`, with the same
 native GraphQL error frame.
 

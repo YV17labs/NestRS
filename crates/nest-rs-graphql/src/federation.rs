@@ -33,7 +33,7 @@ use nest_rs_guards::__private::resolve_global_chain;
 use nest_rs_guards::GuardSpecs;
 
 use crate::config::GraphqlConfig;
-use crate::error::FieldFailure;
+use crate::error::{FieldFailure, Unserved, opaque_error};
 use crate::operation::{FieldGuardStage, FieldUnit, Floor, ROOT_FIELD, in_field_unit};
 use crate::view::FieldRole;
 
@@ -104,19 +104,22 @@ pub(crate) fn compose_sites(container: &Container) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Installs [`FederationExtension`] on a subgraph's schema.
+/// Installs [`FederationExtension`] on the served schema.
 pub(crate) struct FederationExtensionFactory {
     max_representations: Option<usize>,
 }
 
 impl FederationExtensionFactory {
-    /// `None` unless the schema is a subgraph: only a subgraph serves the
-    /// federation fields, and an idle extension costs every field a boxed
-    /// indirection.
-    pub(crate) fn for_config(config: &GraphqlConfig) -> Option<Self> {
+    /// `None` when the schema is no subgraph and the app lists no guard pool:
+    /// an idle extension costs every field a boxed indirection. A pool installs
+    /// it whatever `federation` says, so `_entities` runs the pool wherever an
+    /// `#[entity]`'s own site skips it ([`gate_runs`]); outside a subgraph the
+    /// boot refuses a keyed schema, the one async-graphql would serve the
+    /// federation fields from.
+    pub(crate) fn for_schema(container: &Container, config: &GraphqlConfig) -> Option<Self> {
         // A pinned `Some(0)` never passes through `ConfigService::count`, which
         // maps the environment's `0` to unlimited.
-        config.federation.then(|| Self {
+        (config.federation || gate_runs(container)).then(|| Self {
             max_representations: config.max_representations.filter(|max| *max > 0),
         })
     }
@@ -191,11 +194,15 @@ impl Extension for FederationExtension {
             ("Query", ENTITIES_FIELD) => &ENTITIES_SITE,
             _ => return next.run(ctx, info).await,
         };
-        let Some(container) = ctx.data_opt::<Container>() else {
-            return next.run(ctx, info).await;
-        };
         let position = info.field.name.pos;
         let field = info.name;
+        // Fails closed: without the container there is no site to run it on.
+        let Some(container) = ctx.data_opt::<Container>() else {
+            let unserved = Unserved {
+                field: site.handler().address(),
+            };
+            return Err(opaque_error(&unserved).into_server_error(position));
+        };
         let unit = FieldUnit::new(site, container, OperationType::Query, FieldRole::Federation);
         let tail = move || async move {
             next.run(ctx, info).await.map_err(|answered| {
@@ -352,4 +359,51 @@ fn visit_root_fields(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn ping(&self) -> bool {
+            true
+        }
+    }
+
+    /// A schema `GraphqlModule` did not build carries no container: the
+    /// federation fields are refused rather than served past their guards.
+    #[tokio::test]
+    async fn a_federation_field_without_a_container_is_refused_opaquely() {
+        let schema = Schema::build(Query, EmptyMutation, EmptySubscription)
+            .enable_federation()
+            .extension(FederationExtensionFactory {
+                max_representations: None,
+            })
+            .finish();
+        let logs = LogCapture::install();
+
+        let response = schema.execute(Request::new("{ _service { sdl } }")).await;
+
+        let body = serde_json::to_value(&response).expect("a response serializes");
+        assert!(!body.to_string().contains("type Query"), "{body}");
+        assert_eq!(
+            response.errors.first().map(|error| error.message.as_str()),
+            Some(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
+            "{body}",
+        );
+        let line = logs.expect_one(crate::TARGET, "graphql operation failed");
+        assert!(
+            line.field("error")
+                .is_some_and(|error| error.contains(SERVICE_FIELD)),
+            "{:?}",
+            line.fields,
+        );
+    }
 }

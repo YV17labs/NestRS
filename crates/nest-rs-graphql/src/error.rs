@@ -267,6 +267,17 @@ pub(crate) struct Unprovided {
     pub(crate) provider: &'static str,
 }
 
+/// A federation field reached on a schema that carries no container, so no
+/// site to run it on: refused rather than served past its guards.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "the schema carries no container, so `{field}` has no site to run on — serve it through \
+     GraphqlModule, which attaches one"
+)]
+pub(crate) struct Unserved {
+    pub(crate) field: &'static str,
+}
+
 /// What a field whose unit failed answers: an exception filter's problem over
 /// whatever it wrote, else the answer it wrote, else the edge's one rule —
 /// each filing the chain it keeps from the client.

@@ -1367,3 +1367,98 @@ async fn an_unselected_operation_does_not_trip_the_ceiling() {
         "the selected operation runs; the ceiling belongs to the one that does: {body}",
     );
 }
+
+/// async-graphql serves `_service` and `_entities` from a key alone, whatever
+/// `federation` says, and a key can come from an object an operation returns:
+/// such a schema is refused outside a subgraph, and a pool runs in front of
+/// the federation fields wherever they are served.
+mod keyed_outside_a_subgraph {
+    use std::any::TypeId;
+
+    use async_graphql::{Executor, Object, Request};
+    use nest_rs_core::{Container, ReachableProviders, module};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+    use nest_rs_guards::{GuardSpecs, guard};
+    use nest_rs_testing::TestApp;
+
+    use super::{Closed, Widget};
+
+    /// An object keying [`Widget`] with async-graphql's own attribute, which
+    /// `#[operations]` never reads.
+    struct Catalog;
+
+    #[Object]
+    impl Catalog {
+        async fn name(&self) -> &'static str {
+            "catalog"
+        }
+
+        #[graphql(entity)]
+        async fn find_widget_by_id(&self, id: i32) -> Widget {
+            Widget {
+                id,
+                label: "keyed by hand".into(),
+            }
+        }
+    }
+
+    #[resolver]
+    struct CatalogResolver;
+
+    #[operations]
+    impl CatalogResolver {
+        #[query]
+        #[public]
+        async fn catalog(&self) -> Catalog {
+            Catalog
+        }
+    }
+
+    #[module(providers = [CatalogResolver, Closed])]
+    struct CatalogProviders;
+
+    #[module(imports = [GraphqlModule::for_root(None), CatalogProviders])]
+    struct CatalogModule;
+
+    #[tokio::test]
+    async fn a_schema_keyed_by_a_returned_object_fails_the_boot_outside_a_subgraph() {
+        let err = TestApp::for_module::<CatalogModule>()
+            .await
+            .err()
+            .expect("a keyed schema outside a subgraph is refused");
+        let message = format!("{err:#}");
+
+        assert!(
+            message.contains("CatalogResolver") && message.contains("#[graphql(entity)]"),
+            "the boot error names the resolver whose types key an entity: {message}",
+        );
+        assert!(message.contains("federation"), "and the flag: {message}");
+    }
+
+    /// Built by hand, so no wiring step refuses the keyed schema first.
+    #[tokio::test]
+    async fn a_pool_refuses_the_sdl_of_a_schema_keyed_outside_a_subgraph() {
+        let container = Container::builder()
+            .import::<CatalogProviders>()
+            .provide(ReachableProviders(
+                [TypeId::of::<CatalogResolver>()].into_iter().collect(),
+            ))
+            .provide(GuardSpecs(vec![guard::<Closed>()]))
+            .build()
+            .expect("the container builds");
+        let schema =
+            nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default());
+
+        let sdl = schema.execute(Request::new("{ _service { sdl } }")).await;
+
+        let body = serde_json::to_value(&sdl).expect("a response serializes");
+        assert!(
+            !body.to_string().contains("@key"),
+            "`_service` publishes no SDL past the pool: {body}",
+        );
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "FORBIDDEN",
+            "{body}"
+        );
+    }
+}

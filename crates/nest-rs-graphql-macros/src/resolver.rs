@@ -1290,22 +1290,28 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                             }
                         },
                         // The gate ran once, at subscribe: every item is masked, a
-                        // refused one dropped rather than nulled.
+                        // refused one dropped rather than nulled, by the ability
+                        // the gate checked — read here, inside the opening's unit,
+                        // since the items arrive outside it.
                         RootKind::Subscription => quote! {
                             match #call {
-                                ::core::result::Result::Ok(__stream) => ::core::result::Result::Ok(
-                                    ::nest_rs_graphql::async_graphql::futures_util::StreamExt::filter_map(
-                                        __stream,
-                                        move |__item| ::core::future::ready(
-                                            ::nest_rs_graphql::__private::keep_masked_item(
-                                                #route_label_lit,
-                                                ::nest_rs_authz::graphql::masked_item_for::<
-                                                    #action, #entity, _,
-                                                >(#gctx, __item),
+                                ::core::result::Result::Ok(__stream) => {
+                                    let __ability = ::nest_rs_authz::graphql::ability()
+                                        .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
+                                    ::core::result::Result::Ok(
+                                        ::nest_rs_graphql::async_graphql::futures_util::StreamExt::filter_map(
+                                            __stream,
+                                            move |__item| ::core::future::ready(
+                                                ::nest_rs_graphql::__private::keep_masked_item(
+                                                    #route_label_lit,
+                                                    ::nest_rs_authz::graphql::masked_item_for::<
+                                                        #action, #entity, _,
+                                                    >(#gctx, &__ability, __item),
+                                                ),
                                             ),
                                         ),
-                                    ),
-                                ),
+                                    )
+                                }
                                 ::core::result::Result::Err(__err) =>
                                     ::core::result::Result::Err(__err),
                             }

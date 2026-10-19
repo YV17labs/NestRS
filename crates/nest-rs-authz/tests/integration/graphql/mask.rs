@@ -405,12 +405,10 @@ fn ability_for(role: &str) -> Arc<nest_rs_authz::Ability> {
     Arc::new(builder.build().expect("valid test ability"))
 }
 
-/// One subscribe as `role`: the subscription, its GraphQL context seeded with `role`'s ability as
-/// `/graphql`'s seed forwards it; the subscriber runs it under the same ability,
-/// ambient, as the request's ability guard leaves it.
-fn subscribe(app: &TestApp, role: &str) -> GqlRequest {
-    let _ = app;
-    GqlRequest::new("subscription { widgetFeed { id name } }").data(ability_for(role))
+/// One subscribe to the widget feed; the subscriber runs it under its role's
+/// ability, ambient, as the request's ability guard leaves it.
+fn subscribe() -> GqlRequest {
+    GqlRequest::new("subscription { widgetFeed { id name } }")
 }
 
 fn payload(response: nest_rs_graphql::async_graphql::Response) -> serde_json::Value {
@@ -425,8 +423,7 @@ fn ids(items: &[serde_json::Value]) -> Vec<i64> {
 }
 
 /// What the harness's socket promises: the ability it attaches is the ambient
-/// one the class gate reads and the one the seed forwards to the mask, as an
-/// upgrade's guards leave it.
+/// one the class gate and the mask read, as an upgrade's guards leave it.
 #[tokio::test]
 async fn a_socket_attaching_an_ability_reaches_a_gated_masked_subscription() {
     let app = boot().await;
@@ -485,7 +482,7 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
     let admin = nest_rs_authz::with_ability(
         ability_for("admin"),
         schema
-            .execute_stream(subscribe(&app, "admin"), None)
+            .execute_stream(subscribe(), None)
             .map(payload)
             .take(3)
             .collect::<Vec<_>>(),
@@ -493,7 +490,7 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
     let auditor = nest_rs_authz::with_ability(
         ability_for("auditor"),
         schema
-            .execute_stream(subscribe(&app, "auditor"), None)
+            .execute_stream(subscribe(), None)
             .map(payload)
             .take(2)
             .collect::<Vec<_>>(),
@@ -628,13 +625,12 @@ async fn first_post_pushed(ability: AbilityBuilder, posts: &[(i32, i32)]) -> ser
         .get::<PostFeed>()
         .expect("the feed is a provider of the booted app");
     let ability = Arc::new(ability.build().expect("valid test ability"));
-    // Ambient, as the request's ability guard leaves it, and seeded into the
-    // GraphQL context, as `/graphql`'s seed forwards it.
+    // Ambient, as the request's ability guard leaves it.
     let received = nest_rs_authz::with_ability(
-        Arc::clone(&ability),
+        ability,
         schema
             .execute_stream(
-                GqlRequest::new("subscription { postFeed { id orgId title } }").data(ability),
+                GqlRequest::new("subscription { postFeed { id orgId title } }"),
                 None,
             )
             .map(payload)
@@ -664,13 +660,9 @@ async fn posts_read(ability: AbilityBuilder, query: &str) -> serde_json::Value {
         &nest_rs_graphql::GraphqlConfig::default(),
     );
     let ability = Arc::new(ability.build().expect("valid test ability"));
-    // Ambient, as the request's ability guard leaves it, and seeded into the
-    // GraphQL context, as `/graphql`'s seed forwards it.
-    let response = nest_rs_authz::with_ability(
-        Arc::clone(&ability),
-        schema.execute(GqlRequest::new(query).data(ability)),
-    )
-    .await;
+    // Ambient, as the request's ability guard leaves it.
+    let response =
+        nest_rs_authz::with_ability(ability, schema.execute(GqlRequest::new(query))).await;
     serde_json::to_value(response).expect("a GraphQL response is JSON")
 }
 
@@ -776,10 +768,11 @@ async fn a_caller_with_no_grant_is_refused_at_subscribe() {
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
     );
-    let responses: Vec<_> = schema
-        .execute_stream(subscribe(&app, ""), None)
-        .collect()
-        .await;
+    let responses: Vec<_> = nest_rs_authz::with_ability(
+        ability_for(""),
+        schema.execute_stream(subscribe(), None).collect(),
+    )
+    .await;
     let first = responses.first().expect("the refusal is delivered");
     assert!(
         !first.errors.is_empty(),
@@ -966,10 +959,11 @@ async fn an_entity_refuses_a_caller_with_no_rule() {
 /// The ability a field's own guard attaches is the one its class gate checks
 /// and its mask reads: one place, the unit's.
 mod ability_of_the_unit {
-    use super::{WidgetDto, widget};
+    use super::{WidgetDto, WidgetFeed, widget};
     use nest_rs_authz::{AbilityBuilder, Action, Read};
     use nest_rs_core::{Layer, UnitContext, injectable, module};
-    use nest_rs_graphql::async_graphql::Result as GqlResult;
+    use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
+    use nest_rs_graphql::async_graphql::{Error as GqlError, Result as GqlResult};
     use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
     use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_http::async_trait;
@@ -1034,6 +1028,72 @@ mod ability_of_the_unit {
             json["data"]["ownWidget"]["name"],
             serde_json::Value::Null,
             "masked by the ability the field's guard attached: {json}",
+        );
+    }
+
+    #[resolver]
+    struct FieldFeedResolver {
+        #[inject]
+        feed: std::sync::Arc<WidgetFeed>,
+    }
+
+    #[operations]
+    impl FieldFeedResolver {
+        #[subscription]
+        #[authorize(Read, widget::Entity)]
+        #[use_guards(FieldAbility)]
+        async fn field_feed(&self) -> Result<impl Stream<Item = WidgetDto>, GqlError> {
+            let rx = self.feed.tx.subscribe();
+            Ok(stream::unfold(rx, |mut rx| async move {
+                match rx.recv().await {
+                    Ok(widget) => Some((widget, rx)),
+                    Err(_) => None,
+                }
+            }))
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [FieldAbility, WidgetFeed, FieldFeedResolver],
+    )]
+    struct FieldFeedModule;
+
+    /// The items arrive outside the opening's unit, yet are masked by the
+    /// ability its class gate checked — over a socket that carries none.
+    #[tokio::test]
+    async fn a_subscriptions_items_are_masked_by_the_ability_its_gate_checked() {
+        let app = TestApp::for_module::<FieldFeedModule>()
+            .await
+            .expect("boots");
+        let feed = app
+            .container()
+            .get::<WidgetFeed>()
+            .expect("the feed is a provider of the booted app");
+        let mut socket = app.graphql_socket().open();
+        socket.connect().await;
+        socket.subscribe("1", "subscription { fieldFeed { id name } }");
+        let emit = async {
+            nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+                feed.tx.receiver_count() >= 1
+            })
+            .await;
+            feed.tx
+                .send(WidgetDto {
+                    id: 1,
+                    name: Some("ada".into()),
+                })
+                .expect("the subscriber is live");
+        };
+
+        let (item, ()) = tokio::join!(socket.next_item("1"), emit);
+
+        let item = item.expect("the gate admitted, so an item arrives");
+        assert_eq!(item["data"]["fieldFeed"]["id"], 1, "{item}");
+        assert_eq!(
+            item["data"]["fieldFeed"]["name"],
+            serde_json::Value::Null,
+            "masked by the ability the field's guard attached: {item}",
         );
     }
 }

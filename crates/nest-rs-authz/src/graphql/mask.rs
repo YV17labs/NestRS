@@ -18,13 +18,15 @@ use crate::gate::{Refusal, reason};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 
-/// Mask **one item of a subscription stream** through the ambient ability, and
-/// report whether it survives — `Ok(None)` meaning this subscriber may not read
-/// this item at all.
+/// Mask **one item of a subscription stream** through `ability`, and report
+/// whether it survives — `Ok(None)` meaning this subscriber may not read this
+/// item at all.
 ///
 /// The streaming counterpart of [`masked_value_for`], emitted automatically by
 /// `#[operations]` after every `#[authorize(Action, Entity)]`-declared
-/// `#[subscription]`. A resolver never calls it.
+/// `#[subscription]`, with the ability its class gate checked at the opening:
+/// an item arrives outside that unit, where a guard bound on the field no
+/// longer reaches. A resolver never calls it.
 ///
 /// Each item is a row — the gate ran once, at subscribe — so one the ability
 /// refuses is dropped, never nulled. No `Repo` read filtered it, so a rule
@@ -32,14 +34,17 @@ use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 /// or an exposed one its type leaves out — grants nothing and, as a denial,
 /// denies. Fails **closed**: a value that cannot be reconciled with `E::Model`
 /// is an `Err`, and the caller drops the item.
-pub fn masked_item_for<A, E, O>(ctx: &Context<'_>, item: O) -> Result<Option<O>, Error>
+pub fn masked_item_for<A, E, O>(
+    ctx: &Context<'_>,
+    ability: &Ability,
+    item: O,
+) -> Result<Option<O>, Error>
 where
     A: ActionMarker,
     E: EntityTrait + WireModelDefaults,
     E::Model: Serialize + DeserializeOwned,
     O: Serialize + DeserializeOwned,
 {
-    let ability = ability()?;
     let action = A::ACTION;
     let wire = serde_json::to_value(&item).map_err(|err| {
         mask_failure::<E>(
@@ -70,7 +75,7 @@ where
     if !verdict.allowed {
         return Ok(None);
     }
-    let masked = crate::wire_mask::mask_row::<E>(&ability, action, &model, verdict, &wire);
+    let masked = crate::wire_mask::mask_row::<E>(ability, action, &model, verdict, &wire);
     match serde_json::from_value(masked.masked) {
         Ok(masked) => Ok(Some(masked)),
         // The mask took a key the item's own type requires. Not a failure in

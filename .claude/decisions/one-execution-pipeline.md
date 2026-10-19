@@ -228,5 +228,6 @@ app's interceptors now run. Where it departs:
   the guards it ran before; **a `#[subscription]`'s layers run at its
   opening**, never per item.
 - **The ability is read off the unit**: the field mask and `bind` read the
-  ambient ability the class gate checked, and the GraphQL context no longer
-  carries one.
+  ambient ability the class gate checked — a subscription's items the one its
+  opening captured, since they arrive outside its unit — and the GraphQL
+  context no longer carries one.

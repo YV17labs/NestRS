@@ -51,8 +51,8 @@ matching rule is refused before the stream opens, exactly as a query is
 refused before its body runs.
 
 The **mask** runs on every item. Each value the stream yields is evaluated
-against the ability captured at subscribe — the row rules first, then the
-field grants. An item the subscriber may not read is **dropped**, not
+against the ability captured at subscribe — the one the gate checked, a guard
+bound on the field included — the row rules first, then the field grants. An item the subscriber may not read is **dropped**, not
 delivered with its fields nulled:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"

@@ -19,13 +19,14 @@ pub const INVALID_TOKEN: &str = "invalid_token";
 /// carry the scope the operation requires.
 pub const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
 
-/// Opt a `401` out of the `Bearer` challenge, by inserting it into the
-/// response's extensions.
+/// Mark a `401` as no resource challenge, by inserting it into the response's
+/// extensions.
 ///
 /// A password-login rejection or a token-endpoint refusal means *these
 /// credentials are wrong*, not *go discover an authorization server*; the RFC
 /// 9728 interceptor (`nest-rs-oauth-resource`) reads this and leaves the
-/// response alone.
+/// response alone, so it carries the challenge it was built with — the bare
+/// `Bearer` the edge gives a raw-text `401` it lifts.
 ///
 /// An app whose own `401` means the same thing marks it the same way.
 #[derive(Clone, Copy, Debug)]

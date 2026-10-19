@@ -8,6 +8,7 @@ use crate::AlwaysUnauthorized;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_http::challenge::{BEARER, NoBearerChallenge};
 use nest_rs_http::{StatusCode, header};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule, WELL_KNOWN_PATH};
@@ -420,4 +421,52 @@ async fn a_challenge_carrying_an_error_code_keeps_it_and_gains_the_pointer() {
         challenge.contains("resource_metadata="),
         "and the deployment's pointer is merged in: {challenge}",
     );
+}
+
+/// A login refusing a password through `?` on `CredentialError`, whose `401`
+/// says *these credentials are wrong*, and a bare `401` beside it.
+#[controller(path = "/session")]
+struct SessionController;
+
+#[routes]
+impl SessionController {
+    #[post("/")]
+    #[public]
+    async fn login(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_authn::CredentialError.into())
+    }
+
+    #[get("/expired")]
+    #[public]
+    async fn expired(&self) -> nest_rs_http::Result<&'static str> {
+        Err(StatusCode::UNAUTHORIZED.into())
+    }
+}
+
+#[module(imports = [authn(), discovery()], providers = [SessionController])]
+struct SessionServer;
+
+/// The marker a handler's `Err` carries out of its rendering reaches the unit
+/// stage and the client's response, so a wrong password is answered the bare
+/// challenge every `401` owes and never the resource's pointer, while a bare
+/// `401` still gains it.
+#[tokio::test]
+async fn no_bearer_challenge_survives_rendering() {
+    let app = TestApp::for_module::<SessionServer>().await.expect("boots");
+
+    let refused = app.http().post("/session").send().await;
+    refused.assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        challenge(&refused.0),
+        BEARER,
+        "a wrong password points at no authorization server",
+    );
+    assert!(
+        refused.0.extensions().get::<NoBearerChallenge>().is_some(),
+        "the mark the handler's error set reaches the response the client is sent",
+    );
+
+    let bare = app.http().get("/session/expired").send().await;
+    bare.assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(challenge(&bare.0), expected());
 }

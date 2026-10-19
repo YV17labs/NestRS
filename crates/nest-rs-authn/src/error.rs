@@ -270,9 +270,10 @@ impl ResponseError for AuthError {
     }
 }
 
-/// Same `?`-propagation for the login path. A password mismatch is not a
-/// `Bearer` challenge: no `WWW-Authenticate` goes out, and [`NoBearerChallenge`]
-/// keeps the resource-server interceptor from adding one at the edge.
+/// Same `?`-propagation for the login path. A password mismatch is no call to
+/// discover an authorization server: [`NoBearerChallenge`] keeps the
+/// resource-server interceptor from adding its pointer, and the edge answers
+/// the bare `Bearer` challenge RFC 9110 §11.6.1 owes every `401`.
 impl ResponseError for CredentialError {
     fn status(&self) -> StatusCode {
         StatusCode::UNAUTHORIZED

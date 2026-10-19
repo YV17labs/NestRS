@@ -258,7 +258,7 @@ pub async fn normalize_error_response(resp: crate::Response) -> crate::Response 
     {
         problem = problem.with_detail(DecodeError::redact(text.trim(), None).into_owned());
     }
-    replacing(problem, &parts.headers)
+    replacing(problem, &parts.headers, parts.extensions)
 }
 
 /// Marks a raw-text error body the framework wrote — its own sentence, already
@@ -275,8 +275,13 @@ pub fn framework_sentence(mut response: crate::Response) -> crate::Response {
     response
 }
 
-/// `problem` as the answer, keeping the headers of the response it replaces.
-fn replacing(problem: ProblemDetails, headers: &http::HeaderMap) -> crate::Response {
+/// `problem` as the answer, keeping the head of the response it replaces: its
+/// headers, and its extensions, which the layers outside it read.
+fn replacing(
+    problem: ProblemDetails,
+    headers: &http::HeaderMap,
+    extensions: http::Extensions,
+) -> crate::Response {
     let mut response = crate::ResponseError::as_response(&problem);
     // The fresh body is uncompressed: a stale `Content-Encoding` would fail decoding.
     // An original header replaces the envelope's default (a bare `Bearer`), since a
@@ -296,6 +301,7 @@ fn replacing(problem: ProblemDetails, headers: &http::HeaderMap) -> crate::Respo
             response.headers_mut().append(name.clone(), value.clone());
         }
     }
+    response.extensions_mut().extend(extensions);
     response
 }
 
@@ -351,12 +357,19 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
             if let Some(withheld) = withheld {
                 crate::error::file(withheld);
             }
-            let mut answer = crate::poem_bridge::response_to_poem(match problem {
-                Some(problem) => problem_response(&problem),
-                None => replacing(ProblemDetails::from_status(parts.status), &parts.headers),
-            });
-            answer.extensions_mut().extend(parts.extensions);
-            return answer;
+            let answer = match problem {
+                Some(problem) => {
+                    let mut answer = problem_response(&problem);
+                    answer.extensions_mut().extend(parts.extensions);
+                    answer
+                }
+                None => replacing(
+                    ProblemDetails::from_status(parts.status),
+                    &parts.headers,
+                    parts.extensions,
+                ),
+            };
+            return crate::poem_bridge::response_to_poem(answer);
         }
         resp.set_body(body);
     }
@@ -640,6 +653,33 @@ mod tests {
                 (bare.type_uri, bare.title),
                 "{}",
                 named.status,
+            );
+        }
+    }
+
+    /// A raw `401` a handler marked as no call for a bearer token — a wrong
+    /// password — keeps its marks once lifted onto the envelope, and the one
+    /// challenge RFC 9110 §11.6.1 owes every `401`.
+    #[tokio::test]
+    async fn normalize_keeps_the_marks_a_raw_error_carries() {
+        for marked in [true, false] {
+            let raw = crate::Response::builder().status(StatusCode::UNAUTHORIZED);
+            let raw = match marked {
+                true => raw.extension(crate::challenge::NoBearerChallenge),
+                false => raw,
+            };
+            let resp = normalize_error_response(raw.body("invalid credentials")).await;
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                resp.headers()[header::CONTENT_TYPE],
+                "application/problem+json"
+            );
+            assert_eq!(resp.headers()[header::WWW_AUTHENTICATE], BEARER);
+            assert_eq!(
+                resp.extensions()
+                    .get::<crate::challenge::NoBearerChallenge>()
+                    .is_some(),
+                marked,
             );
         }
     }

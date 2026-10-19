@@ -56,10 +56,16 @@ pub fn batch_spawner(
             Some(carried) => Either::Left(carried.scope(batch)),
             None => Either::Right(batch),
         };
-        let batch = batch.instrument(span.clone());
+        let batch = nest_rs_core::panic::contain(batch.instrument(span.clone()));
         let batches = batches.clone();
         tokio::spawn(async move {
-            let _ = batches.run(batch).await;
+            if let Some(Err(unwound)) = batches.run(batch).await {
+                nest_rs_core::contained_panic!(
+                    target: crate::TARGET,
+                    unwound.as_ref(),
+                    "a DataLoader batch panicked; the loads it served answer no value",
+                );
+            }
         });
     }
 }

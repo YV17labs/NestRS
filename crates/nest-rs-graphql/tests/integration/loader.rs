@@ -319,3 +319,74 @@ async fn connect(addr: std::net::SocketAddr) -> tokio::net::TcpStream {
     }
     panic!("the transport never came up on {addr}");
 }
+
+/// A batch runs off its field's task: a panic in it is contained there and
+/// said once on this crate's target, as a field's would be.
+mod panicking_batch {
+    use std::collections::HashMap;
+
+    use nest_rs_core::{injectable, module};
+    use nest_rs_graphql::async_graphql::dataloader::DataLoader;
+    use nest_rs_graphql::async_graphql::{self, Context};
+    use nest_rs_graphql::{GraphqlModule, dataloader, operations, resolver};
+    use nest_rs_testing::{LogCapture, TestApp};
+
+    #[injectable]
+    #[derive(Default)]
+    struct BrokenShelf;
+
+    #[dataloader]
+    impl BrokenShelf {
+        async fn labels(&self, keys: &[i32]) -> HashMap<i32, String> {
+            tokio::task::yield_now().await;
+            panic!("the shelf at {} broke", keys.len())
+        }
+    }
+
+    #[resolver]
+    struct BrokenShelfResolver;
+
+    #[operations]
+    impl BrokenShelfResolver {
+        #[query]
+        #[public]
+        async fn broken_label(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
+            let loader = ctx.data::<DataLoader<BrokenShelfLabels>>()?;
+            let Ok(found) = loader.load_one(id).await;
+            Ok(found.unwrap_or_default())
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [BrokenShelf, BrokenShelfResolver],
+    )]
+    struct BrokenShelfApp;
+
+    #[tokio::test]
+    async fn a_batch_that_panics_is_contained_and_said_once_on_the_graphql_target() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<BrokenShelfApp>()
+            .await
+            .expect("the schema boots");
+
+        let _ = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ brokenLabel(id: 7) }" }))
+            .send()
+            .await;
+
+        let said = logs.expect_one(
+            nest_rs_graphql::TARGET,
+            "a DataLoader batch panicked; the loads it served answer no value",
+        );
+        assert_eq!(said.level, "error");
+        assert!(
+            said.field(nest_rs_core::panic::FIELD)
+                .is_some_and(|panic| panic.contains("the shelf at 1 broke")),
+            "{:?}",
+            said.fields,
+        );
+    }
+}

@@ -189,6 +189,10 @@ loader would race the commit. So a relation resolved in a mutation's own
 response reads the rows as they stood before the mutation's transaction: a
 row the mutation wrote is not there yet. Loaders are reads.
 
+A batch that panics is contained on its task and said once, at `error` on
+`nest_rs::graphql`, with the panic's message; the fields waiting on it fail
+with it, as a field that panics itself does.
+
 ## Going further
 
 - [Database](/database/) — the slice the loader hangs off.

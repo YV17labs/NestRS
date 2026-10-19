@@ -37,6 +37,9 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 schemars = { version = "1.2", features = ["uuid1"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio-tungstenite = "0.30"
+# `=`: the framework's own pin, a public dependency of `nest-rs-redis` — the
+# command API a feature sends its own commands with over a `RedisConnection`.
+redis = { version = "=1.7", default-features = false, features = ["aio"] }
 
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }

@@ -56,7 +56,7 @@ pub enum RedisDatabase {
 
 impl RedisDatabase {
     const SUITES: u8 = 1;
-    const OWN: std::ops::RangeInclusive<u8> = 2..=8;
+    const OWN: std::ops::RangeInclusive<u8> = 2..=7;
 
     pub fn config(self) -> RedisConfig {
         let index = self as u8;

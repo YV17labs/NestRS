@@ -9,7 +9,8 @@ names its binary. Adding one is an entry in `apps`, not a template.
 ```bash
 helm install demo demo/charts/demo \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="rediss://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379" \
+  --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379"
 ```
 
 `helm template` renders against the Kubernetes version its Helm was built with,

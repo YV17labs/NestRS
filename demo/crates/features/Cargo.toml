@@ -18,6 +18,8 @@ async-trait.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 parking_lot.workspace = true
+# The audio feature keeps its transcode records on its own Redis instance.
+redis.workspace = true
 tokio.workspace = true
 sea-orm.workspace = true
 chrono.workspace = true

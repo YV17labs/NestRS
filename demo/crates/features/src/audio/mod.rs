@@ -8,6 +8,7 @@ mod guard;
 mod module;
 mod service;
 mod state;
+mod transcodes;
 
 pub mod http;
 pub mod mcp;
@@ -23,6 +24,7 @@ pub use guard::TranscodeGuard;
 pub use module::AudioModule;
 pub use service::AudioService;
 pub use state::TranscodeState;
+pub use transcodes::Transcodes;
 
 pub use http::AudioHttpModule;
 pub use mcp::AudioMcpModule;

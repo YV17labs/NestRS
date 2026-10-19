@@ -8,6 +8,8 @@ pub enum AudioError {
     Storage(#[from] StorageError),
     #[error("audio queue operation failed")]
     Queue(#[from] QueueError),
+    #[error("audio transcode record operation failed")]
+    Transcodes(#[from] redis::RedisError),
 }
 
 impl ResponseError for AudioError {

@@ -4,13 +4,14 @@ use nest_rs::graphql::GraphqlModule;
 use nest_rs::health::HealthModule;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::openapi::OpenApiModule;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
+use nest_rs::redis::{RedisHealthModule, RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::ScheduleModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 use nest_rs::server_timing::ServerTimingModule;
+use nest_rs::storage::StorageHealthModule;
 use nest_rs::throttler::ThrottlerModule;
 
-use features::audio::{AudioHttpModule, AudioScheduleModule};
+use features::audio::{AudioHttpModule, AudioScheduleModule, Transcodes};
 use features::audit::AuditHttpModule;
 use features::authn::AuthnModule;
 use features::authz::{AuthzGraphqlModule, AuthzModule};
@@ -25,7 +26,10 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
         SeaOrmHealthModule,
+        StorageHealthModule,
         RedisModule::for_root(None),
+        RedisHealthModule,
+        RedisHealthModule::<Transcodes>,
         RedisQueueModule,
         HealthModule,
         ServerTimingModule,

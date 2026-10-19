@@ -5,12 +5,13 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
 use nest_rs::core::{error_message, injectable};
 use nest_rs::queue::{JobProducer, JobProducerExt};
+use nest_rs::redis::RedisConnection;
 use nest_rs::storage::{SignedPut, Storage};
 use uuid::Uuid;
 
 use super::command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
 use super::error::AudioError;
-use super::{PresignedUrlDto, TranscodeProgressDto, TranscodeState};
+use super::{PresignedUrlDto, TranscodeProgressDto, TranscodeState, Transcodes};
 
 const PRESIGN_TTL: Duration = Duration::from_secs(15 * 60);
 
@@ -19,17 +20,25 @@ const AUDIO_CONTENT_TYPE: &str = "audio/mpeg";
 const TRANSCODE_POLL_ATTEMPTS: u32 = 20;
 const TRANSCODE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
+const TRANSCODE_RECORD_TTL_SECS: u64 = 24 * 60 * 60;
+
 #[injectable]
 pub struct AudioService {
     #[inject]
     queue: Arc<dyn JobProducer>,
     #[inject]
     storage: Arc<Storage>,
+    #[inject]
+    transcodes: Arc<RedisConnection<Transcodes>>,
 }
 
 impl AudioService {
     fn derived_key(source: Uuid) -> String {
         format!("transcoded/{source}")
+    }
+
+    fn record_key(source: Uuid) -> String {
+        format!("audio:transcoded:{source}")
     }
 
     pub async fn presign_upload(&self) -> Result<PresignedUrlDto, AudioError> {
@@ -70,6 +79,13 @@ impl AudioService {
         self.storage
             .put_stream(&derived, AUDIO_CONTENT_TYPE, source)
             .await?;
+        redis::cmd("SET")
+            .arg(Self::record_key(file))
+            .arg(&derived)
+            .arg("EX")
+            .arg(TRANSCODE_RECORD_TTL_SECS)
+            .query_async::<()>(&mut RedisConnection::clone(&self.transcodes))
+            .await?;
         tracing::debug!(
             target: crate::audio::TARGET,
             %file,
@@ -77,6 +93,14 @@ impl AudioService {
             "transcoded",
         );
         Ok(derived)
+    }
+
+    async fn recorded(&self, file: Uuid) -> Result<bool, AudioError> {
+        let recorded: bool = redis::cmd("EXISTS")
+            .arg(Self::record_key(file))
+            .query_async(&mut RedisConnection::clone(&self.transcodes))
+            .await?;
+        Ok(recorded)
     }
 
     pub async fn store_upload(
@@ -136,7 +160,12 @@ impl AudioService {
                     return None;
                 }
                 let event = |state: TranscodeState| TranscodeProgressDto { state, attempt };
-                match svc.result_ready(file).await {
+                let ready = if attempt == 0 {
+                    svc.result_ready(file).await
+                } else {
+                    svc.recorded(file).await
+                };
+                match ready {
                     Ok(true) => Some((event(TranscodeState::Ready), u32::MAX)),
                     Ok(false) => {
                         tokio::time::sleep(TRANSCODE_POLL_INTERVAL).await;

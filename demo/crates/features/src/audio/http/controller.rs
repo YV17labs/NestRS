@@ -106,9 +106,10 @@ impl AudioController {
     #[meta(Throttle::per_minute(60))]
     #[api(
         summary = "Stream transcode progress as Server-Sent Events",
-        description = "Opens a `text/event-stream` that polls the derived object and emits a \
-                       `transcode` event (`{state: pending|ready}`) until it is produced, then \
-                       ends — a live progress feed the browser reads with `EventSource`. Each \
+        description = "Opens a `text/event-stream` that polls the transcode — the derived \
+                       object first, then the record the worker files once it has produced it — \
+                       and emits a `transcode` event (`{state: pending|ready}`) until it is \
+                       produced, then ends — a live progress feed the browser reads with `EventSource`. Each \
                        event carries the poll attempt as its SSE id, so a browser reconnecting \
                        sends it back as `Last-Event-ID` and is not re-sent the progress ticks it \
                        already displayed; the terminal state is always sent. Requires a bearer \

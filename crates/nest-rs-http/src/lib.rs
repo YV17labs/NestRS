@@ -201,7 +201,7 @@ pub use config::{
     SSE_KEEP_ALIVE_FLOOR, UNIT_TIMEOUT_CEILING, UNIT_TIMEOUT_FLOOR,
 };
 pub use context::{Ctx, RejectedCredential};
-pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
+pub use controller::{HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
 pub use cors::HttpCors;
 pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
@@ -334,7 +334,7 @@ pub use nest_rs_http_macros::controller;
 ///
 /// ```
 /// # use nest_rs_core::{Discoverable, Discovery, module};
-/// # use nest_rs_http::{Controller, HttpControllerMeta, Json, Method, controller, routes};
+/// # use nest_rs_http::{HttpControllerMeta, Json, Method, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// #[controller(path = "/users")]
 /// #[derive(Default)]
@@ -352,7 +352,7 @@ pub use nest_rs_http_macros::controller;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
 ///
-/// fn implements<T: Controller + Discoverable>() {}
+/// fn implements<T: Discoverable>() {}
 /// implements::<UsersController>();
 ///
 /// # let app = TestApp::for_module::<UsersModule>().await?;

@@ -56,3 +56,8 @@ checked once at its mount, so the `warn` a chain composed for two scopes could
 file twice is filed once, and no `HttpBootCheck` remains on a controller. The
 container channel stays for what still mounts without a `Result`: a gateway's
 message table.
+
+**2026-10-19 — a controller's mount is the closure on its record.** `#[routes]`
+emits a controller's mount as the closure it attaches to the controller's
+`HttpControllerMeta`, and the public `Controller` trait that closure called is
+gone (HTTP-18): what is said above of `Controller::mount` holds of that closure.

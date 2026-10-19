@@ -72,13 +72,12 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// The impl block (verb/layer/response attrs stripped), one wrapper reading
 /// the handler's parameters off the request it borrows and one `static`
-/// pipeline site per route,
-/// `impl nest_rs_http::Controller` (registers each route on the transport's
-/// `HttpRoutes`, its site's chains composed against the container), and
-/// `impl nest_rs_core::Discoverable`
-/// attaching the `HttpControllerMeta` route table the transport mounts and
-/// declaring, per parameter type, the provider an extractor resolves per
-/// request (`Scoped<T>`, `Bind<A, S>`), which the boot's access graph checks.
+/// pipeline site per route, and `impl nest_rs_core::Discoverable` attaching
+/// the `HttpControllerMeta` route table the transport mounts — its mount
+/// registering each route on the transport's `HttpRoutes`, its site's chains
+/// composed against the container — and declaring, per parameter type, the
+/// provider an extractor resolves per request (`Scoped<T>`, `Bind<A, S>`),
+/// which the boot's access graph checks.
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(routes::routes(args, input).into()).into()

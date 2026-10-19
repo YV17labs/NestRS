@@ -872,37 +872,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         #(#wrappers)*
 
-        impl ::nest_rs_http::Controller for #self_ty {
-            fn mount(
-                container: &::nest_rs_core::Container,
-                __routes: &mut ::nest_rs_http::HttpRoutes,
-            ) {
-                ::nest_rs_http::__private::mount_controller(
-                    container,
-                    __routes,
-                    #ctrl_tag,
-                    &<#self_ty>::__nestrs_controller_guard_specs(),
-                );
-                let __ctrl = ::std::sync::Arc::new(<#self_ty>::__nestrs_from_container(container));
-                #sse_resolve
-                // `[None]` for an unversioned controller: an empty list would unmount it.
-                let __versions: ::std::vec::Vec<::core::option::Option<&'static str>> =
-                    if <#self_ty>::VERSIONS.is_empty() {
-                        ::std::vec![::core::option::Option::None]
-                    } else {
-                        <#self_ty>::VERSIONS
-                            .iter()
-                            .map(|__v| ::core::option::Option::Some(*__v))
-                            .collect()
-                    };
-                for __version in __versions {
-                    let __prefix =
-                        ::nest_rs_http::version_path(__version, <#self_ty>::PATH);
-                    #(#route_entries)*
-                }
-            }
-        }
-
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods
 
@@ -917,7 +886,32 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     <#self_ty>::PATH,
                     <#self_ty>::VERSIONS,
                     ::std::vec![#(#route_metas),*],
-                    |__c, __r| <#self_ty as ::nest_rs_http::Controller>::mount(__c, __r),
+                    |container, __routes| {
+                        ::nest_rs_http::__private::mount_controller(
+                            container,
+                            __routes,
+                            #ctrl_tag,
+                            &<#self_ty>::__nestrs_controller_guard_specs(),
+                        );
+                        let __ctrl =
+                            ::std::sync::Arc::new(<#self_ty>::__nestrs_from_container(container));
+                        #sse_resolve
+                        // `[None]` for an unversioned controller: an empty list would unmount it.
+                        let __versions: ::std::vec::Vec<::core::option::Option<&'static str>> =
+                            if <#self_ty>::VERSIONS.is_empty() {
+                                ::std::vec![::core::option::Option::None]
+                            } else {
+                                <#self_ty>::VERSIONS
+                                    .iter()
+                                    .map(|__v| ::core::option::Option::Some(*__v))
+                                    .collect()
+                            };
+                        for __version in __versions {
+                            let __prefix =
+                                ::nest_rs_http::version_path(__version, <#self_ty>::PATH);
+                            #(#route_entries)*
+                        }
+                    },
                 );
                 builder.attach_meta::<#self_ty, ::nest_rs_http::HttpControllerMeta>(__meta)
             }
@@ -1137,8 +1131,8 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
 struct EmittedRoute {
     /// Item-level: the site, its layers and its guard stage.
     items: TokenStream2,
-    /// Inside `Controller::mount`, where `container`, `__routes`, `__path`,
-    /// `__ctrl` and `__sse` are in scope.
+    /// Inside the controller's mount closure, where `container`, `__routes`,
+    /// `__path`, `__ctrl` and `__sse` are in scope.
     mount: TokenStream2,
 }
 
@@ -1244,7 +1238,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         );
     };
 
-    // Expanded inside `Controller::mount`, where `__ctrl` and `__sse` are in scope.
+    // Expanded inside the mount closure, where `__ctrl` and `__sse` are in scope.
     let wrapper_expr = if *is_sse {
         quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl), __sse: __sse } }
     } else {

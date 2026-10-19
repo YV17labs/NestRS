@@ -115,9 +115,10 @@ impl HttpRoutes {
     /// `endpoint` answers `method` at `template`. The table owns the method
     /// dispatch: another method at that address answers `405` with `Allow`,
     /// and `HEAD` is served by `GET` when not registered (RFC 9110 §9.3.2,
-    /// §15.5.6). Registered from a controller's mount, it is a route like any
-    /// other: the app's guard pool, exception filters and interceptors run
-    /// around it, inside the request's unit of work.
+    /// §15.5.6). Registered from a self-mount's closure
+    /// ([`HttpEndpointMeta`](crate::HttpEndpointMeta)), it is one of that
+    /// surface's entries: the guards its posture calls for and the app's
+    /// exception filters run in front of it.
     pub fn route(&mut self, method: Method, template: &str, endpoint: impl Endpoint) -> &mut Self {
         self.register(
             Some(method),

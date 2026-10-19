@@ -6,14 +6,6 @@ use nest_rs_core::Container;
 use crate::deprecation::DeprecationMeta;
 use crate::routes::HttpRoutes;
 
-/// Registers a controller's routes on the transport's table; implemented by
-/// `#[routes]`.
-pub trait Controller: 'static {
-    /// Register this controller's routes (under its `PATH`) on `routes`,
-    /// resolving handler dependencies from `container`.
-    fn mount(container: &Container, routes: &mut HttpRoutes);
-}
-
 /// Builds the schema for a request body or response, recording named component
 /// schemas in the shared generator.
 pub type SchemaFn = fn(&mut schemars::SchemaGenerator) -> schemars::Schema;

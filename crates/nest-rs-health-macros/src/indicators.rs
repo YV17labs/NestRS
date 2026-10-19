@@ -1,10 +1,11 @@
 //! `#[indicators]`: strips each probe attribute and submits one
 //! `HealthIndicator` per method; `Discoverable` stays with `#[injectable]`.
 
-use nest_rs_codegen::layers::{LayerScope, take_layers};
-use nest_rs_codegen::pair;
-use nest_rs_codegen::{
-    HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit, shared_receiver,
+use nest_rs_codegen::__private::layers::{LayerScope, take_layers};
+use nest_rs_codegen::__private::pair;
+use nest_rs_codegen::__private::{
+    HostBorrow, await_if_async, cfg_attrs, concrete_signature, impl_self_ident,
+    one_role_per_method, returns_unit, shared_receiver,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -62,12 +63,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // `take_flag_attr`: an argument such as `#[readiness(timeout = "5s")]`
         // is a compile error, never dropped.
         let accepted: Vec<&str> = PROBE_ATTRS.iter().map(|(name, _)| *name).collect();
-        let index =
-            match nest_rs_codegen::one_role_per_method("probe", &method.attrs, &accepted, "") {
-                Ok(Some(index)) => index,
-                Ok(None) => continue,
-                Err(err) => return err.to_compile_error().into(),
-            };
+        let index = match one_role_per_method("probe", &method.attrs, &accepted, "") {
+            Ok(Some(index)) => index,
+            Ok(None) => continue,
+            Err(err) => return err.to_compile_error().into(),
+        };
         let Some((name, kind_variant)) = PROBE_ATTRS
             .into_iter()
             .find(|(name, _)| method.attrs[index].path().is_ident(name))
@@ -81,7 +81,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         if let Err(err) = shared_receiver(method, "#[indicators]", &provider, HostBorrow::Arc) {
             return err.to_compile_error().into();
         }
-        if let Err(err) = nest_rs_codegen::concrete_signature(method, "#[indicators]") {
+        if let Err(err) = concrete_signature(method, "#[indicators]") {
             return err.to_compile_error().into();
         }
 

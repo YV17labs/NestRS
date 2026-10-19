@@ -1,6 +1,7 @@
 //! `#[main]` — the binary's entry point. Not `main.rs`, which Cargo would build
 //! as a binary target of this crate.
 
+use nest_rs_codegen::__private::{entry_needs_an_async_fn, entry_takes_no_arguments};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned as _;
@@ -9,19 +10,17 @@ use syn::{Block, ItemFn, ReturnType};
 /// Each refusal is emitted beside the item it refused, or rustc adds a second
 /// error: `main` function not found.
 pub(crate) fn main(args: TokenStream, input: TokenStream) -> TokenStream {
-    let refused = nest_rs_codegen::entry_takes_no_arguments(&args.into())
-        .map(|refused| refused.to_compile_error());
+    let refused = entry_takes_no_arguments(&args.into()).map(|refused| refused.to_compile_error());
     let input = proc_macro2::TokenStream::from(input);
     let mut item: ItemFn = match syn::parse2(input.clone()) {
         Ok(item) => item,
         Err(_) => {
-            let error = nest_rs_codegen::entry_needs_an_async_fn(input.span()).to_compile_error();
+            let error = entry_needs_an_async_fn(input.span()).to_compile_error();
             return quote! { #error #input }.into();
         }
     };
     if item.sig.asyncness.take().is_none() {
-        let error =
-            nest_rs_codegen::entry_needs_an_async_fn(item.sig.fn_token.span).to_compile_error();
+        let error = entry_needs_an_async_fn(item.sig.fn_token.span).to_compile_error();
         return quote! { #error #input }.into();
     }
     // Named so the body's `?`s convert into it: an `async` block infers its

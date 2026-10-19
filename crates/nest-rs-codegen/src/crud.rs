@@ -185,9 +185,12 @@ const OPS_LIST: &str = "a list of operations, e.g. `ops = [list, get]`";
 /// Parse a key's value, refusing one of the wrong kind with the shared value
 /// sentence rather than syn's `expected identifier`.
 fn value_of<T: Parse>(input: ParseStream, key: &str, what: &str) -> syn::Result<T> {
-    input
-        .parse()
-        .map_err(|error| syn::Error::new(error.span(), crate::takes_value("crud", Some(key), what)))
+    input.parse().map_err(|error| {
+        syn::Error::new(
+            error.span(),
+            crate::args::takes_value("crud", Some(key), what),
+        )
+    })
 }
 
 impl Parse for CrudDeclaration {
@@ -244,7 +247,7 @@ impl Parse for CrudDeclaration {
                     if !input.peek(syn::token::Bracket) {
                         return Err(syn::Error::new(
                             input.span(),
-                            crate::takes_value("crud", Some("ops"), OPS_LIST),
+                            crate::args::takes_value("crud", Some("ops"), OPS_LIST),
                         ));
                     }
                     let content;
@@ -264,7 +267,7 @@ impl Parse for CrudDeclaration {
                             other => {
                                 return Err(syn::Error::new(
                                     id.span(),
-                                    crate::unknown_value(
+                                    crate::args::unknown_value(
                                         "crud",
                                         "op",
                                         other,
@@ -301,7 +304,7 @@ impl Parse for CrudDeclaration {
                         other => {
                             return Err(syn::Error::new(
                                 mode.span(),
-                                crate::unknown_value("crud", "paginate", other, &PAGINATE),
+                                crate::args::unknown_value("crud", "paginate", other, &PAGINATE),
                             ));
                         }
                     };
@@ -317,20 +320,20 @@ impl Parse for CrudDeclaration {
                 Span::call_site(),
                 format!(
                     "{} (the injected `CrudService` field to delegate to)",
-                    crate::missing_argument("crud", "service", "svc"),
+                    crate::args::missing_argument("crud", "service", "svc"),
                 ),
             )
         })?;
         let entity = entity.ok_or_else(|| {
             syn::Error::new(
                 Span::call_site(),
-                crate::missing_argument("crud", "entity", "users::Entity"),
+                crate::args::missing_argument("crud", "entity", "users::Entity"),
             )
         })?;
         let output = output.ok_or_else(|| {
             syn::Error::new(
                 Span::call_site(),
-                crate::missing_argument("crud", "output", "User"),
+                crate::args::missing_argument("crud", "output", "User"),
             )
         })?;
 

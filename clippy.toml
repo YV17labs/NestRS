@@ -26,6 +26,9 @@ disallowed-methods = [
     { path = "object_store::aws::AmazonS3Builder::from_env", reason = "it reads every AWS_* variable, AWS_ALLOW_INVALID_CERTIFICATES among them: build the client from StorageConfig, whose ClientTls verifies always" },
     { path = "object_store::parse_url", reason = "it builds a store from the URL alone, past StorageConfig's refusals and its ClientTls: open the store through StorageConfig" },
     { path = "object_store::parse_url_opts", reason = "it builds a store from the URL and string options, allow_invalid_certificates among them, past StorageConfig's refusals and its ClientTls: open the store through StorageConfig" },
+    { path = "syn::meta::parser", reason = "parse a decorator's keys through nest_rs_codegen::Grammar" },
+    { path = "syn::Attribute::parse_nested_meta", reason = "parse a decorator's keys through nest_rs_codegen::Grammar" },
+    { path = "syn::MetaList::parse_nested_meta", reason = "parse a decorator's keys through nest_rs_codegen::Grammar" },
 ]
 
 disallowed-macros = [

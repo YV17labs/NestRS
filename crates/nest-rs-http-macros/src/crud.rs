@@ -1,7 +1,7 @@
 //! `#[crud]` — generate standard REST operations on a `#[controller]` impl
 //! block and re-emit it under `#[routes]`.
 
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use std::collections::HashSet;
 
 use proc_macro::TokenStream;
@@ -9,7 +9,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{ImplItem, ItemImpl, parse_quote};
 
-use nest_rs_codegen::{Paginate, impl_self_ident, parse_crud_args};
+use nest_rs_codegen::__private::{Paginate, impl_self_ident, parse_crud_args};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = match pair::HTTP.parse_operations(input.into()) {

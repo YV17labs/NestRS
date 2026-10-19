@@ -1873,7 +1873,7 @@ mod tests {
                 "the two copies disagree on {name:?}"
             );
             if let Err(refusal) = boot {
-                let compile = nest_rs_codegen::invalid_time_zone(name);
+                let compile = nest_rs_codegen::__private::invalid_time_zone(name);
                 let fact = compile
                     .strip_prefix("#[cron] `tz`: ")
                     .expect("the decorator's refusal opens with its site");

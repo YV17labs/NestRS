@@ -1,17 +1,19 @@
 //! `#[gateway]` — struct decorator: construction, `PATH`/`VERSION` and the
 //! connection-level guard wrapping `#[messages]` reads.
 
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{LitStr, Path};
 
-use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
-use nest_rs_codegen::{
-    InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
-    injected_keys_with_layers, injected_names_with_layers, injected_optional_fns, layer_deps,
-    scoped_specs,
+use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::versioning;
+use nest_rs_codegen::__private::{
+    InjectableBody, MountPath, build_injectable_body, from_container_method,
+    guard_capability_bounds, host_meta_fn, injected_keys_with_layers, injected_names_with_layers,
+    injected_optional_fns, layer_deps, missing_argument, reject_path, scoped_specs, takes_value,
+    ungrouped_expr,
 };
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -38,7 +40,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(layers) => layers,
             Err(err) => return err.to_compile_error().into(),
         };
-    let host_meta = nest_rs_codegen::host_meta_fn(&meta);
+    let host_meta = host_meta_fn(&meta);
 
     let InjectableBody {
         ctor,
@@ -194,12 +196,11 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
             // `#[controller]`'s parser, so the version grammar is one.
             "version" => {
                 let value = arg.expr()?;
-                let declared =
-                    nest_rs_codegen::versioning::parse_version_list(&value, "#[gateway]")?;
+                let declared = versioning::parse_version_list(&value, "#[gateway]")?;
                 if declared.len() > 1 {
                     return Err(syn::Error::new_spanned(
                         &value,
-                        nest_rs_codegen::takes_value(
+                        takes_value(
                             "gateway",
                             Some("version"),
                             "one version: a gateway owns its mount outright, so there is no \
@@ -219,10 +220,10 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     let path = path.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
-            nest_rs_codegen::missing_argument("gateway", "path", "\"/ws\""),
+            missing_argument("gateway", "path", "\"/ws\""),
         )
     })?;
-    nest_rs_codegen::reject_path("gateway", &path, nest_rs_codegen::MountPath::Literal)?;
+    reject_path("gateway", &path, MountPath::Literal)?;
     Ok(GatewayArgs {
         path,
         version,
@@ -233,11 +234,11 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
 /// `namespace = ChatNs`'s value, read through the invisible group a
 /// `macro_rules!` forwards it in.
 fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
-    match nest_rs_codegen::ungrouped_expr(expr) {
+    match ungrouped_expr(expr) {
         syn::Expr::Path(p) => Ok(p.path.clone()),
         other => Err(syn::Error::new_spanned(
             other,
-            nest_rs_codegen::takes_value(
+            takes_value(
                 "gateway",
                 Some("namespace"),
                 "a marker type path, e.g. `namespace = ChatNs`",

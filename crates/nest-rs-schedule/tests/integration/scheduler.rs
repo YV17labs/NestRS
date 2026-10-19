@@ -1647,11 +1647,11 @@ async fn the_decorators_copy_of_the_key_rule_agrees_with_the_boots() {
         let boot = boot_pinning(key, Replicas::One).await;
         assert_eq!(
             boot.is_ok(),
-            nest_rs_codegen::is_valid_job_key(key),
+            nest_rs_codegen::__private::is_valid_job_key(key),
             "the two copies disagree on {key:?}: {boot:?}"
         );
         if let Err(refusal) = boot {
-            let compile = nest_rs_codegen::invalid_job_key("every", key);
+            let compile = nest_rs_codegen::__private::invalid_job_key("every", key);
             let fact = compile
                 .strip_prefix("#[every] `key`: ")
                 .expect("the decorator's refusal opens with its site");
@@ -1668,7 +1668,9 @@ async fn a_key_on_a_job_firing_on_every_replica_fails_the_boot() {
     let refusal = boot_pinning("billing::PinnedTasks::sweep", Replicas::Each)
         .await
         .expect_err("a key nothing claims under");
-    let compile = nest_rs_codegen::key_without_replicas_one(nest_rs_codegen::JobDecorator::Every);
+    let compile = nest_rs_codegen::__private::key_without_replicas_one(
+        nest_rs_codegen::__private::JobDecorator::Every,
+    );
     let fact = compile
         .strip_prefix("#[every] `key`: ")
         .expect("the decorator's refusal opens with its site");

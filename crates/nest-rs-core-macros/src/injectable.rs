@@ -3,11 +3,12 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Expr, ItemStruct};
 
-use nest_rs_codegen::{
+use nest_rs_codegen::__private::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, from_scope_method, injected_method, injected_names_method,
-    injected_optional_method, injected_optional_names_method, optional_dependencies_method,
-    optional_dependency_names_method, parse_provider_host,
+    injected_optional_method, injected_optional_names_method, key_as_written,
+    optional_dependencies_method, optional_dependency_names_method, parse_provider_host,
+    provider_residency, unknown_value,
 };
 
 pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -50,7 +51,7 @@ pub(crate) fn provider(
     let injected_optional_names = injected_optional_names_method(&opt_names);
 
     // Every scope: a missing impl could be written by hand and lie about residency.
-    let singleton_marker = nest_rs_codegen::provider_residency(
+    let singleton_marker = provider_residency(
         &name,
         &item.generics,
         matches!(scope, InjectableScope::Singleton),
@@ -179,15 +180,10 @@ fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
         let Expr::Path(path) = &value else {
             return Err(syn::Error::new_spanned(
                 &value,
-                nest_rs_codegen::unknown_value(
-                    "injectable",
-                    "scope",
-                    &quote!(#value).to_string(),
-                    &SCOPES,
-                ),
+                unknown_value("injectable", "scope", &quote!(#value).to_string(), &SCOPES),
             ));
         };
-        let written = nest_rs_codegen::key_as_written(&path.path);
+        let written = key_as_written(&path.path);
         scope = Some(match written.as_str() {
             "singleton" => InjectableScope::Singleton,
             "request" => InjectableScope::Request,
@@ -195,7 +191,7 @@ fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
             other => {
                 return Err(syn::Error::new_spanned(
                     &value,
-                    nest_rs_codegen::unknown_value("injectable", "scope", other, &SCOPES),
+                    unknown_value("injectable", "scope", other, &SCOPES),
                 ));
             }
         });

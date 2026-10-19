@@ -418,7 +418,7 @@ A worker job — a queue attempt, a tick — and an event listener are the units
 no edge deadline bounds, so their decorator's `timeout` key is their deadline,
 defaulting to `nest_rs_core::JOB_TIMEOUT` and never off: past it an attempt's
 body is cut and fails retryably, a listener's is cut and its unit rolls back,
-and each files `error` (held by `nest_rs_codegen::job`'s table, `#[on_event]`'s
+and each files `error` (held by `nest-rs-codegen`'s job table, `#[on_event]`'s
 sibling grammar beside it, and each edge's suite). A listener's deadline starts
 with its own call, so one queued behind a slow sibling is not charged for it.
 Synchronous seams (`AbilityFactory`, the WS `Registry`, `ConfigSource`) are

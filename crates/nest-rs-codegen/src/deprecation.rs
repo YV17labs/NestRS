@@ -7,7 +7,7 @@
 //! the framework, so it says its date through `#[api]`.
 //!
 //! ```
-//! # use nest_rs_codegen::deprecation_header;
+//! # use nest_rs_codegen::__private::deprecation_header;
 //! let since: syn::LitStr = syn::parse_quote!("2026-10-08");
 //! assert_eq!(deprecation_header(&since)?, "@1791417600");
 //! # Ok::<(), syn::Error>(())

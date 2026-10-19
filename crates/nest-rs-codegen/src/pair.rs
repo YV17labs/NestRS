@@ -10,13 +10,13 @@
 //! # use quote::quote;
 //! # fn main() -> syn::Result<()> {
 //! # let input = quote! { struct Chat; };
-//! let item = nest_rs_codegen::pair::WS.parse_host(input.into())?;       // in `#[gateway]`
+//! let item = nest_rs_codegen::__private::pair::WS.parse_host(input.into())?;       // in `#[gateway]`
 //! # assert_eq!(item.ident, "Chat");
 //! # let input = quote! { impl Chat {} };
-//! let item = nest_rs_codegen::pair::WS.parse_operations(input.into())?; // in `#[messages]`
+//! let item = nest_rs_codegen::__private::pair::WS.parse_operations(input.into())?; // in `#[messages]`
 //! # assert!(item.items.is_empty());
 //!
-//! let wrong_half = nest_rs_codegen::pair::WS.parse_host(quote! { impl Chat {} });
+//! let wrong_half = nest_rs_codegen::__private::pair::WS.parse_host(quote! { impl Chat {} });
 //! assert!(wrong_half.is_err_and(|e| e.to_string().contains("#[messages]")));
 //! # Ok(())
 //! # }
@@ -214,7 +214,7 @@ impl DecoratorPair {
     /// does not take either, the table's refusal (`crate::layers`) for that
     /// block; on a provider pair, whose block is its host, the table's refusal.
     /// A `#[meta]` there is
-    /// [`reject_meta_on_operations`](crate::reject_meta_on_operations)'s.
+    /// [`reject_meta_on_operations`](crate::meta::reject_meta_on_operations)'s.
     pub fn reject_host_layers(&self, attrs: &[syn::Attribute]) -> syn::Result<()> {
         crate::layers::reject_on_operations(self, attrs)
     }

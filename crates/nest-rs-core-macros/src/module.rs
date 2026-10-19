@@ -1,4 +1,5 @@
-use nest_rs_codegen::path_label;
+use nest_rs_codegen::__private::{path_label, site, takes_value};
+use nest_rs_codegen::Refusals;
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
@@ -419,9 +420,9 @@ enum ProviderGroup<'a> {
 /// The list grouped by provider path as written, refusing at the second entry a
 /// provider listed twice or listed bare beside its `as dyn` binding.
 fn group_providers(bindings: &[ProviderBinding]) -> syn::Result<Vec<ProviderGroup<'_>>> {
-    let site = nest_rs_codegen::site("module", Some("providers"));
+    let site = site("module", Some("providers"));
     let mut groups: Vec<(String, ProviderGroup<'_>)> = Vec::new();
-    let mut refusal: Option<syn::Error> = None;
+    let mut refusals = Refusals::default();
     for binding in bindings {
         let (provider, trait_ty) = match binding {
             ProviderBinding::Concrete(p) => (p, None),
@@ -453,16 +454,10 @@ fn group_providers(bindings: &[ProviderBinding]) -> syn::Result<Vec<ProviderGrou
             (ProviderGroup::Concrete(_), Some(trait_ty)) => beside(&site, &spelled, trait_ty),
             (ProviderGroup::Dyn { traits, .. }, None) => beside(&site, &spelled, traits[0]),
         };
-        let error = syn::Error::new_spanned(binding, message);
-        match &mut refusal {
-            Some(first) => first.combine(error),
-            None => refusal = Some(error),
-        }
+        refusals.push(syn::Error::new_spanned(binding, message));
     }
-    match refusal {
-        Some(error) => Err(error),
-        None => Ok(groups.into_iter().map(|(_, group)| group).collect()),
-    }
+    refusals.finish()?;
+    Ok(groups.into_iter().map(|(_, group)| group).collect())
 }
 
 /// The refusal of a bare `provider` beside its binding `as trait_ty`.
@@ -534,7 +529,7 @@ impl Parse for ModuleArgs {
             if !input.peek(syn::token::Bracket) {
                 return Err(syn::Error::new(
                     input.span(),
-                    nest_rs_codegen::takes_value("module", Some(name), takes),
+                    takes_value("module", Some(name), takes),
                 ));
             }
             let content;
@@ -545,10 +540,7 @@ impl Parse for ModuleArgs {
             } else {
                 let bindings: Punctuated<ProviderBinding, Token![,]> =
                     Punctuated::parse_terminated(&content).map_err(|stopped| {
-                        syn::Error::new(
-                            stopped.span(),
-                            nest_rs_codegen::takes_value("module", Some(name), takes),
-                        )
+                        syn::Error::new(stopped.span(), takes_value("module", Some(name), takes))
                     })?;
                 args.providers.extend(bindings);
             }

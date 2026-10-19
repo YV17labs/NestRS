@@ -3,9 +3,10 @@
 //! Emits absolute `::nest_rs_queue::*` paths so the macros crate never depends
 //! on its surface crate.
 
-use nest_rs_codegen::{
-    Grammar, invalid_queue_name, is_valid_queue_name, missing_argument, takes_value,
+use nest_rs_codegen::__private::{
+    invalid_queue_name, is_valid_queue_name, missing_argument, takes_value,
 };
+use nest_rs_codegen::Grammar;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};

@@ -143,7 +143,7 @@ A name and its path say the same thing, and a name is judged in its set.
 - No collapsing the workspaces; `demo/apps/`, `demo/crates/features/` are fixed.
 - No decorator forcing a manifest line, none on two item shapes (a struct host
   plus an impl sibling, `#[controller]`/`#[routes]`, held by
-  `nest_rs_codegen::pair::ALL`), and no two for one concern.
+  `nest_rs_codegen::__private::pair::ALL`), and no two for one concern.
 - No second way to configure a module: `Module::for_root(x)`, one value, an
   opaque `*Setup` — no builder chain, other constructor or env-only `#[config]`.
 - No breaking change inside a major (what is API: `manifests-ci.md`,

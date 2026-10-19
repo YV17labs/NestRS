@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Internal — shared syn/quote helpers every NestRS *-macros crate is built from; not a direct dependency (third-party macro crates may also use it)."
+description = "Shared token helpers for NestRS decorators; third-party proc-macro crates use its root items, the rest is the framework's."
 keywords = ["framework", "nestrs", "macros", "proc-macro", "codegen"]
 categories = ["development-tools::procedural-macro-helpers"]
 

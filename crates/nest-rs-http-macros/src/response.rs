@@ -1,7 +1,7 @@
 //! Per-handler response shapers: `#[http_code]`, `#[response_header]`, and
 //! `#[redirect]`, markers consumed by `#[routes]`.
 
-use nest_rs_codegen::{mixed_site_ident, site, takes_value, ungrouped_expr};
+use nest_rs_codegen::__private::{mixed_site_ident, site, takes_value, ungrouped_expr};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, quote};

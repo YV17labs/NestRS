@@ -8,13 +8,12 @@
 //! of their own rather than through the host's `Discoverable`.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::Type;
-use syn::ext::IdentExt;
 
 use crate::inject::{LayerDeps, layer_deps};
 use crate::layers::Layers;
-use crate::meta::handler_ref;
+use crate::meta::{handler_ref, site_const_ident, site_fn_ident};
 
 /// One dispatch site of a provider-hosted impl half, with the layers its block
 /// and its method bound.
@@ -33,7 +32,7 @@ pub struct ProviderSite<'a> {
 
 /// The hidden associated items declaring `site`, placed in the inherent `impl`
 /// of the host that holds its handler const
-/// ([`handler_const`](crate::handler_const)): the function building its
+/// ([`handler_const`](crate::meta::handler_const)): the function building its
 /// layers, and the const holding its `&'static Site`, which
 /// [`site_ref`] reads. Every app-wide layer runs around such a unit: it is
 /// accepted on its own, nested in none.
@@ -45,12 +44,8 @@ pub fn site_const(site: &ProviderSite<'_>) -> TokenStream {
         method_layers,
         cfgs,
     } = site;
-    let name = site_ident(method);
-    // Cased as a function's is: a method may be named in any case.
-    let layers_fn = format_ident!(
-        "__nestrs_layers_{}",
-        method.unraw().to_string().to_lowercase()
-    );
+    let name = site_const_ident("site", method);
+    let layers_fn = site_fn_ident("layers", method);
     let handler = handler_ref(self_ty, method);
     let host_interceptors = &host.interceptors;
     let method_interceptors = &method_layers.interceptors;
@@ -96,7 +91,7 @@ pub fn site_const(site: &ProviderSite<'_>) -> TokenStream {
 
 /// The `&'static Site` of `method`'s site on `self_ty`.
 pub fn site_ref(self_ty: &Type, method: &syn::Ident) -> TokenStream {
-    let name = site_ident(method);
+    let name = site_const_ident("site", method);
     quote! { <#self_ty>::#name }
 }
 
@@ -126,14 +121,6 @@ pub fn host_layers_entry(site: &ProviderSite<'_>) -> TokenStream {
             }
         }
     }
-}
-
-/// The name of a site's const: the method's, cased as a const's is.
-fn site_ident(method: &syn::Ident) -> syn::Ident {
-    format_ident!(
-        "__NESTRS_SITE_{}",
-        method.unraw().to_string().to_uppercase()
-    )
 }
 
 #[cfg(test)]

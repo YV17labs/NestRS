@@ -66,8 +66,8 @@ fn meta_value(attr: &Attribute) -> syn::Result<Expr> {
 /// function, a constant or a variant of `Option` or `Result`, whose type the
 /// expression does not show.
 fn named_type(value: &Expr) -> Option<String> {
-    let path = match crate::ungrouped_expr(value) {
-        Expr::Call(call) => match crate::ungrouped_expr(&call.func) {
+    let path = match crate::ungrouped::ungrouped_expr(value) {
+        Expr::Call(call) => match crate::ungrouped::ungrouped_expr(&call.func) {
             Expr::Path(path) if path.qself.is_none() => &path.path,
             _ => return None,
         },
@@ -208,24 +208,24 @@ pub fn handler_const(site: &HandlerSite<'_>) -> TokenStream {
         method_meta,
         cfgs,
     } = site;
-    let name = handler_ident(method);
-    // Cased as a function's is: a method may be named in any case.
-    let meta_fn = format_ident!(
-        "__nestrs_meta_{}",
-        method.unraw().to_string().to_lowercase()
-    );
+    let name = site_const_ident("handler", method);
+    let meta_fn = site_fn_ident("meta", method);
     let host_name = host_name.unraw().to_string();
     let method_name = method.unraw().to_string();
-    let posture = match posture {
-        SitePosture::Public => quote!(Public),
-        SitePosture::Gated => quote!(Gated),
-        SitePosture::System => quote!(System),
-    };
     let host_values = match host_meta {
         HostMeta::Struct => quote! { <#self_ty>::__nestrs_host_meta() },
         HostMeta::Values(values) => boxed(values),
     };
     let method_values = boxed(method_meta);
+    let handler = declared_handler(&HandlerDeclaration {
+        unit: unit.clone(),
+        host: quote!(#self_ty),
+        host_name: &host_name,
+        method: &method_name,
+        address: address.clone(),
+        posture: *posture,
+        meta: quote!(<#self_ty>::#meta_fn),
+    });
     quote! {
         #(#cfgs)*
         #[doc(hidden)]
@@ -242,34 +242,85 @@ pub fn handler_const(site: &HandlerSite<'_>) -> TokenStream {
             dead_code,
             reason = "a site is declared whether or not its edge reads it, and its values stay built"
         )]
-        pub const #name: &'static ::nest_rs_core::Handler = {
-            static __NESTRS_HANDLER: ::nest_rs_core::Handler =
-                ::nest_rs_core::__private::declare_handler(
-                    ::nest_rs_core::__private::HandlerDeclaration {
-                        unit: #unit,
-                        host: ::core::any::TypeId::of::<#self_ty>(),
-                        host_name: #host_name,
-                        method: #method_name,
-                        address: #address,
-                        posture: ::nest_rs_core::Posture::#posture,
-                        meta: <#self_ty>::#meta_fn,
-                    },
-                );
-            &__NESTRS_HANDLER
-        };
+        pub const #name: &'static ::nest_rs_core::Handler = #handler;
     }
+}
+
+/// A `nest_rs_core::Handler`'s declaration, as the tokens of each field.
+pub struct HandlerDeclaration<'a> {
+    /// The path of the unit the site runs as.
+    pub unit: TokenStream,
+    /// The type whose `TypeId` names the host.
+    pub host: TokenStream,
+    /// The host's name, as written.
+    pub host_name: &'a str,
+    /// The dispatched method's name; empty for a site no method serves.
+    pub method: &'a str,
+    /// What a client addresses, a `&'static str` expression.
+    pub address: TokenStream,
+    /// What the site's posture declared.
+    pub posture: SitePosture,
+    /// The path of the `fn() -> MetaLevels` building the site's values.
+    pub meta: TokenStream,
+}
+
+/// The `&'static Handler` `declaration` describes, as a block expression
+/// holding its `static`: the one place a site's handler is declared.
+pub fn declared_handler(declaration: &HandlerDeclaration<'_>) -> TokenStream {
+    let HandlerDeclaration {
+        unit,
+        host,
+        host_name,
+        method,
+        address,
+        posture,
+        meta,
+    } = declaration;
+    let posture = match posture {
+        SitePosture::Public => quote!(Public),
+        SitePosture::Gated => quote!(Gated),
+        SitePosture::System => quote!(System),
+    };
+    quote! {{
+        static __NESTRS_HANDLER: ::nest_rs_core::Handler =
+            ::nest_rs_core::__private::declare_handler(
+                ::nest_rs_core::__private::HandlerDeclaration {
+                    unit: #unit,
+                    host: ::core::any::TypeId::of::<#host>(),
+                    host_name: #host_name,
+                    method: #method,
+                    address: #address,
+                    posture: ::nest_rs_core::Posture::#posture,
+                    meta: #meta,
+                },
+            );
+        &__NESTRS_HANDLER
+    }}
 }
 
 /// The `&'static Handler` of `method`'s site on `self_ty`.
 pub fn handler_ref(self_ty: &Type, method: &Ident) -> TokenStream {
-    let name = handler_ident(method);
+    let name = site_const_ident("handler", method);
     quote! { <#self_ty>::#name }
 }
 
-/// The name of a site's handler const: the method's, cased as a const's is.
-fn handler_ident(method: &Ident) -> Ident {
+/// The hidden function `role` declares beside `method`'s site:
+/// `__nestrs_<role>_<method>`, cased as a function's is, since a method may be
+/// named in any case.
+pub(crate) fn site_fn_ident(role: &str, method: &Ident) -> Ident {
     format_ident!(
-        "__NESTRS_HANDLER_{}",
+        "__nestrs_{}_{}",
+        role,
+        method.unraw().to_string().to_lowercase()
+    )
+}
+
+/// The hidden const `role` declares beside `method`'s site:
+/// `__NESTRS_<ROLE>_<METHOD>`, cased as a const's is.
+pub(crate) fn site_const_ident(role: &str, method: &Ident) -> Ident {
+    format_ident!(
+        "__NESTRS_{}_{}",
+        role.to_uppercase(),
         method.unraw().to_string().to_uppercase()
     )
 }

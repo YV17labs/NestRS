@@ -1,14 +1,15 @@
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Expr, ItemStruct, LitStr};
 
-use nest_rs_codegen::layers::{LayerAttribute, LayerScope, Layers, take_layers};
-use nest_rs_codegen::{
-    InjectableBody, VersionedEdge, build_injectable_body, from_container_method,
-    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers,
-    injected_optional_method, injected_optional_names_method, layer_deps, scoped_specs,
+use nest_rs_codegen::__private::layers::{LayerAttribute, LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::{
+    InjectableBody, MCP_GRAMMAR, MountPath, VersionedEdge, build_injectable_body,
+    from_container_method, guard_capability_bounds, host_meta_fn, injected_keys_with_layers,
+    injected_names_with_layers, injected_optional_method, injected_optional_names_method,
+    layer_deps, reject_path, scoped_specs,
 };
 
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -48,7 +49,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             Ok(layers) => layers,
             Err(err) => return refused_beside(err, item),
         };
-    let host_meta = nest_rs_codegen::host_meta_fn(&meta);
+    let host_meta = host_meta_fn(&meta);
     let capability_bounds = guard_capability_bounds(
         guards.iter(),
         quote!(::nest_rs_guards::GuardFor<::nest_rs_mcp::McpView>),
@@ -209,7 +210,7 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
     // Before the grammar, so `version` gets its own refusal, not the unknown-key one.
     VersionedEdge::Mcp.reject_version(&args)?;
     let mut parsed = McpArgs::default();
-    nest_rs_codegen::MCP_GRAMMAR.parse2(args, |arg| {
+    MCP_GRAMMAR.parse2(args, |arg| {
         match arg.key() {
             "path" => parsed.path = Some(arg.str_lit("/mcp")?),
             "name" => parsed.name = Some(arg.expr()?),
@@ -227,7 +228,7 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
 
 /// Refuses an empty `path`: absent is the one spelling of "the default".
 fn check_path(path: &LitStr) -> syn::Result<()> {
-    nest_rs_codegen::reject_path("mcp", path, nest_rs_codegen::MountPath::Literal)
+    reject_path("mcp", path, MountPath::Literal)
 }
 
 /// An optional identity argument as the `Option<&str>` tokens

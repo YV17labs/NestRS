@@ -2,9 +2,9 @@
 //! OpenAPI path templating, at boot: what `also_mounts`, a self-mount's path
 //! and a path read from config declare.
 //!
-//! `#[routes]` reads its literals with `nest_rs_codegen::RoutePath`, which this
-//! crate cannot depend on (it pulls `syn`), so the grammar is written twice and
-//! pinned once, by `codegen_and_runtime_parse_one_corpus_alike` below.
+//! `#[routes]` reads its literals with `nest_rs_codegen::__private::RoutePath`,
+//! which this crate cannot depend on (it pulls `syn`), so the grammar is written
+//! twice and pinned once, by `codegen_and_runtime_parse_one_corpus_alike` below.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -370,7 +370,7 @@ mod tests {
     fn codegen_and_runtime_parse_one_corpus_alike() {
         for written in CORPUS {
             match (
-                nest_rs_codegen::RoutePath::parse(written),
+                nest_rs_codegen::__private::RoutePath::parse(written),
                 RouteTemplate::parse(written),
             ) {
                 (Ok(compiled), Ok(booted)) => {
@@ -392,7 +392,7 @@ mod tests {
         for written in ["/ws/{room}", "/a{{b", "/graphql/:x", "/files/*rest"] {
             let booted = RouteTemplate::literal(written).expect_err("not literal");
             assert_eq!(
-                nest_rs_codegen::MountPath::Literal.refusal(written),
+                nest_rs_codegen::__private::MountPath::Literal.refusal(written),
                 Some(
                     booted
                         .to_string()
@@ -402,7 +402,7 @@ mod tests {
             );
         }
         assert_eq!(
-            nest_rs_codegen::MountPath::Literal.refusal("/graphql"),
+            nest_rs_codegen::__private::MountPath::Literal.refusal("/graphql"),
             None
         );
     }

@@ -3,17 +3,19 @@
 //! link-time inventory, leaving the methods unchanged. The provider's own
 //! `#[injectable]` owns `Discoverable`.
 
-use nest_rs_codegen::layers::{LayerScope, take_layers};
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::layers::{LayerScope, take_layers};
+use nest_rs_codegen::__private::pair;
 use std::str::FromStr;
 
-use nest_rs_codegen::{
-    HostBorrow, JobDecorator, JobKey, Replicas, VersionedEdge, await_if_async, cfg_attrs,
-    duration_millis, impl_self_ident, invalid_time_zone, job_key, job_keys, job_returns_a_result,
-    job_timeout, job_transaction, key_value, key_without_replicas_one, replicas_value,
-    require_str_lit, returns_unit, shared_receiver, site, takes_value, timeout_value,
-    transactional_value, ungrouped_expr, unread_job_key,
+use nest_rs_codegen::__private::{
+    HandlerSite, HostBorrow, HostMeta, JobDecorator, JobKey, ProviderSite, Replicas, SitePosture,
+    VersionedEdge, await_if_async, cfg_attrs, concrete_signature, handler_const, host_layers_entry,
+    impl_self_ident, invalid_time_zone, job_key, job_keys, job_returns_a_result, job_timeout,
+    job_transaction, key_as_written, key_value, key_without_replicas_one, one_role_per_method,
+    replicas_value, require_str_lit, returns_unit, shared_receiver, site, site_const, site_ref,
+    takes_value, timeout_value, transactional_value, ungrouped_expr, unread_job_key,
 };
+use nest_rs_codegen::{Refusals, duration_millis};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -52,19 +54,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut submissions: Vec<TokenStream2> = Vec::new();
     let mut handler_consts: Vec<TokenStream2> = Vec::new();
-    let mut refusals: Option<syn::Error> = None;
+    let mut refusals = Refusals::default();
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
 
-        let index = match nest_rs_codegen::one_role_per_method(
-            "trigger",
-            &method.attrs,
-            &TRIGGER_ATTRS,
-            "",
-        ) {
+        let index = match one_role_per_method("trigger", &method.attrs, &TRIGGER_ATTRS, "") {
             Ok(Some(index)) => index,
             Ok(None) => continue,
             Err(err) => return err.to_compile_error().into(),
@@ -72,14 +69,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let trigger_attr = method.attrs.remove(index);
 
         // The shape refusals name the trigger as written.
-        let key = nest_rs_codegen::key_as_written(trigger_attr.path());
+        let key = key_as_written(trigger_attr.path());
         let member = JobDecorator::named(&key)
             .unwrap_or_else(|| unreachable!("one_role_per_method matched a trigger attribute"));
         let written = format!("#[{key}]");
         if let Err(err) = shared_receiver(method, &written, &provider, HostBorrow::Arc) {
             return err.to_compile_error().into();
         }
-        if let Err(err) = nest_rs_codegen::concrete_signature(method, &written) {
+        if let Err(err) = concrete_signature(method, &written) {
             return err.to_compile_error().into();
         }
         // The expansion hands the method's answer to the scheduler, which reads
@@ -92,21 +89,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         // Every method's keys are read before the first refusal is returned, so a
         // host with several wrong triggers learns about all of them at once.
-        let ParsedTrigger {
+        let Some(ParsedTrigger {
             trigger: trigger_tokens,
             timeout,
             transactional,
             replicas,
             key,
-        } = match parse_trigger(&trigger_attr, member) {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                match &mut refusals {
-                    Some(refusals) => refusals.combine(err),
-                    None => refusals = Some(err),
-                }
-                continue;
-            }
+        }) = refusals.handle(parse_trigger(&trigger_attr, member))
+        else {
+            continue;
         };
         let timeout_tokens = job_timeout(timeout);
         let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_schedule));
@@ -127,29 +118,27 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 quote!(#derived)
             }
         };
-        handler_consts.push(nest_rs_codegen::handler_const(
-            &nest_rs_codegen::HandlerSite {
-                unit: quote!(::nest_rs_schedule::unit::TICK),
-                self_ty: &self_ty,
-                host_name: &provider,
-                method: &method_ident,
-                address,
-                posture: nest_rs_codegen::SitePosture::System,
-                host_meta: nest_rs_codegen::HostMeta::Values(&host_layers.meta),
-                method_meta: &method_layers.meta,
-                cfgs: &cfgs,
-            },
-        ));
-        let site = nest_rs_codegen::ProviderSite {
+        handler_consts.push(handler_const(&HandlerSite {
+            unit: quote!(::nest_rs_schedule::unit::TICK),
+            self_ty: &self_ty,
+            host_name: &provider,
+            method: &method_ident,
+            address,
+            posture: SitePosture::System,
+            host_meta: HostMeta::Values(&host_layers.meta),
+            method_meta: &method_layers.meta,
+            cfgs: &cfgs,
+        }));
+        let site = ProviderSite {
             self_ty: &self_ty,
             method: &method_ident,
             host: &host_layers,
             method_layers: &method_layers,
             cfgs: &cfgs,
         };
-        handler_consts.push(nest_rs_codegen::site_const(&site));
-        submissions.push(nest_rs_codegen::host_layers_entry(&site));
-        let site_ref = nest_rs_codegen::site_ref(&self_ty, &method_ident);
+        handler_consts.push(site_const(&site));
+        submissions.push(host_layers_entry(&site));
+        let site_ref = site_ref(&self_ty, &method_ident);
         let key_tokens = match key {
             Some(key) => quote! { ::std::option::Option::Some(#key) },
             None => quote! { ::std::option::Option::None },
@@ -184,7 +173,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         });
     }
 
-    if let Some(refusals) = refusals {
+    if let Err(refusals) = refusals.finish() {
         return refusals.to_compile_error().into();
     }
     let host_check = pair::SCHEDULED.provider_host_check(&self_ty);
@@ -334,8 +323,8 @@ fn optional_keys(member: JobDecorator) -> String {
 }
 
 /// The named keys a trigger accepts after its own argument, read against the
-/// family's table (`nest_rs_codegen::job_key`): another member's key, or one no
-/// member takes, is refused naming why.
+/// family's table (`nest_rs_codegen::__private::job_key`): another member's key,
+/// or one no member takes, is refused naming why.
 ///
 /// **A repeated key is refused, not last-write-wins.**
 fn parse_trailing_keys(
@@ -486,10 +475,7 @@ mod tests {
                 .err()
                 .expect("a key beside a job firing on every replica")
                 .to_string();
-            assert_eq!(
-                refusal,
-                nest_rs_codegen::key_without_replicas_one(JobDecorator::Every)
-            );
+            assert_eq!(refusal, key_without_replicas_one(JobDecorator::Every));
         }
     }
 

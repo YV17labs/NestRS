@@ -2,7 +2,7 @@
 //! orchestration of the `#[query]` / `#[mutation]` / `#[subscription]` /
 //! `#[field_resolver]` methods on its impl block.
 
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
@@ -13,15 +13,20 @@ use syn::{
     PathArguments, Signature, Token, Type, parse_quote,
 };
 
-use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
-use nest_rs_codegen::{
-    Collision, Conditional, DispatchKeys, HostBorrow, InjectableBody, PipeWrapper, VersionedEdge,
-    await_if_async, build_injectable_body, cfg_attrs, delegated_attrs, force_guard_typeids,
-    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
+use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::{
+    Collision, Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta,
+    InjectableBody, PipeWrapper, SitePosture, VersionedEdge, answer_span, at_most_one_authorize,
+    await_if_async, build_injectable_body, cfg_attrs, concrete_signature, declared_handler,
+    delegated_attrs, force_guard_typeids, forwarded_arg_idents, forwarded_idents,
+    from_container_method, guard_capability_bounds, handler_const, handler_ref, host_meta_fn,
     impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
-    injected_names_with_layers, injected_optional_fns, layer_deps, normalize_forwarded_args,
-    pipe_wrapper, scoped_specs, shared_receiver, take_flag_attr, type_label,
+    injected_names_with_layers, injected_optional_fns, key_as_written, layer_deps,
+    normalize_forwarded_args, one_role_per_method, pipe_wrapper, posture_contradiction,
+    posture_required, reject_meta_on_operations, scoped_specs, shared_receiver, takes_value,
+    type_label, unknown_argument,
 };
+use nest_rs_codegen::take_flag_attr;
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
@@ -102,7 +107,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
             Ok(layers) => layers,
             Err(err) => return err.to_compile_error().into(),
         };
-    let host_meta = nest_rs_codegen::host_meta_fn(&meta);
+    let host_meta = host_meta_fn(&meta);
 
     let InjectableBody {
         ctor,
@@ -229,7 +234,7 @@ impl syn::parse::Parse for AuthorizeArg {
                 let spelled = name.to_string();
                 Err(syn::Error::new_spanned(
                     name,
-                    nest_rs_codegen::unknown_argument("authorize", &spelled, AUTHORIZE.keys()),
+                    unknown_argument("authorize", &spelled, AUTHORIZE.keys()),
                 ))
             }
         } else {
@@ -242,12 +247,7 @@ impl syn::parse::Parse for AuthorizeArg {
 }
 
 fn refused(key: &'static str, takes: &'static str) -> impl Fn(syn::Error) -> syn::Error {
-    move |stopped| {
-        syn::Error::new(
-            stopped.span(),
-            nest_rs_codegen::takes_value("authorize", Some(key), takes),
-        )
-    }
+    move |stopped| syn::Error::new(stopped.span(), takes_value("authorize", Some(key), takes))
 }
 
 const AUTHORIZE_SHAPE: &str = "expected `#[authorize(Action, Entity)]` — e.g. \
@@ -264,7 +264,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     if attrs.iter().any(|a| a.path().is_ident("authorize")) {
         return Err(syn::Error::new_spanned(
             &attr,
-            nest_rs_codegen::at_most_one_authorize("operation"),
+            at_most_one_authorize("operation"),
         ));
     }
     let args: Vec<AuthorizeArg> = attr
@@ -601,7 +601,7 @@ fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenS
         };
     }
     if root == RootKind::Subscription {
-        let probe = quote_spanned! {nest_rs_codegen::answer_span(sig)=>
+        let probe = quote_spanned! {answer_span(sig)=>
             ::nest_rs_graphql::__private::answers_a_stream(::nest_rs_core::__private::Answer(&__answer).kind());
         };
         return quote! {{
@@ -699,7 +699,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     }
 
     pair::GRAPHQL.reject_host_layers(&item.attrs)?;
-    nest_rs_codegen::reject_meta_on_operations(&pair::GRAPHQL, &item.attrs)?;
+    reject_meta_on_operations(&pair::GRAPHQL, &item.attrs)?;
 
     let query_obj = format_ident!("__{}Query", base);
     let mutation_obj = format_ident!("__{}Mutation", base);
@@ -731,7 +731,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             .attrs
             .iter()
             .filter(|a| ROLE_ATTRS.iter().any(|name| a.path().is_ident(name)))
-            .map(|a| nest_rs_codegen::key_as_written(a.path()))
+            .map(|a| key_as_written(a.path()))
             .collect();
         let why = if written.iter().any(|role| role == "entity")
             && written.iter().any(|role| role != "entity")
@@ -741,13 +741,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         } else {
             ""
         };
-        let Some(idx) =
-            nest_rs_codegen::one_role_per_method("role", &method.attrs, &ROLE_ATTRS, why)?
-        else {
+        let Some(idx) = one_role_per_method("role", &method.attrs, &ROLE_ATTRS, why)? else {
             continue;
         };
         shared_receiver(method, "#[operations]", &base, HostBorrow::Host)?;
-        nest_rs_codegen::concrete_signature(method, "#[operations]")?;
+        concrete_signature(method, "#[operations]")?;
         let cfgs = cfg_attrs(&method.attrs);
 
         let verb_attr = method.attrs.remove(idx);
@@ -801,7 +799,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     format!("#[field_resolver] {parent}.{field}"),
                 )
             } else {
-                let root = nest_rs_codegen::key_as_written(verb_attr.path());
+                let root = key_as_written(verb_attr.path());
                 (format!("{root} {field}"), format!("#[{root}] {field}"))
             };
             declared.declare(
@@ -854,7 +852,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 (Some(_), true) => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
-                        nest_rs_codegen::posture_contradiction(),
+                        posture_contradiction(),
                     ));
                 }
                 (None, false) if is_entity => {
@@ -871,7 +869,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 (None, false) => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
-                        nest_rs_codegen::posture_required(
+                        posture_required(
                             "`#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]`",
                             "no `#[authorize]` gate and no response mask — `#[use_guards]` \
                              guards still run",
@@ -888,28 +886,26 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             } else {
                 RootKind::Subscription
             };
-            handler_consts.push(nest_rs_codegen::handler_const(
-                &nest_rs_codegen::HandlerSite {
-                    unit: match root_kind {
-                        RootKind::Subscription => quote!(::nest_rs_graphql::unit::SUBSCRIPTION),
-                        RootKind::Query | RootKind::Mutation => {
-                            quote!(::nest_rs_graphql::unit::FIELD)
-                        }
-                    },
-                    self_ty: &self_ty,
-                    host_name: &base,
-                    method: &method_name,
-                    address: quote!(#field),
-                    posture: if is_public {
-                        nest_rs_codegen::SitePosture::Public
-                    } else {
-                        nest_rs_codegen::SitePosture::Gated
-                    },
-                    host_meta: nest_rs_codegen::HostMeta::Struct,
-                    method_meta: &metas,
-                    cfgs: &cfgs,
+            handler_consts.push(handler_const(&HandlerSite {
+                unit: match root_kind {
+                    RootKind::Subscription => quote!(::nest_rs_graphql::unit::SUBSCRIPTION),
+                    RootKind::Query | RootKind::Mutation => {
+                        quote!(::nest_rs_graphql::unit::FIELD)
+                    }
                 },
-            ));
+                self_ty: &self_ty,
+                host_name: &base,
+                method: &method_name,
+                address: quote!(#field),
+                posture: if is_public {
+                    SitePosture::Public
+                } else {
+                    SitePosture::Gated
+                },
+                host_meta: HostMeta::Struct,
+                method_meta: &metas,
+                cfgs: &cfgs,
+            }));
             // async-graphql's subscription derive builds paths out of the return
             // type, and Rust refuses an `impl Trait` inside a path (E0562).
             if root_kind == RootKind::Subscription
@@ -1019,7 +1015,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let route_label_lit = LitStr::new(&route_label, proc_macro2::Span::call_site());
             let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
             gsig.output = wrapper_output(&sig);
-            let site_handler = nest_rs_codegen::handler_ref(&self_ty, &method_name);
+            let site_handler = handler_ref(&self_ty, &method_name);
             let authz_entity = |spec: &AuthorizeSpec| match &spec.entity {
                 Some(entity) => quote!(#entity),
                 None => {
@@ -1373,9 +1369,16 @@ fn field_method(
     let where_clause = &sig.generics.where_clause;
     let output = wrapper_output(sig);
 
-    let host_name = LitStr::new(&type_label(self_ty), proc_macro2::Span::call_site());
-    let method_lit = LitStr::new(&method_name.unraw().to_string(), method_name.span());
     let field_lit = LitStr::new(field, proc_macro2::Span::call_site());
+    let handler = declared_handler(&HandlerDeclaration {
+        unit: quote!(::nest_rs_graphql::unit::FIELD),
+        host: quote!(#self_ty),
+        host_name: &type_label(self_ty),
+        method: &method_name.unraw().to_string(),
+        address: quote!(#field_lit),
+        posture: SitePosture::Gated,
+        meta: quote!(__nestrs_field_meta),
+    });
     // A field resolver is no unit and declares no site of its own: the guards
     // its chain runs read the resolver's `#[meta]` through this declaration.
     let site_handler = quote! {{
@@ -1385,18 +1388,7 @@ fn field_method(
                 method: ::std::vec::Vec::new(),
             }
         }
-        static __NESTRS_FIELD: ::nest_rs_core::Handler = ::nest_rs_core::__private::declare_handler(
-            ::nest_rs_core::__private::HandlerDeclaration {
-                unit: ::nest_rs_graphql::unit::FIELD,
-                host: ::core::any::TypeId::of::<#self_ty>(),
-                host_name: #host_name,
-                method: #method_lit,
-                address: #field_lit,
-                posture: ::nest_rs_core::Posture::Gated,
-                meta: __nestrs_field_meta,
-            },
-        );
-        &__NESTRS_FIELD
+        #handler
     }};
     let checks = layered_resolver_chain(
         self_ty,

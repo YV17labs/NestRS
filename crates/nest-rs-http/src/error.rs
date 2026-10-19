@@ -614,8 +614,8 @@ impl RouteTemplateError {
     }
 }
 
-/// What the route grammar refuses, worded as `nest_rs_codegen::RoutePath`
-/// words it.
+/// What the route grammar refuses, worded as
+/// `nest_rs_codegen::__private::RoutePath` words it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum TemplateRefusal {
     #[error("`:{name}` is the 6.x parameter syntax — write `{rewrite}`")]

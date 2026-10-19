@@ -6,7 +6,7 @@
 //! supplies only how its operations are spelled, and what `#[public]` buys on it:
 //!
 //! ```
-//! # use nest_rs_codegen::{Posture, PostureRules};
+//! # use nest_rs_codegen::__private::{Posture, PostureRules};
 //! # fn main() -> syn::Result<()> {
 //! const POSTURE: PostureRules = PostureRules {
 //!     operation: "#[subscribe_message]",
@@ -36,6 +36,7 @@ use syn::punctuated::Punctuated;
 use syn::{ImplItemFn, Meta, Path, Token};
 
 use crate::attrs::take_flag_attr;
+use crate::meta::SitePosture;
 
 /// The sentence every site prints for a second `#[authorize(...)]`.
 pub fn at_most_one_authorize(site: &str) -> String {
@@ -101,6 +102,15 @@ impl Posture {
                 ..
             }
         )
+    }
+
+    /// What a site's declaration says of this posture: `#[public]` is public,
+    /// `#[authorize]` gated.
+    pub fn site_posture(&self) -> SitePosture {
+        match self {
+            Self::Public => SitePosture::Public,
+            Self::Authorize { .. } => SitePosture::Gated,
+        }
     }
 }
 

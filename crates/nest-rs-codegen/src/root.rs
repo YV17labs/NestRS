@@ -189,6 +189,20 @@ fn root_prefix(u: &Umbrella) -> TokenStream {
 /// by the umbrella's check for its feature, an item: the output belongs in
 /// item or associated-item position. Call it once, on what a decorator is
 /// about to return.
+///
+/// ```
+/// use proc_macro2::TokenStream;
+/// use quote::quote;
+///
+/// fn injectable_audit(item: syn::ItemStruct) -> TokenStream {
+///     let ident = &item.ident;
+///     nest_rs_codegen::reroot(quote! {
+///         #[::nest_rs_core::injectable]
+///         #item
+///         impl ::nestrs_audit::Audited for #ident {}
+///     })
+/// }
+/// ```
 pub fn reroot(tokens: TokenStream) -> TokenStream {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
 

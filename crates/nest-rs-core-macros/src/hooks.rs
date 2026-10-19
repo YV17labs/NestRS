@@ -1,13 +1,14 @@
-use nest_rs_codegen::layers::{LayerScope, take_layers};
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::layers::{LayerScope, take_layers};
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::ImplItem;
 use syn::ext::IdentExt;
 
-use nest_rs_codegen::{
-    HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit, shared_receiver,
+use nest_rs_codegen::__private::{
+    HostBorrow, await_if_async, cfg_attrs, concrete_signature, impl_self_ident,
+    one_role_per_method, returns_unit, shared_receiver,
 };
 
 const HOOK_ATTRS: [(&str, &str); 5] = [
@@ -59,12 +60,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
 
         let accepted: Vec<&str> = HOOK_ATTRS.iter().map(|(name, _)| *name).collect();
-        let index = match nest_rs_codegen::one_role_per_method(
-            "lifecycle phase",
-            &method.attrs,
-            &accepted,
-            "",
-        ) {
+        let index = match one_role_per_method("lifecycle phase", &method.attrs, &accepted, "") {
             Ok(Some(index)) => index,
             Ok(None) => continue,
             Err(err) => return err.to_compile_error().into(),
@@ -83,7 +79,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         if let Err(err) = shared_receiver(method, "#[hooks]", &base, HostBorrow::Arc) {
             return err.to_compile_error().into();
         }
-        if let Err(err) = nest_rs_codegen::concrete_signature(method, "#[hooks]") {
+        if let Err(err) = concrete_signature(method, "#[hooks]") {
             return err.to_compile_error().into();
         }
 

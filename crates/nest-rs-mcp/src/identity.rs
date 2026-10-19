@@ -300,7 +300,7 @@ mod tests {
         );
         for field in fields {
             assert!(
-                nest_rs_codegen::mcp_answers(field),
+                nest_rs_codegen::__private::mcp_answers(field),
                 "`McpIdentity::{field}` has no answer in `#[mcp]`'s grammar — give it a \
                  row in nest_rs_codegen's SERVER_FIELDS naming the seam that takes it",
             );

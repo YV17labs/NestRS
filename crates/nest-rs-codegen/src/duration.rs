@@ -17,10 +17,21 @@ fn outside_the_grammar(attr: &str, key: Option<&str>) -> String {
     )
 }
 
-/// Read a duration written at `#[attr]`'s `key` as whole milliseconds.
+/// Read a duration written at `#[attr]`'s `key` as whole milliseconds; `key`
+/// is `None` for a decorator's positional argument.
 ///
 /// Refused with one sentence: anything but a string literal with one of the
 /// four suffixes on a whole number above zero that fits `u64` milliseconds.
+///
+/// ```
+/// use nest_rs_codegen::duration_millis;
+///
+/// assert_eq!(duration_millis("every", None, &syn::parse_quote!("5m"))?, 300_000);
+///
+/// let refused = duration_millis("cached", Some("ttl"), &syn::parse_quote!(60)).unwrap_err();
+/// assert!(refused.to_string().starts_with("#[cached] `ttl` takes a duration literal"));
+/// # Ok::<(), syn::Error>(())
+/// ```
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"

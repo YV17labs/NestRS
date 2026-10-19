@@ -2,7 +2,7 @@
 //! not hand-write, each delegating to the entity's `CrudService`, then re-emit
 //! under `#[operations]`.
 
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use std::collections::HashSet;
 
 use proc_macro::TokenStream;
@@ -10,7 +10,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_quote};
 
-use nest_rs_codegen::{Paginate, parse_crud_args, singular_of};
+use nest_rs_codegen::__private::{Paginate, parse_crud_args, singular_of};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = match pair::GRAPHQL.parse_operations(input.into()) {

@@ -1,7 +1,10 @@
 //! Parse `#[expose(...)]` into a [`ResourceModel`] and strip the per-field
 //! annotations so the ORM macros see a clean entity.
 
-use nest_rs_codegen::{Arg, Grammar, ungrouped_expr};
+use nest_rs_codegen::__private::{
+    missing_argument, require_str_lit, site, takes_value, ungrouped_expr, unknown_value,
+};
+use nest_rs_codegen::{Arg, Grammar};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote};
 use syn::ext::IdentExt;
@@ -149,7 +152,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                 service = Some(arg.value()?.parse::<Path>().map_err(|stopped| {
                     syn::Error::new(
                         stopped.span(),
-                        nest_rs_codegen::takes_value(
+                        takes_value(
                             "expose",
                             Some("service"),
                             "the path of the entity's service, e.g. `service = UsersService`",
@@ -172,7 +175,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             &item.ident,
             format!(
                 "{} (the wire DTO and OpenAPI schema name)",
-                nest_rs_codegen::missing_argument("expose", "name", "\"User\""),
+                missing_argument("expose", "name", "\"User\""),
             ),
         )
     })?;
@@ -207,6 +210,10 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut enum_name: Option<LitStr> = None;
         let mut ignored = false;
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("sea_orm")) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "reads sea-orm's own #[sea_orm] attribute, whose keys are sea-orm's"
+            )]
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("primary_key") {
                     is_pk = true;
@@ -263,7 +270,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                             other => {
                                 return Err(syn::Error::new_spanned(
                                     other,
-                                    nest_rs_codegen::unknown_value(
+                                    unknown_value(
                                         "expose",
                                         "input",
                                         &other.to_token_stream().to_string(),
@@ -279,7 +286,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     if !input.peek(syn::token::Paren) {
                         return Err(syn::Error::new(
                             arg.ident().span(),
-                            nest_rs_codegen::takes_value(
+                            takes_value(
                                 "expose",
                                 Some("validate"),
                                 "a list of `validator` rules, e.g. `validate(length(min = 1))`",
@@ -301,7 +308,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                             format!(
                                 "{}: {:?} is not a column name — it takes a snake_case column \
                                  of the child entity, e.g. `via = \"author_id\"`",
-                                nest_rs_codegen::site("expose", Some("via")),
+                                site("expose", Some("via")),
                                 lit.value(),
                             ),
                         ));
@@ -476,7 +483,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
 /// and the stem of its `Create…` / `Update…` inputs and OpenAPI schema.
 /// Refused unless an identifier, since `format_ident!` panics on one that is not.
 fn type_name(written: &Expr) -> syn::Result<String> {
-    let lit = nest_rs_codegen::require_str_lit(written, "expose", "name", "User")?;
+    let lit = require_str_lit(written, "expose", "name", "User")?;
     let name = lit.value();
     if syn::parse_str::<Ident>(&name).is_err() {
         return Err(syn::Error::new_spanned(
@@ -484,7 +491,7 @@ fn type_name(written: &Expr) -> syn::Result<String> {
             format!(
                 "{}: {name:?} is not a Rust identifier — the wire DTO is declared under it, and \
                  its `Create`/`Update` inputs and OpenAPI schema are named from it",
-                nest_rs_codegen::site("expose", Some("name")),
+                site("expose", Some("name")),
             ),
         ));
     }
@@ -495,7 +502,7 @@ fn type_name(written: &Expr) -> syn::Result<String> {
 /// find the field holding a `HasOne` relation's foreign key. The ident keeps the
 /// literal's span, so a later refusal of the column lands on the name.
 fn foreign_key(written: &Expr) -> syn::Result<Ident> {
-    let lit = nest_rs_codegen::require_str_lit(written, "sea_orm", "from", "org_id")?;
+    let lit = require_str_lit(written, "sea_orm", "from", "org_id")?;
     let column = lit.value();
     if syn::parse_str::<Ident>(&column).is_err() {
         return Err(syn::Error::new_spanned(
@@ -503,7 +510,7 @@ fn foreign_key(written: &Expr) -> syn::Result<Ident> {
             format!(
                 "{}: {column:?} is not a column name — `#[expose]` reads it as the field holding \
                  this relation's foreign key, e.g. `from = \"org_id\"`",
-                nest_rs_codegen::site("sea_orm", Some("from")),
+                site("sea_orm", Some("from")),
             ),
         ));
     }
@@ -532,12 +539,8 @@ const FIELD: Grammar = Grammar::new("expose", &["input", "validate", "complexity
 /// written, or the key refused naming what its list takes when no list follows.
 fn listed(arg: &Arg<'_>, takes: &str) -> syn::Result<Vec<Expr>> {
     let input = arg.input();
-    let refused = |at: proc_macro2::Span| {
-        syn::Error::new(
-            at,
-            nest_rs_codegen::takes_value("expose", Some(arg.key()), takes),
-        )
-    };
+    let refused =
+        |at: proc_macro2::Span| syn::Error::new(at, takes_value("expose", Some(arg.key()), takes));
     if !input.peek(syn::token::Paren) {
         return Err(refused(arg.ident().span()));
     }

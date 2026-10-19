@@ -1,7 +1,7 @@
 //! `#[routes]` — bind a `#[controller]` impl block's verb-tagged methods to
 //! HTTP routes, with their mount, discovery and OpenAPI metadata.
 
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
@@ -10,13 +10,19 @@ use syn::{
     Attribute, Expr, FnArg, ImplItem, LitStr, Meta, Path, ReturnType, Token, Type, parse_quote,
 };
 
-use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
-use nest_rs_codegen::{
-    Collision, Conditional, DispatchKeys, HostBorrow, RoutePath, await_if_async, cfg_attrs,
-    force_guard_typeids, guard_capability_bounds, impl_self_ident, injected_methods_with_layers,
-    injected_per_request_method, layer_deps, mixed_site_ident, normalize_forwarded_args,
-    nth_generic_type, scoped_specs, shared_receiver, take_flag_attr,
+use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::versioning;
+use nest_rs_codegen::__private::{
+    Collision, Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta,
+    ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture, at_most_one_authorize, await_if_async,
+    cfg_attrs, concrete_signature, deprecation_header, force_guard_typeids,
+    guard_capability_bounds, handler_const, handler_ref, impl_self_ident,
+    injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
+    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
+    takes_value, ungrouped_expr,
 };
+use nest_rs_codegen::take_flag_attr;
 
 use crate::attr::opt_str;
 
@@ -131,7 +137,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     if let Err(err) = pair::HTTP
         .reject_host_layers(&item.attrs)
-        .and_then(|()| nest_rs_codegen::reject_meta_on_operations(&pair::HTTP, &item.attrs))
+        .and_then(|()| reject_meta_on_operations(&pair::HTTP, &item.attrs))
     {
         return err.to_compile_error().into();
     }
@@ -162,7 +168,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let index = match nest_rs_codegen::one_role_per_method(
+        let index = match one_role_per_method(
             "verb",
             &method.attrs,
             &["get", "post", "put", "delete", "patch", "sse"],
@@ -179,7 +185,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // Before the arguments are read: without `&self`, the first argument is
         // not a receiver.
         if let Err(err) = shared_receiver(method, "#[routes]", &ctrl_name, HostBorrow::Host)
-            .and_then(|()| nest_rs_codegen::concrete_signature(method, "#[routes]"))
+            .and_then(|()| concrete_signature(method, "#[routes]"))
         {
             return err.to_compile_error().into();
         }
@@ -202,10 +208,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Err(refusal) => {
                 return syn::Error::new_spanned(
                     &written_path,
-                    format!(
-                        "{} {refusal}",
-                        nest_rs_codegen::site(&declared_verb.to_string(), None),
-                    ),
+                    format!("{} {refusal}", site(&declared_verb.to_string(), None)),
                 )
                 .to_compile_error()
                 .into();
@@ -278,9 +281,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
         let method_guarded = !guards.is_empty();
         let method_throttled = guards.iter().any(guard_path_is_throttler);
-        if let Err(err) =
-            nest_rs_codegen::refuse_rust_deprecated(&method.attrs, "a `#[routes]` handler")
-        {
+        if let Err(err) = refuse_rust_deprecated(&method.attrs, "a `#[routes]` handler") {
             return err.to_compile_error().into();
         }
         let api = match nest_rs_codegen::take_single_attr(&mut method.attrs, "api") {
@@ -291,9 +292,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(None) => ApiMeta::default(),
             Err(err) => return err.to_compile_error().into(),
         };
-        let deprecation = match api.deprecated.as_ref().map(|since| {
-            nest_rs_codegen::deprecation_header(since).map(|header| (since.clone(), header))
-        }) {
+        let deprecation = match api
+            .deprecated
+            .as_ref()
+            .map(|since| deprecation_header(since).map(|header| (since.clone(), header)))
+        {
             Some(Ok(read)) => Some(read),
             Some(Err(err)) => return err.to_compile_error().into(),
             None => None,
@@ -467,23 +470,21 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         });
 
-        handler_consts.push(nest_rs_codegen::handler_const(
-            &nest_rs_codegen::HandlerSite {
-                unit: quote!(::nest_rs_http::unit::REQUEST),
-                self_ty: &self_ty,
-                host_name: &ctrl_name,
-                method: &method_name,
-                address: quote!(#route_path),
-                posture: if is_public {
-                    nest_rs_codegen::SitePosture::Public
-                } else {
-                    nest_rs_codegen::SitePosture::Gated
-                },
-                host_meta: nest_rs_codegen::HostMeta::Struct,
-                method_meta: &metas,
-                cfgs: &cfgs,
+        handler_consts.push(handler_const(&HandlerSite {
+            unit: quote!(::nest_rs_http::unit::REQUEST),
+            self_ty: &self_ty,
+            host_name: &ctrl_name,
+            method: &method_name,
+            address: quote!(#route_path),
+            posture: if is_public {
+                SitePosture::Public
+            } else {
+                SitePosture::Gated
             },
-        ));
+            host_meta: HostMeta::Struct,
+            method_meta: &metas,
+            cfgs: &cfgs,
+        }));
 
         // The compiler selects the arming type, so this crate needs no authz
         // dependency and a renamed import still arms.
@@ -502,7 +503,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             param_types,
             named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
             has_extractors: !inputs.is_empty(),
-            handler: nest_rs_codegen::handler_ref(&self_ty, &method_name),
+            handler: handler_ref(&self_ty, &method_name),
             no_pipes,
             force_guards,
             pipes: method_pipes,
@@ -959,7 +960,7 @@ fn take_version_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<LitStr>> {
             "a route declares its versions in one `#[version(...)]`, listing them together",
         ));
     }
-    nest_rs_codegen::versioning::parse_version_args(&attr)
+    versioning::parse_version_args(&attr)
 }
 
 /// Take `#[authorize(Action, Entity)]` off a route method.
@@ -975,7 +976,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     if attrs.iter().any(|a| a.path().is_ident("authorize")) {
         return Err(syn::Error::new_spanned(
             &attr,
-            nest_rs_codegen::at_most_one_authorize("route"),
+            at_most_one_authorize("route"),
         ));
     }
     // Parsed as `Meta`, not `Path`, so `bind = Service` is refused by name rather
@@ -992,7 +993,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
         if nv.path.is_ident("bind") {
             return Err(syn::Error::new_spanned(
                 meta,
-                nest_rs_codegen::posture_key_unsupported(
+                posture_key_unsupported(
                     "bind = Service",
                     "HTTP",
                     "a route's subject is loaded by a `Bind<Service, Action>` parameter, which \
@@ -1004,11 +1005,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
         if nv.path.is_ident("id_arg") {
             return Err(syn::Error::new_spanned(
                 meta,
-                nest_rs_codegen::posture_key_unsupported(
-                    "id_arg = argument",
-                    "HTTP",
-                    nest_rs_codegen::ID_ARG_UNSUPPORTED_BECAUSE,
-                ),
+                posture_key_unsupported("id_arg = argument", "HTTP", ID_ARG_UNSUPPORTED_BECAUSE),
             ));
         }
     }
@@ -1022,7 +1019,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     if let Some(unmasked) = paths.iter().find(|p| p.is_ident("unmasked")) {
         return Err(syn::Error::new_spanned(
             unmasked,
-            nest_rs_codegen::posture_key_unsupported(
+            posture_key_unsupported(
                 "unmasked",
                 "HTTP",
                 "there is no value-level mask here to switch off. A route's response is \
@@ -1315,7 +1312,7 @@ fn route_path(attr: &Attribute, verb: &syn::Ident) -> syn::Result<LitStr> {
     let refused = |at: &dyn ToTokens| {
         syn::Error::new_spanned(
             at,
-            nest_rs_codegen::takes_value(
+            takes_value(
                 &verb,
                 None,
                 &format!("the route's path as a string literal, e.g. `#[{verb}(\"/{{id}}\")]`"),
@@ -1323,7 +1320,7 @@ fn route_path(attr: &Attribute, verb: &syn::Ident) -> syn::Result<LitStr> {
         )
     };
     let written: Expr = attr.parse_args().map_err(|_| refused(attr))?;
-    match nest_rs_codegen::ungrouped_expr(&written) {
+    match ungrouped_expr(&written) {
         Expr::Lit(syn::ExprLit {
             lit: syn::Lit::Str(path),
             ..
@@ -1412,7 +1409,7 @@ fn api_type(input: syn::parse::ParseStream<'_>, key: &str, example: &str) -> syn
     input.parse::<Type>().map_err(|stopped| {
         syn::Error::new(
             stopped.span(),
-            nest_rs_codegen::takes_value(
+            takes_value(
                 "api",
                 Some(key),
                 &format!("a type, e.g. `{key} = {example}`"),
@@ -1426,7 +1423,7 @@ fn api_tags(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Result
     let refused = |at: &dyn ToTokens| {
         syn::Error::new_spanned(
             at,
-            nest_rs_codegen::takes_value(
+            takes_value(
                 "api",
                 Some("tags"),
                 "a list of string literals, e.g. `tags(\"users\", \"admin\")`",
@@ -1440,7 +1437,7 @@ fn api_tags(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Result
     syn::parenthesized!(content in input);
     Punctuated::<Expr, Token![,]>::parse_terminated(&content)?
         .iter()
-        .map(|tag| match nest_rs_codegen::ungrouped_expr(tag) {
+        .map(|tag| match ungrouped_expr(tag) {
             Expr::Lit(syn::ExprLit {
                 lit: syn::Lit::Str(tag),
                 ..
@@ -1462,12 +1459,8 @@ fn api_errors(
 ) -> syn::Result<Vec<(syn::LitInt, Type)>> {
     const TAKES: &str = "a list of `status = Type`, the status a 4xx or 5xx, e.g. \
                          `error(503 = ProbeReport)`; the success payload is `response = T`";
-    let refused = |at: &dyn ToTokens| {
-        syn::Error::new_spanned(
-            at,
-            nest_rs_codegen::takes_value("api", Some("error"), TAKES),
-        )
-    };
+    let refused =
+        |at: &dyn ToTokens| syn::Error::new_spanned(at, takes_value("api", Some("error"), TAKES));
     if !input.peek(syn::token::Paren) {
         return Err(refused(key));
     }
@@ -1488,7 +1481,7 @@ fn api_errors(
                 &status,
                 format!(
                     "{}: {code} is declared twice — one status, one body",
-                    nest_rs_codegen::site("api", Some("error")),
+                    site("api", Some("error")),
                 ),
             ));
         }
@@ -1579,7 +1572,7 @@ fn check_media_type(lit: &LitStr) -> syn::Result<()> {
             format!(
                 "{}: {value:?} is not a media type — spell it `type/subtype`, e.g. \
                  \"application/octet-stream\", \"text/event-stream\" or \"audio/mpeg\"",
-                nest_rs_codegen::site("api", Some("response_content_type")),
+                site("api", Some("response_content_type")),
             ),
         ));
     }

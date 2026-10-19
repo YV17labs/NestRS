@@ -1,3 +1,4 @@
+use nest_rs_codegen::__private::missing_argument;
 use nest_rs_codegen::Grammar;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -81,7 +82,7 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     let lit = namespace.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
-            nest_rs_codegen::missing_argument("config", "namespace", "\"seaorm\""),
+            missing_argument("config", "namespace", "\"seaorm\""),
         )
     })?;
     validate_namespace(&lit)?;

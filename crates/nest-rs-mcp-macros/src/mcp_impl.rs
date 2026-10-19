@@ -8,7 +8,7 @@
 //! still reach the parent's private fields (pinned by
 //! `tests/integration/mcp_impl.rs`).
 
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
@@ -18,13 +18,16 @@ use syn::{
     Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Path, Signature, Token, Type,
 };
 
-use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
-use nest_rs_codegen::{
-    Collision, Conditional, DispatchKeys, HostBorrow, PipeWrapper, Posture, PostureRules,
-    await_if_async, cfg_attrs, force_guard_typeids, forwarded_arg_idents, generic_args,
-    guard_capability_bounds, impl_self_ident, layer_deps, normalize_forwarded_args,
-    nth_generic_type, pipe_wrapper, scoped_specs, shared_receiver, snake_case, type_label,
+use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::{
+    Collision, Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta,
+    PipeWrapper, Posture, PostureRules, answer_span, await_if_async, cfg_attrs, concrete_signature,
+    declared_handler, force_guard_typeids, forwarded_arg_idents, generic_args,
+    guard_capability_bounds, handler_const, handler_ref, impl_self_ident, layer_deps,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, pipe_wrapper,
+    reject_meta_on_operations, scoped_specs, shared_receiver, type_label, ungrouped_expr,
 };
+use nest_rs_codegen::snake_case;
 
 /// The decorated methods of one authored `impl`, partitioned by router.
 #[derive(Default)]
@@ -158,7 +161,7 @@ pub(crate) fn mcp_impl(args: TokenStream, item: ItemImpl) -> TokenStream {
 
 fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     pair::MCP.reject_host_layers(&item.attrs)?;
-    nest_rs_codegen::reject_meta_on_operations(&pair::MCP, &item.attrs)?;
+    reject_meta_on_operations(&pair::MCP, &item.attrs)?;
 
     let self_ty = item.self_ty.clone();
     let base = impl_self_ident(&self_ty, "#[tools]")?;
@@ -443,7 +446,7 @@ fn wrapper(self_ty: &Type, op: &Operation, generic: bool) -> syn::Result<TokenSt
     // A refusal becomes the operation's answer at one site, typed by
     // `OperationAnswer`, so a non-`Result` return is refused once, at the return type.
     let piped: Vec<&syn::Ident> = pipes.iter().map(|arg| &arg.ident).collect();
-    let refused = quote_spanned! {nest_rs_codegen::answer_span(sig)=>
+    let refused = quote_spanned! {answer_span(sig)=>
         ::nest_rs_mcp::__private::refused(__nestrs_refusal)
     };
     Ok(quote! {
@@ -491,7 +494,7 @@ fn guard_chain(
     let handler = if generic {
         generic_operation_handler(self_ty, op)
     } else {
-        nest_rs_codegen::handler_ref(self_ty, op.name())
+        handler_ref(self_ty, op.name())
     };
     quote! {
         let __nestrs_attached = {
@@ -519,28 +522,19 @@ fn guard_chain(
 /// declare its sites on: a site of its own, with no `#[meta]` (the generic host
 /// refuses it).
 fn generic_operation_handler(self_ty: &Type, op: &Operation) -> TokenStream2 {
-    let host_name = LitStr::new(&type_label(self_ty), op.name().span());
-    let method = LitStr::new(&op.name().unraw().to_string(), op.name().span());
     let wire_name = LitStr::new(&op.wire_name, op.name().span());
-    let posture = match op.posture {
-        Posture::Public => quote!(Public),
-        Posture::Authorize { .. } => quote!(Gated),
-    };
+    let handler = declared_handler(&HandlerDeclaration {
+        unit: quote!(::nest_rs_mcp::unit::OPERATION),
+        host: quote!(__NestrsGenericHost),
+        host_name: &type_label(self_ty),
+        method: &op.name().unraw().to_string(),
+        address: quote!(#wire_name),
+        posture: op.posture.site_posture(),
+        meta: quote!(::nest_rs_core::__private::MetaLevels::default),
+    });
     quote! {{
         struct __NestrsGenericHost;
-        static __NESTRS_OPERATION: ::nest_rs_core::Handler =
-            ::nest_rs_core::__private::declare_handler(
-                ::nest_rs_core::__private::HandlerDeclaration {
-                    unit: ::nest_rs_mcp::unit::OPERATION,
-                    host: ::core::any::TypeId::of::<__NestrsGenericHost>(),
-                    host_name: #host_name,
-                    method: #method,
-                    address: #wire_name,
-                    posture: ::nest_rs_core::Posture::#posture,
-                    meta: ::nest_rs_core::__private::MetaLevels::default,
-                },
-            );
-        &__NESTRS_OPERATION
+        #handler
     }}
 }
 
@@ -664,16 +658,14 @@ fn take_operations(
         let ImplItem::Fn(method) = entry else {
             return Err(unsupported(entry));
         };
-        let Some(index) =
-            nest_rs_codegen::one_role_per_method("role", &method.attrs, &Role::names(), "")?
-        else {
+        let Some(index) = one_role_per_method("role", &method.attrs, &Role::names(), "")? else {
             return Err(unsupported(entry));
         };
         let Some(role) = Role::from_attr(&method.attrs[index]) else {
             return Err(unsupported(entry));
         };
         shared_receiver(method, "#[tools]", base, HostBorrow::Host)?;
-        nest_rs_codegen::concrete_signature(method, "#[tools]")?;
+        concrete_signature(method, "#[tools]")?;
 
         let role_attr = &method.attrs[index];
         let wire_name = match stated_name(role_attr)? {
@@ -797,17 +789,14 @@ fn handler_consts(
     }
     let consts = operations.all().map(|op| {
         let wire_name = &op.wire_name;
-        nest_rs_codegen::handler_const(&nest_rs_codegen::HandlerSite {
+        handler_const(&HandlerSite {
             unit: quote!(::nest_rs_mcp::unit::OPERATION),
             self_ty,
             host_name: base,
             method: op.name(),
             address: quote!(#wire_name),
-            posture: match op.posture {
-                Posture::Public => nest_rs_codegen::SitePosture::Public,
-                Posture::Authorize { .. } => nest_rs_codegen::SitePosture::Gated,
-            },
-            host_meta: nest_rs_codegen::HostMeta::Struct,
+            posture: op.posture.site_posture(),
+            host_meta: HostMeta::Struct,
             method_meta: &op.metas,
             cfgs: &op.cfgs,
         })
@@ -928,7 +917,7 @@ fn stated_description(attr: &Attribute) -> syn::Result<Option<Description>> {
     }) else {
         return Ok(None);
     };
-    Ok(Some(match nest_rs_codegen::ungrouped_expr(value) {
+    Ok(Some(match ungrouped_expr(value) {
         syn::Expr::Lit(syn::ExprLit {
             lit: syn::Lit::Str(text),
             ..
@@ -967,7 +956,7 @@ fn doc_comment(attrs: &[Attribute]) -> Option<TokenStream2> {
             _ => None,
         })
         .collect();
-    let literal = |line: &syn::Expr| match nest_rs_codegen::ungrouped_expr(line) {
+    let literal = |line: &syn::Expr| match ungrouped_expr(line) {
         syn::Expr::Lit(syn::ExprLit {
             lit: syn::Lit::Str(text),
             ..

@@ -26,7 +26,7 @@ fn the_decorators_copy_of_the_rule_agrees_with_the_port() {
     ];
     for value in corpus {
         assert_eq!(
-            nest_rs_codegen::is_valid_queue_name(value),
+            nest_rs_codegen::__private::is_valid_queue_name(value),
             nest_rs_queue::__private::is_valid_queue_name(value),
             "the two copies disagree on {value:?}",
         );
@@ -42,7 +42,7 @@ fn the_decorators_refusal_is_the_ports_with_the_site_in_front() {
             .expect_err("outside the rule")
             .to_string();
         assert_eq!(
-            nest_rs_codegen::invalid_queue_name("queue", "name", value),
+            nest_rs_codegen::__private::invalid_queue_name("queue", "name", value),
             format!("#[queue] `name`: {port}"),
         );
     }

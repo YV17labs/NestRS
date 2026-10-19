@@ -4,14 +4,17 @@
 //! `QueueWorker` runs from boot. No `Discoverable` for the host struct: the
 //! user's own `#[injectable]` owns it.
 
-use nest_rs_codegen::layers::{LayerScope, take_layers};
-use nest_rs_codegen::pair;
-use nest_rs_codegen::{
-    Grammar, JobDecorator, JobKey, PipeWrapper, VersionedEdge, await_if_async, cfg_attrs,
-    duration_millis, generic_args, impl_self_ident, job_key, job_returns_a_result, job_timeout,
-    job_transaction, missing_argument, payload_arg_type, pipe_wrapper, returns_unit, snake_case,
-    takes_value, timeout_value, transactional_value, ungrouped_expr, unread_job_key,
+use nest_rs_codegen::__private::layers::{LayerScope, take_layers};
+use nest_rs_codegen::__private::pair;
+use nest_rs_codegen::__private::{
+    HandlerSite, HostMeta, JobDecorator, JobKey, PipeWrapper, ProviderSite, SitePosture,
+    VersionedEdge, await_if_async, cfg_attrs, concrete_signature, generic_args, handler_const,
+    host_layers_entry, impl_self_ident, job_key, job_returns_a_result, job_timeout,
+    job_transaction, missing_argument, one_role_per_method, payload_arg_type, pipe_wrapper,
+    returns_unit, site_const, site_ref, takes_value, timeout_value, transactional_value,
+    ungrouped_expr, unread_job_key,
 };
+use nest_rs_codegen::{Grammar, Refusals, duration_millis, snake_case};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
@@ -64,21 +67,20 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let mut emissions: Vec<TokenStream2> = Vec::new();
     let mut handler_consts: Vec<TokenStream2> = Vec::new();
-    let mut refusals: Option<syn::Error> = None;
+    let mut refusals = Refusals::default();
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
 
-        let index =
-            match nest_rs_codegen::one_role_per_method("queue", &method.attrs, &["process"], "") {
-                Ok(Some(index)) => index,
-                Ok(None) => continue,
-                Err(err) => return err.to_compile_error().into(),
-            };
+        let index = match one_role_per_method("queue", &method.attrs, &["process"], "") {
+            Ok(Some(index)) => index,
+            Ok(None) => continue,
+            Err(err) => return err.to_compile_error().into(),
+        };
         let attr = method.attrs.remove(index);
-        if let Err(err) = nest_rs_codegen::concrete_signature(method, "#[process]") {
+        if let Err(err) = concrete_signature(method, "#[process]") {
             return err.to_compile_error().into();
         }
 
@@ -106,15 +108,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         // Every method's keys are read before the first refusal is returned, so
         // a host with several wrong declarations learns about all of them at once.
-        let args = match attr.parse_args::<ProcessArgs>() {
-            Ok(a) => a,
-            Err(err) => {
-                match &mut refusals {
-                    Some(refusals) => refusals.combine(err),
-                    None => refusals = Some(err),
-                }
-                continue;
-            }
+        let Some(args) = refusals.handle(attr.parse_args::<ProcessArgs>()) else {
+            continue;
         };
 
         if let Err(err) = check_shape(method) {
@@ -127,28 +122,26 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             };
         let QueueId::Type(queue_ty) = &args.queue;
         let cfgs = cfg_attrs(&method.attrs);
-        handler_consts.push(nest_rs_codegen::handler_const(
-            &nest_rs_codegen::HandlerSite {
-                unit: quote!(::nest_rs_queue::unit::JOB),
-                self_ty: &self_ty,
-                host_name: &provider_ident,
-                method: &method.sig.ident,
-                address: quote!(<#queue_ty as ::nest_rs_queue::Queue>::NAME),
-                posture: nest_rs_codegen::SitePosture::System,
-                host_meta: nest_rs_codegen::HostMeta::Values(&host_layers.meta),
-                method_meta: &method_layers.meta,
-                cfgs: &cfgs,
-            },
-        ));
-        let site = nest_rs_codegen::ProviderSite {
+        handler_consts.push(handler_const(&HandlerSite {
+            unit: quote!(::nest_rs_queue::unit::JOB),
+            self_ty: &self_ty,
+            host_name: &provider_ident,
+            method: &method.sig.ident,
+            address: quote!(<#queue_ty as ::nest_rs_queue::Queue>::NAME),
+            posture: SitePosture::System,
+            host_meta: HostMeta::Values(&host_layers.meta),
+            method_meta: &method_layers.meta,
+            cfgs: &cfgs,
+        }));
+        let site = ProviderSite {
             self_ty: &self_ty,
             method: &method.sig.ident,
             host: &host_layers,
             method_layers: &method_layers,
             cfgs: &cfgs,
         };
-        handler_consts.push(nest_rs_codegen::site_const(&site));
-        emissions.push(nest_rs_codegen::host_layers_entry(&site));
+        handler_consts.push(site_const(&site));
+        emissions.push(host_layers_entry(&site));
 
         match emit_method(&self_ty, &provider_ident, method, args) {
             Ok(emitted) => emissions.push(emitted),
@@ -156,7 +149,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     }
 
-    if let Some(refusals) = refusals {
+    if let Err(refusals) = refusals.finish() {
         return refusals.to_compile_error().into();
     }
     let out = quote! {
@@ -319,7 +312,7 @@ fn emit_method(
         &method.sig,
         quote!(<#self_ty>::#method_ident(&__provider, #(#call_args),*)),
     );
-    let site = nest_rs_codegen::site_ref(self_ty, &method_ident);
+    let site = site_ref(self_ty, &method_ident);
 
     Ok(quote! {
         #(#cfgs)*
@@ -579,7 +572,8 @@ struct ProcessArgs {
     /// The shared `timeout` key in milliseconds, `None` when unwritten.
     timeout: Option<u64>,
     /// The shared `transactional` key, `None` when unwritten — see
-    /// `nest_rs_codegen::job`, which words it for every job decorator at once.
+    /// `nest-rs-codegen`'s job table, which words it for every job decorator at
+    /// once.
     transactional: Option<bool>,
 }
 
@@ -730,7 +724,7 @@ mod tests {
     /// offer a developer to paste, so each offered spelling is proved to parse.
     #[test]
     fn every_key_of_the_column_is_read() {
-        for key in nest_rs_codegen::job_keys(PROCESS) {
+        for key in nest_rs_codegen::__private::job_keys(PROCESS) {
             let written: TokenStream2 = key.example().parse().expect("an example is tokens");
             let args = match key {
                 JobKey::Queue => written,

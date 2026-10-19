@@ -340,8 +340,8 @@ impl VersionRefused {
 /// A version token is spliced into a URL path: bare alphanumerics, `.` and `-`,
 /// bounded length.
 ///
-/// A copy of `nest_rs_codegen::versioning`'s rule (that crate pulls `syn`), held
-/// equal by `the_wire_grammar_matches_the_declared_grammar`.
+/// A copy of `nest_rs_codegen::__private::versioning`'s rule (that crate pulls
+/// `syn`), held equal by `the_wire_grammar_matches_the_declared_grammar`.
 fn is_valid_version(raw: &str) -> bool {
     !raw.is_empty()
         && raw.len() <= MAX_VERSION_LEN
@@ -852,7 +852,7 @@ mod tests {
     fn the_wire_grammar_matches_the_declared_grammar() {
         assert_eq!(
             MAX_VERSION_LEN,
-            nest_rs_codegen::versioning::MAX_VERSION_LEN
+            nest_rs_codegen::__private::versioning::MAX_VERSION_LEN
         );
 
         // Over the whole ASCII range: a table passes for every byte it omits.
@@ -860,7 +860,7 @@ mod tests {
             let case = (byte as char).to_string();
             assert_eq!(
                 is_valid_version(&case),
-                nest_rs_codegen::versioning::is_valid_version(&case),
+                nest_rs_codegen::__private::versioning::is_valid_version(&case),
                 "the two halves disagree about the character {byte:#04x}",
             );
         }
@@ -874,7 +874,7 @@ mod tests {
             let case = "a".repeat(len);
             assert_eq!(
                 is_valid_version(&case),
-                nest_rs_codegen::versioning::is_valid_version(&case),
+                nest_rs_codegen::__private::versioning::is_valid_version(&case),
                 "the two halves disagree about a {len}-character version",
             );
         }
@@ -893,7 +893,7 @@ mod tests {
         ] {
             assert_eq!(
                 is_valid_version(case),
-                nest_rs_codegen::versioning::is_valid_version(case),
+                nest_rs_codegen::__private::versioning::is_valid_version(case),
                 "the two halves disagree about {case:?}",
             );
         }

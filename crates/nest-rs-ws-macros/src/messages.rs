@@ -3,7 +3,7 @@
 //! `Discoverable` impl that self-mounts on the HTTP transport. Each event's
 //! guard chain is composed once at mount.
 
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, quote_spanned};
@@ -11,13 +11,16 @@ use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
-use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
-use nest_rs_codegen::{
-    Collision, Conditional, DispatchKeys, HostBorrow, PipeWrapper, Posture, PostureRules,
-    await_if_async, cfg_attrs, force_guard_typeids, guard_capability_bounds, impl_self_ident,
-    injected_methods_with_layers, layer_deps, pipe_wrapper, returns_unit, scoped_specs,
-    shared_receiver, take_flag_attr,
+use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::{
+    Collision, Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta,
+    PipeWrapper, Posture, PostureRules, SitePosture, await_if_async, cfg_attrs, concrete_signature,
+    declared_handler, force_guard_typeids, guard_capability_bounds, handler_const, handler_ref,
+    impl_self_ident, injected_methods_with_layers, layer_deps, one_role_per_method, pipe_wrapper,
+    reject_meta_on_operations, returns_unit, scoped_specs, shared_receiver, take_meta, takes_value,
+    ungrouped_expr,
 };
+use nest_rs_codegen::take_flag_attr;
 
 /// WS's half of the shared posture grammar, mandatory per message.
 const POSTURE: PostureRules = PostureRules {
@@ -41,7 +44,7 @@ fn event_name(attr: &syn::Attribute) -> syn::Result<LitStr> {
     let refused = |at: &dyn quote::ToTokens| {
         syn::Error::new_spanned(
             at,
-            nest_rs_codegen::takes_value(
+            takes_value(
                 "subscribe_message",
                 None,
                 "the event's name as a string literal, e.g. `#[subscribe_message(\"chat\")]`",
@@ -49,7 +52,7 @@ fn event_name(attr: &syn::Attribute) -> syn::Result<LitStr> {
         )
     };
     let written: syn::Expr = attr.parse_args().map_err(|_| refused(attr))?;
-    match nest_rs_codegen::ungrouped_expr(&written) {
+    match ungrouped_expr(&written) {
         syn::Expr::Lit(syn::ExprLit {
             lit: syn::Lit::Str(event),
             ..
@@ -104,7 +107,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     if let Err(err) = pair::WS
         .reject_host_layers(&item.attrs)
-        .and_then(|()| nest_rs_codegen::reject_meta_on_operations(&pair::WS, &item.attrs))
+        .and_then(|()| reject_meta_on_operations(&pair::WS, &item.attrs))
     {
         return err.to_compile_error().into();
     }
@@ -138,7 +141,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let index = match nest_rs_codegen::one_role_per_method(
+        let index = match one_role_per_method(
             "role",
             &method.attrs,
             &["subscribe_message", "on_connect", "on_disconnect"],
@@ -149,7 +152,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Err(err) => return err.to_compile_error().into(),
         };
         if let Err(err) = shared_receiver(method, "#[messages]", &host, HostBorrow::Host)
-            .and_then(|()| nest_rs_codegen::concrete_signature(method, "#[messages]"))
+            .and_then(|()| concrete_signature(method, "#[messages]"))
         {
             return err.to_compile_error().into();
         }
@@ -188,28 +191,26 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
         if let Some(hook) = hook {
-            let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
+            let metas = match take_meta(&mut method.attrs) {
                 Ok(values) => values,
                 Err(err) => return err.to_compile_error().into(),
             };
-            handler_consts.push(nest_rs_codegen::handler_const(
-                &nest_rs_codegen::HandlerSite {
-                    unit: if hook == "on_connect" {
-                        quote!(::nest_rs_ws::unit::CONNECT)
-                    } else {
-                        quote!(::nest_rs_ws::unit::DISCONNECT)
-                    },
-                    self_ty: &self_ty,
-                    host_name: &host,
-                    method: &method.sig.ident,
-                    address: quote!(#identity),
-                    // A hook runs on a connection the upgrade's guards admitted.
-                    posture: nest_rs_codegen::SitePosture::Gated,
-                    host_meta: nest_rs_codegen::HostMeta::Struct,
-                    method_meta: &metas,
-                    cfgs: &cfgs,
+            handler_consts.push(handler_const(&HandlerSite {
+                unit: if hook == "on_connect" {
+                    quote!(::nest_rs_ws::unit::CONNECT)
+                } else {
+                    quote!(::nest_rs_ws::unit::DISCONNECT)
                 },
-            ));
+                self_ty: &self_ty,
+                host_name: &host,
+                method: &method.sig.ident,
+                address: quote!(#identity),
+                // A hook runs on a connection the upgrade's guards admitted.
+                posture: SitePosture::Gated,
+                host_meta: HostMeta::Struct,
+                method_meta: &metas,
+                cfgs: &cfgs,
+            }));
             if let Err(err) = take_flag_attr(&mut method.attrs, hook) {
                 return err.to_compile_error().into();
             }
@@ -249,27 +250,22 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(posture) => posture,
             Err(err) => return err.to_compile_error().into(),
         };
-        handler_consts.push(nest_rs_codegen::handler_const(
-            &nest_rs_codegen::HandlerSite {
-                unit: quote!(::nest_rs_ws::unit::MESSAGE),
-                self_ty: &self_ty,
-                host_name: &host,
-                method: &method.sig.ident,
-                address: quote!(#identity),
-                posture: match posture {
-                    Posture::Public => nest_rs_codegen::SitePosture::Public,
-                    Posture::Authorize { .. } => nest_rs_codegen::SitePosture::Gated,
-                },
-                host_meta: nest_rs_codegen::HostMeta::Struct,
-                method_meta: &metas,
-                cfgs: &cfgs,
-            },
-        ));
+        handler_consts.push(handler_const(&HandlerSite {
+            unit: quote!(::nest_rs_ws::unit::MESSAGE),
+            self_ty: &self_ty,
+            host_name: &host,
+            method: &method.sig.ident,
+            address: quote!(#identity),
+            posture: posture.site_posture(),
+            host_meta: HostMeta::Struct,
+            method_meta: &metas,
+            cfgs: &cfgs,
+        }));
         all_message_layers.extend(guards.iter().map(|guard| (cfgs.clone(), guard.clone())));
 
         let method_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
         let force_typeids = force_guard_typeids(&force_guards);
-        let message_handler = nest_rs_codegen::handler_ref(&self_ty, &method.sig.ident);
+        let message_handler = handler_ref(&self_ty, &method.sig.ident);
         chain_inserts.push(quote! {
             #(#cfgs)*
             __chains.insert(
@@ -491,6 +487,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         quote!(::nest_rs_guards::GuardFor<::nest_rs_ws::WsView>),
     );
     let host_name = host.unraw().to_string();
+    let upgrade_handler = declared_handler(&HandlerDeclaration {
+        unit: quote!(::nest_rs_ws::nest_rs_http::unit::REQUEST),
+        host: quote!(#self_ty),
+        host_name: &host_name,
+        method: "",
+        address: quote!(<#self_ty>::PATH),
+        posture: SitePosture::Gated,
+        meta: quote!(<#self_ty>::__nestrs_upgrade_meta),
+    });
     let message_layers = layer_deps(conditional());
     let injected_methods = injected_methods_with_layers(&self_ty, &message_layers);
     let markers = declared.markers(&self_ty, &item.generics);
@@ -513,21 +518,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             /// The site the gateway's upgrade runs as: an HTTP `GET` the gateway's
             /// guards gate, before any message.
             #[doc(hidden)]
-            pub const __NESTRS_UPGRADE: &'static ::nest_rs_core::Handler = {
-                static __NESTRS_HANDLER: ::nest_rs_core::Handler =
-                    ::nest_rs_core::__private::declare_handler(
-                        ::nest_rs_core::__private::HandlerDeclaration {
-                            unit: ::nest_rs_ws::nest_rs_http::unit::REQUEST,
-                            host: ::core::any::TypeId::of::<#self_ty>(),
-                            host_name: #host_name,
-                            method: "",
-                            address: <#self_ty>::PATH,
-                            posture: ::nest_rs_core::Posture::Gated,
-                            meta: <#self_ty>::__nestrs_upgrade_meta,
-                        },
-                    );
-                &__NESTRS_HANDLER
-            };
+            pub const __NESTRS_UPGRADE: &'static ::nest_rs_core::Handler = #upgrade_handler;
         }
 
         #capability_bounds

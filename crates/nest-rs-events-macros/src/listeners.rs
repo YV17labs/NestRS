@@ -1,18 +1,20 @@
 //! `#[listeners]`: per `#[on_event]` method, a free `wire` fn and a
 //! `ListenerMethod` inventory entry.
 
-use nest_rs_codegen::layers::{LayerScope, take_layers};
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::layers::{LayerScope, take_layers};
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::ImplItem;
 use syn::ext::IdentExt;
 
-use nest_rs_codegen::{
-    VersionedEdge, answer_span, await_if_async, cfg_attrs, impl_self_ident, parse_on_event_args,
-    payload_arg_type, snake_case,
+use nest_rs_codegen::__private::{
+    HandlerSite, HostMeta, ProviderSite, SitePosture, VersionedEdge, answer_span, await_if_async,
+    cfg_attrs, concrete_signature, handler_const, host_layers_entry, impl_self_ident,
+    one_role_per_method, parse_on_event_args, payload_arg_type, site_const, site_ref,
 };
+use nest_rs_codegen::snake_case;
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
@@ -59,18 +61,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let index = match nest_rs_codegen::one_role_per_method(
-            "listener",
-            &method.attrs,
-            &["on_event"],
-            "",
-        ) {
+        let index = match one_role_per_method("listener", &method.attrs, &["on_event"], "") {
             Ok(Some(index)) => index,
             Ok(None) => continue,
             Err(err) => return err.to_compile_error().into(),
         };
         let attr = method.attrs.remove(index);
-        if let Err(err) = nest_rs_codegen::concrete_signature(method, "#[on_event]") {
+        if let Err(err) = concrete_signature(method, "#[on_event]") {
             return err.to_compile_error().into();
         }
 
@@ -102,29 +99,27 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 Ok(layers) => layers,
                 Err(err) => return err.to_compile_error().into(),
             };
-        handler_consts.push(nest_rs_codegen::handler_const(
-            &nest_rs_codegen::HandlerSite {
-                unit: quote!(::nest_rs_events::unit::DISPATCH),
-                self_ty: &self_ty,
-                host_name: &provider_ident,
-                method: &method_ident,
-                address: quote!(::core::stringify!(#event_ty)),
-                posture: nest_rs_codegen::SitePosture::System,
-                host_meta: nest_rs_codegen::HostMeta::Values(&host_layers.meta),
-                method_meta: &method_layers.meta,
-                cfgs: &cfgs,
-            },
-        ));
-        let site = nest_rs_codegen::ProviderSite {
+        handler_consts.push(handler_const(&HandlerSite {
+            unit: quote!(::nest_rs_events::unit::DISPATCH),
+            self_ty: &self_ty,
+            host_name: &provider_ident,
+            method: &method_ident,
+            address: quote!(::core::stringify!(#event_ty)),
+            posture: SitePosture::System,
+            host_meta: HostMeta::Values(&host_layers.meta),
+            method_meta: &method_layers.meta,
+            cfgs: &cfgs,
+        }));
+        let site = ProviderSite {
             self_ty: &self_ty,
             method: &method_ident,
             host: &host_layers,
             method_layers: &method_layers,
             cfgs: &cfgs,
         };
-        handler_consts.push(nest_rs_codegen::site_const(&site));
-        emissions.push(nest_rs_codegen::host_layers_entry(&site));
-        let site_ref = nest_rs_codegen::site_ref(&self_ty, &method_ident);
+        handler_consts.push(site_const(&site));
+        emissions.push(host_layers_entry(&site));
+        let site_ref = site_ref(&self_ty, &method_ident);
         let call = await_if_async(
             &method.sig,
             quote!(<#self_ty>::#method_ident(&__provider, __event)),

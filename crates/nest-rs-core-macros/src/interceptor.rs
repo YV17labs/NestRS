@@ -3,7 +3,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::Expr;
 
-use nest_rs_codegen::parse_provider_host;
+use nest_rs_codegen::__private::{key_as_written, parse_provider_host, unknown_value};
 
 use crate::injectable::{InjectableScope, provider};
 
@@ -49,13 +49,13 @@ fn parse_stage(args: TokenStream2) -> syn::Result<syn::Ident> {
         let refused = |written: &str| {
             syn::Error::new_spanned(
                 &value,
-                nest_rs_codegen::unknown_value("interceptor", "stage", written, &STAGES),
+                unknown_value("interceptor", "stage", written, &STAGES),
             )
         };
         let Expr::Path(path) = &value else {
             return Err(refused(&quote!(#value).to_string()));
         };
-        stage = match nest_rs_codegen::key_as_written(&path.path).as_str() {
+        stage = match key_as_written(&path.path).as_str() {
             "unit" => "Unit",
             "handler" => "Handler",
             other => return Err(refused(other)),

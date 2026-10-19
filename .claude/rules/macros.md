@@ -17,7 +17,10 @@ companion `*-macros` crate that its surface crate re-exports. Its `lib.rs` holds
 the `#[proc_macro_attribute]` items — the one licensed exception to "`lib.rs`
 carries no logic", since Rust forces them to the crate root — as thin
 delegations into the crate's own modules. What several macro crates share lives
-in `nest-rs-codegen`. A `*-macros` crate never depends on its surface crate.
+in `nest-rs-codegen`: its root items are the kit a third-party macro crate
+builds on, which semver covers (`manifests-ci.md`, *Semver*), and the rest is
+its `__private` (`decisions/codegen-kit.md`). A `*-macros` crate never depends
+on its surface crate.
 
 ## Every emitted path is rooted
 
@@ -84,9 +87,9 @@ An edge is two decorators (`CLAUDE.md`, hard "no"). The table is closed:
 
 The struct half is named for the host role, the impl half for what it collects.
 One attribute on two item shapes would give two grammars one rustdoc page and
-one go-to-definition. Held by `nest_rs_codegen::pair::ALL` — a `DecoratorPair`
-is constructible only there, and both halves parse through it — and a trybuild
-snapshot per wrong shape.
+one go-to-definition. Held by `nest_rs_codegen::__private::pair::ALL` — a
+`DecoratorPair` is constructible only there, and both halves parse through it —
+and a trybuild snapshot per wrong shape.
 
 **MCP's struct decorator is the protocol's name, not its role word.** The role
 word went to the impl half, where a host's methods are; `#[mcp]` cannot be
@@ -143,7 +146,10 @@ OpenAPI document infers (`#[api(response = T)]` states what spelling hides).
 ## Keys — one grammar, one refusal sentence
 
 Every key a decorator reads is parsed through `nest_rs_codegen::Grammar`; `syn`'s
-meta parsers are `disallowed-methods` outside `nest-rs-codegen` (`clippy.toml`).
+three meta parsers are `disallowed-methods` (`clippy.toml`), and the one site
+calling one carries its `#[expect]`: a foreign attribute's keys are its owner's
+(`#[sea_orm]`'s are sea-orm's). A decorator that reports several refusals of
+an item at once collects them in `nest_rs_codegen::Refusals`.
 An argument a decorator does not accept is a compile error naming the decorator
 and what it accepts — one shared sentence; a specific reason is added when it
 fits on one line (`CLAUDE.md`, *Families*). A value refusal opens with its site
@@ -151,8 +157,8 @@ fits on one line (`CLAUDE.md`, *Families*). A value refusal opens with its site
 shows without the source frame. No value is handed to `syn`'s own sentence or to
 `format_ident!`, which names neither the decorator nor the key, or panics.
 
-**Every layer attribute is one cell of `nest_rs_codegen::layers`' table** —
-an exhaustive `match` over the pairs, each layer attribute and the two scopes
+**Every layer attribute is one cell of `nest_rs_codegen::__private::layers`'
+table** — an exhaustive `match` over the pairs, each layer attribute and the two scopes
 (the host, a method): built, pending or refused with the fact that makes it
 meaningless (`a hook has no caller and no site`), read by `take_layers`, with a
 trybuild snapshot per refused cell and a hygiene use site per built one. An
@@ -160,23 +166,24 @@ attribute a site does not take never runs as a silent no-op, nor reaches rustc
 as `cannot find attribute` — but at the WebSocket `#[on_connect]` /
 `#[on_disconnect]` hooks, no row yet, until the hooks move onto it. A
 provider-hosted pair (`#[processor]`, `#[scheduled]`, `#[listeners]`)
-declares each method's site through `nest_rs_codegen::site_const` and reports
-what it binds to the access graph through `host_layers_entry`.
+declares each method's site through `nest_rs_codegen::__private::site_const`
+and reports what it binds to the access graph through `host_layers_entry`.
 
 **`#[meta(EXPR)]` is read alike at every pair**: on the host (the struct, or
 the impl block a provider pair decorates) and on each dispatched method, into
 the site's one `Handler`, built on first read; two values naming one type at one
-level are refused (`nest_rs_codegen::take_meta`).
+level are refused (`nest_rs_codegen::__private::take_meta`).
 
 **The worker-job family answers every key at every member.** `#[process]`,
-`#[every]`, `#[cron]` and `#[after]` are one `nest_rs_codegen::job` table (held
+`#[every]`, `#[cron]` and `#[after]` are one job table in `nest-rs-codegen` (held
 by its exhaustive `match`): each cell is built, or refused with the fact that
 makes it meaningless (``#[every] takes no `retries`: a tick's retry is the next
 occurrence``), with a trybuild snapshot per refused cell and a hygiene use site
 per built one. `transactional` is the one key every member builds.
 `#[on_event]` is no member — a listener is no worker job — and reads two of the
 family's keys, `transactional` and `timeout`, through a sibling grammar
-(`nest_rs_codegen::ON_EVENT_GRAMMAR`) with the family's parsers, named by site.
+(`nest_rs_codegen::__private::ON_EVENT_GRAMMAR`) with the family's parsers,
+named by site.
 
 **A rule both a decorator and the runtime check is written twice and pinned
 once.** A surface crate cannot depend on its own macros, so a queue name or a

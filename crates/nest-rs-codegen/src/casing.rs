@@ -8,6 +8,13 @@ use syn::Ident;
 ///
 /// `OAuth` → `o_auth`: a single capital before a capitalised word cannot be told
 /// from a one-letter prefix; spell the type `Oauth`, as Rust spells `Uuid`.
+///
+/// ```
+/// use nest_rs_codegen::snake_case;
+///
+/// assert_eq!(snake_case("InvoiceAuditor"), "invoice_auditor");
+/// assert_eq!(snake_case("HTTPServer"), "http_server");
+/// ```
 pub fn snake_case(camel: &str) -> String {
     let chars: Vec<char> = camel.chars().collect();
     let mut out = String::with_capacity(camel.len() + 4);
@@ -26,8 +33,13 @@ pub fn snake_case(camel: &str) -> String {
     out
 }
 
-/// `org_id` → `OrgId`. Matches SeaORM's `Column` enum naming and the
-/// `<Service>By<Method>` loader struct convention from `#[dataloader]`.
+/// `org_id` → `OrgId`, keeping the identifier's span: the `<Service>By<Method>`
+/// loader struct convention from `#[dataloader]`.
+///
+/// ```
+/// let method: syn::Ident = syn::parse_quote!(by_org_id);
+/// assert_eq!(nest_rs_codegen::pascal_case(&method), "ByOrgId");
+/// ```
 pub fn pascal_case(ident: &Ident) -> Ident {
     let mut out = String::new();
     let mut upper = true;

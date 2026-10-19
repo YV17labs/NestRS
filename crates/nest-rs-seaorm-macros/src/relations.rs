@@ -5,7 +5,8 @@
 //! The FK-side dataloader (`by_<fk_col>`) and its `RelatedTo<Parent, Via>` impl
 //! are emitted by the entity declaring `belongs_to`, never by the parent.
 
-use nest_rs_codegen::{last_segment_ident, pascal_case};
+use nest_rs_codegen::__private::{last_segment_ident, site};
+use nest_rs_codegen::pascal_case;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{Ident, Type};
@@ -145,7 +146,7 @@ fn column_of<'a>(field: &'a ResourceField, key: &str, at: &Ident) -> syn::Result
             format!(
                 "{}: \"{}\" is a relation or an `ignore`d field — a relation's key must be a \
                  column of the entity",
-                nest_rs_codegen::site("sea_orm", Some(key)),
+                site("sea_orm", Some(key)),
                 field.ident,
             ),
         )
@@ -162,7 +163,7 @@ fn fk_column<'a>(model: &'a ResourceModel, fk: &Ident) -> syn::Result<&'a Resour
             format!(
                 "{}: \"{fk}\" is not a column of this entity — `#[expose]` reads it as the field \
                  holding this relation's foreign key",
-                nest_rs_codegen::site("sea_orm", Some("from")),
+                site("sea_orm", Some("from")),
             ),
         )
     })

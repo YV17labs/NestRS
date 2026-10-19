@@ -8,7 +8,8 @@ use syn::{
     Type, parse_macro_input,
 };
 
-use nest_rs_codegen::{cfg_attrs, impl_self_ident, pascal_case};
+use nest_rs_codegen::__private::{await_if_async, cfg_attrs, impl_self_ident};
+use nest_rs_codegen::pascal_case;
 
 pub(crate) fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
@@ -82,8 +83,7 @@ fn dataloader_for_method(
 
     // By path, never `self.0.method(..)`: method lookup tries the `Arc` first, so
     // a same-named trait method on `Arc<T>` would run instead.
-    let call =
-        nest_rs_codegen::await_if_async(sig, quote! { <#self_ty>::#method_name(&*self.0, __keys) });
+    let call = await_if_async(sig, quote! { <#self_ty>::#method_name(&*self.0, __keys) });
     let (error_ty, load_body) = match error_ty {
         Some(err) => (quote!(#err), call),
         None => (

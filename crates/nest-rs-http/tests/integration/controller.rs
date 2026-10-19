@@ -291,7 +291,7 @@ async fn path_binds_by_position_and_name() {
 // one address is refused as two shapes of it, two addresses each answer.
 #[tokio::test]
 async fn a_route_identity_is_the_address_the_table_serves() {
-    use nest_rs_codegen::RoutePath;
+    use nest_rs_codegen::__private::RoutePath;
     use nest_rs_http::Method;
 
     /// A template and a request it serves.

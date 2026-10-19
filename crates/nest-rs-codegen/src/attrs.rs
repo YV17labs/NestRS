@@ -179,6 +179,24 @@ fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
 ///
 /// An argument on a flag is a compile error, never a discard: `#[public(x)]`
 /// must not silently declare a public posture.
+///
+/// ```
+/// use nest_rs_codegen::take_flag_attr;
+///
+/// let mut method: syn::ImplItemFn = syn::parse_quote! {
+///     #[audited]
+///     fn close(&self) {}
+/// };
+/// assert!(take_flag_attr(&mut method.attrs, "audited")?);
+/// assert!(method.attrs.is_empty());
+///
+/// let mut method: syn::ImplItemFn = syn::parse_quote! {
+///     #[audited(always)]
+///     fn close(&self) {}
+/// };
+/// assert!(take_flag_attr(&mut method.attrs, "audited").is_err());
+/// # Ok::<(), syn::Error>(())
+/// ```
 pub fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<bool> {
     let Some(attr) = take_single_attr(attrs, ident)? else {
         return Ok(false);
@@ -198,6 +216,26 @@ pub fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<bo
 /// Remove the one `#[<ident>]` on an item, refusing a second copy by name.
 ///
 /// The span is the second copy, the one to delete.
+///
+/// ```
+/// use nest_rs_codegen::{repeated_attribute, take_single_attr};
+///
+/// let mut item: syn::ItemStruct = syn::parse_quote! {
+///     #[audited(topic = "billing")]
+///     struct Invoice;
+/// };
+/// let taken = take_single_attr(&mut item.attrs, "audited")?;
+/// assert!(taken.is_some() && item.attrs.is_empty());
+///
+/// let mut item: syn::ItemStruct = syn::parse_quote! {
+///     #[audited(topic = "billing")]
+///     #[audited(topic = "orders")]
+///     struct Invoice;
+/// };
+/// let refused = take_single_attr(&mut item.attrs, "audited").err();
+/// assert_eq!(refused.map(|e| e.to_string()), Some(repeated_attribute("audited")));
+/// # Ok::<(), syn::Error>(())
+/// ```
 pub fn take_single_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Option<Attribute>> {
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
         return Ok(None);
@@ -209,7 +247,13 @@ pub fn take_single_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<
     Ok(Some(attr))
 }
 
-/// The sentence [`take_single_attr`] refuses a second copy with.
+/// The sentence [`take_single_attr`] refuses a second copy with, for a
+/// decorator that finds the copy itself.
+///
+/// ```
+/// let sentence = nest_rs_codegen::repeated_attribute("audited");
+/// assert!(sentence.starts_with("`#[audited]` is written twice here"));
+/// ```
 pub fn repeated_attribute(ident: &str) -> String {
     format!(
         "`#[{ident}]` is written twice here — it declares once, and a second copy would be \
@@ -220,6 +264,26 @@ pub fn repeated_attribute(ident: &str) -> String {
 /// Extract and remove a `#[<ident>(PathA, PathB)]` attribute, returning its
 /// comma-separated paths (empty when absent). At most one is accepted; an entry
 /// that is not a type path is refused naming the attribute.
+///
+/// ```
+/// use nest_rs_codegen::take_path_list;
+///
+/// let mut item: syn::ItemStruct = syn::parse_quote! {
+///     #[use_auditors(Ledger, crate::audit::Mailer)]
+///     struct Invoice;
+/// };
+/// let listed = take_path_list(&mut item.attrs, "use_auditors")?;
+/// assert_eq!(listed.len(), 2);
+/// assert!(item.attrs.is_empty());
+///
+/// let mut item: syn::ItemStruct = syn::parse_quote! {
+///     #[use_auditors("ledger")]
+///     struct Invoice;
+/// };
+/// let refused = take_path_list(&mut item.attrs, "use_auditors").err();
+/// assert!(refused.is_some_and(|e| e.to_string().starts_with("#[use_auditors] takes a list")));
+/// # Ok::<(), syn::Error>(())
+/// ```
 pub fn take_path_list(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Vec<Path>> {
     let noun = listed_noun(ident);
     let spoken = noun.replace('_', " ");

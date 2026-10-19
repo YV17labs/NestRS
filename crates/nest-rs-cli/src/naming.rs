@@ -493,10 +493,11 @@ mod tests {
     #[test]
     fn the_instance_decorator_refuses_the_vocabulary_the_rules_reserve() {
         let scraped: std::collections::BTreeSet<&str> = RESERVED.keys().copied().collect();
-        let refused: std::collections::BTreeSet<&str> = nest_rs_codegen::RESERVED_VOCABULARY
-            .iter()
-            .copied()
-            .collect();
+        let refused: std::collections::BTreeSet<&str> =
+            nest_rs_codegen::__private::RESERVED_VOCABULARY
+                .iter()
+                .copied()
+                .collect();
         assert_eq!(refused, scraped);
     }
 

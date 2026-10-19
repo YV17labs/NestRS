@@ -19,7 +19,7 @@ use syn::spanned::Spanned;
 ///
 /// `bound` is the tokens of the bound's absolute path
 /// (`::nest_rs_guards::GuardFor<::nest_rs_graphql::GraphqlView>`). Deduped by
-/// rendered path, as [`layer_deps`](crate::layer_deps) keys this list.
+/// rendered path, as [`layer_deps`](crate::inject::layer_deps) keys this list.
 ///
 /// A guard bound on a `#[cfg]`-gated method is asserted under its
 /// [`Conditional`] conditions — it may not exist in that build — unless it is

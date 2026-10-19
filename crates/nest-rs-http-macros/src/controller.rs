@@ -1,16 +1,18 @@
 //! `#[controller]` — struct decorator: construction, `PATH`/`VERSIONS` and the
 //! controller-level layer specs `#[routes]` reads.
 
-use nest_rs_codegen::pair;
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::LitStr;
 
-use nest_rs_codegen::layers::{LayerScope, Layers, take_layers};
-use nest_rs_codegen::{
-    InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
-    injected_keys_with_layers, injected_names_with_layers, injected_optional_fns, layer_deps,
+use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::versioning;
+use nest_rs_codegen::__private::{
+    InjectableBody, MountPath, build_injectable_body, from_container_method,
+    guard_capability_bounds, host_meta_fn, injected_keys_with_layers, injected_names_with_layers,
+    injected_optional_fns, layer_deps, missing_argument, refuse_rust_deprecated, reject_path,
     scoped_specs,
 };
 
@@ -24,7 +26,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
-    if let Err(err) = nest_rs_codegen::refuse_rust_deprecated(&item.attrs, "a `#[controller]`") {
+    if let Err(err) = refuse_rust_deprecated(&item.attrs, "a `#[controller]`") {
         return err.to_compile_error().into();
     }
 
@@ -40,7 +42,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(layers) => layers,
         Err(err) => return err.to_compile_error().into(),
     };
-    let host_meta = nest_rs_codegen::host_meta_fn(&meta);
+    let host_meta = host_meta_fn(&meta);
 
     let InjectableBody {
         ctor,
@@ -169,8 +171,7 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>
         match arg.key() {
             "path" => path = Some(arg.str_lit("/users")?),
             "version" => {
-                versions =
-                    nest_rs_codegen::versioning::parse_version_list(&arg.expr()?, "#[controller]")?;
+                versions = versioning::parse_version_list(&arg.expr()?, "#[controller]")?;
             }
             // The grammar hands over only its own keys.
             _ => {}
@@ -180,9 +181,9 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>
     let path = path.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
-            nest_rs_codegen::missing_argument("controller", "path", "\"/users\""),
+            missing_argument("controller", "path", "\"/users\""),
         )
     })?;
-    nest_rs_codegen::reject_path("controller", &path, nest_rs_codegen::MountPath::Prefix)?;
+    reject_path("controller", &path, MountPath::Prefix)?;
     Ok((path, versions))
 }

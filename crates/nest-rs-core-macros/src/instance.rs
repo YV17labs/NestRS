@@ -1,5 +1,6 @@
 //! `#[instance]` — a unit struct as an `Instance` marker, named by its ident.
 
+use nest_rs_codegen::__private::{INSTANCE, instance_name};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Fields, Item};
@@ -9,7 +10,7 @@ pub(crate) fn instance(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 fn expand(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
-    nest_rs_codegen::INSTANCE.parse2(args, |_| Ok(()))?;
+    INSTANCE.parse2(args, |_| Ok(()))?;
     let item = match syn::parse2::<Item>(input)? {
         Item::Struct(item) => item,
         other => {
@@ -34,8 +35,7 @@ fn expand(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         ));
     }
     let ident = &item.ident;
-    let name = nest_rs_codegen::instance_name(ident)
-        .map_err(|refusal| syn::Error::new_spanned(ident, refusal))?;
+    let name = instance_name(ident).map_err(|refusal| syn::Error::new_spanned(ident, refusal))?;
     let declared = syn::ext::IdentExt::unraw(ident).to_string();
     Ok(quote! {
         #item

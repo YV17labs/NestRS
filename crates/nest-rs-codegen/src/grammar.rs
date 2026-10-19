@@ -1,12 +1,14 @@
 //! [`Grammar`] — the one reader of a decorator's `key = value` arguments.
 //!
-//! It issues a key it does not take ([`unknown_argument`]), a key written twice
-//! ([`duplicate_argument`]) and a bare key that needs a value
-//! ([`needs_a_value`]) before the closure handed to [`Grammar::parse`] sees a
-//! key; the closure reads the value through [`Arg`].
+//! It refuses a key it does not take ([`unknown_argument`]) and a key written
+//! twice ([`duplicate_argument`]) before the closure handed to
+//! [`Grammar::parse`] sees a key. The closure reads the value through [`Arg`],
+//! which refuses a key written bare ([`needs_a_value`]) when the closure asks
+//! for its value; a key that takes none is read through [`Arg::input`].
 //!
-//! The root `clippy.toml` refuses `syn::meta::parser` and
-//! `syn::Attribute::parse_nested_meta` in its favour.
+//! The root `clippy.toml` refuses `syn::meta::parser`,
+//! `syn::Attribute::parse_nested_meta` and `syn::MetaList::parse_nested_meta`
+//! in its favour.
 
 use proc_macro2::{TokenStream, TokenTree};
 use syn::ext::IdentExt;
@@ -17,6 +19,36 @@ use crate::args::{duplicate_argument, needs_a_value, require_str_lit, unknown_ar
 
 /// One decorator's argument grammar: its name and the keys it takes, in the
 /// order its refusals list them.
+///
+/// A key it does not take and a key written twice are refused before the
+/// closure handed to [`parse`](Self::parse) sees a key; a key written bare is
+/// refused when the closure reads its value through [`Arg`], and a key that
+/// takes no value is read through [`Arg::input`]. Each refusal is the
+/// sentence every framework decorator words it with.
+///
+/// ```
+/// use nest_rs_codegen::{Grammar, duration_millis};
+/// use quote::quote;
+///
+/// const CACHED: Grammar = Grammar::new("cached", &["ttl", "key"]);
+///
+/// let mut ttl = None;
+/// CACHED.parse2(quote!(ttl = "30s"), |arg| {
+///     match arg.key() {
+///         "ttl" => ttl = Some(duration_millis("cached", Some("ttl"), &arg.expr()?)?),
+///         _ => drop(arg.str_lit("users")?),
+///     }
+///     Ok(())
+/// })?;
+/// assert_eq!(ttl, Some(30_000));
+///
+/// let refused = CACHED.parse2(quote!(ttl = "30s", ttl = "1m"), |arg| arg.expr().map(drop));
+/// assert_eq!(refused.unwrap_err().to_string(), "#[cached] takes at most one `ttl`");
+///
+/// let bare = CACHED.parse2(quote!(ttl), |arg| arg.expr().map(drop));
+/// assert_eq!(bare.unwrap_err().to_string(), "#[cached] `ttl` needs a value — write `ttl = ...`");
+/// # Ok::<(), syn::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Grammar {
     attr: &'static str,
@@ -198,6 +230,18 @@ impl Grammar {
 
 /// One key of a [`Grammar`], handed to the decorator with the stream still at
 /// what follows it.
+///
+/// ```
+/// use nest_rs_codegen::Grammar;
+///
+/// const AUDITED: Grammar = Grammar::new("audited", &["topic"]);
+///
+/// let refused = AUDITED.parse2(quote::quote!(topic = 7), |arg| arg.str_lit("billing").map(drop));
+/// assert_eq!(
+///     refused.unwrap_err().to_string(),
+///     "#[audited] `topic` takes a string literal, e.g. `topic = \"billing\"`",
+/// );
+/// ```
 pub struct Arg<'a> {
     grammar: Grammar,
     key: &'static str,
@@ -241,7 +285,7 @@ impl<'a> Arg<'a> {
     }
 
     /// The key's value as a string literal, refused naming the decorator, the
-    /// key and `example` — see [`require_str_lit`].
+    /// key and `example`, a value the key takes.
     pub fn str_lit(&self, example: &str) -> syn::Result<LitStr> {
         let value = self.expr()?;
         require_str_lit(
@@ -379,7 +423,7 @@ mod tests {
 
     #[test]
     fn a_job_member_names_another_members_key_and_its_bare_transactional() {
-        let every = crate::JobDecorator::Every.grammar();
+        let every = crate::job::JobDecorator::Every.grammar();
         assert_eq!(
             read(every, quote!(retries = 3)),
             Err("#[every] takes no `retries`: a tick's retry is the next occurrence".to_owned()),

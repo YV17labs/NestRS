@@ -6,7 +6,7 @@
 //! does instead.
 //!
 //! ```
-//! # use nest_rs_codegen::VersionedEdge;
+//! # use nest_rs_codegen::__private::VersionedEdge;
 //! # fn refuse(args: proc_macro2::TokenStream, value: syn::LitStr) -> syn::Result<()> {
 //! VersionedEdge::Schedule.reject_version(&args)?;        // raw decorator argument tokens
 //! return Err(VersionedEdge::Mcp.refuse_version(&value)); // a value already parsed out
@@ -49,7 +49,7 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
     // name itself, so it is handed the bare word.
     let attr = decorator.trim_start_matches("#[").trim_end_matches(']');
     // A forwarded `$v:expr` list arrives as `Expr::Group(Array)`.
-    let literals = match crate::ungrouped_expr(value) {
+    let literals = match crate::ungrouped::ungrouped_expr(value) {
         Expr::Array(array) => array
             .elems
             .iter()

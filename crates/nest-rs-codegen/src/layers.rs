@@ -8,8 +8,8 @@
 //! here, in the change that builds it.
 //!
 //! ```
-//! use nest_rs_codegen::layers::{LayerScope, take_layers};
-//! use nest_rs_codegen::pair;
+//! use nest_rs_codegen::__private::layers::{LayerScope, take_layers};
+//! use nest_rs_codegen::__private::pair;
 //!
 //! let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[use_guards(AuthnGuard)])];
 //! let layers = take_layers(&pair::HTTP, LayerScope::Host, &mut attrs).unwrap();

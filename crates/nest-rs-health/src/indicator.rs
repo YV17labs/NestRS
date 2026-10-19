@@ -1,10 +1,12 @@
-//! Health indicator contract and link-time registry.
+//! Health indicator contract: the link-time registry `#[indicators]` fills,
+//! and the container metadata a resource's binding attaches.
 
 use std::any::TypeId;
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 
-use nest_rs_core::Container;
+use nest_rs_core::{Container, Module};
 use nest_rs_http::schemars::JsonSchema;
 use serde::Serialize;
 
@@ -35,8 +37,9 @@ pub enum IndicatorStatus {
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 #[schemars(crate = "nest_rs_http::schemars")]
 pub struct IndicatorReport {
-    /// The indicator's stable id (its snake_case method name).
-    pub name: &'static str,
+    /// The indicator's stable id: its snake_case method name, or the crate
+    /// owning a resource and its instance (`redis:cache`).
+    pub name: Cow<'static, str>,
     /// Whether this indicator's check passed.
     pub status: IndicatorStatus,
     /// `Some` only when the check failed — a **fixed, opaque** reason
@@ -56,11 +59,11 @@ pub struct ProbeReport {
     /// The overall probe result — `down` if any indicator is down.
     pub status: IndicatorStatus,
     /// Up indicators, keyed by name.
-    pub info: std::collections::BTreeMap<&'static str, IndicatorReport>,
+    pub info: std::collections::BTreeMap<Cow<'static, str>, IndicatorReport>,
     /// Down indicators, keyed by name. Empty when `status == Up`.
-    pub error: std::collections::BTreeMap<&'static str, IndicatorReport>,
+    pub error: std::collections::BTreeMap<Cow<'static, str>, IndicatorReport>,
     /// Every indicator that ran, up or down — the union of `info` and `error`.
-    pub details: std::collections::BTreeMap<&'static str, IndicatorReport>,
+    pub details: std::collections::BTreeMap<Cow<'static, str>, IndicatorReport>,
 }
 
 impl ProbeReport {
@@ -81,14 +84,14 @@ impl ProbeReport {
         for r in reports {
             match r.status {
                 IndicatorStatus::Up => {
-                    info.insert(r.name, r.clone());
+                    info.insert(r.name.clone(), r.clone());
                 }
                 IndicatorStatus::Down => {
-                    error.insert(r.name, r.clone());
+                    error.insert(r.name.clone(), r.clone());
                     status = IndicatorStatus::Down;
                 }
             }
-            details.insert(r.name, r);
+            details.insert(r.name.clone(), r);
         }
         Self {
             status,
@@ -121,3 +124,65 @@ pub struct HealthIndicator {
 }
 
 ::nest_rs_core::inventory::collect!(HealthIndicator);
+
+/// An indicator a module attaches to the container from its `register` — how a
+/// resource the framework opens, once per instance, ships its check: an
+/// `inventory` entry cannot be generic, and metadata is gated by construction,
+/// since only an imported module registers.
+///
+/// Its name is the probe body's key, read off the crate owning the resource
+/// and the instance, never chosen: `seaorm`, `redis`, `redis:cache`,
+/// `storage`. An app's own indicator keeps its method name through
+/// [`indicators`](crate::indicators).
+///
+/// ```
+/// use nest_rs_core::{App, Container, ContainerBuilder, Module, Registering, module};
+/// use nest_rs_health::{HealthModule, HealthService, IndicatorEntry, IndicatorFuture, ProbeKind};
+///
+/// fn ping(_container: &Container) -> IndicatorFuture<'_> {
+///     Box::pin(async { Ok(()) })
+/// }
+///
+/// struct PoolHealthModule;
+///
+/// impl Module for PoolHealthModule {
+///     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+///         builder.provide_meta(IndicatorEntry::new::<Self>("pool", ProbeKind::Readiness, ping))
+///     }
+/// }
+///
+/// #[module(imports = [HealthModule, PoolHealthModule])]
+/// struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let app = App::builder().module::<AppModule>().build().await?;
+/// # let health = app.container().get::<HealthService>().expect("HealthModule provides it");
+/// let ready = health.probe(ProbeKind::Readiness).await;
+/// assert!(ready.details.contains_key("pool"));
+/// # Ok(())
+/// # }
+/// ```
+pub struct IndicatorEntry {
+    pub(crate) name: Cow<'static, str>,
+    pub(crate) kind: ProbeKind,
+    /// The module that attached it, as a boot refusal names it.
+    pub(crate) origin: &'static str,
+    pub(crate) run: IndicatorRun,
+}
+
+impl IndicatorEntry {
+    /// The indicator `name` on the `kind` probe, attached by the module `M`
+    /// and answering through `run`.
+    pub fn new<M: Module>(
+        name: impl Into<Cow<'static, str>>,
+        kind: ProbeKind,
+        run: IndicatorRun,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            origin: std::any::type_name::<M>(),
+            run,
+        }
+    }
+}

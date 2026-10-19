@@ -18,7 +18,8 @@ use crate::service::HealthService;
 )]
 /// Provides the health probe endpoints. Import it to mount `/health` and let
 /// any reachable provider contribute `#[liveness]`/`#[readiness]`/`#[startup]`
-/// indicators.
+/// indicators, and any imported module attach an
+/// [`IndicatorEntry`](crate::IndicatorEntry).
 pub struct HealthModule;
 
 impl HealthModule {
@@ -49,13 +50,15 @@ impl Module for HealthWiring {
     }
 }
 
-/// Hand the service the assembled container, once the app's indicators are
-/// known to answer under distinct names.
+/// Hand the service the assembled container and the indicators it runs — the
+/// decorated methods and the entries modules attached — once they are known
+/// to answer under distinct names.
 fn wire_indicators(container: &Container) -> anyhow::Result<()> {
     if let Some(svc) = container.get::<HealthService>() {
+        let indicators = crate::service::wired(container);
         // The report's fold by name would silently keep one of two verdicts.
-        crate::service::check_indicator_names(container)?;
-        svc.install_container(container.clone());
+        crate::service::check_names(&indicators)?;
+        svc.install(container.clone(), indicators);
     }
     Ok(())
 }

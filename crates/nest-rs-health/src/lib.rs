@@ -2,9 +2,10 @@
 //!
 //! Importing [`HealthModule`] mounts three routes on the HTTP transport —
 //! `GET /health/live`, `GET /health/ready`, `GET /health/startup`. Each route
-//! runs every [`HealthIndicator`] registered for its [`ProbeKind`] against the
-//! assembled container and returns `200` with a JSON body when all are `up`,
-//! `503` when any is `down`.
+//! runs every indicator of its [`ProbeKind`] — each [`HealthIndicator`] a
+//! reachable provider declares and each [`IndicatorEntry`] an imported module
+//! attaches — against the assembled container and returns `200` with a JSON
+//! body when all are `up`, `503` when any is `down`.
 //!
 //! **The routes sit under `HttpConfig::global_prefix`**: with
 //! `<PREFIX>_HTTP__GLOBAL_PREFIX=/api/v1` a probe answers on
@@ -17,6 +18,9 @@
 //!
 //! Indicators are declared with [`indicators`] on an `#[injectable]` provider's
 //! `impl` block; one whose provider lives in an unimported module does not run.
+//! A resource opened once per instance ships its check as an [`IndicatorEntry`]
+//! its binding module attaches from `register` (`RedisHealthModule::<I>`), so
+//! it runs only in an app importing that module.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -32,10 +36,10 @@ mod service;
 
 pub use config::HealthConfig;
 // `IndicatorFuture` and `IndicatorRun` name the type of the public field
-// `HealthIndicator::run`.
+// `HealthIndicator::run` and of the check `IndicatorEntry::new` takes.
 pub use indicator::{
-    HealthIndicator, IndicatorFuture, IndicatorReport, IndicatorRun, IndicatorStatus, ProbeKind,
-    ProbeReport,
+    HealthIndicator, IndicatorEntry, IndicatorFuture, IndicatorReport, IndicatorRun,
+    IndicatorStatus, ProbeKind, ProbeReport,
 };
 pub use module::{HealthModule, HealthSetup};
 

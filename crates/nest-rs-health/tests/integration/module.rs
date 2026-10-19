@@ -76,7 +76,7 @@ mod probed_from_an_init_hook {
     #[injectable]
     #[derive(Default)]
     struct ProbedAtInit {
-        ran: Mutex<Vec<&'static str>>,
+        ran: Mutex<Vec<String>>,
     }
 
     #[injectable]
@@ -93,7 +93,7 @@ mod probed_from_an_init_hook {
         async fn wait_until_ready(&self) {
             let report = self.svc.probe(ProbeKind::Readiness).await;
             *self.seen.ran.lock().expect("only this hook writes it") =
-                report.details.keys().copied().collect();
+                report.details.keys().map(ToString::to_string).collect();
         }
     }
 
@@ -162,5 +162,118 @@ mod dropped_at_the_end {
             DROPPED.load(Ordering::SeqCst),
             "the health service no longer keeps the container, and every singleton in it, alive"
         );
+    }
+}
+
+/// An indicator a module attaches to the container — a resource the framework
+/// opens, once per instance — beside one `#[indicators]` submits to the
+/// link-time registry: one probe runs both, and one name check covers both.
+mod attached_by_a_module {
+    use nest_rs_core::{App, Container, ContainerBuilder, Module, Registering, injectable, module};
+    use nest_rs_health::{
+        HealthModule, HealthService, IndicatorEntry, IndicatorFuture, IndicatorStatus, ProbeKind,
+        indicators,
+    };
+
+    fn answers(_: &Container) -> IndicatorFuture<'_> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// What a resource's health binding is: a module attaching its entry.
+    struct PoolHealthModule;
+
+    impl Module for PoolHealthModule {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.provide_meta(IndicatorEntry::new::<Self>(
+                "pool",
+                ProbeKind::Readiness,
+                answers,
+            ))
+        }
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct Upstream;
+
+    #[indicators]
+    impl Upstream {
+        #[readiness]
+        async fn upstream(&self) {}
+    }
+
+    #[module(imports = [HealthModule, PoolHealthModule], providers = [Upstream])]
+    struct BothKinds;
+
+    #[tokio::test]
+    async fn an_attached_indicator_and_a_decorated_one_run_in_one_probe() {
+        let app = App::builder()
+            .module::<BothKinds>()
+            .build()
+            .await
+            .unwrap_or_else(|refused| panic!("boots: {refused:#}"));
+        let health = app
+            .container()
+            .get::<HealthService>()
+            .expect("HealthModule provides it");
+
+        let ready = health.probe(ProbeKind::Readiness).await;
+        assert_eq!(ready.status, IndicatorStatus::Up);
+        assert_eq!(
+            ready
+                .details
+                .keys()
+                .map(|key| &**key)
+                .collect::<Vec<&str>>(),
+            ["pool", "upstream"],
+            "{ready:#?}"
+        );
+        assert!(
+            health.probe(ProbeKind::Startup).await.details.is_empty(),
+            "each entry answers its own probe alone"
+        );
+    }
+
+    /// A resource's binding claiming the name an app's own method claims.
+    struct ClashingHealthModule;
+
+    impl Module for ClashingHealthModule {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.provide_meta(IndicatorEntry::new::<Self>(
+                "cache",
+                ProbeKind::Readiness,
+                answers,
+            ))
+        }
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct HandWrittenCache;
+
+    #[indicators]
+    impl HandWrittenCache {
+        #[readiness]
+        async fn cache(&self) {}
+    }
+
+    #[module(
+        imports = [HealthModule, ClashingHealthModule],
+        providers = [HandWrittenCache],
+    )]
+    struct Clashing;
+
+    #[tokio::test]
+    async fn an_attached_and_a_decorated_indicator_on_one_name_fail_the_boot_naming_both() {
+        let Err(refused) = App::builder().module::<Clashing>().build().await else {
+            panic!("two verdicts under one key must not boot");
+        };
+        let sentence = format!("{refused:#}");
+        for named in ["\"cache\"", "ClashingHealthModule", module_path!()] {
+            assert!(
+                sentence.contains(named),
+                "the refusal names {named}: {sentence}"
+            );
+        }
     }
 }

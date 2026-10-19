@@ -1,11 +1,17 @@
+use std::borrow::Cow;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use nest_rs_core::{Container, ReachableProviders, Unanswered, injectable, inventory, within};
+use nest_rs_core::{
+    Container, Discovery, ReachableProviders, Unanswered, injectable, inventory, within,
+};
 
 use crate::config::HealthConfig;
-use crate::indicator::{HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport};
+use crate::indicator::{
+    HealthIndicator, IndicatorEntry, IndicatorReport, IndicatorRun, IndicatorStatus, ProbeKind,
+    ProbeReport,
+};
 
 /// The reason a body carries for a check that failed. Fixed and opaque:
 /// `/health/*` is routinely unauthenticated, so the error chain goes to the
@@ -19,30 +25,93 @@ const REASON_TIMED_OUT: &str = "timed out";
 /// **probe** deadline elapsed.
 const REASON_DEADLINE: &str = "probe deadline exceeded";
 
-/// Aggregates every reachable [`HealthIndicator`] submitted via `#[indicators]`
-/// into a per-probe [`ProbeReport`]; a probe with zero indicators reports `up`.
+/// Aggregates every indicator this app runs — each reachable one
+/// `#[indicators]` submitted, and each [`IndicatorEntry`] an imported module
+/// attached — into a per-probe [`ProbeReport`]; a probe with zero indicators
+/// reports `up`.
 #[injectable]
 #[derive(Default)]
 pub struct HealthService {
     /// Set by `HealthModule`'s wiring step, before the first hook, and taken
     /// back by its close: held for good, it would keep the container, and
     /// every singleton in it, alive past the app.
-    container: RwLock<Option<Container>>,
+    installed: RwLock<Option<Installed>>,
     /// Absent without `ConfigModule` (a hand-built container): the defaults
     /// stand, so a probe never runs unbounded.
     config: OnceLock<Arc<HealthConfig>>,
 }
 
+/// What the wiring hands the service: the container the checks run against,
+/// and the indicators the boot's name check passed.
+struct Installed {
+    container: Container,
+    indicators: Arc<[Indicator]>,
+}
+
+/// One indicator this app runs, whichever registry it came from — the one the
+/// probe runs and the boot's name check reads, so the two agree.
+#[derive(Clone)]
+pub(crate) struct Indicator {
+    name: Cow<'static, str>,
+    kind: ProbeKind,
+    /// Where it was declared: the decorated method's module path, or the type
+    /// of the module that attached it.
+    origin: &'static str,
+    run: IndicatorRun,
+}
+
+impl From<&HealthIndicator> for Indicator {
+    fn from(entry: &HealthIndicator) -> Self {
+        Self {
+            name: Cow::Borrowed(entry.name),
+            kind: entry.kind,
+            origin: entry.origin,
+            run: entry.run,
+        }
+    }
+}
+
+impl From<&IndicatorEntry> for Indicator {
+    fn from(entry: &IndicatorEntry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            kind: entry.kind,
+            origin: entry.origin,
+            run: entry.run,
+        }
+    }
+}
+
+/// Every indicator `container`'s app runs: the reachable ones `#[indicators]`
+/// submitted, then the entries its modules attached — gated by construction,
+/// since only an imported module registers.
+pub(crate) fn wired(container: &Container) -> Vec<Indicator> {
+    reachable_indicators(container)
+        .map(Indicator::from)
+        .chain(
+            Discovery::new(container)
+                .meta::<IndicatorEntry>()
+                .iter()
+                .map(|attached| Indicator::from(&*attached.meta)),
+        )
+        .collect()
+}
+
 impl HealthService {
-    pub(crate) fn install_container(&self, container: Container) {
+    /// Hold `container` and the `indicators` its probes run, once; a second
+    /// install keeps the first.
+    pub(crate) fn install(&self, container: Container, indicators: Vec<Indicator>) {
         let installed = {
             let mut held = self
-                .container
+                .installed
                 .write()
                 .unwrap_or_else(PoisonError::into_inner);
             let empty = held.is_none();
             if empty {
-                *held = Some(container.clone());
+                *held = Some(Installed {
+                    container: container.clone(),
+                    indicators: indicators.into(),
+                });
             }
             empty
         };
@@ -62,29 +131,36 @@ impl HealthService {
 
     /// Hand the container back once the app ends, so its singletons drop.
     pub(crate) fn release_container(&self) {
-        self.container
+        self.installed
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
     }
 
-    /// Run every reachable indicator for `kind` **concurrently** and aggregate
-    /// their results into a [`ProbeReport`], under the per-indicator ceiling and
-    /// the probe deadline of [`HealthConfig`]. The boot's wiring step hands it
-    /// the container before any hook runs; a service no boot wired (a
-    /// hand-built container) reports `up` with no indicator run.
+    /// Run every indicator this app runs for `kind` **concurrently** and
+    /// aggregate their results into a [`ProbeReport`], under the per-indicator
+    /// ceiling and the probe deadline of [`HealthConfig`]. The boot's wiring
+    /// step hands it the container before any hook runs; a service no boot
+    /// wired (a hand-built container) reports `up` with no indicator run.
     pub async fn probe(&self, kind: ProbeKind) -> ProbeReport {
         let held = self
-            .container
+            .installed
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let Some(container) = held else {
+            .as_ref()
+            .map(|installed| {
+                (
+                    installed.container.clone(),
+                    Arc::clone(&installed.indicators),
+                )
+            });
+        let Some((container, indicators)) = held else {
             return ProbeReport::empty_up();
         };
 
         // Silent on skips: `report_unreachable_indicators` named them at boot.
-        let entries: Vec<&'static HealthIndicator> = reachable_indicators(&container)
+        let entries: Vec<&Indicator> = indicators
+            .iter()
             .filter(|entry| entry.kind == kind)
             .collect();
         if entries.is_empty() {
@@ -98,7 +174,7 @@ impl HealthService {
 
 /// Run `entries` concurrently under both ceilings and fold them into a report.
 async fn run_indicators(
-    entries: &[&HealthIndicator],
+    entries: &[&Indicator],
     container: &Container,
     kind: ProbeKind,
     config: &HealthConfig,
@@ -113,7 +189,7 @@ async fn run_indicators(
             // In the bounded call, so an indicator panicking before it hands
             // back its future is contained too.
             let check = async { (entry.run)(container).await };
-            let outcome = run_with_timeout(entry.name, kind, check, indicator_timeout).await;
+            let outcome = run_with_timeout(&entry.name, kind, check, indicator_timeout).await;
             (slot, outcome)
         })
         .collect();
@@ -147,7 +223,7 @@ async fn run_indicators(
                 let (status, error) =
                     outcome.unwrap_or((IndicatorStatus::Down, Some(REASON_DEADLINE.to_owned())));
                 IndicatorReport {
-                    name: entry.name,
+                    name: entry.name.clone(),
                     status,
                     error,
                 }
@@ -156,18 +232,34 @@ async fn run_indicators(
     )
 }
 
-/// Two reachable indicators claiming one name on one probe is a **boot**
-/// failure naming both hosts: [`ProbeReport::from_indicators`] folds by name,
-/// so a `down` verdict could be overwritten by an `up` one.
+/// Two indicators claiming one name on one probe is a **boot** failure naming
+/// both origins: [`ProbeReport::from_indicators`] folds by name, so a `down`
+/// verdict could be overwritten by an `up` one.
 ///
-/// Per probe, not per registry: `nest-rs-seaorm` ships one `db` on readiness
-/// and one on startup.
-pub(crate) fn check_indicator_names(container: &Container) -> anyhow::Result<()> {
-    check_names(reachable_indicators(container))
+/// Per probe, not per registry: `nest-rs-seaorm` ships one `seaorm` on
+/// readiness and one on startup.
+pub(crate) fn check_names<'a>(
+    entries: impl IntoIterator<Item = &'a Indicator>,
+) -> anyhow::Result<()> {
+    let mut claimed: std::collections::HashMap<(ProbeKind, &'a str), &'static str> =
+        std::collections::HashMap::new();
+    for entry in entries {
+        if let Some(first) = claimed.insert((entry.kind, entry.name.as_ref()), entry.origin) {
+            anyhow::bail!(
+                "duplicate health indicator {name:?} on the {kind:?} probe: {first} and \
+                 {second} both claim it. That name is the probe body's JSON key, so one \
+                 verdict would silently replace the other — rename one of the two methods, or \
+                 drop the check a resource's health binding already runs",
+                name = entry.name,
+                kind = entry.kind,
+                second = entry.origin,
+            );
+        }
+    }
+    Ok(())
 }
 
-/// Every linked indicator this app can actually run; shared by the boot check
-/// and the probe, which must agree.
+/// Every linked indicator this app can actually run.
 ///
 /// No [`ReachableProviders`] means a hand-built container: every indicator is
 /// in scope.
@@ -180,26 +272,6 @@ fn reachable_indicators(
             .as_ref()
             .is_none_or(|r| r.0.contains(&(entry.provider_type_id)()))
     })
-}
-
-/// The registry-free half of [`check_indicator_names`]: `inventory` is
-/// process-wide, so tests hand the entries in.
-fn check_names<'a>(entries: impl Iterator<Item = &'a HealthIndicator>) -> anyhow::Result<()> {
-    let mut claimed: std::collections::HashMap<(ProbeKind, &'static str), &'static str> =
-        std::collections::HashMap::new();
-    for entry in entries {
-        if let Some(first) = claimed.insert((entry.kind, entry.name), entry.origin) {
-            anyhow::bail!(
-                "duplicate health indicator {name:?} on the {kind:?} probe: {first} and \
-                 {second} both claim it. That name is the probe body's JSON key, so one \
-                 verdict would silently replace the other — rename one of the two methods",
-                name = entry.name,
-                kind = entry.kind,
-                second = entry.origin,
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Name the linked-but-unreachable indicators **once, at boot**; probing then
@@ -233,7 +305,7 @@ fn report_inert_indicator(container: &Container, entry: &HealthIndicator) {
 /// failure, a panic and timeout to a `(status, error)` pair with an opaque
 /// reason.
 async fn run_with_timeout(
-    name: &'static str,
+    name: &str,
     kind: ProbeKind,
     fut: impl std::future::Future<Output = anyhow::Result<()>>,
     timeout: Duration,
@@ -276,8 +348,6 @@ async fn run_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indicator::IndicatorRun;
-    use nest_rs_core::Container;
 
     #[tokio::test]
     async fn a_hanging_indicator_times_out_to_down() {
@@ -400,7 +470,7 @@ mod tests {
             .build()
             .expect("the container builds");
         let svc = HealthService::default();
-        svc.install_container(container);
+        svc.install(container.clone(), wired(&container));
 
         let report = svc.probe(ProbeKind::Readiness).await;
         assert_eq!(report.status, IndicatorStatus::Down);
@@ -462,7 +532,7 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let svc = HealthService::default();
-        svc.install_container(container);
+        svc.install(container.clone(), wired(&container));
 
         let skipped = logs.find(
             crate::TARGET,
@@ -490,21 +560,21 @@ mod tests {
     #[test]
     fn two_hosts_claiming_one_name_on_one_probe_fail_the_boot() {
         let ok: IndicatorRun = |_| Box::pin(async { Ok(()) });
-        let mine = HealthIndicator {
+        let mine = Indicator {
             origin: "features::billing::health",
-            ..entry("db", ok)
+            ..entry("seaorm", ok)
         };
-        let theirs = HealthIndicator {
-            origin: "nest_rs_seaorm::health::indicator",
-            ..entry("db", ok)
+        let theirs = Indicator {
+            origin: "nest_rs_seaorm::health::module::SeaOrmHealthModule",
+            ..entry("seaorm", ok)
         };
-        let err = check_names([&mine, &theirs].into_iter())
+        let err = check_names([&mine, &theirs])
             .expect_err("one name, one probe, two hosts must not boot");
         let sentence = format!("{err:#}");
         for named in [
             "features::billing::health",
-            "nest_rs_seaorm::health::indicator",
-            "db",
+            "nest_rs_seaorm::health::module::SeaOrmHealthModule",
+            "seaorm",
         ] {
             assert!(
                 sentence.contains(named),
@@ -516,29 +586,28 @@ mod tests {
     #[test]
     fn one_name_on_two_probes_is_not_a_collision() {
         let ok: IndicatorRun = |_| Box::pin(async { Ok(()) });
-        let ready = entry("db", ok);
-        let startup = HealthIndicator {
+        let ready = entry("seaorm", ok);
+        let startup = Indicator {
             kind: ProbeKind::Startup,
-            ..entry("db", ok)
+            ..entry("seaorm", ok)
         };
-        check_names([&ready, &startup].into_iter())
+        check_names([&ready, &startup])
             .expect("two probes never share a report, so the name is claimed once each");
     }
 
     #[test]
     fn distinct_names_on_one_probe_boot() {
         let ok: IndicatorRun = |_| Box::pin(async { Ok(()) });
-        let (a, b) = (entry("db", ok), entry("cache", ok));
-        check_names([&a, &b].into_iter()).expect("no name is claimed twice");
+        let (a, b) = (entry("seaorm", ok), entry("redis:cache", ok));
+        check_names([&a, &b]).expect("no name is claimed twice");
     }
 
     /// Built by hand, not submitted: `inventory` is process-wide.
-    fn entry(name: &'static str, run: crate::indicator::IndicatorRun) -> HealthIndicator {
-        HealthIndicator {
-            origin: "features::probes::fixture",
-            name,
+    fn entry(name: &'static str, run: IndicatorRun) -> Indicator {
+        Indicator {
+            name: Cow::Borrowed(name),
             kind: ProbeKind::Readiness,
-            provider_type_id: || std::any::TypeId::of::<UpHost>(),
+            origin: "features::probes::fixture",
             run,
         }
     }
@@ -562,7 +631,7 @@ mod tests {
             entry("c", slow),
             entry("d", slow),
         ];
-        let entries: Vec<&HealthIndicator> = entries.iter().collect();
+        let entries: Vec<&Indicator> = entries.iter().collect();
 
         let started = tokio::time::Instant::now();
         let report = run_indicators(&entries, &container, ProbeKind::Readiness, &config).await;
@@ -590,7 +659,7 @@ mod tests {
                 Box::pin(std::future::pending::<anyhow::Result<()>>())
             }),
         ];
-        let entries: Vec<&HealthIndicator> = entries.iter().collect();
+        let entries: Vec<&Indicator> = entries.iter().collect();
 
         let started = tokio::time::Instant::now();
         let report = run_indicators(&entries, &container, ProbeKind::Readiness, &config).await;
@@ -637,7 +706,7 @@ mod tests {
                 })
             }),
         ];
-        let entries: Vec<&HealthIndicator> = entries.iter().collect();
+        let entries: Vec<&Indicator> = entries.iter().collect();
 
         let report = run_indicators(&entries, &container, ProbeKind::Readiness, &config).await;
         let body = serde_json::to_string(&report).expect("the report serializes");
@@ -655,7 +724,7 @@ mod tests {
             .build()
             .expect("the container builds");
         let svc = HealthService::default();
-        svc.install_container(container);
+        svc.install(container.clone(), wired(&container));
 
         let report = svc.probe(ProbeKind::Liveness).await;
         assert_eq!(report.status, IndicatorStatus::Up);

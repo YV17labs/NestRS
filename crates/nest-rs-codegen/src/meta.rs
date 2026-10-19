@@ -4,7 +4,8 @@
 //! Every impl half reads `#[meta]` the same way, at two levels: the host's (on
 //! the struct a pair's host half decorates, or on the impl block a provider
 //! pair decorates) and the method's. A site's `Handler` holds both, built once
-//! on its first read; a read prefers the method's value of a type.
+//! — when the site composes, or on its first read; a read prefers the method's
+//! value of a type.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -23,7 +24,8 @@ const META: &str = "meta";
 /// `Throttle { limit: 20 }`, the same unit struct twice, or two variants of one
 /// enum — are refused at the second: a read takes the first of a type, so the
 /// second would be read by nothing. An expression that names no type (a call
-/// to a function, a method call) cannot be told apart here.
+/// to a function, a method call) cannot be told apart here: the site refuses
+/// it when it composes, by the type the value resolves to.
 pub fn take_meta(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Expr>> {
     let mut values: Vec<Expr> = Vec::new();
     let mut named: Vec<String> = Vec::new();
@@ -143,9 +145,7 @@ pub fn host_meta_fn(values: &[Expr]) -> TokenStream {
     let values = boxed(values);
     quote! {
         #[doc(hidden)]
-        pub fn __nestrs_host_meta() -> ::std::vec::Vec<
-            ::std::boxed::Box<dyn ::core::any::Any + ::core::marker::Send + ::core::marker::Sync>,
-        > {
+        pub fn __nestrs_host_meta() -> ::std::vec::Vec<::nest_rs_core::__private::MetaValue> {
             #values
         }
     }

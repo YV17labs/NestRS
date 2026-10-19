@@ -1,6 +1,7 @@
 //! Drive `Scheduler` end-to-end against a hand-built container, with metadata
 //! attached directly.
 
+use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -8,13 +9,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::JOB_TIMEOUT;
-use nest_rs_core::{Container, Transport};
+use nest_rs_core::{Container, DuplicateMetaError, ReachableProviders, Transport, injectable};
 use nest_rs_schedule::nest_rs_database::{
     self, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
 };
 use nest_rs_schedule::{
     CronExpression, CronJobMeta, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError,
-    Replicas, RunFn, Scheduler, Trigger,
+    Replicas, RunFn, Scheduler, Trigger, scheduled,
 };
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
@@ -3074,4 +3075,48 @@ async fn a_tick_whose_commit_never_answers_is_reported_in_doubt_and_not_retryabl
         "{event:?}"
     );
     assert_eq!(event.field("retryable").as_deref(), Some("false"));
+}
+
+/// A value whose expression hides its type from `#[scheduled]`.
+struct Tag;
+
+impl Tag {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct TaggedTwiceTasks;
+
+#[scheduled]
+#[meta(Tag::new())]
+#[meta(Tag::new())]
+impl TaggedTwiceTasks {
+    #[every("1h")]
+    async fn sweep(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn two_values_of_one_hidden_type_on_a_scheduled_host_fail_the_configure_naming_it_and_the_host()
+ {
+    let container = Container::builder()
+        .provide(ReachableProviders(
+            [TypeId::of::<TaggedTwiceTasks>()].into_iter().collect(),
+        ))
+        .provide(TaggedTwiceTasks)
+        .build()
+        .expect("the container builds");
+    let refused = Scheduler::new()
+        .configure(&container)
+        .await
+        .expect_err("the host's jobs would run with a value read by nothing");
+    let refused = refused
+        .downcast_ref::<DuplicateMetaError>()
+        .expect("the site's own refusal");
+    assert_eq!(refused.type_name, std::any::type_name::<Tag>());
+    assert_eq!(refused.declared_on, "TaggedTwiceTasks");
 }

@@ -260,6 +260,7 @@ impl UnitChains {
         guard_stage: Option<Arc<dyn GuardStage>>,
     ) -> anyhow::Result<Self> {
         let label = site_label(handler);
+        handler.refuse_duplicate_meta(&label)?;
         let unit = handler.unit();
         let global = declared.global;
         let bound = (declared.layers)();
@@ -429,6 +430,7 @@ mod tests {
     use super::*;
     use crate::container::ContainerBuilder;
     use crate::exception_filter::exception_filter;
+    use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
     use crate::interceptor::__private::register_interceptor;
     use crate::interceptor::interceptor;
     use crate::testing::{JOB, RUN, Recording, SEND};
@@ -881,6 +883,81 @@ mod tests {
             CACHED
                 .chains(&second)
                 .is_ok_and(|chains| Arc::ptr_eq(&chains, &other))
+        );
+    }
+
+    /// A value whose expression hides its type from the expansion.
+    struct Tag;
+
+    impl Tag {
+        fn new() -> Self {
+            Self
+        }
+    }
+
+    fn tagged_twice_on_the_method() -> MetaLevels {
+        MetaLevels {
+            host: vec![meta_value(Tag::new())],
+            method: vec![meta_value(Tag::new()), meta_value(Tag::new())],
+        }
+    }
+
+    fn tagged_twice_on_the_host() -> MetaLevels {
+        MetaLevels {
+            host: vec![meta_value(Tag::new()), meta_value(Tag::new())],
+            method: Vec::new(),
+        }
+    }
+
+    fn tagged_once_per_level() -> MetaLevels {
+        MetaLevels {
+            host: vec![meta_value(Tag::new()), meta_value(1_u8)],
+            method: vec![meta_value(Tag::new()), meta_value(2_u16)],
+        }
+    }
+
+    struct Tagging;
+
+    const fn tagging(method: &'static str, meta: fn() -> MetaLevels) -> Handler {
+        declare_handler(HandlerDeclaration {
+            unit: crate::testing::MESSAGE,
+            host: TypeId::of::<Tagging>(),
+            host_name: "Tagging",
+            method,
+            address: method,
+            posture: crate::Posture::Gated,
+            meta,
+        })
+    }
+
+    static ON_THE_METHOD: Handler = tagging("twice", tagged_twice_on_the_method);
+    static ON_THE_HOST: Handler = tagging("hosted", tagged_twice_on_the_host);
+    static ONCE_EACH: Handler = tagging("once", tagged_once_per_level);
+
+    #[test]
+    fn two_values_of_one_type_at_one_level_refuse_the_site_naming_the_type_and_where() {
+        let container = Container::default();
+        for (handler, declared_on) in [
+            (&ON_THE_METHOD, "Tagging::twice"),
+            (&ON_THE_HOST, "Tagging"),
+        ] {
+            let Err(refused) = UnitChains::compose(
+                &container,
+                handler,
+                &declared(SiteLayers::default, GlobalLayers::NONE),
+            ) else {
+                panic!("a site composed with a value read by nothing");
+            };
+            let refused = refused
+                .downcast_ref::<crate::DuplicateMetaError>()
+                .unwrap_or_else(|| panic!("not a duplicate value: {refused:#}"));
+            assert_eq!(refused.type_name, "nest_rs_core::site::tests::Tag");
+            assert_eq!(refused.declared_on, declared_on);
+        }
+        composed(
+            &container,
+            &ONCE_EACH,
+            &declared(SiteLayers::default, GlobalLayers::NONE),
         );
     }
 }

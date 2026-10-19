@@ -111,7 +111,7 @@ whatever it answered.
 layer reads. `#[public]` marks a route as anonymous-admissible (the guard admits
 it through); `#[meta]` declares typed data on a route or its controller, which a
 guard reads through `cx.reflector()`. Each route keeps one declaration for
-the process, its values built on first read; its layers read it through a
+the process, its values built once as it mounts; its layers read it through a
 pointer, so nothing is copied per request. A refusal is answered by the guard
 stage — exception filters never see it; a unit-stage interceptor observes it.
 

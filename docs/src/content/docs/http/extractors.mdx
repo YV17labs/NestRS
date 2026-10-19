@@ -339,12 +339,13 @@ async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
 Three rules pin the contract:
 
 - The value type must be `Send + Sync + 'static`. The expression is
-  evaluated once, the first time a layer reads the route's metadata, and
-  every request reads that one value through a pointer — never cloned,
-  never shadowed by what a guard attaches. The reader
-  resolves by `TypeId`: wrap values of one underlying shape in distinct
-  newtypes when they need to coexist, and declare each type once per
-  level.
+  evaluated once, when the route mounts, and every request reads that one
+  value through a pointer — never cloned, never shadowed by what a guard
+  attaches. The reader resolves by `TypeId`: wrap values of one underlying
+  shape in distinct newtypes when they need to coexist, and declare each
+  type once per level. A second would be read by nothing, so the compiler
+  refuses it when each expression names its type, and the boot when one
+  hides it (`Throttle::per_minute(10)`), naming the type and where.
 - The method's value of a type wins over its controller's, and a
   controller's value of another type still reads through.
 - Scope does not change what a guard reads. The pool executes

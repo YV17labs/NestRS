@@ -11,7 +11,7 @@ error[E0277]: `Rc<u32>` cannot be sent between threads safely
 note: required by a bound in `nest_rs::nest_rs_core::__private::meta_value`
   --> $WORKSPACE/crates/nest-rs-core/src/handler.rs
    |
-   | pub fn meta_value<M: Any + Send + Sync>(value: M) -> Box<dyn Any + Send + Sync> {
+   | pub fn meta_value<M: Any + Send + Sync>(value: M) -> MetaValue {
    |                            ^^^^ required by this bound in `meta_value`
 help: consider dereferencing here
    |
@@ -31,7 +31,7 @@ error[E0277]: `Rc<u32>` cannot be shared between threads safely
 note: required by a bound in `nest_rs::nest_rs_core::__private::meta_value`
   --> $WORKSPACE/crates/nest-rs-core/src/handler.rs
    |
-   | pub fn meta_value<M: Any + Send + Sync>(value: M) -> Box<dyn Any + Send + Sync> {
+   | pub fn meta_value<M: Any + Send + Sync>(value: M) -> MetaValue {
    |                                   ^^^^ required by this bound in `meta_value`
 help: consider dereferencing here
    |

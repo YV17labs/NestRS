@@ -171,8 +171,10 @@ and reports what it binds to the access graph through `host_layers_entry`.
 
 **`#[meta(EXPR)]` is read alike at every pair**: on the host (the struct, or
 the impl block a provider pair decorates) and on each dispatched method, into
-the site's one `Handler`, built on first read; two values naming one type at one
-level are refused (`nest_rs_codegen::__private::take_meta`).
+the site's one `Handler`, built once; two values of one type at one level are
+refused — at expansion when each expression names its type
+(`nest_rs_codegen::__private::take_meta`), else when the site composes, by the
+type they resolve to (`DuplicateMetaError`).
 
 **The worker-job family answers every key at every member.** `#[process]`,
 `#[every]`, `#[cron]` and `#[after]` are one job table in `nest-rs-codegen` (held

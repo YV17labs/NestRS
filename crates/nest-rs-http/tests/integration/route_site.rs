@@ -230,3 +230,40 @@ async fn a_declared_value_is_never_copied_per_request() {
 
     assert_eq!(CLONED.load(Ordering::SeqCst), before, "a value was cloned");
 }
+
+/// A value whose expression hides its type from `#[routes]`.
+struct Tag;
+
+impl Tag {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[controller(path = "/tagged")]
+struct TaggedTwiceController;
+
+#[routes]
+impl TaggedTwiceController {
+    #[get("/")]
+    #[meta(Tag::new())]
+    #[meta(Tag::new())]
+    async fn read(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(providers = [TaggedTwiceController])]
+struct TaggedTwiceModule;
+
+#[tokio::test]
+async fn two_values_of_one_hidden_type_on_a_route_fail_the_boot_naming_it_and_the_route() {
+    let Err(refused) = TestApp::for_module::<TaggedTwiceModule>().await else {
+        panic!("the route would serve with a value read by nothing");
+    };
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains("route_site::Tag`") && chain.contains("TaggedTwiceController::read"),
+        "the refusal names the type and the route: {chain}",
+    );
+}

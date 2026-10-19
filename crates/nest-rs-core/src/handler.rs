@@ -5,6 +5,7 @@ use std::any::{Any, TypeId};
 use std::fmt;
 use std::sync::OnceLock;
 
+use crate::error::DuplicateMetaError;
 use crate::operation_log::Unit;
 
 /// One dispatch site as its decorators declared it: built once, immutable, and
@@ -63,11 +64,37 @@ impl Handler {
         Reflector { handler: self }
     }
 
-    /// The site's metadata, built by its declaration on the first read and
-    /// kept for the process.
+    /// The site's metadata, built by its declaration on the first read, or
+    /// when its site composes, and kept for the process.
     fn levels(&self) -> &MetaLevels {
         self.levels.get_or_init(self.declared.meta)
     }
+
+    /// Refuses a declaration holding two values of one type at one level,
+    /// which no read could tell apart: the second would be read by nothing.
+    /// `site` names the method's level, as the boot log names the site.
+    pub(crate) fn refuse_duplicate_meta(&self, site: &str) -> Result<(), DuplicateMetaError> {
+        let levels = self.levels();
+        for (values, declared_on) in [(&levels.method, site), (&levels.host, self.host_name())] {
+            if let Some(type_name) = written_twice(values) {
+                return Err(DuplicateMetaError {
+                    type_name,
+                    declared_on: declared_on.to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The type of the first value in `values` whose type an earlier one has.
+fn written_twice(values: &[MetaValue]) -> Option<&'static str> {
+    values.iter().enumerate().find_map(|(index, value)| {
+        values[..index]
+            .iter()
+            .any(|earlier| earlier.type_id == value.type_id)
+            .then_some(value.type_name)
+    })
 }
 
 impl fmt::Debug for Handler {
@@ -124,7 +151,7 @@ impl<'a> Reflector<'a> {
             .method
             .iter()
             .chain(&levels.host)
-            .filter_map(|value| value.downcast_ref::<M>())
+            .filter_map(|value| value.value.downcast_ref::<M>())
     }
 
     /// The site's [`Posture`].
@@ -144,9 +171,17 @@ impl<'a> Reflector<'a> {
 pub struct MetaLevels {
     /// Declared on the host: the struct, or the impl block a worker pair
     /// decorates.
-    pub host: Vec<Box<dyn Any + Send + Sync>>,
+    pub host: Vec<MetaValue>,
     /// Declared on the dispatched method.
-    pub method: Vec<Box<dyn Any + Send + Sync>>,
+    pub method: Vec<MetaValue>,
+}
+
+/// One `#[meta]` value as a level holds it, with its type's identity, which a
+/// read matches and a duplicate is refused by.
+pub struct MetaValue {
+    value: Box<dyn Any + Send + Sync>,
+    type_id: TypeId,
+    type_name: &'static str,
 }
 
 /// What a decorator declares about one dispatch site, written into a `static`.
@@ -163,7 +198,8 @@ pub struct HandlerDeclaration {
     pub address: &'static str,
     /// What `#[public]` and `#[authorize]` declared.
     pub posture: Posture,
-    /// Builds the site's metadata, once, on the first read.
+    /// Builds the site's metadata, once: on the first read, or when its site
+    /// composes.
     pub meta: fn() -> MetaLevels,
 }
 
@@ -177,8 +213,12 @@ pub const fn declare_handler(declared: HandlerDeclaration) -> Handler {
 
 /// One `#[meta]` value as a level holds it: shared by every unit its site
 /// serves, so it is `Send + Sync`, and read by type, so it is `'static`.
-pub fn meta_value<M: Any + Send + Sync>(value: M) -> Box<dyn Any + Send + Sync> {
-    Box::new(value)
+pub fn meta_value<M: Any + Send + Sync>(value: M) -> MetaValue {
+    MetaValue {
+        value: Box::new(value),
+        type_id: TypeId::of::<M>(),
+        type_name: std::any::type_name::<M>(),
+    }
 }
 
 #[cfg(test)]
@@ -206,8 +246,8 @@ mod tests {
 
     fn posts_levels() -> MetaLevels {
         MetaLevels {
-            host: vec![Box::new(Throttle(100)), Box::new(Audit("posts"))],
-            method: vec![Box::new(Throttle(10))],
+            host: vec![meta_value(Throttle(100)), meta_value(Audit("posts"))],
+            method: vec![meta_value(Throttle(10))],
         }
     }
 
@@ -272,7 +312,7 @@ mod tests {
             BUILT.fetch_add(1, Ordering::SeqCst);
             MetaLevels {
                 host: Vec::new(),
-                method: vec![Box::new(Audit("counted"))],
+                method: vec![meta_value(Audit("counted"))],
             }
         }
         static COUNTED: Handler = declare_handler(HandlerDeclaration {

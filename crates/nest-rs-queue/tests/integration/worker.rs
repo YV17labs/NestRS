@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{Transport, injectable, module};
+use nest_rs_core::{DuplicateMetaError, Transport, injectable, module};
 use nest_rs_queue::{BoundConsumer, JobProducer, QueueName, QueueWorker, processor, queue};
 use nest_rs_testing::HeadlessApp;
 use nest_rs_testing::queue::KitBackend;
@@ -148,6 +148,55 @@ async fn a_producer_and_a_consumer_of_two_backends_fail_the_boot_naming_both() {
     for expected in ["memory-plain", "`memory`"] {
         assert!(refused.contains(expected), "{expected:?} in {refused}");
     }
+}
+
+/// A value whose expression hides its type from `#[processor]`.
+struct Tag;
+
+impl Tag {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[queue(name = "nestrs-worker-tagged", job = WorkerCommand)]
+struct TaggedQueue;
+
+#[injectable]
+#[derive(Default)]
+struct TaggedTwiceProcessor;
+
+#[processor]
+impl TaggedTwiceProcessor {
+    #[process(queue = TaggedQueue)]
+    #[meta(Tag::new())]
+    #[meta(Tag::new())]
+    async fn run(&self, _job: WorkerCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(providers = [TaggedTwiceProcessor])]
+struct TaggedTwiceModule;
+
+#[tokio::test]
+async fn two_values_of_one_hidden_type_on_a_process_method_fail_the_boot_naming_it_and_the_method()
+{
+    let app = HeadlessApp::builder()
+        .module::<TaggedTwiceModule>()
+        .provide(BoundConsumer::new(Memory::new(&PLAIN, LEASE).consumer()))
+        .build_headless()
+        .await
+        .expect("the app boots: the worker is what refuses");
+    let refused = QueueWorker::new()
+        .configure(app.container())
+        .await
+        .expect_err("the method would run with a value read by nothing");
+    let refused = refused
+        .downcast_ref::<DuplicateMetaError>()
+        .expect("the site's own refusal");
+    assert_eq!(refused.type_name, std::any::type_name::<Tag>());
+    assert_eq!(refused.declared_on, "TaggedTwiceProcessor::run");
 }
 
 #[tokio::test(start_paused = true)]

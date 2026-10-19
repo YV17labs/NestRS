@@ -175,3 +175,42 @@ mod dropped_at_the_end {
         );
     }
 }
+
+/// A value whose expression hides its type from `#[listeners]`.
+struct Tag;
+
+impl Tag {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[derive(Clone)]
+struct Audited;
+
+#[injectable]
+#[derive(Default)]
+struct TaggedTwiceListeners;
+
+#[listeners]
+#[meta(Tag::new())]
+#[meta(Tag::new())]
+impl TaggedTwiceListeners {
+    #[on_event]
+    async fn on_audited(&self, _event: Audited) {}
+}
+
+#[module(imports = [EventsModule], providers = [TaggedTwiceListeners])]
+struct TaggedTwiceModule;
+
+#[tokio::test]
+async fn two_values_of_one_hidden_type_on_a_listener_host_fail_the_boot_naming_it() {
+    let Err(refused) = App::builder().module::<TaggedTwiceModule>().build().await else {
+        panic!("the listener would run with a value read by nothing");
+    };
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains("module::Tag`") && chain.contains("on `TaggedTwiceListeners`"),
+        "the refusal names the type and the host declaring it twice: {chain}",
+    );
+}

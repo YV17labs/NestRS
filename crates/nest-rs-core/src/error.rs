@@ -655,6 +655,27 @@ pub struct UnresolvedLayerError {
     pub site: String,
 }
 
+/// Two `#[meta]` values of one type declared at one level of a site — on its
+/// method, or on its host — which no read could tell apart: a read takes the
+/// first value of a type, so the second would be read by nothing.
+///
+/// The decorator refuses the pair at compile time when each expression names
+/// its type; this refuses the rest, by the type the values resolve to.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "`#[meta]` declares two `{type_name}` values on `{declared_on}` — a read takes the first \
+     value of a type, so the second would be read by nothing: keep one; a method's own value \
+     already overrides its host's"
+)]
+pub struct DuplicateMetaError {
+    /// The values' type.
+    pub type_name: &'static str,
+    /// Where both are declared: the site, for its method's values, or the
+    /// host.
+    pub declared_on: String,
+}
+
 /// A payload that did not decode, as every edge reports it: the category of the
 /// failure, the line and column when the payload was text, the kind of value
 /// found and the type expected — never the value.

@@ -76,11 +76,14 @@ where
     E: Endpoint + 'static,
     E::Output: IntoResponse,
 {
-    poem_bridge::to_poem(behind_guards(
-        &UPGRADE,
-        chain,
-        nest_rs_http::BoxEndpoint::new(poem_bridge::from_poem(inner)),
-    ))
+    poem_bridge::to_poem(
+        behind_guards(
+            &UPGRADE,
+            chain,
+            nest_rs_http::BoxEndpoint::new(poem_bridge::from_poem(inner)),
+        )
+        .expect("a site declaring no `#[meta]` composes"),
+    )
 }
 
 async fn call_guarded(guard: DecisionGuard) -> poem::Response {

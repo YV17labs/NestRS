@@ -177,11 +177,14 @@ pub(crate) fn answer(cx: &mut UnitContext<'_>, denial: Denial) -> Failure {
 /// `inner` behind `chain`, run as the guard stage of a site `handler` declares
 /// and nothing else: the seam a guard stage's own tests drive a request
 /// through, as a self-mount's request runs it.
+///
+/// Refused as a route is when it mounts: `handler` declares two `#[meta]`
+/// values of one type at one level.
 pub fn behind_guards(
     handler: &'static Handler,
     chain: Vec<ResolvedLayer<dyn Guard>>,
     inner: crate::endpoint::BoxEndpoint,
-) -> crate::endpoint::BoxEndpoint {
+) -> anyhow::Result<crate::endpoint::BoxEndpoint> {
     behind_stage(handler, chain, StageKind::SelfMount, inner)
 }
 
@@ -192,7 +195,7 @@ fn behind_stage(
     chain: Vec<ResolvedLayer<dyn Guard>>,
     kind: StageKind,
     inner: crate::endpoint::BoxEndpoint,
-) -> crate::endpoint::BoxEndpoint {
+) -> anyhow::Result<crate::endpoint::BoxEndpoint> {
     use nest_rs_core::__private::{GlobalLayers, SiteDeclaration, SiteLayers, compose_site};
 
     let stage: Arc<dyn GuardStage> = Arc::new(HttpGuardStage::new(chain, Vec::new(), kind));
@@ -202,20 +205,16 @@ fn behind_stage(
         guard_stage: None,
         class_gate: None,
     };
-    // Composing around a given stage resolves nothing: it cannot refuse.
-    #[expect(
-        clippy::expect_used,
-        reason = "a site with no layer of its own to resolve composes"
-    )]
     let chains = compose_site(
         &nest_rs_core::Container::default(),
         handler,
         &declared,
         Some(stage),
-    )
-    .expect("a site with nothing to resolve composes");
+    )?;
     let tail = crate::site::EndpointTail::new(inner, &chains);
-    crate::endpoint::BoxEndpoint::new(crate::site::SiteEndpoint::new(handler, chains, None, tail))
+    Ok(crate::endpoint::BoxEndpoint::new(
+        crate::site::SiteEndpoint::new(handler, chains, None, tail),
+    ))
 }
 
 /// Run `guards`' HTTP entry on `req`, the unit `handler` declares, as the
@@ -382,6 +381,7 @@ mod tests {
         inner: impl Endpoint,
     ) -> impl Endpoint {
         behind_stage(&ROUTE, chain, kind, BoxEndpoint::new(inner))
+            .expect("a route declaring each type once composes")
     }
 
     #[tokio::test]
@@ -811,5 +811,38 @@ mod tests {
             answer.into_body().into_string().await.expect("a body"),
             "acme"
         );
+    }
+
+    fn throttled_twice() -> MetaLevels {
+        MetaLevels {
+            host: Vec::new(),
+            method: vec![meta_value(Throttle(10)), meta_value(Throttle(20))],
+        }
+    }
+
+    static THROTTLED_TWICE: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::REQUEST,
+        host: TypeId::of::<Controller>(),
+        host_name: "Controller",
+        method: "throttled_twice",
+        address: "/twice",
+        posture: Posture::Public,
+        meta: throttled_twice,
+    });
+
+    #[test]
+    fn a_site_declaring_two_values_of_one_type_is_refused_rather_than_guarded() {
+        let inner = crate::endpoint_fn(|_req: Request| async {
+            Ok(Response::builder().body("unreachable"))
+        });
+        let Err(refused) = behind_guards(&THROTTLED_TWICE, Vec::new(), BoxEndpoint::new(inner))
+        else {
+            panic!("the site would serve with a value read by nothing");
+        };
+        let refused = refused
+            .downcast_ref::<nest_rs_core::DuplicateMetaError>()
+            .expect("the composition's own refusal");
+        assert!(refused.type_name.ends_with("::Throttle"), "{refused}");
+        assert_eq!(refused.declared_on, "Controller::throttled_twice");
     }
 }

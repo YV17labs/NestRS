@@ -163,11 +163,12 @@ pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
     AccessGraphError, BootInterruptedError, BudgetPastNetError, ContainerError,
-    ContestedDeclarationError, DecodeError, DuplicateProviderError, FactoryCycleError,
-    FactoryFailedError, InitFailedError, LateFactoryError, LateOptionalDependencyError,
-    MissingDependencyError, OverriddenDependencyError, ProviderCycleError, ScopeViolationError,
-    UnboundedTransportError, UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError,
-    UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
+    ContestedDeclarationError, DecodeError, DuplicateMetaError, DuplicateProviderError,
+    FactoryCycleError, FactoryFailedError, InitFailedError, LateFactoryError,
+    LateOptionalDependencyError, MissingDependencyError, OverriddenDependencyError,
+    ProviderCycleError, ScopeViolationError, UnboundedTransportError, UnbuiltCause,
+    UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError, UnresolvedFactoryError,
+    UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};
@@ -220,7 +221,9 @@ pub mod __private {
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::error_message::__private::find_in_chain;
     pub use crate::exception_filter::__private::ErasedExceptionFilter;
-    pub use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
+    pub use crate::handler::{
+        HandlerDeclaration, MetaLevels, MetaValue, declare_handler, meta_value,
+    };
     pub use crate::instance::{InstanceDeclaration, InstanceSeal};
     pub use crate::interceptor::__private::{
         InterceptorRegistration, InterceptorStage, register_interceptor,

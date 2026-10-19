@@ -153,10 +153,21 @@ Six constructors cover the common cases:
 | `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
 | `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
 
-A domain error implementing `ToProblem` answers through `problem_error`: the
-problem's sentence, `invalid_request` for a `4xx` and `internal_error` for a
-`5xx`, its code under `data.code` — or, when the error says none, the opaque
-answer `Opaque` gives, its chain filed at `error`:
+A domain error implementing `ToProblem` is returned as it is, from an
+operation answering a `Result<T, E>`: it answers the problem's sentence,
+`invalid_request` for a `4xx` and `internal_error` for a `5xx`, its code under
+`data.code` — or, when the error says none, the opaque answer `Opaque` gives,
+its chain filed at `error` — and an exception filter reads it as its type
+first:
+
+```rust title="crates/features/src/weather/mcp/tool.rs"
+async fn forecast(&self, Parameters(p): Parameters<CityParams>) -> Result<String, WeatherError> {
+    Ok(self.svc.forecast(&p.city).await?.summary())
+}
+```
+
+Where the operation answers `McpError`, `problem_error` converts one at the
+call site the same way:
 
 ```rust title="crates/features/src/weather/mcp/tool.rs"
 use nest_rs::mcp::{McpError, problem_error};

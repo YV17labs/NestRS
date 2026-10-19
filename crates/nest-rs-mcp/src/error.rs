@@ -52,8 +52,11 @@
 //! A deliberate `McpError::invalid_params(…)`, meant for the model to read and
 //! retry, is returned directly, never through here.
 
-use nest_rs_core::__private::Withheld;
-use nest_rs_core::ToProblem;
+use std::error::Error as StdError;
+
+use nest_rs_core::__private::{Withheld, caught_problem, find_in_chain};
+use nest_rs_core::{DecodeError, Failure, Problem, ToProblem};
+use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
 use rmcp::model::ErrorCode;
@@ -88,7 +91,7 @@ pub fn pipe_error(err: &PipeError) -> McpError {
 }
 
 /// Render what a [`ToProblem`] error says — a
-/// [`Problem`](nest_rs_core::Problem) among them — as the JSON-RPC error an MCP
+/// [`Problem`] among them — as the JSON-RPC error an MCP
 /// operation answers with: a `4xx` as `invalid_request`, a `5xx` as
 /// `internal_error`, the problem's
 /// [`client_message`](nest_rs_core::Problem::client_message) as the message,
@@ -106,14 +109,11 @@ pub fn pipe_error(err: &PipeError) -> McpError {
 /// assert_eq!(error.data, Some(serde_json::json!({ "code": "NOT_FOUND" })));
 /// ```
 pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
-    let Some(problem) = error.to_problem() else {
-        return opaque_error(error);
-    };
-    match nest_rs_core::__private::withheld(&problem, error) {
-        Some(Withheld::Failed(said)) => failed(&said),
-        Some(Withheld::Unavailable(said)) => unavailable(&said),
-        None => {}
-    }
+    problem_reply(error).filed()
+}
+
+/// A problem as the JSON-RPC error an MCP operation answers with.
+fn rendered(problem: &Problem) -> McpError {
     let mut data = serde_json::Map::new();
     data.insert("code".to_owned(), problem.code().as_str().into());
     if let Some(seconds) = problem.retry_after() {
@@ -127,10 +127,188 @@ pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
     }
 }
 
+/// `problem` rendered, the chain of `error` behind it filed when its answer
+/// withholds it.
+fn answered(problem: &Problem, error: &(dyn StdError + 'static)) -> McpError {
+    file(nest_rs_core::__private::withheld(problem, error));
+    rendered(problem)
+}
+
+/// The operator's line for a chain an answer withholds, at its level.
+fn file(withheld: Option<Withheld>) {
+    match withheld {
+        Some(Withheld::Failed(said)) => failed(&said),
+        Some(Withheld::Unavailable(said)) => unavailable(&said),
+        None => {}
+    }
+}
+
 /// The opaque answer, with `error`'s whole chain on the operator's line.
-fn opaque_error(error: &(dyn std::error::Error + 'static)) -> McpError {
+fn opaque_error(error: &(dyn StdError + 'static)) -> McpError {
     failed(&nest_rs_core::error_message(error));
+    opaque_answer()
+}
+
+/// The opaque answer alone, for a failure whose cause is filed elsewhere.
+pub(crate) fn opaque_answer() -> McpError {
     McpError::internal_error(OPAQUE, None)
+}
+
+/// The vocabulary `error`'s chain carries, else the opaque answer: the
+/// method's own error, a problem, a pipe's refusal or a decode failure,
+/// first found from the error itself down.
+fn chain_error(error: &(dyn StdError + 'static)) -> McpError {
+    if let Some(deliberate) = find_in_chain::<McpError>(error) {
+        return deliberate.clone();
+    }
+    if let Some(problem) = find_in_chain::<Problem>(error) {
+        return answered(problem, error);
+    }
+    if let Some(rejection) = find_in_chain::<PipeError>(error) {
+        return pipe_error(rejection);
+    }
+    if let Some(report) = DecodeError::in_chain(error) {
+        return McpError::invalid_params(report.to_string(), None);
+    }
+    opaque_error(error)
+}
+
+/// Why an operation's tail failed: the failure the pipeline carries, which
+/// its exception filters read, and the answer only the error's type could say,
+/// held until the operation's unit decides whether it goes out.
+pub struct OperationFailure {
+    pub(crate) failure: Failure,
+    pub(crate) reply: Option<Box<Reply>>,
+}
+
+/// An answer an operation wrote, with the chain it keeps from the client —
+/// filed only if it is the one sent.
+pub(crate) struct Reply {
+    error: McpError,
+    withheld: Option<Withheld>,
+}
+
+impl Reply {
+    /// The answer, its withheld chain filed: it is the one sent.
+    pub(crate) fn filed(self) -> McpError {
+        file(self.withheld);
+        self.error
+    }
+}
+
+impl OperationFailure {
+    /// A failure the edge's one rule answers once the unit ran.
+    pub(crate) fn unanswered(failure: Failure) -> Self {
+        Self {
+            failure,
+            reply: None,
+        }
+    }
+
+    /// What an operation failing with this answers when no exception filter
+    /// answers it, the chain it withholds filed.
+    #[cfg(test)]
+    pub(crate) fn into_answer(self) -> McpError {
+        match self.reply {
+            Some(reply) => reply.filed(),
+            None => unanswered(&self.failure),
+        }
+    }
+}
+
+/// The operation's own `McpError`, as built: its own answer, which a filter
+/// still reads.
+impl From<McpError> for OperationFailure {
+    fn from(error: McpError) -> Self {
+        Self {
+            failure: Failure::from(error.clone()),
+            reply: Some(Box::new(Reply {
+                error,
+                withheld: None,
+            })),
+        }
+    }
+}
+
+/// A per-argument pipe's refusal, answered as one.
+impl From<PipeError> for OperationFailure {
+    fn from(refused: PipeError) -> Self {
+        Self::unanswered(Failure::from(refused))
+    }
+}
+
+/// What an operation whose unit failed answers: an exception filter's problem
+/// over whatever it wrote, else the answer it wrote, else the edge's one rule
+/// — each filing the chain it keeps from the client.
+pub(crate) fn answer(failure: &Failure, reply: Option<Box<Reply>>) -> McpError {
+    if let Some(problem) = caught_problem(failure) {
+        return answered(problem, failure.error());
+    }
+    match reply {
+        Some(reply) if failure.is_answered() => reply.filed(),
+        _ => unanswered(failure),
+    }
+}
+
+/// The edge's one rule for a failure nothing answered: a refusal as its
+/// denial, the vocabulary its chain carries, else the opaque answer.
+fn unanswered(failure: &Failure) -> McpError {
+    match failure.find::<Denial>() {
+        Some(denial) => crate::guard::denial_to_mcp_error(denial.clone()),
+        None => chain_error(failure.error()),
+    }
+}
+
+/// The answer to `error`'s [`ToProblem`] — the problem it says, or the opaque
+/// answer when it says none — and the chain it keeps from the client.
+fn problem_reply<E: ToProblem>(error: &E) -> Reply {
+    match error.to_problem() {
+        Some(problem) => Reply {
+            error: rendered(&problem),
+            withheld: nest_rs_core::__private::withheld(&problem, error),
+        },
+        None => Reply {
+            error: opaque_answer(),
+            withheld: Some(Withheld::Failed(nest_rs_core::error_message(error))),
+        },
+    }
+}
+
+/// An operation's error, rendered by its type: the inherent method takes a
+/// [`ToProblem`] error, [`ErrorReportChain`] any other — the operation's own
+/// `McpError` as built, else the vocabulary its chain carries, else opaque.
+pub struct ErrorReport<E>(pub E);
+
+impl<E: ToProblem> ErrorReport<E> {
+    /// The problem the error says, or the opaque answer; the error stays
+    /// typed for the exception filters.
+    pub fn into_failure(self) -> OperationFailure {
+        let reply = Box::new(problem_reply(&self.0));
+        OperationFailure {
+            failure: Failure::from(self.0),
+            reply: Some(reply),
+        }
+    }
+}
+
+/// Every error [`ErrorReport`]'s inherent method does not take.
+pub trait ErrorReportChain {
+    /// The operation's own `McpError` as built, else a failure the edge's one
+    /// rule answers.
+    fn into_failure(self) -> OperationFailure;
+}
+
+impl<E> ErrorReportChain for ErrorReport<E>
+where
+    E: Into<Box<dyn StdError + Send + Sync>> + 'static,
+{
+    fn into_failure(self) -> OperationFailure {
+        let boxed = nest_rs_core::boxed_error(self.0);
+        match boxed.downcast::<McpError>() {
+            Ok(deliberate) => OperationFailure::from(*deliberate),
+            Err(other) => OperationFailure::unanswered(Failure::new(other)),
+        }
+    }
 }
 
 /// The operator's line for a failure the answer withholds: its whole chain.
@@ -150,18 +328,6 @@ fn unavailable(said: &str) {
         error = %said,
         "mcp operation unavailable",
     );
-}
-
-/// The failure a decorated operation reports when it declares guards and finds
-/// no app to resolve them from: closed, never a chain of zero guards.
-pub fn unresolvable_chain(label: &'static str) -> McpError {
-    tracing::error!(
-        target: crate::TARGET,
-        operation = label,
-        reason = "no_ambient_container",
-        "mcp operation declares guards but the mount carries no container",
-    );
-    McpError::internal_error(OPAQUE, None)
 }
 
 /// Whether `error` is rmcp's `PromptRouter` refusing `name`, a prompt its host
@@ -235,6 +401,11 @@ pub(crate) fn said_by_code(code: ErrorCode) -> Option<&'static str> {
 /// found*.
 pub(crate) const TOOL_NOT_FOUND: &str = "tool not found";
 
+/// The refusal of a tool no host declares, in rmcp's own words.
+pub(crate) fn tool_not_found() -> McpError {
+    McpError::invalid_params(TOOL_NOT_FOUND, None)
+}
+
 /// rmcp 3.5's streamable-HTTP refusals written as text, word for word, that
 /// quote nothing the request carried: what a client needs to fix its call.
 const TRANSPORT_SENTENCES: [&str; 15] = [
@@ -305,29 +476,63 @@ pub(crate) fn is_transport_message(message: &str) -> bool {
         })
 }
 
-/// What an MCP operation answers: a `Result` whose error takes an [`McpError`],
-/// whatever the type is called.
+/// What an MCP operation answers: a `Result`, whatever the type is called.
 #[diagnostic::on_unimplemented(
-    message = "an MCP operation returns `Result<_, McpError>`, and `{Self}` is not one",
-    label = "not a `Result` an `McpError` converts into",
-    note = "its guard chain, its access posture and its pipes refuse by returning, and an \
-            operation that cannot fail has nowhere to report a denial"
+    message = "an MCP operation returns a `Result`, and `{Self}` is not one",
+    label = "not a `Result`",
+    note = "its guards, its access posture and its pipes refuse through the operation's \
+            failure, and an operation that cannot fail has nowhere to report a denial"
 )]
 pub trait OperationAnswer {
-    /// The answer carrying `error`.
-    fn refused(error: McpError) -> Self;
+    /// What the operation answers when it succeeds.
+    type Value;
+    /// What it fails with: an `McpError`, a `ToProblem` error or any other
+    /// error, rendered by its type.
+    type Error;
+
+    /// The answer as the `Result` it is.
+    fn into_result(self) -> Result<Self::Value, Self::Error>;
 }
 
-impl<T, E: From<McpError>> OperationAnswer for Result<T, E> {
-    fn refused(error: McpError) -> Self {
-        Err(E::from(error))
+impl<T, E> OperationAnswer for Result<T, E> {
+    type Value = T;
+    type Error = E;
+
+    fn into_result(self) -> Self {
+        self
     }
 }
 
-/// A refusal from the wrapper's chain, gate or pipes, as the operation's own
-/// answer — see [`OperationAnswer`].
-pub fn refused<R: OperationAnswer>(error: McpError) -> R {
-    R::refused(error)
+/// The operation's answer as the `Result` it is — see [`OperationAnswer`].
+pub fn answer_of<R, V, E>(answer: R) -> Result<V, E>
+where
+    R: OperationAnswer<Value = V, Error = E>,
+{
+    answer.into_result()
+}
+
+/// What a tool call whose result reports its error in band fails its unit
+/// with: the answer is the result itself.
+#[derive(Debug, thiserror::Error)]
+#[error("the tool reported its error in its result")]
+pub(crate) struct ToolReportedError;
+
+/// Why an operation's `Scoped<T>` parameter resolved nothing — said to the
+/// operator alone, the client answered opaquely.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ScopeError {
+    /// No request scope reached the operation.
+    #[error("no request scope reaches the operation to resolve `{provider}`")]
+    NotInstalled {
+        /// The provider the parameter names.
+        provider: &'static str,
+    },
+    /// The scope's container offers no such provider.
+    #[error("no provider registered for `{provider}` — add it to a module's providers")]
+    NoProvider {
+        /// The provider the parameter names.
+        provider: &'static str,
+    },
 }
 
 /// Why a mount's session manager refused: its cap, or rmcp's own manager.
@@ -607,20 +812,88 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_operation_with_guards_and_no_container_says_which_operation_and_why() {
-        let logs = nest_rs_testing::LogCapture::install();
-        let _ = unresolvable_chain("posts::publish");
+    /// What a domain answers when the ledger refuses; it says no problem.
+    #[derive(Debug, thiserror::Error)]
+    #[error("account 4111-1111 is frozen")]
+    struct Frozen;
 
-        let event = logs.expect_one(
-            "nest_rs::mcp",
-            "mcp operation declares guards but the mount carries no container",
+    /// What a domain answers when a charge conflicts; it says a `409`.
+    #[derive(Debug, thiserror::Error)]
+    #[error("charge 42 conflicts with charge 41")]
+    struct Conflicting;
+
+    impl ToProblem for Conflicting {
+        fn to_problem(&self) -> Option<Problem> {
+            Some(Problem::new(409, nest_rs_core::problem::code::CONFLICT))
+        }
+    }
+
+    #[test]
+    fn each_error_is_rendered_by_its_type() {
+        use super::ErrorReportChain as _;
+
+        let deliberate = ErrorReport(McpError::invalid_params("bad cursor", None))
+            .into_failure()
+            .into_answer();
+        assert_eq!(deliberate.message, "bad cursor");
+
+        let conflicting = ErrorReport(Conflicting).into_failure();
+        assert!(
+            conflicting.failure.find::<Conflicting>().is_some(),
+            "a filter reads the error as its type"
         );
-        assert_eq!(event.level, "error");
-        assert_eq!(event.field("operation").as_deref(), Some("posts::publish"));
+        let conflicting = conflicting.into_answer();
+        assert_eq!(conflicting.code, ErrorCode::INVALID_REQUEST);
         assert_eq!(
-            event.field("reason").as_deref(),
-            Some("no_ambient_container"),
+            conflicting.data,
+            Some(serde_json::json!({ "code": "CONFLICT" }))
         );
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let frozen = ErrorReport(Frozen).into_failure();
+        assert!(frozen.failure.find::<Frozen>().is_some());
+        let frozen = frozen.into_answer();
+        assert_eq!(frozen.message, OPAQUE);
+        assert!(!format!("{frozen:?}").contains("4111"), "{frozen:?}");
+        let event = logs.expect_one(crate::TARGET, "mcp operation failed");
+        assert_eq!(
+            event.field("error").as_deref(),
+            Some("account 4111-1111 is frozen")
+        );
+
+        let carried = nest_rs_core::anyhow::Error::from(Problem::new(
+            404,
+            nest_rs_core::problem::code::NOT_FOUND,
+        ))
+        .context("loading the post");
+        let found = ErrorReport(carried).into_failure().into_answer();
+        assert_eq!(found.message, "not found");
+
+        let piped = ErrorReport(PipeError::new("must be a valid UUID"))
+            .into_failure()
+            .into_answer();
+        assert_eq!(piped.message, "must be a valid UUID");
+        assert_eq!(piped.code, ErrorCode::INVALID_PARAMS);
+
+        let decode = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+        let said = ErrorReport(decode).into_failure().into_answer();
+        assert!(!said.message.contains("sk_live"), "{}", said.message);
+        assert_eq!(said.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    /// What an operation wrote goes out when no filter answered over it.
+    #[test]
+    fn an_answered_failure_goes_out_as_the_operation_wrote_it() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let OperationFailure { failure, reply } =
+            OperationFailure::from(McpError::invalid_params("bad cursor", None));
+        let failure = failure.answered(nest_rs_core::__private::settled());
+
+        let written = answer(&failure, reply);
+        assert_eq!(
+            written.message, "bad cursor",
+            "no filter: the operation's own"
+        );
+        logs.expect_none(crate::TARGET, "mcp operation failed");
     }
 }

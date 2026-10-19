@@ -180,8 +180,9 @@ fn filed(logs: &LogCapture) -> usize {
 }
 
 /// The one line `edge`'s denial filed: its decider's when the guard files its
-/// own, else the edge's floor.
-fn assert_one_line(logs: &LogCapture, seen: usize, edge: &str, guard_files: bool) {
+/// own, else the edge's floor, naming the guard `silent` by its type path as
+/// every edge's floor does.
+fn assert_one_line(logs: &LogCapture, seen: usize, edge: &str, guard_files: bool, silent: &str) {
     let lines = filed_since(logs, seen);
     let said: Vec<(&str, &str)> = lines
         .iter()
@@ -199,6 +200,12 @@ fn assert_one_line(logs: &LogCapture, seen: usize, edge: &str, guard_files: bool
                 lines[0].message.starts_with("guard denied the "),
                 "{edge}: the edge's floor — {said:?}",
             );
+            assert_eq!(
+                lines[0].field("guard"),
+                Some(silent.to_owned()),
+                "{edge}: one guard field, one vocabulary — {:?}",
+                lines[0].fields,
+            );
         }
     }
 }
@@ -214,6 +221,7 @@ async fn booted(pool: nest_rs_guards::GuardSpec) -> TestApp {
 
 /// Every edge's request, refused by the pool's guard.
 async fn requests_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
+    let silent = std::any::type_name::<SilentDoor>();
     let logs = LogCapture::install();
     let app = booted(pool).await;
 
@@ -223,7 +231,7 @@ async fn requests_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "a route", guard_files);
+    assert_one_line(&logs, seen, "a route", guard_files, silent);
 
     let seen = filed(&logs);
     app.http()
@@ -232,13 +240,13 @@ async fn requests_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "/graphql", guard_files);
+    assert_one_line(&logs, seen, "/graphql", guard_files, silent);
 
     let seen = filed(&logs);
     post_message(app.http(), "/mcp", None, None, &initialize_request())
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "/mcp", guard_files);
+    assert_one_line(&logs, seen, "/mcp", guard_files, silent);
 
     let seen = filed(&logs);
     app.http()
@@ -250,7 +258,7 @@ async fn requests_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "a gateway's upgrade", guard_files);
+    assert_one_line(&logs, seen, "a gateway's upgrade", guard_files, silent);
 }
 
 #[tokio::test]
@@ -265,6 +273,7 @@ async fn a_request_a_silent_guard_refuses_files_the_edges_line() {
 
 /// Every in-band edge's unit, refused by the pool's guard.
 async fn units_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
+    let silent = std::any::type_name::<SilentField>();
     let logs = LogCapture::install();
     let app = TestApp::builder()
         .module::<EveryEdgeModule>()
@@ -281,7 +290,7 @@ async fn units_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         refused["data"]["error"].is_string(),
         "the message is refused: {refused}"
     );
-    assert_one_line(&logs, seen, "a WS message", guard_files);
+    assert_one_line(&logs, seen, "a WS message", guard_files, silent);
     drop(socket);
     app.close().await;
 
@@ -299,12 +308,12 @@ async fn units_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         .send()
         .await;
     graphql.assert_status(StatusCode::OK);
-    assert_one_line(&logs, seen, "a GraphQL operation", guard_files);
+    assert_one_line(&logs, seen, "a GraphQL operation", guard_files, silent);
 
     let seen = filed(&logs);
     let mcp = call_tool_as(app.http(), "/mcp", "ping", None, &[], serde_json::json!({})).await;
     assert!(mcp.contains("closed"), "the tool call is refused: {mcp}");
-    assert_one_line(&logs, seen, "an MCP operation", guard_files);
+    assert_one_line(&logs, seen, "an MCP operation", guard_files, silent);
 }
 
 #[tokio::test]

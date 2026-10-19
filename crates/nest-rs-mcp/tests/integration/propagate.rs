@@ -1485,3 +1485,88 @@ async fn a_stop_arriving_while_its_unit_commits_lets_the_operation_end_as_it_ans
     );
     assert!(SETTLE_LANDED.load(Ordering::SeqCst), "its commit landed");
 }
+
+/// What [`OperationUnit`] ran around: the method of each request.
+static AROUND_OPERATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Brought by its module, around every MCP operation: a unit-stage
+/// interceptor, outside the guards.
+#[nest_rs_core::interceptor(stage = unit)]
+struct OperationUnit;
+
+impl nest_rs_core::Layer for OperationUnit {
+    fn serves(&self, unit: nest_rs_core::operation_log::Unit) -> bool {
+        unit.edge() == Some(nest_rs_core::Edge::Mcp)
+    }
+}
+
+#[nest_rs_core::async_trait]
+impl nest_rs_core::Interceptor for OperationUnit {
+    async fn intercept(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+        next: nest_rs_core::Next<'_>,
+    ) -> nest_rs_core::Outcome {
+        let method = cx
+            .switch_to::<nest_rs_mcp::McpView>()
+            .expect("an MCP operation carries the MCP view")
+            .method()
+            .to_owned();
+        AROUND_OPERATIONS.lock().expect("the log").push(method);
+        next.run(cx).await
+    }
+}
+
+const UNIT_STAGED: &str = "/mcp/unit-staged";
+
+#[mcp(path = "/mcp/unit-staged")]
+#[derive(Clone, Default)]
+struct UnitStagedTools;
+
+#[tools]
+impl UnitStagedTools {
+    /// Answer with a constant.
+    #[tool]
+    #[public]
+    async fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [UnitStagedTools, OperationUnit])]
+struct UnitStagedModule;
+
+/// Every request is one operation unit, and the unit stage runs once around
+/// it — a tool call included, never a second time around the tool's site.
+#[tokio::test]
+async fn a_unit_stage_interceptor_runs_once_around_every_request() {
+    let app = TestApp::for_module::<UnitStagedModule>()
+        .await
+        .expect("a unit-stage interceptor beside an MCP host boots");
+    let session = open_session(app.http(), UNIT_STAGED, None).await;
+    let called = call_method(
+        app.http(),
+        UNIT_STAGED,
+        &session,
+        None,
+        "tools/call",
+        json!({ "name": "ping", "arguments": {} }),
+    )
+    .await;
+    assert!(called.contains("pong"), "{called}");
+    call_method(
+        app.http(),
+        UNIT_STAGED,
+        &session,
+        None,
+        "tools/list",
+        json!({}),
+    )
+    .await;
+
+    assert_eq!(
+        *AROUND_OPERATIONS.lock().expect("the log"),
+        ["initialize", "tools/call", "tools/list"],
+        "a notification is no unit, and a tool call runs the stage once",
+    );
+}

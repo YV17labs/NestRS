@@ -6,7 +6,7 @@ use std::sync::Arc;
 use http::uri::Authority;
 use nest_rs_core::problem::code;
 use nest_rs_core::{Container, Correlation, Problem, current_request_scope};
-use nest_rs_http::__private::{attached_pending, framework_sentence};
+use nest_rs_http::__private::framework_sentence;
 use nest_rs_http::ResponseError as _;
 use nest_rs_http::{
     Body, BoxEndpoint, DetachedWork, Endpoint, HeaderValue, Method, Request, Response, Result,
@@ -22,10 +22,10 @@ use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
 use crate::McpError;
+use crate::ambient::McpAmbient;
 use crate::config::McpConfig;
-use crate::context::{McpAmbient, McpToolContext};
-use crate::error::{TOOL_NOT_FOUND, is_transport_message, said_by_code, transport_sentence};
-use crate::propagate::{PropagatingHandler, file_undeclared_call};
+use crate::error::{is_transport_message, said_by_code, tool_not_found, transport_sentence};
+use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains};
 use crate::registry::MountIndex;
 use crate::sessions::{BoundedSessions, ReportedStore};
 use nest_rs_database::UnitOfWork;
@@ -41,13 +41,12 @@ nest_rs_core::inventory::submit! {
     nest_rs_core::__private::LibraryClamp::new("rmcp", tracing::level_filters::LevelFilter::OFF)
 }
 
-/// Everything one `#[mcp]` mount needs beyond the handler itself: what ambient
-/// state is re-installed around an operation, and how the streamable-HTTP
-/// server is configured. The transport checks the request's origin and runs its
-/// guards in front of it, so an endpoint built from one serves whoever reaches
-/// it.
+/// Everything one `#[mcp]` mount needs beyond the handler itself: the chains
+/// each operation runs, its unit of work, and how the streamable-HTTP server is
+/// configured. The transport checks the request's origin and runs its guards
+/// in front of it, so an endpoint built from one serves whoever reaches it.
 pub struct McpMount {
-    context: Option<Arc<dyn McpToolContext>>,
+    chains: RequestChains,
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
     config: McpConfig,
     session_store: Option<Arc<dyn SessionStore>>,
@@ -60,11 +59,11 @@ pub struct McpMount {
 }
 
 impl McpMount {
-    /// A mount on [`McpConfig::default`], with no context and no unit of work:
-    /// a hand-built endpoint's, in a test.
+    /// A mount on [`McpConfig::default`], with no app's layers and no unit of
+    /// work: a hand-built endpoint's, in a test.
     pub fn new() -> Self {
         Self {
-            context: None,
+            chains: RequestChains::Bare,
             unit_of_work: None,
             config: McpConfig::default(),
             session_store: None,
@@ -75,7 +74,8 @@ impl McpMount {
 
     /// Resolve the whole mount from the app's container:
     ///
-    /// * the registered `dyn McpToolContext`, if any;
+    /// * the chains every operation's own site runs, which the boot's wiring
+    ///   step composed;
     /// * the bound `dyn UnitOfWork` each request operation runs its unit of work
     ///   through — without one a `Repo`-backed handler fails **closed**;
     /// * [`McpConfig`], if `McpModule` was imported, else its defaults;
@@ -109,8 +109,20 @@ impl McpMount {
             );
         }
 
+        let chains = match crate::operation::REQUEST.chains(container) {
+            Ok(chains) => RequestChains::Composed(chains),
+            Err(refused) => {
+                tracing::error!(
+                    target: crate::TARGET,
+                    error = %nest_rs_core::error_message(refused.as_ref()),
+                    "the mount's operations did not compose; every operation is refused",
+                );
+                RequestChains::Refused
+            }
+        };
+
         Self {
-            context: container.get_dyn::<dyn McpToolContext>(),
+            chains,
             unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
             config,
             session_store: container.get_dyn::<dyn SessionStore>(),
@@ -151,7 +163,7 @@ where
     H: ServerHandler + Send + 'static,
 {
     let McpMount {
-        context,
+        chains,
         unit_of_work,
         config,
         session_store,
@@ -159,12 +171,18 @@ where
         index,
     } = mount;
 
-    let handler_context = context.clone();
-    let operation_timeout = config.operation_timeout;
-    let undeclared = index.clone().map(|index| UndeclaredTools {
+    let units = OperationUnits::new(
+        unit_of_work,
+        detached.clone(),
+        config.operation_timeout,
+        index.clone(),
+        chains,
+    );
+    let undeclared = index.map(|index| UndeclaredTools {
         index,
         allowed_hosts: config.allowed_hosts.clone(),
         max_request_body_bytes: config.max_request_body_bytes,
+        units: units.clone(),
     });
 
     let sessions = Arc::new(BoundedSessions::new(
@@ -181,21 +199,11 @@ where
         session_store.map(|store| Arc::new(ReportedStore(store)) as Arc<dyn SessionStore>);
 
     let service = StreamableHttpService::new(
-        move || {
-            Ok(PropagatingHandler::new(
-                factory(),
-                handler_context.clone(),
-                unit_of_work.clone(),
-                detached.clone(),
-                operation_timeout,
-                index.clone(),
-            ))
-        },
+        move || Ok(PropagatingHandler::new(factory(), units.clone())),
         sessions.clone(),
         server_config,
     );
     BoxEndpoint::new(SessionEndpoint {
-        context,
         session_cap: SessionCap {
             sessions,
             legacy: config.legacy_session_mode,
@@ -209,7 +217,6 @@ where
 /// The streamable-HTTP service behind the session cap, each request carrying
 /// what its operations re-install on rmcp's own tasks.
 struct SessionEndpoint<H: ServerHandler> {
-    context: Option<Arc<dyn McpToolContext>>,
     session_cap: SessionCap,
     /// `None` on a hand-built [`endpoint`], whose mount read no declarations.
     undeclared: Option<UndeclaredTools>,
@@ -275,7 +282,8 @@ impl SessionCap {
 /// whole handler to ask, and keeps the answer — a miss included — in a map
 /// nothing bounds (`StreamableHttpService::tool_schema`): a caller naming a
 /// new tool per request would grow it for good. The call is answered as
-/// rmcp's own handler answers it, `tool not found`.
+/// rmcp's own handler answers it, `tool not found`, and runs as the operation
+/// that handler would have run.
 struct UndeclaredTools {
     index: Arc<MountIndex>,
     /// rmcp's DNS-rebinding allowlist: a request it refuses for its `Host`
@@ -283,13 +291,15 @@ struct UndeclaredTools {
     allowed_hosts: Vec<String>,
     /// What the body is read to, as rmcp would.
     max_request_body_bytes: usize,
+    /// What a call answered on its id runs as.
+    units: OperationUnits,
 }
 
 impl UndeclaredTools {
     /// The answer to `req`, when it calls a tool no host declares at a
     /// version rmcp would look its schema up at — the body read and handed
     /// back otherwise. A call answered on its id is the operation the
-    /// handler would have answered, filed as a unit of `request`.
+    /// handler would have answered, a unit of `request`.
     async fn refusal(&self, req: &mut Request, request: &Correlation) -> Option<Response> {
         if req.method() != Method::POST
             || !looks_up_schemas(req)
@@ -308,10 +318,18 @@ impl UndeclaredTools {
         let undeclared = undeclared_call(&body, &self.index);
         req.set_body(body);
         let call = undeclared?;
-        if call.id.is_some() {
-            file_undeclared_call(&call.name, request);
-        }
-        Some(tool_not_found(call.id))
+        let refused = match call.id {
+            Some(_) => {
+                nest_rs_core::with_request_scope(
+                    current_request_scope(),
+                    request.clone(),
+                    self.units.undeclared_call(call.name),
+                )
+                .await
+            }
+            None => tool_not_found(),
+        };
+        Some(refused_call(call.id, refused))
     }
 }
 
@@ -443,22 +461,23 @@ fn looked_up(body: &[u8]) -> Option<(String, Option<RequestId>)> {
     Some((name.to_owned(), id))
 }
 
-/// rmcp's own answer to a call of a tool no host declares, on the call's id.
-/// A call with no id rmcp reads is input the server cannot accept: refused
-/// `400`, its error carrying no id, as the streamable-HTTP transport answers it.
-fn tool_not_found(id: Option<RequestId>) -> Response {
+/// The answer to a call of a tool no host declares, `refused`, on the call's
+/// id. A call with no id rmcp reads is input the server cannot accept:
+/// refused `400`, its error carrying no id, as the streamable-HTTP transport
+/// answers it.
+fn refused_call(id: Option<RequestId>, refused: McpError) -> Response {
     let status = if id.is_some() {
         StatusCode::OK
     } else {
         StatusCode::BAD_REQUEST
     };
-    let refusal = JsonRpcError::new(id, McpError::invalid_params(TOOL_NOT_FOUND, None));
+    let refusal = JsonRpcError::new(id, refused);
     match serde_json::to_vec(&refusal) {
         Ok(body) => Response::builder()
             .status(status)
             .content_type(HeaderValue::from_static("application/json"))
             .body(body),
-        // Unreachable: an id and a constant error always serialize.
+        // Unreachable: an id and an error always serialize.
         Err(_) => Problem::new(500, code::INTERNAL).as_response(),
     }
 }
@@ -559,21 +578,12 @@ where
             return Ok(refused);
         }
 
-        // Post-guard, while the ambient executor and ability are reachable; rmcp
-        // forwards the extensions into every operation's `RequestContext`.
+        // Past the request's guards, so what they and its layers made ambient
+        // is captured; rmcp forwards the extensions into every operation's
+        // `RequestContext`, on a task of its own which no ambient context
+        // reaches.
+        req.extensions_mut().insert(McpAmbient::capture());
         let scope = current_request_scope();
-        let captured = self.context.as_ref().map(|context| context.capture(&req));
-        // What the request's guards attached, re-installed around each
-        // operation on rmcp's own task, which no ambient context reaches.
-        let attached = attached_pending(&req);
-        req.extensions_mut().insert(McpAmbient {
-            scope: scope.clone(),
-            captured,
-            attached,
-            // The request's own span: the interceptor band is the outermost wrap.
-            span: tracing::Span::current(),
-            correlation: correlation.clone(),
-        });
 
         // A `GET` is the session's standalone stream, with no end of its own.
         let standalone = req.method() == Method::GET;

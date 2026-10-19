@@ -1,16 +1,21 @@
 //! [`McpView`], the MCP edge's view of the operation it dispatches.
 
+use std::borrow::Cow;
+
 use nest_rs_core::UnitView;
 use nest_rs_http::CarriedView;
 
 use crate::operation::McpOperationKind;
 
-/// The MCP edge's view of one operation a guard checks: the JSON-RPC method,
-/// which router serves it, the tool or prompt it names, and its `#[mcp]` host.
+/// The MCP edge's view of one operation: the JSON-RPC method, which router
+/// serves it, the tool, prompt or resource it addresses, and the `#[mcp]` host
+/// that declares it.
 ///
-/// A guard reaches it through `UnitContext::switch_to` in `Guard::check`. It
-/// carries no arguments: deciding access from a payload is a pipe's job, never
-/// a guard's.
+/// Every request is an operation a unit-stage interceptor reads through it; a
+/// tool call and a prompt fetch are also the units their guards check, through
+/// `UnitContext::switch_to` in `Guard::check`, and the units their exception
+/// filters and handler-stage interceptors run around. It carries no
+/// arguments: deciding access from a payload is a pipe's job, never a guard's.
 ///
 /// It also names `/mcp` to [`EndpointGuards`](nest_rs_http::EndpointGuards):
 /// the guards a module declares for `McpView` run at every `/mcp` request.
@@ -70,11 +75,12 @@ use crate::operation::McpOperationKind;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct McpView {
-    kind: McpOperationKind,
-    name: &'static str,
-    host: &'static str,
+    method: Cow<'static, str>,
+    kind: Option<McpOperationKind>,
+    name: Option<Cow<'static, str>>,
+    host: Option<&'static str>,
 }
 
 impl UnitView for McpView {}
@@ -83,31 +89,54 @@ impl UnitView for McpView {}
 impl CarriedView for McpView {}
 
 impl McpView {
-    /// The view of the operation `name` on `host`, served by `kind`'s router.
-    pub(crate) fn new(kind: McpOperationKind, name: &'static str, host: &'static str) -> Self {
-        Self { kind, name, host }
-    }
-
-    /// The JSON-RPC method the client called (`tools/call`, `prompts/get`).
-    pub fn method(&self) -> &'static str {
-        match self.kind {
-            McpOperationKind::Tool => "tools/call",
-            McpOperationKind::Prompt => "prompts/get",
+    /// The view of the operation `name` on `host`, served by `kind`'s router:
+    /// a tool call or a prompt fetch `#[tools]` declares.
+    pub(crate) fn declared(kind: McpOperationKind, name: &'static str, host: &'static str) -> Self {
+        Self {
+            method: Cow::Borrowed(kind.method()),
+            kind: Some(kind),
+            name: Some(Cow::Borrowed(name)),
+            host: Some(host),
         }
     }
 
-    /// Whether this is a tool call or a prompt fetch.
-    pub fn kind(&self) -> McpOperationKind {
+    /// The view of a request for `method`, addressing `name` as the client
+    /// named it, served by `kind`'s router on `host` when a host declares it.
+    pub(crate) fn request(
+        method: Cow<'static, str>,
+        kind: Option<McpOperationKind>,
+        name: Option<String>,
+        host: Option<&'static str>,
+    ) -> Self {
+        Self {
+            method,
+            kind,
+            name: name.map(Cow::Owned),
+            host,
+        }
+    }
+
+    /// The JSON-RPC method the client called (`tools/call`, `resources/read`).
+    pub fn method(&self) -> &str {
+        &self.method
+    }
+
+    /// The router serving the operation: a tool call or a prompt fetch;
+    /// `None` for every other request.
+    pub fn kind(&self) -> Option<McpOperationKind> {
         self.kind
     }
 
-    /// The tool or prompt the client named.
+    /// What the operation addresses: the tool or prompt it names, or a
+    /// resource's URI; `None` when the method names nothing.
     pub fn name(&self) -> Option<&str> {
-        Some(self.name)
+        self.name.as_deref()
     }
 
-    /// The `#[mcp]` host type the operation belongs to.
-    pub fn host(&self) -> &'static str {
+    /// The `#[mcp]` host type declaring the tool or prompt the operation
+    /// names; `None` when no host on the endpoint declares it, or the method
+    /// names neither.
+    pub fn host(&self) -> Option<&'static str> {
         self.host
     }
 }

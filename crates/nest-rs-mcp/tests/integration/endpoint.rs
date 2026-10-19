@@ -649,6 +649,74 @@ async fn a_tool_call_answered_before_rmcp_files_its_operation_line() {
     assert_eq!(span.field("parent_span_id"), request.span_id);
 }
 
+/// What [`GateWatch`] ran around, as `<method> <name>`. This test's alone:
+/// nextest runs each test in its own process.
+static WATCHED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Around every MCP request: a unit-stage interceptor its module brings.
+#[nest_rs_core::interceptor(stage = unit)]
+struct GateWatch;
+
+impl nest_rs_core::Layer for GateWatch {
+    fn serves(&self, unit: nest_rs_core::operation_log::Unit) -> bool {
+        unit.edge() == Some(nest_rs_core::Edge::Mcp)
+    }
+}
+
+#[nest_rs_core::async_trait]
+impl nest_rs_core::Interceptor for GateWatch {
+    async fn intercept(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+        next: nest_rs_core::Next<'_>,
+    ) -> nest_rs_core::Outcome {
+        let view = cx
+            .switch_to::<nest_rs_mcp::McpView>()
+            .expect("an MCP operation carries the MCP view");
+        let seen = format!("{} {}", view.method(), view.name().unwrap_or("-"));
+        WATCHED.lock().expect("the log").push(seen);
+        next.run(cx).await
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [CountedTools, GateWatch])]
+struct WatchedModule;
+
+/// A call the gate answers runs the unit stage the handler runs around every
+/// request, as the same call in an older session does — and an input refused
+/// for its shape, which is no operation, runs none.
+#[tokio::test]
+async fn a_tool_call_answered_before_rmcp_runs_the_unit_stage() {
+    let app = TestApp::for_module::<WatchedModule>()
+        .await
+        .expect("a unit-stage interceptor beside the counted mount boots");
+
+    let answered = standard_call(&app, "marked_tool").await;
+    let body = answered.0.into_body().into_string().await.expect("a body");
+    let refused = nest_rs_testing::mcp::result(&body);
+    assert_eq!(refused["id"], serde_json::json!(7), "{refused}");
+    assert_eq!(refused["error"]["message"], "tool not found", "{refused}");
+    assert_eq!(
+        std::mem::take(&mut *WATCHED.lock().expect("the log")),
+        ["tools/call marked_tool"],
+    );
+
+    let declared = standard_call(&app, "ping").await;
+    let body = declared.0.into_body().into_string().await.expect("a body");
+    assert!(body.contains("pong"), "{body}");
+    assert_eq!(
+        std::mem::take(&mut *WATCHED.lock().expect("the log")),
+        ["tools/call ping"],
+    );
+
+    let shapeless = raw_standard_call(&app, "unread_tool", None).await;
+    assert_eq!(shapeless.0.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        WATCHED.lock().expect("the log").is_empty(),
+        "an input refused for its shape is no operation",
+    );
+}
+
 /// rmcp refuses a `Host` outside its allowlist before it looks any schema
 /// up: such a call is left to that refusal, so a page a rebound name serves
 /// learns nothing of which tools exist.

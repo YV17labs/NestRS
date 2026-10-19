@@ -161,12 +161,13 @@ it comes from, never its scope. `nest_rs::seaorm::Bind<A, S>` is held the same
 way for the service `S` it loads through.
 
 HTTP, WebSockets, GraphQL, and MCP each install a fresh request scope per call
-(one per request for HTTP, one per message for WebSockets, one per operation
-for GraphQL and MCP). Within a scope, request-scoped providers are cached and
-shared; across scopes, fresh instances are built. A WebSocket message and a
-GraphQL resolver take them as a parameter, `nest_rs::ws::Scoped<T>` and
-`nest_rs::graphql::Scoped<T>` — no schema argument on GraphQL, and both inside
-the access contract as HTTP's is — MCP tools with `nest_rs::mcp::Scoped<T>`. A
+(one per request for HTTP and MCP — every operation one `/mcp` request carries
+shares it — one per message for WebSockets, one per operation for GraphQL).
+Within a scope, request-scoped providers are cached and shared; across scopes,
+fresh instances are built. A WebSocket message, a GraphQL resolver and an MCP
+tool or prompt take them as a parameter, `nest_rs::ws::Scoped<T>`,
+`nest_rs::graphql::Scoped<T>` and `nest_rs::mcp::Scoped<T>` — no schema
+argument on GraphQL, and all three inside the access contract as HTTP's is. A
 request-scoped provider may itself inject another request-scoped provider (both
 share the per-request cache); providers waiting on each other fail the boot,
 naming the chain (`ProviderCycleError`).

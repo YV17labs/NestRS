@@ -37,11 +37,11 @@ pub trait ExceptionFilter: Layer {
 `/mcp`, a WS upgrade) and what the router answers itself, and so do
 [GraphQL fields](#on-a-graphql-field),
 [WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
+[MCP tool calls and prompt fetches](/mcp/#layers-around-an-operation),
 [jobs](/queue/#layers-around-a-job), [ticks](/schedule/#layers-around-a-tick)
-and [listener calls](/events/dispatch/#layers-around-a-listener-call). MCP
-moves onto the same pipeline during 7.0; until it has,
-`#[use_exception_filters]` beside its decorators is a compile error naming the
-edge.
+and [listener calls](/events/dispatch/#layers-around-a-listener-call). A
+WebSocket `#[on_connect]` / `#[on_disconnect]` hook runs none yet:
+`#[use_exception_filters]` on one is a compile error.
 </Aside>
 
 ## Install
@@ -112,9 +112,10 @@ need this — they compose the framework's types.
 `ResponseError` is HTTP's seam. An error that also crosses GraphQL,
 WebSockets or MCP implements `nest_rs::core::ToProblem` once: the `Problem`
 it says — a status, a `Code`, a detail — is what those edges answer, each in
-its own form (see [GraphQL errors](/graphql/errors/)). A resolver or a
-gateway handler returning the error is read by its type; an MCP tool
-converts it with `nest_rs::mcp::problem_error`. HTTP reads `ResponseError`,
+its own form (see [GraphQL errors](/graphql/errors/)). A resolver, a
+gateway handler or an MCP tool returning the error is read by its type; an MCP
+tool answering `McpError` converts it with `nest_rs::mcp::problem_error`. HTTP
+reads `ResponseError`,
 not `ToProblem`: a route answers a `Problem` only when the error is one or
 carries one in its chain. What no seam answers — no `ResponseError`, no
 `ToProblem` where the edge reads it, no framework type in its chain — is

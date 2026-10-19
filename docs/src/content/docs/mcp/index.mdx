@@ -135,13 +135,18 @@ Two decorators, one per item shape:
 - **`#[tools]` on the impl** declares the operations. Every `#[tool]` and
   `#[prompt]` method is mounted, and the endpoint's advertised capabilities are
   derived from the roles present — you cannot serve a tool you forgot to
-  declare. An operation declares the same request layers a `#[query]` does:
-  `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`, and a pipe on its
-  arguments. Each of those refuses by returning, so an operation answers a
-  `Result` an `McpError` converts into — known by its type, so
-  `type Answered<T> = Result<T, McpError>` serves as well as the spelled one,
-  and a `String` is refused at the return type. A *masked* operation spells it
-  `Result<…>`: the mask reads `Json<T>` off that spelling.
+  declare. An operation declares the same request layers a route does:
+  `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`,
+  `#[use_exception_filters(...)]`, `#[use_interceptors(...)]`, a pipe on its
+  arguments and a `Scoped<T>` parameter — see
+  [Layers around an operation](#layers-around-an-operation). An operation
+  answers a `Result`, known by its type: it fails with whatever error it
+  holds — an `McpError`, a domain error — answered by that type, an alias
+  such as `type Ledgered<T> = Result<T, LedgerError>` serves as well as the
+  spelled one, and a `String` is refused at the return type. Two readings go
+  by the spelling: a *masked* operation spells its `Result<…>`, since the mask
+  reads `Json<T>` off it, and rmcp derives a tool's output schema only from a
+  return spelled `Result<Json<T>, …>`.
 - **The description is `#[tool(description = "…")]`** — the sentence the model
   reads to pick this tool, so it is a value the decorator compiles in rather
   than commentary. Write a doc comment instead and it is used as a fallback, so
@@ -287,6 +292,62 @@ can act on:
 `Piped<P, T>` runs any [pipe](/fundamentals/pipes/) in the same slot when the
 argument needs transforming rather than validating.
 
+## Layers around an operation
+
+Every request a client sends is an operation of its own — its span, its line,
+its unit of work — run on the same pipeline as a route. A tool call and a
+prompt fetch run the layers their host and their method bind, then the app's,
+each family once: the guards' `check`, the posture's gate, the exception
+filters, the interceptors, then the pipes, the `Scoped<T>` parameters, the body
+and the mask. A layer reads the operation through `McpView`:
+
+```rust title="crates/features/src/billing/mcp/tool.rs"
+#[mcp(path = "/mcp/billing")]
+#[use_interceptors(ToolMetrics)]
+#[derive(Clone)]
+pub struct BillingTool {
+    #[inject]
+    svc: Arc<BillingService>,
+}
+
+#[tools]
+impl BillingTool {
+    #[tool(description = "Charge the caller's account for one report.")]
+    #[public]
+    #[use_exception_filters(LedgerConflictFilter)]
+    async fn charge(&self, basket: Scoped<Basket>) -> Result<String, LedgerError> {
+        self.svc.charge(&basket).await
+    }
+}
+```
+
+`cx.switch_to::<McpView>()` answers the JSON-RPC method (`method()`), the
+router serving it (`kind()`), the tool or prompt it names (`name()`) and the
+host declaring it (`host()`). `charge` fails with the domain's own
+`LedgerError`: `LedgerConflictFilter` reads it as that type and may answer a
+problem — a `409` is `invalid_request` with `data.code: "CONFLICT"` — and an
+error no filter answers is rendered by its type: a `ToProblem` error says its
+problem, any other is answered opaquely, its chain filed at `error`. A filter
+answers what the client reads, never whether the operation failed: its unit of
+work rolls back either way.
+
+`Scoped<T>` resolves an `#[injectable(scope = request)]` provider from the
+`/mcp` request's scope, once the guards and the gate admitted the caller. It is
+checked at boot like an `#[inject]` field: a provider no imported module
+offers fails the boot rather than the first call. A host writing rmcp's handler
+by hand reads `nest_rs::core::current_request_scope()` instead.
+
+The app's own interceptors (`use_interceptors_global`, a module's
+`#[interceptor]`) run around every tool call and prompt fetch too, outermost,
+after the guards. An `#[interceptor(stage = unit)]` serving MCP runs once
+around every request — a listing, a handshake, a tool call alike, one naming
+no declared tool included — before rmcp decodes it; `Layer::serves` reads the unit, `nest_rs::mcp::unit::OPERATION`.
+Every operation's layers are composed at boot, so one that no module provides,
+or two `#[meta]` values of one type on one operation, fail the boot.
+
+`#[mcp]` and `#[tools]` sit on a concrete type: each operation's site is a
+`static`, so a generic host does not compile.
+
 ## Failing without leaking
 
 A tool body talks to a **language model**, and an error's `Display` is handed to
@@ -298,9 +359,12 @@ let rows = self.svc.list().await.opaque()?;
 ```
 
 The real error is logged at `error` on `nest_rs::mcp`, inside rmcp's own
-per-operation span; the model gets a constant `internal error`. A *deliberate*
-error is the opposite case — `McpError::invalid_params(...)` exists to be read,
-so return it directly and never route it through `opaque`.
+per-operation span; the model gets a constant `internal error`. Returning the
+error itself does the same — an operation answering a `Result<T, E>` answers
+an `E` that says no problem opaquely, and files it — while keeping it typed for an
+[exception filter](#layers-around-an-operation). A *deliberate* error is the
+opposite case — `McpError::invalid_params(...)` exists to be read, so return it
+directly and never route it through `opaque`.
 
 A tool that **panics** is answered the same way: rmcp runs it on a task of its
 own, so the panic is contained where the operation is dispatched, the client

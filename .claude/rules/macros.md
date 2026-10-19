@@ -140,12 +140,12 @@ provider implements `nest_rs_core::ResolvesProvider`, and the impl half asks
 answers to `Discoverable::injected_per_request`, so the access graph checks it.
 Spelling decides only what no value can tell a macro, and each such reading is
 stated in the decorator's rustdoc: the wrapper async-graphql's derive itself
-reads by name, the shape a masked MCP or WS operation unwraps, which
-`#[subscribe_message]` parameter is the payload (`&WsClient` by its reference,
-`Scoped<T>` by its name — resolved through
-`nest_rs_ws::__private::scoped_parameter`, which returns that crate's own
-`Scoped`, so a namesake does not compile), and what an OpenAPI document infers
-(`#[api(response = T)]` states what spelling hides).
+reads by name, the `Json<T>` rmcp derives a tool's output schema from, the
+shape a masked MCP or WS operation unwraps, which `#[subscribe_message]`
+parameter is the payload (`&WsClient` by its reference, `Scoped<T>` by its
+name — resolved through `nest_rs_ws::__private::scoped_parameter`, which
+returns that crate's own `Scoped`, so a namesake does not compile), and what an
+OpenAPI document infers (`#[api(response = T)]` states what spelling hides).
 
 ## Keys — one grammar, one refusal sentence
 
@@ -172,7 +172,10 @@ provider-hosted pair (`#[processor]`, `#[scheduled]`, `#[listeners]`)
 declares each method's site through `nest_rs_codegen::__private::site_const`
 and reports what it binds to the access graph through `host_layers_entry`;
 `#[operations]` declares one per field beside its handler, its guard stage
-included, and submits them for the boot to compose.
+included, and submits them for the boot to compose; `#[tools]` declares one
+per operation alike and lists them for the boot to compose — so it refuses a
+generic impl, and `#[mcp]` a generic struct, whose `static` sites no parameter
+reaches.
 
 **`#[meta(EXPR)]` is read alike at every pair**: on the host (the struct, or
 the impl block a provider pair decorates) and on each dispatched method, into

@@ -962,7 +962,7 @@ struct UnbackedNameApp;
 async fn a_name_with_no_version_behind_it_fails_boot() {
     let err = match TestApp::for_module::<UnbackedNameApp>().await {
         Ok(_) => panic!("a named endpoint with no version anywhere must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -1003,7 +1003,7 @@ struct ContestedDeclarationApp;
 async fn two_hosts_declaring_one_endpoint_fail_boot() {
     let err = match TestApp::for_module::<ContestedDeclarationApp>().await {
         Ok(_) => panic!("two hosts naming one endpoint must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -1020,7 +1020,7 @@ struct OrphanDeclarationApp;
 async fn an_identity_no_host_serves_fails_boot() {
     let err = match TestApp::for_module::<OrphanDeclarationApp>().await {
         Ok(_) => panic!("an identity declared with no host at all must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -1549,7 +1549,7 @@ struct ClashingModule;
 async fn a_duplicate_tool_name_on_one_path_fails_boot() {
     let err = match TestApp::for_module::<ClashingModule>().await {
         Ok(_) => panic!("two hosts claiming one tool name must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -1584,7 +1584,7 @@ struct ClashingPromptModule;
 async fn a_duplicate_prompt_name_on_one_path_fails_boot() {
     let err = match TestApp::for_module::<ClashingPromptModule>().await {
         Ok(_) => panic!("two hosts claiming one prompt name must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -1787,7 +1787,7 @@ struct IncompatibleVersionsApp;
 async fn hosts_with_no_protocol_in_common_fail_boot_naming_both() {
     let err = match TestApp::for_module::<IncompatibleVersionsApp>().await {
         Ok(_) => panic!("an endpoint no client can handshake with must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -1966,4 +1966,66 @@ async fn a_lone_host_keeps_the_cursor_it_returned() {
         "nest_rs::mcp",
         "an MCP host on a shared path returned a pagination cursor — the merged page drops it",
     );
+}
+
+/// A value whose expression hides its type from `#[tools]`.
+struct Tag;
+
+impl Tag {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[mcp(path = "/mcp/tagged")]
+#[derive(Clone, Default)]
+struct TaggedTwiceTools;
+
+#[tools]
+impl TaggedTwiceTools {
+    /// Answer with a constant.
+    #[tool]
+    #[public]
+    #[meta(Tag::new())]
+    #[meta(Tag::new())]
+    async fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [TaggedTwiceTools])]
+struct TaggedTwiceModule;
+
+/// Every operation's site is composed at the boot's wiring step, so one that
+/// would run with a value read by nothing refuses the app, not its first call.
+#[tokio::test]
+async fn two_values_of_one_hidden_type_on_a_tool_fail_the_boot_naming_it_and_the_operation() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<TaggedTwiceModule>()
+        .build()
+        .await
+    else {
+        panic!("the operation would run with a value read by nothing");
+    };
+    let duplicate = refused
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<nest_rs_core::DuplicateMetaError>())
+        .unwrap_or_else(|| panic!("the site's own refusal: {refused:#}"));
+    assert_eq!(duplicate.type_name, std::any::type_name::<Tag>());
+    assert_eq!(duplicate.declared_on, "TaggedTwiceTools::ping");
+}
+
+/// A host the boot never served over HTTP still has its endpoint checked: two
+/// hosts naming one tool on one path refuse the app whatever it serves.
+#[tokio::test]
+async fn an_endpoints_checks_run_in_an_app_serving_no_http() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<ClashingModule>()
+        .build()
+        .await
+    else {
+        panic!("two tools under one name on one path would leave one unreachable");
+    };
+    let said = format!("{refused:#}");
+    assert!(said.contains("duplicate MCP tool name"), "{said}");
 }

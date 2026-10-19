@@ -1,7 +1,7 @@
 //! `#[interceptor]` at both stages, and an exception filter: a consumer with no
 //! direct `async-trait` or `tracing` dependency compiles the provider and the
-//! registration it emits — and the layers a route, a gateway and the worker
-//! witnesses bind.
+//! registration it emits — and the layers a route, a gateway, an MCP host and
+//! the worker witnesses bind.
 
 use std::sync::Arc;
 

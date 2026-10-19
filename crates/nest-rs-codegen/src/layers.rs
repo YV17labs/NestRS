@@ -183,10 +183,9 @@ pub fn cell(pair: &DecoratorPair, scope: LayerScope, attribute: LayerAttribute) 
         (P::Http | P::Ws, _, A::UsePipes | A::UseInterceptors | A::UseExceptionFilters) => Built,
         (_, _, A::UseFilters) => Refused(FILTERS),
 
-        (P::Graphql, _, A::UseInterceptors | A::UseExceptionFilters) => Built,
+        (P::Graphql | P::Mcp, _, A::UseInterceptors | A::UseExceptionFilters) => Built,
         (P::Graphql, _, A::UsePipes) => Refused(GRAPHQL_PIPES),
         (P::Mcp, _, A::UsePipes) => Refused(MCP_PIPES),
-        (P::Mcp, _, A::UseInterceptors | A::UseExceptionFilters) => Pending,
 
         (P::Processor | P::Scheduled | P::Listeners, _, A::UseGuards | A::ForceGuards) => {
             Refused(NO_CALLER)
@@ -594,12 +593,32 @@ mod tests {
             .unwrap_or_default();
         assert!(refused.contains("folded once per request"), "{refused}");
 
-        let mut attrs: Vec<Attribute> = vec![parse_quote!(#[use_interceptors(I)])];
-        let pending = take_layers(&crate::pair::MCP, LayerScope::Host, &mut attrs)
-            .err()
-            .map(|err| err.to_string())
-            .unwrap_or_default();
-        assert!(pending.contains("does not run on MCP yet"), "{pending}");
+        for pair in ALL {
+            for scope in [LayerScope::Host, LayerScope::Method, LayerScope::Hook] {
+                for &attribute in LayerAttribute::ALL {
+                    if cell(pair, scope, attribute) == Cell::Pending {
+                        let pending = refusal(pair, scope, attribute).unwrap_or_default();
+                        assert!(pending.contains("silent no-op"), "{pending}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_mcp_host_and_its_operations_take_interceptors_and_exception_filters() {
+        for scope in SCOPES {
+            for attribute in [
+                LayerAttribute::UseInterceptors,
+                LayerAttribute::UseExceptionFilters,
+            ] {
+                assert_eq!(
+                    cell(&crate::pair::MCP, scope, attribute),
+                    Cell::Built,
+                    "{scope:?} {attribute:?}",
+                );
+            }
+        }
     }
 
     #[test]

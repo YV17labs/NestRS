@@ -101,8 +101,8 @@ Review a new edge, or a change to one, against it:
    the change that builds a family flips its cell.
 9. **Request scope and a unit of work** — `Scoped<T>`, a parameter the boot
    checks (its provider is inside the access contract, through
-   `ResolvesProvider` and the impl half's probe — HTTP's, GraphQL's and WS's
-   today, as is the service HTTP's `Bind<A, S>` and GraphQL's
+   `ResolvesProvider` and the impl half's probe — HTTP's, GraphQL's, WS's and
+   MCP's today, as is the service HTTP's `Bind<A, S>` and GraphQL's
    `bind = Service` load through), a miss answered opaquely with the type on
    the operator's line, and each
    dispatch run through `nest_rs_database::run_unit` over the `dyn UnitOfWork`
@@ -126,9 +126,8 @@ Review a new edge, or a change to one, against it:
     never with its detail on a `5xx`, a denial carries the same `code`
     wherever it has no status line, and every code the framework emits is a
     `nest_rs_core::problem::code` constant. The edge decides **by type**
-    where it names the handler's error — GraphQL's and WS's wrappers probe
-    `ToProblem` before the chain, an MCP operation converts with
-    `problem_error` — and a `Problem`, `PipeError` or decode failure its
+    where it names the handler's error — GraphQL's, WS's and MCP's wrappers
+    probe `ToProblem` before the chain — and a `Problem`, `PipeError` or decode failure its
     chain carries answers itself; HTTP reads no `ToProblem`: it renders an
     error's own `ResponseError` as built and reads the chain of what it
     would otherwise render as text. GraphQL holds the rule at
@@ -202,10 +201,10 @@ executions; it chooses the **site**, by the family's nature:
 
 | Family | Global scope runs at | Controller / handler scope runs at |
 |---|---|---|
-| Guard | a route's, a WS message's and a GraphQL root field's guard stage, and the federation fields'; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`) | the same, plus each in-band operation's chain |
+| Guard | a route's, a WS message's, a GraphQL root field's and an MCP tool's or prompt's guard stage, and the federation fields'; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`) | the same, plus each in-band operation's chain |
 | Pipe | a route's tail, over the body, and a WS message's, over its `data`; `/graphql` variables (a POST or a graphql-ws operation) at its endpoint | a route's or a WS message's tail; per argument on the other edges |
-| Exception filter | around a route's, a WS message's or a GraphQL root field's handler stage; a self-mount's request; the fallback (`404`, `405`) | around the route's, the message's or the field's handler stage |
-| Interceptor | a route's, a WS message's or a GraphQL root field's handler stage, after the guards and the class gate | the same, inside the app's |
+| Exception filter | around a route's, a WS message's, a GraphQL root field's or an MCP tool's or prompt's handler stage; a self-mount's request; the fallback (`404`, `405`) | around the route's, the message's, the field's or the operation's handler stage |
+| Interceptor | a route's, a WS message's, a GraphQL root field's or an MCP tool's or prompt's handler stage, after the guards and the class gate | the same, inside the app's |
 
 An HTTP unit — a route, a self-mount's request, the fallback — and a WS
 message are each one `Site` dispatched through core's pipeline inside `run_unit`
@@ -237,10 +236,11 @@ the visible opening.
   type, at the kernel's wiring step (`provide_wiring`), in every app whatever it
   serves; so does a global guard pool listed out of phase order.
   **No site runs without a layer it declares**: one composed at boot (a route, a
-  gateway's upgrade and messages, a GraphQL field at the wiring step) fails the
-  boot naming the layer and the site, one composed on its first dispatch (an
-  MCP operation, a GraphQL field of a container built by hand) refuses that
-  unit opaquely and files one `error` naming both. **A surface beyond the
+  gateway's upgrade and messages, a GraphQL field or an MCP tool or prompt at
+  the wiring step) fails the boot naming the layer and the site, one composed
+  on its first dispatch (a GraphQL field or an MCP operation of a container
+  built by hand) refuses that unit opaquely and files one `error` naming both.
+  **A surface beyond the
   route table is a self-mount**, the transport's one other mount (it is built
   from `HttpConfig` alone, with no builder), and declares a `static` `Handler`
   with its posture: `Gated` (a WS upgrade, `/mcp`) and `InBand` (`/graphql`,
@@ -255,9 +255,9 @@ the visible opening.
 - **The in-band edges also run a per-operation chain**, composed once per site
   from the app-wide pool, the provider's `#[use_guards]` and the operation's
   own — one `compose`, no per-transport switch over where the pool runs: a
-  GraphQL field's `Site` guard stage, an MCP operation's shared
-  `SiteChainCell`. **An in-band endpoint's guards check the request; the site checks
-  the operation**: `check_http` once per request, `check` once per operation,
+  GraphQL field's or an MCP tool's or prompt's `Site` guard stage. **An in-band
+  endpoint's guards check the request; the site checks the operation**:
+  `check_http` once per request, `check` once per operation,
   and neither stands in for the other. What a request's guards attach
   (`cx.attach`) is ambient for every unit the request carries.
 - **`/graphql` and `/mcp` stay fail-secure**: the global pool always runs at
@@ -297,10 +297,8 @@ the visible opening.
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
 `nest_rs::core::{Interceptor, ExceptionFilter}`, `#[interceptor]` (handler
 stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP, a GraphQL
-field, a WS message, a job's attempt, a tick and a listener call run on it; MCP
-moves onto it in its own change, a `Site` per dispatch site, and until then
-refuses `#[use_interceptors]` and `#[use_exception_filters]` by name and runs
-none of the app's. A WS connection hook is a unit with no site yet: it carries
+field, a WS message, an MCP operation, a job's attempt, a tick and a listener
+call run on it. A WS connection hook is a unit with no site yet: it carries
 what the upgrade attached and runs no layer.
 
 **A GraphQL root field is a unit nested in its `/graphql` request**
@@ -316,6 +314,19 @@ site is composed at the wiring step, so a layer it declares that does not
 resolve, or two `#[meta]` values of one type, refuse the boot. A field's
 `Ability` is the unit's — the one its class gate checked — and its mask and
 `bind` read it there, never off the GraphQL context.
+
+**Every MCP request is one `mcp.operation` unit**, run on rmcp's task inside
+the `/mcp` request's context — its scope, its trace, what its guards and layers
+made ambient — and a unit of work of its own: its own site runs the unit stage
+alone, once around whatever the request reaches, rmcp's decode and routing
+included, as around a `tools/call` naming no declared tool, which the endpoint
+answers before rmcp. A `#[tool]` or a `#[prompt]` `#[tools]` declares is a site inside it:
+its guards' `check`, its class gate, the exception filters and the handler
+stage, never a second unit stage; `subscriptions/listen` and the
+notifications run none. Every operation's site is composed at the wiring step,
+so a layer it declares that does not resolve, or two `#[meta]` values of one
+type, refuse the boot. A generic `#[mcp]` struct or `#[tools]` impl is
+refused: its operations' sites are `static`s no parameter reaches.
 
 ## Posture inside an operation
 
@@ -415,14 +426,15 @@ router parses. The rewrite is skipped when nothing is versioned.
   `Option`, a `Vec` or a struct is data. An `Err` becomes a frame through
   `ErrorReport`, so a cause chain is logged whenever the type has one.
 - **MCP aggregates** behind one endpoint, since clients point at one URL; one
-  host on a path is served verbatim. Guard, tool context and config resolve once
-  per path. **A host's `path` is a join key, not a namespace**: written whole,
+  host on a path is served verbatim. Endpoint guards, posture and config
+  resolve once per path. **A host's `path` is a join key, not a namespace**: written whole,
   defaulting to the `DEFAULT_PATH` constant, never config — a decorator's path is
   code everywhere (only a module owning its whole mount, as GraphQL does, may
   configure one), and `global_prefix` moves the whole surface. A failing
-  operation talks to a language model, so it answers through `Opaque`; a
-  deliberate `McpError::invalid_params` is returned directly, and a `Problem`
-  through `problem_error`. **Identity has two
+  operation talks to a language model, so its error is rendered by its type:
+  its own `McpError` as built, a `ToProblem` error the problem it says, any
+  other opaquely, its chain filed — and an exception filter may answer any of
+  them with a problem; `Opaque` says the same at a call site. **Identity has two
   owners**: the app declares `McpOptions { server }` — name, version, branding
   and `instructions` — and a host may refine only `name` and `title` for its
   endpoint; `instructions` on `#[mcp]` is a compile error. Identity has no

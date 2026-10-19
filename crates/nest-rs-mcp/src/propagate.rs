@@ -1,16 +1,22 @@
-//! The wrapper that carries ambient request state across rmcp's spawn.
+//! The wrapper that runs each MCP operation as a unit of its own.
 //!
-//! rmcp dispatches every operation on its own task, where a task-local installed
-//! around the HTTP endpoint is gone; [`PropagatingHandler`] re-installs it inside
-//! the dispatch. A method it does not delegate silently reverts to rmcp's default,
-//! so the impl carries `#[deny(clippy::missing_trait_methods)]`.
+//! rmcp dispatches every operation on its own task, where the request's
+//! context is gone; [`PropagatingHandler`] re-installs it inside the dispatch,
+//! then runs a request as one `mcp.operation` unit on the pipeline: the
+//! request's own site (the unit stage), inside a unit of work, around rmcp's
+//! routing — where a `#[tools]` operation runs its own site. A method it does
+//! not delegate silently reverts to rmcp's default, so the impl carries
+//! `#[deny(clippy::missing_trait_methods)]`.
 //!
-//! | Kind | Request span | Request scope | Guard ability | Unit of work | Files a line |
+//! | Kind | Request context | Unit stage | Unit of work | Deadline | Files a line |
 //! |---|---|---|---|---|---|
 //! | Requests (`tools/call`, `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`, `tasks/*`, lifecycle, custom) | yes | yes | yes | yes | yes |
-//! | `subscriptions/listen` | yes | yes | yes | no — it outlives any sane transaction | yes |
-//! | Notifications | yes | yes | no | no — nothing to commit or roll back on | yes |
+//! | `subscriptions/listen` | yes | no | no — it outlives any sane transaction | no | yes |
+//! | Notifications | yes | no | no — nothing to commit or roll back on | no | yes |
 //! | Synchronous accessors (`get_info`, `get_tool`, …) | — | — | — | — | no — no work is dispatched |
+//!
+//! The request context is the `/mcp` request's: its span, scope and
+//! correlation, and what its guards and layers made ambient.
 //!
 //! An operation files `ok` or `error` — `error` too when it outlives
 //! `McpConfig::operation_timeout`, which every request but `subscriptions/listen`
@@ -24,19 +30,24 @@
     reason = "rmcp still routes the deprecated methods for legacy protocol versions"
 )]
 
+use std::any::Any;
 use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::{Correlation, RequestContinuation, operation_log};
+use futures_util::future::Either;
+use nest_rs_core::__private::{Tail, UnitChains, dispatch, new_unit_context, settled};
+use nest_rs_core::{
+    Correlation, Deadline, Failure, Outcome, RequestContinuation, UnitContext, operation_log,
+};
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_http::DetachedWork;
 use rmcp::ServerHandler;
 use rmcp::model::{
-    CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CancelTaskMethod,
-    CancelTaskParams, CancelledNotificationMethod, CancelledNotificationParam,
+    CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
+    CancelTaskMethod, CancelTaskParams, CancelledNotificationMethod, CancelledNotificationParam,
     CompleteRequestMethod, CompleteRequestParams, CompleteResult, ConstString, CustomNotification,
     CustomRequest, CustomResult, DiscoverRequestMethod, DiscoverResult, GetPromptRequestMethod,
     GetPromptRequestParams, GetPromptResponse, GetTaskMethod, GetTaskParams, GetTaskResult,
@@ -57,71 +68,52 @@ use rmcp::service::{
 use tracing::Instrument;
 
 use crate::McpError;
-use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
+use crate::ambient::McpAmbient;
 use crate::error::{
-    method_not_found, prompt_not_found, refuses_method, refuses_prompt, refuses_task,
-    task_not_found,
+    ToolReportedError, answer, method_not_found, opaque_answer, prompt_not_found, refuses_method,
+    refuses_prompt, refuses_task, task_not_found, tool_not_found,
 };
 use crate::guard::BoxFuture;
+use crate::operation::McpOperationKind;
 use crate::registry::MountIndex;
-use nest_rs_core::__private::install_pending;
+use crate::view::McpView;
 
-/// Wraps a tool host so each operation runs with the request scope, what the
-/// request's guards attached, and the registered [`McpToolContext`]'s state
-/// installed, as a unit of work of its own.
+/// The chains every request's own site runs on one mount.
+#[derive(Clone)]
+pub(crate) enum RequestChains {
+    /// A hand-built endpoint's, which no app composed: its requests run their
+    /// tail alone.
+    Bare,
+    /// The chains the mount's container composed.
+    Composed(Arc<UnitChains>),
+    /// The mount's container refused them, and said why: every request is
+    /// refused opaquely.
+    Refused,
+}
+
+/// Wraps a tool host so each operation runs with the `/mcp` request's context
+/// installed, as a unit of its own on the pipeline.
 ///
 /// Built by [`endpoint`](crate::__private::endpoint), never by hand.
 pub struct PropagatingHandler<H> {
     inner: H,
-    context: Option<Arc<dyn McpToolContext>>,
-    unit_of_work: Option<Arc<dyn UnitOfWork>>,
-    detached: DetachedWork,
-    /// What one request operation may run for; `None` ⇒ no deadline.
-    operation_timeout: Option<Duration>,
-    /// What the mount's hosts declare; `None` asks the host's `get_tool`.
-    index: Option<Arc<MountIndex>>,
+    units: OperationUnits,
 }
 
 impl<H> PropagatingHandler<H> {
-    pub(crate) fn new(
-        inner: H,
-        context: Option<Arc<dyn McpToolContext>>,
-        unit_of_work: Option<Arc<dyn UnitOfWork>>,
-        detached: DetachedWork,
-        operation_timeout: Option<Duration>,
-        index: Option<Arc<MountIndex>>,
-    ) -> Self {
-        Self {
-            inner,
-            context,
-            unit_of_work,
-            detached,
-            operation_timeout,
-            index,
-        }
+    pub(crate) fn new(inner: H, units: OperationUnits) -> Self {
+        Self { inner, units }
     }
 
-    /// The nesting every wrapped operation shares, outermost first: the
-    /// registered context, the request scope, the unit of
-    /// work (the transaction), what the request's guards attached (the
-    /// ability), the dispatch. The unit commits when the operation answers `Ok`
-    /// with no tool error in band.
-    ///
-    /// `method` is the JSON-RPC method and `addressed` what it named, which the
-    /// span records as the conventions ask; a line names only a tool the host
-    /// declares under that name. `wrapped` is `false` for an operation that
-    /// takes neither the registered context, a unit of work nor the operation
-    /// deadline, which cuts the body, never its settle, so a commit is never
-    /// cut. `stopped` resolves when the operation is to end before it answers,
-    /// with what the client is answered; like the deadline it cuts the body
-    /// alone, so a stop arriving while the unit settles leaves the operation to
-    /// end as it answered.
+    /// Run `inner` as one operation of the mount — see
+    /// [`OperationUnits::dispatch`] — its line naming a tool the mount reads
+    /// declared, or the host's `get_tool` knows where the mount cannot say.
     async fn dispatch<T, F, S>(
         &self,
         method: &Method,
         addressed: &Addressed,
-        ambient: McpAmbient,
-        wrapped: bool,
+        ambient: Option<McpAmbient>,
+        unit: bool,
         stopped: S,
         inner: F,
     ) -> Result<T, McpError>
@@ -131,25 +123,135 @@ impl<H> PropagatingHandler<H> {
         F: Future<Output = Result<T, McpError>> + Send,
         S: Future<Output = Result<T, McpError>> + Send,
     {
-        let McpAmbient {
-            scope,
-            captured: context_captured,
-            attached,
-            span,
-            correlation,
-        } = ambient;
-        let (context, unit, timeout) = if wrapped {
-            (
-                self.context.as_ref(),
-                self.unit_of_work.as_ref(),
-                self.operation_timeout,
+        let declared = addressed.declared(&self.inner, self.units.index.as_deref());
+        self.units
+            .dispatch(method, addressed, declared, ambient, unit, stopped, inner)
+            .await
+    }
+}
+
+/// What one mount runs each request as: an operation unit — its own site, a
+/// unit of work, a deadline and a stop. Every session's handler shares it, and
+/// so does the endpoint, which answers a call naming no declared tool before
+/// rmcp sees it.
+#[derive(Clone)]
+pub(crate) struct OperationUnits {
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
+    detached: DetachedWork,
+    /// What one request operation may run for; `None` ⇒ no deadline.
+    operation_timeout: Option<Duration>,
+    /// What the mount's hosts declare; `None` asks the host's `get_tool`.
+    index: Option<Arc<MountIndex>>,
+    chains: RequestChains,
+}
+
+impl OperationUnits {
+    pub(crate) fn new(
+        unit_of_work: Option<Arc<dyn UnitOfWork>>,
+        detached: DetachedWork,
+        operation_timeout: Option<Duration>,
+        index: Option<Arc<MountIndex>>,
+        chains: RequestChains,
+    ) -> Self {
+        Self {
+            unit_of_work,
+            detached,
+            operation_timeout,
+            index,
+            chains,
+        }
+    }
+
+    /// Answer a `tools/call` naming `name`, a tool no host on the mount
+    /// declares, as the operation the handler would have run: its unit stage,
+    /// its line `error` and the refusal rmcp's own handler answers,
+    /// `tool not found`, unless a layer around it answered otherwise.
+    pub(crate) async fn undeclared_call(&self, name: String) -> McpError {
+        let method = Method::from(CallToolRequestMethod::VALUE);
+        let addressed = Addressed::Tool(name);
+        let answered = self
+            .dispatch::<std::convert::Infallible, _, _>(
+                &method,
+                &addressed,
+                Some(operation_log::OTHER),
+                Some(McpAmbient::capture()),
+                true,
+                std::future::pending(),
+                async { Err(tool_not_found()) },
             )
+            .await;
+        let Err(error) = answered;
+        error
+    }
+
+    /// Run `inner` as one operation, under the `/mcp` request's context
+    /// `ambient` carries.
+    ///
+    /// `method` is the JSON-RPC method and `addressed` what it named, which the
+    /// span and the view record as the conventions ask; the line names
+    /// `declared` alone, a tool the host declares under that name. `unit` is
+    /// `false` for an operation that runs neither the request's site, a unit
+    /// of work nor the deadline, which cuts the body, never its settle, so a
+    /// commit is never cut. `stopped` resolves when the operation is to end
+    /// before it answers, with what the client is answered; like the deadline
+    /// it cuts the body alone, so a stop arriving while the unit settles leaves
+    /// the operation to end as it answered.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is one thing the caller read off the request; a struct would only rename them"
+    )]
+    async fn dispatch<T, F, S>(
+        &self,
+        method: &Method,
+        addressed: &Addressed,
+        declared: Option<&str>,
+        ambient: Option<McpAmbient>,
+        unit: bool,
+        stopped: S,
+        inner: F,
+    ) -> Result<T, McpError>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, McpError>> + Send,
+        S: Future<Output = Result<T, McpError>> + Send,
+    {
+        // Boxed, as rmcp's own future is: rmcp holds every method's future in
+        // its loop, so each stays a pointer there whatever the operation runs.
+        let run: BoxFuture<'_, Result<T, McpError>> =
+            Box::pin(self.operation(method, addressed, declared, unit, stopped, inner));
+        match ambient {
+            Some(ambient) => ambient.carried.carry(run).await,
+            None => run.await,
+        }
+    }
+
+    /// [`dispatch`](Self::dispatch)'s operation, inside whatever context it
+    /// installed: the nesting every operation shares, outermost first — its
+    /// span and line, the request scope, the unit of work (the transaction),
+    /// the request's own site, rmcp's routing. The unit commits when the
+    /// operation answers `Ok` with no tool error in band.
+    async fn operation<T, F, S>(
+        &self,
+        method: &Method,
+        addressed: &Addressed,
+        declared: Option<&str>,
+        unit: bool,
+        stopped: S,
+        inner: F,
+    ) -> Result<T, McpError>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, McpError>> + Send,
+        S: Future<Output = Result<T, McpError>> + Send,
+    {
+        let (binding, timeout) = if unit {
+            (self.unit_of_work.as_ref(), self.operation_timeout)
         } else {
-            (None, None, None)
+            (None, None)
         };
 
         // Its own unit of work: one session request carries many operations.
-        let correlation = correlation.child();
+        let correlation = Correlation::inherited().child();
         // One `mcp.operation.name` for the conventions' three (`mcp.tool.name`,
         // `mcp.prompt.name`, `mcp.resource.uri`); `mcp.method.name` says which.
         let operation = nest_rs_core::operation_span!(
@@ -158,13 +260,10 @@ impl<H> PropagatingHandler<H> {
             mcp.method.name = method.sent(),
             mcp.operation.name = addressed.spanned(),
         );
-        let method = method.named();
-        let declared = addressed.declared(&self.inner, self.index.as_deref());
+        let named = method.named();
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
-        let line = OperationLine::open(method, declared, correlation.clone(), operation.clone());
+        let line = OperationLine::open(named, declared, correlation.clone(), operation.clone());
 
-        // Inside the operation's own scope: rmcp's task carries no ambient
-        // context for the attachments to extend.
         let deadline = timeout.map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
         let spec = UnitSpec::new(
             crate::unit::OPERATION,
@@ -176,71 +275,65 @@ impl<H> PropagatingHandler<H> {
             None => spec,
         };
         let stopped_first = &AtomicBool::new(false);
-        let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(nest_rs_core::with_request_scope(
-            scope,
+        let view = || self.view(method, addressed);
+        let scoped: BoxFuture<'_, Answered<T>> = Box::pin(nest_rs_core::with_request_scope(
+            nest_rs_core::current_request_scope(),
             correlation,
             run_unit(
-                unit,
+                binding,
                 spec,
                 async {
-                    let body = install_pending(attached, inner);
+                    let dispatched =
+                        self.dispatched(named, unit, view, deadline.map(|(_, at)| at), inner);
                     let cut = async move {
                         match deadline {
-                            Some((timeout, at)) => tokio::time::timeout_at(at, body)
+                            Some((timeout, at)) => tokio::time::timeout_at(at, dispatched)
                                 .await
-                                .unwrap_or_else(|_| Err(timed_out(method, declared, timeout))),
-                            None => body.await,
+                                .unwrap_or_else(|_| {
+                                    Answered::refused(timed_out(named, declared, timeout))
+                                }),
+                            None => dispatched.await,
                         }
                     };
-                    let answered = tokio::select! {
+                    tokio::select! {
                         biased;
                         answered = cut => answered,
                         answer = stopped => {
                             stopped_first.store(true, Ordering::Relaxed);
-                            answer
+                            Answered { answer, commits: false }
                         }
-                    };
-                    answered.map(OperationValue::new)
+                    }
                 },
-                |outcome| outcome.as_ref().is_ok_and(|value| !value.reports_error()),
-                |_| {
-                    Err(McpError::internal_error(
-                        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
-                        None,
-                    ))
-                },
+                |answered| answered.commits,
+                |_| Answered::refused(opaque_answer()),
             ),
         ));
 
-        // Composed inside the instrumented block: an `around` opening a span of
-        // its own does so when called, not when polled.
         async move {
-            let ran = async move {
-                match (context, &context_captured) {
-                    (Some(context), Some(captured)) => context.around(captured, scoped).await,
-                    _ => scoped.await,
-                }
-            };
-            let ended = self.detached.run(nest_rs_core::panic::contain(ran)).await;
+            let ended = self
+                .detached
+                .run(nest_rs_core::panic::contain(scoped))
+                .await;
             match ended {
                 Some(Ok(answered)) if stopped_first.load(Ordering::Relaxed) => {
                     line.file(operation_log::CANCELLED);
-                    answered.and_then(OperationValue::take::<T>)
+                    answered.answer
                 }
-                Some(Ok(Ok(value))) => {
+                Some(Ok(Answered {
+                    answer: Ok(value), ..
+                })) => {
                     line.file(operation_log::OK);
-                    value.take::<T>()
+                    Ok(value)
                 }
-                Some(Ok(Err(error))) => {
+                Some(Ok(Answered {
+                    answer: Err(error), ..
+                })) => {
                     line.file(operation_log::ERROR);
                     Err(error)
                 }
                 Some(Err(payload)) => {
                     line.unwound(&*payload);
-                    Err(McpError::internal_error(
-                        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
-                        None,
-                    ))
+                    Err(opaque_answer())
                 }
                 None => {
                     line.file(operation_log::CANCELLED);
@@ -249,10 +342,155 @@ impl<H> PropagatingHandler<H> {
             }
         }
         .instrument(operation)
-        // For the exported OTel tree only; it must add nothing to a log line
-        // (the kernel's formats, `crates/nest-rs-core/src/logging.rs`).
-        .instrument(span)
         .await
+    }
+
+    /// `inner` through the request's own site, unless `unit` is `false`; the
+    /// operation's deadline, `at`, made ambient for the site a `#[tools]`
+    /// operation reaches inside it. `method` is the one its line names.
+    async fn dispatched<T, F, V>(
+        &self,
+        method: &'static str,
+        unit: bool,
+        view: V,
+        at: Option<tokio::time::Instant>,
+        inner: F,
+    ) -> Answered<T>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, McpError>> + Send,
+        V: FnOnce() -> McpView,
+    {
+        let chains = match (&self.chains, unit) {
+            (RequestChains::Composed(chains), true) => chains,
+            (RequestChains::Refused, true) => return Answered::refused(opaque_answer()),
+            (RequestChains::Bare, _) | (_, false) => return Answered::of(inner.await),
+        };
+        let inner = match at {
+            Some(at) => Either::Left(nest_rs_core::with_ambient(Arc::new(Deadline(at)), inner)),
+            None => Either::Right(inner),
+        };
+        let mut slot = None;
+        let outcome = {
+            let mut view = view();
+            let mut tail = RequestTail {
+                inner: Some(inner),
+                slot: &mut slot,
+            };
+            let mut cx = new_unit_context(crate::operation::REQUEST.handler(), &mut view, None, at);
+            dispatch(&mut cx, chains, &mut tail).await
+        };
+        Answered::dispatched(method, outcome, slot)
+    }
+
+    /// The view of the request `method` addressing `addressed`, naming the
+    /// host the mount reads declares it.
+    fn view(&self, method: &Method, addressed: &Addressed) -> McpView {
+        let kind = match addressed {
+            Addressed::Tool(_) => Some(McpOperationKind::Tool),
+            Addressed::Prompt(_) if method.sent() == GetPromptRequestMethod::VALUE => {
+                Some(McpOperationKind::Prompt)
+            }
+            _ => None,
+        };
+        let name = addressed.spanned();
+        let host = match (kind, name, self.index.as_deref()) {
+            (Some(kind), Some(name), Some(index)) => index.host(kind, name),
+            _ => None,
+        };
+        McpView::request(method.as_cow(), kind, name.map(str::to_owned), host)
+    }
+}
+
+/// What one operation answered, and whether its unit of work commits.
+struct Answered<T> {
+    answer: Result<T, McpError>,
+    commits: bool,
+}
+
+impl<T: 'static> Answered<T> {
+    /// What rmcp answered, the unit committing on an `Ok` that reports no
+    /// tool error in band.
+    fn of(answer: Result<T, McpError>) -> Self {
+        let commits = answer
+            .as_ref()
+            .is_ok_and(|value| !reports_tool_error(value));
+        Self { answer, commits }
+    }
+
+    /// `error`, the unit rolled back.
+    fn refused(error: McpError) -> Self {
+        Self {
+            answer: Err(error),
+            commits: false,
+        }
+    }
+
+    /// What the site of a request for `method` came to: what its tail wrote,
+    /// or its failure answered by the edge's one rule.
+    fn dispatched(
+        method: &'static str,
+        outcome: Outcome,
+        slot: Option<Result<T, McpError>>,
+    ) -> Self {
+        match (outcome, slot) {
+            (Ok(_), Some(answer)) => Self::of(answer),
+            (Err(failure), Some(answer)) if failure.is_answered() => Self {
+                answer,
+                commits: false,
+            },
+            (Ok(_), None) => {
+                tracing::error!(
+                    target: crate::TARGET,
+                    method,
+                    "an MCP operation settled without an answer; it is refused",
+                );
+                Self::refused(opaque_answer())
+            }
+            (Err(failure), _) => Self::refused(answer(&failure, None)),
+        }
+    }
+}
+
+/// Whether `value` is a tool call's result that reports the tool's error —
+/// a `CallToolResult` with `isError: true`, how the MCP specification reports
+/// a tool that failed — which its unit of work does not commit.
+fn reports_tool_error(value: &dyn Any) -> bool {
+    let result = match value.downcast_ref::<CallToolResponse>() {
+        Some(CallToolResponse::Complete(result)) => Some(result),
+        Some(_) => None,
+        None => value.downcast_ref::<CallToolResult>(),
+    };
+    result.is_some_and(|result| result.is_error == Some(true))
+}
+
+/// The request's own site's tail: rmcp's routing, its answer written into the
+/// operation's slot. An error, or a tool error reported in band, fails the
+/// unit, answered: the answer is what rmcp wrote.
+struct RequestTail<'s, T, F> {
+    inner: Option<F>,
+    slot: &'s mut Option<Result<T, McpError>>,
+}
+
+impl<T, F> Tail for RequestTail<'_, T, F>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, McpError>> + Send,
+{
+    async fn call(&mut self, _: &mut UnitContext<'_>) -> Outcome {
+        let Some(inner) = self.inner.take() else {
+            unreachable!("a unit runs its tail once");
+        };
+        let answer = inner.await;
+        let failed = match &answer {
+            Ok(value) => reports_tool_error(value).then(|| Failure::from(ToolReportedError)),
+            Err(error) => Some(Failure::from(error.clone())),
+        };
+        *self.slot = Some(answer);
+        match failed {
+            None => Ok(settled()),
+            Some(failure) => Err(failure.answered(settled())),
+        }
     }
 }
 
@@ -309,6 +547,14 @@ impl Method {
         match self {
             Self::Defined(method) => method,
             Self::Custom(_) => operation_log::OTHER,
+        }
+    }
+
+    /// As sent, for the operation's view.
+    fn as_cow(&self) -> Cow<'static, str> {
+        match self {
+            Self::Defined(method) => Cow::Borrowed(method),
+            Self::Custom(method) => Cow::Owned(method.clone()),
         }
     }
 }
@@ -376,27 +622,6 @@ impl Addressed {
             _ => error,
         }
     }
-}
-
-/// File the unit of a `tools/call` naming `name`, a tool no host on the mount
-/// declares, which the endpoint answered before rmcp dispatched it: its span
-/// and its line `error`, as [`PropagatingHandler`] files one it dispatches,
-/// a unit of `request`.
-pub(crate) fn file_undeclared_call(name: &str, request: &Correlation) {
-    let correlation = request.child();
-    let operation = nest_rs_core::operation_span!(
-        crate::unit::OPERATION,
-        &correlation,
-        mcp.method.name = CallToolRequestMethod::VALUE,
-        mcp.operation.name = name,
-    );
-    OperationLine::open(
-        CallToolRequestMethod::VALUE,
-        Some(operation_log::OTHER),
-        correlation,
-        operation,
-    )
-    .file(operation_log::ERROR);
 }
 
 /// One operation's `mcp.operation` line, filed exactly once — by the end the
@@ -495,10 +720,12 @@ macro_rules! request_method {
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<$out, McpError>> + MaybeSendFuture + '_ {
             async move {
-                let ambient = McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
+                let ambient = McpAmbient::from_extensions(&context.extensions);
                 let method = Method::from($method);
                 let addressed: Addressed = $addressed;
                 let cancelled = context.ct.clone().cancelled_owned();
+                let inner: BoxFuture<'_, Result<$out, McpError>> =
+                    Box::pin(self.inner.$name($($arg,)* context));
                 self.dispatch(
                     &method,
                     &addressed,
@@ -508,7 +735,7 @@ macro_rules! request_method {
                         cancelled.await;
                         Err(cancelled_before_completion())
                     },
-                    self.inner.$name($($arg,)* context),
+                    inner,
                 )
                 .await
                 .map_err(|error| addressed.said_by_kind(&method, error))
@@ -517,7 +744,7 @@ macro_rules! request_method {
     };
 }
 
-/// Delegate one notification: the request span and scope are installed, and
+/// Delegate one notification: the request's context is installed, and
 /// nothing else is.
 macro_rules! notification_method {
     ($name:ident ( $($arg:ident : $arg_ty:ty),* ), $method:expr $(,)?) => {
@@ -526,26 +753,34 @@ macro_rules! notification_method {
             $($arg: $arg_ty,)*
             context: NotificationContext<RoleServer>,
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
-            async move {
-                let McpAmbient { scope, span, correlation, .. } =
-                    McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
-                let method = Method::from($method);
+            let ambient = McpAmbient::from_extensions(&context.extensions);
+            let method = Method::from($method);
+            let handled: BoxFuture<'_, _> =
+                Box::pin(nest_rs_core::panic::contain(self.inner.$name($($arg,)* context)));
+            let run = async move {
+                let correlation = Correlation::inherited();
                 let line = OperationLine::open(
                     method.named(),
                     None,
                     correlation.clone(),
                     tracing::Span::none(),
                 );
-                let handled = nest_rs_core::panic::contain(self.inner.$name($($arg,)* context));
-                nest_rs_core::with_request_scope(scope, correlation, async move {
-                    match self.detached.run(handled).await {
-                        Some(Ok(())) => line.file(operation_log::OK),
-                        Some(Err(payload)) => line.unwound(&*payload),
-                        None => line.file(operation_log::CANCELLED),
-                    }
-                })
-                .instrument(span)
+                nest_rs_core::with_request_scope(
+                    nest_rs_core::current_request_scope(),
+                    correlation,
+                    async move {
+                        match self.units.detached.run(handled).await {
+                            Some(Ok(())) => line.file(operation_log::OK),
+                            Some(Err(payload)) => line.unwound(&*payload),
+                            None => line.file(operation_log::CANCELLED),
+                        }
+                    },
+                )
                 .await
+            };
+            match ambient {
+                Some(ambient) => Either::Left(ambient.carried.carry(run)),
+                None => Either::Right(run),
             }
         }
     };
@@ -675,9 +910,9 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
     /// `Ok(())`, which rmcp sends as the schema's final result for a graceful
     /// teardown, and files `cancelled`.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
-        let ambient =
-            McpAmbient::from_extensions(&context.request_context().extensions).unwrap_or_default();
-        let going_away = self.detached.going_away();
+        let ambient = McpAmbient::from_extensions(&context.request_context().extensions);
+        let going_away = self.units.detached.going_away();
+        let inner: BoxFuture<'_, Result<(), McpError>> = Box::pin(self.inner.listen(context));
         self.dispatch(
             &Method::from(SubscriptionsListenRequestMethod::VALUE),
             &Addressed::Nothing,
@@ -687,7 +922,7 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
                 going_away.await;
                 Ok(())
             },
-            self.inner.listen(context),
+            inner,
         )
         .await
     }
@@ -752,8 +987,10 @@ mod tests {
     /// tells a delegated call from an inherited one.
     #[test]
     fn the_wrapper_asks_the_inner_host_to_negotiate() {
-        let wrapper =
-            PropagatingHandler::new(NegotiatingHost, None, None, DetachedWork::new(), None, None);
+        let wrapper = PropagatingHandler::new(
+            NegotiatingHost,
+            OperationUnits::new(None, DetachedWork::new(), None, None, RequestChains::Bare),
+        );
         let mut request = InitializeRequestParams::default();
         request.protocol_version = THE_CALLER_ASKS_FOR;
 

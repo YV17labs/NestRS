@@ -43,12 +43,27 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         Ok(parsed) => parsed,
         Err(err) => return refused_beside(err, item),
     };
+    if !item.generics.params.is_empty() {
+        let err = syn::Error::new_spanned(
+            &item.generics,
+            "`#[mcp]` must be on a concrete struct — each operation `#[tools]` declares on it \
+             runs a `static` site, which no parameter of the struct reaches, so a generic \
+             host's instances would share one site; write a non-generic host type per \
+             instantiation",
+        );
+        return refused_beside(err, item);
+    }
 
-    let Layers { guards, meta, .. } =
-        match take_layers(&pair::MCP, LayerScope::Host, &mut item.attrs) {
-            Ok(layers) => layers,
-            Err(err) => return refused_beside(err, item),
-        };
+    let Layers {
+        guards,
+        interceptors,
+        exception_filters,
+        meta,
+        ..
+    } = match take_layers(&pair::MCP, LayerScope::Host, &mut item.attrs) {
+        Ok(layers) => layers,
+        Err(err) => return refused_beside(err, item),
+    };
     let host_meta = host_meta_fn(&meta);
     let capability_bounds = guard_capability_bounds(
         guards.iter(),
@@ -70,14 +85,20 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let host_name = name.to_string();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // Per-operation guards arrive from the impl half through
+    // Per-operation layers arrive from the impl half through
     // `__nestrs_mcp_operation_layers()`: a hand-written `ServerHandler` host has none.
-    let layers = layer_deps(guards.iter());
+    let layers = layer_deps(guards.iter().chain(&interceptors).chain(&exception_filters));
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_method(&opt_keys);
     let injected_optional_names = injected_optional_names_method(&opt_names);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
+    let interceptor_specs = quote! {
+        ::std::vec![#(::nest_rs_core::interceptor::<#interceptors>()),*]
+    };
+    let exception_filter_specs = quote! {
+        ::std::vec![#(::nest_rs_core::exception_filter::<#exception_filters>()),*]
+    };
 
     // Empty means "none declared": `nest-rs-mcp` owns the default path.
     let path = args.path.unwrap_or_else(|| LitStr::new("", name.span()));
@@ -99,12 +120,30 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             #host_meta
 
             /// Host-scope `#[use_guards(...)]`, read by the impl half when it
-            /// composes an operation's chain.
+            /// composes an operation's guard stage.
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_guard_specs()
                 -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
             {
                 #guard_specs
+            }
+
+            /// Host-scope `#[use_interceptors(...)]`, read by the impl half when
+            /// it declares an operation's site.
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_host_interceptor_specs()
+                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
+            {
+                #interceptor_specs
+            }
+
+            /// Host-scope `#[use_exception_filters(...)]`, read by the impl half
+            /// when it declares an operation's site.
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_host_exception_filter_specs()
+                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
+            {
+                #exception_filter_specs
             }
         }
 
@@ -128,6 +167,13 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             #injected_optional
 
             #injected_optional_names
+
+            fn injected_per_request() -> ::std::vec::Vec<(::core::any::TypeId, &'static str)> {
+                // The impl half's probe of each operation's parameters; empty for a
+                // host that writes rmcp by hand.
+                use ::nest_rs_mcp::__private::DefaultOperationLayers as _;
+                <Self>::__nestrs_mcp_injected_per_request()
+            }
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
@@ -156,6 +202,10 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                             <Self>::prompt_router().list_all(),
                             <Self>::__nestrs_mcp_declares_every_route(),
                         )
+                    },
+                    || {
+                        use ::nest_rs_mcp::__private::DefaultOperationLayers as _;
+                        <Self>::__nestrs_mcp_operation_sites()
                     },
                 )
             }
@@ -188,6 +238,20 @@ fn refused_beside(err: syn::Error, mut item: ItemStruct) -> TokenStream {
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_guard_specs()
                 -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
+            {
+                ::std::vec::Vec::new()
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_host_interceptor_specs()
+                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
+            {
+                ::std::vec::Vec::new()
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_host_exception_filter_specs()
+                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
             {
                 ::std::vec::Vec::new()
             }

@@ -66,8 +66,8 @@ payload), and run no interceptor or exception filter yet.
 | `#[use_guards]` | struct, method | struct, method | struct (the upgrade), method; — on a connection hook | struct, method | — no caller to gate | — |
 | `#[force_guards]` | method | method | method | method | — | — |
 | `#[use_pipes]` | struct, method | — bind a per-argument pipe | struct, method; — on a connection hook | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
-| `#[use_interceptors]` | struct, method | struct, method | struct, method; not yet on a connection hook | not yet | impl block, method | — |
-| `#[use_exception_filters]` | struct, method | struct, method | struct, method; not yet on a connection hook | not yet | impl block, method | — |
+| `#[use_interceptors]` | struct, method | struct, method | struct, method; not yet on a connection hook | struct, method | impl block, method | — |
+| `#[use_exception_filters]` | struct, method | struct, method | struct, method; not yet on a connection hook | struct, method | impl block, method | — |
 | `#[use_filters]` | — use `#[use_exception_filters]` | — | — | — | — | — |
 | `#[meta]` | struct, method | struct, method | struct, method, connection hook | struct, method | impl block, method | — |
 

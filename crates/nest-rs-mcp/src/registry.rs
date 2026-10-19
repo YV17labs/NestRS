@@ -3,19 +3,22 @@
 //! [`HttpEndpointMeta`] that mounts them all, merged into a [`CompositeHandler`].
 //!
 //! Metadata, not `inventory`: it is attached from `Discoverable::register`, so a
-//! host whose module the app does not import contributes nothing. The guard, the
-//! tool context, [`McpConfig`](crate::McpConfig) and the session store resolve
-//! once per path, when its [`McpMount`] is built from the container.
+//! host whose module the app does not import contributes nothing. The chains,
+//! [`McpConfig`](crate::McpConfig) and the session store resolve once per path,
+//! when its [`McpMount`] is built from the container; every endpoint's checks
+//! and every operation's site run at the kernel's wiring step, in every app
+//! that imports a host, whatever it serves.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use nest_rs_core::{Container, ContainerBuilder, Discovery, Handler, Posture};
-use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
-use nest_rs_http::{
-    DetachedWork, HttpBootCheck, HttpEndpointMeta, HttpRoutes, normalize_mount_path,
+use nest_rs_core::__private::Site;
+use nest_rs_core::{
+    Container, ContainerBuilder, Discovery, Handler, Posture, WiringContribution, anyhow,
 };
+use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
+use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpRoutes, normalize_mount_path};
 use rmcp::model::{Prompt, ProtocolVersion, ServerCapabilities, ServerConfig, Tool};
 
 use crate::composite::{CompositeHandler, common_protocol_versions};
@@ -23,6 +26,7 @@ use crate::endpoint::{McpMount, endpoint};
 use crate::host::McpHost;
 use crate::identity::{McpIdentity, ResolvedIdentity};
 use crate::module::McpModule;
+use crate::operation::McpOperationKind;
 use crate::view::McpView;
 
 /// The `HttpEndpointMeta` label every MCP mount carries.
@@ -62,6 +66,14 @@ type BuildHost = fn(&Container) -> Arc<dyn McpHost>;
 /// instance, for the mount's index and the boot's duplicate checks.
 type StaticRoutes = fn() -> DeclaredRoutes;
 
+/// The sites a host's `#[tools]` declares, one per operation, which the boot
+/// composes.
+type OperationSites = fn() -> Vec<&'static Site>;
+
+/// The registry the boot's wiring step checks every endpoint and composes
+/// every operation's site for.
+const ENDPOINTS: &str = "nest_rs::mcp::endpoints";
+
 /// The tools and prompts a host's routers declare, read without an instance.
 pub struct DeclaredRoutes {
     tools: Vec<Tool>,
@@ -94,9 +106,12 @@ impl DeclaredRoutes {
 pub struct McpHostMeta {
     path: String,
     host: &'static str,
+    /// The host's type path, as an operation's view names it.
+    type_name: &'static str,
     identity: McpIdentity,
     build: BuildHost,
     routes: StaticRoutes,
+    sites: OperationSites,
 }
 
 impl McpHostMeta {
@@ -123,6 +138,12 @@ impl McpHostMeta {
 
     pub(crate) fn declared_routes(&self) -> DeclaredRoutes {
         (self.routes)()
+    }
+
+    /// The sites its operations run, one per tool and prompt `#[tools]`
+    /// declares.
+    pub(crate) fn operation_sites(&self) -> Vec<&'static Site> {
+        (self.sites)()
     }
 
     pub(crate) fn build(&self, container: &Container) -> Arc<dyn McpHost> {
@@ -171,13 +192,28 @@ pub trait DefaultOperationLayers: Sized + 'static {
     fn __nestrs_mcp_operation_layers() -> (Vec<std::any::TypeId>, Vec<&'static str>) {
         (Vec::new(), Vec::new())
     }
+
+    /// No decorated operations, so no provider a parameter resolves.
+    fn __nestrs_mcp_injected_per_request() -> Vec<(std::any::TypeId, &'static str)> {
+        Vec::new()
+    }
+
+    /// No decorated operations, so no site to compose.
+    fn __nestrs_mcp_operation_sites() -> Vec<&'static Site> {
+        Vec::new()
+    }
 }
 
 impl<T: 'static> DefaultOperationLayers for T {}
 
-/// Record `P` as a host of the MCP endpoint at `path`, and — for the first host
-/// to claim that path — attach the endpoint itself, its requests running as
-/// `site`, plus its boot check.
+/// Record `P` as a host of the MCP endpoint at `path`, its operations running
+/// the `sites` its `#[tools]` declares, and — for the first host to claim that
+/// path — attach the endpoint itself, its requests running as `site`; the
+/// first host of the app attaches the wiring that checks every endpoint.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one thing the decorator declared about its host; a struct would only rename them"
+)]
 pub fn register_host<P: 'static>(
     builder: ContainerBuilder,
     site: &'static Handler,
@@ -186,6 +222,7 @@ pub fn register_host<P: 'static>(
     identity: McpIdentity,
     build: BuildHost,
     routes: StaticRoutes,
+    sites: OperationSites,
 ) -> ContainerBuilder {
     let path = normalize_mount_path(match path {
         "" => DEFAULT_PATH,
@@ -198,45 +235,79 @@ pub fn register_host<P: 'static>(
         .attached_meta::<HttpEndpointMeta>()
         .any(|meta| meta.label() == MCP_LABEL && meta.path() == path);
 
+    let wired = builder
+        .attached_meta::<WiringContribution>()
+        .any(|wiring| wiring.name() == ENDPOINTS);
+
     let builder = builder.attach_meta::<P, McpHostMeta>(McpHostMeta {
         path: path.clone(),
         host,
+        type_name: std::any::type_name::<P>(),
         identity,
         build,
         routes,
+        sites,
     });
+    let builder = if wired {
+        builder
+    } else {
+        builder.provide_wiring(ENDPOINTS, wire_endpoints)
+    };
 
     if claimed {
         return builder;
     }
 
     let mount_path = path.clone();
-    let check_path = path.clone();
     let detached = DetachedWork::new();
     let mount_work = detached.clone();
-    builder
-        .attach_meta::<P, HttpEndpointMeta>(checks_origin(
-            HttpEndpointMeta::new(site, path, MCP_LABEL, move |container, routes| {
-                mount(container, routes, &mount_path, &mount_work);
-            })
-            .carries::<McpView>()
-            .runs_detached(detached)
-            .owned_by(host),
-            OriginCheck::Every,
-            refused_origin,
-        ))
-        .attach_meta::<P, HttpBootCheck>(HttpBootCheck::new(move |container| {
-            let path = check_path.as_str();
-            let hosts = resolve(container, path);
-            check_identity(container, path, &hosts)?;
-            if hosts.len() < 2 {
-                return Ok(());
-            }
-            check_duplicate_tools(path, &hosts)?;
-            check_duplicate_prompts(path, &hosts)?;
-            warn_undeclared_tools(path, &hosts);
-            check_protocol_versions(path, &hosts)
-        }))
+    builder.attach_meta::<P, HttpEndpointMeta>(checks_origin(
+        HttpEndpointMeta::new(site, path, MCP_LABEL, move |container, routes| {
+            mount(container, routes, &mount_path, &mount_work);
+        })
+        .carries::<McpView>()
+        .runs_detached(detached)
+        .owned_by(host),
+        OriginCheck::Every,
+        refused_origin,
+    ))
+}
+
+/// The boot's checks of every endpoint the app's hosts share, and the sites
+/// their operations run, composed: a contested identity, a name two hosts
+/// claim, protocol versions no host shares, a layer an operation declares that
+/// no module provides or two `#[meta]` values of one type refuse the app.
+fn wire_endpoints(container: &Container) -> anyhow::Result<()> {
+    let metas = Discovery::new(container).meta::<McpHostMeta>();
+    let paths: BTreeSet<String> = metas
+        .iter()
+        .map(|discovered| discovered.meta.path().to_owned())
+        .collect();
+    for path in &paths {
+        check_endpoint(container, path).map_err(|refused| anyhow::anyhow!(refused))?;
+    }
+    if !metas.is_empty() {
+        crate::operation::REQUEST.chains(container)?;
+    }
+    for discovered in &metas {
+        for site in discovered.meta.operation_sites() {
+            site.chains(container)?;
+        }
+    }
+    Ok(())
+}
+
+/// The checks of the endpoint at `path`, over the hosts that share it.
+fn check_endpoint(container: &Container, path: &str) -> Result<(), String> {
+    let hosts = resolve(container, path);
+    check_identity(container, path, &hosts)?;
+    if hosts.len() < 2 {
+        return Ok(());
+    }
+    check_duplicate_tools(path, &hosts)?;
+    check_duplicate_prompts(path, &hosts)?;
+    warn_undeclared_tools(path, &hosts);
+    check_protocol_versions(path, &hosts)
 }
 
 /// An MCP request from a browser origin the transport's policy refuses, filed on
@@ -333,6 +404,7 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
 
     let mut index = MountIndex::default();
     for (position, host) in hosts.iter().enumerate() {
+        index.hosts.push(host.type_name);
         let declared = host.declared_routes();
         let names: Vec<String> = declared.tool_names().collect();
         tracing::info!(
@@ -387,6 +459,22 @@ pub(crate) struct MountIndex {
     pub(crate) tools: RouteIndex,
     /// The prompts, by name.
     pub(crate) prompts: RouteIndex,
+    /// Each host's type path, by its position.
+    pub(crate) hosts: Vec<&'static str>,
+}
+
+impl MountIndex {
+    /// The type path of the host declaring the tool or the prompt `name`, as
+    /// `kind` says which.
+    pub(crate) fn host(&self, kind: McpOperationKind, name: &str) -> Option<&'static str> {
+        let routes = match kind {
+            McpOperationKind::Tool => &self.tools,
+            McpOperationKind::Prompt => &self.prompts,
+        };
+        routes
+            .owner(name)
+            .and_then(|position| self.hosts.get(position).copied())
+    }
 }
 
 /// The names one kind of route — a tool, a prompt — the hosts on one path
@@ -573,18 +661,15 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
 }
 
 /// Fail boot when the app named a server no `#[mcp]` host serves.
-pub(crate) fn server_reaches_a_host() -> HttpBootCheck {
-    HttpBootCheck::new(|container| {
-        if !Discovery::new(container).meta::<McpHostMeta>().is_empty() {
-            return Ok(());
-        }
-        Err(
-            "an MCP server identity is declared but no #[mcp] host serves anything, so the \
-             declaration reaches nothing: import the module owning your tool host, or drop \
-             `server` from McpOptions"
-                .to_owned(),
-        )
-    })
+pub(crate) fn server_reaches_a_host(container: &Container) -> anyhow::Result<()> {
+    if !Discovery::new(container).meta::<McpHostMeta>().is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "an MCP server identity is declared but no #[mcp] host serves anything, so the \
+         declaration reaches nothing: import the module owning your tool host, or drop \
+         `server` from McpOptions"
+    )
 }
 
 /// Fail boot when hosts sharing a path support no protocol version in common,

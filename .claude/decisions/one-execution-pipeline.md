@@ -264,3 +264,46 @@ through the connection alone. Where it departs:
   of any app importing the gateway, whatever it serves.
 - **An event no handler serves runs no site**: it has no handler to declare
   one, so it meets no layer and answers the unknown-event frame.
+
+**2026-10-19 — `feat/mcp-on-pipeline`: an MCP operation runs on it.** Every
+JSON-RPC request but `subscriptions/listen` is one `mcp.operation` unit on rmcp's
+task, inside a unit of work of its own; a `#[tool]` or a `#[prompt]` `#[tools]`
+declares is a `Site` dispatched inside it: its guards' `check`, its class gate,
+the method's, the host's and the app's exception filters, the app's, the
+modules', the host's and the method's interceptors, then its pipes, its
+`Scoped<T>` parameters, the call and the mask. The app's interceptors now reach
+every tool call and prompt fetch; the `/mcp` request still folds no handler
+stage. Where it departs:
+
+- **The unit stage runs once per request, at the request's own site**, never
+  at a tool's: every request's site folds the unit stage alone (the "other
+  requests" row of 2026-10-11), around rmcp's decode and routing, and a tool's
+  or a prompt's site nested in it folds the filters and the handler stage, as a
+  GraphQL root field does. A request whose arguments do not decode, whose
+  tool a hand-written host serves, or whose tool no host declares — which the
+  endpoint answers before rmcp, as the operation rmcp's handler would have
+  run — still runs it, and none runs it twice.
+- **The `/mcp` request's context crosses as one `TaskContext`** — its span,
+  scope, trace and what its guards and layers made ambient — so a value a layer
+  makes ambient around `/mcp` reaches the tool, and `McpToolContext`'s slot is
+  gone (refused above). `RefusalMark` crosses into a task, so a refused
+  operation still marks the request carrying it.
+- **Every operation's site is composed at the wiring step**, beside the
+  endpoint's boot checks that `HttpBootCheck` ran only when HTTP served: a
+  layer an operation declares that no module provides, or two `#[meta]` values
+  of one type, refuse the boot of every app importing the host. A container
+  built by hand composes on the first dispatch and refuses that operation
+  opaquely.
+- **The tail writes the operation's value into a slot of its own**, typed; a
+  failure only its type can answer — the method's own `McpError`, a
+  `ToProblem` error — goes out answered, an exception filter's problem over it.
+  A return spelled `Result<T, E>` answers rmcp `Result<T, McpError>` whatever
+  `E` is, and one behind an alias the same `Result` behind an opaque type —
+  read by its type, as the macros rule asks of every return.
+- **A generic `#[tools]` impl is refused**, as `#[operations]` refuses one,
+  and so is a generic `#[mcp]` struct: each operation's site is a `static` no
+  parameter reaches, so its instances would share one site and one list of
+  layers.
+- **The futures rmcp holds stay boxed**: rmcp keeps every method's future in
+  its serve loop, so each request's future is a pointer there whatever the
+  operation runs; unboxed, a debug build overflowed a test thread's stack.

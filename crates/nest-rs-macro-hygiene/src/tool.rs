@@ -1,4 +1,6 @@
-//! `#[mcp]` + `#[tools]`, through the umbrella alone.
+//! `#[mcp]` + `#[tools]`, through the umbrella alone: the layers a host and
+//! an operation bind, a `Scoped<T>` parameter, and an error of the domain's
+//! own type.
 //!
 //! rmcp's `#[tool_router]`/`#[tool_handler]`/`#[prompt]` expand to bare `rmcp::`
 //! paths resolved at the call site; this file names no `rmcp`, so it stops
@@ -7,7 +9,9 @@
 use nest_rs::core::{Layer, UnitContext};
 use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Role};
-use nest_rs::mcp::{McpError, McpView, Parameters, Valid, input, mcp, tools};
+use nest_rs::mcp::{McpError, McpView, Parameters, Scoped, Valid, input, mcp, tools};
+
+use crate::pipeline::{HygieneUnitAudit, HygieneUnitRefusal};
 
 /// The typed input a tool takes, validated through `Valid<HygieneArgs>`.
 #[input]
@@ -36,10 +40,30 @@ const STAMP: &str = "Answer with this sentence.";
 /// A value `#[meta]` declares, read by type.
 pub struct HygieneLimit(pub u32);
 
-/// Tools and prompts, under a host-scope guard.
+/// Built once per operation's request, read through a `Scoped<T>` parameter.
+#[nest_rs::core::injectable(scope = request)]
+#[derive(Default)]
+pub struct HygieneBasket;
+
+/// What a domain answers when it refuses: no MCP type names it.
+#[derive(Debug)]
+pub struct HygieneRefused;
+
+impl std::fmt::Display for HygieneRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("refused")
+    }
+}
+
+impl std::error::Error for HygieneRefused {}
+
+/// Tools and prompts, under a host-scope guard, interceptor and exception
+/// filter.
 #[mcp(path = "/hygiene")]
 #[meta(HygieneLimit(100))]
 #[use_guards(HygieneGuard)]
+#[use_interceptors(HygieneUnitAudit)]
+#[use_exception_filters(HygieneUnitRefusal)]
 #[derive(Clone, Default)]
 pub struct HygieneTool;
 
@@ -78,6 +102,15 @@ impl HygieneTool {
     #[public]
     fn ping(&self) -> Result<String, McpError> {
         Ok("pong".into())
+    }
+
+    #[tool(description = "Read this request's basket.")]
+    #[public]
+    #[use_interceptors(HygieneUnitAudit)]
+    #[use_exception_filters(HygieneUnitRefusal)]
+    async fn basket(&self, basket: Scoped<HygieneBasket>) -> Result<String, HygieneRefused> {
+        let _ = &*basket;
+        Err(HygieneRefused)
     }
 
     #[cfg(feature = "seaorm")]

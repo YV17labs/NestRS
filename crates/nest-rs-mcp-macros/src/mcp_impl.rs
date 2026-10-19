@@ -1,18 +1,19 @@
 //! `#[tools]` on an `impl` block — the operations half of the MCP decorator.
 //!
-//! The authored methods are re-emitted untouched; each operation gets a
-//! generated wrapper carrying `#[tool(name = "…")]` that runs guards → gate →
-//! pipes → call → mask, and rmcp's routers and `ServerHandler` are emitted in a
-//! private child module that carries the `rmcp` import rmcp's macros resolve
-//! against. An inherent impl may sit in any module of the defining crate and
-//! still reach the parent's private fields (pinned by
-//! `tests/integration/mcp_impl.rs`).
+//! The authored methods are re-emitted untouched; each operation declares its
+//! `static` site — its guards, its posture's class gate, its exception filters
+//! and interceptors — and gets a generated wrapper carrying
+//! `#[tool(name = "…")]` that dispatches it through that site, its tail running
+//! pipes → `Scoped<T>` parameters → call → mask. rmcp's routers and
+//! `ServerHandler` are emitted in a private child module that carries the
+//! `rmcp` import rmcp's macros resolve against. An inherent impl may sit in any
+//! module of the defining crate and still reach the parent's private fields
+//! (pinned by `tests/integration/mcp_impl.rs`).
 
 use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{ToTokens, format_ident, quote, quote_spanned};
-use syn::ext::IdentExt;
+use quote::{format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
 use syn::{
     Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Path, Signature, Token, Type,
@@ -20,12 +21,12 @@ use syn::{
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    Collision, Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta,
-    PipeWrapper, Posture, PostureRules, answer_span, await_if_async, cfg_attrs, concrete_signature,
-    declared_handler, force_guard_typeids, forwarded_arg_idents, generic_args,
-    guard_capability_bounds, handler_const, handler_ref, impl_self_ident, layer_deps,
-    normalize_forwarded_args, nth_generic_type, one_role_per_method, pipe_wrapper,
-    reject_meta_on_operations, scoped_specs, shared_receiver, type_label, ungrouped_expr,
+    Collision, Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, PipeWrapper, Posture,
+    PostureRules, answer_span, await_if_async, cfg_attrs, concrete_signature, force_guard_typeids,
+    forwarded_arg_idents, generic_args, guard_capability_bounds, handler_const, handler_ref,
+    impl_self_ident, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
+    pipe_wrapper, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
+    site_fn_ident, ungrouped_expr,
 };
 use nest_rs_codegen::snake_case;
 
@@ -91,6 +92,15 @@ impl Role {
         }
     }
 
+    /// What rmcp's router takes this role's answer as, named where the
+    /// expansion cannot spell the answer's type.
+    fn wire_answer(self) -> TokenStream2 {
+        match self {
+            Self::Tool => quote!(::nest_rs_mcp::__private::IntoCallToolResult),
+            Self::Prompt => quote!(::nest_rs_mcp::__private::IntoGetPromptResult),
+        }
+    }
+
     /// The word a chain label and a log field spell this role with.
     fn label(self) -> &'static str {
         match self {
@@ -117,8 +127,12 @@ struct Operation {
     sig: Signature,
     guards: Vec<Path>,
     force_guards: Vec<Path>,
+    interceptors: Vec<Path>,
+    exception_filters: Vec<Path>,
     posture: Posture,
     pipes: Vec<PipedArg>,
+    /// Its `Scoped<T>` parameters, resolved in its tail rather than by rmcp.
+    scoped: Vec<ScopedArg>,
     /// The authored method's `#[cfg]` conditions, which its router group, and so
     /// its wrapper and its route, are compiled under.
     cfgs: Vec<TokenStream2>,
@@ -134,6 +148,13 @@ impl Operation {
     fn name(&self) -> &syn::Ident {
         &self.sig.ident
     }
+}
+
+/// A `#[tool]` / `#[prompt]` parameter a request-scoped provider fills.
+struct ScopedArg {
+    ident: syn::Ident,
+    /// `Scoped<T>`, as written.
+    ty: Type,
 }
 
 /// A `#[tool]` / `#[prompt]` parameter whose wire value goes through a pipe:
@@ -165,6 +186,14 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     let self_ty = item.self_ty.clone();
     let base = impl_self_ident(&self_ty, "#[tools]")?;
+    if !item.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &item.generics,
+            "`#[tools] impl` must be on a concrete self type — each operation declares its \
+             site in a `static`, which no parameter of the impl reaches, so a generic host's \
+             instances would share one site",
+        ));
+    }
     let (operations, declared) = take_operations(&mut item, &base)?;
     let markers = declared.markers(&self_ty, &item.generics);
     if operations.is_empty() {
@@ -237,22 +266,28 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         }}
     };
 
-    // Read back by the struct half's `Discoverable::injected`, so an unprovided
-    // guard fails the boot rather than the first call.
-    let operation_guards = || {
+    // `Guard::check` admits by default: the bound makes a guard declare MCP.
+    let capability_bounds = guard_capability_bounds(
         operations.all().flat_map(|op| {
             op.guards.iter().map(|item| Conditional {
                 cfgs: &op.cfgs,
                 item,
             })
-        })
-    };
-    // `Guard::check` admits by default: the bound makes a guard declare MCP.
-    let capability_bounds = guard_capability_bounds(
-        operation_guards(),
+        }),
         quote!(::nest_rs_guards::GuardFor<::nest_rs_mcp::McpView>),
     );
-    let layers = layer_deps(operation_guards());
+    // Read back by the struct half's `Discoverable::injected`, so a layer no
+    // imported module provides fails the boot rather than the first call.
+    let layers = layer_deps(operations.all().flat_map(|op| {
+        op.guards
+            .iter()
+            .chain(&op.interceptors)
+            .chain(&op.exception_filters)
+            .map(|item| Conditional {
+                cfgs: &op.cfgs,
+                item,
+            })
+    }));
     let description_checks = operations.all().filter_map(|op| {
         let cfgs = &op.cfgs;
         op.description_check
@@ -261,7 +296,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     });
     let layer_keys = &layers.keys;
     let layer_labels = &layers.labels;
-    let handlers = handler_consts(&item, &self_ty, &base, &operations)?;
+    let sites = site_items(&self_ty, &base, &operations);
 
     let (impl_generics, ty_generics, where_clause) = &generics;
     Ok(quote! {
@@ -273,7 +308,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         #markers
 
-        #handlers
+        #sites
 
         impl #impl_generics #self_ty #ty_generics #where_clause {
             #[doc(hidden)]
@@ -343,9 +378,8 @@ fn router_impl(
         return Ok(None);
     }
     let mut groups: Vec<(&[TokenStream2], Vec<TokenStream2>)> = Vec::new();
-    let generic = !impl_generics.to_token_stream().is_empty();
     for op in ops {
-        let wrapped = wrapper(self_ty, op, generic)?;
+        let wrapped = wrapper(self_ty, op)?;
         let own = &op.cfgs;
         let conditions = quote!(#(#own)*).to_string();
         match groups
@@ -401,9 +435,9 @@ type Generics<'a> = (
     Option<&'a syn::WhereClause>,
 );
 
-/// The generated method that rmcp routes to: the four request layers, then the
-/// authored method.
-fn wrapper(self_ty: &Type, op: &Operation, generic: bool) -> syn::Result<TokenStream2> {
+/// The generated method that rmcp routes to: the operation dispatched through
+/// its site, the authored method its tail.
+fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     let Operation {
         role,
         role_attr,
@@ -411,131 +445,111 @@ fn wrapper(self_ty: &Type, op: &Operation, generic: bool) -> syn::Result<TokenSt
         sig,
         posture,
         pipes,
+        scoped,
+        wire_name,
         ..
     } = op;
     let name = op.name();
 
     // Each pipe carrier is replaced by the value it wraps, so rmcp derives the
-    // tool's JSON Schema from `T`.
+    // tool's JSON Schema from `T`; a `Scoped<T>` is the tail's, never rmcp's.
     let mut wire_sig = sig.clone();
     wire_sig.ident = wrapper.clone();
-    for input in wire_sig.inputs.iter_mut() {
-        let FnArg::Typed(pat_type) = input else {
-            continue;
-        };
-        let syn::Pat::Ident(pat_ident) = &*pat_type.pat else {
-            continue;
-        };
-        if let Some(arg) = pipes.iter().find(|arg| arg.ident == pat_ident.ident) {
-            let value = &arg.value_ty;
-            *pat_type.ty = syn::parse_quote!(::nest_rs_mcp::Parameters<#value>);
+    wire_sig.asyncness = Some(syn::token::Async(name.span()));
+    wire_sig.inputs = sig
+        .inputs
+        .iter()
+        .filter_map(|input| {
+            let mut input = input.clone();
+            if let FnArg::Typed(pat_type) = &mut input
+                && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
+            {
+                if scoped.iter().any(|arg| arg.ident == pat_ident.ident) {
+                    return None;
+                }
+                if let Some(arg) = pipes.iter().find(|arg| arg.ident == pat_ident.ident) {
+                    let value = &arg.value_ty;
+                    *pat_type.ty = syn::parse_quote!(::nest_rs_mcp::Parameters<#value>);
+                }
+            }
+            Some(input)
+        })
+        .collect();
+    // Whatever error the method fails with, rmcp is answered a `Result` over an
+    // `McpError`: spelled out where the method spells its `Result`, so rmcp
+    // reads a `Json<T>` off it, and behind an opaque type where an alias or a
+    // renamed `Result` hides the value's type from the expansion.
+    wire_sig.output = match spelled_result(sig) {
+        Some(ok) => syn::parse_quote!(
+            -> ::core::result::Result<#ok, ::nest_rs_mcp::McpError>
+        ),
+        None => {
+            let answer = role.wire_answer();
+            syn::parse_quote_spanned!(answer_span(sig)=> -> impl #answer + use<>)
         }
-    }
+    };
 
-    let label = LitStr::new(
-        &format!("{} {}::{}", role.label(), type_label(self_ty), name),
-        name.span(),
-    );
-    let chain = guard_chain(self_ty, op, &label, generic, &class_gate(posture));
     let pipe_prelude = pipes.iter().map(pipe_statement);
+    let scoped_prelude = scoped.iter().map(|ScopedArg { ident, ty }| {
+        quote! { let #ident: #ty = ::nest_rs_mcp::__private::scoped()?; }
+    });
     let call_args = forwarded_arg_idents(sig)?;
     let call = await_if_async(sig, quote!(<#self_ty>::#name(self, #(#call_args),*)));
-    let body = mask(posture, sig, call)?;
-    wire_sig.asyncness = Some(syn::token::Async(name.span()));
-
-    // A refusal becomes the operation's answer at one site, typed by
-    // `OperationAnswer`, so a non-`Result` return is refused once, at the return type.
-    let piped: Vec<&syn::Ident> = pipes.iter().map(|arg| &arg.ident).collect();
-    let refused = quote_spanned! {answer_span(sig)=>
-        ::nest_rs_mcp::__private::refused(__nestrs_refusal)
+    // What the method answers is read by its type, refused at its return type.
+    let returned_by = quote_spanned!(answer_span(sig)=> __nestrs_answered);
+    let answer = quote_spanned! {answer_span(sig)=>
+        ::nest_rs_mcp::__private::answer_of(#returned_by)
     };
+    let answered = masked(posture, sig)?;
+    let site = site_ref(self_ty, name);
+    let kind = role.kind();
+    let wire_name = LitStr::new(wire_name, name.span());
     Ok(quote! {
         #role_attr
         #wire_sig {
-            let __nestrs_ready: ::core::result::Result<_, ::nest_rs_mcp::McpError> = async {
-                #chain
-                ::nest_rs_mcp::__private::install_pending(
-                    ::core::clone::Clone::clone(&__nestrs_attached),
-                    async {
-                        #(#pipe_prelude)*
-                        ::core::result::Result::Ok((__nestrs_attached, #(#piped,)*))
-                    },
-                )
-                .await
-            }
-            .await;
-            let (__nestrs_attached, #(#piped,)*) = match __nestrs_ready {
-                ::core::result::Result::Ok(__nestrs_ready) => __nestrs_ready,
-                ::core::result::Result::Err(__nestrs_refusal) => return #refused,
-            };
-            ::nest_rs_mcp::__private::install_pending(__nestrs_attached, async move { #body }).await
+            ::nest_rs_mcp::__private::run_operation(
+                #site,
+                ::nest_rs_mcp::__private::operation_view(
+                    #kind,
+                    #wire_name,
+                    ::core::any::type_name::<#self_ty>(),
+                ),
+                move || async move {
+                    #(#pipe_prelude)*
+                    #(#scoped_prelude)*
+                    let #returned_by = #call;
+                    match #answer {
+                        ::core::result::Result::Ok(__nestrs_value) => #answered,
+                        ::core::result::Result::Err(__nestrs_error) => {
+                            #[allow(unused_imports)]
+                            use ::nest_rs_mcp::__private::ErrorReportChain as _;
+                            ::core::result::Result::Err(
+                                ::nest_rs_mcp::__private::ErrorReport(__nestrs_error)
+                                    .into_failure(),
+                            )
+                        }
+                    }
+                },
+            )
+            .await
         }
     })
 }
 
-/// Steps 1 and 2 — the host-scope + operation-scope guard chain, then the
-/// posture's class `gate`, run as the unit the operation's `Handler` declares;
-/// binds `__nestrs_attached`, what its guards attached, which the rest of the
-/// operation runs under.
-///
-/// Always emitted, even when the operation declares none: the impl half cannot
-/// see whether the host struct declared guards.
-fn guard_chain(
-    self_ty: &Type,
-    op: &Operation,
-    label: &LitStr,
-    generic: bool,
-    gate: &TokenStream2,
-) -> TokenStream2 {
-    let method_specs = scoped_specs(&op.guards, quote!(dyn ::nest_rs_guards::Guard));
-    let force = force_guard_typeids(&op.force_guards);
-    let kind = op.role.kind();
-    let name = LitStr::new(&op.name().to_string(), op.name().span());
-    let handler = if generic {
-        generic_operation_handler(self_ty, op)
-    } else {
-        handler_ref(self_ty, op.name())
+/// The `T` of a return spelled `Result<T, E>`, two arguments written; `None`
+/// for an alias or a renamed `Result`, whose value's type only its type says.
+fn spelled_result(sig: &Signature) -> Option<&Type> {
+    let syn::ReturnType::Type(_, ty) = &sig.output else {
+        return None;
     };
-    quote! {
-        let __nestrs_attached = {
-            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::__private::SiteChainCell =
-                ::nest_rs_guards::__private::SiteChainCell::new();
-            ::nest_rs_mcp::__private::run_layered_mcp_chain(
-                &__NESTRS_GUARD_CHAIN,
-                #label,
-                ::core::any::type_name::<#self_ty>(),
-                #kind,
-                #name,
-                &|| ::nest_rs_guards::__private::SiteChainSources {
-                    provider: <#self_ty>::__nestrs_mcp_host_guard_specs(),
-                    method: #method_specs,
-                    force: #force,
-                },
-                #handler,
-                #gate,
-            ).await?
-        };
-    }
+    let (ident, args) = generic_args(ty)?;
+    (ident == "Result" && args.len() == 2).then(|| args[0])
 }
 
-/// The declaration of an operation on a generic host, which has no one type to
-/// declare its sites on: a site of its own, with no `#[meta]` (the generic host
-/// refuses it).
-fn generic_operation_handler(self_ty: &Type, op: &Operation) -> TokenStream2 {
-    let wire_name = LitStr::new(&op.wire_name, op.name().span());
-    let handler = declared_handler(&HandlerDeclaration {
-        unit: quote!(::nest_rs_mcp::unit::OPERATION),
-        host: quote!(__NestrsGenericHost),
-        host_name: &type_label(self_ty),
-        method: &op.name().unraw().to_string(),
-        address: quote!(#wire_name),
-        posture: op.posture.site_posture(),
-        meta: quote!(::nest_rs_core::__private::MetaLevels::default),
-    });
-    quote! {{
-        struct __NestrsGenericHost;
-        #handler
-    }}
+/// The `&'static Site` `method`'s operation runs through on `self_ty`.
+fn site_ref(self_ty: &Type, method: &syn::Ident) -> TokenStream2 {
+    let name = site_const_ident("site", method);
+    quote! { <#self_ty>::#name }
 }
 
 /// Step 2 — the class gate `#[authorize(Action, Entity)]` desugars to, every
@@ -543,7 +557,10 @@ fn generic_operation_handler(self_ty: &Type, op: &Operation) -> TokenStream2 {
 fn class_gate(posture: &Posture) -> TokenStream2 {
     match posture {
         Posture::Authorize { action, entity, .. } => quote! {
-            ::core::option::Option::Some(::nest_rs_authz::class_gate::<#action, #entity>)
+            ::core::option::Option::Some(
+                ::nest_rs_authz::class_gate::<#action, #entity>
+                    as ::nest_rs_core::__private::ClassGate,
+            )
         },
         Posture::Public => quote!(::core::option::Option::None),
     }
@@ -566,31 +583,33 @@ fn pipe_statement(arg: &PipedArg) -> TokenStream2 {
     quote! {
         let ::nest_rs_mcp::Parameters(__nestrs_value) = #ident;
         let #ident = ::nest_rs_mcp::Parameters(
-            #apply.map_err(|__nestrs_err| ::nest_rs_mcp::pipe_error(&__nestrs_err))?,
+            #apply.map_err(::nest_rs_mcp::__private::OperationFailure::from)?,
         );
     }
 }
 
-/// Step 4 — the call, with response masking when the posture arms it.
+/// Step 4 — the answer's value, `__nestrs_value`, with response masking when
+/// the posture arms it.
 ///
 /// `Json<T>` is unwrapped before masking and rewrapped after: rmcp's wrapper is
 /// neither `Serialize` nor `DeserializeOwned`.
-fn mask(posture: &Posture, sig: &Signature, call: TokenStream2) -> syn::Result<TokenStream2> {
+fn masked(posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
+    let unmasked = quote!(::core::result::Result::Ok(__nestrs_value));
     let Posture::Authorize {
         action,
         entity,
-        unmasked,
+        unmasked: declared_unmasked,
     } = posture
     else {
-        return Ok(call);
+        return Ok(unmasked);
     };
-    if *unmasked {
-        return Ok(call);
+    if *declared_unmasked {
+        return Ok(unmasked);
     }
 
     // `take_operation` already refused a masked return not spelled `Result<…>`.
     let Some(ok_ty) = result_ok_type(sig) else {
-        return Ok(call);
+        return Ok(unmasked);
     };
     // Opaque content blocks: refused here, or an unmet `DeserializeOwned` bound
     // surfaces deep inside the expansion.
@@ -611,24 +630,17 @@ fn mask(posture: &Posture, sig: &Signature, call: TokenStream2) -> syn::Result<T
     }
 
     if let Some(inner) = nth_generic_type(ok_ty, "Json", 0) {
-        return Ok(quote! {
-            {
-                let ::nest_rs_mcp::Json(__nestrs_out) = #call?;
-                ::core::result::Result::Ok(::nest_rs_mcp::Json(
-                    ::nest_rs_authz::mcp::masked_value_for::<#action, #entity, #inner>(
-                        __nestrs_out,
-                    )?,
-                ))
-            }
-        });
+        return Ok(quote! {{
+            let ::nest_rs_mcp::Json(__nestrs_out) = __nestrs_value;
+            ::nest_rs_authz::mcp::masked_value_for::<#action, #entity, #inner>(__nestrs_out)
+                .map(::nest_rs_mcp::Json)
+                .map_err(::nest_rs_mcp::__private::OperationFailure::from)
+        }});
     }
 
     Ok(quote! {
-        {
-            let __nestrs_out = #call?;
-            // No `Ok(..?)` rewrap: clippy would flag it at every use site.
-            ::nest_rs_authz::mcp::masked_value_for::<#action, #entity, _>(__nestrs_out)
-        }
+        ::nest_rs_authz::mcp::masked_value_for::<#action, #entity, _>(__nestrs_value)
+            .map_err(::nest_rs_mcp::__private::OperationFailure::from)
     })
 }
 
@@ -729,6 +741,8 @@ fn take_operation(
     let Layers {
         guards,
         force_guards,
+        interceptors,
+        exception_filters,
         meta: metas,
         ..
     } = take_layers(&pair::MCP, LayerScope::Method, &mut method.attrs)?;
@@ -737,7 +751,7 @@ fn take_operation(
         return Err(syn::Error::new_spanned(
             &method.sig.output,
             format!(
-                "a masked {} spells its return `Result<…, McpError>`: the mask reads the \
+                "a masked {} spells its return `Result<…>`: the mask reads the \
                  value's shape — `Json<T>` to unwrap, `CallToolResult` to refuse — off \
                  that spelling, and a `Result` renamed on import or behind an alias hides \
                  it. Write `Result<…>`, or declare `#[authorize(Action, Entity, unmasked)]` \
@@ -750,6 +764,7 @@ fn take_operation(
     let mut sig = method.sig.clone();
     normalize_forwarded_args(sig.inputs.iter_mut())?;
     let pipes = piped_args(&sig)?;
+    let scoped = scoped_args(&sig);
 
     let cfgs = cfg_attrs(&method.attrs);
 
@@ -761,51 +776,185 @@ fn take_operation(
         sig,
         guards,
         force_guards,
+        interceptors,
+        exception_filters,
         posture,
         pipes,
+        scoped,
         cfgs,
         wire_name,
         metas,
     })
 }
 
-/// The `Handler` each operation declares, `mcp.operation` addressed by the name
-/// a client calls; a generic host has no one type to name, so it declares none.
-fn handler_consts(
-    item: &ItemImpl,
-    self_ty: &Type,
-    base: &syn::Ident,
-    operations: &Operations,
-) -> syn::Result<TokenStream2> {
-    if !item.generics.params.is_empty() {
-        if let Some(op) = operations.all().find(|op| !op.metas.is_empty()) {
-            return Err(syn::Error::new_spanned(
-                op.name(),
-                "a generic `#[tools]` host declares no `#[meta]`: its operations have no one \
-                 host type to declare it on",
-            ));
-        }
-        return Ok(quote!());
-    }
-    let consts = operations.all().map(|op| {
+/// Every `Scoped<T>` parameter, read by its last segment as `#[routes]` reads
+/// HTTP's: the tail resolves it once the guards and the gate admitted the
+/// caller, so the wire signature rmcp extracts from leaves it out.
+fn scoped_args(sig: &Signature) -> Vec<ScopedArg> {
+    sig.inputs
+        .iter()
+        .filter_map(|input| {
+            let FnArg::Typed(pat_type) = input else {
+                return None;
+            };
+            let syn::Pat::Ident(pat_ident) = &*pat_type.pat else {
+                return None;
+            };
+            generic_args(&pat_type.ty)
+                .is_some_and(|(ident, _)| ident == "Scoped")
+                .then(|| ScopedArg {
+                    ident: pat_ident.ident.clone(),
+                    ty: (*pat_type.ty).clone(),
+                })
+        })
+        .collect()
+}
+
+/// What each operation declares on its host: its `Handler`, `mcp.operation`
+/// addressed by the name a client calls, and its `static` site — the layers
+/// its host and its method bind, its guard stage and its posture's class
+/// gate — plus the list of sites the boot composes and the providers its
+/// `Scoped<T>` parameters resolve, which the access graph checks.
+fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> TokenStream2 {
+    let items = operations.all().map(|op| {
         let wire_name = &op.wire_name;
-        handler_const(&HandlerSite {
+        let method = op.name();
+        let cfgs = &op.cfgs;
+        let handler = handler_const(&HandlerSite {
             unit: quote!(::nest_rs_mcp::unit::OPERATION),
             self_ty,
             host_name: base,
-            method: op.name(),
+            method,
             address: quote!(#wire_name),
             posture: op.posture.site_posture(),
             host_meta: HostMeta::Struct,
             method_meta: &op.metas,
-            cfgs: &op.cfgs,
+            cfgs,
+        });
+        let handler_ref = handler_ref(self_ty, method);
+        let layers_fn = site_fn_ident("layers", method);
+        let guards_fn = site_fn_ident("guards", method);
+        let site = site_const_ident("site", method);
+        let interceptors = &op.interceptors;
+        let exception_filters = &op.exception_filters;
+        let method_guards = scoped_specs(&op.guards, quote!(dyn ::nest_rs_guards::Guard));
+        let force = force_guard_typeids(&op.force_guards);
+        let kind = op.role.kind();
+        let gate = class_gate(&op.posture);
+        quote! {
+            #handler
+
+            #(#cfgs)*
+            #[doc(hidden)]
+            fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
+                ::nest_rs_core::__private::SiteLayers {
+                    host_interceptors: <#self_ty>::__nestrs_mcp_host_interceptor_specs(),
+                    method_interceptors: ::std::vec![
+                        #(::nest_rs_core::interceptor::<#interceptors>()),*
+                    ],
+                    host_exception_filters:
+                        <#self_ty>::__nestrs_mcp_host_exception_filter_specs(),
+                    method_exception_filters: ::std::vec![
+                        #(::nest_rs_core::exception_filter::<#exception_filters>()),*
+                    ],
+                }
+            }
+
+            #(#cfgs)*
+            #[doc(hidden)]
+            fn #guards_fn(
+                __nestrs_container: &::nest_rs_core::Container,
+                __nestrs_handler: &::nest_rs_core::Handler,
+            ) -> ::nest_rs_core::anyhow::Result<
+                ::core::option::Option<
+                    ::std::sync::Arc<dyn ::nest_rs_core::__private::GuardStage>,
+                >,
+            > {
+                ::nest_rs_mcp::__private::operation_guard_stage(
+                    __nestrs_container,
+                    __nestrs_handler,
+                    ::nest_rs_mcp::__private::OperationGuards {
+                        host: <#self_ty>::__nestrs_mcp_host_guard_specs(),
+                        method: #method_guards,
+                        force: #force,
+                        kind: #kind,
+                        host_type: ::core::any::type_name::<#self_ty>(),
+                    },
+                )
+            }
+
+            #(#cfgs)*
+            #[doc(hidden)]
+            pub const #site: &'static ::nest_rs_core::__private::Site = {
+                static __NESTRS_SITE: ::nest_rs_core::__private::Site =
+                    ::nest_rs_core::__private::declare_site(
+                        #handler_ref,
+                        ::nest_rs_core::__private::SiteDeclaration {
+                            layers: <#self_ty>::#layers_fn,
+                            global: ::nest_rs_mcp::__private::OPERATION_LAYERS,
+                            guard_stage: ::core::option::Option::Some(
+                                <#self_ty>::#guards_fn
+                                    as ::nest_rs_core::__private::GuardStageFactory,
+                            ),
+                            class_gate: #gate,
+                        },
+                    );
+                &__NESTRS_SITE
+            };
+        }
+    });
+    let site_pushes = operations.all().map(|op| {
+        let cfgs = &op.cfgs;
+        let site = site_ref(self_ty, op.name());
+        quote! {
+            #(#cfgs)*
+            __nestrs_sites.push(#site);
+        }
+    });
+    let probes = operations.all().flat_map(|op| {
+        op.scoped.iter().map(move |ScopedArg { ty, .. }| {
+            let cfgs = &op.cfgs;
+            quote! {
+                #(#cfgs)*
+                let () = __nestrs_resolved.extend(
+                    (&&::nest_rs_core::__private::ParamProbe::<#ty>::new()).resolved_provider(),
+                );
+            }
         })
     });
-    Ok(quote! {
+    quote! {
         impl #self_ty {
-            #(#consts)*
+            #(#items)*
+
+            /// The site each operation runs, for the boot to compose.
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_operation_sites()
+                -> ::std::vec::Vec<&'static ::nest_rs_core::__private::Site>
+            {
+                #[allow(unused_mut, reason = "every operation may be compiled out")]
+                let mut __nestrs_sites = ::std::vec::Vec::new();
+                #(#site_pushes)*
+                __nestrs_sites
+            }
+
+            /// The provider each `Scoped<T>` parameter resolves, asked of the
+            /// parameter's type, for the access graph.
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_injected_per_request()
+                -> ::std::vec::Vec<(::core::any::TypeId, &'static str)>
+            {
+                #[allow(
+                    unused_imports,
+                    reason = "the probe's two arms are in scope for autoref, which no lint sees"
+                )]
+                use ::nest_rs_core::__private::{ParamProbeFallback as _, ParamProbeResolves as _};
+                #[allow(unused_mut, reason = "an operation may take no `Scoped<T>`")]
+                let mut __nestrs_resolved = ::std::vec::Vec::new();
+                #(#probes)*
+                __nestrs_resolved
+            }
         }
-    })
+    }
 }
 
 /// The sentence an operation with no description is refused with — at expansion

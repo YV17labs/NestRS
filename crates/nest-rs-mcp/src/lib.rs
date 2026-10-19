@@ -7,15 +7,18 @@
 //! (`/mcp`) when omitted; nothing nests under it, and hosts writing the same
 //! path share one endpoint.
 //!
-//! # An operation declares the same layers a `#[query]` does
+//! # An operation runs the layers every other edge runs
 //!
-//! Each `#[tool]` / `#[prompt]` takes `#[use_guards(...)]` / `#[force_guards(...)]`,
-//! a **mandatory** access posture (`#[authorize(Action, Entity)]` or
-//! `#[public]`), and a pipe on its arguments (`Parameters<Valid<T>>` /
-//! `Parameters<Piped<P, T>>`), run in that order. The host's `#[use_guards]` and
-//! the app-wide pool join one chain per site, deduplicated by `TypeId`, which
-//! runs each guard's `check`; the guards at the endpoint's request run
-//! `check_http` apart from it.
+//! Each request is one `mcp.operation` unit on core's pipeline, and a
+//! `#[tool]` / `#[prompt]` is a site of its own inside it, taking
+//! `#[use_guards(...)]` / `#[force_guards(...)]`, a **mandatory** access
+//! posture (`#[authorize(Action, Entity)]` or `#[public]`),
+//! `#[use_exception_filters(...)]`, `#[use_interceptors(...)]`, `Scoped<T>`
+//! parameters and a pipe on its arguments (`Parameters<Valid<T>>` /
+//! `Parameters<Piped<P, T>>`), run in that order. The host's layers and the
+//! app-wide ones join each family once per site, deduplicated by `TypeId`; the
+//! guard stage runs each guard's `check`, the guards at the endpoint's request
+//! running `check_http` apart from it.
 //!
 //! Response masking fails *closed* on a stripped **required** field — declare
 //! `unmasked` when a tool deliberately answers with a narrower projection — and
@@ -31,18 +34,19 @@
 //! # Ambient request state reaches every operation
 //!
 //! rmcp dispatches each operation on its own task; [`PropagatingHandler`]
-//! re-installs the per-operation state inside that dispatch, for every
+//! re-installs the `/mcp` request's context inside that dispatch, for every
 //! capability, so a handler method gets:
 //!
-//! * [`Scoped<T>::from_context`](Scoped) for an `#[injectable(scope = request)]`
+//! * [`Scoped<T>`](Scoped), a parameter, for an `#[injectable(scope = request)]`
 //!   provider;
-//! * what the request's guards attached — the caller's ability — ambient;
+//! * what the request's guards and layers made ambient — the caller's
+//!   ability — and its trace;
 //! * a `Repo`-backed body reading through the ambient executor of the
 //!   operation's own unit of work, opened through the bound
 //!   `nest_rs_database::UnitOfWork`, row-filtered by the caller's ability.
 //!
-//! Notifications and `subscriptions/listen` are the exceptions, documented on
-//! [`McpToolContext::around`].
+//! Notifications and `subscriptions/listen` run no unit of work, documented
+//! on [`PropagatingHandler`].
 //!
 //! The HTTP transport runs the endpoint's request guards in front of it: the
 //! app's global guard pool and the `EndpointGuards<McpView, _>` its modules
@@ -56,9 +60,9 @@
 /// This crate's span target — MCP operations, hosts and the merged endpoint.
 pub const TARGET: &str = "nest_rs::mcp";
 
+mod ambient;
 mod composite;
 mod config;
-mod context;
 mod endpoint;
 mod error;
 mod guard;
@@ -76,8 +80,7 @@ mod view;
 
 pub use composite::CompositeHandler;
 pub use config::McpConfig;
-pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
-pub use error::{Opaque, pipe_error, problem_error, unresolvable_chain};
+pub use error::{Opaque, pipe_error, problem_error};
 pub use guard::{BoxFuture, denial_to_mcp_error};
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
@@ -85,8 +88,8 @@ pub use module::{McpModule, McpOptions, McpSetup};
 pub use operation::{McpOperationKind, current_container};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
-/// Per-operation accessor for `#[injectable(scope = request)]` providers inside
-/// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
+/// The `#[injectable(scope = request)]` provider a tool or a prompt takes as a
+/// parameter — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;
 pub use view::McpView;
 
@@ -96,14 +99,21 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::endpoint::{McpMount, endpoint};
-    pub use crate::error::{OperationAnswer, refused};
+    pub use crate::error::{
+        ErrorReport, ErrorReportChain, OperationAnswer, OperationFailure, answer_of,
+    };
     pub use crate::identity::declared_identity;
-    pub use crate::operation::{description_is_blank, run_layered_mcp_chain};
+    pub use crate::operation::{
+        OPERATION_LAYERS, OperationGuards, description_is_blank, operation_guard_stage,
+        operation_view, run_operation,
+    };
     pub use crate::registry::{
         DeclaredRoutes, DefaultDeclaredRoutes, DefaultOperationLayers, DefaultPromptRouter,
         DefaultToolRouter, ENDPOINT, declare_endpoint, register_host,
     };
-    pub use nest_rs_core::__private::install_pending;
+    pub use crate::scope::scoped;
+    pub use rmcp::handler::server::prompt::IntoGetPromptResult;
+    pub use rmcp::handler::server::tool::IntoCallToolResult;
 }
 
 pub use rmcp::model::ProtocolVersion;

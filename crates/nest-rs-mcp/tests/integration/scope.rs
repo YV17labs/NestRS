@@ -1,64 +1,194 @@
 //! Ambient request state reaches a tool body across rmcp's spawned dispatch,
-//! asserted on what the body saw rather than on the transport succeeding.
+//! asserted on what the body saw rather than on the transport succeeding; a
+//! `Scoped<T>` parameter resolves the operation's request-scoped provider, and
+//! the boot checks it is reachable.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::{Container, RequestScope};
+use nest_rs_core::{AccessGraphError, App, MissingDependencyError, injectable, module};
 use nest_rs_http::{BoxEndpoint, Endpoint, endpoint_fn};
 use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::{
-    CallToolResult, ContentBlock, McpError, Scoped, ServerHandler, tool, tool_handler, tool_router,
+    CallToolResult, ContentBlock, McpError, Scoped, ServerHandler, mcp, tool, tool_handler,
+    tool_router, tools,
 };
+use nest_rs_testing::TestApp;
 use nest_rs_testing::TestClient;
-use nest_rs_testing::mcp::call_tool;
+use nest_rs_testing::mcp::{call_method, call_tool, open_session, result};
+use serde_json::json;
 use tracing::Instrument;
 
-struct Probe;
+/// Counts the instances built, so each one is told apart.
+static BUILT: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Clone)]
-struct ScopeProbeTool;
+/// Built once per request.
+#[injectable(scope = request)]
+struct Basket {
+    serial: usize,
+}
 
-#[tool_router]
-impl ScopeProbeTool {
-    #[tool(description = "Report whether the request scope reached this tool body.")]
-    async fn probe_scope(&self) -> Result<CallToolResult, McpError> {
-        let seen = Scoped::<Probe>::from_context().is_ok();
-        Ok(CallToolResult::success(vec![ContentBlock::text(if seen {
-            "scoped"
-        } else {
-            "unscoped"
-        })]))
+impl Default for Basket {
+    fn default() -> Self {
+        Self {
+            serial: BUILT.fetch_add(1, Ordering::SeqCst),
+        }
     }
 }
 
-#[tool_handler]
-impl ServerHandler for ScopeProbeTool {}
+#[module(providers = [Basket])]
+struct BasketModule;
 
-/// Mirrors the HTTP transport edge, which installs the request scope.
-fn with_scope_extension(inner: BoxEndpoint) -> impl Endpoint {
-    let container = Container::builder()
-        .provide_scoped::<Probe, _>(|_| Probe)
-        .build()
-        .expect("the container builds");
-    endpoint_fn(move |req| {
-        let inner = inner.clone();
-        let scope = Arc::new(RequestScope::new(container.clone()));
-        let correlation = nest_rs_core::Correlation::minted(None);
-        async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
-    })
+const BASKET: &str = "/mcp/basket";
+
+#[mcp(path = "/mcp/basket")]
+#[derive(Clone, Default)]
+struct BasketTools;
+
+#[tools]
+impl BasketTools {
+    /// Say which basket the operation reads, twice.
+    #[tool]
+    #[public]
+    async fn peek(
+        &self,
+        first: Scoped<Basket>,
+        second: Scoped<Basket>,
+    ) -> Result<String, McpError> {
+        Ok(format!("{} {}", first.serial, second.serial))
+    }
 }
 
+#[module(imports = [crate::open_mcp(), BasketModule], providers = [BasketTools])]
+struct BasketToolsModule;
+
 #[tokio::test]
-async fn ambient_request_scope_reaches_a_tool_body() {
-    let app = with_scope_extension(endpoint(McpMount::new(), || ScopeProbeTool));
-    let client = TestClient::new(app);
+async fn a_scoped_parameter_resolves_the_operations_request_scoped_provider() {
+    let app = TestApp::for_module::<BasketToolsModule>()
+        .await
+        .expect("a request-scoped provider its module imports boots");
+    let session = open_session(app.http(), BASKET, None).await;
+    let peek = || {
+        call_method(
+            app.http(),
+            BASKET,
+            &session,
+            None,
+            "tools/call",
+            json!({ "name": "peek", "arguments": {} }),
+        )
+    };
 
-    let body = call_tool(&client, "/", "probe_scope", None).await;
+    let first = result(&peek().await)["result"]["content"][0]["text"].clone();
+    let second = result(&peek().await)["result"]["content"][0]["text"].clone();
 
+    let serials = |said: &serde_json::Value| -> Vec<String> {
+        said.as_str()
+            .unwrap_or_else(|| panic!("the tool answered: {said}"))
+            .split(' ')
+            .map(str::to_owned)
+            .collect()
+    };
+    let (first, second) = (serials(&first), serials(&second));
+    assert_eq!(
+        first[0], first[1],
+        "one instance within an operation's request"
+    );
+    assert_ne!(first[0], second[0], "a fresh one for the next request");
+}
+
+/// The tools' module reaches the basket's only through a sibling.
+#[module(providers = [BasketTools])]
+struct StrayBasketToolsModule;
+
+#[module(imports = [crate::open_mcp(), BasketModule, StrayBasketToolsModule])]
+struct StrayBasketRoot;
+
+#[tokio::test]
+async fn a_scoped_parameter_whose_module_is_not_imported_fails_the_boot() {
+    let refused = match App::builder().module::<StrayBasketRoot>().build().await {
+        Ok(_) => panic!("an unimported `Scoped` target must fail the boot"),
+        Err(refused) => refused,
+    };
+    let access = refused
+        .downcast::<AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not the access refusal: {refused:#}"));
+    assert_eq!(access.consumer, "BasketTools");
+    assert_eq!(access.owner, "BasketModule");
+}
+
+/// Offered by no module.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct Coupon;
+
+#[mcp(path = "/mcp/coupon")]
+#[derive(Clone, Default)]
+struct CouponTools;
+
+#[tools]
+impl CouponTools {
+    /// Redeem the coupon.
+    #[tool]
+    #[public]
+    async fn redeem(&self, _coupon: Scoped<Coupon>) -> Result<String, McpError> {
+        Ok("redeemed".to_owned())
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [CouponTools])]
+struct CouponToolsModule;
+
+#[tokio::test]
+async fn a_scoped_parameter_no_module_offers_fails_the_boot_naming_it() {
+    let missing = match App::builder().module::<CouponToolsModule>().build().await {
+        Ok(_) => panic!("a `Scoped` parameter no module offers must fail the boot"),
+        Err(refused) => refused
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}")),
+    };
+    assert_eq!(missing.consumer, "CouponTools");
     assert!(
-        body.contains("scoped") && !body.contains("unscoped"),
-        "the request scope must reach the tool body across rmcp's spawn — \
-         `Scoped<T>` and every `Repo`-backed tool depend on it. Body: {body}",
+        missing.dependency.ends_with("::Coupon"),
+        "{}",
+        missing.dependency
+    );
+}
+
+/// A request-scoped provider no module offers, reached by a host the boot
+/// never checked: a container built by hand.
+#[tokio::test]
+async fn a_scoped_parameter_that_resolves_nothing_answers_opaquely_and_names_it_to_the_operator() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = nest_rs_core::Container::builder()
+        .build()
+        .expect("the container builds");
+    let inner = endpoint(McpMount::new(), || CouponTools);
+    let scoped = endpoint_fn(move |req| {
+        let inner = inner.clone();
+        let scope = Arc::new(nest_rs_core::RequestScope::new(container.clone()));
+        let correlation = nest_rs_core::Correlation::minted(None);
+        async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
+    });
+
+    let body = call_tool(&TestClient::new(scoped), "/", "redeem", None).await;
+
+    assert_eq!(
+        result(&body)["error"]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{body}"
+    );
+    assert!(
+        !body.contains("Coupon") && !body.contains("redeemed"),
+        "{body}"
+    );
+    let failed = logs.expect_one(nest_rs_mcp::TARGET, "mcp operation failed");
+    assert!(
+        failed
+            .field("error")
+            .is_some_and(|chain| chain.contains("Coupon")),
+        "the operator reads the provider it missed: {:?}",
+        failed.fields,
     );
 }
 

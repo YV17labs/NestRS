@@ -47,7 +47,8 @@ impl Refused {
 /// Ambient on a unit whose in-band units refusing their caller must mark it —
 /// the HTTP request carrying a GraphQL or an MCP operation — so a layer around
 /// that unit tells a refusal its status line does not show: `Server-Timing`
-/// times no refusal.
+/// times no refusal. It crosses into what those units run on: a GraphQL
+/// batch, and the task rmcp runs an MCP operation on.
 #[derive(Clone, Debug, Default)]
 pub struct RefusalMark(Arc<AtomicBool>);
 
@@ -65,7 +66,7 @@ impl RefusalMark {
 
 impl AmbientValue for RefusalMark {
     fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
-        (into == Continuation::Batch).then_some(self)
+        matches!(into, Continuation::Batch | Continuation::Task).then_some(self)
     }
 }
 
@@ -119,4 +120,26 @@ pub async fn check_guards(
         gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The units a request carries run on a batch (GraphQL) or a task of their
+    /// own (MCP); nothing else the request hands on marks it.
+    #[test]
+    fn a_refusal_mark_crosses_into_a_batch_and_a_task_alone() {
+        for (into, crosses) in [
+            (Continuation::Batch, true),
+            (Continuation::Task, true),
+            (Continuation::Body, false),
+            (Continuation::Commit, false),
+            (Continuation::Connection, false),
+            (Continuation::Envelope, false),
+        ] {
+            let carried = Arc::new(RefusalMark::default()).carry(into);
+            assert_eq!(carried.is_some(), crosses, "{into:?}");
+        }
+    }
 }

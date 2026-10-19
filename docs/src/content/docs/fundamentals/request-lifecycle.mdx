@@ -102,6 +102,14 @@ produced it: its resolver's guards and its own, then only the interceptors and
 exception filters declared on it — none of the app's, since the root field ran
 them.
 
+Each operation an `/mcp` request carries is a unit of its own, inside that
+request's context: stages 1 to 3 for every one — its span and line, its unit of
+work, the unit stage — and, for a tool call or a prompt fetch, stages 4 to 7 at
+the operation's own site inside it: its guards' `check`, its class gate, its
+exception filters, its interceptors, then its pipes, its `Scoped<T>`
+parameters, the body and the mask. See
+[MCP](/mcp/#layers-around-an-operation).
+
 The operation span is outside all of it: the transport opens it before routing,
 so every stage above logs under one `trace_id` — see
 [Correlation](/fundamentals/correlation/).
@@ -154,10 +162,9 @@ that serves no HTTP included, naming the type: the check runs at the boot's
 wiring step, before any hook.
 
 A layer a site declares — on a controller, a route, a gateway or one of its
-messages, a GraphQL field — that no imported module provides fails the boot
-too, naming the layer and the site; an MCP operation, which composes its chain
-on its first call, refuses that call opaquely and logs one `error` naming
-both. No site ever runs without a layer it declares.
+messages, a GraphQL field, an MCP tool or prompt — that no imported module
+provides fails the boot too, naming the layer and the site. No site ever runs
+without a layer it declares.
 
 A route whose guards are misordered — an authorization guard listed before the
 authentication guard whose principal it reads, at any scope — fails the boot

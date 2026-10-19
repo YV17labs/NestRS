@@ -147,6 +147,9 @@ const ONE_OPENING: &str = "An app opens its MCP endpoints once — set `posture:
                            on one `McpModule::for_root`, and let every other import of the \
                            module leave `posture` at its default.";
 
+/// The registry the wiring step checks the app's declared identity reaches.
+const IDENTITY: &str = "nest_rs::mcp::identity";
+
 /// The app's opening of its MCP endpoints, declared by the one import setting
 /// [`Posture::Public`].
 struct McpPosture;
@@ -195,7 +198,7 @@ impl DynamicModule for McpSetup {
         };
         // The one import declaring the identity checks that it reaches a host.
         let builder = match self.options.server {
-            Some(_) => builder.provide_meta(registry::server_reaches_a_host()),
+            Some(_) => builder.provide_wiring(IDENTITY, registry::server_reaches_a_host),
             None => builder,
         };
         builder.import::<McpModule>()

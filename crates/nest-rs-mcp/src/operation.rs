@@ -1,16 +1,30 @@
-//! What one MCP operation *is*, and the guard chain that runs around it.
+//! What one MCP operation *is*, and the sites it runs through on core's
+//! pipeline: every request's own [`REQUEST`] site, and the site `#[tools]`
+//! declares for each tool and prompt, run inside it.
 
+use std::any::TypeId;
 use std::fmt;
+use std::future::Future;
+use std::sync::Arc;
 
-use nest_rs_core::__private::{ClassGate, Pending, new_unit_context};
-use nest_rs_core::{Container, Handler};
-use nest_rs_guards::__private::{
-    Chain, GlobalBucket, SiteChainCell, SiteChainSources, failure_chain, run_stage,
+use futures_util::future::BoxFuture;
+use nest_rs_core::__private::{
+    GlobalLayers, GuardStage, HandlerDeclaration, MetaLevels, ResolvedLayer, Site, SiteDeclaration,
+    SiteLayers, Tail, compose_chain, declare_handler, declare_site, dedup_bucket, dispatch,
+    log_effective_chain, new_unit_context, report_unresolved, resolve_scoped, settled,
 };
+use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::{
+    Container, Deadline, Failure, Handler, Outcome, Posture, UnitContext, UnresolvedLayerError,
+    anyhow,
+};
+use nest_rs_guards::__private::{RefusalMark, Refused, failure_chain, resolve_global_guards};
+use nest_rs_guards::{Denial, Guard, GuardSpec};
+use rmcp::model::{CallToolRequestMethod, ConstString, GetPromptRequestMethod};
 
 use crate::McpError;
-use crate::error::unresolvable_chain;
-use crate::guard::denial_to_mcp_error;
+use crate::error::{OperationFailure, Reply, answer, opaque_answer};
+use crate::module::McpModule;
 use crate::view::McpView;
 
 /// The container serving the current MCP operation, read off the ambient request
@@ -36,6 +50,14 @@ impl McpOperationKind {
             Self::Prompt => "prompt",
         }
     }
+
+    /// The JSON-RPC method that reaches this role's router.
+    pub fn method(self) -> &'static str {
+        match self {
+            Self::Tool => CallToolRequestMethod::VALUE,
+            Self::Prompt => GetPromptRequestMethod::VALUE,
+        }
+    }
 }
 
 impl fmt::Display for McpOperationKind {
@@ -44,67 +66,273 @@ impl fmt::Display for McpOperationKind {
     }
 }
 
-/// Run an operation site's guard chain, then its posture's class `gate` on the
-/// same operation — called by `#[tools]` at the start of every decorated
-/// operation, `handler` the site's declaration: the app-wide pool, the host's
-/// `#[use_guards]` and the operation's own, each guard's `check` on the
-/// operation; what they attached comes back, for the operation to run under.
-///
-/// The pool is part of this chain, as on `/graphql`: the endpoint's request
-/// runs `check_http`, never `check`, so leaving the pool out here would leave a
-/// global guard overriding only `check` never consulted. `cell` memoizes the
-/// composed chain per app; `sources` is consulted only on the miss that
-/// composes it.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is one thing the decorator declared about its site; a struct would only rename them"
-)]
-pub async fn run_layered_mcp_chain(
-    cell: &SiteChainCell,
-    route_label: &'static str,
-    host: &'static str,
-    kind: McpOperationKind,
-    name: &'static str,
-    sources: &(dyn Fn() -> SiteChainSources + Sync),
-    handler: &'static Handler,
-    gate: Option<ClassGate>,
-) -> Result<Pending, McpError> {
-    let chain = match current_container() {
-        Some(container) => cell
-            .chain(&container, route_label, sources, |_| GlobalBucket::Fold)
-            .map_err(denial_to_mcp_error)?,
-        None => {
-            // No app is ambient: declared guards cannot be resolved, so the
-            // operation fails closed; one that declared none loses nothing.
-            let declared = sources();
-            if !declared.provider.is_empty() || !declared.method.is_empty() {
-                return Err(unresolvable_chain(route_label));
-            }
-            Chain::from(Vec::new())
-        }
-    };
-    if chain.is_empty() && gate.is_none() {
-        return Ok(Pending::default());
-    }
+/// What every request's own site folds of the app-wide layers: the unit
+/// stage, once around whatever the request reaches.
+const REQUEST_LAYERS: GlobalLayers = GlobalLayers {
+    unit_stage: true,
+    exception_filters: false,
+    handler_stage: false,
+};
 
-    let mut view = McpView::new(kind, name, host);
-    let mut cx = new_unit_context(handler, &mut view, None, None);
-    run_stage(&chain, gate, &mut cx).await.map_err(|refused| {
-        denial_to_mcp_error(refused.into_denial(|guard, denial| {
-            // Structural floor mirroring the HTTP edge's; host and operation stay
-            // separate fields for an incident query.
-            tracing::warn!(
-                target: nest_rs_core::target::LAYERS,
-                guard,
-                host,
-                kind = kind.as_str(),
-                operation = name,
-                status = denial.http_status(),
-                error = failure_chain(denial),
-                "guard denied the operation",
+/// What a tool's or a prompt's site folds of the app-wide layers: its
+/// exception filters and handler-stage interceptors, never the unit stage the
+/// operation's own request site ran around it.
+pub const OPERATION_LAYERS: GlobalLayers = GlobalLayers {
+    unit_stage: false,
+    exception_filters: true,
+    handler_stage: true,
+};
+
+/// The declaration of every request's own site, behind the guards at the
+/// endpoint's request.
+static REQUEST_HANDLER: Handler = declare_handler(HandlerDeclaration {
+    unit: crate::unit::OPERATION,
+    host: TypeId::of::<McpModule>(),
+    host_name: "McpModule",
+    method: "",
+    address: "*",
+    posture: Posture::Gated,
+    meta: MetaLevels::default,
+});
+
+/// The site every MCP request runs as — the unit stage alone; a tool call or
+/// a prompt fetch then reaches its own site inside it.
+pub(crate) static REQUEST: Site = declare_site(
+    &REQUEST_HANDLER,
+    SiteDeclaration {
+        layers: SiteLayers::default,
+        global: REQUEST_LAYERS,
+        guard_stage: None,
+        class_gate: None,
+    },
+);
+
+/// The guards one tool's or prompt's site declares, as `#[tools]` collects
+/// them.
+pub struct OperationGuards {
+    /// `#[use_guards]` on the host.
+    pub host: Vec<GuardSpec>,
+    /// `#[use_guards]` beside the method, `#[force_guards]` included.
+    pub method: Vec<GuardSpec>,
+    /// `#[force_guards]`: the guards the method re-runs.
+    pub force: Vec<TypeId>,
+    /// Which router serves the operation.
+    pub kind: McpOperationKind,
+    /// The host's type, as a denial's line names it.
+    pub host_type: &'static str,
+}
+
+/// The guard stage of the operation `handler` declares: the app-wide pool, the
+/// host's guards and the method's, each once, each running its
+/// [`check`](Guard::check) on the operation — `None` when it runs none.
+///
+/// The pool is part of it, as on a GraphQL root field: the endpoint's request
+/// runs `check_http`, never `check`, so leaving it out here would leave a
+/// global guard overriding only `check` never consulted.
+pub fn operation_guard_stage(
+    container: &Container,
+    handler: &Handler,
+    declared: OperationGuards,
+) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
+    let label = format!(
+        "{} {}::{}",
+        declared.kind,
+        handler.host_name(),
+        handler.method()
+    );
+    let host = resolve_scoped(container, &declared.host, LayerSite::Host, &label)?;
+    let method = resolve_scoped(container, &declared.method, LayerSite::Method, &label)?;
+    let chain = compose_chain::<dyn Guard>(
+        dedup_bucket(resolve_global_guards(container)),
+        host,
+        method,
+        &declared.force,
+        &label,
+    );
+    log_effective_chain(&label, "guards", &chain);
+    if chain.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(OperationGuardStage {
+        guards: chain,
+        kind: declared.kind,
+        host: declared.host_type,
+    })))
+}
+
+/// One operation's guards, as the pipeline runs a site's guard stage: each
+/// one's [`check`](Guard::check) on the operation, read through [`McpView`].
+struct OperationGuardStage {
+    guards: Vec<ResolvedLayer<dyn Guard>>,
+    kind: McpOperationKind,
+    host: &'static str,
+}
+
+impl GuardStage for OperationGuardStage {
+    fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
+        Box::pin(async move {
+            for entry in &self.guards {
+                // `as_ref()`: dispatch on the erased guard — the `Guard for
+                // Arc<T>` blanket would nest a second boxed future per check.
+                let guard = entry.layer.as_ref();
+                if let Err(denial) = guard.check(cx).await {
+                    let operation = cx.handler().address();
+                    let denial = Refused::by(entry.name, guard, denial)
+                        .into_denial(|guard, denial| self.file(guard, operation, denial));
+                    return Err(Failure::from(denial));
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+impl OperationGuardStage {
+    /// The edge's structural floor under a denial `guard` raised on
+    /// `operation`; host and operation stay separate fields for an incident
+    /// query.
+    fn file(&self, guard: &'static str, operation: &str, denial: &Denial) {
+        tracing::warn!(
+            target: nest_rs_core::target::LAYERS,
+            guard,
+            host = self.host,
+            kind = self.kind.as_str(),
+            operation,
+            status = denial.http_status(),
+            error = failure_chain(denial),
+            "guard denied the operation",
+        );
+    }
+}
+
+/// Run one tool call or prompt fetch through the site `#[tools]` declared for
+/// it — `#[tools]` wraps every operation in this — the rest of it being
+/// `tail`: its `Scoped<T>` parameters, its pipes, the call and the posture's
+/// mask, answering the operation's value.
+///
+/// It runs inside the operation's own unit, whose site ran the unit stage. A
+/// site whose chains do not compose is refused opaquely, its cause filed: no
+/// operation runs without a layer it declares.
+pub async fn run_operation<T, F, Fut>(
+    site: &'static Site,
+    view: McpView,
+    tail: F,
+) -> Result<T, McpError>
+where
+    T: Send,
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = Result<T, OperationFailure>> + Send,
+{
+    // `tail` is a closure: the operation's future is built in `dispatch`'s
+    // own frame, held once (rust-lang/rust#62958).
+    let handler = site.handler();
+    // Composed against an empty container where no app is ambient: a site
+    // declaring nothing still runs, one declaring a layer is refused.
+    let container = current_container().unwrap_or_default();
+    let chains = match site.chains(&container) {
+        Ok(chains) => chains,
+        Err(refused) => return Err(refused_site(handler, &refused)),
+    };
+    let deadline = nest_rs_core::ambient::<Deadline>().map(|deadline| deadline.0);
+    let mut slot = None;
+    let outcome = {
+        let mut view = view;
+        let mut tail = OperationTail {
+            run: Some(tail),
+            slot: &mut slot,
+        };
+        let mut cx = new_unit_context(handler, &mut view, None, deadline);
+        dispatch(&mut cx, &chains, &mut tail).await
+    };
+    answered(handler, outcome, slot)
+}
+
+/// The view of the operation `name` of `host`, served by `kind`'s router.
+pub fn operation_view(kind: McpOperationKind, name: &'static str, host: &'static str) -> McpView {
+    McpView::declared(kind, name, host)
+}
+
+/// What a site whose chains did not compose answers: the opaque answer, its
+/// cause filed — the layer and the site when a declared layer did not resolve.
+fn refused_site(handler: &Handler, refused: &anyhow::Error) -> McpError {
+    match refused.downcast_ref::<UnresolvedLayerError>() {
+        Some(unresolved) => report_unresolved(unresolved),
+        None => tracing::error!(
+            target: nest_rs_core::target::LAYERS,
+            site = handler.address(),
+            error = %nest_rs_core::error_message(refused.as_ref()),
+            "an MCP operation's layers did not compose; it is refused",
+        ),
+    }
+    opaque_answer()
+}
+
+/// What the unit of the operation `handler` declares came to, as the client
+/// reads it: the value its tail wrote, or its failure answered by the edge's
+/// one rule.
+fn answered<T>(
+    handler: &Handler,
+    outcome: Outcome,
+    slot: Option<Result<T, Box<Reply>>>,
+) -> Result<T, McpError> {
+    match (outcome, slot) {
+        (Ok(_), Some(Ok(value))) => Ok(value),
+        (Ok(_), Some(Err(reply))) => Err(reply.filed()),
+        (Ok(_), None) => {
+            tracing::error!(
+                target: crate::TARGET,
+                site = handler.address(),
+                "an MCP operation settled without a value; it is refused",
             );
-        }))
-    })
+            Err(opaque_answer())
+        }
+        (Err(failure), slot) => {
+            if failure.find::<Denial>().is_some()
+                && let Some(mark) = nest_rs_core::ambient::<RefusalMark>()
+            {
+                mark.mark();
+            }
+            Err(answer(&failure, slot.and_then(Result::err)))
+        }
+    }
+}
+
+/// An operation's tail as the pipeline runs it: `run`, its value written into
+/// the operation's own slot; a failure carrying an answer only its type could
+/// say goes out answered, which the exception filters still see.
+struct OperationTail<'s, T, F> {
+    run: Option<F>,
+    slot: &'s mut Option<Result<T, Box<Reply>>>,
+}
+
+impl<T, F, Fut> Tail for OperationTail<'_, T, F>
+where
+    T: Send,
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = Result<T, OperationFailure>> + Send,
+{
+    async fn call(&mut self, _: &mut UnitContext<'_>) -> Outcome {
+        let Some(run) = self.run.take() else {
+            unreachable!("a unit runs its tail once");
+        };
+        match run().await {
+            Ok(value) => {
+                *self.slot = Some(Ok(value));
+                Ok(settled())
+            }
+            Err(OperationFailure {
+                failure,
+                reply: Some(reply),
+            }) => {
+                *self.slot = Some(Err(reply));
+                Err(failure.answered(settled()))
+            }
+            Err(OperationFailure {
+                failure,
+                reply: None,
+            }) => Err(failure),
+        }
+    }
 }
 
 /// Whether an operation's description holds no prose — `str::trim` leaves
@@ -138,7 +366,7 @@ pub const fn description_is_blank(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::description_is_blank;
+    use super::*;
 
     /// `str::trim` is the oracle.
     #[test]
@@ -175,5 +403,68 @@ mod tests {
             assert!(description_is_blank(concat!(" ", "\u{3000}")));
             assert!(!description_is_blank(concat!(" Counts ", "items.")));
         }
+    }
+
+    struct Tools;
+
+    static PING: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::OPERATION,
+        host: TypeId::of::<Tools>(),
+        host_name: "Tools",
+        method: "ping",
+        address: "ping",
+        posture: Posture::Public,
+        meta: MetaLevels::default,
+    });
+
+    static SITE: Site = declare_site(
+        &PING,
+        SiteDeclaration {
+            layers: SiteLayers::default,
+            global: OPERATION_LAYERS,
+            guard_stage: None,
+            class_gate: None,
+        },
+    );
+
+    /// What an operation's site adds to the future of a tail holding `N`
+    /// bytes: every stage between the wrapper and the developer's method.
+    fn added_by_the_site<const N: usize>() -> usize {
+        let holding = || async {
+            let held = [0u8; N];
+            tokio::task::yield_now().await;
+            Ok::<_, OperationFailure>(held.len())
+        };
+        let tail = size_of_val(&holding());
+        let view = operation_view(McpOperationKind::Tool, "ping", "Tools");
+        size_of_val(&run_operation(&SITE, view, holding)) - tail
+    }
+
+    /// A debug build reserves every copy of a future a frame holds on the
+    /// thread polling it: a site copying its tail's would multiply the stack
+    /// an operation needs by the stages it runs.
+    #[test]
+    fn an_operations_site_holds_its_tails_future_once() {
+        let light = added_by_the_site::<1024>();
+        let heavy = added_by_the_site::<16384>();
+        assert_eq!(
+            light, heavy,
+            "an operation's site copies its tail's future: it adds {light} bytes to a 1 KiB \
+             one, {heavy} to a 16 KiB one",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_operation_answers_the_value_its_tail_wrote() {
+        let view = operation_view(McpOperationKind::Tool, "ping", "Tools");
+        let answered =
+            run_operation(&SITE, view, || async { Ok::<_, OperationFailure>("pong") }).await;
+        assert_eq!(answered.ok(), Some("pong"));
+    }
+
+    #[test]
+    fn an_operation_kind_names_the_method_reaching_its_router() {
+        assert_eq!(McpOperationKind::Tool.method(), "tools/call");
+        assert_eq!(McpOperationKind::Prompt.method(), "prompts/get");
     }
 }

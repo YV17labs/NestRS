@@ -361,7 +361,7 @@ impl<'a> FieldUnit<'a> {
             let mut cx = new_unit_context(handler, &mut view, None, None);
             dispatch(&mut cx, &chains, &mut tail).await
         };
-        answered(outcome, slot)
+        answered(handler, outcome, slot)
     }
 }
 
@@ -381,9 +381,13 @@ fn refused_site(handler: &Handler, refused: &anyhow::Error) -> GraphqlError {
     rendered(&Problem::new(500, code::INTERNAL))
 }
 
-/// What a field's unit came to, as the client reads it: the value its tail
-/// wrote, or its failure answered by the edge's one rule.
-fn answered<T>(outcome: Outcome, slot: Option<Result<T, Box<Reply>>>) -> Result<T, GraphqlError> {
+/// What the field `handler` declares came to, as the client reads it: the
+/// value its tail wrote, or its failure answered by the edge's one rule.
+fn answered<T>(
+    handler: &Handler,
+    outcome: Outcome,
+    slot: Option<Result<T, Box<Reply>>>,
+) -> Result<T, GraphqlError> {
     let failure = match outcome {
         Ok(_) => {
             return match slot {
@@ -392,6 +396,7 @@ fn answered<T>(outcome: Outcome, slot: Option<Result<T, Box<Reply>>>) -> Result<
                 None => {
                     tracing::error!(
                         target: crate::TARGET,
+                        site = handler.address(),
                         "a field settled without a value; it is refused",
                     );
                     Err(rendered(&Problem::new(500, code::INTERNAL)))
@@ -622,5 +627,23 @@ mod tests {
         };
         let answered = unit.run(|| async { Ok::<_, FieldFailure>(7) }).await;
         assert_eq!(answered.ok(), Some(7));
+    }
+
+    #[test]
+    fn a_field_settled_without_a_value_is_refused_naming_its_site() {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        let answer = answered::<i32>(&FIELD, Ok(settled()), None);
+
+        assert!(answer.is_err());
+        let line = logs.expect_one(
+            crate::TARGET,
+            "a field settled without a value; it is refused",
+        );
+        assert!(
+            line.field("site").is_some_and(|site| site == "field"),
+            "{:?}",
+            line.fields,
+        );
     }
 }

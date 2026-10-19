@@ -267,29 +267,36 @@ async fn a_scope_the_document_never_advertises_is_reported_at_warn() {
     );
 }
 
-// A scope name that cannot go in a header: scopes come from a guard, not the config
-// checked at boot, and a dropped `WWW-Authenticate` leaves only the event as a trace.
+// A scope outside RFC 6749 §3.3's grammar: scopes come from a guard, not the
+// config checked at boot, so the challenge leaves the attribute out and says so.
 
-/// A scope carrying a newline, which `HeaderValue::from_str` refuses.
-const UNREPRESENTABLE: &str = "posts:\nwrite";
+/// A scope carrying a space, which would read as two scopes in the attribute.
+const OUTSIDE_THE_GRAMMAR: &str = "posts write";
+
+/// What the operator reads when the challenge goes without its scopes.
+const LEFT_OUT: &str =
+    "a required scope is not a scope-token; the challenge is sent without its scope attribute";
 
 #[injectable]
 #[derive(Default)]
-struct ScopeWithAControlCharacter;
+struct ScopeOutsideTheGrammar;
 
-impl Layer for ScopeWithAControlCharacter {}
+impl Layer for ScopeOutsideTheGrammar {}
 
 #[async_trait]
-impl Guard for ScopeWithAControlCharacter {
+impl Guard for ScopeOutsideTheGrammar {
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        Err(Denial::insufficient_scope([UNREPRESENTABLE], "forbidden"))
+        Err(Denial::insufficient_scope(
+            [OUTSIDE_THE_GRAMMAR],
+            "forbidden",
+        ))
     }
 }
 
-impl GuardFor<nest_rs_http::HttpView> for ScopeWithAControlCharacter {}
+impl GuardFor<nest_rs_http::HttpView> for ScopeOutsideTheGrammar {}
 
 #[controller(path = "/malformed")]
-#[use_guards(ScopeWithAControlCharacter)]
+#[use_guards(ScopeOutsideTheGrammar)]
 struct MalformedScopeController;
 
 #[routes]
@@ -302,12 +309,12 @@ impl MalformedScopeController {
 
 #[module(
     imports = [authn(), scoped_resource_server()],
-    providers = [MalformedScopeController, ScopeWithAControlCharacter],
+    providers = [MalformedScopeController, ScopeOutsideTheGrammar],
 )]
 struct MalformedScopeServer;
 
 #[tokio::test]
-async fn a_scope_that_cannot_be_a_header_value_is_reported_rather_than_dropped() {
+async fn a_scope_outside_the_grammar_leaves_the_attribute_out_and_is_reported() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::for_module::<MalformedScopeServer>()
         .await
@@ -315,38 +322,41 @@ async fn a_scope_that_cannot_be_a_header_value_is_reported_rather_than_dropped()
 
     let resp = app.http().get("/malformed").send().await;
     resp.assert_status(StatusCode::FORBIDDEN);
-    // The challenge the guard layer wrote from a static RFC 6750 §3.1 code stands;
-    // the offending scope never reaches the wire.
-    let challenge = resp
-        .0
-        .headers()
-        .get(header::WWW_AUTHENTICATE)
-        .expect("the static code stands even when the scope list cannot be sent")
-        .to_str()
-        .expect("a challenge built from constants is a valid header value");
-    assert_eq!(challenge, r#"Bearer error="insufficient_scope""#);
-    assert!(
-        !challenge.contains("posts:"),
-        "the scope that could not be encoded is not on the wire, got {challenge:?}",
+    assert_eq!(
+        challenge(&resp.0),
+        format!(
+            "Bearer error=\"insufficient_scope\", resource_metadata=\"{RESOURCE}{WELL_KNOWN_PATH}\""
+        ),
+        "the step-up challenge still points at the document, without the scope it cannot carry",
     );
 
-    let event = logs.expect_one(
-        nest_rs_oauth_resource::TARGET,
-        "insufficient-scope challenge is not a valid header value",
+    let said: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.message == LEFT_OUT)
+        .collect();
+    let [event] = said.as_slice() else {
+        panic!("one refusal files one line: {said:#?}");
+    };
+    assert_eq!(
+        (event.target.as_str(), event.level.as_str()),
+        (nest_rs_http::target::HTTP, "warn"),
+        "the edge stamped the guard's step-up and said it",
     );
-    assert_eq!(event.level, "error");
     assert!(
         event
-            .field("challenge")
-            .is_some_and(|c| c.contains("posts:")),
-        "the event carries the challenge that could not be sent, which is what \
-         points at the offending scope, got {:?}",
+            .field("scopes")
+            .is_some_and(|scopes| scopes.contains(OUTSIDE_THE_GRAMMAR)),
+        "the line names the rule's scopes, got {:?}",
         event.fields,
     );
     assert!(
-        event.field("error").is_some(),
-        "…and why it could not, got {:?}",
-        event.fields,
+        logs.events()
+            .iter()
+            .filter(|event| event.target == nest_rs_oauth_resource::TARGET)
+            .all(|event| event.field("challenge").is_none()),
+        "no line carries the challenge, whose pointer holds the resource's URI: {:#?}",
+        logs.events(),
     );
 }
 

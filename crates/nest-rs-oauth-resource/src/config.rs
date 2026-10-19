@@ -188,7 +188,7 @@ fn entry(index: usize, key: &str) -> String {
 
 /// RFC 6749 §3.3: `scope-token = 1*( %x21 / %x23-5B / %x5D-7E )` — printable
 /// ASCII excluding space (`%x20`), `"` (`%x22`) and `\` (`%x5C`).
-fn is_scope_token(scope: &str) -> bool {
+pub(crate) fn is_scope_token(scope: &str) -> bool {
     !scope.is_empty()
         && scope
             .bytes()

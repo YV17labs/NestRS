@@ -169,6 +169,11 @@ request it from. An **ordinary** `403` — the caller may not do this at
 all — deliberately carries no challenge: advertising a recovery that
 cannot succeed is worse than a plain refusal.
 
+A scope your rule names outside RFC 6749 §3.3's grammar — a space, a
+quote — cannot ride the quoted attribute: the challenge goes out without
+`scope`, and a `warn` names the rule's scopes, `a required scope is not a
+scope-token; the challenge is sent without its scope attribute`.
+
 On GraphQL there is no `403` to enrich, so the same facts ride the error
 frame the transport already speaks:
 

@@ -16,9 +16,10 @@ use nest_rs_core::{
     Edge, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor,
 };
 use nest_rs_guards::RequiredScopes;
-use nest_rs_http::challenge::{BEARER, NoBearerChallenge};
+use nest_rs_http::challenge::{BEARER, INSUFFICIENT_SCOPE, NoBearerChallenge};
 use nest_rs_http::{HeaderValue, HttpView, Response, StatusCode, header};
 
+use crate::config::is_scope_token;
 use crate::metadata::ProtectedResourceMetadata;
 
 /// Infra interceptor brought by
@@ -89,11 +90,11 @@ impl ResourceChallenge {
             Ok(value) => {
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
             }
-            // Unreachable: every component was character-checked at boot.
+            // Unreachable: every component was character-checked at boot. The
+            // challenge stays out of the line: its pointer holds the resource's URI.
             Err(error) => tracing::error!(
                 target: crate::TARGET,
                 %error,
-                challenge = %merged,
                 "protected resource challenge is not a valid header value",
             ),
         }
@@ -131,20 +132,45 @@ impl ResourceChallenge {
             }
         }
 
+        // The scopes are the rule's literals, never a client's value; the edge
+        // filed this line already where it stamped the step-up itself.
+        if !required.iter().all(|scope| is_scope_token(scope)) && !carries_step_up(res) {
+            tracing::warn!(
+                target: crate::TARGET,
+                scopes = ?required,
+                "a required scope is not a scope-token; the challenge is sent without its scope \
+                 attribute",
+            );
+        }
         let challenge = self.metadata.insufficient_scope_challenge(&required);
         match HeaderValue::from_str(&challenge) {
             Ok(value) => {
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
             }
-            // Unreachable: the config refuses a scope with a quote or control character.
+            // Unreachable: the boot checked the pointer, and a scope outside the
+            // grammar is left out. The challenge stays out of the line, as above.
             Err(error) => tracing::error!(
                 target: crate::TARGET,
                 %error,
-                challenge,
                 "insufficient-scope challenge is not a valid header value",
             ),
         }
     }
+}
+
+/// Whether `res` already carries RFC 6750 §3.1's `insufficient_scope` challenge.
+fn carries_step_up(res: &Response) -> bool {
+    let Some(Ok(existing)) = res
+        .headers()
+        .get(header::WWW_AUTHENTICATE)
+        .map(HeaderValue::to_str)
+    else {
+        return false;
+    };
+    existing
+        .get(..BEARER.len())
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case(BEARER))
+        && existing.contains(&format!(r#"error="{INSUFFICIENT_SCOPE}""#))
 }
 
 #[cfg(test)]
@@ -218,6 +244,35 @@ mod tests {
             ),
             "the step-up challenge points at the same document as the 401: {challenge}",
         );
+    }
+
+    /// A scope outside the grammar is said once: here for a `403` built by
+    /// hand, never again where the edge stamped the step-up and said it.
+    #[test]
+    fn a_scope_outside_the_grammar_is_said_where_no_edge_said_it() {
+        const LEFT_OUT: &str = "a required scope is not a scope-token; the challenge is sent \
+                                without its scope attribute";
+        let outside = || {
+            let mut res = status(StatusCode::FORBIDDEN);
+            res.extensions_mut()
+                .insert(RequiredScopes::new(["posts write"]));
+            res
+        };
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let hand_built = challenge_for(outside()).expect("a step-up challenge");
+        assert!(!hand_built.contains("scope=\""), "{hand_built}");
+
+        let mut stamped = outside();
+        stamped.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Bearer error=\"insufficient_scope\""),
+        );
+        let challenge = challenge_for(stamped).expect("a step-up challenge");
+        assert!(challenge.contains("resource_metadata="), "{challenge}");
+
+        let event = logs.expect_one(crate::TARGET, LEFT_OUT);
+        assert_eq!(event.level, "warn");
     }
 
     #[test]

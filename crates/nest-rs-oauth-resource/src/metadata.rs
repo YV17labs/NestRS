@@ -4,6 +4,8 @@
 use nest_rs_http::challenge::BEARER;
 use serde::Serialize;
 
+use crate::config::is_scope_token;
+
 /// The well-known path RFC 9728 §3 reserves, served at the resource's root.
 pub const WELL_KNOWN_PATH: &str = "/.well-known/oauth-protected-resource";
 
@@ -130,6 +132,9 @@ impl ProtectedResourceMetadata {
     }
 
     /// The `WWW-Authenticate` value for a `403` whose token is valid but too
+    /// narrow: RFC 6750 §3.1's `insufficient_scope`, the pointer, and `scope`
+    /// naming `required` — left out when one of them is not an RFC 6749 §3.3
+    /// `scope-token`, which the quoted attribute could not carry.
     pub fn insufficient_scope_challenge(&self, required: &[String]) -> String {
         build_challenge(
             &self.metadata_url,
@@ -170,7 +175,7 @@ fn build_challenge(metadata_url: &str, scopes: &[String], error: Option<&str>) -
         params.push(format!("error=\"{error}\""));
     }
     params.push(format!("resource_metadata=\"{metadata_url}\""));
-    if !scopes.is_empty() {
+    if !scopes.is_empty() && scopes.iter().all(|scope| is_scope_token(scope)) {
         params.push(format!("scope=\"{}\"", scopes.join(" ")));
     }
     format!("{BEARER} {}", params.join(", "))
@@ -263,6 +268,26 @@ mod tests {
              resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\", \
              scope=\"posts:write\"",
         );
+    }
+
+    /// A quote would end the attribute early and a space split one scope in
+    /// two: a required set outside RFC 6749 §3.3's grammar is not said at all.
+    #[test]
+    fn an_insufficient_scope_challenge_leaves_out_a_scope_outside_the_grammar() {
+        let meta = meta("https://api.example.com", &["posts:read"]);
+        for refused in [
+            &["posts\"write"][..],
+            &["posts write"],
+            &["posts:write", ""],
+        ] {
+            let required: Vec<String> = refused.iter().map(|&scope| scope.to_owned()).collect();
+            assert_eq!(
+                meta.insufficient_scope_challenge(&required),
+                "Bearer error=\"insufficient_scope\", \
+                 resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\"",
+                "{refused:?}",
+            );
+        }
     }
 
     #[test]

@@ -299,8 +299,8 @@ async fn read_batch(req: &Request, body: Body) -> Result<BatchRequest, Response>
     if let Some(content_type) = multipart {
         // A file is never larger than the body the transport's cap admits.
         let options = MultipartOptions::default().max_file_size(current_body_limit());
-        let stream = std::pin::pin!(body.into_stream());
-        return receive_batch_body(Some(content_type), stream.into_async_read(), options)
+        let body = body.into_stream().into_async_read();
+        return receive_batch_body(Some(content_type), body, options)
             .await
             .map_err(|refusal| multipart_refused(&refusal));
     }
@@ -315,22 +315,11 @@ async fn read_batch(req: &Request, body: Body) -> Result<BatchRequest, Response>
 /// What a body that failed to read is said as; the body cap answers `413` itself.
 const UNREADABLE: &str = "the request body could not be read";
 
-/// The answer to a multipart body that is not a GraphQL request: a file past
-/// the cap as the cap answers, any other refusal said by [`multipart_refusal`].
+/// The answer to a multipart body that is not a GraphQL request, read by
+/// variant: a file past the cap as the cap answers; the `operations` and `map`
+/// parts' decoders wrap serde's sentence, which quotes the part; every other
+/// variant's own sentence is fixed.
 fn multipart_refused(refusal: &ParseRequestError) -> Response {
-    match refusal {
-        ParseRequestError::PayloadTooLarge => BodyError::TooLarge {
-            limit: current_body_limit(),
-        }
-        .as_response(),
-        refusal => refused(&multipart_refusal(refusal), StatusCode::BAD_REQUEST),
-    }
-}
-
-/// Why a multipart body is not a GraphQL request, read by variant: the
-/// `operations` and `map` parts' decoders wrap serde's sentence, which quotes
-/// the part; every other variant's own sentence is fixed.
-fn multipart_refusal(parse: &ParseRequestError) -> String {
     use ParseRequestError as Refused;
 
     fn part(name: &str, source: &(dyn std::error::Error + Send + Sync + 'static)) -> String {
@@ -343,12 +332,17 @@ fn multipart_refusal(parse: &ParseRequestError) -> String {
         }
     }
 
-    match parse {
+    let reason = match refusal {
+        Refused::PayloadTooLarge => {
+            let limit = current_body_limit();
+            return BodyError::TooLarge { limit }.as_response();
+        }
         Refused::InvalidRequest(source) => part("operations", source.as_ref()),
         Refused::InvalidFilesMap(source) => part("map", source.as_ref()),
         Refused::Io(_) => UNREADABLE.to_owned(),
         fixed => fixed.to_string(),
-    }
+    };
+    refused(&reason, StatusCode::BAD_REQUEST)
 }
 
 /// Why `bytes` is not a GraphQL request, as the shape it was decodes it.
@@ -455,9 +449,7 @@ fn batch_response(executed: &BatchResponse) -> nest_rs_http::Result<Response> {
     {
         headers.insert(header::CACHE_CONTROL, hint);
     }
-    for (name, value) in &executed.http_headers() {
-        headers.append(name, value.clone());
-    }
+    headers.extend(executed.http_headers_iter());
     Ok(response)
 }
 

@@ -3,7 +3,7 @@
 
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_http::{StatusCode, header};
+use nest_rs_http::{Method, StatusCode, header};
 use nest_rs_testing::TestApp;
 
 #[resolver]
@@ -53,8 +53,8 @@ async fn a_plain_get_without_the_playground_is_405_naming_post() {
         .await
         .expect("boots");
 
-    for method in [nest_rs_http::Method::GET, nest_rs_http::Method::HEAD] {
-        let resp = app.http().request(method.clone(), "/graphql").send().await;
+    for method in [Method::GET, Method::HEAD] {
+        let resp = app.http().request(method, "/graphql").send().await;
 
         resp.assert_status(StatusCode::METHOD_NOT_ALLOWED);
         resp.assert_content_type("application/problem+json");

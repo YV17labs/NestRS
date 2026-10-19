@@ -2,7 +2,7 @@
 
 use nest_rs_http::__private::websocket;
 use nest_rs_http::{
-    Body, Bytes, Endpoint, HeaderValue, HttpError, IntoResponse, ProblemDetails, Request, Response,
+    Bytes, Endpoint, HeaderValue, HttpError, IntoResponse, ProblemDetails, Request, Response,
     StatusCode, header,
 };
 
@@ -33,7 +33,7 @@ impl<E: async_graphql::Executor> Endpoint for GetEndpoint<E> {
         match &self.playground {
             Some(html) => Ok(Response::builder()
                 .content_type(HeaderValue::from_static("text/html; charset=utf-8"))
-                .body(Body::from_bytes(html.clone()))),
+                .body(html.clone())),
             None => Err(HttpError::from_response(not_a_graphql_request())),
         }
     }

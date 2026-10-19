@@ -563,18 +563,14 @@ mod the_answer_on_the_wire {
         TestApp::for_module::<WireModule>().await.expect("boots")
     }
 
-    fn values(resp: &TestResponse, name: header::HeaderName) -> Vec<String> {
+    /// The tags in the order sent, which `assert_header_all` does not check.
+    fn tags(resp: &TestResponse) -> Vec<&str> {
         resp.0
             .headers()
-            .get_all(name)
+            .get_all("x-graphql-tag")
             .iter()
-            .map(|value| value.to_str().expect("a visible header").to_owned())
+            .map(|value| value.to_str().expect("a visible header"))
             .collect()
-    }
-
-    async fn body(resp: TestResponse) -> serde_json::Value {
-        let text = resp.0.into_body().into_string().await.expect("a body");
-        serde_json::from_str(&text).unwrap_or_else(|_| panic!("a JSON body: {text}"))
     }
 
     #[tokio::test]
@@ -592,20 +588,15 @@ mod the_answer_on_the_wire {
         let mut names: Vec<&str> = resp.0.headers().keys().map(|name| name.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, SIX_X_HEADER_SET);
+        resp.assert_header_all(header::CONTENT_TYPE, ["application/json; charset=utf-8"]);
+        resp.assert_header_all(header::CACHE_CONTROL, ["max-age=60"]);
         assert_eq!(
-            values(&resp, header::CONTENT_TYPE),
-            ["application/json; charset=utf-8"]
-        );
-        assert_eq!(values(&resp, header::CACHE_CONTROL), ["max-age=60"]);
-        assert_eq!(
-            values(&resp, header::HeaderName::from_static("x-graphql-tag")),
+            tags(&resp),
             ["first", "second"],
             "every value a resolver appended, in order",
         );
-        assert_eq!(
-            body(resp).await,
-            json!({ "data": { "cached": { "value": 1 }, "tagged": 2 } })
-        );
+        resp.assert_json(json!({ "data": { "cached": { "value": 1 }, "tagged": 2 } }))
+            .await;
     }
 
     /// The header names a POST answering `cached` and `tagged` carried in 6.x.
@@ -634,7 +625,7 @@ mod the_answer_on_the_wire {
 
         resp.assert_status_is_ok();
         resp.assert_header_is_not_exist(header::CACHE_CONTROL);
-        let body = body(resp).await;
+        let body: serde_json::Value = resp.json().await.value().deserialize();
         assert_eq!(body["errors"][0]["message"], "refused on purpose", "{body}");
     }
 
@@ -651,11 +642,8 @@ mod the_answer_on_the_wire {
 
         resp.assert_status_is_ok();
         resp.assert_header_is_not_exist(header::CACHE_CONTROL);
-        assert_eq!(
-            values(&resp, header::HeaderName::from_static("x-graphql-tag")),
-            ["first", "second"],
-        );
-        let body = body(resp).await;
+        assert_eq!(tags(&resp), ["first", "second"]);
+        let body: serde_json::Value = resp.json().await.value().deserialize();
         assert_eq!(body[0], json!({ "data": { "tagged": 2 } }), "{body}");
         assert_eq!(
             body[1]["errors"][0]["message"], "refused on purpose",
@@ -712,7 +700,8 @@ mod the_answer_on_the_wire {
             .await;
 
         resp.assert_status_is_ok();
-        assert_eq!(body(resp).await, json!({ "data": { "uploadSize": 1024 } }));
+        resp.assert_json(json!({ "data": { "uploadSize": 1024 } }))
+            .await;
     }
 
     /// A refusal of the multipart reader keeps its fixed sentence.
@@ -725,10 +714,10 @@ mod the_answer_on_the_wire {
 
         resp.assert_status(StatusCode::BAD_REQUEST);
         resp.assert_content_type("application/json");
-        assert_eq!(
-            body(resp).await,
-            json!({ "errors": [{ "message": "the body is not a GraphQL request: Missing \"map\" part" }] })
-        );
+        resp.assert_json(json!({
+            "errors": [{ "message": "the body is not a GraphQL request: Missing \"map\" part" }],
+        }))
+        .await;
     }
 
     #[tokio::test]

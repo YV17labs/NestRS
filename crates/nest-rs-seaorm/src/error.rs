@@ -424,14 +424,17 @@ impl nest_rs_core::ToProblem for ServiceError {
 /// seconds rounded up. Outside a unit, or on a pool with no bound, no wait is
 /// invented.
 fn unavailable() -> nest_rs_core::Problem {
-    let problem = nest_rs_core::Problem::new(503, nest_rs_core::problem::code::UNAVAILABLE);
+    use nest_rs_core::__private::retry_after_secs;
+    use nest_rs_core::Problem;
+    use nest_rs_core::problem::code;
+
+    let problem = Problem::new(503, code::UNAVAILABLE);
     let bound = crate::executor::current_executor()
-        .and_then(|executor| executor.pool().and_then(crate::module::statement_bound));
+        .as_ref()
+        .and_then(crate::executor::Executor::pool)
+        .and_then(crate::module::statement_bound);
     match bound {
-        Some(bound) => {
-            let whole = bound.as_secs() + u64::from(bound.subsec_nanos() > 0);
-            problem.with_retry_after(u32::try_from(whole.max(1)).unwrap_or(u32::MAX))
-        }
+        Some(bound) => problem.with_retry_after(retry_after_secs(bound)),
         None => problem,
     }
 }

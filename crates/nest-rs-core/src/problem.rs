@@ -310,8 +310,20 @@ impl ToProblem for Problem {
 /// Re-exported through the crate's `__private`.
 pub(crate) mod __private {
     use std::error::Error;
+    use std::time::Duration;
 
     use super::Problem;
+
+    /// The `Retry-After` a `wait` answers with, in whole seconds: rounded up,
+    /// since a client that waits less may collide with the attempt, and never
+    /// `0`, which RFC 9110 §10.2.3 reads as "retry immediately".
+    pub fn retry_after_secs(wait: Duration) -> u32 {
+        let whole = wait
+            .as_secs()
+            .saturating_add(u64::from(wait.subsec_nanos() > 0))
+            .max(1);
+        u32::try_from(whole).unwrap_or(u32::MAX)
+    }
 
     /// What answering `problem` for `error` keeps from the client: `error`'s
     /// whole chain when the answer is a `5xx` and `error` is more than the bare
@@ -402,6 +414,20 @@ mod tests {
     fn a_problem_returned_as_an_error_answers_itself() {
         let problem = Problem::new(429, code::RATE_LIMITED).with_retry_after(30);
         assert_eq!(problem.to_problem(), Some(problem.clone()));
+    }
+
+    #[test]
+    fn a_wait_is_said_in_whole_seconds_rounded_up_and_never_zero() {
+        use std::time::Duration;
+
+        use super::__private::retry_after_secs;
+
+        assert_eq!(retry_after_secs(Duration::from_secs(30)), 30);
+        assert_eq!(retry_after_secs(Duration::new(30, 1)), 31);
+        assert_eq!(retry_after_secs(Duration::from_millis(2500)), 3);
+        assert_eq!(retry_after_secs(Duration::from_millis(500)), 1);
+        assert_eq!(retry_after_secs(Duration::ZERO), 1);
+        assert_eq!(retry_after_secs(Duration::MAX), u32::MAX);
     }
 
     #[test]

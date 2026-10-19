@@ -30,8 +30,7 @@ impl Strategy for OAuthStrategy {
     async fn authenticate(&self, req: &mut Request) -> Result<Caller, AuthError> {
         let provider = req
             .path_param("provider")
-            .ok_or_else(|| AuthError::Failed("OAuth callback missing provider".into()))?
-            .to_owned();
+            .ok_or_else(|| AuthError::Failed("OAuth callback missing provider".into()))?;
         let Ok(Query(query)) =
             Query::<CallbackQuery>::from_request(req, &mut RequestBody::new(Body::empty())).await
         else {
@@ -53,7 +52,7 @@ impl Strategy for OAuthStrategy {
         )
         .ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
         self.svc
-            .resolve_caller(&provider, transaction, &state, &code)
+            .resolve_caller(provider, transaction, &state, &code)
             .await
     }
 }

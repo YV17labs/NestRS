@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use nest_rs_core::__private::retry_after_secs;
 use nest_rs_core::{Edge, Layer, Unanswered, UnitContext, UnitView, injectable, within};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{ClientOrigin, HttpView, async_trait};
@@ -46,19 +47,6 @@ fn bucket_key(parts: &[&dyn fmt::Display]) -> String {
         let _ = write!(key, "{part}");
     }
     key
-}
-
-/// The wait a caller is told to observe, in whole seconds — **rounded up, and
-/// never `0`**.
-///
-/// Truncating would hand every denial in a window's last second
-/// `Retry-After: 0`, which RFC 9110 §10.2.3 reads as "retry immediately".
-fn retry_after_secs(retry_after: Duration) -> u32 {
-    let secs = retry_after
-        .as_secs()
-        .saturating_add(u64::from(retry_after.subsec_nanos() > 0))
-        .max(1);
-    u32::try_from(secs).unwrap_or(u32::MAX)
 }
 
 /// The refusal every edge returns.

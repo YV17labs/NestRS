@@ -76,11 +76,7 @@ impl RequestDeadline {
 /// What a request that outran its budget is answered with: `503`, not `504`, since
 /// RFC 9110 §15.6.5 scopes `504` to a gateway and this server is the origin (§15.6.4).
 pub(crate) fn timed_out(timeout: Duration) -> Response {
-    // Never `0`, which reads as "retry immediately" (RFC 9110 §10.2.3).
-    let seconds = timeout
-        .as_secs()
-        .saturating_add(u64::from(timeout.subsec_nanos() > 0))
-        .max(1);
+    let seconds = nest_rs_core::__private::retry_after_secs(timeout);
     Response::builder()
         .status(StatusCode::SERVICE_UNAVAILABLE)
         .header(header::RETRY_AFTER, HeaderValue::from(seconds))

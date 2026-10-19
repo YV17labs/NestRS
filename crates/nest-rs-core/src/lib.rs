@@ -242,7 +242,7 @@ pub mod __private {
     pub use crate::outcome::__private::{caught_problem, settled};
     pub use crate::panic::__private::{Unwound, unwound};
     pub use crate::param::{ParamProbe, ParamProbeFallback, ParamProbeResolves};
-    pub use crate::problem::__private::{Withheld, withheld};
+    pub use crate::problem::__private::{Withheld, retry_after_secs, withheld};
     pub use crate::process_start::ProcessStart;
     pub use crate::request_scope::__private::RequestScopes;
     pub use crate::site::{

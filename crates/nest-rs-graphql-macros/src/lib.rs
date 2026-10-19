@@ -12,15 +12,17 @@ mod resolver;
 /// Declares a GraphQL resolver struct; its operations go under
 /// [`macro@operations`] on the impl block.
 ///
-/// `#[use_guards(...)]` here runs before every operation on the impl;
-/// per-method `#[use_guards(...)]` stacks inside it. A denial short-circuits
-/// as a GraphQL error. A `#[meta(EXPR)]` here is declared for every root field,
-/// under a field's own value of the same type.
+/// `#[use_guards(...)]` here runs on every field of the impl, a field
+/// resolver's included; `#[use_interceptors(...)]` and
+/// `#[use_exception_filters(...)]` here wrap every root field. A method's own
+/// stack inside them. A denial short-circuits as a GraphQL error. A
+/// `#[meta(EXPR)]` here is declared for every root field, under a field's own
+/// value of the same type.
 ///
 /// # Expands to
 ///
 /// The original struct, a hidden constructor and the hidden helpers
-/// `#[operations]` reads the struct's injected keys and guards back through,
+/// `#[operations]` reads the struct's injected keys and layers back through,
 /// and a resolver-membership descriptor: a resolver listed in no
 /// reachable module's `providers` is left out of the schema with a boot `warn`.
 #[proc_macro_attribute]
@@ -33,7 +35,9 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// submitted to the link-time registry; `#[field_resolver]` methods become
 /// `#[ComplexObject]` impls on the parent type.
 ///
-/// `#[use_guards(...)]` belongs on the struct beside `#[resolver]`, not here.
+/// The resolver's own `#[use_guards]`, `#[use_interceptors]` and
+/// `#[use_exception_filters]` belong on the struct beside `#[resolver]`, not
+/// here; a method binds its own beside its role.
 ///
 /// **Every `#[query]`/`#[mutation]`/`#[subscription]` declares its access
 /// posture** — forgetting one is a compile error, never a silently ungated
@@ -57,10 +61,10 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// over the resolver's of the same type; a `#[field_resolver]` declares none.
 ///
 /// **A `#[subscription]` declares the same posture and it is enforced twice**:
-/// the gate once, at subscribe, and the mask on **every item** the stream
-/// yields — evaluated against the ability captured at subscribe, so an item the
-/// subscriber may not read is dropped rather than nulled
-/// (`nest_rs_authz::graphql::masked_item_for`). The method is a `fn` or an
+/// its layers and gate once, at subscribe, and the mask on **every item** the
+/// stream yields — evaluated against the ability the gate checked, captured at
+/// subscribe, so an item the subscriber may not read is dropped rather than
+/// nulled (`nest_rs_authz::graphql::masked_item_for`). The method is a `fn` or an
 /// `async fn` returning `impl Stream<Item = T>`, optionally behind a
 /// literally-spelled `Result<…>`; an aliased `Result` is a compile error that
 /// names itself.
@@ -72,14 +76,21 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Expands to
 ///
 /// `#[query]`/`#[mutation]` methods split into hidden
-/// `__<Base>Query` / `__<Base>Mutation` `#[Object]` roots (each registered with
-/// the link-time registry), `#[field_resolver]`
-/// methods merge into one `#[ComplexObject]` impl per parent type, plus an
-/// `impl Discoverable` (with a no-op `register`).
+/// `__<Base>Query` / `__<Base>Mutation` `#[Object]` roots and `#[subscription]`
+/// methods into a hidden `__<Base>Subscription` root (each registered with the
+/// link-time registry), `#[field_resolver]` methods merge into one
+/// `#[ComplexObject]` impl per parent type; each field declares its site,
+/// submitted so the boot composes every one before any operation runs; plus an
+/// `impl Discoverable` (with a no-op `register`) whose keys put each layer, each
+/// `Scoped<T>` parameter's provider and each `bind = Service` inside the access
+/// contract.
 ///
-/// Each delegating method runs the layered guard chain (global, resolver-scope
-/// and method guards), the posture's class gate (`nest_rs_authz::class_gate`) on
-/// the same field, the inherent method, then the response mask
+/// Each delegating method runs its field's pipeline, in order: the guards (the
+/// app's pool on a root field, the resolver's and the method's), the posture's
+/// class gate (`nest_rs_authz::class_gate`), the exception filters and
+/// interceptors (on a root field the app's, the modules' `#[interceptor]`s and
+/// the resolver's, then the method's; on a field resolver its own alone), the
+/// per-argument pipes, the inherent method, then the response mask
 /// (`nest_rs_authz::graphql::masked_value_for`) over what it returned.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {

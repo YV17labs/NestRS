@@ -30,9 +30,9 @@ http = [
     "dep:nest-rs-http",
     "dep:poem",
 ]
-# GraphQL surface: the `ability` accessor + `ContextSeed`, and the response
-# mask. The class gate is `class_gate`, every edge's, at the crate root. The
-# resolver-side `bind` helper lives in `nest_rs_seaorm::graphql`.
+# GraphQL surface: the `ability` accessor, reading the field's unit, and the
+# response mask. The class gate is `class_gate`, every edge's, at the crate
+# root. The resolver-side `bind` helper lives in `nest_rs_seaorm::graphql`.
 graphql = [
     "dep:nest-rs-graphql",
     # The root `AbilityGuard` is what `/graphql`'s request runs, through its

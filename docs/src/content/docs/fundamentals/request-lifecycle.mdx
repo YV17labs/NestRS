@@ -95,8 +95,10 @@ operation's unit of work): it runs stages 4 to 7 — its guard stage the app's
 pool, the resolver's and the field's guards, each one's `check`, then the
 field's class gate; the exception filters and the handler stage with the
 app's own; then its argument pipes, the call and the mask. A
-`#[field_resolver]` runs only what is declared on it, no app-wide layer, once
-per parent row.
+`#[field_resolver]` runs once per parent row, inside the root field that
+produced it: its resolver's guards and its own, then only the interceptors and
+exception filters declared on it — none of the app's, since the root field ran
+them.
 
 The operation span is outside all of it: the transport opens it before routing,
 so every stage above logs under one `trace_id` — see

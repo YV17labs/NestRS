@@ -54,7 +54,7 @@ use std::sync::Arc;
 
 use nest_rs_core::{Failure, ResolvesProvider};
 
-use crate::error::FieldFailure;
+use crate::error::{FieldFailure, Unprovided};
 
 /// Resolves a provider of type `T` from the request the operation arrived on,
 /// as a resolver method's parameter.
@@ -117,26 +117,6 @@ pub fn unprovided<T: 'static>() -> FieldFailure {
         provider: type_name::<T>(),
     }))
 }
-
-/// A provider a field reaches that neither its request nor the container
-/// holds: the type goes on the operator's line, never to the client.
-#[derive(Debug)]
-struct Unprovided {
-    provider: &'static str,
-}
-
-impl std::fmt::Display for Unprovided {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "no `{}` reached the field — list it in a module's providers, and serve a \
-             request-scoped one over the HTTP request",
-            self.provider,
-        )
-    }
-}
-
-impl std::error::Error for Unprovided {}
 
 #[cfg(test)]
 mod tests {

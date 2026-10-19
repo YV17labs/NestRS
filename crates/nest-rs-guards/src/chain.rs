@@ -143,7 +143,8 @@ impl SiteChainCell {
         {
             return Ok(chain);
         }
-        let chain = compose(container, route_label, sources(), global(container))?;
+        let chain: Chain =
+            compose_site_chain(container, route_label, sources(), global(container))?.into();
         site_chains(container).hold(Arc::clone(&chain));
         let cached = Cached {
             container: id,
@@ -157,19 +158,19 @@ impl SiteChainCell {
     }
 }
 
-/// Resolve, dedup and order this site's chain.
+/// Resolve, dedup and order one in-band site's chain.
 ///
 /// The app-wide pool is folded in: this site runs each guard's
 /// [`check`](Guard::check), which the endpoint request's `check_http` never
 /// stands in for. Skipping it ([`GlobalBucket::Skip`]) composes and then drops
 /// the global entries, never composes without them — the pool is what
 /// `compose_chain`'s dedup collapses a narrower declaration against.
-fn compose(
+pub fn compose_site_chain(
     container: &Container,
     route_label: &str,
     sources: SiteChainSources,
     bucket: GlobalBucket,
-) -> Result<Chain, UnresolvedLayerError> {
+) -> Result<Vec<ResolvedLayer<dyn Guard>>, UnresolvedLayerError> {
     let global = dedup_bucket(resolve_global_guards(container));
     let provider = resolve_scoped(container, &sources.provider, LayerSite::Host, route_label)?;
     let method = resolve_scoped(container, &sources.method, LayerSite::Method, route_label)?;
@@ -180,7 +181,7 @@ fn compose(
         chain.retain(|entry| entry.source != LayerSite::Global);
     }
     log_effective_chain(route_label, "guards", &chain);
-    Ok(chain.into())
+    Ok(chain)
 }
 
 /// Guards in the order they run.

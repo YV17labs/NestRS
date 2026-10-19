@@ -13,16 +13,17 @@ use async_graphql::parser::types::OperationType;
 use async_graphql::{Context, Error as GraphqlError};
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
-    GlobalLayers, GuardStage, ResolvedLayer, Site, Tail, compose_chain, dedup_bucket, dispatch,
-    log_effective_chain, new_unit_context, report_unresolved, resolve_scoped, settled,
+    GlobalLayers, GuardStage, ResolvedLayer, Site, Tail, dispatch, new_unit_context,
+    report_unresolved, settled,
 };
 use nest_rs_core::anyhow;
-use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::problem::code;
 use nest_rs_core::{
     Container, Failure, Handler, Outcome, Problem, UnitContext, UnresolvedLayerError,
 };
-use nest_rs_guards::__private::{RefusalMark, Refused, failure_chain, resolve_global_guards};
+use nest_rs_guards::__private::{
+    GlobalBucket, RefusalMark, Refused, SiteChainSources, compose_site_chain, failure_chain,
+};
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use tracing::Instrument;
 
@@ -55,11 +56,12 @@ impl GraphqlSite {
     ///
     /// An entity skips it only where the federation site runs it: a global
     /// pool can be absent, and skipping then would leave nothing to skip.
-    fn folds_pool(self, container: &Container) -> bool {
+    fn bucket(self, container: &Container) -> GlobalBucket {
         match self {
-            Self::Operation | Self::Federation => true,
-            Self::Field => false,
-            Self::Entity => !crate::federation::gate_runs(container),
+            Self::Operation | Self::Federation => GlobalBucket::Fold,
+            Self::Field => GlobalBucket::Skip,
+            Self::Entity if crate::federation::gate_runs(container) => GlobalBucket::Skip,
+            Self::Entity => GlobalBucket::Fold,
         }
     }
 
@@ -106,20 +108,19 @@ pub fn field_guard_stage(
     container: &Container,
     declared: FieldGuards,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
-    let label = declared.label;
-    let host = resolve_scoped(container, &declared.host, LayerSite::Host, label)?;
-    let method = resolve_scoped(container, &declared.method, LayerSite::Method, label)?;
-    let mut chain = compose_chain::<dyn Guard>(
-        dedup_bucket(resolve_global_guards(container)),
+    let FieldGuards {
         host,
         method,
-        &declared.force,
+        force,
+        site,
         label,
-    );
-    if !declared.site.folds_pool(container) {
-        chain.retain(|entry| entry.source != LayerSite::Global);
-    }
-    log_effective_chain(label, "guards", &chain);
+    } = declared;
+    let sources = SiteChainSources {
+        provider: host,
+        method,
+        force,
+    };
+    let chain = compose_site_chain(container, label, sources, site.bucket(container))?;
     Ok(FieldGuardStage::of(chain, Floor::Operation(label)))
 }
 
@@ -226,11 +227,12 @@ where
         GraphqlSite::Entity => "entity",
         _ => operation_label(operation),
     };
-    let unit = FieldUnit {
+    let unit = FieldUnit::new(
         site,
-        container: ctx.data_unchecked::<Container>(),
-        view: GraphqlView::new(site.handler().address(), operation, kind.role()),
-    };
+        ctx.data_unchecked::<Container>(),
+        operation,
+        kind.role(),
+    );
     in_field_unit(role, field_name(ctx), unit.run(tail))
 }
 
@@ -294,16 +296,14 @@ where
     F: FnOnce() -> Fut + Send + 'a,
     Fut: Future<Output = Result<T, FieldFailure>> + Send + 'a,
 {
-    let unit = FieldUnit {
+    let operation = ctx.query_env.operation.node.ty;
+    FieldUnit::new(
         site,
-        container: ctx.data_unchecked::<Container>(),
-        view: GraphqlView::new(
-            site.handler().address(),
-            ctx.query_env.operation.node.ty,
-            kind.role(),
-        ),
-    };
-    unit.run(tail)
+        ctx.data_unchecked::<Container>(),
+        operation,
+        kind.role(),
+    )
+    .run(tail)
 }
 
 /// The operation type as a field's line names its role.
@@ -318,12 +318,26 @@ fn operation_label(operation: OperationType) -> &'static str {
 /// One field to dispatch: its site, the container its chains are composed
 /// against, and the view its layers read.
 pub(crate) struct FieldUnit<'a> {
-    pub(crate) site: &'static Site,
-    pub(crate) container: &'a Container,
-    pub(crate) view: GraphqlView,
+    site: &'static Site,
+    container: &'a Container,
+    view: GraphqlView,
 }
 
-impl FieldUnit<'_> {
+impl<'a> FieldUnit<'a> {
+    /// The field `site` declares, in an `operation`, playing `role`.
+    pub(crate) fn new(
+        site: &'static Site,
+        container: &'a Container,
+        operation: OperationType,
+        role: FieldRole,
+    ) -> Self {
+        Self {
+            site,
+            container,
+            view: GraphqlView::new(site.handler().address(), operation, role),
+        }
+    }
+
     /// The field through its site's chains, the rest of it `tail`, answered
     /// by the edge's one rule.
     pub(crate) async fn run<T, F, Fut>(self, tail: F) -> Result<T, GraphqlError>
@@ -391,11 +405,7 @@ fn answered<T>(outcome: Outcome, slot: Option<Result<T, Box<Reply>>>) -> Result<
     {
         mark.mark();
     }
-    let reply = match slot {
-        Some(Err(reply)) => Some(reply),
-        Some(Ok(_)) | None => None,
-    };
-    Err(answer(&failure, reply))
+    Err(answer(&failure, slot.and_then(Result::err)))
 }
 
 /// A field's tail as the pipeline runs it: `run`, its value written into the
@@ -417,7 +427,7 @@ where
         let slot = &mut *self.slot;
         async move {
             let Some(run) = run else {
-                return Err(Failure::from(RanTwice));
+                unreachable!("a unit runs its tail once");
             };
             match run().await {
                 Ok(value) => {
@@ -439,19 +449,6 @@ where
         }
     }
 }
-
-/// A field's tail reached a second time: the pipeline runs a unit once, so
-/// this is a framework defect, answered opaquely.
-#[derive(Debug)]
-struct RanTwice;
-
-impl std::fmt::Display for RanTwice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("a field's tail was run twice")
-    }
-}
-
-impl std::error::Error for RanTwice {}
 
 pin_project_lite::pin_project! {
     /// A root field's unit with its line, filed once it ends: `ok` or `error`

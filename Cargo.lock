@@ -2834,6 +2834,7 @@ dependencies = [
  "nest-rs-ws",
  "pin-project-lite",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "validator",

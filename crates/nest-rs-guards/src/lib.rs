@@ -110,7 +110,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::chain::{
-        Chain, GlobalBucket, SiteChainCell, SiteChainSources, split_at_covered,
+        Chain, GlobalBucket, SiteChainCell, SiteChainSources, compose_site_chain, split_at_covered,
     };
     pub use crate::denial::{denial_of, failure_chain};
     pub use crate::reason::{client_message, denial_code, structured_reason};

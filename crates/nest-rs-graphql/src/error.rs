@@ -100,20 +100,12 @@ pub fn denial_to_graphql_error(denial: Denial) -> Error {
 /// assert_eq!(error.message, "conflict");
 /// ```
 pub fn problem_error<E: ToProblem>(error: &E) -> Error {
-    match error.to_problem() {
-        Some(problem) => answered(&problem, error),
-        None => opaque_error(error),
-    }
+    problem_reply(error).filed()
 }
 
 /// `problem` as the answer to `error`, filing what a `5xx` answer withholds.
 fn answered(problem: &Problem, error: &(dyn StdError + 'static)) -> Error {
-    match nest_rs_core::__private::withheld(problem, error) {
-        Some(Withheld::Failed(said)) => failed(&said),
-        Some(Withheld::Unavailable(said)) => unavailable(&said),
-        None => {}
-    }
-    rendered(problem)
+    Reply::problem(problem, error).filed()
 }
 
 /// A problem in GraphQL's form.
@@ -131,9 +123,7 @@ pub(crate) fn rendered(problem: &Problem) -> Error {
 /// The opaque answer, with `error`'s whole chain on the operator's line: what
 /// a failure the client is owed no explanation for becomes.
 pub(crate) fn opaque_error(error: &(dyn StdError + 'static)) -> Error {
-    failed(&nest_rs_core::error_message(error));
-    // The `INTERNAL` code an internal denial carries, so the two are indistinguishable.
-    rendered(&Problem::new(500, code::INTERNAL))
+    Reply::opaque(error).filed()
 }
 
 /// The operator's line for a failure the answer withholds: its whole chain.
@@ -185,11 +175,30 @@ pub struct FieldFailure {
 /// An answer a field wrote, with the chain it keeps from the client — filed
 /// only if it is the one sent.
 pub(crate) struct Reply {
-    pub(crate) error: Error,
+    error: Error,
     withheld: Option<Withheld>,
 }
 
 impl Reply {
+    /// `problem` as the answer to `error`, keeping what a `5xx` answer
+    /// withholds.
+    fn problem(problem: &Problem, error: &(dyn StdError + 'static)) -> Self {
+        Self {
+            error: rendered(problem),
+            withheld: nest_rs_core::__private::withheld(problem, error),
+        }
+    }
+
+    /// The opaque answer, keeping `error`'s whole chain.
+    fn opaque(error: &(dyn StdError + 'static)) -> Self {
+        Self {
+            // The `INTERNAL` code an internal denial carries, so the two are
+            // indistinguishable.
+            error: rendered(&Problem::new(500, code::INTERNAL)),
+            withheld: Some(Withheld::Failed(nest_rs_core::error_message(error))),
+        }
+    }
+
     /// The answer, its withheld chain filed: it is the one sent.
     pub(crate) fn filed(self) -> Error {
         match self.withheld {
@@ -243,16 +252,20 @@ impl From<PipeError> for FieldFailure {
 /// What the pipeline carries for a field that answered its own
 /// `async_graphql::Error`: the answer is that error, as built, so the failure
 /// names no more than this.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("the field answered its own GraphQL error")]
 pub(crate) struct DeliberateError;
 
-impl std::fmt::Display for DeliberateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("the field answered its own GraphQL error")
-    }
+/// A provider a field reaches that neither its request nor the container
+/// holds: the type goes on the operator's line, never to the client.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "no `{provider}` reached the field — list it in a module's providers, and serve a \
+     request-scoped one over the HTTP request"
+)]
+pub(crate) struct Unprovided {
+    pub(crate) provider: &'static str,
 }
-
-impl StdError for DeliberateError {}
 
 /// What a field whose unit failed answers: an exception filter's problem over
 /// whatever it wrote, else the answer it wrote, else the edge's one rule —
@@ -280,14 +293,8 @@ fn unanswered(failure: &Failure) -> Error {
 /// answer when it says none — and the chain it keeps from the client.
 fn problem_reply<E: ToProblem>(error: &E) -> Reply {
     match error.to_problem() {
-        Some(problem) => Reply {
-            error: rendered(&problem),
-            withheld: nest_rs_core::__private::withheld(&problem, error),
-        },
-        None => Reply {
-            error: rendered(&Problem::new(500, code::INTERNAL)),
-            withheld: Some(Withheld::Failed(nest_rs_core::error_message(error))),
-        },
+        Some(problem) => Reply::problem(&problem, error),
+        None => Reply::opaque(error),
     }
 }
 

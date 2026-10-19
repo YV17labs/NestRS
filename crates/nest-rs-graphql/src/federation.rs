@@ -35,7 +35,7 @@ use nest_rs_guards::GuardSpecs;
 use crate::config::GraphqlConfig;
 use crate::error::FieldFailure;
 use crate::operation::{FieldGuardStage, FieldUnit, Floor, ROOT_FIELD, in_field_unit};
-use crate::view::{FieldRole, GraphqlView};
+use crate::view::FieldRole;
 
 /// The `Query`-root field a router calls to read a subgraph's SDL.
 pub(crate) const SERVICE_FIELD: &str = "_service";
@@ -196,15 +196,7 @@ impl Extension for FederationExtension {
         };
         let position = info.field.name.pos;
         let field = info.name;
-        let unit = FieldUnit {
-            site,
-            container,
-            view: GraphqlView::new(
-                site.handler().address(),
-                OperationType::Query,
-                FieldRole::Federation,
-            ),
-        };
+        let unit = FieldUnit::new(site, container, OperationType::Query, FieldRole::Federation);
         let tail = move || async move {
             next.run(ctx, info).await.map_err(|answered| {
                 let carried = Error {

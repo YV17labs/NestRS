@@ -22,14 +22,15 @@ impl<I: Instance> Module for RedisHealthModule<I> {
         if let Err(missing) = RedisConnection::<I>::of(&builder.snapshot(), "RedisHealthModule") {
             return builder.refuse(missing);
         }
+        let name = name::<I>();
         builder
             .provide_meta(IndicatorEntry::new::<Self>(
-                name::<I>(),
+                name.clone(),
                 ProbeKind::Readiness,
                 ping::<I>,
             ))
             .provide_meta(IndicatorEntry::new::<Self>(
-                name::<I>(),
+                name,
                 ProbeKind::Startup,
                 ping::<I>,
             ))

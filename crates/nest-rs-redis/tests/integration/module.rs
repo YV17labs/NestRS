@@ -22,11 +22,12 @@ use crate::harness::tls::trusting_the_test_authority;
 #[instance]
 pub(crate) struct Cache;
 
-/// The cache instance's server, set by the one test booting [`TwoInstances`]:
+/// The cache instance's server, set by each test booting a module that pins
+/// [`cache_config`] — [`TwoInstances`], `health`'s two probed instances:
 /// nextest runs each test in a process of its own.
-static CACHE_URL: OnceLock<String> = OnceLock::new();
+pub(crate) static CACHE_URL: OnceLock<String> = OnceLock::new();
 
-fn cache_config() -> RedisConfig {
+pub(crate) fn cache_config() -> RedisConfig {
     RedisConfig {
         url: CACHE_URL.get().cloned().unwrap_or_default(),
         connect_timeout: Duration::from_secs(2),

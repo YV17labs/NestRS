@@ -872,6 +872,62 @@ impl DarkeningProxy {
     }
 }
 
+/// A proxy in front of the dev container's Valkey that can sever the app from
+/// it and then let it back: severed, it drops every connection it carries and
+/// closes each new one on accept — Redis gone, as a restart or a failover leaves
+/// it — and restored, it carries new connections again.
+struct SeveringProxy {
+    addr: SocketAddr,
+    severed: watch::Sender<bool>,
+}
+
+impl SeveringProxy {
+    async fn start() -> Self {
+        let upstream = redis_url();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the proxy");
+        let addr = listener.local_addr().expect("the proxy's address");
+        let severed = watch::channel(false).0;
+        let accepting = severed.subscribe();
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                if *accepting.borrow() {
+                    drop(client);
+                    continue;
+                }
+                let upstream = upstream.clone();
+                let mut cut = accepting.clone();
+                tokio::spawn(async move {
+                    let Some((mut client, mut server)) =
+                        harness::tls::bridge(client, &upstream).await
+                    else {
+                        return;
+                    };
+                    tokio::select! {
+                        _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
+                        _ = cut.wait_for(|severed| *severed) => {}
+                    }
+                });
+            }
+        });
+        Self { addr, severed }
+    }
+
+    /// The suite's URL on database `db`, at the proxy's address.
+    fn url_on(&self, db: u8) -> String {
+        url_at(&redis_url_on(db), self.addr)
+    }
+
+    fn sever(&self) {
+        self.severed.send_replace(true);
+    }
+
+    fn restore(&self) {
+        self.severed.send_replace(false);
+    }
+}
+
 /// A proxy in front of the dev container's Valkey that, once muted, still
 /// carries every command to Valkey and drops every reply — a command that runs
 /// and whose answer is lost, the case only a network can make. It ends TLS on

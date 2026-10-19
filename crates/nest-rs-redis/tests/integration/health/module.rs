@@ -3,7 +3,6 @@
 //! and startup probes as `redis`, a named one as `redis:cache`, and liveness
 //! waits on neither.
 
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use nest_rs_core::{App, module};
@@ -12,19 +11,7 @@ use nest_rs_redis::{RedisConfig, RedisHealthModule, RedisModule};
 
 use crate::connection::DemotedRedis;
 use crate::harness::tls::trusting_the_test_authority;
-use crate::module::Cache;
-
-/// The cache instance's server, set by the one test booting [`TwoProbed`]:
-/// nextest runs each test in a process of its own.
-static CACHE_URL: OnceLock<String> = OnceLock::new();
-
-fn cache_config() -> RedisConfig {
-    RedisConfig {
-        url: CACHE_URL.get().cloned().unwrap_or_default(),
-        connect_timeout: Duration::from_secs(2),
-        tls: trusting_the_test_authority(),
-    }
-}
+use crate::module::{CACHE_URL, Cache, cache_config};
 
 #[module(imports = [
     HealthModule,

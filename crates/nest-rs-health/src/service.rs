@@ -43,6 +43,7 @@ pub struct HealthService {
 
 /// What the wiring hands the service: the container the checks run against,
 /// and the indicators the boot's name check passed.
+#[derive(Clone)]
 struct Installed {
     container: Container,
     indicators: Arc<[Indicator]>,
@@ -50,7 +51,6 @@ struct Installed {
 
 /// One indicator this app runs, whichever registry it came from — the one the
 /// probe runs and the boot's name check reads, so the two agree.
-#[derive(Clone)]
 pub(crate) struct Indicator {
     name: Cow<'static, str>,
     kind: ProbeKind,
@@ -100,7 +100,7 @@ pub(crate) fn wired(container: &Container) -> Vec<Indicator> {
 impl HealthService {
     /// Hold `container` and the `indicators` its probes run, once; a second
     /// install keeps the first.
-    pub(crate) fn install(&self, container: Container, indicators: Vec<Indicator>) {
+    pub(crate) fn install(&self, container: &Container, indicators: Vec<Indicator>) {
         let installed = {
             let mut held = self
                 .installed
@@ -123,9 +123,9 @@ impl HealthService {
                 )]
                 let _ = self.config.set(config);
             }
-            report_unreachable_indicators(&container);
+            report_unreachable_indicators(container);
             // Inside the guard: a service two live apps share reports once.
-            crate::controller::report_prefixed_probe_paths(&container);
+            crate::controller::report_prefixed_probe_paths(container);
         }
     }
 
@@ -147,18 +147,15 @@ impl HealthService {
             .installed
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map(|installed| {
-                (
-                    installed.container.clone(),
-                    Arc::clone(&installed.indicators),
-                )
-            });
-        let Some((container, indicators)) = held else {
+            .clone();
+        let Some(Installed {
+            container,
+            indicators,
+        }) = held
+        else {
             return ProbeReport::empty_up();
         };
 
-        // Silent on skips: `report_unreachable_indicators` named them at boot.
         let entries: Vec<&Indicator> = indicators
             .iter()
             .filter(|entry| entry.kind == kind)
@@ -470,7 +467,7 @@ mod tests {
             .build()
             .expect("the container builds");
         let svc = HealthService::default();
-        svc.install(container.clone(), wired(&container));
+        svc.install(&container, wired(&container));
 
         let report = svc.probe(ProbeKind::Readiness).await;
         assert_eq!(report.status, IndicatorStatus::Down);
@@ -532,7 +529,7 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let svc = HealthService::default();
-        svc.install(container.clone(), wired(&container));
+        svc.install(&container, wired(&container));
 
         let skipped = logs.find(
             crate::TARGET,
@@ -724,7 +721,7 @@ mod tests {
             .build()
             .expect("the container builds");
         let svc = HealthService::default();
-        svc.install(container.clone(), wired(&container));
+        svc.install(&container, wired(&container));
 
         let report = svc.probe(ProbeKind::Liveness).await;
         assert_eq!(report.status, IndicatorStatus::Up);

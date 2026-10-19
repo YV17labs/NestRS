@@ -58,7 +58,7 @@ fn wire_indicators(container: &Container) -> anyhow::Result<()> {
         let indicators = crate::service::wired(container);
         // The report's fold by name would silently keep one of two verdicts.
         crate::service::check_names(&indicators)?;
-        svc.install(container.clone(), indicators);
+        svc.install(container, indicators);
     }
     Ok(())
 }

@@ -205,9 +205,8 @@ pub(crate) struct OriginGate {
 impl HttpEndpointMeta {
     /// Declare a self-mount at `path`, its posture the one `handler` declares
     /// ([`declare_endpoint`] builds it); `path` and `label` may be owned, read
-    /// from config. The surface answers
-    /// under `path` whole, so it is one literal address: a template fails the
-    /// boot, naming the owner.
+    /// from config. The surface answers under `path` whole, so it is one
+    /// literal address: a template fails the boot, naming the owner.
     pub fn new<F>(
         handler: &'static Handler,
         path: impl Into<Cow<'static, str>>,

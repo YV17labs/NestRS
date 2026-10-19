@@ -4,7 +4,6 @@
 
 use std::io::{self, Seek, SeekFrom};
 use std::ops::Range;
-use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_http::header::{
@@ -40,10 +39,7 @@ const FALLBACK_VARY: HeaderValue = HeaderValue::from_static("Accept, Sec-Fetch-M
 const SEC_FETCH_MODE: HeaderName = HeaderName::from_static("sec-fetch-mode");
 
 /// The files under one mount, served.
-#[derive(Clone)]
-pub(crate) struct StaticFilesEndpoint(Arc<Served>);
-
-struct Served {
+pub(crate) struct StaticFilesEndpoint {
     path: String,
     files: Files,
     /// What every file but an HTML document is cached with.
@@ -63,16 +59,14 @@ impl StaticFilesEndpoint {
                 HeaderValue::try_from(format!("public, max-age={}", age.as_secs())).ok()
             })
             .unwrap_or(NO_CACHE);
-        Self(Arc::new(Served {
+        Self {
             path,
             files,
             cache_control,
             spa_fallback,
-        }))
+        }
     }
-}
 
-impl Served {
     /// The path below the mount, without the `/` that joins them; an empty
     /// segment stays, and is refused as one.
     fn below_mount<'a>(&self, path: &'a str) -> &'a str {
@@ -93,20 +87,19 @@ impl Served {
 
 impl Endpoint for StaticFilesEndpoint {
     async fn call(&self, req: Request) -> Result<Response> {
-        let served = &*self.0;
         let read = matches!(*req.method(), Method::GET | Method::HEAD);
-        let path = match RequestPath::parse(served.below_mount(req.uri().path())) {
+        let path = match RequestPath::parse(self.below_mount(req.uri().path())) {
             Ok(path) => path,
             Err(refusal) => return Ok(refused(refusal)),
         };
         // Whether a miss here may be a page — what `Accept` then decides.
-        let may_fall_back = read && served.spa_fallback && !path.names_a_file();
+        let may_fall_back = read && self.spa_fallback && !path.names_a_file();
         let fallback = may_fall_back && is_navigation(req.headers());
-        let found = served.files.find(&path, fallback).await.opaque()?;
+        let found = self.files.find(&path, fallback).await.opaque()?;
         let varies = may_fall_back && matches!(found, Found::Fallback(_) | Found::Missing);
         let mut resp = match found {
             Found::Asset(asset) if read => {
-                let cache_control = served.cache_control(&asset);
+                let cache_control = self.cache_control(&asset);
                 answer(asset, &req, cache_control)?
             }
             Found::Asset(_) => method_not_allowed(),

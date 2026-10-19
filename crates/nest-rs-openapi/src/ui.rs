@@ -38,7 +38,7 @@ pub(crate) fn swagger_index() -> impl Endpoint {
                 header::CONTENT_SECURITY_POLICY,
                 HeaderValue::from_static(DOCS_CONTENT_SECURITY_POLICY),
             )
-            .body(Bytes::from_static(INDEX_HTML.as_bytes())))
+            .body(INDEX_HTML))
     })
 }
 
@@ -62,23 +62,19 @@ pub(crate) fn swagger_preset() -> impl Endpoint {
 pub(crate) fn spec_endpoint(spec: String) -> impl Endpoint {
     let spec = Bytes::from(spec);
     endpoint_fn(move |_req| {
-        let spec = spec.clone();
-        async move { Ok(Response::builder().content_type(JSON).body(spec)) }
+        let response = Response::builder().content_type(JSON).body(spec.clone());
+        async move { Ok(response) }
     })
 }
 
 fn asset(content_type: HeaderValue, body: &'static [u8]) -> impl Endpoint {
     endpoint_fn(move |_req| {
-        let content_type = content_type.clone();
-        async move { Ok(cached(content_type, body)) }
+        let response = Response::builder()
+            .content_type(content_type.clone())
+            .header(header::CACHE_CONTROL, IMMUTABLE)
+            .body(body);
+        async move { Ok(response) }
     })
-}
-
-fn cached(content_type: HeaderValue, body: &'static [u8]) -> Response {
-    Response::builder()
-        .content_type(content_type)
-        .header(header::CACHE_CONTROL, IMMUTABLE)
-        .body(Bytes::from_static(body))
 }
 
 #[cfg(test)]

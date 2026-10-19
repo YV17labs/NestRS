@@ -1,7 +1,9 @@
-//! What `GET` on the GraphQL path answers when it opens no socket.
+//! What `GET` on the GraphQL path answers when it opens no socket: the
+//! playground, or a method refusal naming what the path serves.
 
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+use nest_rs_http::{StatusCode, header};
 use nest_rs_testing::TestApp;
 
 #[resolver]
@@ -15,6 +17,9 @@ impl PingResolver {
         true
     }
 }
+
+#[module(imports = [GraphqlModule::for_root(None)], providers = [PingResolver])]
+struct NoPlaygroundModule;
 
 #[module(
     imports = [GraphqlModule::for_root(GraphqlConfig {
@@ -38,4 +43,21 @@ async fn the_playground_is_html_naming_the_schemas_path() {
     let html = resp.0.into_body().into_string().await.expect("a body");
     assert!(html.contains("GraphQL Playground"), "{html:.120}");
     assert!(html.contains("\"/graphql\""), "{html:.120}");
+}
+
+/// RFC 9110 §15.5.6: a `405` lists what the path serves; a plain `GET` is not
+/// a GraphQL request here, a `POST` is.
+#[tokio::test]
+async fn a_plain_get_without_the_playground_is_405_naming_post() {
+    let app = TestApp::for_module::<NoPlaygroundModule>()
+        .await
+        .expect("boots");
+
+    for method in [nest_rs_http::Method::GET, nest_rs_http::Method::HEAD] {
+        let resp = app.http().request(method.clone(), "/graphql").send().await;
+
+        resp.assert_status(StatusCode::METHOD_NOT_ALLOWED);
+        resp.assert_content_type("application/problem+json");
+        resp.assert_header(header::ALLOW, "POST");
+    }
 }

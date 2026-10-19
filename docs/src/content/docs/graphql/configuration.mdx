@@ -126,6 +126,8 @@ depends on it), leave `playground` and `emit_sdl` to env.
   carrying file uploads, each held to the transport's body cap.
 - `GET <path>` — the [subscription socket](/graphql/subscriptions/) when the
   request asks to upgrade; otherwise the playground HTML, when `playground = true`.
+  With the playground off, a plain `GET` is answered `405` with `Allow: POST`:
+  a GraphQL request travels as a `POST` here.
 
 Any other method is answered `405`, with `Allow: POST, GET, HEAD`.
 

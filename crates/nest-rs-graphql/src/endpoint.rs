@@ -1,7 +1,10 @@
 //! [`GetEndpoint`] — what `GET` on the GraphQL path answers.
 
 use nest_rs_http::__private::websocket;
-use nest_rs_http::{Body, Bytes, Endpoint, HeaderValue, HttpError, Request, Response, StatusCode};
+use nest_rs_http::{
+    Body, Bytes, Endpoint, HeaderValue, HttpError, IntoResponse, ProblemDetails, Request, Response,
+    StatusCode, header,
+};
 
 use crate::subscription::SubscriptionEndpoint;
 
@@ -31,7 +34,17 @@ impl<E: async_graphql::Executor> Endpoint for GetEndpoint<E> {
             Some(html) => Ok(Response::builder()
                 .content_type(HeaderValue::from_static("text/html; charset=utf-8"))
                 .body(Body::from_bytes(html.clone()))),
-            None => Err(HttpError::from_status(StatusCode::METHOD_NOT_ALLOWED)),
+            None => Err(HttpError::from_response(not_a_graphql_request())),
         }
     }
+}
+
+/// A plain `GET` with the playground off: `405` naming the method a GraphQL
+/// request takes here (RFC 9110 §15.5.6), `GET` serving the socket alone.
+fn not_a_graphql_request() -> Response {
+    let mut refused = ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).into_response();
+    refused
+        .headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static("POST"));
+    refused
 }

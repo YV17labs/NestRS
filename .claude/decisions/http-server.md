@@ -232,3 +232,12 @@ the transport's body cap. What the endpoint refuses — a batch past
 `max_batch_size`, a `GET` it cannot serve — reaches the self-mount's site as an
 `HttpError`, where the app's exception filters read it, instead of being
 rendered inside a poem leaf first.
+
+With the playground off, a plain `GET` is answered `405` with `Allow: POST`,
+where 6.x sent no `Allow` (RFC 9110 §15.5.6 requires one): a GraphQL request
+travels as a `POST` there, and `GET` serves only the handshake. It is the
+endpoint's answer to a request its address routes, not the table's to a method
+the address does not serve, so the table's `Allow: POST, GET, HEAD` for any
+other method stands beside it; RFC 9110 §10.2.1 lets the set follow the
+request. Refused: `426` with `Upgrade: websocket`, which would point a client
+that wanted a query at a socket.

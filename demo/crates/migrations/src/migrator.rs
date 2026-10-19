@@ -21,6 +21,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260718_000000_add_post_status::Migration),
             Box::new(m20260718_000001_create_notification::Migration),
             Box::new(m20260721_000000_create_post_publication::Migration),
+            Box::new(nest_rs::seaorm::queue::OutboxMigration),
             Box::new(m20261015_000000_unique_among_live_rows::Migration),
         ]
     }

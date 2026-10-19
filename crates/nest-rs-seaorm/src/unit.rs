@@ -54,6 +54,9 @@ pub struct SeaOrmUnitOfWork {
     observe_conflicts: bool,
     settle_net: Duration,
     settles: Settles,
+    /// The outbox a unit's transaction writes a push's jobs into.
+    #[cfg(feature = "queue")]
+    outbox: Option<Arc<crate::queue::SeaOrmOutbox>>,
 }
 
 impl SeaOrmUnitOfWork {
@@ -80,7 +83,25 @@ impl SeaOrmUnitOfWork {
             observe_conflicts: config.observe_serialization_conflicts,
             settle_net: settle_net(config),
             settles,
+            #[cfg(feature = "queue")]
+            outbox: None,
         }
+    }
+
+    /// The same unit of work, its transactions writing a push's jobs into
+    /// `outbox` once a relay armed it.
+    #[cfg(feature = "queue")]
+    pub(crate) fn keeping(mut self, outbox: Option<Arc<crate::queue::SeaOrmOutbox>>) -> Self {
+        self.outbox = outbox;
+        self
+    }
+
+    /// A transaction opened on its first touch, for `transport`.
+    fn lazy(&self, transport: &'static str) -> LazyTransaction {
+        let lazy = LazyTransaction::new(self.db.clone(), transport);
+        #[cfg(feature = "queue")]
+        let lazy = lazy.keeping(self.outbox.clone());
+        lazy
     }
 }
 
@@ -102,11 +123,13 @@ impl UnitOfWork for SeaOrmUnitOfWork {
                     pool: Arc::clone(&self.pool),
                     settles: self.settles.clone(),
                     unseen: OnceLock::new(),
+                    #[cfg(feature = "queue")]
+                    outbox: self.outbox.clone(),
                 }),
                 transport,
             })),
             TransactionPolicy::PerUnit => Ok(Box::new(InTransaction {
-                lazy: Arc::new(LazyTransaction::new(self.db.clone(), transport)),
+                lazy: Arc::new(self.lazy(transport)),
                 observe_conflicts: self.observe_conflicts && spec.scope == ExecutorScope::Request,
                 net: self.settle_net,
                 deadline: spec.deadline,
@@ -180,6 +203,10 @@ pub(crate) struct PoolUnit {
     /// The commits of the blocks the body opened whose answer it has not seen;
     /// allocated by the first block.
     unseen: OnceLock<Arc<AtomicUsize>>,
+    /// The outbox a block of its own writes a push's jobs into; a push on the
+    /// pool itself is filed at once.
+    #[cfg(feature = "queue")]
+    outbox: Option<Arc<crate::queue::SeaOrmOutbox>>,
 }
 
 impl PoolUnit {
@@ -188,6 +215,13 @@ impl PoolUnit {
         self.unseen
             .get()
             .is_some_and(|unseen| unseen.load(Ordering::Relaxed) > 0)
+    }
+
+    /// The outbox a cancel on the pool deletes a kept record from: the
+    /// binding's, armed by a relay.
+    #[cfg(feature = "queue")]
+    fn outbox(&self) -> Option<&Arc<crate::queue::SeaOrmOutbox>> {
+        self.outbox.as_ref().filter(|outbox| outbox.is_armed())
     }
 }
 
@@ -198,11 +232,41 @@ impl nest_rs_database::Executor for PoolUnit {
 
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
         let own = self.pool.own_block()?;
+        #[cfg(feature = "queue")]
+        let own = own.keeping(self.outbox.clone());
         let unseen = Arc::clone(self.unseen.get_or_init(Arc::default));
         Some(Arc::new(AtomicExecutor::own_on_pool(
-            own,
+            Arc::new(own),
             PoolCommit::new(self.settles.clone(), unseen),
         )))
+    }
+
+    /// A record committed by an earlier unit and not yet filed is deleted on
+    /// the pool, outside every transaction.
+    #[cfg(feature = "queue")]
+    fn remove_outbox<'a>(
+        &'a self,
+        queue: &'a str,
+        id: uuid::Uuid,
+    ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
+    {
+        let outbox = self.outbox()?;
+        Some(Box::pin(
+            outbox.remove_on_pool(crate::queue::removal_of_job(queue, id)),
+        ))
+    }
+
+    #[cfg(feature = "queue")]
+    fn remove_outbox_unique<'a>(
+        &'a self,
+        queue: &'a str,
+        key: &'a str,
+    ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
+    {
+        let outbox = self.outbox()?;
+        Some(Box::pin(
+            outbox.remove_on_pool(crate::queue::removal_of_key(queue, key)),
+        ))
     }
 }
 
@@ -467,6 +531,8 @@ mod tests {
                 pool: Arc::new(Executor::Pool(DatabaseConnection::default())),
                 settles: Settles::default(),
                 unseen: OnceLock::new(),
+                #[cfg(feature = "queue")]
+                outbox: None,
             });
             if let Some(unseen) = blocks_unseen {
                 let block = nest_rs_database::Executor::atomic(&*unit)
@@ -621,6 +687,66 @@ mod tests {
         }));
         settles.drain().await;
         assert!(ended.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[cfg(feature = "queue")]
+    #[test]
+    fn a_units_transaction_keeps_jobs_once_a_relay_armed_its_outbox_and_a_pool_never() {
+        let record = || {
+            std::iter::once(nest_rs_database::OutboxRecord::new(
+                "notify",
+                uuid::Uuid::nil(),
+                "{}".to_owned(),
+                None,
+                Duration::ZERO,
+            ))
+        };
+        let unread = || {
+            std::iter::from_fn(|| -> Option<nest_rs_database::OutboxRecord> {
+                panic!("a handle keeping no outbox builds no record")
+            })
+        };
+        let unarmed = Arc::new(crate::queue::SeaOrmOutbox::new(
+            DatabaseConnection::default(),
+        ));
+        let unit_of_work = unit_of_work().keeping(Some(unarmed));
+        let open = unit_of_work
+            .open(&UnitSpec::new(
+                MESSAGE,
+                ExecutorScope::Request,
+                TransactionPolicy::PerUnit,
+            ))
+            .expect("opened");
+        assert!(
+            open.executor().write_outbox(&mut unread()).is_none(),
+            "no relay drains it: filed at once"
+        );
+
+        let unit_of_work = unit_of_work.keeping(Some(crate::queue::armed()));
+        let open = unit_of_work
+            .open(&UnitSpec::new(
+                MESSAGE,
+                ExecutorScope::Request,
+                TransactionPolicy::PerUnit,
+            ))
+            .expect("opened");
+        assert!(open.executor().write_outbox(&mut record()).is_some());
+        let open = unit_of_work
+            .open(&UnitSpec::new(
+                MESSAGE,
+                ExecutorScope::Request,
+                TransactionPolicy::Pool,
+            ))
+            .expect("opened");
+        assert!(
+            open.executor().write_outbox(&mut unread()).is_none(),
+            "a pool files at once"
+        );
+        let caller = Executor::Pool(DatabaseConnection::default());
+        assert!(
+            nest_rs_database::Executor::write_outbox(&caller, &mut unread()).is_none(),
+            "a handle the caller built keeps no outbox"
+        );
     }
 
     #[tokio::test]

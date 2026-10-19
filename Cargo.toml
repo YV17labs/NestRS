@@ -95,7 +95,9 @@ url = "2.5"
 # Public. `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed
 # bump, both pins together.
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid"] }
-sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio"] }
+# No `cli`: the framework links a migration (`OutboxMigration`) and a migrator,
+# never the migration command line, which an app's own migrations crate takes.
+sea-orm-migration = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio"] }
 # Named for its feature alone: sea-orm's `runtime-tokio-rustls` selects sqlx's
 # ring backend, which deny.toml bans.
 sqlx = { version = "0.9", default-features = false, features = ["tls-rustls-aws-lc-rs"] }

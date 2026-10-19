@@ -99,7 +99,7 @@ impl Savepoint {
     /// Keep `work` until the block settles, captured here for the commit that
     /// will run it.
     pub(crate) fn hold(&self, work: Deferred) {
-        self.adopt([held_for_commit(work, self.root().pool())]);
+        self.adopt([held_for_commit(work, self.root().pool_handle())]);
     }
 
     fn adopt(&self, work: impl IntoIterator<Item = Deferred>) {

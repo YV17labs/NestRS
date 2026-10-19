@@ -9,7 +9,7 @@ use nest_rs_core::logging::CONSOLE_FLUSH_TIMEOUT;
 use nest_rs_core::{SHUTDOWN_HOOKS_TIMEOUT, Transport};
 use nest_rs_http::{HttpConfig, HttpTransport};
 use nest_rs_opentelemetry::FLUSH_TIMEOUT;
-use nest_rs_queue::QueueWorker;
+use nest_rs_queue::{OutboxRelay, QueueWorker};
 use nest_rs_schedule::Scheduler;
 
 /// `terminationGracePeriodSeconds`' default: Kubernetes' number, not ours.
@@ -21,7 +21,7 @@ const KUBERNETES_DEFAULT_GRACE: Duration = Duration::from_secs(30);
 const STATED_WAY_DOWN: Duration = Duration::from_millis(29_500);
 
 /// Every transport the framework attaches, at its defaults.
-fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
+fn transports() -> [(&'static str, Box<dyn Transport>); 4] {
     [
         (
             "HttpTransport",
@@ -31,6 +31,7 @@ fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
             ),
         ),
         ("QueueWorker", Box::new(QueueWorker::default())),
+        ("OutboxRelay", Box::new(OutboxRelay::default())),
         ("Scheduler", Box::new(Scheduler::default())),
     ]
 }

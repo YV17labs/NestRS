@@ -20,7 +20,7 @@ use nest_rs_mcp::{McpConfig, McpModule};
 use nest_rs_oauth_client::{OAuthClientConfig, OAuthClientModule};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
-use nest_rs_queue::{QueueConfig, QueueModule};
+use nest_rs_queue::{OutboxConfig, OutboxModule, QueueConfig, QueueModule};
 use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueConfig, RedisQueueModule};
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmModule};
 use nest_rs_server_timing::{ServerTimingConfig, ServerTimingModule};
@@ -308,6 +308,14 @@ imported_twice!(
     unpinned = [QueueModule::for_root(None)],
     pinned = [QueueModule::for_root(QueueConfig::default())],
     bare = [QueueModule],
+);
+
+imported_twice!(
+    outbox,
+    seeds = unseeded,
+    unpinned = [OutboxModule::for_root(None)],
+    pinned = [OutboxModule::for_root(OutboxConfig::default())],
+    bare = [OutboxModule],
 );
 
 imported_twice!(

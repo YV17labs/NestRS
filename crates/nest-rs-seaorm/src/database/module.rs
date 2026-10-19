@@ -12,7 +12,24 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 /// UnitOfWork`, which every edge opens its units of work through and every
 /// lifecycle hook runs in. A bare import beside
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
+///
+/// Under the `queue` feature it also keeps the queue port's outbox:
+/// [`SeaOrmOutbox`](crate::queue::SeaOrmOutbox) as `dyn OutboxStore`, written by
+/// every unit's transaction, and the relay's `OutboxModule`, which files what
+/// a committed unit wrote on whichever queue backend the app binds.
 pub struct SeaOrmDatabaseModule;
+
+/// What the unit of work is built from: the pool, its config, the settles the
+/// close drains — and the outbox its transactions write into.
+#[cfg(not(feature = "queue"))]
+type UnitInputs = (DatabaseConnection, SeaOrmConfig, Settles);
+#[cfg(feature = "queue")]
+type UnitInputs = (
+    DatabaseConnection,
+    SeaOrmConfig,
+    Settles,
+    crate::queue::SeaOrmOutbox,
+);
 
 impl Module for SeaOrmDatabaseModule {
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
@@ -21,12 +38,9 @@ impl Module for SeaOrmDatabaseModule {
             .fold(builder, ContainerBuilder::provide_meta);
         // Queued after the pool's and config's factories, so a missing one is
         // named before any later factory dials.
-        provide_unit_of_work::<(DatabaseConnection, SeaOrmConfig, Settles), _, _>(
-            builder,
-            |container| async move {
-                Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
-            },
-        )
+        let builder = provide_unit_of_work::<UnitInputs, _, _>(builder, |container| async move {
+            Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
+        })
         // Installed after the pool, so its close drains every settle still
         // running before the pool's closes.
         .provide_factory_after::<Settles, (DatabaseConnection,), _, _>(|_| async {
@@ -35,10 +49,15 @@ impl Module for SeaOrmDatabaseModule {
         .provide_close::<Settles, _, _>(|settles| async move {
             settles.drain().await;
             Ok(())
-        })
+        });
+        #[cfg(feature = "queue")]
+        let builder = crate::queue::collect(builder);
+        builder
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        #[cfg(feature = "queue")]
+        let builder = crate::queue::register(builder);
         // A seeded `dyn UnitOfWork` skips the factory above, and its check.
         if let Err(missing) = substrate(&builder.snapshot()) {
             return builder.refuse(missing);
@@ -61,7 +80,10 @@ fn unit_of_work(container: &Container) -> anyhow::Result<SeaOrmUnitOfWork> {
         .get::<Settles>()
         .map(|settles| (*settles).clone())
         .unwrap_or_default();
-    Ok(SeaOrmUnitOfWork::draining_into(db, &config, settles))
+    let unit_of_work = SeaOrmUnitOfWork::draining_into(db, &config, settles);
+    #[cfg(feature = "queue")]
+    let unit_of_work = unit_of_work.keeping(container.get::<crate::queue::SeaOrmOutbox>());
+    Ok(unit_of_work)
 }
 
 fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Result<Arc<T>> {
@@ -223,6 +245,35 @@ mod tests {
             ran.load(std::sync::atomic::Ordering::SeqCst),
             "the binding's close drained it"
         );
+    }
+
+    #[cfg(feature = "queue")]
+    #[tokio::test]
+    async fn the_binding_keeps_the_outbox_and_attaches_the_relay_that_drains_it() {
+        let app = App::builder()
+            .provide(DatabaseConnection::default())
+            .provide(SeaOrmConfig::default())
+            .module::<SeaOrmDatabaseModule>()
+            .build()
+            .await
+            .expect("the binding boots over a pool and its config");
+        assert!(
+            app.container()
+                .get_dyn::<dyn nest_rs_database::OutboxStore>()
+                .is_some()
+        );
+        assert!(
+            app.container()
+                .get::<nest_rs_queue::OutboxConfig>()
+                .is_some(),
+            "the relay's settings are read for it"
+        );
+        let attached: Vec<String> = nest_rs_core::Discovery::new(app.container())
+            .meta::<nest_rs_core::TransportContribution>()
+            .iter()
+            .map(|contribution| contribution.meta.name().to_owned())
+            .collect();
+        assert_eq!(attached, ["OutboxRelay"]);
     }
 
     /// A hand-written importer that imports the binding in its register alone.

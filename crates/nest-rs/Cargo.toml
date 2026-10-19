@@ -141,7 +141,14 @@ mcp = [
 # A port forwards its kit weakly: beside `testing`, a queue driver's suite
 # reaches `queue_kit!` with no second manifest line, and a build without
 # `testing` compiles no harness.
-queue = ["dep:nest-rs-queue", "pipes", "nest-rs-testing?/queue"]
+queue = [
+    "dep:nest-rs-queue",
+    "pipes",
+    "nest-rs-testing?/queue",
+    # Beside `seaorm`, the database binding keeps the outbox a push inside a
+    # transaction is written to, with no import of the app's.
+    "nest-rs-seaorm?/queue",
+]
 # The one Redis connection (`RedisModule`, `RedisConnection`) and nothing else:
 # an app that sends its own commands, or a health check, compiles no port.
 redis = ["dep:nest-rs-redis"]

@@ -45,8 +45,14 @@ graphql = [
 # round-trips a `SELECT 1`, so an unreachable DB drops the readiness probe
 # to `503`.
 health = ["dep:nest-rs-health"]
+# The queue port's transactional outbox in the app's Postgres: `SeaOrmOutbox`,
+# which `SeaOrmDatabaseModule` binds as `dyn OutboxStore` beside the relay's
+# `OutboxModule`, and `OutboxMigration`, which creates its table. The
+# umbrella's `queue` feature forwards it, so an app binding a database and a
+# queue backend files a job pushed inside a transaction after its commit.
+queue = ["dep:nest-rs-queue", "dep:sea-orm-migration", "dep:futures-util"]
 # Convenience for tests and exemplars.
-full = ["http", "graphql", "health"]
+full = ["http", "graphql", "health", "queue"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -103,6 +109,14 @@ tokio-util.workspace = true
 async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono"] }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
+# Behind `queue`: the relay's `OutboxModule`, which the binding imports beside
+# the store it binds.
+nest-rs-queue = { workspace = true, optional = true }
+# Behind `queue`: `OutboxMigration` is a `MigrationTrait` an app's migrator
+# lists beside its own.
+sea-orm-migration = { workspace = true, optional = true }
+# Behind `queue`: the boxed futures `OutboxStore` and `OutboxClaim` answer.
+futures-util = { workspace = true, optional = true }
 # Behind `http`: the extractor, the mask and the error mapping a route reads.
 nest-rs-http = { workspace = true, optional = true }
 
@@ -146,6 +160,8 @@ nest-rs-queue = { path = "../nest-rs-queue" }
 # `test-util` (not part of tokio's `full`) pauses time, so the instant each
 # conflicting call retries at is read off the clock its backoff sleeps on.
 tokio = { workspace = true, features = ["test-util"] }
+# The outbox e2e migrates an ephemeral database with `OutboxMigration`.
+sea-orm-migration.workspace = true
 
 [lints]
 workspace = true

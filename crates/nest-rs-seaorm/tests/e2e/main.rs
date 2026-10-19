@@ -25,6 +25,7 @@ mod mcp;
 mod module;
 mod mutual_tls;
 mod public_visitor;
+mod queue;
 mod relational_authz;
 mod scope;
 mod soft_delete;

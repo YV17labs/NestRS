@@ -11,6 +11,10 @@
 //!   runs its unit of work through, on an ambient [`Executor`]: the pool, or a
 //!   transaction opened on the unit's first data-layer touch.
 //! - [`SeaOrmHealthModule`] (bare, feature `health`) binds a health indicator.
+//! - Under the `queue` feature, [`SeaOrmDatabaseModule`] also keeps the queue
+//!   port's outbox, [`queue::SeaOrmOutbox`]: a job pushed inside a unit's
+//!   transaction is written there and filed after its commit;
+//!   [`queue::OutboxMigration`] creates its table.
 //!
 //! Services query through [`Repo`]: every call runs on the ambient executor,
 //! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability),
@@ -72,6 +76,8 @@ pub mod graphql;
 mod health;
 #[cfg(feature = "http")]
 mod http;
+#[cfg(feature = "queue")]
+pub mod queue;
 
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;

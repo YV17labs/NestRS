@@ -63,6 +63,35 @@ impl nest_rs_database::Executor for AtomicExecutor {
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
         self.executor.atomic()
     }
+
+    #[cfg(feature = "queue")]
+    fn write_outbox(
+        &self,
+        records: &mut dyn Iterator<Item = nest_rs_database::OutboxRecord>,
+    ) -> Option<futures_util::future::BoxFuture<'_, Result<(), nest_rs_database::OutboxError>>>
+    {
+        nest_rs_database::Executor::write_outbox(&self.executor, records)
+    }
+
+    #[cfg(feature = "queue")]
+    fn remove_outbox<'a>(
+        &'a self,
+        queue: &'a str,
+        id: uuid::Uuid,
+    ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
+    {
+        nest_rs_database::Executor::remove_outbox(&self.executor, queue, id)
+    }
+
+    #[cfg(feature = "queue")]
+    fn remove_outbox_unique<'a>(
+        &'a self,
+        queue: &'a str,
+        key: &'a str,
+    ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
+    {
+        nest_rs_database::Executor::remove_outbox_unique(&self.executor, queue, key)
+    }
 }
 
 impl AtomicBlock for AtomicExecutor {

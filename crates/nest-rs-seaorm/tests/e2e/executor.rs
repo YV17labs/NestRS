@@ -325,3 +325,52 @@ async fn a_listener_run_at_once_under_a_callers_own_transaction_runs_in_a_unit_o
         "run at once, before the caller's commit, in a transaction of its own",
     );
 }
+
+#[module(imports = [SeaOrmModule::for_root(None)])]
+struct BoundedPoolModule;
+
+/// A body cut at its deadline leaves its statement running; Postgres cancels
+/// it at its bound, and that answer is what the rollback meets. The rollback
+/// is said at `warn`, as every statement Postgres cancelled is, whichever edge
+/// the boundary served.
+#[tokio::test]
+async fn a_rollback_after_a_statement_postgres_cancelled_is_said_at_warn() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = nest_rs_core::App::builder()
+        .provide(SeaOrmConfig {
+            url: crate::harness::url(),
+            statement_timeout_secs: Some(1),
+            ..SeaOrmConfig::default()
+        })
+        .module::<BoundedPoolModule>()
+        .build()
+        .await
+        .expect("boots");
+    let db = app
+        .container()
+        .get::<sea_orm::DatabaseConnection>()
+        .expect("the pool");
+    let lazy = std::sync::Arc::new(nest_rs_seaorm::LazyTransaction::new((*db).clone(), "ws"));
+    let executor = nest_rs_seaorm::Executor::Lazy(std::sync::Arc::clone(&lazy));
+    let cut = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        executor.execute_unprepared("SELECT pg_sleep(3)"),
+    )
+    .await;
+    assert!(cut.is_err(), "the body is cut while its statement runs");
+    drop(executor);
+
+    let settled = lazy.finalize(false).await;
+    assert!(
+        matches!(settled, nest_rs_seaorm::FinalizeOutcome::RolledBack),
+        "{settled:?}"
+    );
+    let line = logs.expect_one(
+        nest_rs_seaorm::target::ORM,
+        "transaction rolled back after a statement Postgres cancelled; nothing it wrote stands",
+    );
+    assert_eq!(line.level, "warn");
+    assert_eq!(line.field("transport").as_deref(), Some("ws"));
+    logs.expect_none(nest_rs_seaorm::target::ORM, "transaction rollback failed");
+    app.close().await;
+}

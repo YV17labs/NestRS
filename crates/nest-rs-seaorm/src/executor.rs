@@ -412,12 +412,7 @@ impl LazyTransaction {
         // nothing.
         if let Some(retryable) = poisoned {
             if let Err(err) = txn.rollback().await {
-                tracing::error!(
-                    target: crate::target::ORM,
-                    transport,
-                    error = %nest_rs_core::error_message(&err),
-                    "poisoned transaction rollback failed"
-                );
+                report_rollback_failed(transport, &err, Settled::Poisoned);
             }
             tracing::error!(
                 target: crate::target::ORM,
@@ -436,12 +431,7 @@ impl LazyTransaction {
             }
         } else {
             if let Err(err) = txn.rollback().await {
-                tracing::error!(
-                    target: crate::target::ORM,
-                    transport,
-                    error = %nest_rs_core::error_message(&err),
-                    "transaction rollback failed"
-                );
+                report_rollback_failed(transport, &err, Settled::Failed);
             }
             FinalizeOutcome::RolledBack
         }
@@ -612,6 +602,49 @@ impl Drop for AbandonedDuringSettle {
         if self.armed {
             report_abandoned(self.transport);
         }
+    }
+}
+
+/// Why a boundary rolled its transaction back.
+#[derive(Clone, Copy)]
+enum Settled {
+    /// A statement failed inside it while it reported success.
+    Poisoned,
+    /// It failed.
+    Failed,
+}
+
+/// Say a rollback the database did not confirm. A statement Postgres
+/// cancelled at its bound (`57014`) answers the rollback of the transaction
+/// it ran in — a body cut at its deadline left it running — and Postgres has
+/// aborted that transaction: the in-doubt end every edge says at `warn`
+/// ([`DbOutcome::Unavailable`](crate::DbOutcome::Unavailable)).
+fn report_rollback_failed(transport: &'static str, err: &DbErr, why: Settled) {
+    let error = nest_rs_core::error_message(err);
+    if crate::DbOutcome::of(err) == crate::DbOutcome::Unavailable {
+        tracing::warn!(
+            target: crate::target::ORM,
+            transport,
+            outcome = "rollback",
+            error = %error,
+            "transaction rolled back after a statement Postgres cancelled; nothing it wrote \
+             stands"
+        );
+        return;
+    }
+    match why {
+        Settled::Poisoned => tracing::error!(
+            target: crate::target::ORM,
+            transport,
+            error = %error,
+            "poisoned transaction rollback failed"
+        ),
+        Settled::Failed => tracing::error!(
+            target: crate::target::ORM,
+            transport,
+            error = %error,
+            "transaction rollback failed"
+        ),
     }
 }
 
@@ -1385,6 +1418,46 @@ mod after_commit_tests {
             "after-commit work discarded: the boundary committed nothing",
         );
         assert_eq!(line.field("discarded").as_deref(), Some("1"));
+    }
+
+    /// A body cut mid-statement leaves it running; the rollback then meets
+    /// the answer Postgres gives it at its bound, and the transaction it ends
+    /// is rolled back whatever that answer says.
+    #[test]
+    fn a_rollback_met_by_a_statement_postgres_cancelled_is_said_at_warn_on_every_path() {
+        let logs = LogCapture::install();
+        for (transport, why) in [("ws", Settled::Failed), ("http", Settled::Poisoned)] {
+            report_rollback_failed(transport, &crate::error::tests::cancelled_statement(), why);
+        }
+        let said = logs.find(
+            crate::target::ORM,
+            "transaction rolled back after a statement Postgres cancelled; nothing it wrote \
+             stands",
+        );
+        assert_eq!(said.len(), 2, "{:?}", logs.events());
+        for line in &said {
+            assert_eq!(line.level, "warn");
+            assert_eq!(line.field("outcome").as_deref(), Some("rollback"));
+            assert!(
+                line.field("error")
+                    .is_some_and(|error| error.contains("57014")),
+                "{line:?}"
+            );
+        }
+        logs.expect_none(crate::target::ORM, "transaction rollback failed");
+        logs.expect_none(crate::target::ORM, "poisoned transaction rollback failed");
+    }
+
+    #[test]
+    fn a_rollback_failing_on_anything_else_is_said_at_error() {
+        let logs = LogCapture::install();
+        report_rollback_failed(
+            "queue",
+            &DbErr::Custom("connection reset".into()),
+            Settled::Failed,
+        );
+        let line = logs.expect_one(crate::target::ORM, "transaction rollback failed");
+        assert_eq!(line.level, "error");
     }
 
     #[test]

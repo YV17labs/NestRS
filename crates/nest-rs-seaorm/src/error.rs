@@ -1010,7 +1010,7 @@ mod http {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use nest_rs_core::error_message;

@@ -30,27 +30,25 @@ impl Strategy for OAuthStrategy {
     async fn authenticate(&self, req: &mut Request) -> Result<Caller, AuthError> {
         let provider = req
             .path_param("provider")
-            .ok_or_else(|| AuthError::Failed("OAuth callback missing provider".into()))?;
+            .ok_or_else(|| AuthError::failed("OAuth callback missing provider"))?;
         let Ok(Query(query)) =
             Query::<CallbackQuery>::from_request(req, &mut RequestBody::new(Body::empty())).await
         else {
-            return Err(AuthError::Failed(
-                "OAuth callback query does not decode".into(),
-            ));
+            return Err(AuthError::failed("OAuth callback query does not decode"));
         };
         let code = query
             .code
-            .ok_or_else(|| AuthError::Failed("OAuth callback missing code".into()))?;
+            .ok_or_else(|| AuthError::failed("OAuth callback missing code"))?;
         let state = query
             .state
-            .ok_or_else(|| AuthError::Failed("OAuth callback missing state".into()))?;
+            .ok_or_else(|| AuthError::failed("OAuth callback missing state"))?;
         let transaction = OAuthClient::transaction_from(
             req.headers()
                 .get_all(header::COOKIE)
                 .iter()
                 .filter_map(|field| field.to_str().ok()),
         )
-        .ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
+        .ok_or_else(|| AuthError::failed("OAuth transaction cookie missing"))?;
         self.svc
             .resolve_caller(provider, transaction, &state, &code)
             .await

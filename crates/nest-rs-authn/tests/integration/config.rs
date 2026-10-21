@@ -30,7 +30,7 @@ fn a_short_hmac_secret_from_config_is_refused_by_the_service() {
     .expect("a secret alone makes an HMAC key");
     assert!(matches!(
         nest_rs_authn::JwtService::new(options),
-        Err(AuthError::Failed(_))
+        Err(AuthError::Failed { .. })
     ));
 }
 
@@ -72,7 +72,7 @@ fn into_options_private_key_without_public_fails() {
             ..Default::default()
         }
         .into_options(),
-        Err(AuthError::Failed(_))
+        Err(AuthError::Failed { .. })
     ));
 }
 
@@ -80,7 +80,7 @@ fn into_options_private_key_without_public_fails() {
 fn into_options_without_any_key_fails() {
     assert!(matches!(
         AuthnConfig::default().into_options(),
-        Err(AuthError::Failed(_))
+        Err(AuthError::Failed { .. })
     ));
 }
 
@@ -110,9 +110,10 @@ fn a_secret_beside_an_eddsa_pair_is_refused_naming_all_three() {
         ..Default::default()
     }
     .into_options();
-    let Err(AuthError::Failed(message)) = refused else {
+    let Err(message @ AuthError::Failed { .. }) = refused else {
         panic!("a secret beside a whole pair must be refused, not ignored")
     };
+    let message = nest_rs_core::error_message(&message);
     for key in ["SECRET", "PRIVATE_KEY", "PUBLIC_KEY"] {
         assert!(
             message.contains(&var_name(AuthnConfig::NAMESPACE, key)),
@@ -157,9 +158,10 @@ fn a_private_key_beside_a_secret_is_refused_naming_both() {
         ..Default::default()
     }
     .into_options();
-    let Err(AuthError::Failed(message)) = refused else {
+    let Err(message @ AuthError::Failed { .. }) = refused else {
         panic!("a private key beside a secret must be refused")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(
         message.contains(&var_name(AuthnConfig::NAMESPACE, "SECRET"))
             && message.contains(&var_name(AuthnConfig::NAMESPACE, "PRIVATE_KEY")),
@@ -183,9 +185,10 @@ fn a_secret_beside_keys_is_named_for_the_environment_and_the_pin_alike() {
         ..Default::default()
     }
     .into_options();
-    let Err(AuthError::Failed(message)) = refused else {
+    let Err(message @ AuthError::Failed { .. }) = refused else {
         panic!("a secret beside keys must be refused")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(
         message.contains("`secret` in an AuthnConfig or JwtOptions built in code"),
         "{message}"
@@ -212,9 +215,10 @@ fn a_blank_secret_beside_a_public_key_is_refused_as_two_modes() {
         ..Default::default()
     }
     .into_options();
-    let Err(AuthError::Failed(message)) = refused else {
+    let Err(message @ AuthError::Failed { .. }) = refused else {
         panic!("a blank secret beside a public key must be refused")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(message.contains("PUBLIC_KEY"), "{message}");
     assert!(!message.contains("must not be empty"), "{message}");
 }
@@ -237,9 +241,10 @@ fn eddsa_key_material_that_does_not_parse_names_its_setting() {
         }
         .into_options()
         .and_then(JwtService::new);
-        let Err(AuthError::Failed(message)) = refused else {
+        let Err(message @ AuthError::Failed { .. }) = refused else {
             panic!("{label} is not a public key")
         };
+        let message = nest_rs_core::error_message(&message);
         assert!(message.contains(&public_setting), "{label}: {message}");
     }
 
@@ -252,9 +257,10 @@ fn eddsa_key_material_that_does_not_parse_names_its_setting() {
     }
     .into_options()
     .and_then(JwtService::new);
-    let Err(AuthError::Failed(message)) = refused else {
+    let Err(message @ AuthError::Failed { .. }) = refused else {
         panic!("a private key that does not parse is refused")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(
         message.contains(&var_name(AuthnConfig::NAMESPACE, "PRIVATE_KEY_FILE")),
         "{message}"
@@ -271,9 +277,10 @@ fn a_public_key_beside_a_secret_is_refused_naming_both() {
         ..Default::default()
     }
     .into_options();
-    let Err(AuthError::Failed(message)) = refused else {
+    let Err(message @ AuthError::Failed { .. }) = refused else {
         panic!("a public key beside a secret must be refused")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(
         message.contains("SECRET") && message.contains("PUBLIC_KEY"),
         "{message}"
@@ -340,9 +347,10 @@ fn a_secret_and_keys_from_different_tiers_arrive_together_and_are_refused() {
         config.secret.is_some() && config.private_key.is_some() && config.public_key.is_some(),
         "each variable is read on its own, so all three arrive"
     );
-    let Err(AuthError::Failed(message)) = config.into_options() else {
+    let Err(message @ AuthError::Failed { .. }) = config.into_options() else {
         panic!("a deployment's secret beside a committed pair must be refused, not chosen")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(message.contains(&secret_var), "{message}");
 
     let pinned = AuthnConfig {
@@ -422,9 +430,10 @@ fn a_secret_is_held_to_the_size_of_its_algorithms_hash() {
     for (algorithm, minimum) in [(Algorithm::HS384, 48), (Algorithm::HS512, 64)] {
         let mut short = nest_rs_authn::JwtOptions::new(STRONG_SECRET);
         short.algorithms = vec![algorithm];
-        let Err(AuthError::Failed(message)) = JwtService::new(short) else {
+        let Err(message @ AuthError::Failed { .. }) = JwtService::new(short) else {
             panic!("a 32-byte secret is too short for {algorithm:?}")
         };
+        let message = nest_rs_core::error_message(&message);
         assert!(message.contains(&format!("{minimum} bytes")), "{message}");
 
         let mut long = nest_rs_authn::JwtOptions::new("x".repeat(minimum));
@@ -529,9 +538,10 @@ fn a_jwk_set_uri_beside_a_static_key_is_refused_naming_both() {
             ..beside
         }
         .into_options();
-        let Err(AuthError::Failed(message)) = refused else {
+        let Err(message @ AuthError::Failed { .. }) = refused else {
             panic!("a JWK Set beside {set} must be refused, not chosen")
         };
+        let message = nest_rs_core::error_message(&message);
         assert!(message.contains(&jwks), "{message}");
         assert!(
             message.contains(&var_name(AuthnConfig::NAMESPACE, set)),
@@ -562,9 +572,10 @@ fn an_authority_without_a_jwk_set_is_refused() {
         ..Default::default()
     }
     .into_options();
-    let Err(AuthError::Failed(message)) = refused else {
+    let Err(message @ AuthError::Failed { .. }) = refused else {
         panic!("an authority with nothing to trust it for must be refused")
     };
+    let message = nest_rs_core::error_message(&message);
     for key in ["TLS_CA_CERT", "JWKS_URI"] {
         assert!(
             message.contains(&var_name(AuthnConfig::NAMESPACE, key)),
@@ -577,9 +588,10 @@ fn an_authority_without_a_jwk_set_is_refused() {
 fn nothing_configured_names_the_jwk_set_among_the_key_sources() {
     use nest_rs_config::{Namespaced, var_name};
 
-    let Err(AuthError::Failed(message)) = AuthnConfig::default().into_options() else {
+    let Err(message @ AuthError::Failed { .. }) = AuthnConfig::default().into_options() else {
         panic!("no key must fail the boot")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(
         message.contains(&var_name(AuthnConfig::NAMESPACE, "JWKS_URI")),
         "{message}"
@@ -642,9 +654,11 @@ fn algorithms_are_read_by_their_jose_names() {
         jwks_uri: Some(JWKS_URI.into()),
         ..read(",").expect("a list of no names reads")
     };
-    let Err(AuthError::Failed(message)) = empty.into_options().and_then(JwtService::new) else {
+    let Err(message @ AuthError::Failed { .. }) = empty.into_options().and_then(JwtService::new)
+    else {
         panic!("a list naming no algorithm must fail the boot")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(
         message.contains(&var_name(AuthnConfig::NAMESPACE, "ALGORITHMS"))
             && message.contains("names no algorithm"),
@@ -700,9 +714,10 @@ fn the_algorithms_set_beside_a_key_must_fit_it() {
     }
     .into_options()
     .and_then(JwtService::new);
-    let Err(AuthError::Failed(message)) = refused else {
+    let Err(message @ AuthError::Failed { .. }) = refused else {
         panic!("RS256 with an EdDSA key must be refused")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(message.contains("algorithm cannot be used"), "{message}");
 }
 

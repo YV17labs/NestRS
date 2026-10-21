@@ -38,7 +38,7 @@ fn missing_client_id_fails_validation() {
 fn empty_config_fails_at_client_construction() {
     assert!(matches!(
         OAuthClient::new(OAuthClientConfig::default()),
-        Err(AuthError::Failed(_))
+        Err(AuthError::Failed { .. })
     ));
 }
 

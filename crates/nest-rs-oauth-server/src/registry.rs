@@ -83,7 +83,7 @@ pub fn authenticate_against_registry<P: Clone>(
             matched = Some(client);
         }
     }
-    let client = matched.ok_or_else(|| AuthError::Failed("invalid client credentials".into()))?;
+    let client = matched.ok_or_else(|| AuthError::failed("invalid client credentials"))?;
     Ok(AuthenticatedClient {
         payload: client.payload.clone(),
         scopes: client.scopes.clone(),
@@ -125,8 +125,11 @@ mod tests {
     fn rejects_a_wrong_secret_with_an_opaque_error() {
         let registry = [client("ci", "s3cret", &["read"])];
         let err = authenticate_against_registry(&registry, "ci", "wrong").expect_err("rejected");
-        assert!(matches!(err, AuthError::Failed(_)));
-        assert!(err.to_string().contains("invalid client credentials"));
+        assert!(matches!(err, AuthError::Failed { .. }));
+        assert_eq!(
+            nest_rs_core::error_message(&err),
+            "authentication failed: invalid client credentials"
+        );
     }
 
     #[test]

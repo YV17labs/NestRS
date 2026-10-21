@@ -61,7 +61,7 @@ nest_rs_core::inventory::submit! {
         build: |container| {
             resolve_provider::<GoogleSocialProvider, GoogleSocialConfig>(container, |config| {
                 let client = OAuthClient::new(config.oauth2_config()?)
-                    .map_err(|e| anyhow::anyhow!("invalid Google OAuth2 client config: {e}"))?;
+                    .map_err(|e| anyhow::Error::new(e).context("invalid Google OAuth2 client config"))?;
                 Ok(GoogleSocialProvider::new(client))
             })
         },

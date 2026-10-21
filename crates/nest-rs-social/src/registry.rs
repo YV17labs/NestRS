@@ -121,10 +121,10 @@ impl SocialRegistry {
                 continue;
             }
             let built = (entry.build)(container).map_err(|err| {
-                anyhow::anyhow!(
-                    "social provider `{}` is linked but misconfigured: {err}",
+                err.context(format!(
+                    "social provider `{}` is linked but misconfigured",
                     entry.key,
-                )
+                ))
             })?;
             match built {
                 Some(provider) => {
@@ -230,7 +230,7 @@ mod tests {
             unreachable!("build_registry never touches the client")
         }
         fn profile<'a>(&'a self, _tokens: &'a TokenSet) -> ProfileFuture<'a> {
-            Box::pin(async { Err::<SocialProfile, _>(AuthError::Failed("stub".into())) })
+            Box::pin(async { Err::<SocialProfile, _>(AuthError::failed("stub")) })
         }
     }
 
@@ -324,7 +324,7 @@ mod tests {
             unreachable!("these tests never run the OAuth flow")
         }
         fn profile<'a>(&'a self, _tokens: &'a TokenSet) -> ProfileFuture<'a> {
-            Box::pin(async { Err::<SocialProfile, _>(AuthError::Failed("stub".into())) })
+            Box::pin(async { Err::<SocialProfile, _>(AuthError::failed("stub")) })
         }
     }
 

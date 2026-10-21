@@ -242,7 +242,7 @@ fn static_key(
             .flatten()
             .collect::<Vec<_>>()
             .join(", and ");
-            Err(AuthError::Failed(format!(
+            Err(AuthError::failed(format!(
                 "{}, is set beside {keys}. An HS256 secret and EdDSA keys are two signing modes, \
                  and nothing says which is meant — remove the secret from wherever it was set \
                  to use EdDSA, or the keys to use HS256",
@@ -253,12 +253,12 @@ fn static_key(
             private_pem: private,
             public_pem: public,
         }),
-        (None, Some(_), None) => Err(AuthError::Failed(format!(
+        (None, Some(_), None) => Err(AuthError::failed(format!(
             "{}, is set without {}",
             spellings("PRIVATE_KEY", "private_key"),
             spellings("PUBLIC_KEY", "public_key"),
         ))),
-        (None, None, None) => Err(AuthError::Failed(format!(
+        (None, None, None) => Err(AuthError::failed(format!(
             "no JWT key configured: set {} for HS256, {} for EdDSA, or {} for an external \
              issuer's keys — or the same field in an AuthnConfig or JwtOptions built in code",
             nest_rs_config::spellings(AuthnConfig::NAMESPACE, "SECRET"),
@@ -294,7 +294,7 @@ impl AuthnConfig {
                 .flatten()
                 .collect::<Vec<_>>();
                 if !beside.is_empty() {
-                    return Err(AuthError::Failed(format!(
+                    return Err(AuthError::failed(format!(
                         "{}, is set beside {}. An external issuer's JWK Set and a key of this \
                          deployment's own are two key sources, and nothing says which is meant \
                          — remove the static key from wherever it was set to verify against the \
@@ -307,7 +307,7 @@ impl AuthnConfig {
             }
             None => {
                 if !self.tls.is_empty() {
-                    return Err(AuthError::Failed(format!(
+                    return Err(AuthError::failed(format!(
                         "TLS material — {} — is set without {}: it is what the JWK Set \
                          endpoint's connection trusts and presents, and no JWK Set is fetched",
                         tls_setting(),

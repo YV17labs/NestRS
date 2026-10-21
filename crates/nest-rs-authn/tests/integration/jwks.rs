@@ -18,8 +18,9 @@ use jsonwebtoken::jwk::{
 };
 use jsonwebtoken::{Algorithm, EncodingKey, Header, get_current_timestamp};
 use nest_rs_authn::{
-    AuthError, AuthnConfig, AuthnGuard, AuthnModule, JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR,
-    JWKS_STALE_CEILING, JwtService, JwtStrategy, PrincipalIdentity,
+    AuthError, AuthnConfig, AuthnGuard, AuthnModule, JWKS_CONNECT_TIMEOUT, JWKS_FETCH_TIMEOUT,
+    JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR, JWKS_STALE_CEILING, JwtService, JwtStrategy,
+    PrincipalIdentity,
 };
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
@@ -317,12 +318,13 @@ async fn an_issuer_certificate_the_client_does_not_accept_names_the_setting_that
         jwks_uri: Some(issuer.uri()),
         ..AuthnConfig::default()
     });
-    let Err(AuthError::Unavailable { detail, .. }) = trusting_the_system
+    let Err(detail @ AuthError::Unavailable { .. }) = trusting_the_system
         .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
         .await
     else {
         panic!("a certificate no trusted authority signed must not be fetched from");
     };
+    let detail = nest_rs_core::error_message(&detail);
     assert!(
         detail.contains("does not chain to an authority")
             && detail.contains(&var_name(AuthnConfig::NAMESPACE, "TLS_CA_CERT")),
@@ -641,9 +643,10 @@ async fn a_failed_refresh_keeps_the_last_good_set_until_its_stale_ceiling() {
     );
 
     elapse(JWKS_STALE_CEILING).await;
-    let Err(AuthError::Unavailable { detail, .. }) = jwt.verify::<Claims>(&valid).await else {
+    let Err(detail @ AuthError::Unavailable { .. }) = jwt.verify::<Claims>(&valid).await else {
         panic!("past its stale ceiling the set verifies nothing");
     };
+    let detail = nest_rs_core::error_message(&detail);
     assert!(detail.contains("answered 500"), "{detail}");
 }
 
@@ -684,15 +687,18 @@ async fn an_answer_that_is_not_a_usable_set_is_unavailable_and_never_quoted() {
     ] {
         let issuer = Issuer::serving(answer).await;
         let jwt = verifier(&issuer);
-        let Err(AuthError::Unavailable {
-            detail,
-            retry_after: waited,
-        }) = jwt
+        let Err(
+            refused @ AuthError::Unavailable {
+                retry_after: waited,
+                ..
+            },
+        ) = jwt
             .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
             .await
         else {
             panic!("{reason}: must be unavailable");
         };
+        let detail = nest_rs_core::error_message(&refused);
         assert!(detail.contains(reason), "{detail}");
         assert!(!detail.contains(SENTINEL), "{detail}");
         assert!(!detail.contains("elsewhere"), "{detail}");
@@ -703,6 +709,86 @@ async fn an_answer_that_is_not_a_usable_set_is_unavailable_and_never_quoted() {
         }
         assert_eq!(issuer.fetches(), 1);
     }
+}
+
+/// What the operator's line says below `refused`'s constant.
+fn beneath(refused: &AuthError) -> String {
+    std::error::Error::source(refused)
+        .map(nest_rs_core::error_message)
+        .expect("the detail beneath the constant")
+}
+
+/// An issuer whose listener never takes the connection fails the fetch at
+/// `JWKS_CONNECT_TIMEOUT`, said by that bound alone: reqwest's own "timed
+/// out" beneath it would say it twice.
+#[tokio::test(start_paused = true)]
+async fn an_issuer_that_never_takes_the_connection_is_said_by_the_connect_bound_alone() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let uri = format!(
+        "https://127.0.0.1:{}/jwks",
+        listener.local_addr().expect("its address").port()
+    );
+    let jwt = verifier_with(config(uri.clone()));
+
+    let sent = tokio::time::Instant::now();
+    let Err(refused @ AuthError::Unavailable { .. }) = jwt
+        .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+        .await
+    else {
+        panic!("a set that cannot be reached verifies nothing");
+    };
+
+    assert_eq!(sent.elapsed(), JWKS_CONNECT_TIMEOUT);
+    assert_eq!(
+        beneath(&refused),
+        format!("the JWK Set at {uri} could not be connected to within {JWKS_CONNECT_TIMEOUT:?}"),
+    );
+}
+
+/// An issuer that takes the request and never answers fails the fetch at
+/// `JWKS_FETCH_TIMEOUT`, said by that bound alone. The double stops the
+/// clock once it has read the request, so the bound is waited out for free.
+#[tokio::test]
+async fn an_issuer_that_never_answers_is_said_by_the_fetch_bound_alone() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let uri = format!(
+        "https://127.0.0.1:{}/jwks",
+        listener.local_addr().expect("its address").port()
+    );
+    let acceptor = CERTIFICATE.acceptor(None);
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let Ok(mut tls) = acceptor.accept(stream).await else {
+            return;
+        };
+        let mut head = Vec::new();
+        let mut buf = [0_u8; 1024];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+            match tls.read(&mut buf).await {
+                Ok(0) | Err(_) => return,
+                Ok(read) => head.extend_from_slice(&buf[..read]),
+            }
+        }
+        tokio::time::pause();
+        std::future::pending::<()>().await;
+    });
+    let jwt = verifier_with(config(uri.clone()));
+
+    let sent = tokio::time::Instant::now();
+    let Err(refused @ AuthError::Unavailable { .. }) = jwt
+        .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+        .await
+    else {
+        panic!("a set that never comes verifies nothing");
+    };
+
+    assert!(sent.elapsed() >= JWKS_FETCH_TIMEOUT, "{:?}", sent.elapsed());
+    assert_eq!(
+        beneath(&refused),
+        format!("the JWK Set at {uri} did not answer within {JWKS_FETCH_TIMEOUT:?}"),
+    );
 }
 
 // The set through the module's seam, behind a booted guard.

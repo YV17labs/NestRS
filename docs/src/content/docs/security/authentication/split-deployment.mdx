@@ -102,8 +102,8 @@ takes.
 
 `AuthnConfig::into_options` walks the three key env vars and chooses
 verify-only mode when only the public key is set. `JwtService::sign`
-on a verify-only service returns `AuthError::Failed("this JwtService
-is verify-only — no signing key configured")` — even a buggy resource
+on a verify-only service returns `AuthError::Failed`, whose detail
+reads `this JwtService is verify-only — no signing key configured` — even a buggy resource
 server cannot mint a token.
 
 A misconfiguration (`PRIVATE_KEY` set, `PUBLIC_KEY` missing) fails the

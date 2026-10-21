@@ -104,7 +104,7 @@ impl OAuthService {
         let provider = self
             .providers
             .get(provider)
-            .ok_or_else(|| AuthError::Failed("unknown social provider".into()))?;
+            .ok_or_else(|| AuthError::failed("unknown social provider"))?;
 
         let tokens = provider
             .exchange(&self.jwt_svc, transaction, state, code)
@@ -465,23 +465,20 @@ mod tests {
         let err = svc
             .authenticate_client("ghost", "s3cret")
             .expect_err("unknown id");
-        assert!(err.to_string().contains("invalid client credentials"));
+        assert!(nest_rs::core::error_message(&err).contains("invalid client credentials"));
     }
 
     #[test]
     fn token_error_from_auth_maps_a_store_outage_to_server_error_not_invalid_credentials() {
         assert!(
             matches!(
-                token_error_from_auth(AuthError::Unavailable {
-                    detail: "store down".into(),
-                    retry_after: None,
-                }),
+                token_error_from_auth(AuthError::unavailable("store down", None)),
                 TokenError::Server(_),
             ),
             "a store outage during login must be server_error (503), never invalid_credentials (401)",
         );
         assert!(matches!(
-            token_error_from_auth(AuthError::Failed("invalid credentials".into())),
+            token_error_from_auth(AuthError::failed("invalid credentials")),
             TokenError::InvalidClient,
         ));
     }

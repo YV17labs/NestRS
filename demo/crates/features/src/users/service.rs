@@ -99,7 +99,7 @@ impl UsersService {
         default_org_id: Uuid,
     ) -> Result<entity::Model, AuthError> {
         let conn =
-            Repo::<Users>::conn().map_err(|e| social_store_unavailable(identity.provider, &e))?;
+            Repo::<Users>::conn().map_err(|e| social_store_unavailable(identity.provider, e))?;
 
         if let Some(user) = self.find_by_identity(identity, &conn).await? {
             return Ok(user);
@@ -112,16 +112,16 @@ impl UsersService {
                 reason = "no_verified_email",
                 "social login rejected: unknown identity with no verified email",
             );
-            return Err(AuthError::Failed("no verified email".into()));
+            return Err(AuthError::failed("no verified email"));
         };
 
         if let Some(user) = find_by_email(email, &conn)
             .await
-            .map_err(|e| social_store_unavailable(identity.provider, &e))?
+            .map_err(|e| social_store_unavailable(identity.provider, e))?
         {
             self.link_identity(user.id, identity)
                 .await
-                .map_err(|e| social_store_unavailable(identity.provider, &e))?;
+                .map_err(|e| social_store_unavailable(identity.provider, e))?;
             return Ok(user);
         }
 
@@ -139,14 +139,14 @@ impl UsersService {
             .filter(user_identity::Column::Subject.eq(identity.subject.clone()))
             .one(conn)
             .await
-            .map_err(|e| social_store_unavailable(identity.provider, &e))?;
+            .map_err(|e| social_store_unavailable(identity.provider, e))?;
         let Some(row) = row else {
             return Ok(None);
         };
         Repo::<Users>::unscoped_by_id(row.user_id)
             .one(conn)
             .await
-            .map_err(|e| social_store_unavailable(identity.provider, &e))
+            .map_err(|e| social_store_unavailable(identity.provider, e))
     }
 
     async fn link_identity(
@@ -196,7 +196,7 @@ impl UsersService {
         )
         .map_err(|e| {
             tracing::error!(target: crate::users::TARGET, provider = identity.provider, error = %error_message(&e), "social user preparation failed");
-            AuthError::Failed("identity resolution failed".into())
+            AuthError::failed_because("identity resolution failed", e)
         })?;
 
         atomic(async {
@@ -221,7 +221,7 @@ impl UsersService {
             Ok(user)
         })
         .await
-        .map_err(|e| social_store_unavailable(identity.provider, &e))
+        .map_err(|e| social_store_unavailable(identity.provider, e))
     }
 }
 
@@ -275,12 +275,12 @@ fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identit
     }
 }
 
-fn social_store_unavailable(provider: &str, err: &(dyn std::error::Error + 'static)) -> AuthError {
-    tracing::error!(target: crate::users::TARGET, provider, error = %error_message(err), "social identity store unreachable");
-    AuthError::Unavailable {
-        detail: error_message(err),
-        retry_after: None,
-    }
+fn social_store_unavailable(
+    provider: &str,
+    err: impl std::error::Error + Send + Sync + 'static,
+) -> AuthError {
+    tracing::error!(target: crate::users::TARGET, provider, error = %error_message(&err), "social identity store unreachable");
+    AuthError::unavailable_because("the social identity store is unreachable", None, err)
 }
 
 async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Model>, DbErr> {
@@ -299,10 +299,7 @@ fn redact_email(email: &str) -> String {
 
 fn store_unavailable(email: &str, err: DbErr) -> AuthError {
     tracing::error!(target: crate::users::TARGET, identity = %redact_email(email), error = %error_message(&err), "credential lookup failed");
-    AuthError::Unavailable {
-        detail: error_message(&err),
-        retry_after: None,
-    }
+    AuthError::unavailable_because("the credential store is unreachable", None, err)
 }
 
 pub(crate) fn prepare_new_user(

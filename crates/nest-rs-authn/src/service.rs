@@ -26,13 +26,13 @@ fn prove_one_pair(
 ) -> Result<(), AuthError> {
     const PROBE: &[u8] = b"nest-rs-authn: are these two keys one pair";
     let signature = jsonwebtoken::crypto::sign(PROBE, encoding, algorithm.jwt())
-        .map_err(|e| AuthError::Failed(format!("invalid JWT private key: {e}")))?;
+        .map_err(|e| AuthError::failed_because("invalid JWT private key", e))?;
     let paired = jsonwebtoken::crypto::verify(&signature, PROBE, decoding, algorithm.jwt())
-        .map_err(|e| AuthError::Failed(format!("invalid JWT public key: {e}")))?;
+        .map_err(|e| AuthError::failed_because("invalid JWT public key", e))?;
     if paired {
         return Ok(());
     }
-    Err(AuthError::Failed(format!(
+    Err(AuthError::failed(format!(
         "{}, and {}, are not one pair: tokens this service signed would be refused, and tokens \
          the other pair's private key signed accepted",
         crate::config::spellings("PRIVATE_KEY", "private_key"),
@@ -286,7 +286,7 @@ fn accepted(key: &JwtKey, algorithms: &[Algorithm]) -> Result<Vec<Algorithm>, Au
     };
     let fitting = || one_of(algorithms_of(families));
     if accepted.is_empty() {
-        return Err(AuthError::Failed(format!(
+        return Err(AuthError::failed(format!(
             "{}, names no algorithm: name {}",
             crate::config::algorithms_setting(),
             fitting()
@@ -296,13 +296,13 @@ fn accepted(key: &JwtKey, algorithms: &[Algorithm]) -> Result<Vec<Algorithm>, Au
         .iter()
         .find(|algorithm| !families.contains(&algorithm.family()))
     {
-        return Err(AuthError::Failed(format!(
+        return Err(AuthError::failed(format!(
             "the {misfit} algorithm cannot be used with {key_name}: use {}",
             fitting()
         )));
     }
     if !matches!(key, JwtKey::Jwks { .. }) && accepted.len() > 1 {
-        return Err(AuthError::Failed(format!(
+        return Err(AuthError::failed(format!(
             "{}, names {} algorithms, and {key_name} signs and verifies with one",
             crate::config::algorithms_setting(),
             accepted.len()
@@ -337,7 +337,9 @@ impl JwtService {
         ] {
             bounds
                 .check(AuthnConfig::NAMESPACE, field, value)
-                .map_err(|refused| AuthError::Failed(refused.to_string()))?;
+                .map_err(|refused| {
+                    AuthError::failed_because("the JWT options are refused", refused)
+                })?;
         }
         // A key and an algorithm that cannot work together fail here, not at the
         // first request.
@@ -347,7 +349,7 @@ impl JwtService {
         // A contradiction, refused rather than resolved.
         if options.allow_any_audience {
             if options.audience.is_some() {
-                return Err(AuthError::Failed(format!(
+                return Err(AuthError::failed(format!(
                     "{} contradicts {}: an audience-agnostic verifier cannot also require an audience",
                     var_name(AuthnConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
                     var_name(AuthnConfig::NAMESPACE, "AUDIENCE"),
@@ -372,7 +374,7 @@ impl JwtService {
             JwtKey::Hmac(secret) => {
                 // Fail closed at the derivation point every constructor reaches.
                 if secret.trim().is_empty() {
-                    return Err(AuthError::Failed(format!(
+                    return Err(AuthError::failed(format!(
                         "{}, must not be empty",
                         crate::config::secret_setting()
                     )));
@@ -381,7 +383,7 @@ impl JwtService {
                 // larger — 256 bits for HS256, 384 for HS384, 512 for HS512.
                 let minimum = min_hmac_secret_bytes(signing);
                 if secret.len() < minimum {
-                    return Err(AuthError::Failed(format!(
+                    return Err(AuthError::failed(format!(
                         "{}, must be at least {minimum} bytes ({} bits) for {signing}; got {}",
                         crate::config::secret_setting(),
                         minimum * 8,
@@ -405,18 +407,24 @@ impl JwtService {
                 public_pem,
             } => {
                 let decoding = DecodingKey::from_ed_pem(public_pem.as_bytes()).map_err(|e| {
-                    AuthError::Failed(format!(
-                        "{}, is not an EdDSA public key in PEM form ({e})",
-                        crate::config::spellings("PUBLIC_KEY", "public_key"),
-                    ))
+                    AuthError::failed_because(
+                        format!(
+                            "{}, is not an EdDSA public key in PEM form",
+                            crate::config::spellings("PUBLIC_KEY", "public_key"),
+                        ),
+                        e,
+                    )
                 })?;
                 let signer = match private_pem {
                     Some(pem) => {
                         let encoding = EncodingKey::from_ed_pem(pem.as_bytes()).map_err(|e| {
-                            AuthError::Failed(format!(
-                                "{}, is not an EdDSA private key in PEM form ({e})",
-                                crate::config::spellings("PRIVATE_KEY", "private_key"),
-                            ))
+                            AuthError::failed_because(
+                                format!(
+                                    "{}, is not an EdDSA private key in PEM form",
+                                    crate::config::spellings("PRIVATE_KEY", "private_key"),
+                                ),
+                                e,
+                            )
                         })?;
                         prove_one_pair(&encoding, &decoding, signing)?;
                         Some(Signer {
@@ -466,7 +474,7 @@ impl JwtService {
     /// The signing half, or the refusal a verify-only service answers.
     fn signer(&self) -> Result<&Signer, AuthError> {
         self.signer.as_ref().ok_or_else(|| {
-            AuthError::Failed("this JwtService is verify-only — no signing key configured".into())
+            AuthError::failed("this JwtService is verify-only — no signing key configured")
         })
     }
 
@@ -481,7 +489,7 @@ impl JwtService {
             Some(stamped) => encode(header, &stamped, &signer.key),
             None => encode(header, claims, &signer.key),
         }
-        .map_err(|e| AuthError::Failed(e.to_string()))
+        .map_err(|e| AuthError::failed_because("the claims could not be signed", e))
     }
 
     /// Stamp the configured `aud` / `iss` onto a claims object.
@@ -493,8 +501,8 @@ impl JwtService {
         if self.audience.is_none() && self.issuer.is_none() {
             return Ok(None);
         }
-        let mut value =
-            serde_json::to_value(claims).map_err(|e| AuthError::Failed(e.to_string()))?;
+        let mut value = serde_json::to_value(claims)
+            .map_err(|e| AuthError::failed_because("the claims could not be serialized", e))?;
         let Some(map) = value.as_object_mut() else {
             // A non-object body cannot carry registered claims; the encoder fails it.
             return Ok(None);
@@ -586,10 +594,9 @@ impl JwtService {
         token: &str,
     ) -> Result<C, AuthError> {
         let Verifier::Static { key, validation } = &self.verifier else {
-            return Err(AuthError::Failed(
+            return Err(AuthError::failed(
                 "this JwtService verifies an issuer's JWK Set — it verifies no handshake of \
-                 this deployment's own"
-                    .into(),
+                 this deployment's own",
             ));
         };
         let data = decode::<C>(token, key, validation).map_err(map_decode_error)?;
@@ -678,7 +685,7 @@ mod tests {
 
     fn refusal(options: JwtOptions) -> String {
         match JwtService::new(options) {
-            Err(AuthError::Failed(refused)) => refused,
+            Err(refused @ AuthError::Failed { .. }) => nest_rs_core::error_message(&refused),
             Err(other) => panic!("refused as {other:?}"),
             Ok(_) => panic!("built"),
         }
@@ -749,15 +756,15 @@ mod tests {
         let jwt = JwtService::new(JwtOptions::jwks("https://issuer.example/jwks")).expect("built");
         assert!(matches!(
             jwt.sign(&serde_json::json!({})),
-            Err(AuthError::Failed(_))
+            Err(AuthError::Failed { .. })
         ));
         assert!(matches!(
             jwt.sign_handshake("oauth-tx", &serde_json::json!({})),
-            Err(AuthError::Failed(_))
+            Err(AuthError::Failed { .. })
         ));
         assert!(matches!(
             jwt.verify_handshake::<serde_json::Value>("oauth-tx", "a.b.c"),
-            Err(AuthError::Failed(_))
+            Err(AuthError::Failed { .. })
         ));
     }
 }

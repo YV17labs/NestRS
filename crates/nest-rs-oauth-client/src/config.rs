@@ -121,7 +121,9 @@ impl OAuthClientConfig {
 /// assert!(refuse_plaintext_redirect("http://localhost:3000/callback", &setting).is_ok());
 /// let refused = refuse_plaintext_redirect("http://app.example/callback", &setting)
 ///     .expect_err("the authorization code would return in clear");
-/// assert!(refused.to_string().contains(&format!("{setting}, must be an https URL")));
+/// assert!(
+///     nest_rs_core::error_message(&refused).contains(&format!("{setting}, must be an https URL"))
+/// );
 /// ```
 pub fn refuse_plaintext_redirect(redirect_url: &str, setting: &str) -> Result<(), AuthError> {
     let redirect = parsed(redirect_url, setting)?;
@@ -147,13 +149,14 @@ fn setting(key: &str, field: &str) -> String {
 
 /// `raw` parsed, refused naming `setting` when it does not parse.
 fn parsed(raw: &str, setting: &str) -> Result<Url, AuthError> {
-    Url::parse(raw.trim())
-        .map_err(|error| refused(setting, &format!("does not parse as a URL: {error}")))
+    Url::parse(raw.trim()).map_err(|error| {
+        AuthError::failed_because(format!("{setting}, does not parse as a URL"), error)
+    })
 }
 
 /// The refusal of `setting`, saying `why`.
 fn refused(setting: &str, why: &str) -> AuthError {
-    AuthError::Failed(format!("{setting}, {why}"))
+    AuthError::failed(format!("{setting}, {why}"))
 }
 
 /// Whether `url` names this host's loopback interface.
@@ -185,10 +188,10 @@ mod tests {
     }
 
     fn refusal(config: &OAuthClientConfig) -> String {
-        let Err(AuthError::Failed(sentence)) = config.refuse_plaintext() else {
+        let Err(refused @ AuthError::Failed { .. }) = config.refuse_plaintext() else {
             panic!("the config is refused");
         };
-        sentence
+        nest_rs_core::error_message(&refused)
     }
 
     /// A provider endpoint over plain http sends a secret, a code or a token in

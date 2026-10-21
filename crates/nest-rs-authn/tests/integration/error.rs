@@ -36,7 +36,7 @@ fn a_request_carrying_no_credentials_is_told_no_reason() {
 
 #[tokio::test]
 async fn failed_variant_body_hides_internal_detail() {
-    let response = AuthError::Failed("internal detail".into()).into_response();
+    let response = AuthError::failed("internal detail").into_response();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body = response.into_body().into_string().await.unwrap();
     assert_eq!(body, "authentication failed");

@@ -105,7 +105,7 @@ async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
     else {
         panic!("state mismatch is rejected");
     };
-    assert!(matches!(err, AuthError::Failed(_)));
+    assert!(matches!(err, AuthError::Failed { .. }));
 
     let event = logs.expect_one(TARGET, "OAuth callback rejected");
     assert_eq!(event.level, "warn");
@@ -359,20 +359,30 @@ fn endpoints_on(addr: SocketAddr, tls: ClientTls) -> OAuthClientConfig {
     }
 }
 
-/// The sentence a provider's outage is reported under, checked to quote no secret.
+/// The sentence a provider's outage is reported under — the detail and its
+/// cause beneath the constant — checked to quote no secret anywhere in the
+/// line.
 fn unavailable_sentence_of(error: &AuthError, extra: &[&str]) -> String {
-    let AuthError::Unavailable { detail, .. } = error else {
+    let AuthError::Unavailable { .. } = error else {
         panic!("a provider that gave no answer is unavailable, not a failed sign-in: {error:?}");
     };
-    secret_free(detail, extra)
+    said_beneath(error, extra)
 }
 
 /// The sentence a provider's refusal is reported under, checked the same way.
 fn sentence_of(error: &AuthError, extra: &[&str]) -> String {
-    let AuthError::Failed(sentence) = error else {
+    let AuthError::Failed { .. } = error else {
         panic!("a provider that answered and refused is a failed authentication: {error:?}");
     };
-    secret_free(sentence, extra)
+    said_beneath(error, extra)
+}
+
+/// What the operator's line says below `error`'s constant, once the whole
+/// line is shown to quote none of the call's secrets.
+fn said_beneath(error: &AuthError, extra: &[&str]) -> String {
+    secret_free(&nest_rs_core::error_message(error), extra);
+    let detail = std::error::Error::source(error).expect("the detail beneath the constant");
+    nest_rs_core::error_message(detail)
 }
 
 /// `sentence`, once shown to quote none of the call's secrets (`extra`: this call's own).
@@ -509,6 +519,11 @@ async fn a_refused_connection_names_the_endpoint_and_the_cause() {
         !sentence.contains("for url"),
         "reqwest's own URL is taken out: {sentence}"
     );
+    let cause = std::error::Error::source(&error)
+        .and_then(std::error::Error::source)
+        .and_then(|cause| cause.downcast_ref::<reqwest::Error>())
+        .expect("reqwest's error is the cause beneath the detail");
+    assert!(cause.is_connect() && cause.url().is_none(), "{cause:?}");
 }
 
 #[tokio::test]
@@ -842,12 +857,13 @@ async fn a_fetch_over_plain_http_is_refused_before_anything_is_sent() {
 /// naming the variable that sets it.
 #[test]
 fn a_provider_endpoint_over_plain_http_is_refused_at_construction() {
-    let Err(AuthError::Failed(sentence)) = OAuthClient::new(OAuthClientConfig {
+    let Err(sentence @ AuthError::Failed { .. }) = OAuthClient::new(OAuthClientConfig {
         token_url: "http://provider.example/token".into(),
         ..valid_config()
     }) else {
         panic!("a plaintext token endpoint must not build a client");
     };
+    let sentence = nest_rs_core::error_message(&sentence);
     assert!(
         sentence.contains(&var_name(OAuthClientConfig::NAMESPACE, "TOKEN_URL"))
             && sentence.contains("RFC 6749 §3.2"),

@@ -113,3 +113,27 @@ async fn the_google_module_opens_google_alone() {
     let keys = keys_with_every_provider_seeded::<GoogleLoginModule>().await;
     assert_eq!(keys, ["google"], "its module opens it, and nothing else");
 }
+
+/// A provider whose config the client refuses fails the boot with the whole
+/// refusal: the provider, then what the client said of the setting.
+#[tokio::test]
+async fn a_misconfigured_provider_fails_the_boot_naming_the_refused_setting() {
+    let Err(refused) = App::builder()
+        .module::<GoogleLoginModule>()
+        .provide(nest_rs_social::GoogleSocialConfig {
+            redirect_url: "http://acme.example.com/auth/google/callback".into(),
+            ..seeded_google_config()
+        })
+        .build()
+        .await
+    else {
+        panic!("a plaintext redirect off loopback must not boot");
+    };
+    let said = nest_rs_core::error_message(refused.as_ref());
+    assert!(
+        said.contains("social provider `google` is linked but misconfigured")
+            && said.contains(&nest_rs_config::var_name("social__google", "REDIRECT_URL"))
+            && said.contains("must be an https URL"),
+        "{said}"
+    );
+}

@@ -84,7 +84,7 @@ impl OAuthResourceConfig {
         let resource = resource.trim();
         let resource_setting = nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE");
         if resource.is_empty() {
-            return Err(AuthError::Failed(format!(
+            return Err(AuthError::failed(format!(
                 "{resource_setting} must name this deployment's canonical URI \
                  (for example https://api.example.com)",
             )));
@@ -98,7 +98,7 @@ impl OAuthResourceConfig {
             .filter(|s| !s.is_empty())
             .collect();
         if authorization_servers.is_empty() {
-            return Err(AuthError::Failed(format!(
+            return Err(AuthError::failed(format!(
                 "{} must list at least one issuer — RFC 9728 metadata without \
                  `authorization_servers` tells a client nothing",
                 nest_rs_config::spellings(Self::NAMESPACE, "AUTHORIZATION_SERVERS"),
@@ -112,7 +112,7 @@ impl OAuthResourceConfig {
         // break out of the quoted challenge parameter.
         for (index, scope) in self.scopes_supported.iter().enumerate() {
             if !is_scope_token(scope) {
-                return Err(AuthError::Failed(format!(
+                return Err(AuthError::failed(format!(
                     "{} is not a valid OAuth scope token (RFC 6749 §3.3): the grammar is \
                      `1*( %x21 / %x23-5B / %x5D-7E )` — printable ASCII excluding space, `\"` \
                      and `\\`",
@@ -128,7 +128,7 @@ impl OAuthResourceConfig {
         } else {
             for (index, method) in self.bearer_methods_supported.iter().enumerate() {
                 if !BEARER_METHODS_DEFINED.contains(&method.as_str()) {
-                    return Err(AuthError::Failed(format!(
+                    return Err(AuthError::failed(format!(
                         "{} is not an RFC 9728 §2 bearer method: the defined values are \
                          {BEARER_METHODS_DEFINED:?}",
                         entry(index, "BEARER_METHODS_SUPPORTED"),
@@ -137,7 +137,7 @@ impl OAuthResourceConfig {
                 // `bearer_token` reads only the `Authorization` header, and a client acts
                 // on the document before reaching a handler: refused, not warned.
                 if method != BEARER_METHOD_HEADER {
-                    return Err(AuthError::Failed(format!(
+                    return Err(AuthError::failed(format!(
                         "{} is the RFC 9728 bearer method `{method}`, but this framework reads a \
                          bearer token only from the `Authorization` header — advertising it \
                          would tell clients to use a form this server refuses",
@@ -154,7 +154,7 @@ impl OAuthResourceConfig {
             (&self.resource_tos_uri, "RESOURCE_TOS_URI"),
         ] {
             if uri.as_deref().is_some_and(carries_userinfo) {
-                return Err(AuthError::Failed(format!(
+                return Err(AuthError::failed(format!(
                     "{} is not a URL the document may publish: {USERINFO}",
                     nest_rs_config::spellings(Self::NAMESPACE, key),
                 )));
@@ -236,7 +236,7 @@ fn validate_canonical_uri(
     environment: Environment,
 ) -> Result<(), AuthError> {
     let refused =
-        |why: &str| AuthError::Failed(format!("{setting} is not a canonical resource URI: {why}"));
+        |why: &str| AuthError::failed(format!("{setting} is not a canonical resource URI: {why}"));
     if carries_userinfo(uri) {
         return Err(refused(USERINFO));
     }
@@ -330,7 +330,7 @@ mod tests {
         .into_metadata()
         .expect_err("no resource");
         assert!(
-            err.to_string().contains("RESOURCE"),
+            nest_rs_core::error_message(&err).contains("RESOURCE"),
             "the boot error must be actionable: {err}",
         );
     }
@@ -341,8 +341,8 @@ mod tests {
             .into_metadata()
             .expect_err("no authorization server");
         assert!(
-            err.to_string().contains("AUTHORIZATION_SERVERS"),
-            "got: {err}",
+            nest_rs_core::error_message(&err).contains("AUTHORIZATION_SERVERS"),
+            "got: {err:?}",
         );
     }
 
@@ -351,7 +351,10 @@ mod tests {
         let err = resource("api.example.com")
             .into_metadata()
             .expect_err("no scheme");
-        assert!(err.to_string().contains("no scheme"), "got: {err}");
+        assert!(
+            nest_rs_core::error_message(&err).contains("no scheme"),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -359,7 +362,10 @@ mod tests {
         let err = resource("https://api.example.com#mcp")
             .into_metadata()
             .expect_err("fragment");
-        assert!(err.to_string().contains("fragment"), "got: {err}");
+        assert!(
+            nest_rs_core::error_message(&err).contains("fragment"),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -367,7 +373,10 @@ mod tests {
         let err = issuers(&["auth.example.com"])
             .into_metadata()
             .expect_err("issuer without a scheme");
-        assert!(err.to_string().contains("no scheme"), "got: {err}");
+        assert!(
+            nest_rs_core::error_message(&err).contains("no scheme"),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -378,7 +387,10 @@ mod tests {
         }
         .into_metadata()
         .expect_err("scope with a space");
-        assert!(err.to_string().contains("RFC 6749 §3.3"), "got: {err}");
+        assert!(
+            nest_rs_core::error_message(&err).contains("RFC 6749 §3.3"),
+            "got: {err:?}"
+        );
     }
 
     /// A refused value is described by its setting and place, never quoted: a
@@ -409,7 +421,10 @@ mod tests {
                 "BEARER_METHODS_SUPPORTED",
             ),
         ] {
-            let err = config.into_metadata().expect_err(setting).to_string();
+            let err = config
+                .into_metadata()
+                .map_err(|e| nest_rs_core::error_message(&e))
+                .expect_err(setting);
             assert!(
                 err.contains(&nest_rs_config::var_name(
                     OAuthResourceConfig::NAMESPACE,
@@ -441,8 +456,8 @@ mod tests {
                 let logs = nest_rs_testing::LogCapture::install();
                 let refused = config
                     .metadata_in(environment)
-                    .expect_err("userinfo is refused")
-                    .to_string();
+                    .map_err(|e| nest_rs_core::error_message(&e))
+                    .expect_err("userinfo is refused");
                 assert!(refused.contains("userinfo"), "{refused}");
                 assert!(
                     refused.contains(&nest_rs_config::var_name(
@@ -493,7 +508,10 @@ mod tests {
             ),
         ] {
             let logs = nest_rs_testing::LogCapture::install();
-            let refused = config.into_metadata().expect_err(setting).to_string();
+            let refused = config
+                .into_metadata()
+                .map_err(|e| nest_rs_core::error_message(&e))
+                .expect_err(setting);
             assert!(refused.contains("userinfo"), "{refused}");
             assert!(
                 refused.contains(&nest_rs_config::var_name(
@@ -553,8 +571,8 @@ mod tests {
             ] {
                 let refused = config
                     .metadata_in(Environment::Development)
-                    .expect_err("no host")
-                    .to_string();
+                    .map_err(|e| nest_rs_core::error_message(&e))
+                    .expect_err("no host");
                 assert!(refused.contains("a host"), "{uri}: {refused}");
                 assert!(
                     refused.contains(&nest_rs_config::var_name(
@@ -591,7 +609,9 @@ mod tests {
                         read.expect("loopback http serves local development");
                         continue;
                     }
-                    let refused = read.expect_err("a deployment speaks https").to_string();
+                    let refused = read
+                        .map_err(|e| nest_rs_core::error_message(&e))
+                        .expect_err("a deployment speaks https");
                     assert!(
                         refused.contains(&nest_rs_config::var_name(
                             OAuthResourceConfig::NAMESPACE,
@@ -634,7 +654,10 @@ mod tests {
         let err = resource("https://api.example.com/\"")
             .into_metadata()
             .expect_err("quote in the resource");
-        assert!(err.to_string().contains("quote"), "got: {err}");
+        assert!(
+            nest_rs_core::error_message(&err).contains("quote"),
+            "got: {err:?}"
+        );
     }
 
     #[test]

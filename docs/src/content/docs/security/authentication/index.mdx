@@ -247,10 +247,40 @@ route.
 
 `AuthError` covers the failure modes a strategy hits:
 `MissingCredentials`, `InvalidToken`, `InvalidSignature`,
-`InvalidAlgorithm`, `UnknownKey`, `NotYetValid`, `Expired`, `Failed(String)` — each
-a **401** — plus `Unavailable { detail, retry_after }`, which is a
-**503**. `Failed` collapses to a generic `"authentication failed"` on the
-wire so the message never leaks configuration detail.
+`InvalidAlgorithm`, `UnknownKey`, `NotYetValid`, `Expired`, `Failed` — each
+a **401** — plus `Unavailable`, which is a **503**. `Failed` collapses to a
+generic `"authentication failed"` on the wire so the message never leaks
+configuration detail.
+
+`Failed` and `Unavailable` are the two your strategy builds itself, and
+each keeps what went wrong for the operator. Name the detail — what failed,
+never a value the request carried — and hand over the error that caused it
+when there is one; the demo's password login does it when its user store
+does not answer:
+
+```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
+fn store_unavailable(email: &str, err: DbErr) -> AuthError {
+    // …
+    AuthError::unavailable_because("the credential store is unreachable", None, err)
+}
+```
+
+The error displays the constant the caller reads — `"authentication
+failed"` or `"authentication unavailable"` — and keeps the detail, then the
+cause's chain, as its `source()`. The line the guard files is that whole
+chain through `nest_rs::core::error_message`, a decode failure in it said
+without its value, so you never `format!` an error into the detail:
+
+```text
+authentication unavailable: the credential store is unreachable: <the driver's error>
+```
+
+Both variants are built through these constructors — `failed`,
+`failed_because`, `unavailable` and `unavailable_because` — and matched as
+`AuthError::Failed { .. }` and `AuthError::Unavailable { .. }`. A cause is
+logged, never answered, so it must not quote a credential or a value the
+request sent either: say a URL through `nest_rs::config::endpoint_shown`, a
+serde failure through `nest_rs::core::DecodeError`.
 
 `Unavailable` is the odd one deliberately: it means the identity store or
 the identity provider could not be reached, or answered that it cannot
@@ -259,8 +289,9 @@ wrong (RFC 9110 §15.6.4) — reporting it as a 401 would tell a caller with
 a perfectly good token to go get another one, and would let an outage
 read as a wave of authentication failures. It is logged at `error` and
 rendered as a `503` with a `Retry-After` when `retry_after` is known — an
-identity provider's own, given in seconds — and none invented when it is
-not. The guard answers a strategy that outlived `AUTHENTICATE_TIMEOUT`
+identity provider's own, given in seconds and rounded up to one at least,
+since `0` would tell the caller to retry at once — and none invented when it
+is not. The guard answers a strategy that outlived `AUTHENTICATE_TIMEOUT`
 with the same 503, and files its own `warn` saying the strategy never
 answered. What the refusal says of the identity store stays on the
 server: HTTP's 503 carries no `detail`, and the GraphQL, MCP and

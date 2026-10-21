@@ -52,7 +52,8 @@ fn short_hmac_secret_is_rejected_by_the_service_constructor() {
         Err(e) => e,
     };
     assert!(
-        matches!(&err, AuthError::Failed(msg) if msg.contains("at least 32 bytes")),
+        matches!(&err, AuthError::Failed { .. })
+            && nest_rs_core::error_message(&err).contains("at least 32 bytes"),
         "unexpected error: {err:?}",
     );
 
@@ -93,9 +94,10 @@ fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
         ),
     ];
     for (label, options) in cases {
-        let Err(AuthError::Failed(message)) = JwtService::new(options) else {
+        let Err(message @ AuthError::Failed { .. }) = JwtService::new(options) else {
             panic!("{label} must be refused at construction")
         };
+        let message = nest_rs_core::error_message(&message);
         assert!(
             message.contains("algorithm cannot be used"),
             "{label}: {message}"
@@ -158,7 +160,7 @@ fn verify_only_service_cannot_sign() {
         JwtService::new(JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY)).expect("verify-only");
     assert!(matches!(
         jwt.sign(&claims(jwt.expiry(), None)),
-        Err(AuthError::Failed(_))
+        Err(AuthError::Failed { .. })
     ));
 }
 
@@ -166,7 +168,7 @@ fn verify_only_service_cannot_sign() {
 fn invalid_pem_fails_at_construction() {
     assert!(matches!(
         JwtService::new(JwtOptions::eddsa_verify("not-a-pem")),
-        Err(AuthError::Failed(_))
+        Err(AuthError::Failed { .. })
     ));
 }
 
@@ -315,9 +317,10 @@ fn a_private_key_beside_another_pairs_public_key_is_refused() {
         crate::DEV_PRIVATE_KEY,
         ANOTHER_PAIRS_PUBLIC_KEY,
     ));
-    let Err(nest_rs_authn::AuthError::Failed(message)) = refused else {
+    let Err(message @ nest_rs_authn::AuthError::Failed { .. }) = refused else {
         panic!("keys from two pairs must not build a service")
     };
+    let message = nest_rs_core::error_message(&message);
     assert!(message.contains("not one pair"), "{message}");
     for setting in ["PRIVATE_KEY_FILE", "PUBLIC_KEY_FILE"] {
         assert!(
@@ -410,9 +413,10 @@ fn allow_any_audience_beside_a_configured_audience_is_refused() {
         Ok(_) => panic!("a contradictory audience policy must not build"),
         Err(e) => e,
     };
-    let AuthError::Failed(msg) = &err else {
+    let msg @ AuthError::Failed { .. } = &err else {
         panic!("expected Failed, got {err:?}");
     };
+    let msg = nest_rs_core::error_message(msg);
     assert!(
         msg.contains("ALLOW_ANY_AUDIENCE") && msg.contains("AUDIENCE"),
         "the refusal names both variables: {msg}",
@@ -527,9 +531,10 @@ fn a_lifetime_or_a_leeway_built_in_code_outside_its_range_is_refused_at_construc
         let mut options = JwtOptions::new(secret);
         options.expires_in = expires_in;
         options.leeway = leeway;
-        let Err(AuthError::Failed(refused)) = JwtService::new(options) else {
+        let Err(refused @ AuthError::Failed { .. }) = JwtService::new(options) else {
             panic!("{field} out of range must be refused");
         };
+        let refused = nest_rs_core::error_message(&refused);
         assert!(refused.contains(field), "{refused}");
     }
 }

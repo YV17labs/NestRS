@@ -231,7 +231,7 @@ async fn an_unverified_email_never_links_to_an_existing_account() {
             .resolve_social_identity(&github("7", "dave@example.com", false), org_id)
             .await;
         assert!(
-            matches!(outcome, Err(AuthError::Failed(_))),
+            matches!(outcome, Err(AuthError::Failed { .. })),
             "an unverified email is rejected, never linked: {outcome:?}",
         );
 

@@ -148,20 +148,16 @@ fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
         .filter(|_| ClientTls::negotiation_failed(&error))
     {
         format!(
-            "{endpoint} could not be called: {} ({})",
+            "{endpoint} could not be called: {}",
             ClientTls::remedy(setting.variables, "the OAuth provider", setting.key, &error),
-            nest_rs_core::error_message(&error.without_url())
         )
     } else {
-        format!(
-            "{endpoint} could not be called: {}",
-            nest_rs_core::error_message(&error.without_url())
-        )
+        format!("{endpoint} could not be called")
     };
-    AuthError::Unavailable {
-        detail,
-        retry_after: None,
+    if error.is_timeout() {
+        return AuthError::unavailable(detail, None);
     }
+    AuthError::unavailable_because(detail, None, error.without_url())
 }
 
 /// A 5xx or `429` (RFC 6585 §4) answer as [`AuthError::Unavailable`], carrying a
@@ -171,24 +167,26 @@ fn provider_unavailable(
     status: u16,
     retry_after: Option<&[u8]>,
 ) -> Option<AuthError> {
-    (status == 429 || (500..600).contains(&status)).then(|| AuthError::Unavailable {
-        detail: format!("{endpoint} answered {status}"),
-        retry_after: retry_after
-            .and_then(|value| std::str::from_utf8(value).ok())
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .map(Duration::from_secs),
+    (status == 429 || (500..600).contains(&status)).then(|| {
+        AuthError::unavailable(
+            format!("{endpoint} answered {status}"),
+            retry_after
+                .and_then(|value| std::str::from_utf8(value).ok())
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .map(Duration::from_secs),
+        )
     })
 }
 
 /// An answer past [`OAuthClient::ANSWER_MAX_BYTES`], said without a byte of it.
 fn oversized(endpoint: &Endpoint<'_>) -> AuthError {
-    AuthError::Unavailable {
-        detail: format!(
+    AuthError::unavailable(
+        format!(
             "{endpoint} answered more than {} bytes, the most an OAuth answer is read to",
             OAuthClient::ANSWER_MAX_BYTES
         ),
-        retry_after: None,
-    }
+        None,
+    )
 }
 
 fn exchange_failed(
@@ -210,8 +208,21 @@ fn exchange_failed(
         RequestTokenError::Request(HttpClientError::Reqwest(error)) => {
             call_failed(endpoint, *error)
         }
-        other => AuthError::Failed(format!("{endpoint}: {other}")),
+        // `Parse` holds the whole answer, tokens included, which its `Debug`
+        // prints: only the decode failure's report is kept.
+        RequestTokenError::Parse(error, _) => undecodable(endpoint, error.inner()),
+        other => AuthError::failed_because(endpoint.to_string(), other),
     }
+}
+
+/// An answer from `endpoint` that does not decode, said by where and what kind
+/// and never by the value serde would quote: a provider's body carries a
+/// profile or a token.
+fn undecodable(endpoint: &Endpoint<'_>, error: &serde_json::Error) -> AuthError {
+    AuthError::failed_because(
+        format!("{endpoint} answered a body that does not parse"),
+        nest_rs_core::DecodeError::new(error),
+    )
 }
 
 /// The status and the `Retry-After` of the token endpoint's answer, read off the
@@ -302,7 +313,10 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
 /// `validator`'s own `Display` lists each rule's parameters, the rejected value
 /// among them; [`ConfigError::validation`] says the field and the rule alone.
 fn invalid(errors: ValidationErrors) -> AuthError {
-    AuthError::Failed(ConfigError::validation(OAuthClientConfig::NAMESPACE, errors).to_string())
+    AuthError::failed_because(
+        "the OAuth client's configuration is invalid",
+        ConfigError::validation(OAuthClientConfig::NAMESPACE, errors),
+    )
 }
 
 /// Every call carries a code, a client secret or a bearer token (RFC 6749 §3.1,
@@ -322,18 +336,16 @@ fn backend() -> reqwest::ClientBuilder {
 /// names others — and presenting its certificate when it holds one.
 fn verified(tls: &ClientTls) -> Result<reqwest::Client, AuthError> {
     let names = ConfigService::for_namespace(OAuthClientConfig::NAMESPACE);
-    let material = nest_rs_config::__private::reqwest_tls(tls, &names)
-        .map_err(|refused| AuthError::Failed(refused.to_string()))?;
+    let material = nest_rs_config::__private::reqwest_tls(tls, &names).map_err(|refused| {
+        AuthError::failed_because("the OAuth client's TLS material is unusable", refused)
+    })?;
     let mut builder = backend().tls_certs_only(material.roots);
     if let Some(identity) = material.identity {
         builder = builder.identity(identity);
     }
-    builder.build().map_err(|error| {
-        AuthError::Failed(format!(
-            "the OAuth client could not be built: {}",
-            nest_rs_core::error_message(&error)
-        ))
-    })
+    builder
+        .build()
+        .map_err(|error| AuthError::failed_because("the OAuth client could not be built", error))
 }
 
 /// A transient Authorization-Code (PKCE) client built per flow from an
@@ -419,9 +431,10 @@ impl OAuthClient {
         // carry userinfo, and the sentence is logged.
         let parse = |field: &'static str| {
             move |error: oauth2::url::ParseError| {
-                AuthError::Failed(format!(
-                    "OAuthClientConfig::{field} does not parse as a URL: {error}"
-                ))
+                AuthError::failed_because(
+                    format!("OAuthClientConfig::{field} does not parse as a URL"),
+                    error,
+                )
             }
         };
         Ok(BasicClient::new(ClientId::new(config.client_id.clone()))
@@ -526,7 +539,7 @@ impl OAuthClient {
                 expected = provider,
                 "{CALLBACK_REJECTED}",
             );
-            return Err(AuthError::Failed("OAuth provider mismatch".into()));
+            return Err(AuthError::failed("OAuth provider mismatch"));
         }
         // Constant-time over the contents; a length mismatch, which is not secret, is
         // unequal at once.
@@ -537,7 +550,7 @@ impl OAuthClient {
                 provider,
                 "{CALLBACK_REJECTED}",
             );
-            return Err(AuthError::Failed("OAuth state mismatch".into()));
+            return Err(AuthError::failed("OAuth state mismatch"));
         }
         let endpoint = Endpoint {
             role: TOKEN_ENDPOINT,
@@ -585,7 +598,7 @@ impl OAuthClient {
             setting: None,
         };
         if !reqwest::Url::parse(url.trim()).is_ok_and(|url| url.scheme() == "https") {
-            return Err(AuthError::Failed(format!(
+            return Err(AuthError::failed(format!(
                 "{endpoint} is not an https URL, and RFC 6750 §5.3 sends a bearer token over TLS \
                  alone"
             )));
@@ -626,7 +639,7 @@ impl OAuthClient {
                     .get(reqwest::header::RETRY_AFTER)
                     .map(|value| value.as_bytes()),
             )
-            .unwrap_or_else(|| AuthError::Failed(format!("{endpoint} answered {status}"))));
+            .unwrap_or_else(|| AuthError::failed(format!("{endpoint} answered {status}"))));
         }
         let body = read_capped(response)
             .await
@@ -634,14 +647,7 @@ impl OAuthClient {
                 Capped::Oversized => oversized(endpoint),
                 Capped::Call(error) => call_failed(endpoint, error),
             })?;
-        // Said without the value serde would quote: a provider's body carries
-        // the profile, and may carry a token.
-        serde_json::from_slice(&body).map_err(|error| {
-            AuthError::Failed(format!(
-                "{endpoint} answered a body that does not parse: {}",
-                nest_rs_core::DecodeError::new(&error),
-            ))
-        })
+        serde_json::from_slice(&body).map_err(|error| undecodable(endpoint, &error))
     }
 }
 
@@ -674,6 +680,13 @@ mod tests {
             http: backend().build().expect("the backend builds"),
             variables: None,
         }
+    }
+
+    /// What the operator's line says below `error`'s constant.
+    fn beneath(error: &AuthError) -> String {
+        std::error::Error::source(error)
+            .map(nest_rs_core::error_message)
+            .unwrap_or_default()
     }
 
     fn jwt() -> JwtService {
@@ -712,18 +725,20 @@ mod tests {
     fn basic_client_refuses_a_malformed_url_naming_its_field_and_not_its_value() {
         let mut config = valid_config();
         config.auth_url = "https://u:s3cr3t@idp:99999/x".into();
-        let Err(AuthError::Failed(msg)) = OAuthClient::basic_client(&config) else {
+        let Err(msg @ AuthError::Failed { .. }) = OAuthClient::basic_client(&config) else {
             panic!("expected Failed");
         };
+        let msg = beneath(&msg);
         assert_eq!(
             msg, "OAuthClientConfig::auth_url does not parse as a URL: invalid port number",
             "{msg}"
         );
 
         config.auth_url = "not a url".into();
-        let Err(AuthError::Failed(msg)) = OAuthClient::basic_client(&config) else {
+        let Err(msg @ AuthError::Failed { .. }) = OAuthClient::basic_client(&config) else {
             panic!("expected Failed");
         };
+        let msg = nest_rs_core::error_message(&msg);
         assert!(
             msg.contains("relative URL without a base") && !msg.contains("not a url"),
             "{msg}"
@@ -755,9 +770,10 @@ mod tests {
             "the probe quotes: {errors}"
         );
 
-        let AuthError::Failed(sentence) = invalid(errors) else {
+        let sentence @ AuthError::Failed { .. } = invalid(errors) else {
             panic!("a refused config is a failed authentication setup");
         };
+        let sentence = nest_rs_core::error_message(&sentence);
         assert!(sentence.contains("client_secret: refused"), "{sentence}");
         assert!(!sentence.contains("s3cr3t"), "{sentence}");
         assert!(!sentence.contains("value"), "{sentence}");
@@ -769,7 +785,7 @@ mod tests {
         config.token_url = "::::".into();
         assert!(matches!(
             OAuthClient::basic_client(&config),
-            Err(AuthError::Failed(_))
+            Err(AuthError::Failed { .. })
         ));
     }
 
@@ -779,7 +795,7 @@ mod tests {
         config.redirect_url = "/relative/path".into();
         assert!(matches!(
             OAuthClient::basic_client(&config),
-            Err(AuthError::Failed(_))
+            Err(AuthError::Failed { .. })
         ));
     }
 
@@ -788,12 +804,15 @@ mod tests {
         let mut config = valid_config();
         config.auth_url = "not a url".into();
         assert!(
-            matches!(OAuthClient::new(config.clone()), Err(AuthError::Failed(_))),
+            matches!(
+                OAuthClient::new(config.clone()),
+                Err(AuthError::Failed { .. })
+            ),
             "new refuses it first"
         );
         assert!(matches!(
             unchecked(config).authorize(&jwt(), "acme"),
-            Err(AuthError::Failed(_))
+            Err(AuthError::Failed { .. })
         ));
     }
 
@@ -809,7 +828,8 @@ mod tests {
         else {
             panic!("a transaction from another provider is rejected");
         };
-        assert!(err.to_string().contains("provider mismatch"), "{err}");
+        let said = nest_rs_core::error_message(&err);
+        assert!(said.contains("provider mismatch"), "{said}");
     }
 
     /// The token endpoint does not parse, so a state that passes fails there instead.
@@ -834,11 +854,15 @@ mod tests {
             else {
                 panic!("nothing reaches a token endpoint that does not parse");
             };
-            assert!(matches!(err, AuthError::Failed(_)), "{presented:?}: {err}");
-            assert_eq!(
-                !err.to_string().contains("state mismatch"),
-                matches,
+            assert!(
+                matches!(err, AuthError::Failed { .. }),
                 "{presented:?}: {err}"
+            );
+            let said = nest_rs_core::error_message(&err);
+            assert_eq!(
+                !said.contains("state mismatch"),
+                matches,
+                "{presented:?}: {said}"
             );
         }
     }
@@ -860,7 +884,7 @@ mod tests {
         });
         let url = format!("http://{addr}/user/emails");
 
-        let Err(AuthError::Unavailable { detail, .. }) = OAuthClient::new(valid_config())
+        let Err(detail @ AuthError::Unavailable { .. }) = OAuthClient::new(valid_config())
             .expect("new accepts a valid config")
             .read::<serde_json::Value>(
                 &Endpoint {
@@ -874,6 +898,7 @@ mod tests {
         else {
             panic!("a plaintext URL is no call the backend makes");
         };
+        let detail = beneath(&detail);
 
         tokio::task::yield_now().await;
         assert_eq!(
@@ -976,10 +1001,11 @@ mod tests {
         // Twice the bound and no longer: a backend that stopped bounding its
         // connections would otherwise wait on this resolver for good.
         let sent = tokio::time::Instant::now();
-        let Err(AuthError::Unavailable {
-            detail: sentence,
-            retry_after: None,
-        }) = tokio::time::timeout(
+        let Err(
+            refused @ AuthError::Unavailable {
+                retry_after: None, ..
+            },
+        ) = tokio::time::timeout(
             OAuthClient::CONNECT_TIMEOUT * 2,
             client.userinfo::<serde_json::Value>("never-quoted"),
         )
@@ -988,6 +1014,7 @@ mod tests {
         else {
             panic!("a provider nobody can reach is unavailable, and returns no profile");
         };
+        let sentence = beneath(&refused);
 
         assert_eq!(sent.elapsed(), OAuthClient::CONNECT_TIMEOUT);
         assert_eq!(

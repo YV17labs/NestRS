@@ -116,13 +116,14 @@ mod tests {
             ),
             ("http://u:s3cr3t@[::1", "does not parse as a URL"),
         ] {
-            let Err(AuthError::Failed(sentence)) = GoogleSocialConfig {
+            let Err(sentence @ AuthError::Failed { .. }) = GoogleSocialConfig {
                 redirect_url: redirect.into(),
                 ..complete()
             }
             .oauth2_config() else {
                 panic!("{redirect} is refused");
             };
+            let sentence = nest_rs_core::error_message(&sentence);
             assert!(
                 sentence.contains(&nest_rs_config::var_name("social__google", "REDIRECT_URL"))
                     && sentence.contains("`GoogleSocialConfig::redirect_url` in code")

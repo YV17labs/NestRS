@@ -145,7 +145,7 @@ let token = self.jwt.sign(&claims)?;
 ```
 
 `sign` is `Result<String, AuthError>` — on a verify-only service
-(EdDSA with no private key), it returns `AuthError::Failed(...)`.
+(EdDSA with no private key), it returns `AuthError::Failed { .. }`.
 `expiry()` returns `now + ttl` from `JwtOptions::expires_in`
 (default one hour); `ttl_secs()` exposes the duration directly so the
 issuer can return it alongside the token.

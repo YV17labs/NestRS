@@ -207,9 +207,8 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
     // The credential was never evaluated, so serving the caller as anonymous
     // would silently downgrade every authenticated session during an outage.
     let logs = LogCapture::install();
-    let guard = AuthnGuard::new(Arc::new(RejectWith(|| AuthError::Unavailable {
-        detail: "store unreachable".into(),
-        retry_after: None,
+    let guard = AuthnGuard::new(Arc::new(RejectWith(|| {
+        AuthError::unavailable("store unreachable", None)
     })));
 
     let denial = check(&guard, &PUBLIC, &mut bare())
@@ -477,10 +476,7 @@ async fn a_strategy_that_never_answers_is_denied_at_the_bound() {
     );
     // The answer an unreachable identity store gets, word for word: the caller
     // cannot tell a hang from an outage, and has the same remedy for both.
-    let unavailable = AuthError::Unavailable {
-        detail: String::new(),
-        retry_after: None,
-    };
+    let unavailable = AuthError::unavailable("", None);
     assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
     assert_eq!(denial.message(), unavailable.client_message());
     assert!(attached::<Who>(&req).is_none(), "no principal is attached");

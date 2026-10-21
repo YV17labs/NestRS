@@ -5,11 +5,13 @@
 //! `nest-rs-oauth-server`'s: this crate resolves who is calling, and a grant
 //! refusal is not a credential verdict.
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use nest_rs_core::__private::OpaqueCause;
 use nest_rs_http::{HeaderValue, IntoResponse, Response, ResponseError, StatusCode, header};
 
 use nest_rs_http::challenge::NoBearerChallenge;
@@ -79,6 +81,10 @@ pub struct UnknownAlgorithmError;
 /// [`AUTHENTICATE_TIMEOUT`](crate::AUTHENTICATE_TIMEOUT).
 pub(crate) const UNAVAILABLE: &str = "authentication unavailable";
 
+/// What a caller is told when a strategy or its configuration failed
+/// ([`AuthError::Failed`]).
+const FAILED: &str = "authentication failed";
+
 /// Opaque "wrong credentials" failure for any password-login path.
 ///
 /// Returned by services that verify a password against a stored hash: missing
@@ -90,6 +96,29 @@ pub(crate) const UNAVAILABLE: &str = "authentication unavailable";
 pub struct CredentialError;
 
 /// Why authentication did not establish an identity.
+///
+/// The two internal-failure variants, [`Failed`](Self::Failed) and
+/// [`Unavailable`](Self::Unavailable), display the constant the caller is
+/// answered and keep their detail, then what failed, as their
+/// [`source`](Error::source): the operator's line, filed with
+/// [`error_message`](fn@nest_rs_core::error_message), says them together, and
+/// no edge answers anything they carry. Only their constructors build them;
+/// a match names them with `{ .. }`:
+///
+/// ```
+/// use nest_rs_authn::AuthError;
+///
+/// let err = AuthError::failed("the provider answered 400");
+/// assert!(matches!(err, AuthError::Failed { .. }));
+/// ```
+///
+/// ```compile_fail
+/// use nest_rs_authn::AuthError;
+///
+/// let err = AuthError::Failed {
+///     cause: nest_rs_core::__private::OpaqueCause::new("the provider answered 400", None),
+/// };
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AuthError {
@@ -120,35 +149,113 @@ pub enum AuthError {
     /// other token failures because it is the routine "log in again" case.
     #[error("token expired")]
     Expired,
-    /// Strategy-specific or configuration failures. The message is for logs, not the client body.
-    #[error("authentication failed: {0}")]
-    Failed(String),
+    /// A strategy-specific or configuration failure. Rendered as a 401
+    /// challenge and logged at `warn`; it displays `"authentication failed"`,
+    /// the body every caller reads. Built by [`failed`](Self::failed) or, with
+    /// what failed, [`failed_because`](Self::failed_because).
+    #[error("{}", FAILED)]
+    #[non_exhaustive]
+    Failed {
+        /// The detail, then the cause's chain, read through [`Error::source`].
+        #[doc(hidden)]
+        #[source]
+        cause: OpaqueCause,
+    },
     /// An identity store or an identity provider could not be reached, or did
     /// not answer — an infrastructure failure, **not** a credential signal: the
     /// caller did nothing wrong. Rendered as **503**, with a `Retry-After` when
-    /// `retry_after` is known (RFC 9110 §15.6.4), and logged at `error`; the
-    /// detail is for logs, never the client body.
-    #[error("authentication unavailable: {detail}")]
+    /// `retry_after` is known (RFC 9110 §15.6.4), and logged at `error`; it
+    /// displays `"authentication unavailable"`, the body every caller reads.
+    /// Built by [`unavailable`](Self::unavailable) or, with what failed,
+    /// [`unavailable_because`](Self::unavailable_because).
+    #[error("{}", UNAVAILABLE)]
+    #[non_exhaustive]
     Unavailable {
-        /// What did not answer, and how — for the log.
-        detail: String,
         /// How long until a retry may succeed, when the party that failed said
         /// so — an identity provider's own `Retry-After`.
         retry_after: Option<Duration>,
+        /// The detail, then the cause's chain, read through [`Error::source`].
+        #[doc(hidden)]
+        #[source]
+        cause: OpaqueCause,
     },
 }
 
 /// A credential mismatch is an authentication failure: it folds into
-/// [`AuthError::Failed`], carrying [`CredentialError`]'s opaque `"invalid
-/// credentials"` text for logs (the client still sees the constant
-/// `client_message`).
+/// [`AuthError::Failed`] with [`CredentialError`]'s opaque `"invalid
+/// credentials"` as its detail, and no cause — it carries none.
 impl From<CredentialError> for AuthError {
     fn from(err: CredentialError) -> Self {
-        Self::Failed(err.to_string())
+        Self::failed(err.to_string())
     }
 }
 
 impl AuthError {
+    /// A [`Failed`](Self::Failed) authentication: the detail names what
+    /// failed for the operator's line, never a value the request carried, and
+    /// the caller reads `"authentication failed"` whatever it says.
+    pub fn failed(detail: impl Into<Cow<'static, str>>) -> Self {
+        Self::Failed {
+            cause: OpaqueCause::new(detail, None),
+        }
+    }
+
+    /// [`failed`](Self::failed), keeping what failed beneath the detail: the
+    /// operator's line says the detail, then the cause's chain. A source never
+    /// quotes a value the request carried — a decode failure is said through
+    /// its [`DecodeError`](nest_rs_core::DecodeError), a URL through
+    /// [`endpoint_shown`](nest_rs_config::endpoint_shown) or reqwest's
+    /// `without_url`, any other error as it displays.
+    ///
+    /// ```
+    /// use nest_rs_authn::AuthError;
+    ///
+    /// let refused = std::io::Error::other("the key store refused the connection");
+    /// let err = AuthError::failed_because("could not build the provider client", refused);
+    /// assert_eq!(err.to_string(), "authentication failed");
+    /// assert_eq!(
+    ///     nest_rs_core::error_message(&err),
+    ///     "authentication failed: could not build the provider client: the key store refused \
+    ///      the connection",
+    /// );
+    /// ```
+    pub fn failed_because(
+        detail: impl Into<Cow<'static, str>>,
+        source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
+    ) -> Self {
+        Self::Failed {
+            cause: OpaqueCause::new(detail, Some(shared(source))),
+        }
+    }
+
+    /// An [`Unavailable`](Self::Unavailable) identity store or provider, with
+    /// the wait it gave when it gave one: the detail names what did not
+    /// answer, for the operator's line, and the caller reads `"authentication
+    /// unavailable"`.
+    pub fn unavailable(
+        detail: impl Into<Cow<'static, str>>,
+        retry_after: Option<Duration>,
+    ) -> Self {
+        Self::Unavailable {
+            retry_after,
+            cause: OpaqueCause::new(detail, None),
+        }
+    }
+
+    /// [`unavailable`](Self::unavailable), keeping what failed beneath the
+    /// detail, under [`failed_because`](Self::failed_because)'s rule: a source
+    /// never quotes a value the request carried.
+    pub fn unavailable_because(
+        detail: impl Into<Cow<'static, str>>,
+        retry_after: Option<Duration>,
+        source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
+    ) -> Self {
+        Self::Unavailable {
+            retry_after,
+            cause: OpaqueCause::new(detail, Some(shared(source))),
+        }
+    }
+
     /// The RFC 6750 §3.1 code this failure reports on the `WWW-Authenticate`
     /// challenge, or `None` when §3 says to report none.
     ///
@@ -177,35 +284,41 @@ impl AuthError {
             Self::UnknownKey => "unknown_key",
             Self::NotYetValid => "not_yet_valid",
             Self::Expired => "expired",
-            Self::Failed(_) => "failed",
+            Self::Failed { .. } => "failed",
             Self::Unavailable { .. } => "unavailable",
         }
     }
 
     /// The `Retry-After` an [`Unavailable`](Self::Unavailable) failure answers
-    /// with, in whole seconds rounded up — `None` for every other failure, and
-    /// for an unavailable one nobody gave a wait for.
+    /// with, in whole seconds rounded up and never `0`, which RFC 9110
+    /// §10.2.3 reads as "retry immediately" — `None` for every other failure,
+    /// and for an unavailable one nobody gave a wait for.
     pub fn retry_after_secs(&self) -> Option<u32> {
-        let Self::Unavailable {
-            retry_after: Some(wait),
-            ..
-        } = self
-        else {
-            return None;
-        };
-        let whole = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
-        Some(u32::try_from(whole).unwrap_or(u32::MAX))
+        match self {
+            Self::Unavailable {
+                retry_after: Some(wait),
+                ..
+            } => Some(nest_rs_core::__private::retry_after_secs(*wait)),
+            _ => None,
+        }
     }
 
     /// Message safe to return in an HTTP 401 body (no strategy/configuration detail).
     pub fn client_message(&self) -> &'static str {
         match self {
-            Self::Failed(_) => "authentication failed",
+            Self::Failed { .. } => FAILED,
             Self::MissingCredentials => "missing credentials",
             Self::Unavailable { .. } => UNAVAILABLE,
             _ => "invalid token",
         }
     }
+}
+
+/// `source` shared, its chain kept readable link by link.
+fn shared(
+    source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
+) -> Arc<dyn Error + Send + Sync> {
+    Arc::from(nest_rs_core::boxed_error(source))
 }
 
 impl AuthError {
@@ -215,16 +328,24 @@ impl AuthError {
     fn render(&self) -> Response {
         let body = self.client_message();
         // An infrastructure failure is a 503 logged at `error`, never a 401 challenge.
-        if let Self::Unavailable { detail, .. } = self {
-            tracing::error!(target: crate::TARGET, detail = %detail, "authentication unavailable");
+        if let Self::Unavailable { .. } = self {
+            tracing::error!(
+                target: crate::TARGET,
+                error = %nest_rs_core::error_message(self),
+                "authentication unavailable",
+            );
             let mut response = Response::builder().status(StatusCode::SERVICE_UNAVAILABLE);
             if let Some(secs) = self.retry_after_secs() {
                 response = response.header(header::RETRY_AFTER, HeaderValue::from(secs));
             }
             return response.body(body);
         }
-        if let Self::Failed(detail) = self {
-            tracing::warn!(target: crate::TARGET, detail = %detail, "authentication failed");
+        if let Self::Failed { .. } = self {
+            tracing::warn!(
+                target: crate::TARGET,
+                error = %nest_rs_core::error_message(self),
+                "authentication failed",
+            );
         }
         // The challenge is composed from constants, so it always encodes.
         let challenge = HeaderValue::try_from(self.challenge())
@@ -296,15 +417,51 @@ mod tests {
         assert_eq!(CredentialError.to_string(), "invalid credentials");
     }
 
+    /// A refused credential carries no cause: its words are said once.
+    #[test]
+    fn a_credential_mismatch_folds_into_failed_without_a_cause() {
+        let err = AuthError::from(CredentialError);
+        assert!(matches!(err, AuthError::Failed { .. }));
+        assert_eq!(
+            nest_rs_core::error_message(&err),
+            "authentication failed: invalid credentials"
+        );
+        assert!(err.source().and_then(Error::source).is_none());
+    }
+
+    /// The cause sits beneath the detail, read through `source`, and the line
+    /// is the whole chain; the body stays the constant.
+    #[tokio::test]
+    async fn a_failed_authentication_keeps_its_cause_and_files_the_chain_at_warn() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let err = AuthError::failed_because("x", std::io::Error::other("the store hung up"));
+        let cause = err
+            .source()
+            .and_then(Error::source)
+            .expect("the cause beneath the detail");
+        assert!(cause.downcast_ref::<std::io::Error>().is_some());
+        assert_eq!(err.to_string(), "authentication failed");
+
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            resp.into_body().into_string().await.expect("a body"),
+            "authentication failed"
+        );
+        let filed = logs.expect_one("nest_rs::authn", "authentication failed");
+        assert_eq!(filed.level, "warn");
+        assert_eq!(
+            filed.field("error").as_deref(),
+            Some("authentication failed: x: the store hung up")
+        );
+        logs.expect_none("nest_rs::authn", "authentication unavailable");
+    }
+
     /// An outage is RFC 9110 §15.6.4's `503`, never a `401` nor a `500`.
     #[test]
     fn unavailable_renders_503_with_the_known_wait_and_no_bearer_challenge() {
         let logs = nest_rs_testing::LogCapture::install();
-        let resp = AuthError::Unavailable {
-            detail: "store unreachable".into(),
-            retry_after: None,
-        }
-        .into_response();
+        let resp = AuthError::unavailable("store unreachable", None).into_response();
         assert_eq!(
             resp.status(),
             StatusCode::SERVICE_UNAVAILABLE,
@@ -318,10 +475,11 @@ mod tests {
             resp.headers().get(header::WWW_AUTHENTICATE).is_none(),
             "a 503 must not send a Bearer challenge the caller cannot satisfy",
         );
-        let waited = AuthError::Unavailable {
-            detail: "provider answered 503".into(),
-            retry_after: Some(Duration::from_millis(2500)),
-        }
+        let waited = AuthError::unavailable_because(
+            "provider answered 503",
+            Some(Duration::from_millis(2500)),
+            std::io::Error::other("upstream overloaded"),
+        )
         .into_response();
         assert_eq!(waited.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
@@ -334,26 +492,57 @@ mod tests {
         );
 
         // The body withholds the detail, so the log is its one place.
-        let event = logs
+        let filed: Vec<_> = logs
             .find("nest_rs::authn", "authentication unavailable")
             .into_iter()
-            .next()
-            .expect("the outage is logged");
-        assert_eq!(event.level, "error");
-        assert!(
-            event
-                .field("detail")
-                .is_some_and(|d| d.contains("store unreachable")),
-            "the event carries the detail the body withholds, got {:?}",
-            event.fields,
+            .map(|event| {
+                (
+                    event.level.clone(),
+                    event.field("error").unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            filed,
+            [
+                (
+                    "error".to_owned(),
+                    "authentication unavailable: store unreachable".to_owned()
+                ),
+                (
+                    "error".to_owned(),
+                    "authentication unavailable: provider answered 503: upstream overloaded"
+                        .to_owned()
+                ),
+            ],
         );
+    }
+
+    /// RFC 9110 §10.2.3 reads `0` as "retry now": a provider's zero wait is
+    /// answered as one second, the floor every `Retry-After` the framework
+    /// sends holds.
+    #[test]
+    fn a_zero_wait_is_answered_as_one_second() {
+        for (wait, secs) in [
+            (Duration::ZERO, 1),
+            (Duration::from_millis(1), 1),
+            (Duration::from_secs(30), 30),
+        ] {
+            assert_eq!(
+                AuthError::unavailable("provider answered 503", Some(wait)).retry_after_secs(),
+                Some(secs),
+                "{wait:?}"
+            );
+        }
+        assert_eq!(AuthError::unavailable("x", None).retry_after_secs(), None);
+        assert_eq!(AuthError::failed("x").retry_after_secs(), None);
     }
 
     #[test]
     fn a_failed_authentication_is_a_warn_and_not_this_line() {
         // An outage filed under this message would read as a brute-force attempt.
         let logs = nest_rs_testing::LogCapture::install();
-        let resp = AuthError::Failed("bad password".into()).into_response();
+        let resp = AuthError::failed("bad password").into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             logs.expect_one("nest_rs::authn", "authentication failed")
@@ -365,13 +554,25 @@ mod tests {
 
     #[test]
     fn unavailable_client_message_hides_the_detail() {
-        assert_eq!(
-            AuthError::Unavailable {
-                detail: "connection refused at 10.0.0.1".into(),
-                retry_after: None,
-            }
-            .client_message(),
-            "authentication unavailable",
-        );
+        let err = AuthError::unavailable("connection refused at 10.0.0.1", None);
+        assert_eq!(err.client_message(), "authentication unavailable");
+        assert_eq!(err.to_string(), "authentication unavailable");
+    }
+
+    /// A decode failure beneath the detail is the operator's: no edge reading
+    /// the chain for what to answer finds it, wrapped or not, and the line
+    /// says it without its value.
+    #[test]
+    fn a_decode_failure_beneath_the_detail_is_never_the_callers() {
+        let failure = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+        let err = anyhow::Error::from(AuthError::failed_because(
+            "the provider answered a body that does not parse",
+            failure,
+        ))
+        .context("resolving the caller");
+        assert!(nest_rs_core::DecodeError::in_chain(err.as_ref()).is_none());
+        let said = nest_rs_core::error_message(err.as_ref());
+        assert!(said.contains("expected u64"), "{said}");
+        assert!(!said.contains("sk_live"), "{said}");
     }
 }

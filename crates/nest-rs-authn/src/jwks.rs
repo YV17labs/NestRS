@@ -27,6 +27,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 use nest_rs_config::{ClientTls, ConfigService, Namespaced};
+use nest_rs_core::__private::OpaqueCause;
 
 use crate::Algorithm;
 use crate::AuthnConfig;
@@ -94,9 +95,28 @@ struct Held {
 }
 
 struct Failure {
-    detail: String,
+    /// What failed and why, shared by every token it answers.
+    cause: OpaqueCause,
     /// The issuer's own `Retry-After`, when it gave one in delay-seconds.
     retry_after: Option<Duration>,
+}
+
+impl Failure {
+    /// A failure `detail` says whole.
+    fn said(detail: String, retry_after: Option<Duration>) -> Self {
+        Self {
+            cause: OpaqueCause::new(detail, None),
+            retry_after,
+        }
+    }
+
+    /// A failure `detail` says, `source` beneath it.
+    fn because(detail: String, source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            cause: OpaqueCause::new(detail, Some(Arc::new(source))),
+            retry_after: None,
+        }
+    }
 }
 
 /// What [`State::join`] found: the fetch to wait for, if any, and the sender of
@@ -119,17 +139,19 @@ impl Jwks {
         algorithms: &[Algorithm],
     ) -> Result<Self, AuthError> {
         let url = reqwest::Url::parse(uri.trim()).map_err(|error| {
-            AuthError::Failed(format!("{}, is not a URL: {error}", jwks_uri_setting()))
+            AuthError::failed_because(format!("{}, is not a URL", jwks_uri_setting()), error)
         })?;
         if url.scheme() != "https" {
-            return Err(AuthError::Failed(format!(
+            return Err(AuthError::failed(format!(
                 "{}, must be an https URL: the keys it serves decide which tokens verify, and \
                  over plain http anyone on the path could serve their own",
                 jwks_uri_setting()
             )));
         }
-        let material = nest_rs_config::__private::reqwest_tls(tls, &names())
-            .map_err(|refused| AuthError::Failed(refused.to_string()))?;
+        let material =
+            nest_rs_config::__private::reqwest_tls(tls, &names()).map_err(|refused| {
+                AuthError::failed_because("the JWK Set client's TLS material is unusable", refused)
+            })?;
         let mut builder = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -141,10 +163,7 @@ impl Jwks {
             builder = builder.identity(identity);
         }
         let client = builder.build().map_err(|error| {
-            AuthError::Failed(format!(
-                "the JWK Set client could not be built: {}",
-                nest_rs_core::error_message(&error)
-            ))
+            AuthError::failed_because("the JWK Set client could not be built", error)
         })?;
         let endpoint = format!("the JWK Set at {}", nest_rs_config::endpoint_shown(uri));
         Ok(Self {
@@ -266,18 +285,20 @@ impl Inner {
             } else {
                 ""
             };
-            return Err(Failure {
-                detail: format!("{} answered {status}{redirect}", self.endpoint),
+            return Err(Failure::said(
+                format!("{} answered {status}{redirect}", self.endpoint),
                 retry_after,
-            });
+            ));
         }
         let fresh_for = freshness(response.headers());
-        let oversized = || Failure {
-            detail: format!(
-                "{} answered more than {JWKS_MAX_BYTES} bytes, the most a JWK Set is read to",
-                self.endpoint
-            ),
-            retry_after: None,
+        let oversized = || {
+            Failure::said(
+                format!(
+                    "{} answered more than {JWKS_MAX_BYTES} bytes, the most a JWK Set is read to",
+                    self.endpoint
+                ),
+                None,
+            )
         };
         if response
             .content_length()
@@ -297,58 +318,56 @@ impl Inner {
             body.extend_from_slice(&chunk);
         }
         // Said without the value serde would quote.
-        let set = JwkSet::parse(&body, &self.algorithms).map_err(|error| Failure {
-            detail: format!(
-                "{} answered a document that is not a JWK Set: {}",
-                self.endpoint,
-                nest_rs_core::DecodeError::new(&error)
-            ),
-            retry_after: None,
+        let set = JwkSet::parse(&body, &self.algorithms).map_err(|error| {
+            Failure::because(
+                format!(
+                    "{} answered a document that is not a JWK Set",
+                    self.endpoint
+                ),
+                nest_rs_core::DecodeError::new(&error),
+            )
         })?;
         if set.len() == 0 {
-            return Err(Failure {
-                detail: format!(
+            return Err(Failure::said(
+                format!(
                     "{} holds no key this verifier can use: none is a signing key for {}",
                     self.endpoint,
                     one_of(self.algorithms.iter().copied())
                 ),
-                retry_after: None,
-            });
+                None,
+            ));
         }
         Ok((set, fresh_for))
     }
 
-    /// A call that got no answer, without the URL reqwest quotes whole — its
-    /// query may carry a credential.
+    /// A call that got no answer: a timeout says the bound it hit, and any
+    /// other failure keeps reqwest's chain without the URL, which it quotes
+    /// whole — its query may carry a credential.
     fn call_failed(&self, error: reqwest::Error) -> Failure {
-        let detail = if error.is_timeout() && error.is_connect() {
-            format!(
-                "{} could not be connected to within {JWKS_CONNECT_TIMEOUT:?}",
-                self.endpoint
-            )
-        } else if error.is_timeout() {
-            format!(
-                "{} did not answer within {JWKS_FETCH_TIMEOUT:?}",
-                self.endpoint
-            )
-        } else if ClientTls::negotiation_failed(&error) {
-            format!(
-                "{} could not be fetched: {} ({})",
-                self.endpoint,
-                ClientTls::remedy(&names(), "the JWK Set endpoint", "JWKS_URI", &error),
-                nest_rs_core::error_message(&error.without_url())
-            )
-        } else {
+        if error.is_timeout() {
+            let detail = if error.is_connect() {
+                format!(
+                    "{} could not be connected to within {JWKS_CONNECT_TIMEOUT:?}",
+                    self.endpoint
+                )
+            } else {
+                format!(
+                    "{} did not answer within {JWKS_FETCH_TIMEOUT:?}",
+                    self.endpoint
+                )
+            };
+            return Failure::said(detail, None);
+        }
+        let detail = if ClientTls::negotiation_failed(&error) {
             format!(
                 "{} could not be fetched: {}",
                 self.endpoint,
-                nest_rs_core::error_message(&error.without_url())
+                ClientTls::remedy(&names(), "the JWK Set endpoint", "JWKS_URI", &error),
             )
+        } else {
+            format!("{} could not be fetched", self.endpoint)
         };
-        Failure {
-            detail,
-            retry_after: None,
-        }
+        Failure::because(detail, error.without_url())
     }
 
     /// Record a fetch's outcome; a failure beside a set still served is said.
@@ -375,7 +394,7 @@ impl Inner {
             }
             Err(failure) => {
                 let kept = state.usable(now).is_some();
-                let detail = failure.detail.clone();
+                let said = nest_rs_core::error_message(&failure.cause);
                 state.failure = Some(failure);
                 drop(state);
                 // With nothing kept, every token waiting answers `Unavailable`
@@ -383,7 +402,7 @@ impl Inner {
                 if kept {
                     tracing::warn!(
                         target: crate::TARGET,
-                        error = %detail,
+                        error = %said,
                         "the issuer's key set could not be refreshed; the last good one is kept",
                     );
                 }
@@ -467,13 +486,13 @@ impl State {
         let next_fetch = (!next_fetch.is_zero()).then_some(next_fetch);
         match &self.failure {
             Some(failure) => AuthError::Unavailable {
-                detail: failure.detail.clone(),
                 retry_after: failure.retry_after.or(next_fetch),
+                cause: failure.cause.clone(),
             },
-            None => AuthError::Unavailable {
-                detail: format!("{endpoint} holds no set this verifier can use yet"),
-                retry_after: next_fetch,
-            },
+            None => AuthError::unavailable(
+                format!("{endpoint} holds no set this verifier can use yet"),
+                next_fetch,
+            ),
         }
     }
 }
@@ -618,11 +637,12 @@ mod tests {
             ("issuer.example/jwks", "is not a URL"),
             ("ftp://issuer.example/jwks", "must be an https URL"),
         ] {
-            let Err(AuthError::Failed(refused)) =
+            let Err(refused @ AuthError::Failed { .. }) =
                 Jwks::new(uri, &ClientTls::default(), &[Algorithm::EdDSA])
             else {
                 panic!("{uri} must be refused");
             };
+            let refused = nest_rs_core::error_message(&refused);
             assert!(
                 refused.contains(&setting) && refused.contains(reason),
                 "{refused}"
@@ -634,7 +654,7 @@ mod tests {
     fn an_authority_file_holding_no_certificate_is_refused() {
         let setting = nest_rs_config::var_name(AuthnConfig::NAMESPACE, "TLS_CA_CERT");
         for pem in [&b""[..], b"not a certificate"] {
-            let Err(AuthError::Failed(refused)) = Jwks::new(
+            let Err(refused @ AuthError::Failed { .. }) = Jwks::new(
                 "https://issuer.example/jwks",
                 &ClientTls::new(
                     Some(nest_rs_config::Material {
@@ -647,6 +667,7 @@ mod tests {
             ) else {
                 panic!("an authority file with no certificate must be refused");
             };
+            let refused = nest_rs_core::error_message(&refused);
             assert!(refused.contains(&setting), "{refused}");
         }
     }

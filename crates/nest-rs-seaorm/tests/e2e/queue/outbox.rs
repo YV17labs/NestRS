@@ -1076,7 +1076,7 @@ async fn the_boot_refuses_naming_the_remedy_when_the_table_is_missing() {
     assert_eq!(
         format!("{refused:#}"),
         "the outbox table `nestrs_outbox` is missing: run `nestrs g migration nestrs_outbox`, \
-         then `nestrs run db migrate`",
+         then `nestrs run db up`",
     );
     app.close().await;
 }

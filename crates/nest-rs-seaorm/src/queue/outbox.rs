@@ -31,7 +31,7 @@ use crate::executor::Executor;
 pub(crate) const TABLE: &str = "nestrs_outbox";
 
 /// What creates the table, as the boot refusing without it says.
-const REMEDY: &str = "run `nestrs g migration nestrs_outbox`, then `nestrs run db migrate`";
+const REMEDY: &str = "run `nestrs g migration nestrs_outbox`, then `nestrs run db up`";
 
 /// The most records one `INSERT` carries: five parameters each, well inside
 /// Postgres's 65535.
@@ -438,6 +438,21 @@ pub(crate) mod tests {
         .await
         .expect("written");
         assert_eq!(sent, 2);
+    }
+
+    /// The remedy names the commands a scaffolded workspace has: the generator
+    /// registering the framework's migration, then the recipe applying it.
+    #[test]
+    fn a_missing_table_names_the_commands_that_create_it() {
+        let missing = OutboxError::Missing {
+            table: TABLE,
+            remedy: REMEDY,
+        };
+        assert_eq!(
+            missing.to_string(),
+            "the outbox table `nestrs_outbox` is missing: run `nestrs g migration nestrs_outbox`, \
+             then `nestrs run db up`",
+        );
     }
 
     #[test]

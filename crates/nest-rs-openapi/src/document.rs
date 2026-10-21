@@ -415,6 +415,7 @@ fn problem_details_schema() -> Value {
             "status": { "type": "integer", "minimum": 100, "maximum": 599 },
             "detail": { "type": "string" },
             "instance": { "type": "string", "format": "uri-reference" },
+            "code": { "type": "string" },
             "errors": { "type": "object", "additionalProperties": true },
         },
         "required": ["type", "title", "status"],
@@ -1498,6 +1499,20 @@ mod tests {
         let content = &op["responses"]["404"]["content"];
         assert!(content["application/problem+json"].is_object(), "{op}");
         assert!(content["application/json"].is_object(), "{op}");
+    }
+
+    /// Every server error's document carries its `code`, and a client error's
+    /// when it was given one: documented, never required.
+    #[test]
+    fn a_problem_names_its_code_member() {
+        let schema = problem_details_schema();
+        assert_eq!(schema["properties"]["code"]["type"], "string", "{schema}");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("code"))),
+            "{schema}",
+        );
     }
 
     #[test]

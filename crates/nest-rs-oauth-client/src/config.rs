@@ -105,7 +105,7 @@ impl OAuthClientConfig {
                 return Err(refused(&setting, &format!("must be an https URL — {why}")));
             }
         }
-        refused_redirect(
+        refuse_plaintext_redirect_in(
             &self.redirect_url,
             &setting(variables, "REDIRECT_URL", "redirect_url"),
             environment,
@@ -140,12 +140,12 @@ impl OAuthClientConfig {
 /// );
 /// ```
 pub fn refuse_plaintext_redirect(redirect_url: &str, setting: &str) -> Result<(), AuthError> {
-    refused_redirect(redirect_url, setting, Environment::from_env())
+    refuse_plaintext_redirect_in(redirect_url, setting, Environment::from_env())
 }
 
 /// [`refuse_plaintext_redirect`] under `environment`, the profile that decides
 /// whether plain `http` on loopback is accepted.
-fn refused_redirect(
+fn refuse_plaintext_redirect_in(
     redirect_url: &str,
     setting: &str,
     environment: Environment,

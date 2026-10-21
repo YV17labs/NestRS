@@ -130,33 +130,34 @@ impl fmt::Display for Endpoint<'_> {
 }
 
 /// A call to `endpoint` that got no answer, as [`AuthError::Unavailable`] (RFC 9110
-/// §15.6.4); reqwest's chain goes in without the URL, which it quotes whole.
+/// §15.6.4): a timeout says the bound it hit, and any other failure keeps
+/// reqwest's chain without the URL, which it quotes whole.
 fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
-    let detail = if error.is_timeout() && error.is_connect() {
-        format!(
-            "{endpoint} could not be connected to within {:?}",
-            OAuthClient::CONNECT_TIMEOUT
-        )
-    } else if error.is_timeout() {
-        format!(
-            "{endpoint} did not answer within {:?}",
-            OAuthClient::CALL_TIMEOUT
-        )
-    } else if let Some(setting) = endpoint
+    if error.is_timeout() {
+        let detail = if error.is_connect() {
+            format!(
+                "{endpoint} could not be connected to within {:?}",
+                OAuthClient::CONNECT_TIMEOUT
+            )
+        } else {
+            format!(
+                "{endpoint} did not answer within {:?}",
+                OAuthClient::CALL_TIMEOUT
+            )
+        };
+        return AuthError::unavailable(detail, None);
+    }
+    let detail = match endpoint
         .setting
         .as_ref()
         .filter(|_| ClientTls::negotiation_failed(&error))
     {
-        format!(
+        Some(setting) => format!(
             "{endpoint} could not be called: {}",
             ClientTls::remedy(setting.variables, "the OAuth provider", setting.key, &error),
-        )
-    } else {
-        format!("{endpoint} could not be called")
+        ),
+        None => format!("{endpoint} could not be called"),
     };
-    if error.is_timeout() {
-        return AuthError::unavailable(detail, None);
-    }
     AuthError::unavailable_because(detail, None, error.without_url())
 }
 
@@ -315,10 +316,9 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
 /// under the namespace the config was read under, or under its type when its
 /// caller composed it.
 fn invalid(errors: ValidationErrors, variables: Option<&ConfigService>) -> AuthError {
-    let namespace = match variables {
-        Some(variables) => variables.namespace().to_owned(),
-        None => COMPOSED.to_owned(),
-    };
+    let namespace = variables
+        .map_or(COMPOSED, ConfigService::namespace)
+        .to_owned();
     AuthError::failed_because(
         "the OAuth client's configuration is invalid",
         ConfigError::validation(namespace, errors),

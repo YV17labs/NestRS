@@ -393,13 +393,14 @@ impl Inner {
                 );
             }
             Err(failure) => {
-                let kept = state.usable(now).is_some();
-                let said = nest_rs_core::error_message(&failure.cause);
-                state.failure = Some(failure);
-                drop(state);
                 // With nothing kept, every token waiting answers `Unavailable`
                 // and its guard says so.
-                if kept {
+                let said = state
+                    .usable(now)
+                    .map(|_| nest_rs_core::error_message(&failure.cause));
+                state.failure = Some(failure);
+                drop(state);
+                if let Some(said) = said {
                     tracing::warn!(
                         target: crate::TARGET,
                         error = %said,

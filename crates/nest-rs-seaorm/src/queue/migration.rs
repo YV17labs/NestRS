@@ -7,7 +7,7 @@ use sea_orm_migration::{MigrationName, MigrationTrait, SchemaManager, async_trai
 
 /// Creates `nestrs_outbox`, the table [`SeaOrmOutbox`](super::SeaOrmOutbox)
 /// keeps a unit's jobs in until the relay files them; registered in an app's
-/// migrator beside its own migrations.
+/// migrator beside its own migrations, by `nestrs g migration nestrs_outbox`.
 ///
 /// ```
 /// use nest_rs_seaorm::queue::OutboxMigration;

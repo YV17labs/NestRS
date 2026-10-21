@@ -1,12 +1,14 @@
 use std::time::Duration;
 
-use features::notifications::NotificationsQueueModule;
+use features::notifications::{Entity as Notifications, NotificationsQueueModule};
 use nest_rs::core::module;
+use nest_rs::database::OutboxStore;
 use nest_rs::http::{StatusCode, header};
-use nest_rs::queue::{QueueModule, QueueWorker};
+use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-use nest_rs::testing::HeadlessApp;
+use nest_rs::testing::{HeadlessApp, wait_for};
+use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -189,8 +191,14 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
 struct NotificationsWorkerHarness;
 
 #[tokio::test]
-async fn publishing_a_post_notifies_the_org_through_the_worker() {
+async fn a_publish_notifies_its_org_once_after_its_commit_and_never_after_its_rollback() {
     let (db, app) = boot_on(RedisDatabase::PostsNotify).await;
+    app.container()
+        .get_dyn::<dyn OutboxStore>()
+        .expect("SeaOrmDatabaseModule keeps the api's outbox")
+        .arm()
+        .await
+        .expect("the api's outbox arms over its migrated database");
 
     let worker = HeadlessApp::builder()
         .module::<NotificationsWorkerHarness>()
@@ -199,6 +207,10 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         .build_headless()
         .await
         .expect("the notifications worker boots against the ephemeral DB and Redis");
+    let relaying = worker
+        .spawn_transport(OutboxRelay::new())
+        .await
+        .expect("the worker's relay files what the api committed");
     let worker_queue = worker
         .spawn_transport(QueueWorker::new())
         .await
@@ -217,9 +229,38 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         token_with_sub(&org_a, "admin", author_id).await
     );
 
-    let post_a = create_post(&app, &author_a, "Launch", "Big news").await;
+    let launched = create_post(&app, &author_a, "Launch", "Big news").await;
+    let refused = create_post(&app, &author_a, "Refused", "Never").await;
+    features::posts::publication::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        post_id: Set(Uuid::parse_str(&refused).expect("valid post uuid")),
+        actor_id: Set(author_id),
+        published_at: Set(nest_rs::seaorm::now()),
+    }
+    .insert(db.connection().as_ref())
+    .await
+    .expect("seed the publication row the refused publish conflicts with");
 
-    let notification_count = |bearer: String| {
+    let publish = |id: &str| {
+        app.http()
+            .post(format!("/posts/{id}/publish"))
+            .header(header::AUTHORIZATION, &author_a)
+            .send()
+    };
+    publish(&refused).await.assert_status(StatusCode::CONFLICT);
+    publish(&launched).await.assert_status_is_ok();
+    publish(&launched).await.assert_status(StatusCode::CONFLICT);
+
+    let conn = db.connection();
+    wait_for(Duration::from_secs(20), || async {
+        Notifications::find()
+            .count(conn.as_ref())
+            .await
+            .expect("count the notifications")
+            >= 1
+    })
+    .await;
+    let notified = |bearer: String| {
         let app = &app;
         async move {
             let listed = app
@@ -229,99 +270,36 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
                 .send()
                 .await;
             listed.assert_status_is_ok();
-            listed.json().await.value().array().iter().count()
+            listed
+                .json()
+                .await
+                .value()
+                .array()
+                .iter()
+                .map(|n| n.object().get("message").string().to_owned())
+                .collect::<Vec<String>>()
         }
     };
-
-    let publish =
-        json!({ "query": format!("mutation {{ publishPost(id: \"{post_a}\") {{ id status }} }}") });
-
-    let first = app
-        .http()
-        .post("/graphql")
-        .header(header::AUTHORIZATION, &author_a)
-        .body_json(&publish)
-        .send()
-        .await;
-    first.assert_status_is_ok();
-    assert!(
-        first
-            .json()
-            .await
-            .value()
-            .object()
-            .get_opt("errors")
-            .is_none(),
-        "the first publish must succeed",
-    );
-
-    let again = app
-        .http()
-        .post("/graphql")
-        .header(header::AUTHORIZATION, &author_a)
-        .body_json(&publish)
-        .send()
-        .await;
-    again.assert_status_is_ok();
-    assert!(
-        again
-            .json()
-            .await
-            .value()
-            .object()
-            .get_opt("errors")
-            .is_some(),
-        "republishing an already-published post must conflict",
-    );
-
-    let mut seen = false;
-    for _ in 0..40 {
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        if notification_count(admin_a.clone()).await >= 1 {
-            seen = true;
-            break;
-        }
-    }
-    assert!(
-        seen,
-        "the worker persisted a notification for org A that GET /notifications returns",
-    );
-
     assert_eq!(
-        notification_count(admin_a.clone()).await,
-        1,
-        "the conflicting republish emitted no second event, so there is exactly one notification",
+        notified(admin_a).await,
+        ["Post \"Launch\" was published"],
+        "one notification: the refused publish's push rolled back with its transaction, and \
+         the republish was refused before pushing",
     );
-
     assert_eq!(
-        notification_count(admin_b).await,
-        0,
+        notified(admin_b).await,
+        Vec::<String>::new(),
         "org B must not see org A's notification",
-    );
-
-    let a_list = app
-        .http()
-        .get("/notifications")
-        .header(header::AUTHORIZATION, &admin_a)
-        .send()
-        .await;
-    a_list.assert_status_is_ok();
-    let a_body = a_list.json().await;
-    let messages: Vec<String> = a_body
-        .value()
-        .array()
-        .iter()
-        .map(|n| n.object().get("message").string().to_owned())
-        .collect();
-    assert!(
-        messages.iter().any(|m| m.contains("Launch")),
-        "the persisted notification names the published post: {messages:?}",
     );
 
     worker_queue
         .shutdown()
         .await
         .expect("the worker's QueueWorker stops cleanly");
+    relaying
+        .shutdown()
+        .await
+        .expect("the worker's relay stops cleanly");
 }
 
 #[tokio::test]

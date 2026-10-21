@@ -190,7 +190,7 @@ shape an off-canon feature leaks in as.
 | GraphQL | `users` (+ `org` relation) |
 | WebSockets | `chat` / the `notifications` ws edge (`demo/crates/features`, served by `demo/apps/live`) |
 | Queue + Schedule | `audio` / `TranscodeCommand` (`demo/apps/worker`) |
-| Events | `PostPublishedEvent` (notifications listener) |
+| Events | `PostPublishedEvent` (the `posts` feed listener) |
 | MCP | `weather` (+ `hello` tool) (`demo/apps/assistant`) |
 | OpenAPI, Health, Rate limiting, OTel, Testing | the `api` app over `users`/`posts` |
 | Storage | the `audio` slice's uploads (`demo/crates/features/src/audio`) |

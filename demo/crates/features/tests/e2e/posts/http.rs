@@ -1,6 +1,8 @@
 use nest_rs::core::module;
+use nest_rs::database::OutboxStore;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::http::{StatusCode, header};
+use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use serde_json::json;
@@ -20,6 +22,8 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
     imports = [
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
+        RedisModule::for_root(None),
+        RedisQueueModule,
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
         AuthnModule,
         AuthzModule,
@@ -68,6 +72,12 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
         .build()
         .await
         .expect("PostsHttpTestModule boots against the throwaway database");
+    app.container()
+        .get_dyn::<dyn OutboxStore>()
+        .expect("SeaOrmDatabaseModule keeps the outbox")
+        .arm()
+        .await
+        .expect("a publish's notification waits in the throwaway database's outbox");
     (db, app, bearer, org_id)
 }
 

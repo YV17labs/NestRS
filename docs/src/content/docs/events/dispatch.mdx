@@ -8,9 +8,9 @@ as a request or a job: one lazy transaction, committed when the listener
 answers `Ok` and rolled back when it answers `Err`, so a listener writing two
 rows never leaves one. Two keys on `#[on_event]` shape that unit:
 
-```rust title="crates/features/src/notifications/events/listener.rs"
+```rust title="crates/features/src/posts/events/listener.rs"
 #[on_event(timeout = "30s", transactional = false)]
-async fn on_post_published(&self, event: PostPublishedEvent) -> Result<(), QueueError> {
+async fn on_post_published(&self, event: PostPublishedEvent) -> anyhow::Result<()> {
     // …
 }
 ```

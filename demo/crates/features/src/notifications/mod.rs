@@ -5,7 +5,6 @@ mod entity;
 mod module;
 mod service;
 
-pub mod events;
 pub mod http;
 pub mod queue;
 pub mod schedule;
@@ -16,7 +15,6 @@ pub use entity::*;
 pub use module::NotificationsModule;
 pub use service::*;
 
-pub use events::NotificationsEventsModule;
 pub use http::NotificationsHttpModule;
 pub use queue::NotificationsQueueModule;
 pub use schedule::NotificationsScheduleModule;

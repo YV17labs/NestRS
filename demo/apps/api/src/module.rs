@@ -14,7 +14,7 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
 use features::audit::AuditHttpModule;
 use features::authn::AuthnModule;
 use features::authz::{AuthzGraphqlModule, AuthzModule};
-use features::notifications::{NotificationsEventsModule, NotificationsHttpModule};
+use features::notifications::NotificationsHttpModule;
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
 use features::posts::{PostsGraphqlModule, PostsHttpModule};
 use features::users::{UsersGraphqlModule, UsersHttpModule};
@@ -49,7 +49,6 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         UsersGraphqlModule,
         PostsHttpModule,
         PostsGraphqlModule,
-        NotificationsEventsModule,
         NotificationsHttpModule,
         AudioHttpModule,
         AudioScheduleModule,

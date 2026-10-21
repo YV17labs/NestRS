@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use nest_rs::core::injectable;
 use nest_rs::events::EventBus;
+use nest_rs::queue::{JobProducer, JobProducerExt};
 use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
 };
@@ -13,11 +14,14 @@ use super::entities::post::{CreatePost, Entity as Posts, Model, Post, PostStatus
 use super::entities::publication;
 use super::error::PostError;
 use super::event::PostPublishedEvent;
+use crate::notifications::{NotifyCommand, NotifyQueue};
 
 #[injectable]
 pub struct PostsService {
     #[inject]
     bus: Arc<EventBus>,
+    #[inject]
+    queue: Arc<dyn JobProducer>,
 }
 
 impl CrudService for PostsService {
@@ -69,6 +73,12 @@ impl PostsService {
             .await
             .map_err(ServiceError::from)?;
 
+        let notification = NotifyCommand {
+            org_id,
+            message: format!("Post \"{}\" was published", published.title),
+        };
+        let receipt = self.queue.push(NotifyQueue, notification, None).await?;
+
         let conn = Repo::<publication::Entity>::conn().map_err(ServiceError::from)?;
         Repo::<publication::Entity>::insert_unscoped(
             publication::ActiveModel {
@@ -89,6 +99,7 @@ impl PostsService {
             target: crate::posts::TARGET,
             id = %post_id,
             %org_id,
+            job_id = %receipt.id(),
             "post published",
         );
         let post = Post::from(&published);

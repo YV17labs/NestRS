@@ -79,3 +79,24 @@ handler's idempotency on `Attempt::job_id` covers a job that already ended.
   lossy semantics without a word.
 - **Pushing before the `COMMIT`** — the rule's second alternative — leaves an
   orphan job on every rollback.
+
+## 2026-10-21 — the CLI registers the framework's migration, and a queue brings it
+
+The boot refusing without the table names `nestrs g migration nestrs_outbox`, so
+the generator registers the framework's migration under its reserved name: one
+`migrator.rs` entry and the `nest-rs` features compiling it, never a file, kept
+by every later regeneration of `migrator.rs`; any other `nestrs_` name or table
+is refused, naming the one it accepts. `g queue` registers it too wherever the
+workspace keeps a migrations crate: the queue it enables arms the outbox in any
+app binding SeaORM's database. "Nothing to wire" decided.
+
+**Refused:**
+
+- **A queue generator that only prints the step.** The boot refusal would then
+  be the first thing every app adding a queue meets.
+- **The entry in every `nestrs new` workspace.** Most never bind a queue, and
+  each would create a table it never uses.
+- **A test harness running the relay unasked.** `TestApp` and `HeadlessApp`
+  run no transport a test did not spawn, the relay included; a test proving a
+  push waits for its commit arms the app's outbox and spawns `OutboxRelay`, as
+  the demo's api suite does.

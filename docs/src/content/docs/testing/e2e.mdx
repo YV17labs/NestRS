@@ -418,6 +418,33 @@ can own is the database. Two settings keep a suite apart:
   `config()` rewrites the suite's URL to that index. Redis ships sixteen, so the list is short: one
   database per test that starts a worker, not one per test.
 
+### A job pushed inside a transaction waits for a relay
+
+A harness runs no transport you did not spawn, so the outbox relay a served app
+runs is absent, and an app booted by `TestApp` or `HeadlessApp` files a push at
+once, as an app with no database does. A test proving that a job waits for its
+commit runs what a served app runs: it arms the app's outbox, as the relay does
+at boot, and spawns a relay beside the worker that drains — any relay files any
+app's records from the shared table:
+
+```rust title="apps/api/tests/e2e/posts.rs (from the demo, abridged)"
+let (db, app) = boot_on(RedisDatabase::PostsNotify).await;
+app.container()
+    .get_dyn::<dyn OutboxStore>()
+    .expect("SeaOrmDatabaseModule keeps the api's outbox")
+    .arm()
+    .await
+    .expect("the api's outbox arms over its migrated database");
+// …
+let relaying = worker
+    .spawn_transport(OutboxRelay::new())
+    .await
+    .expect("the worker's relay files what the api committed");
+```
+
+A request that answers `409` then rolls its job back with its writes, and the
+worker runs the job of the one that committed, once.
+
 ## Proving the way down
 
 A harness app is dropped at the end of its test, and a drop runs no shutdown

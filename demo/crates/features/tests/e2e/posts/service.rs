@@ -2,9 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use features::notifications::{
-    Entity as Notifications, NotificationsEventsModule, NotificationsQueueModule,
-};
+use features::notifications::{Entity as Notifications, NotificationsQueueModule};
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{
     ActiveModel as PostActive, Entity as Posts, PostStatus, PostsModule, PostsService,
@@ -15,7 +13,7 @@ use nest_rs::core::module;
 use nest_rs::database::{
     ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
 };
-use nest_rs::queue::{QueueModule, QueueWorker};
+use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
@@ -29,7 +27,6 @@ use uuid::Uuid;
         RedisModule::for_root(None),
         RedisQueueModule,
         PostsModule,
-        NotificationsEventsModule,
     ],
 )]
 struct PublishingHarness;
@@ -166,6 +163,10 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
         .build_headless()
         .await
         .expect("the publishing app boots against the throwaway database and Redis");
+    let relaying = app
+        .spawn_transport(OutboxRelay::new())
+        .await
+        .expect("the relay arms the outbox over the throwaway database");
     app.init().await.expect("the init hooks run");
     let svc = app
         .container()
@@ -215,6 +216,10 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
         .shutdown()
         .await
         .expect("the worker's QueueWorker stops cleanly");
+    relaying
+        .shutdown()
+        .await
+        .expect("the publishing app's relay stops cleanly");
 
     assert_eq!(
         notifications(&conn).await,

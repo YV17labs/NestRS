@@ -170,8 +170,9 @@ there is one write, so it lands whole or not at all.
 
 You write the push as anywhere else, and list nothing: `SeaOrmDatabaseModule`
 keeps the outbox and attaches the relay. Your migrator lists the framework's
-migration, which creates the table — the boot refuses without it, naming the
-remedy:
+migration, which creates the table — `nestrs g queue` registers it, or
+`nestrs g migration nestrs_outbox`, and the boot refuses without it, naming
+that remedy:
 
 ```rust title="crates/migrations/src/migrator.rs (abridged)"
 fn migrations() -> Vec<Box<dyn MigrationTrait>> {

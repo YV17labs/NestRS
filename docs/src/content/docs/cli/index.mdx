@@ -253,11 +253,16 @@ nestrs g auth
 # A SeaORM migration, registered in lib.rs and migrator.rs
 nestrs g migration create_posts
 
+# The framework's own migration, the outbox's table: one migrator.rs entry, no
+# file. The `nestrs_` prefix is the framework's: any other `nestrs_` name, and a
+# resource or an entity whose table would take it, is refused.
+nestrs g migration nestrs_outbox
+
 # Bolt a transport onto an existing port
 nestrs g http posts        # controller
 nestrs g graphql posts     # resolver
 nestrs g ws posts          # gateway
-nestrs g queue posts       # processor
+nestrs g queue posts       # processor, and the outbox's migration
 nestrs g schedule posts    # scheduled tasks
 nestrs g mcp posts         # MCP tool
 nestrs g events posts      # event listener, with its event at the port
@@ -270,6 +275,12 @@ the guards a module declares at their request, so without it `/mcp` denies
 every call and `/graphql` runs operations with no ability attached. A gateway's
 module brings the guards whose ability crosses the connection and scopes its
 rows.
+
+`g queue` also registers the framework's outbox migration in
+`crates/migrations`, when the workspace keeps that crate. The queue it enables
+keeps a job pushed inside a transaction in the outbox's table until the commit,
+and an app binding SeaORM beside a queue refuses to boot without the table:
+`nestrs run db up` creates it.
 
 <Aside type="note">
 Generated entities default to wire-only `#[expose]` (no GraphQL tokens) — see
@@ -459,7 +470,7 @@ nestrs update --from-path
 | `nestrs g resource <name>` | DB-backed CRUD port + guarded HTTP adapter (deps auto-added) |
 | `nestrs g entity <feature>[/<name>]` | One `#[expose]` entity in an existing feature |
 | `nestrs g auth` | The app's authn/authz adapter — one per workspace |
-| `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs` |
+| `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs`; `nestrs_outbox` registers the framework's own |
 | `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp <name>` | Add one transport adapter to a port |
 
 Every generator accepts **`--dry-run`** and **`-p <path>`**.

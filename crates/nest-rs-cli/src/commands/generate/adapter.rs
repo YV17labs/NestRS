@@ -16,6 +16,7 @@ use super::cargo::{
     adapter_deps, app_host_deps, auth_deps, ensure_features_deps, ensure_workspace_deps,
     graphql_port_deps,
 };
+use super::migration::{OUTBOX_MIGRATION, queue_framework_entry};
 use super::support::{finish, wire_into_app};
 use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
@@ -144,11 +145,18 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     if scaffolded_auth {
         deps.extend(auth_deps());
     }
-    if !deps.is_empty() {
+    // A queue beside the workspace's database arms the outbox, whose table the
+    // framework's migration creates.
+    let mut workspace_deps = deps.clone();
+    let outbox = transport == Transport::Queue
+        && queue_framework_entry(&mut s, &ws, &OUTBOX_MIGRATION, &mut workspace_deps)?;
+    if !workspace_deps.is_empty() {
         s.edit(
             ws.root.join("Cargo.toml"),
-            ensure_workspace_deps(deps.clone()),
+            ensure_workspace_deps(workspace_deps),
         );
+    }
+    if !deps.is_empty() {
         s.edit(ws.features_cargo(), ensure_features_deps(deps));
     }
     if scaffolded_auth {
@@ -194,6 +202,14 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         wired_app.is_some(),
         authz,
     );
+    if outbox {
+        println!(
+            "  The outbox's migration (`{}`) is registered in crates/migrations: its \
+             table keeps a job pushed inside a transaction until the commit. Apply it \
+             with `nestrs run db up`.",
+            OUTBOX_MIGRATION.name()
+        );
+    }
     if let Some(secrets) = &bootstrapped {
         auth::print_bootstrapped(secrets);
     }

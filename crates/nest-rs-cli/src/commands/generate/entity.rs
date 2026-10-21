@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use super::cargo::{ensure_features_deps, ensure_workspace_deps, entity_deps};
+use super::migration::refuse_reserved;
 use super::support::finish;
 use crate::commands::resolve_start;
 use crate::context::Context;
@@ -73,6 +74,7 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
     let ws = ctx.workspace.ok_or(CliError::NotNestrsWorkspace)?;
 
     let target = Target::parse(&opts.target)?;
+    refuse_reserved(&target.entity.snake, &target.stem())?;
     if !ws.feature_exists(&target.feature.snake) {
         return Err(CliError::FeatureNotFound {
             name: target.feature.snake.clone(),

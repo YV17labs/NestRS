@@ -126,9 +126,20 @@ that silently never runs.
 With the `queue` feature beside `seaorm`, the framework keeps a table of its
 own, `nestrs_outbox`, where a job pushed inside a transaction waits for its
 commit. Its migration ships with the framework,
-`nest_rs::seaorm::queue::OutboxMigration`, so it has no file in your crate: one
-entry in `migrations()`, at its date's place, registers it. An app binding a
-queue backend refuses to boot without the table, and says how to create it.
+`nest_rs::seaorm::queue::OutboxMigration`, so it has no file in your crate:
+
+```bash frame="terminal"
+nestrs g migration nestrs_outbox
+```
+
+writes one entry in `migrations()`, at its date's place, and turns on the
+`nest-rs` features that compile it; `nestrs g queue` writes the same entry when
+it adds a queue. Every later `g migration` keeps the entry when it
+regenerates `migrator.rs`. The `nestrs_` prefix is the framework's: a migration
+of yours named `nestrs_<anything else>`, or creating a `nestrs_` table, is
+refused, and so is a `g resource` or `g entity` whose table would take it. An
+app binding a queue backend refuses to boot without the table, and says how to
+create it.
 
 ## Run them
 

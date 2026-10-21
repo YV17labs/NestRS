@@ -2,7 +2,10 @@
 //! obligations are per transport: the right template, the crates its expansion
 //! names, and the wiring into feature and app.
 
-use crate::harness::{assigned, run_ok, scaffolded_var, write_fake_app, write_fake_workspace};
+use crate::harness::{
+    assigned, run_ok, scaffolded_var, write_fake_app, write_fake_migrations_crate,
+    write_fake_workspace,
+};
 use std::fs;
 use std::process::Command;
 
@@ -386,6 +389,42 @@ fn generate_queue_adapter_brings_the_queue_binding_feature() {
         features_cargo.contains("\"redis-queue\""),
         "{features_cargo}"
     );
+}
+
+/// A queue beside the workspace's database arms the outbox, whose table the
+/// framework's migration creates: `g queue` registers it in the migrator the
+/// workspace keeps, and leaves a workspace without one alone.
+#[test]
+fn generate_queue_adapter_registers_the_outbox_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let root = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "audio", "-p", root]);
+    let printed = run_ok(dir.path(), &["g", "queue", "audio", "-p", root]);
+
+    let migrator =
+        fs::read_to_string(dir.path().join("crates/migrations/src/migrator.rs")).unwrap();
+    assert_eq!(
+        migrator
+            .matches("Box::new(nest_rs::seaorm::queue::OutboxMigration)")
+            .count(),
+        1,
+        "{migrator}"
+    );
+    assert!(
+        migrator.contains("Box::new(m20260101_000000_init::Migration)"),
+        "{migrator}"
+    );
+    assert!(printed.contains("nestrs run db up"), "{printed}");
+
+    let bare = tempfile::tempdir().unwrap();
+    write_fake_workspace(bare.path());
+    let root = bare.path().to_str().unwrap();
+    run_ok(bare.path(), &["g", "feature", "audio", "-p", root]);
+    run_ok(bare.path(), &["g", "queue", "audio", "-p", root]);
+    assert!(!bare.path().join("crates/migrations").exists());
 }
 
 /// `#[mcp]` expands to names behind the `mcp` feature, so the generator turns

@@ -48,6 +48,16 @@ pub enum CliError {
     #[error("{0}")]
     InvalidFeatureName(String),
 
+    /// A migration's name, or the table a migration, a resource or an entity
+    /// writes, taking the framework's `nestrs_` prefix for a migration the
+    /// framework does not ship.
+    #[error(
+        "`{name}` claims the `nestrs_` prefix, which names the framework's own tables: \
+         `nestrs g migration` registers under it only a migration the framework ships — \
+         {accepted}"
+    )]
+    ReservedPrefix { name: String, accepted: String },
+
     #[error("{transport} adapter for `{name}` already exists at {path}")]
     AdapterExists {
         transport: &'static str,

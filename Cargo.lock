@@ -2669,6 +2669,8 @@ dependencies = [
  "nest-rs-codegen",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-seaorm",
+ "sea-orm-migration",
  "serde_json",
  "syn 3.0.6",
  "tempfile",

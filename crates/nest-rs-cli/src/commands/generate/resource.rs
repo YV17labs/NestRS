@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use super::auth;
 use super::cargo::{auth_deps, ensure_features_deps, ensure_workspace_deps, resource_deps};
+use super::migration::refuse_reserved;
 use super::support::{finish, wire_into_app};
 use crate::commands::resolve_start;
 use crate::context::Context;
@@ -29,6 +30,7 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
 
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
+    refuse_reserved(&names.snake, &names.table())?;
     let root = ws.feature_root(&names.snake);
     if root.exists() {
         return Err(CliError::FeatureExists {

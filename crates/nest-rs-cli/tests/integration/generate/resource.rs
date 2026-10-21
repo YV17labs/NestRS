@@ -2,7 +2,7 @@
 //! it has to declare in lockstep with `g migration`.
 
 use crate::harness::{
-    assert_256_bit_hex, assigned, run_ok, scaffolded_var, write_fake_app,
+    assert_256_bit_hex, assigned, files_under, run_err, run_ok, scaffolded_var, write_fake_app,
     write_fake_migrations_crate, write_fake_workspace,
 };
 use std::fs;
@@ -182,5 +182,31 @@ fn generate_resource_declares_the_columns_its_migration_scaffolds() {
     let migration = fs::read_to_string(generated).unwrap();
     for column in ["CreatedAt", "UpdatedAt", "DeletedAt"] {
         assert!(migration.contains(column), "{migration}");
+    }
+}
+
+/// The `nestrs_` prefix names the framework's tables, the outbox's among them:
+/// a resource whose table would take it is refused before anything is written,
+/// so its next step never names a migration `g migration` refuses.
+#[test]
+fn a_resource_whose_table_takes_the_nestrs_prefix_is_refused() {
+    for name in ["nestrs_widget", "nestrs-outbox"] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let before = files_under(dir.path());
+
+        let refused = run_err(
+            dir.path(),
+            &["g", "resource", name, "-p", dir.path().to_str().unwrap()],
+        );
+
+        assert!(
+            refused.contains("claims the `nestrs_` prefix, which names the framework's own tables"),
+            "`{name}`: the refusal names the reserved prefix: {refused}"
+        );
+        assert!(
+            files_under(dir.path()) == before,
+            "`{name}`: nothing is written"
+        );
     }
 }

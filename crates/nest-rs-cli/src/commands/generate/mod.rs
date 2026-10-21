@@ -13,7 +13,7 @@ mod support;
 
 /// `nestrs new` writes the same `migrations`/`seed` crates `g migration`
 /// bootstraps — one implementation, reached without opening the module.
-pub(crate) use migration::queue_db_crates;
+pub(crate) use migration::{Registered, queue_db_crates};
 
 pub(crate) use adapter::{AdapterOptions, run as run_adapter};
 pub(crate) use auth::{AuthOptions, run as run_auth};

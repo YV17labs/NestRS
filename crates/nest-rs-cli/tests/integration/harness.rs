@@ -1,6 +1,7 @@
 //! Shared fixtures: a fake workspace on disk, a fake app crate inside it, and
 //! the `nestrs` invocation every test drives the binary through.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -66,6 +67,41 @@ pub(crate) fn run_ok(dir: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Run `nestrs <args...>` with cwd at `dir`, asserting failure, and hand back
+/// what it printed on stderr.
+pub(crate) fn run_err(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "args {args:?} succeeded: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// Every file under `root`, by its path below it, with its bytes: what a
+/// refused generator leaves unchanged.
+pub(crate) fn files_under(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let bytes = fs::read(&path).unwrap();
+                files.insert(path.strip_prefix(root).unwrap().to_path_buf(), bytes);
+            }
+        }
+    }
+    files
 }
 
 /// The scaffolded `.env.example` sends a test override to a file the cascade

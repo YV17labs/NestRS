@@ -46,6 +46,10 @@ nest-rs-core = { path = "../nest-rs-core" }
 # `#[instance]` refuses the reserved vocabulary from a list of its own, which
 # a test holds to the one this crate scrapes from `architecture.md`.
 nest-rs-codegen = { path = "../nest-rs-codegen" }
+# `g migration nestrs_outbox` places the framework's migration by the name
+# `nest-rs-seaorm` gives it, which a test reads off the migration itself.
+nest-rs-seaorm = { path = "../nest-rs-seaorm", features = ["queue"] }
+sea-orm-migration.workspace = true
 # A generated binary's console lines, read back as the JSON they are.
 serde_json.workspace = true
 # `figment::Jail` sets and restores the working directory and the environment

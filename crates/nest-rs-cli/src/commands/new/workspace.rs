@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::commands::queue_db_crates;
+use crate::commands::{Registered, queue_db_crates};
 use crate::context::NestrsWorkspace;
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;
@@ -40,7 +40,7 @@ pub(super) fn scaffold_root(
         root.join("crates/features/Cargo.toml"),
         r.render(workspace::FEATURES_CARGO),
     );
-    queue_db_crates(&mut s, &root, &[]);
+    queue_db_crates(&mut s, &root, &Registered::default());
     queue_root_files(&mut s, &root, names, env_prefix);
 
     // The first app is always `hello`, whatever the workspace is called.

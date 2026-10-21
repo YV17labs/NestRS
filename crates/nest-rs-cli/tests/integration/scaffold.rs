@@ -422,12 +422,17 @@ fn every_adapter_over_a_plain_port_compiles() {
 fn every_adapter_over_a_resource_port_compiles() {
     // The authz adapters share the `authz/` tree and name providers behind
     // features only a compile can judge. `http` is skipped: `g resource` writes it.
-    let mut generate = vec![vec!["g", "resource", "post", "-p", "apps/hello"]];
+    // `g migration nestrs_outbox` runs before `g queue`, which registers the
+    // same entry: after it, the command would find it listed and write nothing.
+    let mut generate = vec![
+        vec!["g", "resource", "post", "-p", "apps/hello"],
+        vec!["g", "migration", "nestrs_outbox"],
+    ];
     generate.extend(every_edge("post", &["http"]));
     generate.push(vec!["g", "migration", "create_post"]);
     check_all(
         &generate,
-        "every adapter over a resource port, and its migration",
+        "every adapter over a resource port, the outbox's migration and its own",
     );
 }
 

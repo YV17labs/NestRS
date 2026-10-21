@@ -52,6 +52,8 @@ pub(super) const EVENTS: Dep = nest_rs(&["events"]);
 // the queue's binding over it (`RedisQueueModule`) and the port arrive
 // together; `redis` alone is the connection.
 pub(super) const REDIS_QUEUE: Dep = nest_rs(&["redis-queue"]);
+// `nest_rs::seaorm::queue` holds the outbox's migration: `seaorm` beside `queue`.
+pub(super) const OUTBOX: Dep = nest_rs(&["seaorm", "queue"]);
 pub(super) const MCP: Dep = nest_rs(&["mcp"]);
 pub(super) const AUTHN: Dep = nest_rs(&["authn"]);
 pub(super) const AUTHZ: Dep = nest_rs(&["authz", "http"]);

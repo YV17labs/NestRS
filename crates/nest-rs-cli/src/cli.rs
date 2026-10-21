@@ -215,7 +215,8 @@ pub enum GenerateCommand {
     Entity(EntityTarget),
     /// The app's authn/authz adapter (Claims, AuthnGuard, AuthzAbility, AuthzGuard).
     Auth(AuthTarget),
-    /// A SeaORM migration, registered in both lib.rs and migrator.rs.
+    /// A SeaORM migration, registered in both lib.rs and migrator.rs (`nestrs_outbox`: the
+    /// framework's own, in migrator.rs alone).
     Migration(GenTarget),
     /// Add an HTTP controller adapter to an existing feature.
     Http(GenTarget),

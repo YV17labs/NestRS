@@ -1,7 +1,7 @@
 //! `nestrs g entity` — one entity in an existing feature: where it lands, what
 //! it deliberately does not name, and the layout it refuses to make ambiguous.
 
-use crate::harness::{run_ok, write_fake_workspace};
+use crate::harness::{files_under, run_err, run_ok, write_fake_workspace};
 use std::fs;
 use std::process::Command;
 
@@ -236,4 +236,30 @@ fn generate_entity_dry_run_writes_nothing() {
     );
     let mod_rs = fs::read_to_string(dir.path().join("crates/features/src/posts/mod.rs")).unwrap();
     assert!(!mod_rs.contains("mod entity;"), "{mod_rs}");
+}
+
+/// The `nestrs_` prefix names the framework's tables: an entity whose table
+/// would take it, named after the slash or after its feature, is refused
+/// before anything is written.
+#[test]
+fn an_entity_whose_table_takes_the_nestrs_prefix_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "shelf", "-p", path]);
+    run_ok(dir.path(), &["g", "feature", "nestrs_crates", "-p", path]);
+    let before = files_under(dir.path());
+
+    for target in ["shelf/nestrs_crate", "shelf/nestrs_outbox", "nestrs_crates"] {
+        let refused = run_err(dir.path(), &["g", "entity", target, "-p", path]);
+
+        assert!(
+            refused.contains("claims the `nestrs_` prefix, which names the framework's own tables"),
+            "`{target}`: the refusal names the reserved prefix: {refused}"
+        );
+        assert!(
+            files_under(dir.path()) == before,
+            "`{target}`: nothing is written"
+        );
+    }
 }

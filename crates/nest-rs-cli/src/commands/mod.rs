@@ -26,11 +26,11 @@ pub(crate) fn resolve_start(path: Option<PathBuf>) -> PathBuf {
 }
 
 pub(crate) use doctor::{DoctorOptions, run as run_doctor};
-pub(crate) use generate::queue_db_crates;
 pub(crate) use generate::{
     AdapterOptions, AuthOptions, EntityOptions, FeatureOptions, MigrationOptions, ResourceOptions,
     run_adapter, run_auth, run_entity, run_feature, run_migration, run_resource,
 };
+pub(crate) use generate::{Registered, queue_db_crates};
 pub(crate) use info::{InfoOptions, run as run_info};
 pub(crate) use lint::{LintOptions, run as run_lint};
 pub(crate) use new::{NewOptions, run as run_new, run_cargo_check};

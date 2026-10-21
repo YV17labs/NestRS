@@ -633,6 +633,50 @@ async fn a_read_whose_body_does_not_decode_quotes_none_of_it() {
              that does not parse: invalid type: a string, expected u64 at line 1 column 40"
         ),
     );
+    debug_free(&error, &[PROVIDER_TOKEN]);
+}
+
+/// A token answer that does not decode is the provider's refusal, said as a
+/// read's undecodable body is, without a byte of the answer: neither in the
+/// operator's line nor in the error's `Debug`, which `oauth2`'s own error
+/// would fill with the whole answer.
+#[tokio::test]
+async fn a_token_answer_that_does_not_decode_quotes_none_of_it() {
+    const ISSUED: &str = "ya29.issued-access-token-never-quoted";
+    const PROVIDER_TOKEN: &str = "ya29.provider-token-never-quoted";
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        &format!(
+            r#"{{"access_token":"{ISSUED}","token_type":"bearer","expires_in":"{PROVIDER_TOKEN}"}}"#
+        ),
+    )
+    .await;
+    let Err(error) = exchange(&client_for(provider.addr)).await else {
+        panic!("an answer of another shape is no token");
+    };
+    assert_eq!(
+        sentence_of(&error, &[ISSUED, PROVIDER_TOKEN]),
+        format!(
+            "the OAuth provider's token endpoint (https://{}/token) answered a body that does \
+             not parse: invalid type: a string, expected u64 at line 1 column 125",
+            provider.addr
+        ),
+    );
+    debug_free(&error, &[ISSUED, PROVIDER_TOKEN]);
+}
+
+/// `error`'s `Debug` — what a `{:?}` or an `expect` prints — once shown to
+/// hold none of `secrets`, as text or as the bytes a `Vec<u8>` prints.
+fn debug_free(error: &AuthError, secrets: &[&str]) {
+    let debug = format!("{error:?}");
+    for secret in secrets {
+        let bytes = format!("{:?}", secret.as_bytes());
+        assert!(
+            !debug.contains(secret) && !debug.contains(bytes.trim_matches(['[', ']'])),
+            "the Debug must not hold {secret:?}: {debug}"
+        );
+    }
 }
 
 #[module(imports = [OAuthClientModule::for_root(None)])]

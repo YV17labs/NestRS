@@ -174,8 +174,11 @@ mod tests {
         }
     }
 
+    /// The process declares the test profile, as every harness does: there,
+    /// and in development, a loopback redirect composes.
     #[test]
-    fn a_loopback_redirect_composes() {
+    fn a_loopback_redirect_composes_outside_a_deployment() {
+        nest_rs_testing::load_project_env();
         let config = GithubSocialConfig {
             redirect_url: "http://localhost:3000/social/github/callback".into(),
             ..complete()

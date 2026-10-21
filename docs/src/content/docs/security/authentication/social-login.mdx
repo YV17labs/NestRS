@@ -297,8 +297,9 @@ defaults to the provider's login set). The secret is secret-shaped —
 keep it out of committed config.
 
 `REDIRECT_URL` is an `https` URL, or `http` on a loopback address
-(`http://localhost:3000/…`, RFC 8252 §7.3) for local development; any
-other is refused at boot, naming `<PREFIX>_SOCIAL__<PROVIDER>__REDIRECT_URL`.
+(`http://localhost:3000/…`, RFC 8252 §7.3) in a declared development or
+test profile (`<PREFIX>_ENV`) alone; any other is refused at boot, naming
+`<PREFIX>_SOCIAL__<PROVIDER>__REDIRECT_URL` and the profile.
 The provider's own endpoints are `https`
 constants, verified against the system's authorities, and a custom
 provider's `fetch` refuses a URL that is not `https` — the call carries

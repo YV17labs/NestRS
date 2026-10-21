@@ -6,7 +6,7 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use aws_lc_rs::constant_time::verify_slices_are_equal;
-use nest_rs_config::{ClientTls, ConfigError, ConfigService, Namespaced};
+use nest_rs_config::{ClientTls, ConfigError, ConfigService, Environment, Namespaced};
 use oauth2::basic::{BasicClient, BasicErrorResponse};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpClientError,
@@ -311,12 +311,51 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
 }
 
 /// `validator`'s own `Display` lists each rule's parameters, the rejected value
-/// among them; [`ConfigError::validation`] says the field and the rule alone.
-fn invalid(errors: ValidationErrors) -> AuthError {
+/// among them; [`ConfigError::validation`] says the field and the rule alone,
+/// under the namespace the config was read under, or under its type when its
+/// caller composed it.
+fn invalid(errors: ValidationErrors, variables: Option<&ConfigService>) -> AuthError {
+    let namespace = match variables {
+        Some(variables) => variables.namespace().to_owned(),
+        None => COMPOSED.to_owned(),
+    };
     AuthError::failed_because(
         "the OAuth client's configuration is invalid",
-        ConfigError::validation(OAuthClientConfig::NAMESPACE, errors),
+        ConfigError::validation(namespace, errors),
     )
+}
+
+/// How a refusal names a config its caller composed, read under no variable.
+const COMPOSED: &str = "OAuthClientConfig";
+
+/// Each key [`ClientTls`] is read under, and the part of a composed config's
+/// `tls` it sets.
+const TLS_PARTS: [(&str, &str); 3] = [
+    ("TLS_CA_CERT", "authorities"),
+    ("TLS_CERT", "certificate"),
+    ("TLS_KEY", "key"),
+];
+
+/// `refused`, judged under the `unread` variables, naming instead the part of
+/// a composed config's `tls` each would have set: the refusal may name a
+/// second variable beside the refused one (a certificate that is not its
+/// key's), and every name in it is built by `unread`, so each is found whole.
+fn composed_tls(refused: ConfigError, unread: &ConfigService) -> ConfigError {
+    let ConfigError::Parse { var, message, .. } = refused else {
+        return refused;
+    };
+    let fields = |sentence: &str| {
+        TLS_PARTS
+            .iter()
+            .fold(sentence.to_owned(), |sentence, (key, part)| {
+                let field = format!("`{COMPOSED}::tls`'s {part}");
+                sentence
+                    .replace(&unread.spellings(key), &field)
+                    .replace(&unread.var_name(&format!("{key}_FILE")), &field)
+                    .replace(&unread.var_name(key), &field)
+            })
+    };
+    ConfigError::parse(fields(&var), fields(&message))
 }
 
 /// Every call carries a code, a client secret or a bearer token (RFC 6749 §3.1,
@@ -333,10 +372,22 @@ fn backend() -> reqwest::ClientBuilder {
 }
 
 /// The backend trusting what `tls` names — the system's authorities unless it
-/// names others — and presenting its certificate when it holds one.
-fn verified(tls: &ClientTls) -> Result<reqwest::Client, AuthError> {
-    let names = ConfigService::for_namespace(OAuthClientConfig::NAMESPACE);
-    let material = nest_rs_config::__private::reqwest_tls(tls, &names).map_err(|refused| {
+/// names others — and presenting its certificate when it holds one. A refusal
+/// names the `variables` the config was read under, or the fields alone for a
+/// config its caller composed.
+fn verified(
+    tls: &ClientTls,
+    variables: Option<&ConfigService>,
+) -> Result<reqwest::Client, AuthError> {
+    let material = match variables {
+        Some(variables) => nest_rs_config::__private::reqwest_tls(tls, variables),
+        None => {
+            let unread = ConfigService::for_namespace(OAuthClientConfig::NAMESPACE);
+            nest_rs_config::__private::reqwest_tls(tls, &unread)
+                .map_err(|refused| composed_tls(refused, &unread))
+        }
+    }
+    .map_err(|refused| {
         AuthError::failed_because("the OAuth client's TLS material is unusable", refused)
     })?;
     let mut builder = backend().tls_certs_only(material.roots);
@@ -383,27 +434,41 @@ impl OAuthClient {
     /// Builds a client from a validated `config`; its backend follows no redirect
     /// (an SSRF risk in a token exchange, per `oauth2`), bounds every call and
     /// trusts what `config.tls` names. A provider endpoint that is not `https`,
-    /// a redirect that is neither `https` nor loopback `http`, and TLS material
-    /// no handshake could use are refused, naming the setting. A handshake a
-    /// provider later refuses is said with rustls's reason alone: `config` may
-    /// be a sign-in provider's, read under none of this crate's variables.
+    /// a redirect that is not `https` — plain `http` on loopback is accepted in
+    /// a declared development or test profile alone, as the process's
+    /// `<PREFIX>_ENV` says — and TLS material no handshake could use are
+    /// refused, naming the field: `config` may be a sign-in provider's, read
+    /// under none of this crate's variables, so a refusal names none of them.
+    /// For the same reason a handshake a provider later refuses is said with
+    /// rustls's reason alone.
     pub fn new(config: OAuthClientConfig) -> Result<Self, AuthError> {
-        config.validate().map_err(invalid)?;
-        config.refuse_plaintext()?;
-        let http = verified(&config.tls)?;
-        Ok(Self {
-            config,
-            http,
-            variables: None,
-        })
+        Self::built(config, None)
     }
 
     /// [`new`](Self::new) over a config read under `<PREFIX>_OAUTH__CLIENT__*`,
-    /// whose variables a refused handshake's remedy then names.
+    /// whose variables a refusal and a refused handshake's remedy then name.
     pub(crate) fn from_variables(config: OAuthClientConfig) -> Result<Self, AuthError> {
+        Self::built(
+            config,
+            Some(ConfigService::for_namespace(OAuthClientConfig::NAMESPACE)),
+        )
+    }
+
+    /// The client over `config`, its refusals naming `variables` when the
+    /// config was read under them and its fields alone otherwise.
+    fn built(
+        config: OAuthClientConfig,
+        variables: Option<ConfigService>,
+    ) -> Result<Self, AuthError> {
+        config
+            .validate()
+            .map_err(|errors| invalid(errors, variables.as_ref()))?;
+        config.refuse_plaintext(variables.as_ref(), Environment::from_env())?;
+        let http = verified(&config.tls, variables.as_ref())?;
         Ok(Self {
-            variables: Some(ConfigService::for_namespace(OAuthClientConfig::NAMESPACE)),
-            ..Self::new(config)?
+            config,
+            http,
+            variables,
         })
     }
 
@@ -586,7 +651,9 @@ impl OAuthClient {
     /// Authenticated `GET` against any provider endpoint (GitHub's verified emails,
     /// say), deserialized into `T`, through this client's redirect-refusing backend.
     /// A `url` that is not `https` is refused before anything is sent: the call
-    /// carries the bearer token.
+    /// carries the bearer token. A handshake the endpoint refuses is said with
+    /// rustls's reason alone, whoever built the client: `url` is the provider's
+    /// code's, set by no variable a remedy could name.
     pub async fn fetch<T: DeserializeOwned>(
         &self,
         url: &str,
@@ -707,6 +774,79 @@ mod tests {
         .expect("sign")
     }
 
+    /// A config its caller composed — a social provider's — was read under
+    /// none of this crate's variables: an invalid field and TLS material no
+    /// handshake can use are refused by the field alone, even where the
+    /// refusal names a second piece of the material, where a module-built
+    /// client's refusal names its namespace and its variables.
+    #[test]
+    fn a_composed_client_is_refused_naming_no_variable_it_never_reads() {
+        let material = |pem: &str| nest_rs_config::Material {
+            bytes: pem.as_bytes().to_vec(),
+            path: None,
+        };
+        let var = |key| nest_rs_config::var_name(OAuthClientConfig::NAMESPACE, key);
+        let invalid = OAuthClientConfig {
+            client_secret: String::new(),
+            ..valid_config()
+        };
+        let unusable = OAuthClientConfig {
+            tls: ClientTls::new(Some(material("not a certificate")), None),
+            ..valid_config()
+        };
+        let authority = nest_rs_testing::TestAuthority::new();
+        let (one, other) = (authority.client("one"), authority.client("other"));
+        let mismatched = OAuthClientConfig {
+            tls: ClientTls::new(
+                None,
+                Some(nest_rs_config::TlsIdentity::new(
+                    material(&one.cert),
+                    material(&other.key),
+                )),
+            ),
+            ..valid_config()
+        };
+        for (config, composed, read) in [
+            (
+                invalid,
+                "configuration validation failed for 'OAuthClientConfig'".to_owned(),
+                "configuration validation failed for 'oauth__client'".to_owned(),
+            ),
+            (
+                unusable,
+                "invalid value for `OAuthClientConfig::tls`'s authorities: ".to_owned(),
+                format!("invalid value for {}: ", var("TLS_CA_CERT")),
+            ),
+            (
+                mismatched,
+                "invalid value for `OAuthClientConfig::tls`'s certificate: is not the \
+                 certificate of the key in `OAuthClientConfig::tls`'s key"
+                    .to_owned(),
+                format!(
+                    "invalid value for {}: is not the certificate of the key in {}",
+                    var("TLS_CERT"),
+                    var("TLS_KEY")
+                ),
+            ),
+        ] {
+            let Err(refused) = OAuthClient::new(config.clone()) else {
+                panic!("a composed config is refused");
+            };
+            let said = nest_rs_core::error_message(&refused);
+            assert!(
+                said.contains(&composed)
+                    && !said.contains(OAuthClientConfig::NAMESPACE)
+                    && !said.contains(&var("")),
+                "{said}"
+            );
+            let Err(refused) = OAuthClient::from_variables(config) else {
+                panic!("a config read under the variables is refused");
+            };
+            let said = nest_rs_core::error_message(&refused);
+            assert!(said.contains(&read), "{said}");
+        }
+    }
+
     #[test]
     fn new_rejects_invalid_config_at_validate_stage() {
         // `OAuthClient` is not `Debug`, hence `is_err`.
@@ -770,7 +910,8 @@ mod tests {
             "the probe quotes: {errors}"
         );
 
-        let sentence @ AuthError::Failed { .. } = invalid(errors) else {
+        let variables = ConfigService::for_namespace(OAuthClientConfig::NAMESPACE);
+        let sentence @ AuthError::Failed { .. } = invalid(errors, Some(&variables)) else {
             panic!("a refused config is a failed authentication setup");
         };
         let sentence = nest_rs_core::error_message(&sentence);

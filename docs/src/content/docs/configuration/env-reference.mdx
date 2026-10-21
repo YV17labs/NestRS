@@ -248,7 +248,7 @@ boot naming the field:
 | `CLIENT_ID` / `CLIENT_SECRET` | the registered OAuth2 client credentials |
 | `AUTH_URL` | provider authorization endpoint (where the user consents); `https` only (RFC 6749 §3.1) |
 | `TOKEN_URL` | provider token endpoint (code → tokens); `https` only (RFC 6749 §3.2) |
-| `REDIRECT_URL` | this app's callback the provider returns to; `https`, or `http` on `localhost`, `127.0.0.1` or `[::1]` (RFC 8252 §7.3) |
+| `REDIRECT_URL` | this app's callback the provider returns to; `https`, or `http` on `localhost`, `127.0.0.1` or `[::1]` (RFC 8252 §7.3) in a declared development or test profile (`<PREFIX>_ENV`) alone |
 | `USERINFO_URL` | provider endpoint the profile is fetched from; `https` only (RFC 6750 §5.3) |
 | `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
 | `TLS_CA_CERT` | PEM certificates of the authorities the provider's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate fails the boot |

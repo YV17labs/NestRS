@@ -44,7 +44,7 @@ call site cannot open a door the configuration kept shut.
 | JWK Set | `<PREFIX>_AUTHN__JWKS_URI` | refused when the module is built, and by the client on every fetch |
 | OAuth token and userinfo endpoints | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL`, `USERINFO_URL` | refused when the client is built (RFC 6749 §3.2), and by the client on every call |
 | `OAuthClient::fetch` | a provider's code, at run time | refused before the call (RFC 6750 §5.3), and by the client whatever path reaches it |
-| OAuth authorize and redirect URLs | `<PREFIX>_OAUTH__CLIENT__AUTH_URL`, `REDIRECT_URL`; followed by the browser, never dialled | the authorize URL never (RFC 6749 §3.1); the redirect only on a loopback address (RFC 8252 §7.3) |
+| OAuth authorize and redirect URLs | `<PREFIX>_OAUTH__CLIENT__AUTH_URL`, `REDIRECT_URL`; followed by the browser, never dialled | the authorize URL never (RFC 6749 §3.1); the redirect only on a loopback address (RFC 8252 §7.3), in a declared development or test profile alone |
 | GitHub and Google sign-in | the providers' own constants | none: every endpoint is `https` |
 | OTLP exporter | `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | an `http://` endpoint declares it, as OTLP/HTTP allows; TLS material set beside it is refused |
 

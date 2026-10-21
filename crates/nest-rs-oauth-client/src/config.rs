@@ -1,15 +1,16 @@
 //! [`OAuthClientConfig`] — env-driven OAuth2 provider endpoints.
 
 use nest_rs_authn::AuthError;
-use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, config, spellings};
+use nest_rs_config::{ClientTls, Config, ConfigService, Environment, config};
 use oauth2::url::{Host, Url};
 
 /// Env-driven OAuth2 provider endpoints (namespace `oauth__client`); every URL and
 /// credential is required. No `Debug`: `client_secret` must not leak through a format.
 ///
-/// The provider's endpoints are `https` URLs, and the redirect an `https` URL or
-/// `http` on a loopback address: [`OAuthClient::new`](crate::OAuthClient::new)
-/// refuses any other, naming the setting and the RFC that requires TLS there.
+/// The provider's endpoints are `https` URLs, and the redirect an `https` URL,
+/// or `http` on a loopback address in a declared development or test profile:
+/// [`OAuthClient::new`](crate::OAuthClient::new) refuses any other, naming the
+/// setting and the RFC that requires TLS there.
 #[config(namespace = "oauth__client")]
 #[derive(Clone, Default)]
 pub struct OAuthClientConfig {
@@ -65,9 +66,16 @@ impl Config for OAuthClientConfig {
 
 impl OAuthClientConfig {
     /// Refuse a URL that does not parse, a provider endpoint that is not
-    /// `https`, and a redirect that is neither `https` nor `http` on a loopback
-    /// address — naming the setting, never the URL, which may carry userinfo.
-    pub(crate) fn refuse_plaintext(&self) -> Result<(), AuthError> {
+    /// `https`, and a redirect that is neither `https` nor, in a profile that
+    /// is no deployment, `http` on a loopback address — naming the setting,
+    /// never the URL, which may carry userinfo. A setting is named by the
+    /// `variables` the config was read under, beside its field, or by its
+    /// field alone for a config its caller composed.
+    pub(crate) fn refuse_plaintext(
+        &self,
+        variables: Option<&ConfigService>,
+        environment: Environment,
+    ) -> Result<(), AuthError> {
         let endpoints = [
             (
                 &self.auth_url,
@@ -92,18 +100,24 @@ impl OAuthClientConfig {
             ),
         ];
         for (raw, key, field, why) in endpoints {
-            let setting = setting(key, field);
+            let setting = setting(variables, key, field);
             if parsed(raw, &setting)?.scheme() != "https" {
                 return Err(refused(&setting, &format!("must be an https URL — {why}")));
             }
         }
-        refuse_plaintext_redirect(&self.redirect_url, &setting("REDIRECT_URL", "redirect_url"))
+        refused_redirect(
+            &self.redirect_url,
+            &setting(variables, "REDIRECT_URL", "redirect_url"),
+            environment,
+        )
     }
 }
 
-/// Refuse a redirect URL that does not parse, or that is neither `https` nor
-/// `http` on a loopback address (RFC 8252 §7.3), the sentence naming it as
-/// `setting` and never quoting it.
+/// Refuse a redirect URL that does not parse, or that is not `https` —
+/// plain `http` is accepted on a loopback address alone (RFC 8252 §7.3), and
+/// only in a declared development or test profile: the process's
+/// `<PREFIX>_ENV` decides. The sentence names the redirect as `setting` and
+/// never quotes it.
 ///
 /// [`OAuthClient::new`](crate::OAuthClient::new) refuses
 /// [`OAuthClientConfig::redirect_url`] this way under its own variable; a
@@ -118,7 +132,7 @@ impl OAuthClientConfig {
 ///     "{}, or `AcmeSocialConfig::redirect_url` in code",
 ///     spellings("social__acme", "REDIRECT_URL"),
 /// );
-/// assert!(refuse_plaintext_redirect("http://localhost:3000/callback", &setting).is_ok());
+/// assert!(refuse_plaintext_redirect("https://app.example/callback", &setting).is_ok());
 /// let refused = refuse_plaintext_redirect("http://app.example/callback", &setting)
 ///     .expect_err("the authorization code would return in clear");
 /// assert!(
@@ -126,25 +140,44 @@ impl OAuthClientConfig {
 /// );
 /// ```
 pub fn refuse_plaintext_redirect(redirect_url: &str, setting: &str) -> Result<(), AuthError> {
+    refused_redirect(redirect_url, setting, Environment::from_env())
+}
+
+/// [`refuse_plaintext_redirect`] under `environment`, the profile that decides
+/// whether plain `http` on loopback is accepted.
+fn refused_redirect(
+    redirect_url: &str,
+    setting: &str,
+    environment: Environment,
+) -> Result<(), AuthError> {
     let redirect = parsed(redirect_url, setting)?;
-    let loopback = redirect.scheme() == "http" && is_loopback(&redirect);
-    if redirect.scheme() != "https" && !loopback {
+    let local = redirect.scheme() == "http" && is_loopback(&redirect) && !environment.is_deployed();
+    if redirect.scheme() != "https" && !local {
         return Err(refused(
             setting,
-            "must be an https URL, or http on a loopback address (localhost, 127.0.0.1, \
-             [::1]) — the authorization code returns there (RFC 6749 §3.1.2.1), and RFC 8252 \
-             §7.3 allows plain http on loopback alone",
+            &format!(
+                "must be an https URL — the authorization code returns there (RFC 6749 \
+                 §3.1.2.1); plain http is accepted only on a loopback address (localhost, \
+                 127.0.0.1, [::1]), which RFC 8252 §7.3 allows, in a declared development or \
+                 test profile ({}, here {})",
+                Environment::var_name(),
+                environment.as_str(),
+            ),
         ));
     }
     Ok(())
 }
 
-/// How a refusal names `field`: both ways it is set.
-fn setting(key: &str, field: &str) -> String {
-    format!(
-        "{}, or `OAuthClientConfig::{field}` in code",
-        spellings(OAuthClientConfig::NAMESPACE, key)
-    )
+/// How a refusal names `field`: both ways it is set when the config was read
+/// under `variables`, by the field alone when its caller composed it.
+fn setting(variables: Option<&ConfigService>, key: &str, field: &str) -> String {
+    match variables {
+        Some(variables) => format!(
+            "{}, or `OAuthClientConfig::{field}` in code",
+            variables.spellings(key)
+        ),
+        None => format!("`OAuthClientConfig::{field}`"),
+    }
 }
 
 /// `raw` parsed, refused naming `setting` when it does not parse.
@@ -172,6 +205,7 @@ fn is_loopback(url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nest_rs_config::Namespaced;
     use validator::Validate;
 
     fn complete() -> OAuthClientConfig {
@@ -187,8 +221,23 @@ mod tests {
         }
     }
 
+    /// The variables a module-built client's config was read under.
+    fn variables() -> ConfigService {
+        ConfigService::for_namespace(OAuthClientConfig::NAMESPACE)
+    }
+
+    /// Every profile, the development conveniences' and the deployments'.
+    const PROFILES: [Environment; 4] = [
+        Environment::Development,
+        Environment::Test,
+        Environment::Staging,
+        Environment::Production,
+    ];
+
     fn refusal(config: &OAuthClientConfig) -> String {
-        let Err(refused @ AuthError::Failed { .. }) = config.refuse_plaintext() else {
+        let Err(refused @ AuthError::Failed { .. }) =
+            config.refuse_plaintext(Some(&variables()), Environment::Development)
+        else {
             panic!("the config is refused");
         };
         nest_rs_core::error_message(&refused)
@@ -230,20 +279,97 @@ mod tests {
         }
     }
 
+    const LOOPBACK: [&str; 3] = [
+        "http://localhost:3000/callback",
+        "http://127.0.0.1:3000/callback",
+        "http://[::1]:3000/callback",
+    ];
+
+    /// A development or test profile may take the code back over loopback
+    /// http, on every spelling of it; an https redirect is taken everywhere.
     #[test]
-    fn a_loopback_redirect_is_accepted_on_every_spelling() {
-        for redirect in [
-            "http://localhost:3000/callback",
-            "http://127.0.0.1:3000/callback",
-            "http://[::1]:3000/callback",
-            "https://app.example/callback",
-        ] {
-            let config = OAuthClientConfig {
-                redirect_url: redirect.into(),
-                ..complete()
-            };
-            assert!(config.refuse_plaintext().is_ok(), "{redirect}");
+    fn a_loopback_redirect_is_accepted_on_every_spelling_outside_a_deployment() {
+        for environment in [Environment::Development, Environment::Test] {
+            for redirect in LOOPBACK {
+                let config = OAuthClientConfig {
+                    redirect_url: redirect.into(),
+                    ..complete()
+                };
+                assert!(
+                    config
+                        .refuse_plaintext(Some(&variables()), environment)
+                        .is_ok(),
+                    "{environment:?}: {redirect}"
+                );
+            }
         }
+        for environment in PROFILES {
+            assert!(
+                complete()
+                    .refuse_plaintext(Some(&variables()), environment)
+                    .is_ok(),
+                "{environment:?}"
+            );
+        }
+    }
+
+    /// A staging or production profile — an undeclared one included — takes
+    /// the code back over TLS alone, and the refusal names the profile and the
+    /// variable that declares it.
+    #[test]
+    fn a_loopback_redirect_is_refused_in_a_deployment_naming_the_profile() {
+        for environment in [Environment::Staging, Environment::Production] {
+            for redirect in LOOPBACK {
+                let Err(refused) = OAuthClientConfig {
+                    redirect_url: redirect.into(),
+                    ..complete()
+                }
+                .refuse_plaintext(Some(&variables()), environment) else {
+                    panic!("{environment:?}: {redirect} is refused");
+                };
+                let sentence = nest_rs_core::error_message(&refused);
+                assert!(
+                    sentence.contains(&nest_rs_config::var_name("oauth__client", "REDIRECT_URL"))
+                        && sentence.contains(&format!(
+                            "({}, here {})",
+                            Environment::var_name(),
+                            environment.as_str()
+                        )),
+                    "{sentence}"
+                );
+            }
+        }
+    }
+
+    /// The public refusal reads the process's profile: an undeclared one is
+    /// production, which refuses loopback http.
+    #[test]
+    fn the_public_refusal_reads_the_profile_the_process_declares() {
+        let declared = Environment::from_env();
+        assert_eq!(
+            refuse_plaintext_redirect(LOOPBACK[0], "REDIRECT").is_ok(),
+            !declared.is_deployed(),
+            "{declared:?}"
+        );
+    }
+
+    /// A config its caller composed — a social provider's — is read under
+    /// none of this crate's variables: a refusal names the field alone.
+    #[test]
+    fn a_composed_config_is_refused_by_its_field_alone() {
+        let Err(refused) = OAuthClientConfig {
+            token_url: "http://auth.example/oauth/token".into(),
+            ..complete()
+        }
+        .refuse_plaintext(None, Environment::Production) else {
+            panic!("a plaintext token endpoint is refused");
+        };
+        let sentence = nest_rs_core::error_message(&refused);
+        assert!(
+            sentence.contains("`OAuthClientConfig::token_url`, must be an https URL")
+                && !sentence.contains(&nest_rs_config::var_name("oauth__client", "")),
+            "{sentence}"
+        );
     }
 
     #[test]
@@ -303,7 +429,9 @@ mod tests {
     #[test]
     fn a_complete_config_validates() {
         complete().validate().expect("valid");
-        complete().refuse_plaintext().expect("every URL is https");
+        complete()
+            .refuse_plaintext(Some(&variables()), Environment::Production)
+            .expect("every URL is https");
     }
 
     #[test]

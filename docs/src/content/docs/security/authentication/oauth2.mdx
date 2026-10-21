@@ -121,7 +121,7 @@ follow the dual-path rule.
 | `client_secret` | `<PREFIX>_OAUTH__CLIENT__CLIENT_SECRET` | length ≥ 1 |
 | `auth_url` | `<PREFIX>_OAUTH__CLIENT__AUTH_URL` | an `https` URL |
 | `token_url` | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL` | an `https` URL |
-| `redirect_url` | `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL` | an `https` URL, or `http` on a loopback address |
+| `redirect_url` | `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL` | an `https` URL, or `http` on a loopback address in a development or test profile |
 | `userinfo_url` | `<PREFIX>_OAUTH__CLIENT__USERINFO_URL` | an `https` URL |
 | `scopes` | `<PREFIX>_OAUTH__CLIENT__SCOPES` | comma-separated list |
 | `tls` | `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` | PEM, each with its `_FILE` spelling |
@@ -133,8 +133,13 @@ token endpoint receives the client secret and the code (§3.2), and the
 userinfo endpoint a bearer token (RFC 6750 §5.3). The redirect may also be
 `http` on `localhost`, `127.0.0.1` or `[::1]` — the loopback exception of
 RFC 8252 §7.3, which keeps a local `http://localhost:3000/callback`
-working. Anything else fails the boot naming the variable and the RFC,
-never the URL, which may carry credentials.
+working — in a declared development or test profile (`<PREFIX>_ENV`)
+alone, so staging and production take the code back over `https`,
+loopback included. Anything else fails the boot naming the variable, the
+RFC and the profile, never the URL, which may carry credentials. An
+`OAuthClient::new` over a config you composed in code names the field
+instead, `OAuthClientConfig::redirect_url`: no variable of the client's
+was read for it.
 
 The provider's certificate is verified against the system's authorities,
 or against the ones `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names, which
@@ -142,7 +147,10 @@ replace them — an identity provider on a private network signed by your
 own authority is trusted that way. A provider requiring a client
 certificate gets `TLS_CERT` and `TLS_KEY`. All three are read at the start,
 so a renewed file takes effect at the next one: rotate it with a rolling
-restart. No setting turns verification off. The HTTP backend refuses
+restart. Material no handshake could use is refused naming the variable
+it was read from, or, in a config composed in code, its part of
+`OAuthClientConfig::tls`: its authorities, its certificate or its key.
+No setting turns verification off. The HTTP backend refuses
 redirects — following them during the token exchange is an SSRF risk per
 the `oauth2` crate's own guidance, and on a read it could send the bearer
 token anywhere — and `fetch` refuses a URL that is not `https` before

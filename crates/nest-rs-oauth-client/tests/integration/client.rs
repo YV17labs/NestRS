@@ -853,20 +853,41 @@ async fn a_fetch_over_plain_http_is_refused_before_anything_is_sent() {
     assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was dialled");
 }
 
-/// A provider endpoint over plain http is refused when the client is built,
-/// naming the variable that sets it.
-#[test]
-fn a_provider_endpoint_over_plain_http_is_refused_at_construction() {
-    let Err(sentence @ AuthError::Failed { .. }) = OAuthClient::new(OAuthClientConfig {
+fn plaintext() -> OAuthClientConfig {
+    OAuthClientConfig {
         token_url: "http://provider.example/token".into(),
         ..valid_config()
-    }) else {
+    }
+}
+
+#[module(imports = [OAuthClientModule::for_root(plaintext())])]
+struct PlaintextHost;
+
+/// A provider endpoint over plain http is refused when the client is built:
+/// a client its caller composed names the field, and the module's names the
+/// variable that sets it beside the field.
+#[tokio::test]
+async fn a_provider_endpoint_over_plain_http_is_refused_at_construction() {
+    let Err(sentence @ AuthError::Failed { .. }) = OAuthClient::new(plaintext()) else {
         panic!("a plaintext token endpoint must not build a client");
     };
     let sentence = nest_rs_core::error_message(&sentence);
     assert!(
-        sentence.contains(&var_name(OAuthClientConfig::NAMESPACE, "TOKEN_URL"))
-            && sentence.contains("RFC 6749 §3.2"),
+        sentence.contains("`OAuthClientConfig::token_url`, must be an https URL")
+            && sentence.contains("RFC 6749 §3.2")
+            && !sentence.contains(&var_name(OAuthClientConfig::NAMESPACE, "")),
+        "{sentence}"
+    );
+
+    let Err(refused) = App::builder().module::<PlaintextHost>().build().await else {
+        panic!("a plaintext token endpoint must not boot");
+    };
+    let sentence = nest_rs_core::error_message(refused.as_ref());
+    assert!(
+        sentence.contains(&format!(
+            "{}, or `OAuthClientConfig::token_url` in code, must be an https URL",
+            nest_rs_config::spellings(OAuthClientConfig::NAMESPACE, "TOKEN_URL")
+        )),
         "{sentence}"
     );
 }

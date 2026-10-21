@@ -7,7 +7,7 @@
 use nest_rs_core::module;
 use nest_rs_http::challenge::NoBearerChallenge;
 use nest_rs_http::{HttpModule, StatusCode, controller, routes};
-use nest_rs_oauth_server::{TARGET, TokenError};
+use nest_rs_oauth_server::{TARGET, TokenEndpointAuthMethod, TokenError};
 use nest_rs_testing::{LogCapture, TestApp};
 
 #[controller(path = "/")]
@@ -24,7 +24,19 @@ impl TokenController {
     #[post("/token/client")]
     #[public]
     async fn client(&self) -> nest_rs_http::Result<String> {
-        Err(TokenError::InvalidClient.into())
+        Err(TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic).into())
+    }
+
+    #[post("/token/client-in-body")]
+    #[public]
+    async fn client_in_body(&self) -> nest_rs_http::Result<String> {
+        Err(TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretPost).into())
+    }
+
+    #[post("/token/no-client")]
+    #[public]
+    async fn no_client(&self) -> nest_rs_http::Result<String> {
+        Err(TokenError::InvalidClient(TokenEndpointAuthMethod::None).into())
     }
 
     #[post("/token/outage")]
@@ -67,25 +79,58 @@ async fn a_refused_grant_reaches_the_client_as_the_rfc6749_json_error() {
     );
 }
 
-/// The one `401`: `invalid_client`, never dressed up as a resource challenge.
+/// The one `401`: a client refused over HTTP Basic, challenged with the
+/// scheme it used (RFC 6749 §5.2), never dressed up as a resource challenge.
 #[tokio::test]
-async fn a_refused_client_is_a_401_that_is_not_a_resource_challenge() {
+async fn a_client_refused_over_basic_is_a_401_challenged_with_basic() {
     let app = TestApp::for_module::<TokenApp>()
         .await
         .expect("the token app boots");
 
-    let response = app.http().post("/token/client").send().await;
+    let response = app
+        .http()
+        .post("/token/client")
+        .header("authorization", "Basic Y2k6d3Jvbmc=")
+        .send()
+        .await;
     response.assert_status(StatusCode::UNAUTHORIZED);
+    response.assert_header("www-authenticate", r#"Basic realm="authorization server""#);
     response
         .assert_json(serde_json::json!({ "error": "invalid_client" }))
         .await;
 
     // Through the `HttpError` `?` in the handler builds.
-    let rendered = nest_rs_http::HttpError::from(TokenError::InvalidClient).into_response();
+    let rendered = nest_rs_http::HttpError::from(TokenError::InvalidClient(
+        TokenEndpointAuthMethod::ClientSecretBasic,
+    ))
+    .into_response();
     assert!(
         rendered.extensions().get::<NoBearerChallenge>().is_some(),
         "the response opts out of the RFC 9728 pointer",
     );
+}
+
+/// A client that never used the `Authorization` header — its credentials in
+/// the body, or none — is §5.2's `400 invalid_client`, and carries no
+/// challenge a browser would answer with a credentials prompt.
+#[tokio::test]
+async fn a_client_refused_without_http_authentication_is_a_400_carrying_no_challenge() {
+    let app = TestApp::for_module::<TokenApp>()
+        .await
+        .expect("the token app boots");
+
+    for path in ["/token/client-in-body", "/token/no-client"] {
+        let response = app.http().post(path).send().await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        assert!(
+            response.0.headers().get("www-authenticate").is_none(),
+            "{path}: {:?}",
+            response.0.headers(),
+        );
+        response
+            .assert_json(serde_json::json!({ "error": "invalid_client" }))
+            .await;
+    }
 }
 
 /// A dependency that did not answer while the grant was resolved: `503` (RFC 9110

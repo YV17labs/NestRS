@@ -43,30 +43,34 @@ async fn login_rejects_bad_credentials() {
     let (db, app) = boot().await;
     seed_org_and_user(db.connection().as_ref()).await;
 
-    app.http()
+    let resp = app
+        .http()
         .post("/login")
         .body_json(&json!({
             "email": LOGIN_EMAIL,
             "password": "wrong-password",
         }))
         .send()
-        .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_json(json!({ "error": "invalid_grant" })).await;
 }
 
 #[tokio::test]
 async fn login_rejects_unknown_email() {
     let (_db, app) = boot().await;
 
-    app.http()
+    let resp = app
+        .http()
         .post("/login")
         .body_json(&json!({
             "email": "nobody@example.com",
             "password": LOGIN_PASSWORD,
         }))
         .send()
-        .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_json(json!({ "error": "invalid_grant" })).await;
 }
 
 #[tokio::test]

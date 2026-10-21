@@ -205,7 +205,7 @@ fn token_error_from_auth(err: AuthError) -> TokenError {
     if matches!(err, AuthError::Unavailable { .. }) {
         TokenError::Server(err.into())
     } else {
-        TokenError::InvalidClient
+        TokenError::InvalidGrant
     }
 }
 
@@ -475,11 +475,11 @@ mod tests {
                 token_error_from_auth(AuthError::unavailable("store down", None)),
                 TokenError::Server(_),
             ),
-            "a store outage during login must be server_error (503), never invalid_credentials (401)",
+            "a store outage during login must be server_error (503), never invalid_grant (400)",
         );
         assert!(matches!(
             token_error_from_auth(AuthError::failed("invalid credentials")),
-            TokenError::InvalidClient,
+            TokenError::InvalidGrant,
         ));
     }
 }

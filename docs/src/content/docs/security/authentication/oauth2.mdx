@@ -324,11 +324,24 @@ A token-issuing controller that fronts the OAuth flow (or its
 
 | Variant | Wire string | Status |
 |---------|-------------|--------|
+| `InvalidRequest` | `invalid_request` | 400 |
 | `UnsupportedGrant` | `unsupported_grant_type` | 400 |
+| `InvalidGrant` | `invalid_grant` | 400 |
+| `UnauthorizedClient` | `unauthorized_client` | 400 |
 | `InvalidScope` | `invalid_scope` | 400 |
-| `InvalidClient` | `invalid_client` | 401 |
+| `InvalidClient(ClientSecretBasic)` | `invalid_client` | 401, with `WWW-Authenticate: Basic realm="authorization server"` |
+| `InvalidClient(ClientSecretPost)`, `InvalidClient(None)` | `invalid_client` | 400 |
 | `Sign(inner)` | `server_error` | 500 |
 | `Server(inner)` | `server_error` | 503 |
+
+`InvalidClient` says how the client tried to authenticate, as a
+`TokenEndpointAuthMethod` — RFC 7591's `token_endpoint_auth_method` values —
+because that decides the answer. A client that sent its credentials in the
+`Authorization` header is answered `401` with the `Basic` challenge §5.2
+requires, matching the scheme it used; one that put them in the body, or
+sent none, gets §5.2's own `400`, since a `Basic` challenge to a request
+that never used HTTP authentication would have a browser carrying a public
+client prompt its user for a password. No `401` leaves without a challenge.
 
 The `Sign` variant collapses any internal signing failure to the
 opaque RFC code on the wire; the inner `anyhow::Error` stays attached

@@ -66,7 +66,7 @@ types with their HTTP mapping already wired:
 | `AuthError::*` | `nest_rs::authn` | `401` + `WWW-Authenticate: Bearer` |
 | `AuthError::Unavailable` | `nest_rs::authn` | `503`, a `Retry-After` when the failing party gave one, logged at `error` — an outage is not a credential signal |
 | `CredentialError` | `nest_rs::authn` | `401` (opaque `"invalid credentials"`) |
-| `TokenError::*` | `nest_rs::oauth::server` | RFC 6749 wire codes (`400` / `401`); `server_error` at `500`, or `503` for a dependency that did not answer, its cause logged at `error` (`warn` behind the `503`) |
+| `TokenError::*` | `nest_rs::oauth::server` | RFC 6749 wire codes (`400` / `401`, the `401` with the `Basic` challenge of a client refused over HTTP Basic); `server_error` at `500`, or `503` for a dependency that did not answer, its cause logged at `error` (`warn` behind the `503`) |
 
 A service returns the framework type directly; `?` flows it to the
 boundary; the impl decides status and body. Every row above implements

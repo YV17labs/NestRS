@@ -2,7 +2,8 @@
 //! that *issues* tokens.
 //!
 //! - [`TokenError`] — §5.2's closed set of six wire codes, with the JSON envelope
-//!   and the §5.1 cache directives the token endpoint owes.
+//!   and the §5.1 cache directives the token endpoint owes; a refused client is
+//!   answered by the [`TokenEndpointAuthMethod`] it attempted.
 //! - [`AccessTokenResponse`] — §5.1's success body, stating the scope granted
 //!   when it differs from the request, returned bare from a handler, which
 //!   renders with the same directives.
@@ -20,6 +21,6 @@ mod error;
 mod registry;
 mod token;
 
-pub use error::TokenError;
+pub use error::{TokenEndpointAuthMethod, TokenError};
 pub use registry::{AuthenticatedClient, RegisteredClient, authenticate_against_registry};
 pub use token::{AccessTokenRequest, AccessTokenResponse};

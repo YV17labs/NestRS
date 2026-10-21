@@ -75,8 +75,9 @@ OpenAPI document reads a body's type off a `Json<T>` return, which is why
 `#[api(response = AccessTokenResponse)]` names it here.
 
 `grant_password` authenticates the email/password pair and signs the
-claims — invalid credentials come back as one opaque error (no
-"user exists but wrong password" oracle). Note the route is `#[public]` and
+claims — invalid credentials come back as one opaque error, RFC 6749
+§5.2's `invalid_grant` with a `400` (no "user exists but wrong password"
+oracle). Note the route is `#[public]` and
 binds a **throttler**, not an auth guard: login is the one route that must
 accept anonymous callers, and rate-limiting is its protection.
 

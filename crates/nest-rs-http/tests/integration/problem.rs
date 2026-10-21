@@ -1,9 +1,11 @@
-//! What a client is told when its request does not decode: the `400` problem's
-//! `detail` names where and what kind, never the value, on every path an `Err`
-//! is rendered by.
+//! What a client is told when its request does not decode — the `400` problem's
+//! `detail` names where and what kind, never the value — and when the server
+//! fails without saying why — one document, its class's `code` and no `detail` —
+//! on every path an `Err` is rendered by.
 
 use nest_rs_core::{
-    App, Interceptor, Layer, Next, Outcome, Transport, UnitContext, injectable, interceptor, module,
+    App, Interceptor, Layer, Module, Next, Outcome, Transport, UnitContext, injectable,
+    interceptor, module,
 };
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
@@ -188,13 +190,66 @@ impl FailureController {
     async fn status(&self) -> Result<String> {
         Err(HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
+
+    /// A failure the handler says is none of the client's business.
+    #[get("/opaque")]
+    async fn opaque(&self) -> Result<String> {
+        Err::<String, _>(std::io::Error::other("secret 42")).opaque()
+    }
+
+    /// A `500` the handler wrote as raw text.
+    #[get("/raw")]
+    async fn raw(&self) -> nest_rs_http::Response {
+        nest_rs_http::Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("secret 42")
+    }
+
+    /// A handler that unwinds.
+    #[get("/panic")]
+    async fn panic(&self) -> String {
+        panic!("secret 42")
+    }
+
+    /// An error of the handler's own whose status is a `500`, rendered by
+    /// `ResponseError`'s default.
+    #[get("/typed")]
+    async fn typed(&self) -> std::result::Result<String, LedgerDown> {
+        Err(LedgerDown)
+    }
+
+    /// The class's own problem, as `#[crud]` answers an opaque failure.
+    #[get("/problem")]
+    async fn problem(&self) -> Result<String> {
+        Err(HttpError::from(nest_rs_core::Problem::new(
+            500,
+            nest_rs_core::problem::code::INTERNAL,
+        )))
+    }
+
+    /// A bare `503`, the server unable to serve the request.
+    #[get("/busy")]
+    async fn busy(&self) -> Result<String> {
+        Err(HttpError::from_status(StatusCode::SERVICE_UNAVAILABLE))
+    }
+}
+
+/// A failure whose sentence names what the client must not read.
+#[derive(Debug, thiserror::Error)]
+#[error("the ledger at 10.0.0.1 holds secret 42")]
+struct LedgerDown;
+
+impl ResponseError for LedgerDown {
+    fn status(&self) -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
 }
 
 fn server_problem() -> nest_rs_core::Problem {
     nest_rs_core::Problem::new(503, nest_rs_core::problem::code::UNAVAILABLE).with_retry_after(30)
 }
 
-#[module(providers = [FailureController])]
+#[module(providers = [FailureController, Forwarding])]
 struct FailureModule;
 
 type Client = TestClient;
@@ -215,10 +270,10 @@ impl Interceptor for Forwarding {
 }
 
 /// The app every real deployment is: one with a layer listed.
-async fn wrapped() -> Client {
+async fn wrapped<M: Module + 'static>() -> Client {
     let app = App::builder()
         .use_interceptors_global([interceptor::<Forwarding>()])
-        .module::<DecodeModule>()
+        .module::<M>()
         .build()
         .await
         .expect("module boots");
@@ -236,15 +291,15 @@ async fn wrapped() -> Client {
 
 /// Every place an `Err` is rendered: the fused edge, the outer wrap compression
 /// mounts, and the tail of a layered route.
-async fn clients() -> [Client; 3] {
+async fn clients<M: Module + 'static>() -> [Client; 3] {
     [
-        crate::boot::<DecodeModule>().await,
-        crate::boot_on::<DecodeModule>(HttpConfig {
+        crate::boot::<M>().await,
+        crate::boot_on::<M>(HttpConfig {
             compression: true,
             ..HttpConfig::default()
         })
         .await,
-        wrapped().await,
+        wrapped::<M>().await,
     ]
 }
 
@@ -270,7 +325,7 @@ fn quoting(logs: &nest_rs_testing::LogCapture, needle: &str) -> Vec<String> {
 #[tokio::test]
 async fn a_body_that_does_not_decode_is_refused_without_its_value() {
     let logs = nest_rs_testing::LogCapture::install();
-    for client in clients().await {
+    for client in clients::<DecodeModule>().await {
         for path in ["/decode/json", "/decode/valid"] {
             let resp = client
                 .post(path)
@@ -317,7 +372,7 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
 
 #[tokio::test]
 async fn a_query_or_a_form_that_does_not_decode_is_refused_without_its_value() {
-    for client in clients().await {
+    for client in clients::<DecodeModule>().await {
         let resp = client
             .get("/decode/query")
             .query("card", &SECRET)
@@ -340,7 +395,7 @@ async fn a_query_or_a_form_that_does_not_decode_is_refused_without_its_value() {
 #[tokio::test]
 async fn a_handler_s_own_decode_failure_is_refused_without_its_value() {
     let body = format!(r#""{SECRET}""#);
-    for client in clients().await {
+    for client in clients::<DecodeModule>().await {
         for path in ["/decode/own", "/decode/bad-request", "/decode/problem"] {
             let resp = client.post(path).body(body.clone()).send().await;
             assert_eq!(
@@ -355,7 +410,7 @@ async fn a_handler_s_own_decode_failure_is_refused_without_its_value() {
 }
 
 /// The operator's half: `.opaque()` over an anyhow-wrapped decode failure logs
-/// the report, at `error`, while the client reads the constant.
+/// the report, at `error`, while the client reads the opaque `500`.
 #[tokio::test]
 async fn an_opaque_decode_failure_is_logged_without_its_value() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -501,4 +556,63 @@ async fn a_bare_status_is_answered_and_files_nothing() {
         "{:#?}",
         logs.events(),
     );
+}
+
+/// The one document every opaque `500` is: the class's problem, its `code`
+/// and no `detail`.
+fn internal_document() -> serde_json::Value {
+    serde_json::json!({
+        "type": "about:blank",
+        "title": "Internal Server Error",
+        "status": 500,
+        "code": "INTERNAL",
+    })
+}
+
+/// Every server failure the framework answers on HTTP without describing it
+/// is one document, whichever part answered — an error no one meant for the
+/// client, a bare status, `Opaque`, a raw-text `500`, a panic, an error
+/// rendered by `ResponseError`'s default, the class's own `Problem` — on every
+/// path an `Err` is rendered by, and none of it quotes the cause.
+#[tokio::test]
+async fn every_opaque_500_is_one_document_whoever_answered_it() {
+    for client in clients::<FailureModule>().await {
+        for path in [
+            "/failure/leaky",
+            "/failure/wrapped",
+            "/failure/ledger",
+            "/failure/status",
+            "/failure/opaque",
+            "/failure/raw",
+            "/failure/panic",
+            "/failure/typed",
+            "/failure/problem",
+        ] {
+            let resp = client.get(path).send().await;
+            resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+            resp.assert_content_type("application/problem+json");
+            let body = problem_json(resp).await;
+            assert_eq!(body, internal_document(), "{path}");
+            assert!(!body.to_string().contains("secret"), "{path}: {body}");
+        }
+    }
+}
+
+/// A `503` the framework answers without describing it is its class's
+/// document: `UNAVAILABLE`, and no `detail`.
+#[tokio::test]
+async fn an_opaque_503_is_its_class_s_document() {
+    for client in clients::<FailureModule>().await {
+        let resp = client.get("/failure/busy").send().await;
+        resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            problem_json(resp).await,
+            serde_json::json!({
+                "type": "about:blank",
+                "title": "Service Unavailable",
+                "status": 503,
+                "code": "UNAVAILABLE",
+            }),
+        );
+    }
 }

@@ -112,7 +112,9 @@ Review a new edge, or a change to one, against it:
 11. **Error opacity** — an error that is neither the edge's own deliberate
     error, a `nest_rs_core::ToProblem` error where the edge reads one, nor
     framework vocabulary is answered opaquely on every edge
-    (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`, the `INTERNAL` code), its chain
+    (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`, the `INTERNAL` code; on HTTP its
+    class's problem document and no `detail`, as every `5xx` the edge does not
+    describe), its chain
     logged once at `error`, as is the chain behind a `5xx` problem — at `warn`
     behind a `503`, the server unable to serve the unit in time, a statement
     Postgres cancelled at its bound among them (core's `Withheld` classes it

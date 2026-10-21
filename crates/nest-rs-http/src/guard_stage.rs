@@ -288,7 +288,7 @@ fn file_denial(guard: &'static str, denial: &Denial) {
 
 /// A [`Denial`] as the HTTP response the edge answers: the RFC 9457
 /// `application/problem+json` envelope, a `4xx` reason as its `detail`, a
-/// `5xx` keeping only the generic title so no internal text leaks.
+/// `5xx` its class's document with no `detail`, so no internal text leaks.
 pub fn denial_to_http_response(denial: Denial) -> Response {
     denial_response(&denial)
 }
@@ -479,20 +479,25 @@ mod tests {
     async fn internal_denial_is_a_500_problem_without_leaking_detail() {
         let resp = denial_to_http_response(Denial::internal("panic: secret config missing"));
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let text = std::str::from_utf8(&bytes).expect("utf8");
+        let text = crate::testing::text(resp).await;
         assert!(
             !text.contains("secret config"),
             "a 5xx denial must not leak internal detail: {text}",
         );
-        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert!(json.get("detail").is_none(), "no detail on a 500 denial");
+        let document: serde_json::Value = serde_json::from_str(&text).expect("problem json");
+        assert_eq!(document, crate::testing::internal_document());
     }
 
     /// The HTTP half: `503` (RFC 9110 §15.6.4), `Retry-After` when known, and
-    /// the generic title of a 5xx rather than the reason.
+    /// the class's document of a 5xx rather than the reason.
     #[tokio::test]
     async fn an_unavailable_dependency_is_a_503_with_its_known_wait() {
+        let unavailable = serde_json::json!({
+            "type": "about:blank",
+            "title": "Service Unavailable",
+            "status": 503,
+            "code": "UNAVAILABLE",
+        });
         let resp =
             denial_to_http_response(Denial::unavailable(Some(7), "authentication unavailable"));
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -502,10 +507,16 @@ mod tests {
                 .map(|v| v.as_bytes()),
             Some(b"7".as_slice()),
         );
+        let document: serde_json::Value =
+            serde_json::from_str(&crate::testing::text(resp).await).expect("problem json");
+        assert_eq!(document, unavailable);
         let unknown =
             denial_to_http_response(Denial::unavailable(None, "authentication unavailable"));
         assert_eq!(unknown.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(unknown.headers().get(header::RETRY_AFTER).is_none());
+        let document: serde_json::Value =
+            serde_json::from_str(&crate::testing::text(unknown).await).expect("problem json");
+        assert_eq!(document, unavailable);
     }
 
     /// The HTTP half of a rate limit, pinned beside the in-band edges' wait:

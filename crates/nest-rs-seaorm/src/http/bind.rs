@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use nest_rs_authz::{Ability, ActionMarker, with_ability};
-use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, ResolvesProvider};
+use nest_rs_core::ResolvesProvider;
 use nest_rs_http::{HttpError, ProblemDetails, StatusCode};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
@@ -100,19 +100,13 @@ where
     }
 }
 
-/// What an [`Unbound::Unwired`] answers: the client learns nothing of the
-/// wiring.
-fn opaque() -> ProblemDetails {
-    ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE)
-}
-
 impl Unbound {
     fn into_http(self) -> HttpError {
         match self {
             Self::NotV7 => ProblemDetails::bad_request()
                 .with_detail(nest_rs_core::UUID_V7_REQUIRED)
                 .into(),
-            Self::Unwired => opaque().into(),
+            Self::Unwired => ProblemDetails::internal().into(),
             Self::Failed(err) => HttpError::from(err),
             Self::Denied => HttpError::from_status(StatusCode::FORBIDDEN),
             Self::Missing => HttpError::from_status(StatusCode::NOT_FOUND),
@@ -187,7 +181,7 @@ mod tests {
         let response = unbound.into_http().into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = response.into_body().into_string().await.expect("body");
-        assert!(body.contains(OPAQUE_CLIENT_MESSAGE), "{body}");
+        assert_eq!(document(&body), internal_document().await, "{body}");
         assert!(
             !body.contains("NotesService"),
             "the type stays off the wire: {body}"
@@ -232,5 +226,25 @@ mod tests {
             !body.contains("db.internal"),
             "driver text must not reach the client: {body}"
         );
+        assert_eq!(document(&body), internal_document().await, "{body}");
+    }
+
+    /// The one document every opaque `500` is on HTTP, whoever answered it:
+    /// what `nest_rs_http::Opaque` answers.
+    async fn internal_document() -> serde_json::Value {
+        use nest_rs_http::Opaque as _;
+
+        let opaque = Err::<(), _>(std::io::Error::other("unwired"))
+            .opaque()
+            .expect_err("a failure")
+            .into_response();
+        let body = opaque.into_body().into_string().await.expect("body");
+        let said = document(&body);
+        assert_eq!(said["code"], "INTERNAL", "{said}");
+        said
+    }
+
+    fn document(body: &str) -> serde_json::Value {
+        serde_json::from_str(body).expect("problem json")
     }
 }

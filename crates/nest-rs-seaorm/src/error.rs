@@ -905,6 +905,12 @@ mod http {
             )))
             .await;
             assert_eq!(body, crud);
+            let (_, _, opaque) = body_json_of(
+                nest_rs_http::Opaque::opaque(Err::<(), _>(std::io::Error::other("refused")))
+                    .expect_err("a failure"),
+            )
+            .await;
+            assert_eq!(body, opaque, "one document for the class, whoever answered");
             assert!(
                 !body.to_string().contains("password_hash"),
                 "the driver message must not reach the wire: {body}",

@@ -174,7 +174,8 @@ impl ExceptionFilter for DomainErrorFilter {
 
 The `ResponseError` impl is what lets a handler's `?` carry `DomainError`; its
 status is the **default** the filter replaces. Drop the filter and the same
-handler answers `500` from that status.
+handler answers the opaque `500` from that status — `code: INTERNAL`, no
+`detail`.
 
 A filter reads the request it answers as a guard does, through
 `HttpView::of(cx)?.request()` — its method, its headers, its extensions — so it

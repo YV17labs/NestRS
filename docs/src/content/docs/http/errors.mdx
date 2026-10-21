@@ -71,28 +71,30 @@ structured error body conforming to
 [RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html):
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::{Json, Path, ProblemDetails, Result};
+use nest_rs::http::{Json, Opaque, Path, ProblemDetails, Result};
 
 #[get("/posts/{id}")]
-async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Post>, ProblemDetails> {
-    let post = self.svc.find(id).await
-        .map_err(|e| ProblemDetails::internal().with_detail(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found()
-                .with_detail(format!("post {id} does not exist"))
-                .with_instance(format!("/posts/{id}"))
-        })?;
+async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Post>> {
+    let post = self.svc.find(id).await.opaque()?.ok_or_else(|| {
+        ProblemDetails::not_found()
+            .with_detail(format!("post {id} does not exist"))
+            .with_instance(format!("/posts/{id}"))
+    })?;
     Ok(Json(post))
 }
 ```
+
+The lookup's own failure goes through [`.opaque()`](#an-error-the-client-is-not-owed):
+its message is the operator's, never the client's.
 
 Constructors cover the well-known statuses — `bad_request`, `unauthorized`,
 `forbidden`, `not_found`, `conflict`, `unprocessable`, `internal` — and
 `from_status` any other. Each is `type: "about:blank"` with the status's phrase
 as its `title`: RFC 9457's spelling of a problem that says nothing beyond its
-status, the one every problem the framework renders carries. A client keys on
-the `status`, or on a `type` of your own set with `.with_type(…)`. Builders
-extend the body:
+status, the one every problem the framework renders carries. A `5xx` adds the
+`code` of its class — `UNAVAILABLE` for a `503`, `INTERNAL` for any other —
+and nothing more. A client keys on the `status`, on that `code`, or on a
+`type` of your own set with `.with_type(…)`. Builders extend the body:
 
 | Builder | Field |
 |---------|-------|
@@ -156,10 +158,22 @@ async fn report(&self, Path(id): Path<Uuid>) -> Result<Json<Report>> {
 }
 ```
 
-`.opaque()?` logs the real error at `error` on `nest_rs::http` and returns a
-`ProblemDetails` 500 carrying a constant message. The envelope is deliberate:
-a client parses the same document whether or not it was told why, so an
-opaque failure is not identifiable by its shape alone.
+`.opaque()?` logs the real error at `error` on `nest_rs::http` and answers the
+opaque `500`, the one document every server failure the framework does not
+describe is on HTTP — a `ServiceError`'s, a `#[crud]` operation's, a panic's,
+an unknown error's alike:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Internal Server Error",
+  "status": 500,
+  "code": "INTERNAL"
+}
+```
+
+A client reads the `code` and nothing else, whichever part answered, so an
+opaque failure is not identifiable by its shape.
 
 Reach for it on a failure that is none of the caller's business. A validation
 rejection or an authorization denial is the opposite case: those exist to be
@@ -181,12 +195,13 @@ Every error the HTTP transport renders — a handler's `ServiceError`, an
 inline `ProblemDetails`, a validation rejection, and even a raw router
 error (an unmounted-route `404`, a `413` over the body cap) — comes back
 as one `application/problem+json` body. The transport lifts any leftover
-plain-text error onto the RFC 9457 envelope at its edge; internal (`5xx`)
-detail is dropped so a driver or panic message never reaches the wire.
+plain-text error onto the RFC 9457 envelope at its edge; a `5xx` answers its
+class's document above — `code: UNAVAILABLE` for a `503` — with no `detail`,
+so a driver or panic message never reaches the wire.
 
 An error nobody meant for the client — an `anyhow` chain, an
-`HttpError::new(e, StatusCode::INTERNAL_SERVER_ERROR)` — is never lost on the way: it answers an
-opaque `500` problem, and its whole chain is filed once at `error` on
+`HttpError::new(e, StatusCode::INTERNAL_SERVER_ERROR)` — is never lost on the way: it answers the
+opaque `500`, and its whole chain is filed once at `error` on
 `nest_rs::http`. A `nest_rs::core::Problem` the chain carries answers itself
 instead — its status, its `detail` on a `4xx`, its `code` as an extension
 member and its `Retry-After` — the same contract GraphQL, WebSockets and MCP

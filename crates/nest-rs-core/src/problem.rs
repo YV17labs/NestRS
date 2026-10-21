@@ -11,7 +11,8 @@
 //! `nest_rs_mcp::problem_error`, and HTTP reads a [`Problem`] only — the error
 //! itself or one its chain carries — beside an error's own `ResponseError`. An
 //! error the edge finds no answer in is answered opaquely
-//! ([`OPAQUE_CLIENT_MESSAGE`]) and its chain is logged once at `error`.
+//! ([`OPAQUE_CLIENT_MESSAGE`]; on HTTP the `500` document under the `INTERNAL`
+//! code, with no `detail`) and its chain is logged once at `error`.
 //!
 //! ```
 //! use nest_rs_core::problem::code;

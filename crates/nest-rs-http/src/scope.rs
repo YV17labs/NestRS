@@ -6,7 +6,7 @@ use std::any::{TypeId, type_name};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, ResolvesProvider};
+use nest_rs_core::ResolvesProvider;
 
 use crate::problem::ProblemDetails;
 
@@ -74,17 +74,12 @@ impl<T: Send + Sync + 'static> Scoped<T> {
     }
 }
 
-/// What a miss answers: the client learns nothing of the wiring.
-fn opaque() -> ProblemDetails {
-    ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE)
-}
-
 impl<'a, T: Send + Sync + 'static> crate::FromRequest<'a> for Scoped<T> {
     async fn from_request(
         _req: &'a crate::Request,
         _body: &mut crate::RequestBody,
     ) -> crate::Result<Self> {
-        Self::resolve().ok_or_else(|| opaque().into())
+        Self::resolve().ok_or_else(|| ProblemDetails::internal().into())
     }
 }
 
@@ -149,10 +144,15 @@ mod tests {
         assert_eq!(scoped.0.0, "registered");
     }
 
+    /// The body a miss answers, asserted to be the one opaque `500`: its
+    /// class's code, no detail.
     async fn opaque_body(error: crate::HttpError) -> String {
         let response = error.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        response.into_body().into_string().await.unwrap()
+        let text = crate::testing::text(response).await;
+        let document: serde_json::Value = serde_json::from_str(&text).expect("problem json");
+        assert_eq!(document, crate::testing::internal_document());
+        text
     }
 
     #[tokio::test]
@@ -168,7 +168,6 @@ mod tests {
             panic!("no provider for Marker");
         };
         let text = opaque_body(refused).await;
-        assert!(text.contains(OPAQUE_CLIENT_MESSAGE), "{text}");
         assert!(
             !text.contains("Marker"),
             "the type stays off the wire: {text}"

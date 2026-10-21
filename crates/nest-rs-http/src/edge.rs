@@ -397,7 +397,7 @@ mod tests {
     use crate::endpoint::BoxEndpoint;
     use crate::error::HttpError;
     use crate::poem_bridge::from_poem;
-    use crate::testing::{answer, get, text};
+    use crate::testing::{answer, get, internal_document, text};
 
     /// The gap bound the edges below hold a body to.
     const GAP: Duration = Duration::from_secs(30);
@@ -440,6 +440,10 @@ mod tests {
             KnownMethods::default(),
             Arc::default(),
         )
+    }
+
+    fn opaque_document(body: &str) -> serde_json::Value {
+        serde_json::from_str(body).expect("problem json")
     }
 
     fn nosniff() -> Vec<(HeaderName, HeaderValue)> {
@@ -501,6 +505,7 @@ mod tests {
         );
         let body = text(resp).await;
         assert!(!body.contains("the handler panicked"), "{body}");
+        assert_eq!(opaque_document(&body), internal_document(), "{body}");
 
         let line = logs.expect_one(
             nest_rs_core::operation_log::TARGET,
@@ -796,6 +801,7 @@ mod tests {
             "what may have landed is never invited again"
         );
         assert_eq!(started.elapsed(), Duration::from_secs(7));
+        assert_eq!(opaque_document(&text(resp).await), internal_document());
         let line = logs.expect_one(
             crate::target::HTTP,
             "request's unit of work did not settle within its net; its writes may have landed",

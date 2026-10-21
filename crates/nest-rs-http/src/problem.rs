@@ -6,7 +6,8 @@
 //! unmounted-route 404, a 413) onto the same `application/problem+json` envelope.
 
 use http::{HeaderValue, StatusCode, header};
-use nest_rs_core::{DecodeError, Problem};
+use nest_rs_core::problem::code;
+use nest_rs_core::{Code, DecodeError, Problem};
 use poem::error::{ParseQueryError, ResponseError};
 use poem::{IntoResponse, Response};
 use serde::Serialize;
@@ -18,8 +19,7 @@ use crate::HttpError;
 /// The scheme name, matched case-insensitively per RFC 7235 §2.1.
 pub const BEARER: &str = "Bearer";
 
-/// The extension member a problem document carries its
-/// [`Code`](nest_rs_core::Code) in.
+/// The extension member a problem document carries its [`Code`] in.
 const CODE: &str = "code";
 
 /// The response a [`Problem`] answers: its document, and `Retry-After` when it
@@ -39,6 +39,8 @@ pub(crate) fn problem_response(problem: &Problem) -> crate::Response {
 /// Every problem the framework builds from a status alone has one `type`,
 /// `about:blank`, and the status's reason phrase as its `title`: RFC 9457
 /// §4.2.1's spelling of a problem that means nothing beyond its status. A
+/// `5xx` adds the `code` member of its class and nothing else, so a server
+/// failure reads the same whichever part of the framework answered it. A
 /// problem type of an app's own, which a client may key on, is set with
 /// [`with_type`](Self::with_type).
 #[derive(Debug, Clone, Serialize)]
@@ -80,14 +82,9 @@ impl ProblemDetails {
         title: impl Into<String>,
         err: &(dyn std::error::Error + 'static),
     ) -> Self {
-        Self {
-            type_uri: "about:blank".into(),
-            title: title.into(),
-            status,
-            detail: Some(DecodeError::redact(&err.to_string(), Some(err)).into_owned()),
-            instance: None,
-            extensions: serde_json::Map::new(),
-        }
+        Self::from_status(status)
+            .with_title(title)
+            .with_detail(DecodeError::redact(&err.to_string(), Some(err)).into_owned())
     }
 
     /// The HTTP document of a [`Problem`]: its status's own problem, its
@@ -136,15 +133,33 @@ impl ProblemDetails {
     }
 
     /// The problem a bare [`StatusCode`] answers: `about:blank` and the
-    /// status's reason phrase (RFC 9457 §4.2.1).
+    /// status's reason phrase (RFC 9457 §4.2.1); a `5xx` also carries the
+    /// `code` of its class, the document [`from_problem`](Self::from_problem)
+    /// gives that class's [`Problem`], so every server failure the framework
+    /// does not describe answers one document.
+    ///
+    /// ```
+    /// use nest_rs_http::{ProblemDetails, StatusCode};
+    ///
+    /// let failed = ProblemDetails::from_status(StatusCode::INTERNAL_SERVER_ERROR);
+    /// assert_eq!(failed.extensions["code"], "INTERNAL");
+    /// assert!(failed.detail.is_none());
+    /// let busy = ProblemDetails::from_status(StatusCode::SERVICE_UNAVAILABLE);
+    /// assert_eq!(busy.extensions["code"], "UNAVAILABLE");
+    /// assert!(ProblemDetails::from_status(StatusCode::NOT_FOUND).extensions.is_empty());
+    /// ```
     pub fn from_status(status: StatusCode) -> Self {
-        Self {
+        let problem = Self {
             type_uri: "about:blank".into(),
             title: reason_phrase(status).into(),
             status,
             detail: None,
             instance: None,
             extensions: serde_json::Map::new(),
+        };
+        match server_error_class(status) {
+            Some(class) => problem.with_extension(CODE, class.as_str()),
+            None => problem,
         }
     }
 
@@ -178,7 +193,8 @@ impl ProblemDetails {
         Self::from_status(StatusCode::UNPROCESSABLE_ENTITY)
     }
 
-    /// A `500 Internal Server Error` problem.
+    /// A `500 Internal Server Error` problem, under the `INTERNAL` code: what
+    /// every failure the client is not told of answers.
     pub fn internal() -> Self {
         Self::from_status(StatusCode::INTERNAL_SERVER_ERROR)
     }
@@ -216,6 +232,18 @@ impl ProblemDetails {
     ) -> Self {
         self.extensions.insert(key.into(), value.into());
         self
+    }
+}
+
+/// The code a server failure answering `status` is known by: `UNAVAILABLE`
+/// for a `503`, the server unable to serve the request in time, and
+/// `INTERNAL` for any other `5xx` — core's two classes, as its
+/// `Problem::client_message` reads them. `None` for a client error.
+fn server_error_class(status: StatusCode) -> Option<Code> {
+    match status {
+        StatusCode::SERVICE_UNAVAILABLE => Some(code::UNAVAILABLE),
+        status if status.is_server_error() => Some(code::INTERNAL),
+        _ => None,
     }
 }
 
@@ -452,6 +480,7 @@ impl crate::IntoResponse for ProblemDetails {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::internal_document;
 
     /// A response poem rendered, as the normalizer takes it.
     fn crossed(response: Response) -> crate::Response {
@@ -764,9 +793,82 @@ mod tests {
             "server-error detail must not leak the driver message: {text}",
         );
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
-        assert_eq!(v["status"], 500);
-        assert_eq!(v["title"], "Internal Server Error");
-        assert!(v.get("detail").is_none(), "no detail on a 500");
+        assert_eq!(v, internal_document(), "the one opaque document");
+    }
+
+    /// A server failure answered from its status alone is its class's
+    /// problem, `code` included and no `detail`: `UNAVAILABLE` for a `503`,
+    /// `INTERNAL` for any other `5xx`, as core's classes read them. A `4xx`
+    /// carries no code it was not given.
+    #[test]
+    fn a_server_status_answers_its_class_s_problem() {
+        for (status, class) in [
+            (StatusCode::INTERNAL_SERVER_ERROR, code::INTERNAL),
+            (StatusCode::NOT_IMPLEMENTED, code::INTERNAL),
+            (StatusCode::BAD_GATEWAY, code::INTERNAL),
+            (StatusCode::SERVICE_UNAVAILABLE, code::UNAVAILABLE),
+            (StatusCode::GATEWAY_TIMEOUT, code::INTERNAL),
+        ] {
+            let bare = serde_json::to_value(ProblemDetails::from_status(status)).unwrap();
+            let problem = Problem::new(status.as_u16(), class);
+            let classed = serde_json::to_value(ProblemDetails::from_problem(&problem)).unwrap();
+            assert_eq!(bare, classed, "{status}");
+            assert_eq!(bare["code"], class.as_str(), "{status}");
+            assert!(bare.get("detail").is_none(), "{status}");
+        }
+        assert_eq!(
+            serde_json::to_value(ProblemDetails::internal()).unwrap(),
+            internal_document(),
+        );
+        let failed = ProblemDetails::from_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal Server Error",
+            &std::fmt::Error,
+        );
+        assert_eq!(failed.extensions["code"], "INTERNAL");
+        for client in [
+            ProblemDetails::bad_request(),
+            ProblemDetails::not_found(),
+            ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED),
+        ] {
+            assert!(client.extensions.get("code").is_none(), "{}", client.status);
+        }
+    }
+
+    /// The `503` the request deadline answers, an empty body, is lifted onto
+    /// its class's document and keeps its `Retry-After`.
+    #[tokio::test]
+    async fn normalize_answers_the_deadline_s_503_as_its_class_s_document() {
+        let raw = crate::deadline::timed_out(std::time::Duration::from_secs(30));
+        let resp = normalize_error_response(raw).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers()[header::RETRY_AFTER], "30");
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "type": "about:blank",
+                "title": "Service Unavailable",
+                "status": 503,
+                "code": "UNAVAILABLE",
+            }),
+        );
+    }
+
+    /// An error the edge cannot read an answer in, rendered with its chain
+    /// withheld, answers the one opaque document.
+    #[tokio::test]
+    async fn an_unknown_server_error_renders_the_one_opaque_document() {
+        let unknown = poem::Error::new(
+            std::io::Error::other("connection to db-primary refused"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        let resp = crossed(render_error(unknown));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
+        assert_eq!(v, internal_document());
     }
 
     #[tokio::test]

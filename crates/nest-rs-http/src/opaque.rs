@@ -38,17 +38,16 @@
 //! # let reply = app.http().get("/reports/7").send().await;
 //!
 //! reply.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-//! let body = reply.0.into_body().into_string().await?;
-//! assert!(body.contains(nest_rs_core::OPAQUE_CLIENT_MESSAGE));
-//! assert!(!body.contains("does not exist"));
+//! let body: serde_json::Value = serde_json::from_str(&reply.0.into_body().into_string().await?)?;
+//! assert_eq!(body["code"], "INTERNAL");
+//! assert!(body.get("detail").is_none());
+//! assert!(!body.to_string().contains("does not exist"));
 //! # Ok(())
 //! # }
 //! ```
 //!
 //! A deliberate error a client can act on (a validation rejection, a `404`) is
 //! returned directly, as a `ProblemDetails`.
-
-use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
 
 use crate::error::HttpError;
 use crate::problem::ProblemDetails;
@@ -59,7 +58,8 @@ use crate::problem::ProblemDetails;
 /// whole cause chain reaches the operator's line through
 /// [`nest_rs_core::boxed_error`].
 pub trait Opaque<T> {
-    /// Log the real error for the operator, hand the client an opaque one.
+    /// Log the real error for the operator, hand the client the opaque `500`:
+    /// [`ProblemDetails::internal`], its `code` and no `detail`.
     fn opaque(self) -> Result<T, HttpError>;
 }
 
@@ -75,8 +75,9 @@ where
                 error = %nest_rs_core::error_message(&*err),
                 "request failed",
             );
-            // The same envelope as a legible failure, so the shape gives nothing away.
-            HttpError::from(ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE))
+            // The document every undescribed server failure answers, so the shape
+            // gives nothing away.
+            HttpError::from(ProblemDetails::internal())
         })
     }
 }
@@ -88,7 +89,6 @@ mod tests {
     use http::StatusCode;
 
     use super::*;
-    use crate::ResponseError;
 
     /// An error whose `Display` carries exactly what must not ship.
     #[derive(Debug)]
@@ -103,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn the_body_carries_the_shared_constant_not_the_error() {
+    fn the_error_displays_none_of_its_cause() {
         let out: Result<(), HttpError> = Err(Leaky).opaque();
         let err = out.expect_err("the failure stays a failure");
         let rendered = err.to_string();
@@ -133,17 +133,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn it_is_a_500_and_a_problem_document() {
+    /// The `500` every opaque failure answers: its class's code, no detail.
+    #[tokio::test]
+    async fn it_is_the_one_opaque_500_document() {
         let out: Result<(), HttpError> = Err(Leaky).opaque();
         let err = out.expect_err("a failure");
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let problem = ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE);
-        assert_eq!(problem.detail.as_deref(), Some(OPAQUE_CLIENT_MESSAGE));
-        assert_eq!(
-            problem.as_response().status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
+        let body = crate::testing::text(err.into_response()).await;
+        let body: serde_json::Value = serde_json::from_str(&body).expect("problem json");
+        assert_eq!(body, crate::testing::internal_document());
     }
 
     #[test]

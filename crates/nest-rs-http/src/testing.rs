@@ -1,8 +1,9 @@
 //! Test doubles: a real upgrade request, served by hyper over an in-memory pipe,
 //! so its `OnUpgrade` yields a socket once answered; an allocator counting the
 //! bytes a thread holds on the heap; a handler whose future weighs what a test
-//! asks; and the in-process call this crate's units drive an endpoint with,
-//! since `nest_rs_testing::TestClient` names the crate's other copy.
+//! asks; the in-process call this crate's units drive an endpoint with, since
+//! `nest_rs_testing::TestClient` names the crate's other copy; and the document
+//! every opaque `500` answers.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -209,6 +210,16 @@ pub(crate) async fn text(response: crate::Response) -> String {
         .into_string()
         .await
         .expect("a text body")
+}
+
+/// The one document every opaque `500` is: its class's `code`, no `detail`.
+pub(crate) fn internal_document() -> serde_json::Value {
+    serde_json::json!({
+        "type": "about:blank",
+        "title": "Internal Server Error",
+        "status": 500,
+        "code": "INTERNAL",
+    })
 }
 
 /// A handler whose future holds `N` bytes across its one await: what a test

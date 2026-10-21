@@ -2,8 +2,10 @@
 //! text: `<CONDITION>_CLIENT_MESSAGE`, one per condition a `5xx` names.
 //!
 //! Each client-facing transport has its own `Opaque` trait, whose `opaque()` logs
-//! the real error and substitutes [`OPAQUE_CLIENT_MESSAGE`]: one trait per
-//! transport lets `.opaque()?` infer its output from the enclosing return type.
+//! the real error and substitutes [`OPAQUE_CLIENT_MESSAGE`] (on HTTP, the `500`
+//! problem document under the `INTERNAL` code, its `title` saying as much): one
+//! trait per transport lets `.opaque()?` infer its output from the enclosing
+//! return type.
 
 /// What a client is told when an operation fails for a reason it must not read
 /// (a `500`).

@@ -212,7 +212,7 @@ impl<T: SiteTail> SiteEndpoint<T> {
         };
         let commits = outcome.is_ok();
         Answered {
-            response: render(&mut view, outcome),
+            response: render(self.handler, &mut view, outcome),
             commits,
         }
     }
@@ -264,16 +264,17 @@ impl<T: SiteTail> Tail for Running<'_, T> {
     }
 }
 
-/// The response `outcome` answers: the reply the view holds, an exception
-/// filter's problem over it, or, for a failure nobody answered, the edge's one
-/// rule. A failure's chain the answer keeps from the client is filed here,
-/// once, by the status it went out with.
-fn render(view: &mut HttpView, outcome: Outcome) -> Response {
+/// The response `outcome` answers at `handler`'s site: the reply the view
+/// holds, an exception filter's problem over it, or, for a failure nobody
+/// answered, the edge's one rule. A failure's chain the answer keeps from the
+/// client is filed here, once, by the status it went out with.
+fn render(handler: &Handler, view: &mut HttpView, outcome: Outcome) -> Response {
     let failure = match outcome {
         Ok(_) => {
             return view.take_response().unwrap_or_else(|| {
                 tracing::error!(
                     target: crate::target::HTTP,
+                    site = handler.address(),
                     "a unit settled without a response; answered 500",
                 );
                 ProblemDetails::internal().into_response()
@@ -651,6 +652,22 @@ mod tests {
             );
             assert_eq!(unit.settled().last(), Some(&commits), "{method} {status}");
         }
+    }
+
+    #[test]
+    fn a_unit_settled_without_a_response_is_answered_500_naming_its_site() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut view = HttpView::new(Request::builder().finish());
+
+        let answered = render(&ROUTE, &mut view, Ok(nest_rs_core::__private::settled()));
+
+        assert_eq!(answered.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let line = logs.expect_one(
+            crate::target::HTTP,
+            "a unit settled without a response; answered 500",
+        );
+        assert_eq!(line.level, "error");
+        assert_eq!(line.field("site").as_deref(), Some(ROUTE.address()));
     }
 
     #[tokio::test]

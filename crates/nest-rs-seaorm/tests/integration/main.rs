@@ -1,7 +1,8 @@
 //! `nest-rs-seaorm`'s in-process suite: what the exposure decorators emit, in
 //! `expose/`, which mirrors their macro crate's `src/` — their refusals are
-//! trybuild snapshots in `nest-rs-macro-hygiene`'s suite — and the pool's
-//! refusal of a server it cannot verify, before any login.
+//! trybuild snapshots in `nest-rs-macro-hygiene`'s suite — the pool's refusal
+//! of a server it cannot verify, before any login, and the unit of work under
+//! the HTTP edge's deadline.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -17,6 +18,7 @@ mod graphql;
 mod http;
 mod module;
 mod savepoint;
+mod unit;
 
 /// The principal the suite's authentication stand-ins attach: a caller with no
 /// identity of its own.

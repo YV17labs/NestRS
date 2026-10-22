@@ -67,11 +67,11 @@ pub(crate) async fn deferred_probe_tables(conn: &DatabaseConnection, prefix: &st
     children
 }
 
-/// FNV-1a over the table name: the lock must agree across nextest processes,
-/// which `DefaultHasher`'s per-process seed breaks.
-fn advisory_lock_key(table: &str) -> i64 {
+/// FNV-1a over `name`: the lock must agree across nextest processes, which
+/// `DefaultHasher`'s per-process seed breaks.
+pub(crate) fn advisory_lock_key(name: &str) -> i64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in table.as_bytes() {
+    for byte in name.as_bytes() {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x1000_0000_01b3);
     }

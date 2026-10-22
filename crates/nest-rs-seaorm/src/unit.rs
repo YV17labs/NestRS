@@ -617,20 +617,43 @@ mod tests {
         assert_eq!(settled, Settlement::Settled);
     }
 
+    /// The order a loaded run produced: the deadline passes while the commit
+    /// is still in flight, and the work it held starts once the commit
+    /// answered — the commit is waited for within the net, and the unit is
+    /// told with its answer, never after the work.
     #[tokio::test(start_paused = true)]
-    async fn a_commit_answered_past_the_deadline_is_waited_for_within_the_net() {
+    async fn a_commit_answered_past_the_deadline_is_told_without_the_work_it_held() {
         let started = Instant::now();
+        let (answer, answered) = oneshot::channel();
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let settle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(2180)).await;
+            let _unheard = answer.send(Settlement::Settled);
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
         let settled = told(
             true,
             "http",
             NET,
-            Some(started + Duration::from_secs(1)),
-            answering(Duration::from_secs(3), Settlement::Settled),
-            async {},
+            Some(started + Duration::from_millis(100)),
+            answered,
+            async move {
+                drop(settle.await);
+            },
         )
         .await;
         assert_eq!(settled, Settlement::Settled);
-        assert_eq!(started.elapsed(), Duration::from_secs(3));
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_millis(2180),
+            "told with the commit's answer"
+        );
+        assert!(
+            !ran.load(std::sync::atomic::Ordering::SeqCst),
+            "the work it held runs on"
+        );
     }
 
     #[tokio::test(start_paused = true)]

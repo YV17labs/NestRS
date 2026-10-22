@@ -432,6 +432,9 @@ struct DeadlineQueue;
 /// How many times the listener on the job's committed write ran.
 static LISTENER_RUNS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// The test's word to that listener, given once the attempt answered.
+static LISTENER_RELEASED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 struct DeadlineProcessor;
 
 impl nest_rs_core::ProviderResidency for DeadlineProcessor {
@@ -441,7 +444,7 @@ impl nest_rs_core::ProviderResidency for DeadlineProcessor {
 #[nest_rs_queue::processor]
 impl DeadlineProcessor {
     /// Writes and returns within its timeout; what listens to the write
-    /// outlives it.
+    /// outlives it, waiting for the test's word.
     #[process(queue = DeadlineQueue, retries = 1, timeout = "1s")]
     async fn write(&self, _job: DeadlineProbe) -> anyhow::Result<()> {
         current_executor()
@@ -449,11 +452,10 @@ impl DeadlineProcessor {
             .execute_unprepared("INSERT INTO worker_deadline_probe DEFAULT VALUES")
             .await?;
         nest_rs_database::after_commit(async {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            LISTENER_RELEASED.notified().await;
             LISTENER_RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         })
         .await;
-        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
         Ok(())
     }
 }
@@ -501,6 +503,7 @@ async fn a_job_whose_listener_outlives_its_timeout_is_not_retried() {
         "a commit whose listener outlives the timeout is no timeout: {outcome:?}"
     );
     assert_eq!(row_count(&conn, "worker_deadline_probe").await, 1);
+    LISTENER_RELEASED.notify_one();
     nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
         LISTENER_RUNS.load(std::sync::atomic::Ordering::SeqCst) == 1
     })
@@ -540,25 +543,37 @@ impl AtomicInDoubtProcessor {
 
 /// A deadline cutting the body while its atomic block commits never cuts that
 /// `COMMIT`: it lands on the driver's task, and the attempt is in doubt —
-/// dead-lettered, never retried into a second write.
+/// dead-lettered, never retried into a second write. The `COMMIT` waits for
+/// the test's word, so an attempt that waited for it would answer only at the
+/// settle net, sixteen seconds past the deadline.
 #[tokio::test]
 async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_lands() {
     use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
+    use sea_orm::TransactionTrait;
 
     let conn = crate::harness::connect_arc().await;
     scratch_table(&conn, "worker_atomic_in_doubt").await;
-    // A deferred trigger runs at `COMMIT`, which then outlives the timeout.
+    let gate = crate::harness::advisory_lock_key("worker_atomic_in_doubt_commit");
+    // A deferred trigger runs at `COMMIT`, which then waits for the gate.
     for sql in [
-        "CREATE OR REPLACE FUNCTION worker_atomic_in_doubt_slow() RETURNS trigger \
-         LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(2); RETURN NULL; END $$",
+        format!(
+            "CREATE OR REPLACE FUNCTION worker_atomic_in_doubt_slow() RETURNS trigger \
+             LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock({gate}); \
+             RETURN NULL; END $$"
+        ),
         "CREATE CONSTRAINT TRIGGER worker_atomic_in_doubt_slow AFTER INSERT ON \
          worker_atomic_in_doubt DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION \
-         worker_atomic_in_doubt_slow()",
+         worker_atomic_in_doubt_slow()"
+            .to_owned(),
     ] {
-        conn.execute_unprepared(sql)
+        conn.execute_unprepared(&sql)
             .await
-            .expect("the slow commit is set up");
+            .expect("the gated commit is set up");
     }
+    let word = conn.begin().await.expect("the gate's transaction opens");
+    word.execute_unprepared(&format!("SELECT pg_advisory_xact_lock({gate})"))
+        .await
+        .expect("the gate is held");
     let unit: Arc<dyn UnitOfWork> = Arc::new(SeaOrmUnitOfWork::new(
         conn.clone(),
         &SeaOrmConfig::default(),
@@ -595,9 +610,12 @@ async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_land
         "{error}"
     );
     assert!(
-        took < std::time::Duration::from_millis(1900),
-        "answered at the deadline, not after the commit, took {took:?}",
+        took < std::time::Duration::from_secs(10),
+        "answered at the deadline, never after the commit the gate holds, took {took:?}",
     );
+    word.rollback()
+        .await
+        .expect("the gate lets the commit through");
     nest_rs_testing::wait_for(std::time::Duration::from_secs(5), || {
         let conn = Arc::clone(&conn);
         async move { row_count(&conn, "worker_atomic_in_doubt").await == 1 }

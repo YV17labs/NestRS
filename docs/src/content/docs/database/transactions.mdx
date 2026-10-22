@@ -142,7 +142,8 @@ each a unit of work of
 its own — a transaction committed on the `Result` it answers and bounded by
 its own `timeout` — with the caller's scope, ability and every value the
 emitter carries; the response leaves once they have — or at the unit's
-deadline, whichever comes first.
+deadline, whichever comes first, and with the commit's answer when that comes
+only past the deadline.
 Past the deadline a listener runs on, the unit answers the outcome it
 committed, and a slow listener never turns a committed write into a timeout
 (a `debug` line on `nest_rs::orm`: `after-commit work outlived the unit's

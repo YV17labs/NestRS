@@ -604,10 +604,14 @@ struct DeadlineProbeModule;
 /// How many times the listener on the request's committed write ran.
 static LISTENED: AtomicU32 = AtomicU32::new(0);
 
+/// The test's word to that listener, given once the response is in.
+static RELEASED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 /// The request timeout bounds the handler: one that wrote and answered within
 /// it answers its own status, never `503`, however long what listens to its
-/// commit runs — the response waits for that until the deadline, then lets it
-/// run on.
+/// commit runs — the response waits for that until the deadline at most, then
+/// lets it run on. The listener waits for the test's word, so a response it
+/// held could only be the net's `500`, whatever the commit took.
 #[tokio::test]
 async fn a_post_whose_listener_outlives_the_request_timeout_answers_its_own_status() {
     const TABLE: &str = "deadline_commit_probe";
@@ -617,27 +621,20 @@ async fn a_post_whose_listener_outlives_the_request_timeout_answers_its_own_stat
         probe_app::<DeadlineProbeModule>(ProbeHandler::answering(StatusCode::CREATED, || async {
             insert_into(TABLE).await;
             nest_rs_database::after_commit(async {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                RELEASED.notified().await;
                 LISTENED.fetch_add(1, Ordering::SeqCst);
             })
             .await;
-            tokio::time::sleep(Duration::from_millis(900)).await;
         }))
         .await;
 
-    let started = tokio::time::Instant::now();
-    let status = probe(&app).await;
-    let took = started.elapsed();
     assert_eq!(
-        status,
+        probe(&app).await,
         StatusCode::CREATED,
-        "a write that landed is never a 503"
-    );
-    assert!(
-        took < Duration::from_millis(1900),
-        "answered at the deadline, not after the listener, took {took:?}",
+        "a write that landed is never a 503, nor held by its listener"
     );
     assert_eq!(committed_rows(&conn, TABLE).await, 1);
+    RELEASED.notify_one();
     nest_rs_testing::wait_until(Duration::from_secs(5), || {
         LISTENED.load(Ordering::SeqCst) == 1
     })

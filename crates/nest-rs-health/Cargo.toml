@@ -14,12 +14,10 @@ categories = ["web-programming"]
 nest-rs-config.workspace = true
 nest-rs-core.workspace = true
 # The probe controller's `#[controller]`/`#[routes]` expansion names the guard
-# declarations and composes the route's response-side layers through the
-# interceptors, as every route does.
+# declarations, as every route does.
 nest-rs-guards.workspace = true
 nest-rs-health-macros.workspace = true
 nest-rs-http.workspace = true
-nest-rs-interceptors.workspace = true
 # The indicators of one probe run concurrently on the probe's own task — never
 # `spawn`, which would file their events under no unit of work — so the join is
 # `FuturesUnordered` rather than a task set.

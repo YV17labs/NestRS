@@ -39,9 +39,8 @@ anyhow.workspace = true
 
 [dev-dependencies]
 # The suite mounts a token endpoint through `#[controller]` / `#[routes]`,
-# whose expansion binds the route's guards and wraps its response layers.
+# whose expansion binds the route's guards.
 nest-rs-guards = { path = "../nest-rs-guards" }
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 tokio = { workspace = true }
 

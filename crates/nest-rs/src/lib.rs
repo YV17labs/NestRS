@@ -91,22 +91,13 @@ pub use nest_rs_static_files as static_files;
 #[cfg(feature = "testing")]
 pub use nest_rs_testing as testing;
 
-// Layer-System extension-point crates, so a custom `Guard`/`Pipe`/`Interceptor`/
-// `Filter`/`ExceptionFilter` needs no per-crate dependency.
+// The layer contracts an edge's decorators name, so a custom `Guard` or `Pipe`
+// needs no per-crate dependency; `Interceptor` and `ExceptionFilter` are core's.
 #[cfg(feature = "guards")]
 pub use nest_rs_guards as guards;
 
 #[cfg(feature = "pipes")]
 pub use nest_rs_pipes as pipes;
-
-#[cfg(feature = "interceptors")]
-pub use nest_rs_interceptors as interceptors;
-
-#[cfg(feature = "filters")]
-pub use nest_rs_filters as filters;
-
-#[cfg(feature = "exception-filters")]
-pub use nest_rs_exception_filters as exception_filters;
 
 #[cfg(feature = "storage")]
 pub use nest_rs_storage as storage;

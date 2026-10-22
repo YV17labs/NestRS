@@ -1,32 +1,21 @@
-//! Layer System — the unified vocabulary for cross-cutting concerns.
+//! Layers — the vocabulary of the cross-cutting concerns that wrap a unit.
 //!
-//! A *layer* is any cross-cutting concern that wraps a handler. There are
-//! five canonical [`LayerKind`]s, one per sub-trait crate:
+//! A *layer* is any cross-cutting concern that wraps the unit an edge
+//! dispatches. There are four [`LayerKind`]s:
 //!
-//! - [`LayerKind::Guard`] — gates access.
-//! - [`LayerKind::Interceptor`] — wraps handler execution (logging, txn,
-//!   response shaping, request preprocessing).
-//! - [`LayerKind::Pipe`] — input transform / validation.
-//! - [`LayerKind::Filter`] — maps an `Err` escaping the handler to a response.
-//! - [`LayerKind::ExceptionFilter`] — maps a **typed** thrown error, closest to
-//!   the handler.
+//! - [`LayerKind::Guard`] — gates access (`nest_rs_guards`).
+//! - [`LayerKind::Pipe`] — input transform / validation (`nest_rs_pipes`).
+//! - [`LayerKind::Interceptor`] — wraps the handler: logging, a transaction,
+//!   response shaping ([`Interceptor`](crate::Interceptor)).
+//! - [`LayerKind::ExceptionFilter`] — answers a failure by its type
+//!   ([`ExceptionFilter`](crate::ExceptionFilter)).
 //!
-//! The execution order across kinds is fixed by the framework. On a routed
-//! HTTP request: Guard → Pipe → scoped Interceptor → handler, with the
-//! error path unwinding ExceptionFilter (typed catch, closest to the
-//! handler) → Filter (generic mapper) → Interceptor (observer). Global
-//! interceptors / filters execute at the transport edge instead — outside
-//! routing — same relative nesting. Inside a single kind, the sites run from
-//! the broadest in, each in declaration order, with [`Layer::priority`] as the
-//! tiebreaker within a site — never across.
-//!
-//! The sub-traits live in `nest_rs_guards`, `nest_rs_pipes`,
-//! `nest_rs_interceptors`, `nest_rs_filters` and `nest_rs_exception_filters`.
-//!
-//! This crate holds the edge-neutral [`Interceptor`](crate::Interceptor) and
-//! [`ExceptionFilter`](crate::ExceptionFilter) beside them: one pipeline whose
-//! stage order is written once, which each edge adopts in place of its
-//! HTTP-typed families.
+//! Every edge runs them through one pipeline, whose stage order this crate
+//! writes once, in the one function every edge calls: the unit stage, the
+//! guard stage and the posture's class gate, the exception filters, the
+//! handler stage, then the tail — the pipes and the call. Inside a stage the
+//! sites run from the broadest in, each in declaration order, with
+//! [`Layer::priority`] as the tiebreaker within a site — never across.
 
 use std::sync::Arc;
 
@@ -46,9 +35,7 @@ pub enum LayerKind {
     Interceptor,
     /// Input transform / validation.
     Pipe,
-    /// Maps an `Err` escaping the handler to a response.
-    Filter,
-    /// Maps a **typed** thrown error to a response, closest to the handler.
+    /// Answers a failure by its type, closest to the handler.
     ExceptionFilter,
 }
 
@@ -77,12 +64,12 @@ impl LayerSite {
     }
 }
 
-/// Common metadata for every layer kind. Sub-traits — `Guard`, `Interceptor`,
-/// `Filter`, `GlobalPipe`, `ExceptionFilter` — extend this to pick up
-/// [`Layer::priority`] and a dedup-friendly identity.
+/// Common metadata for every layer kind. Sub-traits — `Guard`, `GlobalPipe`,
+/// [`Interceptor`](crate::Interceptor), [`ExceptionFilter`](crate::ExceptionFilter)
+/// — extend this to pick up [`Layer::priority`] and a dedup-friendly identity.
 ///
-/// The sub-traits are named, not linked: this crate sits below theirs, and a
-/// relative URL 404s on docs.rs.
+/// `Guard` and `GlobalPipe` are named, not linked: this crate sits below
+/// theirs, and a relative URL 404s on docs.rs.
 pub trait Layer: Send + Sync + 'static {
     /// Tiebreaker inside one site of a kind — lower runs first, never ahead of
     /// a broader site's layers. Default `0`, leaving declaration order in

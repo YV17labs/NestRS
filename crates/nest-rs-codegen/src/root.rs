@@ -131,13 +131,6 @@ const FRAMEWORK: &[FrameworkCrate] = &[
     row("nest_rs_testing", "testing", "testing"),
     row("nest_rs_guards", "guards", "guards"),
     row("nest_rs_pipes", "pipes", "pipes"),
-    row("nest_rs_interceptors", "interceptors", "interceptors"),
-    row("nest_rs_filters", "filters", "filters"),
-    row(
-        "nest_rs_exception_filters",
-        "exception_filters",
-        "exception-filters",
-    ),
     row("nest_rs_storage", "storage", "storage"),
 ];
 
@@ -900,8 +893,8 @@ mod tests {
     #[test]
     fn keeps_multi_word_concerns_aligned_with_the_facade() {
         assert_eq!(
-            rewritten(quote!(::nest_rs_exception_filters::ExceptionFilter)),
-            quote!(::nest_rs::exception_filters::ExceptionFilter).to_string()
+            rewritten(quote!(::nest_rs_static_files::StaticFilesModule)),
+            quote!(::nest_rs::static_files::StaticFilesModule).to_string()
         );
     }
 

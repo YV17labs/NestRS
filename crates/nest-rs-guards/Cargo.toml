@@ -26,8 +26,6 @@ nest-rs-core.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
-# `#[routes]` composes a route's response-side layers through the interceptors.
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # The body-reading guard the docs teach for a webhook verifies an HMAC-SHA256
 # (aws-lc-rs, the workspace's crypto backend) over base64 signatures, as
 # Standard Webhooks spells them.

@@ -14,7 +14,7 @@ use nest_rs_core::{
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule};
 use nest_rs_health::{HealthConfig, HealthModule};
 use nest_rs_http::{
-    HttpBootCheck, HttpConfig, HttpControllerMeta, HttpEndpointMeta, HttpFallbackMeta, HttpModule,
+    HttpConfig, HttpControllerMeta, HttpEndpointMeta, HttpFallbackMeta, HttpModule,
 };
 use nest_rs_mcp::{McpConfig, McpModule};
 use nest_rs_oauth_client::{OAuthClientConfig, OAuthClientModule};
@@ -42,7 +42,6 @@ struct Wiring {
     controllers: usize,
     endpoints: usize,
     fallbacks: usize,
-    boot_checks: usize,
 }
 
 impl Wiring {
@@ -67,7 +66,6 @@ impl Wiring {
             controllers: discovery.meta::<HttpControllerMeta>().len(),
             endpoints: discovery.meta::<HttpEndpointMeta>().len(),
             fallbacks: discovery.meta::<HttpFallbackMeta>().len(),
-            boot_checks: discovery.meta::<HttpBootCheck>().len(),
         }
     }
 }

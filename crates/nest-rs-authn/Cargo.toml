@@ -72,8 +72,6 @@ base64 = { workspace = true }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-ws = { path = "../nest-rs-ws" }
-# The suite's `#[routes]` wrap each route's response layers.
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 
 [lints]
 workspace = true

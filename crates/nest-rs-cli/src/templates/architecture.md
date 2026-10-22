@@ -177,7 +177,7 @@ File name = role, folder = module; snake_case; one role, one file per folder.
 | Event listener host | `events/listener.rs` |
 | Entity (ORM + `#[expose]`) | `entity.rs` / `entities/` |
 | Guard / Strategy / Pipe | `guard.rs` / `strategy.rs` / `pipe.rs` |
-| Interceptor / Filter / Exception filter | `interceptor.rs` / `filter.rs` / `exception_filter.rs` |
+| Interceptor / Exception filter | `interceptor.rs` / `exception_filter.rs` |
 | Module config (`#[config]`) | `config.rs` |
 | An edge's view of the unit it dispatches (`<Edge>View`, the crate's subject and the file) | `view.rs`, at the edge crate's root |
 | Error types (every one — public, crate-private, domain or driver defect; a wire error document a client parses, such as `ProblemDetails`, is named for its document) / Static constants | `error.rs` / `constants.rs` |

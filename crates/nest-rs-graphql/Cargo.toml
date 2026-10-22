@@ -67,10 +67,6 @@ thiserror.workspace = true
 nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "http", "ws"] }
 # The close codes a socket the suites open ends with, as an app names them.
 nest-rs-ws = { path = "../nest-rs-ws" }
-# The layer-pool test asserts the transport-edge interceptor pool covers the
-# `/graphql` self-mount. An allowed dev-dependency cycle: the interceptors
-# depend on `nest-rs-http`, which this crate does.
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `test-util` (not part of tokio's `full`) pauses time, so the socket-lifetime
 # ceiling is asserted against a four-hour deadline in microseconds instead of
 # being approximated by a wall-clock sleep nobody would keep honest.

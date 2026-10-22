@@ -2583,13 +2583,10 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-events",
- "nest-rs-exception-filters",
- "nest-rs-filters",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-mcp",
  "nest-rs-oauth-client",
  "nest-rs-oauth-resource",
@@ -2755,26 +2752,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nest-rs-exception-filters"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-http",
- "poem",
-]
-
-[[package]]
-name = "nest-rs-filters"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-http",
- "poem",
-]
-
-[[package]]
 name = "nest-rs-graphql"
 version = "7.0.0"
 dependencies = [
@@ -2828,7 +2805,6 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-health-macros",
  "nest-rs-http",
- "nest-rs-interceptors",
  "serde",
  "serde_json",
  "tokio",
@@ -2887,18 +2863,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "nest-rs-interceptors"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-exception-filters",
- "nest-rs-filters",
- "nest-rs-http",
- "poem",
 ]
 
 [[package]]

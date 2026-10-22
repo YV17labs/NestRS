@@ -2579,13 +2579,10 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-events",
- "nest-rs-exception-filters",
- "nest-rs-filters",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-mcp",
  "nest-rs-oauth-client",
  "nest-rs-oauth-resource",
@@ -2620,7 +2617,6 @@ dependencies = [
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-mcp",
  "nest-rs-testing",
  "nest-rs-ws",
@@ -2794,29 +2790,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nest-rs-exception-filters"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-http",
- "poem",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "nest-rs-filters"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-http",
- "poem",
- "tokio",
-]
-
-[[package]]
 name = "nest-rs-graphql"
 version = "7.0.0"
 dependencies = [
@@ -2830,7 +2803,6 @@ dependencies = [
  "nest-rs-graphql-macros",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-pipes",
  "nest-rs-testing",
  "nest-rs-ws",
@@ -2861,7 +2833,6 @@ dependencies = [
  "base64 0.23.1",
  "nest-rs-core",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-testing",
  "serde_json",
  "tokio",
@@ -2879,7 +2850,6 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-health-macros",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-testing",
  "serde",
  "serde_json",
@@ -2946,20 +2916,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "nest-rs-interceptors"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-exception-filters",
- "nest-rs-filters",
- "nest-rs-http",
- "nest-rs-testing",
- "poem",
- "tokio",
 ]
 
 [[package]]
@@ -3064,7 +3020,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-testing",
  "schemars",
  "serde",
@@ -3082,7 +3037,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-testing",
  "schemars",
  "serde",
@@ -3327,7 +3281,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-openapi",
  "nest-rs-testing",
  "rust-embed",
@@ -3430,7 +3383,6 @@ dependencies = [
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-mcp",
  "nest-rs-testing",
  "nest-rs-ws",
@@ -3453,7 +3405,6 @@ dependencies = [
  "nest-rs-database",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-pipes",
  "nest-rs-testing",
  "nest-rs-ws-macros",

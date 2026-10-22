@@ -12,9 +12,6 @@ paths:
   - "crates/nest-rs-authz/**"
   - "crates/nest-rs-authn/**"
   - "crates/nest-rs-pipes/**"
-  - "crates/nest-rs-filters/**"
-  - "crates/nest-rs-interceptors/**"
-  - "crates/nest-rs-exception-filters/**"
   - "crates/nest-rs-throttler/**"
   - "crates/nest-rs-openapi/**"
 ---

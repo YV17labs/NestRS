@@ -89,10 +89,7 @@ globally on `App::builder()` or per controller / resolver / gateway.
 Interceptors and exception filters take no feature: `Interceptor`,
 `ExceptionFilter` and `#[interceptor]` live in `nest_rs::core`, beside the
 pipeline that runs them — see [Interceptors](/fundamentals/interceptors/) and
-[Exception filters](/fundamentals/exception-filters/). The `interceptors`,
-`filters` and `exception-filters` features still build NestRS 6's layer
-crates, which nothing in the framework runs any more; they leave in 7.0
-([Upgrading](/upgrading/)).
+[Exception filters](/fundamentals/exception-filters/).
 
 ## Background work
 

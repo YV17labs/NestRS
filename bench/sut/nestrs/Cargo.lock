@@ -1607,11 +1607,8 @@ dependencies = [
  "nest-rs-authz",
  "nest-rs-config",
  "nest-rs-core",
- "nest-rs-exception-filters",
- "nest-rs-filters",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
  "nest-rs-pipes",
  "nest-rs-seaorm",
  "nest-rs-testing",
@@ -1715,26 +1712,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nest-rs-exception-filters"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-http",
- "poem",
-]
-
-[[package]]
-name = "nest-rs-filters"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-http",
- "poem",
-]
-
-[[package]]
 name = "nest-rs-guards"
 version = "7.0.0"
 dependencies = [
@@ -1785,18 +1762,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "nest-rs-interceptors"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "nest-rs-core",
- "nest-rs-exception-filters",
- "nest-rs-filters",
- "nest-rs-http",
- "poem",
 ]
 
 [[package]]

@@ -109,9 +109,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::chain::{
-        Chain, GlobalBucket, SiteChainCell, SiteChainSources, compose_site_chain, split_at_covered,
-    };
+    pub use crate::chain::{GlobalBucket, SiteChainSources, compose_site_chain, split_at_covered};
     pub use crate::denial::{denial_of, failure_chain};
     pub use crate::reason::{client_message, denial_code, structured_reason};
     pub use crate::registry::{global_guards_active, resolve_global_chain, resolve_global_guards};

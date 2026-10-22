@@ -16,7 +16,6 @@ mod accept_encoding;
 mod access_log;
 mod allow;
 mod body;
-mod boot_check;
 mod capped;
 pub mod challenge;
 mod client_ip;
@@ -194,7 +193,6 @@ pub use http::response::Parts as ResponseParts;
 pub use http::uri::Scheme;
 
 pub use body::Body;
-pub use boot_check::HttpBootCheck;
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::{
     HttpConfig, MAX_CONNECTION_CEILING, MAX_CONNECTION_FLOOR, SSE_KEEP_ALIVE_CEILING,

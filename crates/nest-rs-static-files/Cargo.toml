@@ -40,8 +40,6 @@ libc.workspace = true
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 # A global deny-all guard, to prove the files are public by import.
 nest-rs-guards = { path = "../nest-rs-guards" }
-# The suite's `#[routes]` wrap each route's response layers.
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # The OpenAPI self-mount at `/api`, whose subtree the fallback never answers.
 nest-rs-openapi = { path = "../nest-rs-openapi" }
 tempfile.workspace = true

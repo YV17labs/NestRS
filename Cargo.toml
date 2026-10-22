@@ -179,9 +179,6 @@ nest-rs-http = { version = "=7.0.0", path = "crates/nest-rs-http" }
 nest-rs-http-macros = { version = "=7.0.0", path = "crates/nest-rs-http-macros" }
 nest-rs-mcp = { version = "=7.0.0", path = "crates/nest-rs-mcp" }
 nest-rs-mcp-macros = { version = "=7.0.0", path = "crates/nest-rs-mcp-macros" }
-nest-rs-interceptors = { version = "=7.0.0", path = "crates/nest-rs-interceptors" }
-nest-rs-filters = { version = "=7.0.0", path = "crates/nest-rs-filters" }
-nest-rs-exception-filters = { version = "=7.0.0", path = "crates/nest-rs-exception-filters" }
 nest-rs-openapi = { version = "=7.0.0", path = "crates/nest-rs-openapi" }
 nest-rs-database = { version = "=7.0.0", path = "crates/nest-rs-database" }
 nest-rs-seaorm = { version = "=7.0.0", path = "crates/nest-rs-seaorm" }

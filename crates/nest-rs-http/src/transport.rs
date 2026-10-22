@@ -15,7 +15,6 @@ use nest_rs_core::{Container, Discovery, Listening, Posture, Transport};
 use nest_rs_database::UnitOfWork;
 use tokio_util::sync::CancellationToken;
 
-use crate::boot_check::HttpBootCheck;
 use crate::controller::HttpControllerMeta;
 use crate::detached::DetachedWork;
 use crate::drain::Drain;
@@ -439,11 +438,6 @@ impl HttpTransport {
 impl Transport for HttpTransport {
     async fn configure(&mut self, container: &Container) -> Result<()> {
         let discovery = Discovery::new(container);
-        // Before anything mounts: an unresolvable global layer spec would
-        // otherwise be dropped silently.
-        for d in discovery.meta::<HttpBootCheck>() {
-            d.meta.run(container).map_err(|msg| anyhow::anyhow!(msg))?;
-        }
         // Applied at registration, so every address the table holds is the one
         // a client calls.
         let prefix = self.global_prefix.take();

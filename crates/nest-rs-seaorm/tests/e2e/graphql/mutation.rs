@@ -117,7 +117,8 @@ impl ProbesResolver {
         }
     }
 
-    /// Two rows under one label, whose second statement violates its unique key.
+    /// Two rows under one label, whose second statement violates its unique key;
+    /// nullable, so its sibling's answer stays beside its `null`.
     #[mutation]
     #[public]
     async fn create_twice(
@@ -125,10 +126,10 @@ impl ProbesResolver {
         first: Uuid,
         second: Uuid,
         label: String,
-    ) -> Result<bool, ServiceError> {
+    ) -> Result<Option<bool>, ServiceError> {
         self.rows.insert(first, &label).await?;
         self.rows.insert(second, &label).await?;
-        Ok(true)
+        Ok(Some(true))
     }
 
     #[mutation]
@@ -291,7 +292,11 @@ async fn a_unique_violation_answers_its_fields_conflict_and_the_others_commit() 
     )
     .await;
 
-    assert_eq!(reply["data"]["kept"], true, "{reply}");
+    assert_eq!(
+        reply["data"],
+        json!({ "kept": true, "twice": null }),
+        "{reply}"
+    );
     assert_eq!(reply["errors"][0]["path"], json!(["twice"]), "{reply}");
     assert_eq!(
         reply["errors"][0]["extensions"]["code"],

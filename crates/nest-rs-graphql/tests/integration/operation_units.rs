@@ -236,6 +236,16 @@ impl ProbeResolver {
 
     #[mutation]
     #[public]
+    async fn maybe_write(&self, fail: bool) -> Result<Option<String>> {
+        tokio::task::yield_now().await;
+        match fail {
+            true => Err("the write was refused".into()),
+            false => Ok(Some(ambient_policy())),
+        }
+    }
+
+    #[mutation]
+    #[public]
     async fn shaped(&self) -> Shape {
         Shape
     }
@@ -349,18 +359,18 @@ async fn a_mutation_runs_as_one_transaction_with_its_root_field_in_a_block() {
 }
 
 #[tokio::test]
-async fn a_failing_root_field_rolls_back_alone_and_the_operation_commits_the_others() {
+async fn a_failing_root_field_answers_null_rolls_back_alone_and_the_operation_commits_the_others() {
     let (app, journal) = boot().await;
     let reply = post(
         &app,
         json!({
-            "query": "mutation { a: write(fail: false) b: write(fail: true) c: write(fail: false) }"
+            "query": "mutation { a: maybeWrite(fail: false) b: maybeWrite(fail: true) c: maybeWrite(fail: false) }"
         }),
     )
     .await;
     assert_eq!(
         reply["data"],
-        json!({ "a": "block", "c": "block" }),
+        json!({ "a": "block", "b": null, "c": "block" }),
         "{reply}"
     );
     assert_eq!(reply["errors"][0]["path"], json!(["b"]), "{reply}");
@@ -377,6 +387,32 @@ async fn a_failing_root_field_rolls_back_alone_and_the_operation_commits_the_oth
     );
 }
 
+/// A Non-Null root field's null reaches `data`; the fields that answered keep
+/// their blocks, and the operation commits them.
+#[tokio::test]
+async fn a_failing_non_null_root_field_nulls_the_data_and_the_others_still_commit() {
+    let (app, journal) = boot().await;
+    let reply = post(
+        &app,
+        json!({
+            "query": "mutation { a: write(fail: false) b: write(fail: true) c: write(fail: false) }"
+        }),
+    )
+    .await;
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(reply["errors"][0]["path"], json!(["b"]), "{reply}");
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "block released",
+            "block rolled back",
+            "block released",
+            "settle graphql.operation true",
+        ],
+    );
+}
+
 #[tokio::test]
 async fn a_nested_error_in_a_root_fields_selection_rolls_that_field_back() {
     let (app, journal) = boot().await;
@@ -385,7 +421,11 @@ async fn a_nested_error_in_a_root_fields_selection_rolls_that_field_back() {
         json!({ "query": "mutation { shaped { fine broken } }" }),
     )
     .await;
-    assert_eq!(reply["data"]["shaped"]["fine"], 1, "{reply}");
+    assert_eq!(
+        reply["data"],
+        json!({ "shaped": { "fine": 1, "broken": null } }),
+        "{reply}"
+    );
     assert_eq!(
         reply["errors"][0]["path"],
         json!(["shaped", "broken"]),

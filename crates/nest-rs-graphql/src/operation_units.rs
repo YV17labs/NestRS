@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use async_graphql::futures_util::StreamExt;
 use async_graphql::futures_util::stream::{self, BoxStream, FuturesOrdered};
-use async_graphql::parser::types::{DocumentOperations, OperationDefinition, OperationType};
+use async_graphql::parser::types::{
+    DocumentOperations, ExecutableDocument, OperationDefinition, OperationType,
+};
 use async_graphql::{
     BatchRequest, BatchResponse, Context, Data, Executor, Name, Positioned, Request, Response,
     ServerError, ServerResult, Value,
@@ -210,6 +212,26 @@ pub(crate) fn selected_type(request: &mut Request) -> Option<OperationType> {
     Selected::of(request).ty
 }
 
+/// The operation `document` runs for a request naming `wanted`, as
+/// async-graphql (`=7.2.1`) selects it, and the name the document declares it
+/// under; `None` when it selects none and nothing runs.
+pub(crate) fn selected_operation<'d>(
+    document: &'d ExecutableDocument,
+    wanted: Option<&str>,
+) -> Option<(Option<&'d Name>, &'d Positioned<OperationDefinition>)> {
+    match (&document.operations, wanted) {
+        (DocumentOperations::Single(operation), None) => Some((None, operation)),
+        (DocumentOperations::Multiple(operations), Some(wanted)) => operations
+            .get_key_value(wanted)
+            .map(|(name, operation)| (Some(name), operation)),
+        (DocumentOperations::Multiple(operations), None) if operations.len() == 1 => operations
+            .iter()
+            .next()
+            .map(|(name, operation)| (Some(name), operation)),
+        _ => None,
+    }
+}
+
 /// The operation a request selects, read off its document — parsed once,
 /// since the request caches the parse for the executor.
 struct Selected {
@@ -226,28 +248,18 @@ impl Selected {
     };
 
     fn of(request: &mut Request) -> Self {
-        let wanted = request.operation_name.clone();
-        let Ok(document) = request.parsed_query() else {
-            return Self::NONE;
-        };
-        let named = |(name, operation): (&Name, &Positioned<OperationDefinition>)| Self {
-            ty: Some(operation.node.ty),
-            name: Some(name.to_string()),
-        };
-        match (&document.operations, wanted.as_deref()) {
-            (DocumentOperations::Single(operation), None) => Self {
-                ty: Some(operation.node.ty),
-                name: None,
-            },
-            (DocumentOperations::Multiple(operations), Some(wanted)) => operations
-                .iter()
-                .find(|(name, _)| name.as_str() == wanted)
-                .map_or(Self::NONE, named),
-            (DocumentOperations::Multiple(operations), None) if operations.len() == 1 => {
-                operations.iter().next().map_or(Self::NONE, named)
+        let wanted = request.operation_name.take();
+        let selected = match request.parsed_query() {
+            Ok(document) => {
+                selected_operation(document, wanted.as_deref()).map(|(name, operation)| Self {
+                    ty: Some(operation.node.ty),
+                    name: name.map(ToString::to_string),
+                })
             }
-            _ => Self::NONE,
-        }
+            Err(_) => None,
+        };
+        request.operation_name = wanted;
+        selected.unwrap_or(Self::NONE)
     }
 
     /// A mutation commits its work; anything else — a query, a document that

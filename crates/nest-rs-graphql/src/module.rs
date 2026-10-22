@@ -11,7 +11,9 @@ use nest_rs_http::{DetachedWork, HttpEndpointMeta, Method};
 use crate::config::GraphqlConfig;
 use crate::context::{ENDPOINT, OperationBridge};
 use crate::endpoint::GetEndpoint;
+use crate::null_propagation::NullPropagated;
 use crate::operation_units::OperationUnits;
+use crate::redact::Redacted;
 use crate::resolver::{build_schema, check_operations, compose_sites};
 use crate::subscription::SubscriptionEndpoint;
 use crate::view::GraphqlView;
@@ -102,7 +104,9 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             }
             let bridge = Arc::new(OperationBridge::new(container.clone()));
             let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
-            let units = OperationUnits::new(crate::redact::Redacted(schema), binding.clone());
+            let sdl = schema.sdl();
+            let units =
+                OperationUnits::new(NullPropagated::new(Redacted(schema), &sdl), binding.clone());
             let post = crate::context::ContextEndpoint::new(
                 units.clone(),
                 Arc::clone(&bridge),

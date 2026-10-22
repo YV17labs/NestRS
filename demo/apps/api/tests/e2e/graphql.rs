@@ -514,7 +514,55 @@ async fn a_publish_the_database_refuses_answers_in_band_and_leaves_the_post_a_dr
 }
 
 #[tokio::test]
-async fn a_document_whose_field_is_refused_still_commits_its_other_fields() {
+async fn a_field_that_errs_answers_null_beside_the_fields_that_answered() {
+    let (_db, app) = boot().await;
+    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org = create_org(&app, &bootstrap, "GqlNull").await;
+    let admin = format!("Bearer {}", token_for(&org, "admin").await);
+    let first = create_user(&app, &admin, "Gql First", "gqlfirst@null.test").await;
+    let second = create_user(&app, &admin, "Gql Second", "gqlsecond@null.test").await;
+
+    let reply = graphql(
+        &app,
+        &admin,
+        &format!(
+            r#"mutation {{ first: updateUser(id: "{first}", input: {{ name: "Gql First", email: "gqlsecond@null.test" }}) {{ id }} second: updateUser(id: "{second}", input: {{ name: "Gql Renamed", email: "gqlsecond@null.test" }}) {{ name }} }}"#
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        reply["data"],
+        json!({ "first": null, "second": { "name": "Gql Renamed" } }),
+        "{reply}"
+    );
+    assert_eq!(reply["errors"][0]["path"], json!(["first"]), "{reply}");
+    assert_eq!(
+        reply["errors"][0]["extensions"]["code"], "CONFLICT",
+        "{reply}"
+    );
+    let read = graphql(
+        &app,
+        &admin,
+        &format!(
+            r#"{{ first: user(id: "{first}") {{ email }} second: user(id: "{second}") {{ name }} bad: user(id: "not-a-uuid") {{ id }} }}"#
+        ),
+    )
+    .await;
+    assert_eq!(
+        read["data"],
+        json!({
+            "first": { "email": "gqlfirst@null.test" },
+            "second": { "name": "Gql Renamed" },
+            "bad": null,
+        }),
+        "{read}"
+    );
+    assert_eq!(read["errors"][0]["path"], json!(["bad"]), "{read}");
+}
+
+#[tokio::test]
+async fn a_non_null_field_that_errs_nulls_the_data_and_the_fields_that_answered_still_commit() {
     let (_db, app) = boot().await;
     let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
 
@@ -525,21 +573,14 @@ async fn a_document_whose_field_is_refused_still_commits_its_other_fields() {
     )
     .await;
 
+    assert_eq!(reply["data"], serde_json::Value::Null, "{reply}");
     assert_eq!(reply["errors"][0]["path"], json!(["refused"]), "{reply}");
-    let kept = reply["data"]["kept"]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("the kept field answered: {reply}"))
-        .to_owned();
-    let member = format!("Bearer {}", token_for(&kept, "admin").await);
-    let got = app
-        .http()
-        .get(format!("/orgs/{kept}"))
-        .header(header::AUTHORIZATION, &member)
-        .send()
-        .await;
-    got.assert_status_is_ok();
-    assert_eq!(
-        got.json().await.value().object().get("name").string(),
-        "GqlKept"
-    );
+    let orgs = graphql(&app, &admin, "{ orgs { name } }").await;
+    let names: Vec<&str> = orgs["data"]["orgs"]
+        .as_array()
+        .unwrap_or_else(|| panic!("orgs is a list: {orgs}"))
+        .iter()
+        .filter_map(|org| org["name"].as_str())
+        .collect();
+    assert!(names.contains(&"GqlKept"), "{orgs}");
 }

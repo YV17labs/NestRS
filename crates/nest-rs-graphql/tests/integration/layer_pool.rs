@@ -308,7 +308,7 @@ mod pipeline {
         #[mutation]
         #[public]
         #[use_exception_filters(LedgerConflict)]
-        async fn write(&self) -> Result<bool, LedgerRefused> {
+        async fn write(&self) -> Result<Option<bool>, LedgerRefused> {
             Err(LedgerRefused)
         }
 
@@ -326,10 +326,10 @@ mod pipeline {
 
         #[field_resolver]
         #[use_exception_filters(LedgerConflict)]
-        async fn balance(&self, parent: &Shelf) -> Result<i32, LedgerRefused> {
+        async fn balance(&self, parent: &Shelf) -> Result<Option<i32>, LedgerRefused> {
             match parent.id {
                 2 => Err(LedgerRefused),
-                id => Ok(id),
+                id => Ok(Some(id)),
             }
         }
     }
@@ -417,8 +417,11 @@ mod pipeline {
 
         let body = post(&app, "mutation { write touch }").await;
 
-        assert_eq!(body["data"]["touch"], true, "the sibling resolved: {body}");
-        assert!(body["data"]["write"].is_null(), "{body}");
+        assert_eq!(
+            body["data"],
+            serde_json::json!({ "write": null, "touch": true }),
+            "the sibling resolved: {body}"
+        );
         let error = &body["errors"][0];
         assert_eq!(error["message"], "the ledger is busy", "{body}");
         assert_eq!(error["extensions"]["code"], "CONFLICT", "{body}");
@@ -439,7 +442,11 @@ mod pipeline {
         let body = post(&app, "{ shelves { id balance } }").await;
 
         assert_eq!(body["data"]["shelves"][0]["balance"], 1, "{body}");
-        assert!(body["data"]["shelves"][1]["balance"].is_null(), "{body}");
+        assert_eq!(
+            body["data"]["shelves"][1],
+            serde_json::json!({ "id": 2, "balance": null }),
+            "{body}"
+        );
         let error = &body["errors"][0];
         assert_eq!(error["extensions"]["code"], "CONFLICT", "{body}");
         assert_eq!(

@@ -76,7 +76,7 @@ impl NoteResolver {
     /// A `Result` under another name (`async_graphql::Result as GqlResult`).
     #[query]
     #[public]
-    async fn refused_by_alias(&self) -> GqlResult<String> {
+    async fn refused_by_alias(&self) -> GqlResult<Option<String>> {
         Err(async_graphql::Error::new("no"))
     }
 
@@ -88,7 +88,7 @@ impl NoteResolver {
 
     #[query]
     #[public]
-    async fn look_up(&self) -> Result<i32, LookupError> {
+    async fn look_up(&self) -> Result<Option<i32>, LookupError> {
         Err(LookupError)
     }
 

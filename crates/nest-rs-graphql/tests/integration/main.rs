@@ -17,6 +17,7 @@ mod layer_pool;
 mod limits;
 mod loader;
 mod module;
+mod null_propagation;
 mod operation;
 mod operation_units;
 mod pipe;

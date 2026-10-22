@@ -10,6 +10,9 @@
 //! pins the exact version, held by a compile-time canary in `resolver.rs` and the
 //! `tests/integration/sdl_snapshot.rs` snapshot. To bump it: raise the pin, fix
 //! the canary until the crate compiles, then review the SDL snapshot diff.
+//! `src/null_propagation.rs` reads three of its behaviours — a failed field's
+//! key left out, the first of a field's selections to finish kept, a request's
+//! cached parse executed — each held by its tests.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -24,6 +27,7 @@ mod error;
 mod federation;
 mod loader;
 mod module;
+mod null_propagation;
 mod opaque;
 mod operation;
 mod operation_units;

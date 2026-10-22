@@ -1197,7 +1197,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.",
+              "description": "The cursor a prior page's `next` link carries, passed back as given;\nabsent or empty for the first page, refused when no page issued it.",
               "type": [
                 "string",
                 "null"
@@ -1240,6 +1240,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -1387,7 +1397,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.",
+              "description": "The cursor a prior page's `next` link carries, passed back as given;\nabsent or empty for the first page, refused when no page issued it.",
               "type": [
                 "string",
                 "null"
@@ -1430,6 +1440,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -1900,7 +1920,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.",
+              "description": "The cursor a prior page's `next` link carries, passed back as given;\nabsent or empty for the first page, refused when no page issued it.",
               "type": [
                 "string",
                 "null"
@@ -1943,6 +1963,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -2008,7 +2038,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2016,7 +2046,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "Created — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
           },
           "400": {
             "content": {
@@ -2482,7 +2512,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.",
+              "description": "The cursor a prior page's `next` link carries, passed back as given;\nabsent or empty for the first page, refused when no page issued it.",
               "type": [
                 "string",
                 "null"
@@ -2525,6 +2555,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -2590,7 +2630,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2598,7 +2638,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "Created — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
           },
           "400": {
             "content": {

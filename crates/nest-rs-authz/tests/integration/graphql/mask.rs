@@ -473,7 +473,8 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
     let schema = nest_rs_graphql::__private::compose_schema(
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
-    );
+    )
+    .expect("the app's boot sealed its reachability set");
     let feed = app
         .container()
         .get::<WidgetFeed>()
@@ -619,7 +620,8 @@ async fn first_post_pushed(ability: AbilityBuilder, posts: &[(i32, i32)]) -> ser
     let schema = nest_rs_graphql::__private::compose_schema(
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
-    );
+    )
+    .expect("the app's boot sealed its reachability set");
     let feed = app
         .container()
         .get::<PostFeed>()
@@ -658,7 +660,8 @@ async fn posts_read(ability: AbilityBuilder, query: &str) -> serde_json::Value {
     let schema = nest_rs_graphql::__private::compose_schema(
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
-    );
+    )
+    .expect("the app's boot sealed its reachability set");
     let ability = Arc::new(ability.build().expect("valid test ability"));
     // Ambient, as the request's ability guard leaves it.
     let response =
@@ -767,7 +770,8 @@ async fn a_caller_with_no_grant_is_refused_at_subscribe() {
     let schema = nest_rs_graphql::__private::compose_schema(
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
-    );
+    )
+    .expect("the app's boot sealed its reachability set");
     let responses: Vec<_> = nest_rs_authz::with_ability(
         ability_for(""),
         schema.execute_stream(subscribe(), None).collect(),

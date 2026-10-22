@@ -22,6 +22,7 @@ use futures_util::future::Either;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, Stream, StreamExt};
 
+use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
 use nest_rs_http::__private::websocket::{
     self, CloseCode, HandshakeRefused, Message, WebSocketLimits, WebSocketStream, WebSocketUpgrade,
@@ -35,19 +36,22 @@ use nest_rs_http::__private::with_view;
 use nest_rs_pipes::{GlobalPipe, PipeError};
 
 /// The composed schema as a bare [`Executor`], as the mount serves it — each
-/// operation run as its own unit: a graphql-ws driver
-/// ([`async_graphql::http::WebSocket`]) takes an executor, not a URL, so a
-/// test subscriber needs this.
-pub fn compose_schema(container: Container, config: &GraphqlConfig) -> impl Executor + 'static {
+/// operation run as its own unit — or a refusal of a container no app sealed:
+/// a graphql-ws driver ([`async_graphql::http::WebSocket`]) takes an executor,
+/// not a URL, so a test subscriber needs this.
+pub fn compose_schema(
+    container: Container,
+    config: &GraphqlConfig,
+) -> anyhow::Result<impl Executor + 'static> {
     let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
     let scopes = nest_rs_core::__private::RequestScopes::new(container.clone());
-    let schema = crate::resolver::build_schema(container, config, &DetachedWork::new());
+    let schema = crate::resolver::build_schema(container, config, &DetachedWork::new())?;
     let sdl = schema.sdl();
-    crate::operation_units::OperationUnits::new(
+    Ok(crate::operation_units::OperationUnits::new(
         crate::null_propagation::NullPropagated::new(crate::redact::Redacted(schema), &sdl),
         binding,
         scopes,
-    )
+    ))
 }
 
 /// Keep or drop one masked subscription item, called per item by the

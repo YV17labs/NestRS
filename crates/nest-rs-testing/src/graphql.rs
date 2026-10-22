@@ -119,7 +119,8 @@ impl GraphqlSocketBuilder {
             .map(|config| (*config).clone())
             .unwrap_or_default();
         let (data, carried) = upgraded(&self.container, self.attached, self.data);
-        let executor = nest_rs_graphql::__private::compose_schema(self.container, &config);
+        let executor = nest_rs_graphql::__private::compose_schema(self.container, &config)
+            .expect("a test app's boot sealed its reachability set");
         let (to_server, rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let client = tokio_stream_from(rx);
         let from_server = async_graphql::http::WebSocket::new(
@@ -148,7 +149,8 @@ fn upgraded(
     // The seeds are synchronous, so the install completes on its first poll.
     install_pending(attached, async {
         (
-            nest_rs_graphql::__private::connection_data(container, &upgrade, data),
+            nest_rs_graphql::__private::connection_data(container, &upgrade, data)
+                .expect("a test app's boot sealed its reachability set"),
             RequestContinuation::capture(Continuation::Connection),
         )
     })

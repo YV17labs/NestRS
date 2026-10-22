@@ -1,4 +1,5 @@
-//! `#[subscription]`: the third discovered root, the graphql-ws mount, and the
+//! `#[subscription]`: the third discovered root, the graphql-ws mount, the
+//! schema composed for a graphql-ws driver of a test's own, and the
 //! socket-lifetime ceiling that bounds it.
 //!
 //! Posture *per item* is tested in `nest-rs-authz`'s
@@ -275,6 +276,24 @@ fn a_withheld_item_is_reported_with_the_operation_that_withheld_it() {
             .all(|event| event.field("operation").as_deref() == Some("subscription ticks")),
         "each names the operation that withheld the item",
     );
+}
+
+#[test]
+fn a_schema_composed_over_a_container_no_app_sealed_is_refused_naming_its_reader() {
+    let by_hand = nest_rs_core::Container::builder()
+        .build()
+        .expect("the container builds");
+
+    let Err(refused) =
+        nest_rs_graphql::__private::compose_schema(by_hand, &GraphqlConfig::default())
+    else {
+        panic!("the schema would serve every resolver linked into the binary");
+    };
+
+    let ungated = refused
+        .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+        .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+    assert_eq!(ungated.reader, "GraphQL resolver");
 }
 
 #[tokio::test]

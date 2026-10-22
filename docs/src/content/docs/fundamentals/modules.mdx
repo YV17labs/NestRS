@@ -221,7 +221,11 @@ never lists a transport it does not serve.
 
 Each import contributes its providers. HTTP mounts only what the import
 tree reaches. Linking a crate without importing its module keeps its
-providers **inert** — compiled in, not activated.
+providers **inert** — compiled in, not activated. The boot seals what the
+tree reaches into the container; a container built by hand with
+`Container::builder()` carries no such set, so a transport asked to discover
+from it refuses with `UngatedDiscoveryError`, naming what it discovers, rather
+than activating everything linked.
 
 That is the usual shape of a root module: compose features and
 framework modules; let adapters own the handlers.

@@ -469,7 +469,7 @@ async fn the_app_wide_pool_runs_once_per_root_field_not_per_parent() {
 mod unresolvable {
     use std::any::TypeId;
 
-    use nest_rs_core::{Container, Layer, ReachableProviders, injectable, module};
+    use nest_rs_core::{Container, Layer, injectable, module};
     use nest_rs_graphql::GraphqlConfig;
     use nest_rs_graphql::async_graphql::{Executor, Request, Result};
     use nest_rs_graphql::{async_trait, operations, resolver};
@@ -515,15 +515,14 @@ mod unresolvable {
         // Built by hand, so the access graph does not refuse first.
         let container = Container::builder()
             .import::<OrphanModule>()
-            .provide(ReachableProviders(
-                [TypeId::of::<OrphanGuardedResolver>()]
-                    .into_iter()
-                    .collect(),
-            ))
+            .provide(nest_rs_core::__private::reachable_providers([
+                TypeId::of::<OrphanGuardedResolver>(),
+            ]))
             .build()
             .expect("the container builds");
         let schema =
-            nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default());
+            nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default())
+                .expect("the seeded set gates the schema");
         let logs = LogCapture::install();
 
         let response = schema.execute(Request::new("{ orphanSecret }")).await;

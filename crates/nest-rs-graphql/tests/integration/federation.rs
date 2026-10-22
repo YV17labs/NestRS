@@ -1376,7 +1376,7 @@ mod keyed_outside_a_subgraph {
     use std::any::TypeId;
 
     use async_graphql::{Executor, Object, Request};
-    use nest_rs_core::{Container, ReachableProviders, module};
+    use nest_rs_core::{Container, module};
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
     use nest_rs_guards::{GuardSpecs, guard};
     use nest_rs_testing::TestApp;
@@ -1440,14 +1440,15 @@ mod keyed_outside_a_subgraph {
     async fn a_pool_refuses_the_sdl_of_a_schema_keyed_outside_a_subgraph() {
         let container = Container::builder()
             .import::<CatalogProviders>()
-            .provide(ReachableProviders(
-                [TypeId::of::<CatalogResolver>()].into_iter().collect(),
-            ))
+            .provide(nest_rs_core::__private::reachable_providers([
+                TypeId::of::<CatalogResolver>(),
+            ]))
             .provide(GuardSpecs(vec![guard::<Closed>()]))
             .build()
             .expect("the container builds");
         let schema =
-            nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default());
+            nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default())
+                .expect("the seeded set gates the schema");
 
         let sdl = schema.execute(Request::new("{ _service { sdl } }")).await;
 

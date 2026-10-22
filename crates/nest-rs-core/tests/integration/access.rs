@@ -444,7 +444,7 @@ fn a_provider_bound_as_dyn_is_reachable_under_its_own_type() {
         .get::<ReachableProviders>()
         .expect("the boot seeds the reachable set");
     assert!(
-        ReachableProviders::reaches(Some(&reachable), TypeId::of::<BoundLedger>()),
+        reachable.reaches(TypeId::of::<BoundLedger>()),
         "a listener, processor, tick or indicator on the host is gated by its own type"
     );
 }

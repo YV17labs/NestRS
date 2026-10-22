@@ -348,9 +348,9 @@ impl Transport for Scheduler {
             .iter()
             .map(|d| Scheduler::resolve(&d.meta, &ATTACHED_SITE))
             .collect::<Result<Vec<_>>>()?;
-        let reachable = container.get::<ReachableProviders>();
+        let reachable = ReachableProviders::of(container, "scheduled method")?;
         for entry in inventory::iter::<ScheduledMethod>() {
-            if !ReachableProviders::reaches(reachable.as_deref(), (entry.provider_type_id)()) {
+            if !reachable.reaches((entry.provider_type_id)()) {
                 ::nest_rs_core::report_inert_host!(
                     target: crate::TARGET,
                     what: "scheduled method",
@@ -1553,6 +1553,20 @@ impl Tail for TickTail<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_scheduler_over_a_container_no_app_sealed_is_refused_naming_its_reader() {
+        let by_hand = Container::builder().build().expect("the container builds");
+
+        let Err(refused) = Scheduler::new().configure(&by_hand).await else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        let ungated = refused
+            .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+            .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+        assert_eq!(ungated.reader, "scheduled method");
+    }
 
     /// A tick blocking its thread never yields to be dropped, so it is left after
     /// the settle bound.

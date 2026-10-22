@@ -167,8 +167,8 @@ pub use error::{
     FactoryCycleError, FactoryFailedError, InitFailedError, LateFactoryError,
     LateOptionalDependencyError, MissingDependencyError, OverriddenDependencyError,
     ProviderCycleError, ScopeViolationError, ScopedLayerError, UnboundedTransportError,
-    UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError,
-    UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
+    UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError, UngatedDiscoveryError,
+    UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};
@@ -207,7 +207,9 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::access::__private::{HostLayers, ModuleDescriptor, ProviderDescriptor};
+    pub use crate::access::__private::{
+        HostLayers, ModuleDescriptor, ProviderDescriptor, reachable_providers,
+    };
     pub use crate::ambient::{
         Pending, UnmaskedReply, carries_ambient, install_pending, with_ambient_from,
     };

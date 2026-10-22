@@ -123,7 +123,7 @@ impl Transport for QueueWorker {
         if let Some(config) = container.get::<QueueConfig>() {
             self.config = (*config).clone();
         }
-        let reachable = consume::reachable(container);
+        let reachable = consume::reachable(container)?;
         let Some(consumer) = container.get::<BoundConsumer>() else {
             if let Some(method) = reachable.first() {
                 anyhow::bail!(

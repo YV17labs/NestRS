@@ -15,7 +15,7 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::{
     Container, Correlation, Failure, Outcome, Problem, ReachableProviders, RequestScope,
-    UnitContext, panic_message, with_request_scope,
+    UngatedDiscoveryError, UnitContext, panic_message, with_request_scope,
 };
 use nest_rs_database::__private::run_unit_bounded;
 use nest_rs_database::{ExecutorScope, UnitOfWork, UnitSpec};
@@ -72,25 +72,30 @@ pub(crate) fn unsupported_by<'a>(
 /// provider is reachable from the running app's root, with a boot `warn` for
 /// each that is linked but unreachable.
 ///
-/// The boot fails — naming every offender at once — when a reachable method
-/// drains a queue whose name breaks the rule, declares something `backend`
-/// cannot honour, or claims a queue another method already drains. Checked after
-/// module-gating, so a method another app owns cannot fail this app's boot.
+/// A container no app sealed is refused ([`UngatedDiscoveryError`]): discovery
+/// never runs ungated. The boot fails — naming every offender at once — when a
+/// reachable method drains a queue whose name breaks the rule, declares
+/// something `backend` cannot honour, or claims a queue another method already
+/// drains. Checked after module-gating, so a method another app owns cannot
+/// fail this app's boot.
 pub fn discover(
     container: &Container,
     backend: &QueueBackend,
 ) -> anyhow::Result<Vec<&'static ProcessMethod>> {
-    let checked = check(reachable(container), backend)?;
+    let checked = check(reachable(container)?, backend)?;
     Ok(checked.into_iter().map(|(method, _)| method).collect())
 }
 
 /// The `#[process]` methods whose provider is reachable from the running app's
-/// root, with a boot `warn` for each that is linked but unreachable.
-pub(crate) fn reachable(container: &Container) -> Vec<&'static ProcessMethod> {
-    let reachable = container.get::<ReachableProviders>();
+/// root, with a boot `warn` for each that is linked but unreachable, or a
+/// refusal of a container no app sealed.
+pub(crate) fn reachable(
+    container: &Container,
+) -> Result<Vec<&'static ProcessMethod>, UngatedDiscoveryError> {
+    let reachable = ReachableProviders::of(container, "#[process] method")?;
     let mut methods: Vec<&'static ProcessMethod> = Vec::new();
     for entry in nest_rs_core::inventory::iter::<ProcessMethod>() {
-        if !ReachableProviders::reaches(reachable.as_deref(), entry.provider_type_id()) {
+        if !reachable.reaches(entry.provider_type_id()) {
             ::nest_rs_core::report_inert_host!(
                 target: TARGET,
                 what: "#[process] method",
@@ -104,7 +109,7 @@ pub(crate) fn reachable(container: &Container) -> Vec<&'static ProcessMethod> {
         }
         methods.push(entry);
     }
-    methods
+    Ok(methods)
 }
 
 /// `methods`, once each is one `backend` can serve, with the queue each drains:
@@ -1130,6 +1135,38 @@ mod tests {
 
     async fn run_payload(handler: JobHandler, last: bool) -> AttemptOutcome {
         run_handler(handler, 1, last).await
+    }
+
+    fn linked(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        Box::pin(async { Ok(()) })
+    }
+
+    // A `#[process]` method linked into this binary, as its decorator submits it.
+    nest_rs_core::inventory::submit! {
+        process_method(
+            module_path!(),
+            "AudioProcessor::linked",
+            "audio",
+            ProcessOptions::DEFAULT,
+            TypeId::of::<AudioProcessor>,
+            &SITE,
+            linked,
+        )
+    }
+
+    #[test]
+    fn discovery_over_a_container_no_app_sealed_is_refused_naming_its_reader() {
+        static BACKEND: QueueBackend = QueueBackend::new("memory", crate::Capabilities::NONE);
+        let by_hand = Container::builder().build().expect("the container builds");
+
+        let Err(refused) = discover(&by_hand, &BACKEND) else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        let ungated = refused
+            .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+            .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+        assert_eq!(ungated.reader, "#[process] method");
     }
 
     #[tokio::test]

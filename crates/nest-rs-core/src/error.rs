@@ -94,6 +94,19 @@ pub struct ScopedLayerError {
     pub layer: &'static str,
 }
 
+/// A link-time registry was read from a container no app sealed: one built by
+/// hand carries no reachability set, and discovery never runs ungated.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "{reader}s are discovered from a container that carries no reachability set; build it \
+     through App::new or App::builder, whose boot seals the set its modules reach"
+)]
+pub struct UngatedDiscoveryError {
+    /// What the reader discovers, as its inert-host report names it.
+    pub reader: &'static str,
+}
+
 /// The failure modes of the access-graph pass: a cross-module reach that no
 /// import covers, or a dependency no module provides.
 ///

@@ -11,11 +11,13 @@
 use std::any::TypeId;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::sync::Arc;
 
+use crate::Container;
 use crate::container::ProviderScope;
 use crate::error::{
     AccessError, AccessGraphError, MissingDependencyError, ProviderCycleError, ScopeViolationError,
-    ScopedLayerError, UnbuiltCause,
+    ScopedLayerError, UnbuiltCause, UngatedDiscoveryError,
 };
 
 pub(crate) use self::__private::{HostLayers, ModuleDescriptor, ProviderDescriptor};
@@ -27,6 +29,14 @@ pub(crate) const UNNAMED_DEPENDENCY: &str = "<unnamed dependency>";
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
+
+    use super::ReachableProviders;
+
+    /// The reachability set of exactly `types`, for a test that builds its
+    /// container by hand and seeds the set it means.
+    pub fn reachable_providers(types: impl IntoIterator<Item = TypeId>) -> ReachableProviders {
+        ReachableProviders(types.into_iter().collect())
+    }
 
     /// One provider declared in a module's `providers = [...]`, recorded by the
     /// `#[module]` macro for the access-graph check.
@@ -108,17 +118,42 @@ pub(crate) fn bound_layers() -> BoundLayers {
     by_host
 }
 
-/// Provider keys reachable from the app's module tree — every provider of a
-/// reachable module plus the global infrastructure keys — seeded into the
-/// container so transports can module-gate their inventory.
-pub struct ReachableProviders(pub std::collections::HashSet<TypeId>);
+/// Provider keys reachable from the running app's module tree — every provider
+/// of a reachable module plus the global infrastructure keys — which the boot
+/// seals into the container, so every discovery reader gates its inventory.
+pub struct ReachableProviders(HashSet<TypeId>);
 
 impl ReachableProviders {
-    /// Whether `provider` is reachable — the gate every inventory-draining edge
-    /// reads before it mounts an entry. No set means the access graph never ran
-    /// (a hand-built container in a test), so everything is in scope.
-    pub fn reaches(set: Option<&Self>, provider: TypeId) -> bool {
-        set.is_none_or(|r| r.0.contains(&provider))
+    /// The set of `keys`, as the boot seals it.
+    pub(crate) fn new(keys: HashSet<TypeId>) -> Self {
+        Self(keys)
+    }
+
+    /// The set the running app's boot sealed into `container`, or a refusal
+    /// naming `reader` — what the caller discovers, as its inert-host report
+    /// names it: discovery never runs ungated.
+    ///
+    /// ```
+    /// use nest_rs_core::{Container, ReachableProviders};
+    ///
+    /// let by_hand = Container::builder().build()?;
+    /// let refused = ReachableProviders::of(&by_hand, "#[process] method").err();
+    /// assert_eq!(refused.map(|refused| refused.reader), Some("#[process] method"));
+    /// # Ok::<(), nest_rs_core::ContainerError>(())
+    /// ```
+    pub fn of(
+        container: &Container,
+        reader: &'static str,
+    ) -> Result<Arc<Self>, UngatedDiscoveryError> {
+        container
+            .get::<Self>()
+            .ok_or(UngatedDiscoveryError { reader })
+    }
+
+    /// Whether `provider` belongs to a module the app imports, or is global
+    /// infrastructure — the gate a reader applies before it mounts an entry.
+    pub fn reaches(&self, provider: TypeId) -> bool {
+        self.0.contains(&provider)
     }
 }
 

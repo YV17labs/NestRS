@@ -26,7 +26,7 @@ mod worker;
 use std::any::TypeId;
 use std::sync::Mutex;
 
-use nest_rs_core::{Container, ReachableProviders};
+use nest_rs_core::Container;
 use nest_rs_queue::{Capabilities, Capability, ProcessMethod, QueueBackend, processor, queue};
 use serde::{Deserialize, Serialize};
 
@@ -103,7 +103,9 @@ fn method(name: &str) -> &'static ProcessMethod {
 /// into this binary.
 fn reaching(providers: &[TypeId]) -> Container {
     Container::builder()
-        .provide(ReachableProviders(providers.iter().copied().collect()))
+        .provide(nest_rs_core::__private::reachable_providers(
+            providers.iter().copied(),
+        ))
         .build()
         .expect("the container builds")
 }

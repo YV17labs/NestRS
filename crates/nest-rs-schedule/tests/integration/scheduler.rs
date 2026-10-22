@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::JOB_TIMEOUT;
-use nest_rs_core::{Container, DuplicateMetaError, ReachableProviders, Transport, injectable};
+use nest_rs_core::{Container, DuplicateMetaError, Transport, injectable};
 use nest_rs_schedule::nest_rs_database::{
     self, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
 };
@@ -3104,9 +3104,9 @@ impl TaggedTwiceTasks {
 async fn two_values_of_one_hidden_type_on_a_scheduled_host_fail_the_configure_naming_it_and_the_host()
  {
     let container = Container::builder()
-        .provide(ReachableProviders(
-            [TypeId::of::<TaggedTwiceTasks>()].into_iter().collect(),
-        ))
+        .provide(nest_rs_core::__private::reachable_providers([
+            TypeId::of::<TaggedTwiceTasks>(),
+        ]))
         .provide(TaggedTwiceTasks)
         .build()
         .expect("the container builds");

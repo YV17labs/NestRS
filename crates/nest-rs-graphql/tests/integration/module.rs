@@ -1,4 +1,5 @@
-//! Covers `src/module.rs` — a setup imported twice mounts `/graphql` once.
+//! Covers `src/module.rs` — a setup imported twice mounts `/graphql` once,
+//! and a container no app sealed mounts no schema.
 
 use nest_rs_core::{Discovery, module};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -62,4 +63,30 @@ async fn two_imports_mount_the_endpoint_once() {
 #[tokio::test]
 async fn a_bare_import_beside_the_configured_one_mounts_the_endpoint_once() {
     mounts_once::<BareBesideTheConfiguredApp>().await;
+}
+
+/// A mount has no `Result`: the schema's discovery files its refusal on the
+/// container, and the boot fails on it once its transports are configured.
+#[tokio::test]
+async fn the_schema_mounted_over_a_container_no_app_sealed_is_refused_naming_its_reader() {
+    // Built by hand, so no wiring step refuses first.
+    let container = nest_rs_core::Container::builder()
+        .provide(nest_rs_graphql::GraphqlConfig::default())
+        .import::<BarePingModule>()
+        .build()
+        .expect("the container builds");
+    let mut transport =
+        nest_rs_http::HttpTransport::from_config(&nest_rs_http::HttpConfig::default())
+            .expect("the defaults are in range");
+    nest_rs_core::Transport::configure(&mut transport, &container)
+        .await
+        .expect("the mount files its refusal rather than returning it");
+
+    let Some(refused) = nest_rs_core::__private::take_site_refusal(&container) else {
+        panic!("the schema would serve every resolver linked into the binary");
+    };
+    let ungated = refused
+        .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+        .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+    assert_eq!(ungated.reader, "GraphQL resolver");
 }

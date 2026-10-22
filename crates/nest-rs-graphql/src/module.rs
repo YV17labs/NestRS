@@ -3,11 +3,13 @@
 use std::sync::Arc;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::__private::RequestScopes;
+use nest_rs_core::__private::{RequestScopes, refuse_site};
 use nest_rs_core::anyhow;
-use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
+use nest_rs_core::{
+    Collecting, Container, ContainerBuilder, Module, ReachableProviders, Registering,
+};
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
-use nest_rs_http::{DetachedWork, HttpEndpointMeta, Method};
+use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpRoutes, Method};
 
 use crate::config::GraphqlConfig;
 use crate::context::{ENDPOINT, OperationBridge};
@@ -15,7 +17,7 @@ use crate::endpoint::GetEndpoint;
 use crate::null_propagation::NullPropagated;
 use crate::operation_units::OperationUnits;
 use crate::redact::Redacted;
-use crate::resolver::{build_schema, check_operations, compose_sites};
+use crate::resolver::{RESOLVERS, build_schema, check_operations, compose_sites};
 use crate::subscription::SubscriptionEndpoint;
 use crate::view::GraphqlView;
 
@@ -84,54 +86,11 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
     let mounted = carried.clone();
     builder.provide_meta(checks_origin(
         HttpEndpointMeta::new(&ENDPOINT, log_path, "graphql", move |container, routes| {
-            let schema = build_schema(container.clone(), &options, &mounted);
-            if options.emit_sdl {
-                let dest = &options.schema_path;
-                let sdl = crate::resolver::render_sdl(&schema, &options);
-                match std::fs::write(dest, &sdl) {
-                    Ok(()) => tracing::info!(
-                        target: crate::TARGET,
-                        path = %dest.display(),
-                        bytes = sdl.len(),
-                        "wrote GraphQL SDL"
-                    ),
-                    Err(err) => tracing::warn!(
-                        target: crate::TARGET,
-                        path = %dest.display(),
-                        error = %nest_rs_core::error_message(&err),
-                        "failed to write GraphQL SDL"
-                    ),
-                }
+            // A mount has no `Result`: a refusal fails the boot once the
+            // transports are configured, and nothing is mounted meanwhile.
+            if let Err(refused) = mount(container, routes, &options, &mounted) {
+                refuse_site(container, refused);
             }
-            let bridge = Arc::new(OperationBridge::new(container.clone()));
-            let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
-            let sdl = schema.sdl();
-            let units = OperationUnits::new(
-                NullPropagated::new(Redacted(schema), &sdl),
-                binding.clone(),
-                RequestScopes::new(container.clone()),
-            );
-            let post = crate::context::ContextEndpoint::new(
-                units.clone(),
-                Arc::clone(&bridge),
-                options.max_batch_size,
-            );
-            let get = GetEndpoint::new(
-                SubscriptionEndpoint::new(units, bridge, &options, mounted.clone(), binding),
-                options.playground.then(|| {
-                    async_graphql::http::playground_source(
-                        async_graphql::http::GraphQLPlaygroundConfig::new(options.path.as_str())
-                            .subscription_endpoint(options.path.as_str()),
-                    )
-                }),
-            );
-            // The transport runs the request's guards in front of both methods:
-            // the endpoint's `InBand` posture lets `AuthnGuard` admit an anonymous
-            // request to the operations' own gates while a presented bearer is
-            // still verified.
-            routes
-                .route(Method::POST, options.path.as_str(), post)
-                .route(Method::GET, options.path.as_str(), get);
         })
         .carries::<GraphqlView>()
         .runs_detached(carried),
@@ -140,19 +99,78 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
     ))
 }
 
+/// Mount `POST` and `GET` on the configured path, over the schema of what the
+/// app `container` holds reaches — refused for a container no app sealed.
+fn mount(
+    container: &Container,
+    routes: &mut HttpRoutes,
+    options: &GraphqlConfig,
+    mounted: &DetachedWork,
+) -> anyhow::Result<()> {
+    let schema = build_schema(container.clone(), options, mounted)?;
+    let bridge = Arc::new(OperationBridge::new(container.clone())?);
+    if options.emit_sdl {
+        let dest = &options.schema_path;
+        let sdl = crate::resolver::render_sdl(&schema, options);
+        match std::fs::write(dest, &sdl) {
+            Ok(()) => tracing::info!(
+                target: crate::TARGET,
+                path = %dest.display(),
+                bytes = sdl.len(),
+                "wrote GraphQL SDL"
+            ),
+            Err(err) => tracing::warn!(
+                target: crate::TARGET,
+                path = %dest.display(),
+                error = %nest_rs_core::error_message(&err),
+                "failed to write GraphQL SDL"
+            ),
+        }
+    }
+    let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
+    let sdl = schema.sdl();
+    let units = OperationUnits::new(
+        NullPropagated::new(Redacted(schema), &sdl),
+        binding.clone(),
+        RequestScopes::new(container.clone()),
+    );
+    let post = crate::context::ContextEndpoint::new(
+        units.clone(),
+        Arc::clone(&bridge),
+        options.max_batch_size,
+    );
+    let get = GetEndpoint::new(
+        SubscriptionEndpoint::new(units, bridge, options, mounted.clone(), binding),
+        options.playground.then(|| {
+            async_graphql::http::playground_source(
+                async_graphql::http::GraphQLPlaygroundConfig::new(options.path.as_str())
+                    .subscription_endpoint(options.path.as_str()),
+            )
+        }),
+    );
+    // The transport runs the request's guards in front of both methods: the
+    // endpoint's `InBand` posture lets `AuthnGuard` admit an anonymous request
+    // to the operations' own gates while a presented bearer is still verified.
+    routes
+        .route(Method::POST, options.path.as_str(), post)
+        .route(Method::GET, options.path.as_str(), get);
+    Ok(())
+}
+
 /// The schema's wiring, at the kernel's wiring step: what the resolvers the app
 /// reaches declare is checked, and every field's site composed, before any
 /// transport is built.
 fn wire_schema(container: &Container) -> anyhow::Result<()> {
+    let reachable = ReachableProviders::of(container, RESOLVERS)?;
     let config = ConfigModule::resolved::<GraphqlConfig>(container)?;
-    check_membership(container, config.strict_resolver_membership)?;
+    check_membership(&reachable, config.strict_resolver_membership)?;
     // Two contributions claiming one name fail the boot, before the mount
     // composes a schema whose SDL and dispatch would disagree.
     //
     // async-graphql serves `_service` and `_entities` as soon as a type is
     // keyed (`schema.rs`'s `enable_federation || has_entities()`), so a keyed
     // schema without `federation` is refused.
-    if let Some(resolver) = check_operations(container).map_err(anyhow::Error::msg)?
+    if let Some(resolver) = check_operations(&reachable).map_err(anyhow::Error::msg)?
         && !config.federation
     {
         let introspection = nest_rs_config::var_name("graphql", "DISABLE_INTROSPECTION");
@@ -168,14 +186,14 @@ fn wire_schema(container: &Container) -> anyhow::Result<()> {
              behind a router, or remove the key."
         );
     }
-    compose_sites(container)?;
+    compose_sites(container, &reachable)?;
     crate::federation::compose_sites(container)
 }
 
 /// A linked `#[resolver]` no reachable module lists is filtered out of the
 /// schema: a boot failure when `strict`, a `warn` each otherwise.
-fn check_membership(container: &Container, strict: bool) -> anyhow::Result<()> {
-    let unreachable = crate::resolver::unreachable_resolvers(container);
+fn check_membership(reachable: &ReachableProviders, strict: bool) -> anyhow::Result<()> {
+    let unreachable = crate::resolver::unreachable_resolvers(reachable);
     if unreachable.is_empty() {
         return Ok(());
     }
@@ -223,6 +241,23 @@ mod tests {
         fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
             builder.import::<ServesGraphql>()
         }
+    }
+
+    #[test]
+    fn the_schema_wired_over_a_container_no_app_sealed_is_refused_naming_its_reader() {
+        let by_hand = Container::builder()
+            .provide(GraphqlConfig::default())
+            .build()
+            .expect("the container builds");
+
+        let Err(refused) = wire_schema(&by_hand) else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        let ungated = refused
+            .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+            .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+        assert_eq!(ungated.reader, "GraphQL resolver");
     }
 
     #[tokio::test]

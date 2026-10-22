@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{
-    Caught, Container, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem,
-    ReachableProviders, Transport, UnitContext, async_trait, injectable,
+    Caught, Container, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, Transport,
+    UnitContext, async_trait, injectable,
 };
 use nest_rs_schedule::{Replicas, ScheduleView, Scheduler, scheduled};
 use tokio_util::sync::CancellationToken;
@@ -198,9 +198,9 @@ impl ServerFailingTasks {
 /// time.
 async fn tick<H: Send + Sync + 'static>(host: H) -> Container {
     let container = Container::builder()
-        .provide(ReachableProviders(
-            [TypeId::of::<H>()].into_iter().collect(),
-        ))
+        .provide(nest_rs_core::__private::reachable_providers([
+            TypeId::of::<H>(),
+        ]))
         .provide(host)
         .provide(Reading)
         .provide(Skipping)
@@ -334,9 +334,9 @@ async fn a_failure_a_filter_says_is_the_servers_is_said_at_error() {
 #[tokio::test]
 async fn a_layer_a_tick_binds_that_nothing_provides_fails_the_configure_naming_both() {
     let container = Container::builder()
-        .provide(ReachableProviders(
-            [TypeId::of::<ViewedTasks>()].into_iter().collect(),
-        ))
+        .provide(nest_rs_core::__private::reachable_providers([
+            TypeId::of::<ViewedTasks>(),
+        ]))
         .provide(ViewedTasks)
         .build()
         .expect("the container builds");

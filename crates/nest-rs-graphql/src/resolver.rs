@@ -7,14 +7,15 @@
 //!
 //! `create_type_info` / `is_empty` are static (no container access), so the
 //! module-gating reachable set lives in a thread-local installed by
-//! [`build_schema`] for the build's duration.
+//! [`build_schema`] for the build's duration; outside it, no resolver is a
+//! member.
 
 use nest_rs_http::DetachedWork;
 use std::any::TypeId;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -29,9 +30,12 @@ use async_graphql::{
 };
 use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
-use nest_rs_core::{Container, ReachableProviders};
+use nest_rs_core::{Container, ReachableProviders, UngatedDiscoveryError};
 
 use crate::config::GraphqlConfig;
+
+/// What the resolver registry holds, as a refusal to read it ungated names it.
+pub(crate) const RESOLVERS: &str = "GraphQL resolver";
 
 /// Which root a resolver's methods contribute to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -132,14 +136,10 @@ pub struct ResolverDescriptor {
 
 inventory::collect!(ResolverDescriptor);
 
-/// Linked `#[resolver]` structs in no module reachable from the app's root,
-/// read off [`ReachableProviders`]; without that set nothing is reported.
-pub(crate) fn unreachable_resolvers(container: &Container) -> Vec<&'static str> {
-    let Some(reachable) = container.get::<ReachableProviders>() else {
-        return Vec::new();
-    };
+/// Linked `#[resolver]` structs in no module the app reaches.
+pub(crate) fn unreachable_resolvers(reachable: &ReachableProviders) -> Vec<&'static str> {
     inventory::iter::<ResolverDescriptor>()
-        .filter(|d| !reachable.0.contains(&(d.resolver)()))
+        .filter(|d| !reachable.reaches((d.resolver)()))
         .map(|d| d.name)
         .collect()
 }
@@ -158,14 +158,12 @@ inventory::collect!(GraphqlSiteRegistration);
 /// Compose the site of every field a reachable resolver declares, so a layer
 /// no imported module provides, or two `#[meta]` values of one type at one
 /// level, refuse the boot naming the field rather than its first operation.
-/// Without [`ReachableProviders`] nothing is composed here: each site then
-/// composes on its first operation.
-pub(crate) fn compose_sites(container: &Container) -> anyhow::Result<()> {
-    let Some(reachable) = container.get::<ReachableProviders>() else {
-        return Ok(());
-    };
+pub(crate) fn compose_sites(
+    container: &Container,
+    reachable: &ReachableProviders,
+) -> anyhow::Result<()> {
     for registration in inventory::iter::<GraphqlSiteRegistration>() {
-        if !reachable.0.contains(&(registration.resolver)()) {
+        if !reachable.reaches((registration.resolver)()) {
             continue;
         }
         for site in (registration.sites)() {
@@ -200,14 +198,14 @@ pub struct GraphqlResolverRegistration {
 inventory::collect!(GraphqlResolverRegistration);
 
 thread_local! {
-    // `None` => no gating: a bare `Schema::build` includes every linked resolver.
-    static REACHABLE: RefCell<Option<Arc<HashSet<TypeId>>>> = const { RefCell::new(None) };
+    // `None` outside a build: no resolver is a member of a schema no app reaches.
+    static REACHABLE: RefCell<Option<Arc<ReachableProviders>>> = const { RefCell::new(None) };
 }
 
 fn is_member_active(reg: &GraphqlResolverRegistration) -> bool {
     REACHABLE.with(|cell| match &*cell.borrow() {
-        Some(set) => set.contains(&(reg.resolver_type_id)()),
-        None => true,
+        Some(set) => set.reaches((reg.resolver_type_id)()),
+        None => false,
     })
 }
 
@@ -333,8 +331,9 @@ fn merge_subscription_type_info<T: SubscriptionType>(
 /// reachable resolver whose types key an entity — an `#[entity]`, or an
 /// object it returns carrying async-graphql's own `#[graphql(entity)]` — which
 /// makes the schema serve the federation fields.
-pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static str>, String> {
-    let reachable = container.get::<ReachableProviders>().map(|p| p.0.clone());
+pub(crate) fn check_operations(
+    reachable: &ReachableProviders,
+) -> Result<Option<&'static str>, String> {
     // A scratch registry: registering is a side effect the served schema must not see.
     let mut scratch = Registry::default();
     let mut claimed: HashMap<(GraphqlResolverKind, String), &'static str> = HashMap::new();
@@ -348,9 +347,7 @@ pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static 
     let mut first_keyed: Option<&'static str> = None;
 
     for reg in inventory::iter::<GraphqlResolverRegistration>() {
-        if let Some(set) = reachable.as_ref()
-            && !set.contains(&(reg.resolver_type_id)())
-        {
+        if !reachable.reaches((reg.resolver_type_id)()) {
             continue;
         }
         // Diffed rather than counted: a cursor would rely on async-graphql
@@ -727,7 +724,8 @@ impl SubscriptionType for DiscoveredSubscription {
 pub(crate) type DiscoveredSchema =
     Schema<DiscoveredQuery, DiscoveredMutation, DiscoveredSubscription>;
 
-/// Build the discovered schema.
+/// Build the discovered schema of the resolvers and the loaders the app
+/// reaches, or refuse a container no app sealed.
 ///
 /// Installs [`ReachableProviders`] in [`REACHABLE`] for the duration of
 /// `Schema::build`; the drop guard restores the previous value even on panic,
@@ -736,10 +734,9 @@ pub(crate) fn build_schema(
     container: Container,
     config: &GraphqlConfig,
     batches: &DetachedWork,
-) -> DiscoveredSchema {
-    let reachable = container
-        .get::<ReachableProviders>()
-        .map(|p| Arc::new(p.0.clone()));
+) -> Result<DiscoveredSchema, UngatedDiscoveryError> {
+    let reachable = ReachableProviders::of(&container, RESOLVERS)?;
+    let loaders = crate::loader::LoaderExtensionFactory::new(container.clone(), batches.clone())?;
     let _reset = ReachableResetGuard::set(reachable);
     let mut builder = Schema::build(
         DiscoveredQuery::from_registry(&container),
@@ -747,10 +744,7 @@ pub(crate) fn build_schema(
         DiscoveredSubscription::from_registry(&container),
     )
     .data(container.clone())
-    .extension(crate::loader::LoaderExtensionFactory::new(
-        container.clone(),
-        batches.clone(),
-    ));
+    .extension(loaders);
     if let Some(gate) =
         crate::federation::FederationExtensionFactory::for_schema(&container, config)
     {
@@ -770,16 +764,16 @@ pub(crate) fn build_schema(
         // subgraph with no key yet.
         builder = builder.enable_federation();
     }
-    builder.finish()
+    Ok(builder.finish())
 }
 
 /// RAII swap on [`REACHABLE`]: install on construction, restore (not clear) on
 /// drop — so a nested build cannot strand the outer build's set.
-struct ReachableResetGuard(Option<Arc<HashSet<TypeId>>>);
+struct ReachableResetGuard(Option<Arc<ReachableProviders>>);
 
 impl ReachableResetGuard {
-    fn set(new: Option<Arc<HashSet<TypeId>>>) -> Self {
-        let previous = REACHABLE.with(|cell| cell.replace(new));
+    fn set(new: Arc<ReachableProviders>) -> Self {
+        let previous = REACHABLE.with(|cell| cell.replace(Some(new)));
         Self(previous)
     }
 }

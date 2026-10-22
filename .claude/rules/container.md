@@ -243,7 +243,11 @@ enumeration of controllers. Where one provider owns several units sharing its
 
 **Discovery is module-gated** (`CLAUDE.md`, hard "no"). `inventory` is link-time,
 so every transport filters its entries against `ReachableProviders`, the access
-graph's set for the running root; linked but unreachable is inert. The gate is
+graph's set for the running root; linked but unreachable is inert. A reader
+takes the set through `ReachableProviders::of`, and a container that carries
+none — built by hand, not sealed by a boot — is refused naming the reader
+(`UngatedDiscoveryError`): there is no ungated mode, a test included, which
+seeds the set it means. The gate is
 always the entry's owner: an entry naming a DI provider is gated by that
 provider's reachability; an entry naming none (`SocialProviderEntry`) names a
 module of its own, and only an app reaching that module (`Composition::reaches`)

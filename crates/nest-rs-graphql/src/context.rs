@@ -14,7 +14,9 @@ use async_graphql::{
 use futures_util::TryStreamExt;
 use nest_rs_core::__private::serde::Serialize;
 use nest_rs_core::__private::serde::de::DeserializeOwned;
-use nest_rs_core::{Container, Discovery, Handler, Posture, ReachableProviders, UnitContext};
+use nest_rs_core::{
+    Container, Discovery, Handler, Posture, ReachableProviders, UngatedDiscoveryError, UnitContext,
+};
 use nest_rs_guards::__private::global_guards_active;
 use nest_rs_http::__private::{EndpointGuardsMeta, with_view};
 use nest_rs_http::{
@@ -97,7 +99,10 @@ pub(crate) struct ContextEndpoint<E> {
 }
 
 impl OperationBridge {
-    pub(crate) fn new(container: Container) -> Self {
+    /// What both endpoints read of the app `container` holds, or a refusal of
+    /// a container no app sealed.
+    pub(crate) fn new(container: Container) -> Result<Self, UngatedDiscoveryError> {
+        let active = active_seeds(&container)?;
         let pool = global_guards_active(&container);
         let endpoint_guards = Discovery::new(&container)
             .meta::<EndpointGuardsMeta>()
@@ -117,7 +122,6 @@ impl OperationBridge {
                 "no guard runs at the /graphql request — graphql operations run unguarded",
             );
         }
-        let active = active_seeds(&container);
         let seeds: Arc<[_]> = active.iter().map(|reg| reg.seed).collect();
         let connection_seeds: Arc<[_]> = active
             .iter()
@@ -125,12 +129,12 @@ impl OperationBridge {
             .map(|reg| reg.seed)
             .collect();
         let pipes = nest_rs_pipes::__private::resolve_global_pipes(&container);
-        Self {
+        Ok(Self {
             connection_seeds,
             container,
             pipes,
             seeds,
-        }
+        })
     }
 
     /// The global pipes each operation's variables go through.
@@ -157,30 +161,36 @@ impl OperationBridge {
     }
 }
 
+/// What the context seed registry holds, as a refusal to read it ungated
+/// names it.
+const SEEDS: &str = "GraphQL context seed";
+
 /// The seeds that fire for the app `container` holds: every framework-level
 /// one, and those whose owner it reaches.
-fn active_seeds(container: &Container) -> Vec<&'static GraphqlContextSeed> {
-    // Without `ReachableProviders`, owner-keyed seeds are skipped: fail-closed.
-    let reachable = container.get::<ReachableProviders>();
-    inventory::iter::<GraphqlContextSeed>()
-        .filter(|reg| match (reg.owner_type_id)() {
-            None => true,
-            Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
-        })
-        .collect()
+fn active_seeds(
+    container: &Container,
+) -> Result<Vec<&'static GraphqlContextSeed>, UngatedDiscoveryError> {
+    let reachable = ReachableProviders::of(container, SEEDS)?;
+    Ok(inventory::iter::<GraphqlContextSeed>()
+        .filter(|reg| (reg.owner_type_id)().is_none_or(|owner| reachable.reaches(owner)))
+        .collect())
 }
 
 /// `data` with what a graphql-ws connection on `req` inherits from its
 /// upgrade: the app's connection seeds, folded under what is ambient where
 /// this runs.
-pub fn connection_data(container: &Container, req: &Request, data: Data) -> Data {
+pub fn connection_data(
+    container: &Container,
+    req: &Request,
+    data: Data,
+) -> Result<Data, UngatedDiscoveryError> {
     let mut gql = GqlRequest::new("");
     gql.data = data;
-    active_seeds(container)
+    Ok(active_seeds(container)?
         .into_iter()
         .filter(|reg| reg.lifetime == SeedLifetime::Connection)
         .fold(gql, |gql, reg| (reg.seed)(req, container, gql))
-        .data
+        .data)
 }
 
 impl<E> ContextEndpoint<E> {
@@ -530,6 +540,18 @@ mod tests {
     use nest_rs_core::__private::serde;
 
     use super::*;
+
+    #[test]
+    fn seeds_folded_over_a_container_no_app_sealed_are_refused_naming_their_reader() {
+        let by_hand = Container::builder().build().expect("the container builds");
+        let upgrade = Request::builder().finish();
+
+        let Err(ungated) = connection_data(&by_hand, &upgrade, Data::default()) else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        assert_eq!(ungated.reader, "GraphQL context seed");
+    }
 
     /// Variables whose JSON form cannot be written.
     struct Unwritable;

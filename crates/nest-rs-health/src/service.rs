@@ -82,11 +82,15 @@ impl From<&IndicatorEntry> for Indicator {
     }
 }
 
-/// Every indicator `container`'s app runs: the reachable ones `#[indicators]`
-/// submitted, then the entries its modules attached — gated by construction,
-/// since only an imported module registers.
-pub(crate) fn wired(container: &Container) -> Vec<Indicator> {
-    reachable_indicators(container)
+/// What the indicator registry holds, as a refusal to read it ungated names it.
+pub(crate) const INDICATORS: &str = "indicator";
+
+/// Every indicator `container`'s app runs: the ones `#[indicators]` submitted
+/// on a provider it `reachable`, then the entries its modules attached — gated
+/// by construction, since only an imported module registers.
+pub(crate) fn wired(container: &Container, reachable: &ReachableProviders) -> Vec<Indicator> {
+    inventory::iter::<HealthIndicator>()
+        .filter(|entry| reachable.reaches((entry.provider_type_id)()))
         .map(Indicator::from)
         .chain(
             Discovery::new(container)
@@ -98,9 +102,15 @@ pub(crate) fn wired(container: &Container) -> Vec<Indicator> {
 }
 
 impl HealthService {
-    /// Hold `container` and the `indicators` its probes run, once; a second
-    /// install keeps the first.
-    pub(crate) fn install(&self, container: &Container, indicators: Vec<Indicator>) {
+    /// Hold `container` and the `indicators` its probes run, once, naming
+    /// those linked on a provider it does not `reachable`; a second install
+    /// keeps the first.
+    pub(crate) fn install(
+        &self,
+        container: &Container,
+        reachable: &ReachableProviders,
+        indicators: Vec<Indicator>,
+    ) {
         let installed = {
             let mut held = self
                 .installed
@@ -123,7 +133,7 @@ impl HealthService {
                 )]
                 let _ = self.config.set(config);
             }
-            report_unreachable_indicators(container);
+            report_unreachable_indicators(container, reachable);
             // Inside the guard: a service two live apps share reports once.
             crate::controller::report_prefixed_probe_paths(container);
         }
@@ -256,29 +266,11 @@ pub(crate) fn check_names<'a>(
     Ok(())
 }
 
-/// Every linked indicator this app can actually run.
-///
-/// No [`ReachableProviders`] means a hand-built container: every indicator is
-/// in scope.
-fn reachable_indicators(
-    container: &Container,
-) -> impl Iterator<Item = &'static HealthIndicator> + use<> {
-    let reachable = container.get::<ReachableProviders>();
-    inventory::iter::<HealthIndicator>().filter(move |entry| {
-        reachable
-            .as_ref()
-            .is_none_or(|r| r.0.contains(&(entry.provider_type_id)()))
-    })
-}
-
 /// Name the linked-but-unreachable indicators **once, at boot**; probing then
 /// skips in silence.
-fn report_unreachable_indicators(container: &Container) {
-    let Some(reachable) = container.get::<ReachableProviders>() else {
-        return;
-    };
+fn report_unreachable_indicators(container: &Container, reachable: &ReachableProviders) {
     for entry in inventory::iter::<HealthIndicator>() {
-        if !reachable.0.contains(&(entry.provider_type_id)()) {
+        if !reachable.reaches((entry.provider_type_id)()) {
             report_inert_indicator(container, entry);
         }
     }
@@ -459,15 +451,31 @@ mod tests {
         }
     }
 
+    /// Install what `container`'s set reaches, as the wiring step does.
+    fn install(svc: &HealthService, container: &Container) {
+        let reachable =
+            ReachableProviders::of(container, INDICATORS).expect("the test seeds the set");
+        svc.install(container, &reachable, wired(container, &reachable));
+    }
+
+    /// The set reaching both hosts.
+    fn reaching_both() -> ReachableProviders {
+        nest_rs_core::__private::reachable_providers([
+            std::any::TypeId::of::<UpHost>(),
+            std::any::TypeId::of::<DownHost>(),
+        ])
+    }
+
     #[tokio::test]
     async fn aggregates_indicators_into_info_and_error_buckets() {
         let container = Container::builder()
             .provide(UpHost)
             .provide(DownHost)
+            .provide(reaching_both())
             .build()
             .expect("the container builds");
         let svc = HealthService::default();
-        svc.install(&container, wired(&container));
+        install(&svc, &container);
 
         let report = svc.probe(ProbeKind::Readiness).await;
         assert_eq!(report.status, IndicatorStatus::Down);
@@ -521,15 +529,15 @@ mod tests {
         let container = Container::builder()
             .provide(UpHost)
             .provide(DownHost)
-            .provide(ReachableProviders(
-                [std::any::TypeId::of::<UpHost>()].into_iter().collect(),
-            ))
+            .provide(nest_rs_core::__private::reachable_providers([
+                std::any::TypeId::of::<UpHost>(),
+            ]))
             .build()
             .expect("the container builds");
 
         let logs = nest_rs_testing::LogCapture::install();
         let svc = HealthService::default();
-        svc.install(&container, wired(&container));
+        install(&svc, &container);
 
         let skipped = logs.find(
             crate::TARGET,
@@ -718,10 +726,11 @@ mod tests {
         let container = Container::builder()
             .provide(UpHost)
             .provide(DownHost)
+            .provide(reaching_both())
             .build()
             .expect("the container builds");
         let svc = HealthService::default();
-        svc.install(&container, wired(&container));
+        install(&svc, &container);
 
         let report = svc.probe(ProbeKind::Liveness).await;
         assert_eq!(report.status, IndicatorStatus::Up);

@@ -57,8 +57,8 @@ fn report_missing_bus(
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
         if container.get::<EventBus>().is_none() {
-            let reachable = container.get::<ReachableProviders>();
-            for entry in reachable_listeners(reachable.as_deref()) {
+            let reachable = ReachableProviders::of(container, LISTENERS)?;
+            for entry in reachable_listeners(&reachable) {
                 tracing::warn!(
                     target: crate::TARGET,
                     listener = entry.name,
@@ -71,12 +71,16 @@ fn report_missing_bus(
     })
 }
 
+/// What the listener registry holds, as its inert report and a refusal to
+/// read it ungated name it.
+const LISTENERS: &str = "#[on_event] method";
+
 /// Subscribe every reachable listener, in the written order, then open the bus.
 fn wire_listeners(container: &Container) -> anyhow::Result<()> {
     let Some(bus) = container.get::<EventBus>() else {
         return Ok(());
     };
-    let reachable = container.get::<ReachableProviders>();
+    let reachable = ReachableProviders::of(container, LISTENERS)?;
     let order = container.get::<ProviderOrder>();
 
     // `inventory::iter` yields link order, reshuffled by any code change;
@@ -93,7 +97,7 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
     });
 
     for entry in entries {
-        if !is_reachable(reachable.as_deref(), entry) {
+        if !is_reachable(&reachable, entry) {
             ::nest_rs_core::report_inert_host!(
                 target: crate::TARGET,
                 what: "#[on_event] method",
@@ -117,12 +121,34 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
 
 /// Whether this app would wire `entry` — shared by the no-bus report and the
 /// wiring loop so both speak of one population.
-fn is_reachable(reachable: Option<&ReachableProviders>, entry: &ListenerMethod) -> bool {
-    ReachableProviders::reaches(reachable, (entry.provider_type_id)())
+fn is_reachable(reachable: &ReachableProviders, entry: &ListenerMethod) -> bool {
+    reachable.reaches((entry.provider_type_id)())
 }
 
 fn reachable_listeners(
-    reachable: Option<&ReachableProviders>,
+    reachable: &ReachableProviders,
 ) -> impl Iterator<Item = &'static ListenerMethod> + '_ {
     inventory::iter::<ListenerMethod>().filter(move |entry| is_reachable(reachable, entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listeners_wired_over_a_container_no_app_sealed_are_refused_naming_their_reader() {
+        let by_hand = Container::builder()
+            .provide_arc(Arc::new(EventBus::new()))
+            .build()
+            .expect("the container builds");
+
+        let Err(refused) = wire_listeners(&by_hand) else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        let ungated = refused
+            .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+            .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+        assert_eq!(ungated.reader, "#[on_event] method");
+    }
 }

@@ -3,7 +3,7 @@
 //! service's container back at its close step.
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{Container, ContainerBuilder, Module, Registering, module};
+use nest_rs_core::{Container, ContainerBuilder, Module, ReachableProviders, Registering, module};
 
 use crate::config::HealthConfig;
 use crate::controller::HealthController;
@@ -55,10 +55,33 @@ impl Module for HealthWiring {
 /// to answer under distinct names.
 fn wire_indicators(container: &Container) -> anyhow::Result<()> {
     if let Some(svc) = container.get::<HealthService>() {
-        let indicators = crate::service::wired(container);
+        let reachable = ReachableProviders::of(container, crate::service::INDICATORS)?;
+        let indicators = crate::service::wired(container, &reachable);
         // The report's fold by name would silently keep one of two verdicts.
         crate::service::check_names(&indicators)?;
-        svc.install(container, indicators);
+        svc.install(container, &reachable, indicators);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indicators_wired_over_a_container_no_app_sealed_are_refused_naming_their_reader() {
+        let by_hand = Container::builder()
+            .provide(HealthService::default())
+            .build()
+            .expect("the container builds");
+
+        let Err(refused) = wire_indicators(&by_hand) else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        let ungated = refused
+            .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+            .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+        assert_eq!(ungated.reader, "indicator");
+    }
 }

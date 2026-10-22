@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{
-    App, Caught, Container, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem,
-    ReachableProviders, Transport, UnitContext, async_trait, injectable, interceptor, module,
+    App, Caught, Container, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, Transport,
+    UnitContext, async_trait, injectable, interceptor, module,
 };
 use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::{
@@ -476,9 +476,9 @@ async fn a_layer_a_job_binds_from_a_module_its_host_does_not_import_fails_the_bo
 async fn a_layer_a_job_binds_that_nothing_provides_fails_the_configure_naming_both() {
     let consumer = Memory::new(&PLAIN, Duration::from_secs(1)).consumer();
     let container = Container::builder()
-        .provide(ReachableProviders(
-            [TypeId::of::<HostedProcessor>()].into_iter().collect(),
-        ))
+        .provide(nest_rs_core::__private::reachable_providers([
+            TypeId::of::<HostedProcessor>(),
+        ]))
         .provide(HostedProcessor)
         .provide(BoundConsumer::new(consumer))
         .build()

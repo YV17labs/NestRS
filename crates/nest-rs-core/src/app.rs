@@ -1267,7 +1267,7 @@ fn seal(
     let order = provider_order(descriptors, &ids);
     let hook_order = HookOrder::new(dependency_order(descriptors, &ids, &overridden));
     Ok(Sealed {
-        reachable: ReachableProviders(reachable_provider_ids(&order, global)),
+        reachable: ReachableProviders::new(reachable_provider_ids(&order, global)),
         order: ProviderOrder::new(order),
         composition: Composition::from_descriptors(descriptors, roots, overridden),
         hook_order,

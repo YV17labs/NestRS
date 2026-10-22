@@ -18,7 +18,9 @@ use async_graphql::extensions::{
 };
 use async_graphql::{Request, ServerResult};
 use futures_util::future::Either;
-use nest_rs_core::{Container, Continuation, ReachableProviders, RequestContinuation};
+use nest_rs_core::{
+    Container, Continuation, ReachableProviders, RequestContinuation, UngatedDiscoveryError,
+};
 use nest_rs_http::DetachedWork;
 use tracing::Instrument;
 
@@ -109,45 +111,41 @@ pub(crate) struct LoaderExtensionFactory {
     batches: DetachedWork,
 }
 
+/// What the loader registry holds, as a refusal to read it ungated names it.
+const LOADERS: &str = "#[dataloader] method";
+
 impl LoaderExtensionFactory {
-    pub(crate) fn new(container: Container, batches: DetachedWork) -> Self {
-        warn_unreachable_loaders(&container);
-        let seeds = reachable_seeds(&container);
-        Self {
+    /// The loaders the app reaches, or a refusal of a container no app sealed.
+    pub(crate) fn new(
+        container: Container,
+        batches: DetachedWork,
+    ) -> Result<Self, UngatedDiscoveryError> {
+        let seeds = reachable_seeds(&container)?;
+        Ok(Self {
             container,
             seeds,
             batches,
-        }
+        })
     }
 }
 
-/// Freeze the reachable loader seeds. Without `ReachableProviders` (a
-/// hand-rolled container) nothing is seeded — fail-closed, reported once.
-fn reachable_seeds(container: &Container) -> Arc<[LoaderSeed]> {
-    let Some(reachable) = container.get::<ReachableProviders>() else {
-        tracing::warn!(
-            target: crate::TARGET,
-            hint = "build the schema via App::builder/App::new or seed ReachableProviders",
-            "loaders skipped: no ReachableProviders seeded"
-        );
-        return Arc::from(Vec::new());
-    };
-    inventory::iter::<GraphqlLoaderRegistration>()
-        .filter(|reg| reachable.0.contains(&(reg.owner_type_id)()))
+/// Freeze the seeds of the loaders the app reaches, counting at `warn` those
+/// it does not.
+fn reachable_seeds(container: &Container) -> Result<Arc<[LoaderSeed]>, UngatedDiscoveryError> {
+    let reachable = ReachableProviders::of(container, LOADERS)?;
+    warn_unreachable_loaders(&reachable);
+    Ok(inventory::iter::<GraphqlLoaderRegistration>()
+        .filter(|reg| reachable.reaches((reg.owner_type_id)()))
         .map(|reg| reg.seed)
-        .collect()
+        .collect())
 }
 
 /// Warn once at schema build about `#[dataloader]`s linked into the binary
 /// whose owner's module is unreachable. Only a count: a registration carries
 /// the owner's `TypeId`, not a name.
-fn warn_unreachable_loaders(container: &Container) {
-    // Without a gate, `reachable_seeds` already warned.
-    let Some(reachable) = container.get::<ReachableProviders>() else {
-        return;
-    };
+fn warn_unreachable_loaders(reachable: &ReachableProviders) {
     let skipped = inventory::iter::<GraphqlLoaderRegistration>()
-        .filter(|reg| !reachable.0.contains(&(reg.owner_type_id)()))
+        .filter(|reg| !reachable.reaches((reg.owner_type_id)()))
         .count();
     if skipped > 0 {
         tracing::warn!(
@@ -205,24 +203,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_container_with_no_reachability_says_it_seeded_no_loaders() {
-        let logs = nest_rs_testing::LogCapture::install();
-        // `App::builder`/`App::new` always seed `ReachableProviders`.
-        let seeds = reachable_seeds(&Container::builder().build().expect("the container builds"));
-        assert!(seeds.is_empty(), "nothing is seeded without reachability");
+    fn loaders_seeded_over_a_container_no_app_sealed_are_refused_naming_their_reader() {
+        let by_hand = Container::builder().build().expect("the container builds");
 
-        let event = logs.expect_one(
-            "nest_rs::graphql",
-            "loaders skipped: no ReachableProviders seeded",
-        );
-        assert_eq!(event.level, "warn");
-        assert!(
-            event
-                .field("hint")
-                .is_some_and(|h| h.contains("App::builder")),
-            "the remedy is the point of the line, got {:?}",
-            event.fields,
-        );
+        let Err(ungated) = reachable_seeds(&by_hand) else {
+            panic!("an ungated discovery is refused, never served empty");
+        };
+
+        assert_eq!(ungated.reader, "#[dataloader] method");
     }
 
     /// The owner of a loader no module provides. Link-time, so it is in every
@@ -239,7 +227,9 @@ mod tests {
     /// `ReachableProviders` seeded with exactly `types`.
     fn reached(types: &[TypeId]) -> Container {
         Container::builder()
-            .provide(ReachableProviders(types.iter().copied().collect()))
+            .provide(nest_rs_core::__private::reachable_providers(
+                types.iter().copied(),
+            ))
             .build()
             .expect("the container builds")
     }
@@ -247,7 +237,7 @@ mod tests {
     #[test]
     fn a_loader_whose_owner_module_is_not_imported_is_counted_at_boot() {
         let logs = nest_rs_testing::LogCapture::install();
-        warn_unreachable_loaders(&reached(&[]));
+        reachable_seeds(&reached(&[])).expect("the set is seeded");
 
         let event = logs.expect_one("nest_rs::graphql", "dataloaders linked but unreachable");
         assert_eq!(event.level, "warn");
@@ -272,12 +262,9 @@ mod tests {
     fn a_loader_whose_owner_is_reachable_is_not_reported() {
         let logs = nest_rs_testing::LogCapture::install();
         let container = reached(&[TypeId::of::<AbsentOwner>()]);
-        warn_unreachable_loaders(&container);
+        let seeds = reachable_seeds(&container).expect("the set is seeded");
         logs.expect_none("nest_rs::graphql", "dataloaders linked but unreachable");
-        assert!(
-            !reachable_seeds(&container).is_empty(),
-            "and it is seeded rather than skipped",
-        );
+        assert!(!seeds.is_empty(), "and it is seeded rather than skipped");
     }
 
     /// A value the triggering unit carries, read back by the batch.

@@ -10,7 +10,10 @@ import { Aside } from '@astrojs/starlight/components';
 `#[indicators]` submits each tagged method to a link-time registry.
 At boot, `HealthModule` reads that registry once and filters it
 against `ReachableProviders` — the access-graph-derived set of every
-provider reachable from the running app's root module. The same
+provider reachable from the running app's root module, which the boot seals
+into the container; a container built by hand carries none, and the wiring
+refuses it (`UngatedDiscoveryError`) rather than running every indicator
+linked. The same
 module-gating every transport uses for `#[controller]`, `#[resolver]`,
 or `#[processor]` applies here. The checks a framework binding ships —
 `SeaOrmHealthModule`, `RedisHealthModule`, `StorageHealthModule` — are

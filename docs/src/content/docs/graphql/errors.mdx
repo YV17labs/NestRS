@@ -183,7 +183,8 @@ unique violation becomes `Conflict`, a row a write found gone `NotFound`, any
 other failure `Db`, whose chain is filed by its SQLSTATE, never by the
 server's message. A `#[crud]` operation answers the same classes
 ([When the database refuses](/database/crud/#when-the-database-refuses)), and a
-mutation field answering one rolls back its own writes alone
+mutation field answering one rolls back its own writes — the whole operation's,
+when its `null` reaches `data`
 ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
 A body that mixes failures keeps `async_graphql::Result` and uses `?`:
@@ -285,12 +286,16 @@ its place, up to the nearest nullable field — and `data` itself answers `null`
 when a Non-Null root field fails. Pick the return by what its failure may cost
 the answer around it: `Result<Option<T>>` keeps its siblings, `Result<T>`
 promises a value wherever its parent has one. The rule holds on `POST`, for each
-operation of a batch, and over the socket.
+operation of a batch, and over the socket. On a mutation, where the `null` lands
+also decides which writes stand: a root field answering `null` rolls back its
+own, and a `null` reaching `data` the whole operation's
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
 Two selections fall outside it, both from async-graphql 7.2.1. A field selected
 on an interface type reports its error without a `path`, so its key stays
-absent: select it inside `... on <ConcreteType>` and its error carries the path,
-so its `null` lands. And an object selected twice at one place — two fragments
+absent, and under a mutation its root field's writes stand with the root
+field's answer: select it inside `... on <ConcreteType>` and its error carries
+the path, so its `null` lands. And an object selected twice at one place — two fragments
 that each select `org` — keeps whichever copy finishes first. When that copy's
 every field failed, the object answers `null`, or its nearest nullable parent
 does, never an object missing what the other copy answered.

@@ -239,7 +239,8 @@ reaches the client or the log, since it quotes the input it refused.
 
 On GraphQL every mutation root field runs in a savepoint of its operation's
 transaction, so a refused statement rolls back that field alone: the field
-answers its class, and the operation's other fields commit
+answers its class, and the operation's other fields commit — unless the field
+is Non-Null, whose `null` reaches `data` and rolls the whole operation back
 ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
 ## Bound mutations

@@ -562,19 +562,27 @@ async fn a_field_that_errs_answers_null_beside_the_fields_that_answered() {
 }
 
 #[tokio::test]
-async fn a_non_null_field_that_errs_nulls_the_data_and_the_fields_that_answered_still_commit() {
+async fn a_non_null_field_that_errs_rolls_the_whole_mutation_back_and_runs_no_later_field() {
     let (_db, app) = boot().await;
     let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
 
     let reply = graphql(
         &app,
         &admin,
-        r#"mutation { kept: createOrg(input: {name: "GqlKept"}) { id } refused: createOrg(input: {name: ""}) { id } }"#,
+        r#"mutation { kept: createOrg(input: {name: "GqlKept"}) { id } refused: createOrg(input: {name: ""}) { id } later: createOrg(input: {name: "GqlLater"}) { id } laterRefused: createOrg(input: {name: ""}) { id } }"#,
     )
     .await;
 
     assert_eq!(reply["data"], serde_json::Value::Null, "{reply}");
+    assert_eq!(reply["errors"].as_array().map(Vec::len), Some(1), "{reply}");
     assert_eq!(reply["errors"][0]["path"], json!(["refused"]), "{reply}");
+    let control = graphql(
+        &app,
+        &admin,
+        r#"mutation { createOrg(input: {name: "GqlControl"}) { id } }"#,
+    )
+    .await;
+    assert!(control.get("errors").is_none(), "{control}");
     let orgs = graphql(&app, &admin, "{ orgs { name } }").await;
     let names: Vec<&str> = orgs["data"]["orgs"]
         .as_array()
@@ -582,5 +590,7 @@ async fn a_non_null_field_that_errs_nulls_the_data_and_the_fields_that_answered_
         .iter()
         .filter_map(|org| org["name"].as_str())
         .collect();
-    assert!(names.contains(&"GqlKept"), "{orgs}");
+    assert!(names.contains(&"GqlControl"), "{orgs}");
+    assert!(!names.contains(&"GqlKept"), "{orgs}");
+    assert!(!names.contains(&"GqlLater"), "{orgs}");
 }

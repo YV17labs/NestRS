@@ -234,7 +234,7 @@ slice inherits, without writing any of them:
   `Ability::condition_for` ANDed in. A row outside scope is invisible.
 - **Transparent transactions.** Mutating routes run inside a transaction
   committed on 2xx/3xx, rolled back otherwise; a GraphQL mutation is one
-  transaction whose fields each roll back alone.
+  transaction whose root fields each roll back on their own answer.
 - **Same code path for safe routes and workers.** Pool executor under the
   hood, no method change.
 - **Audited choke point.** Controllers, resolvers, dataloader code call

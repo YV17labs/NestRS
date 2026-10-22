@@ -71,3 +71,34 @@ owner, since each reopens how a block settles:
   still answers its value, that field `null`: the response reports work that
   was rolled back. Settling the block on whether the field itself answers
   `null` — the specification's "the field errs" — would keep the promise.
+
+**2026-10-22 — a root field settles on its own answer, and an answer with no
+data rolls back whole.** Both consequences the entry above left open are
+closed (`fix/graphql-mutation-settles-on-its-answer`):
+
+- **A root field's block settles on what the field answers**, its errors'
+  nulls placed — §6.4.4's "the field errs", the owner's 2026-10-09 "rolled
+  back when that field errors" — no longer on whether its answer carries an
+  error. A `null` that reaches the root field, its own or a Non-Null
+  sub-field's, rolls the block back; one that stays below it, a nullable
+  sub-field's or a Non-Null one's held by a nullable parent, releases it, and
+  the field's value and work stand. Decided by the run from the owner's own
+  words: the count-based rule rolled back a block whose answer stood. The block
+  runs the placement the operation's answer gets, on the field's value as it
+  resolved, so the two cannot disagree; an error async-graphql 7.2.1 files
+  without a `path` (an interface field's) places no null, so its root field's
+  work stands with its answer.
+- **The owner's decision of 2026-10-22**, amending "released otherwise" for
+  one case: when a mutation operation's `data` is nulled by a field error — a
+  Non-Null root field's `null` — the whole operation rolls back and no root
+  field after it resolves (§6.4.4 lets the siblings be cancelled); the skipped
+  field answers `null` unresolved and adds no error. The answer reports
+  nothing, so nothing it ran stands, and a retry applies nothing twice. Every
+  other case keeps its savepoint per root field. The operation's unit settles
+  on its answer: it commits only when that answer reports data. With no data
+  layer bound the later root fields are skipped all the same: the answer
+  reports none of their work.
+- **Refused: resolving the later root fields and rolling them back with the
+  operation.** Their guards and handlers would run, and whatever they do
+  outside the transaction — an outbound call, a message sent at once — would
+  happen for an answer that reports none of it.

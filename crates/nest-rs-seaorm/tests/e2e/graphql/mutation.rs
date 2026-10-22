@@ -1,7 +1,9 @@
 //! A GraphQL operation over `SeaOrmUnitOfWork`, through `POST /graphql` and
 //! the graphql-ws socket: a mutation is one transaction and each of its root
-//! fields a savepoint, so a field that errs rolls back its own writes and drops
-//! its events while the operation's other fields commit.
+//! fields a savepoint settled on the field's own answer, so a field that
+//! answers `null` for an error rolls back its own writes and drops its events
+//! while the operation's other fields commit, and an operation whose answer
+//! reports no data rolls back whole.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -79,13 +81,18 @@ impl ProbeRows {
     }
 }
 
-/// What a create answers: a field the schema cannot ship null, which fails.
+/// What a create answers: `checked`, which the schema cannot ship null, and
+/// `broken`, which it can; both fail.
 struct Created;
 
 #[Object]
 impl Created {
     async fn checked(&self) -> async_graphql::Result<i32> {
         Err("the sub-field failed".into())
+    }
+
+    async fn broken(&self) -> async_graphql::Result<Option<i32>> {
+        Err("the nullable sub-field failed".into())
     }
 }
 
@@ -117,6 +124,13 @@ impl ProbesResolver {
         }
     }
 
+    /// `create_probe`, nullable: its `null` stays beside its siblings' answers.
+    #[mutation]
+    #[public]
+    async fn maybe_create_probe(&self, id: Uuid, fail: bool) -> Result<Option<bool>, ServiceError> {
+        self.create_probe(id, fail).await.map(Some)
+    }
+
     /// Two rows under one label, whose second statement violates its unique key;
     /// nullable, so its sibling's answer stays beside its `null`.
     #[mutation]
@@ -137,6 +151,12 @@ impl ProbesResolver {
     async fn create_checked(&self, id: Uuid) -> Result<Created, ServiceError> {
         self.rows.insert(id, &id.to_string()).await?;
         Ok(Created)
+    }
+
+    #[mutation]
+    #[public]
+    async fn maybe_create_checked(&self, id: Uuid) -> Result<Option<Created>, ServiceError> {
+        self.create_checked(id).await.map(Some)
     }
 }
 
@@ -218,6 +238,10 @@ fn create(id: Uuid, fail: bool) -> String {
     format!(r#"createProbe(id: "{id}", fail: {fail})"#)
 }
 
+fn maybe_create(id: Uuid, fail: bool) -> String {
+    format!(r#"maybeCreateProbe(id: "{id}", fail: {fail})"#)
+}
+
 #[tokio::test]
 async fn a_field_that_errs_after_its_write_leaves_no_row_and_dispatches_no_event() {
     let conn = db().await;
@@ -248,7 +272,7 @@ async fn a_field_that_errs_after_its_write_leaves_no_row_and_dispatches_no_event
 }
 
 #[tokio::test]
-async fn a_failing_field_rolls_back_alone_and_the_operations_other_fields_commit() {
+async fn a_nullable_field_that_errs_rolls_back_alone_and_the_operations_other_fields_commit() {
     let conn = db().await;
     let app = boot().await;
     let (a, b, c) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
@@ -258,19 +282,62 @@ async fn a_failing_field_rolls_back_alone_and_the_operations_other_fields_commit
         json!({
             "query": format!(
                 "mutation {{ a: {} b: {} c: {} }}",
-                create(a, false),
-                create(b, true),
-                create(c, false),
+                maybe_create(a, false),
+                maybe_create(b, true),
+                maybe_create(c, false),
             ),
         }),
     )
     .await;
 
+    assert_eq!(
+        reply["data"],
+        json!({ "a": true, "b": null, "c": true }),
+        "{reply}"
+    );
     assert_eq!(reply["errors"][0]["path"], json!(["b"]), "{reply}");
     assert!(stored(&conn, a).await, "{reply}");
     assert!(!stored(&conn, b).await, "{reply}");
     assert!(stored(&conn, c).await, "{reply}");
     remove(&conn, &[a, c]).await;
+}
+
+/// The answer reports nothing, so nothing the operation ran stands: the field
+/// that answered before the failure rolls back with it, its event dropped, and
+/// the ones after it never run — `d` would add its own error if it did.
+#[tokio::test]
+async fn a_non_null_field_that_errs_rolls_the_whole_operation_back_and_runs_no_later_field() {
+    let conn = db().await;
+    let app = boot().await;
+    let dispatched = app.container().get::<Dispatched>().expect("provided");
+    let (a, b, c, d) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+
+    let reply = post(
+        &app,
+        json!({
+            "query": format!(
+                "mutation {{ a: {} b: {} c: {} d: {} }}",
+                create(a, false),
+                create(b, true),
+                create(c, false),
+                create(d, true),
+            ),
+        }),
+    )
+    .await;
+
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(reply["errors"].as_array().map(Vec::len), Some(1), "{reply}");
+    assert_eq!(reply["errors"][0]["path"], json!(["b"]), "{reply}");
+    for id in [a, b, c, d] {
+        assert!(!stored(&conn, id).await, "{reply}");
+        assert!(!dispatched.holds(id), "{reply}");
+    }
 }
 
 #[tokio::test]
@@ -342,23 +409,96 @@ async fn a_batch_of_mutations_commits_each_operation_on_its_own_outcome() {
     remove(&conn, &[kept]).await;
 }
 
+/// A Non-Null sub-field's `null` climbs through its Non-Null root field to
+/// `data`, as the root field's own error does.
 #[tokio::test]
-async fn a_mutation_whose_non_null_sub_field_fails_leaves_no_row() {
+async fn a_non_null_sub_field_failing_under_a_non_null_root_field_rolls_the_whole_operation_back() {
     let conn = db().await;
     let app = boot().await;
-    let id = Uuid::now_v7();
+    let (a, b, c) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
 
     let reply = post(
         &app,
-        json!({ "query": format!(r#"mutation {{ createChecked(id: "{id}") {{ checked }} }}"#) }),
+        json!({
+            "query": format!(
+                r#"mutation {{ a: {} b: createChecked(id: "{b}") {{ checked }} c: {} }}"#,
+                create(a, false),
+                create(c, false),
+            ),
+        }),
     )
     .await;
 
-    assert!(reply["errors"].is_array(), "{reply}");
-    assert!(
-        !stored(&conn, id).await,
-        "a field whose response carries an error reports no work"
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(
+        reply["errors"][0]["path"],
+        json!(["b", "checked"]),
+        "{reply}"
     );
+    for id in [a, b, c] {
+        assert!(!stored(&conn, id).await, "{reply}");
+    }
+}
+
+/// A Non-Null sub-field's `null` stops at its nullable root field, which
+/// answers `null` and rolls back alone.
+#[tokio::test]
+async fn a_non_null_sub_field_failing_under_a_nullable_root_field_rolls_back_that_field_alone() {
+    let conn = db().await;
+    let app = boot().await;
+    let (kept, dropped) = (Uuid::now_v7(), Uuid::now_v7());
+
+    let reply = post(
+        &app,
+        json!({
+            "query": format!(
+                r#"mutation {{ kept: {} dropped: maybeCreateChecked(id: "{dropped}") {{ checked }} }}"#,
+                maybe_create(kept, false),
+            ),
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        reply["data"],
+        json!({ "kept": true, "dropped": null }),
+        "{reply}"
+    );
+    assert!(stored(&conn, kept).await, "{reply}");
+    assert!(
+        !stored(&conn, dropped).await,
+        "a root field that answers null reports no work"
+    );
+    remove(&conn, &[kept]).await;
+}
+
+/// A nullable sub-field's `null` stays below its root field, whose answer
+/// stands: so does its row.
+#[tokio::test]
+async fn a_nullable_sub_field_failing_leaves_its_root_fields_answer_and_its_row_standing() {
+    let conn = db().await;
+    let app = boot().await;
+    let (sure, maybe) = (Uuid::now_v7(), Uuid::now_v7());
+
+    let reply = post(
+        &app,
+        json!({
+            "query": format!(
+                r#"mutation {{ sure: createChecked(id: "{sure}") {{ broken }} maybe: maybeCreateChecked(id: "{maybe}") {{ broken }} }}"#
+            ),
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        reply["data"],
+        json!({ "sure": { "broken": null }, "maybe": { "broken": null } }),
+        "{reply}"
+    );
+    assert_eq!(reply["errors"].as_array().map(Vec::len), Some(2), "{reply}");
+    assert!(stored(&conn, sure).await, "{reply}");
+    assert!(stored(&conn, maybe).await, "{reply}");
+    remove(&conn, &[sure, maybe]).await;
 }
 
 /// The next text frame of a graphql-ws socket, parsed.

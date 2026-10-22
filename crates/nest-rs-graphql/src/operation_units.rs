@@ -1,9 +1,11 @@
 //! Every operation a GraphQL request carries runs as a unit of work of its
 //! own, [`OPERATION`](crate::unit::OPERATION), through the binding the mount
 //! resolves: a query on the pool, a mutation in one transaction whose root
-//! fields each run in an atomic block, so a field that errs rolls back alone
-//! while the operation's other fields commit — and a response never reports
-//! work that was rolled back.
+//! fields each run in an atomic block settled on the field's own answer, so a
+//! field that answers `null` for an error rolls back alone while the
+//! operation's other fields commit, and an operation whose answer reports no
+//! data rolls back whole — a response never reports work that was rolled back,
+//! nor stays silent on work that stands.
 
 use std::convert::identity;
 use std::future::Future;
@@ -28,6 +30,7 @@ use nest_rs_http::RequestDeadline;
 use tracing::Instrument;
 
 use crate::loader::BatchSpan;
+use crate::null_propagation::{MutationAnswer, RootAnswer};
 
 /// The schema `E`, each query and mutation it executes run as a unit of work
 /// of its own; a subscription's unit is its connection.
@@ -105,7 +108,7 @@ impl<E: Executor> OperationUnits<E> {
     }
 
     /// Run `body`, the operation `selected` names, as its unit: cut at `cut`,
-    /// settled on whether it executed, and filed on its own line.
+    /// settled on whether its answer reports data, and filed on its own line.
     async fn run<B>(&self, selected: Selected, cut: Option<&RequestDeadline>, body: B) -> Response
     where
         B: Future<Output = Response> + Send,
@@ -146,7 +149,7 @@ impl<E: Executor> OperationUnits<E> {
             self.binding.as_ref(),
             spec,
             body,
-            Answered::executed,
+            Answered::reports_data,
             Answered::unhonoured,
         );
         let scoped = nest_rs_core::with_request_scope(
@@ -289,8 +292,9 @@ impl Selected {
     reason = "one per operation, moved to its settle and back: boxing would allocate where a move does not"
 )]
 enum Answered {
-    /// It executed: whatever its fields answered, each failed one already
-    /// rolled back alone, so the unit commits.
+    /// It executed. Each root field that answered `null` for an error already
+    /// rolled back alone, so the unit commits what the answer reports — unless
+    /// it reports no data, a Non-Null root field's `null` having reached `data`.
     Executed(Response),
     /// The request's deadline cut it: nothing it ran commits.
     Cut,
@@ -299,8 +303,9 @@ enum Answered {
 }
 
 impl Answered {
-    fn executed(&self) -> bool {
-        matches!(self, Self::Executed(_))
+    /// Whether what it ran stands: an answer with no data reports none of it.
+    fn reports_data(&self) -> bool {
+        matches!(self, Self::Executed(response) if response.data != Value::Null)
     }
 
     fn unhonoured(_: Unhonoured) -> Self {
@@ -334,34 +339,70 @@ fn refused(problem: &Problem) -> Response {
     Response::from_errors(vec![refused])
 }
 
-/// Resolve one mutation root field inside an atomic block of its operation's
-/// unit, rolled back when the field's response carries an error and released
-/// otherwise; with no executor installed — an app with no data layer — as it
-/// is.
-pub(crate) async fn in_atomic_block<F>(ctx: &Context<'_>, resolve: F) -> ServerResult<Option<Value>>
+/// Resolve one mutation root field, its work settled on the answer it gives:
+/// inside an atomic block of its operation's unit, rolled back when the field
+/// answers `null` for an error — its own, or a Non-Null field's below it — and
+/// released otherwise. None resolves once a root field before it nulled
+/// `data`, since the operation then answers nothing. With no executor
+/// installed — an app with no data layer — the field runs bare.
+pub(crate) async fn resolve_mutation_field<F>(
+    ctx: &Context<'_>,
+    resolve: F,
+) -> ServerResult<Option<Value>>
 where
     F: Future<Output = ServerResult<Option<Value>>> + Send,
 {
-    if nest_rs_database::current_executor().is_none() {
-        return resolve.await;
+    let answer = ctx.data_opt::<MutationAnswer>();
+    if answer.is_some_and(MutationAnswer::data_nulled) {
+        return Ok(None);
     }
     // Exact: a mutation's root fields resolve one at a time, so no other field
     // adds an error meanwhile.
     let reported = errors_reported(ctx);
+    if nest_rs_database::current_executor().is_none() {
+        let resolved = resolve.await;
+        answered(ctx, answer, &resolved, reported);
+        return resolved;
+    }
     let outcome = nest_rs_database::atomic(async {
-        let result = resolve.await;
-        match result.is_err() || errors_reported(ctx) > reported {
-            true => Err(FieldFailed::Field(result)),
-            false => Ok(result),
+        let resolved = resolve.await;
+        match answered(ctx, answer, &resolved, reported) {
+            RootAnswer::Stands => Ok(resolved),
+            RootAnswer::Null | RootAnswer::NoData => Err(FieldFailed::Field(resolved)),
         }
     })
     .await;
     match outcome {
-        Ok(result) | Err(FieldFailed::Field(result)) => result,
+        Ok(resolved) | Err(FieldFailed::Field(resolved)) => resolved,
         Err(FieldFailed::Atomic(error)) => {
-            Err(ctx
-                .set_error_path(crate::error::opaque_error(&error).into_server_error(ctx.item.pos)))
+            let refused = Err(ctx.set_error_path(
+                crate::error::opaque_error(&error).into_server_error(ctx.item.pos),
+            ));
+            answered(ctx, answer, &refused, errors_reported(ctx));
+            refused
         }
+    }
+}
+
+/// What the root field `ctx` answers, given what it `resolved` and the errors
+/// filed past the first `reported`: read off its operation's answer, or,
+/// without one, `null` for any error.
+fn answered(
+    ctx: &Context<'_>,
+    answer: Option<&MutationAnswer>,
+    resolved: &ServerResult<Option<Value>>,
+    reported: usize,
+) -> RootAnswer {
+    let errors = ctx
+        .query_env
+        .errors
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let filed = errors.get(reported..).unwrap_or_default();
+    match answer {
+        Some(answer) => answer.root_field(ctx, resolved, filed),
+        None if resolved.is_err() || !filed.is_empty() => RootAnswer::Null,
+        None => RootAnswer::Stands,
     }
 }
 
@@ -377,7 +418,7 @@ fn errors_reported(ctx: &Context<'_>) -> usize {
 
 /// Why a root field's block rolls back.
 enum FieldFailed {
-    /// Its response carries an error, answered as the resolver wrote it.
+    /// It answers `null` for an error, as the resolver wrote it.
     Field(ServerResult<Option<Value>>),
     /// The block could not be kept.
     Atomic(AtomicError),

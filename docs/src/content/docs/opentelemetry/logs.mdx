@@ -200,9 +200,11 @@ lifecycle hook:
 
 A GraphQL document files one `graphql.operation` line per query or mutation
 it runs — `error` when its response carries an error — and one `graphql.field`
-line per root field under it, its role `query`, `mutation` or `entity`, and
-`federation` for a subgraph's `_service` and `_entities`. The operation's name
-is the document's, which
+line per root field it resolves, its role `query`, `mutation` or `entity`, and
+`federation` for a subgraph's `_service` and `_entities`. A mutation resolves
+none after a root field whose `null` reached `data`, so those file no line
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+The operation's name is the document's, which
 the client writes, so it rides the operation's span as `graphql.operation.name`
 and never the line; the root fields' lines say what ran, by the names your
 schema declares. A GraphQL `#[field_resolver]` files no line and

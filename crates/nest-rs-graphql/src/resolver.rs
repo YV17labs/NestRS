@@ -679,10 +679,10 @@ impl DiscoveredQuery {
 }
 
 impl DiscoveredMutation {
-    /// Each mutation root field in an atomic block of its operation's unit, so
-    /// a field that errs rolls back alone.
+    /// Each mutation root field in an atomic block of its operation's unit,
+    /// settled on the answer the field gives.
     async fn resolve_root_field(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
-        crate::operation_units::in_atomic_block(ctx, self.resolve_members(ctx)).await
+        crate::operation_units::resolve_mutation_field(ctx, self.resolve_members(ctx)).await
     }
 }
 

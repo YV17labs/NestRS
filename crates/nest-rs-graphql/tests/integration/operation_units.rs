@@ -1,7 +1,9 @@
 //! Covers `src/operation_units.rs`: every operation a request carries runs as
 //! a unit of its own through the binding the mount resolves — a query on the
 //! pool, a mutation in one transaction whose root fields each run in an atomic
-//! block, so a field that errs rolls back alone.
+//! block settled on the field's own answer: a field that answers `null` for an
+//! error rolls back alone, and one whose `null` reaches `data` rolls the whole
+//! operation back.
 
 use std::any::Any;
 use std::future::Future;
@@ -67,6 +69,8 @@ enum Settles {
 struct Recording {
     journal: Arc<Journal>,
     settles: Settles,
+    /// Whether its executors offer an atomic block.
+    blocks: bool,
 }
 
 struct Opened {
@@ -74,12 +78,14 @@ struct Opened {
     unit: &'static str,
     policy: TransactionPolicy,
     settles: Settles,
+    blocks: bool,
 }
 
 /// The executor a unit installs, naming its policy.
 struct Installed {
     journal: Arc<Journal>,
     policy: TransactionPolicy,
+    blocks: bool,
 }
 
 /// An atomic block of an [`Installed`] executor.
@@ -106,6 +112,7 @@ impl UnitOfWork for Recording {
             unit: spec.unit.name(),
             policy: spec.policy,
             settles: self.settles,
+            blocks: self.blocks,
         }))
     }
 
@@ -119,6 +126,7 @@ impl OpenUnit for Opened {
         Arc::new(Installed {
             journal: Arc::clone(&self.journal),
             policy: self.policy,
+            blocks: self.blocks,
         })
     }
 
@@ -157,9 +165,11 @@ impl Executor for Installed {
     }
 
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        Some(Arc::new(Block {
-            journal: Arc::clone(&self.journal),
-        }))
+        self.blocks.then(|| {
+            Arc::new(Block {
+                journal: Arc::clone(&self.journal),
+            }) as Arc<dyn AtomicBlock>
+        })
     }
 }
 
@@ -197,8 +207,8 @@ fn ambient_policy() -> String {
     }
 }
 
-/// A shape whose nullable field fails, so its error is nested in the
-/// operation's response rather than the root field's.
+/// A shape whose fields fail below a root field: `broken` is nullable and holds
+/// its own `null`, `strict` is Non-Null and hands it to its parent.
 struct Shape;
 
 #[Object]
@@ -207,8 +217,16 @@ impl Shape {
         Err("the nested field failed".into())
     }
 
+    async fn strict(&self) -> Result<i32> {
+        Err("the non-null nested field failed".into())
+    }
+
     async fn fine(&self) -> i32 {
         1
+    }
+
+    async fn inner(&self) -> Option<Shape> {
+        Some(Shape)
     }
 }
 
@@ -252,6 +270,12 @@ impl ProbeResolver {
 
     #[mutation]
     #[public]
+    async fn maybe_shaped(&self) -> Option<Shape> {
+        Some(Shape)
+    }
+
+    #[mutation]
+    #[public]
     async fn slow_write(&self) -> String {
         tokio::time::sleep(Duration::from_secs(30)).await;
         ambient_policy()
@@ -288,11 +312,19 @@ struct ProbeModule;
 struct DeadlineModule;
 
 async fn boot_with<M: nest_rs_core::Module + 'static>(settles: Settles) -> (TestApp, Arc<Journal>) {
+    boot_over::<M>(settles, true).await
+}
+
+async fn boot_over<M: nest_rs_core::Module + 'static>(
+    settles: Settles,
+    blocks: bool,
+) -> (TestApp, Arc<Journal>) {
     let journal = Arc::new(Journal::default());
     let app = TestApp::builder()
         .provide_dyn::<dyn UnitOfWork>(Arc::new(Recording {
             journal: Arc::clone(&journal),
             settles,
+            blocks,
         }))
         .module::<M>()
         .build()
@@ -387,10 +419,24 @@ async fn a_failing_root_field_answers_null_rolls_back_alone_and_the_operation_co
     );
 }
 
-/// A Non-Null root field's null reaches `data`; the fields that answered keep
-/// their blocks, and the operation commits them.
+/// The root fields `#[operations]` dispatched, by name, in order: each files
+/// one `graphql.field` line.
+fn dispatched(logs: &LogCapture) -> Vec<String> {
+    logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::FIELD.name(),
+    )
+    .into_iter()
+    .filter_map(|line| line.field("operation"))
+    .collect()
+}
+
+/// A Non-Null root field's `null` reaches `data`: the answer reports nothing,
+/// so nothing the operation ran stands, and no root field after it resolves.
 #[tokio::test]
-async fn a_failing_non_null_root_field_nulls_the_data_and_the_others_still_commit() {
+async fn a_failing_non_null_root_field_nulls_the_data_rolls_the_operation_back_and_resolves_no_later_field()
+ {
+    let logs = LogCapture::install();
     let (app, journal) = boot().await;
     let reply = post(
         &app,
@@ -400,7 +446,75 @@ async fn a_failing_non_null_root_field_nulls_the_data_and_the_others_still_commi
     )
     .await;
     assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(reply["errors"].as_array().map(Vec::len), Some(1), "{reply}");
     assert_eq!(reply["errors"][0]["path"], json!(["b"]), "{reply}");
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "block released",
+            "block rolled back",
+            "settle graphql.operation false",
+        ],
+        "`a` answered nothing the client reads, so it rolls back with the operation"
+    );
+    assert_eq!(dispatched(&logs), ["write", "write"], "`c` never resolves");
+}
+
+/// A Non-Null field's `null` below a Non-Null root field climbs through it to
+/// `data`, as the root field's own error does.
+#[tokio::test]
+async fn a_non_null_field_failing_below_a_non_null_root_field_rolls_the_operation_back() {
+    let logs = LogCapture::install();
+    let (app, journal) = boot().await;
+    let reply = post(
+        &app,
+        json!({
+            "query": "mutation { a: write(fail: false) b: shaped { fine strict } c: write(fail: false) }"
+        }),
+    )
+    .await;
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(
+        reply["errors"][0]["path"],
+        json!(["b", "strict"]),
+        "{reply}"
+    );
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "block released",
+            "block rolled back",
+            "settle graphql.operation false",
+        ],
+    );
+    assert_eq!(dispatched(&logs), ["write", "shaped"], "`c` never resolves");
+}
+
+/// A Non-Null field's `null` below a nullable root field stops there: the root
+/// field answers `null`, its block rolls back, and the others commit.
+#[tokio::test]
+async fn a_non_null_field_failing_below_a_nullable_root_field_nulls_it_and_rolls_back_its_block_alone()
+ {
+    let (app, journal) = boot().await;
+    let reply = post(
+        &app,
+        json!({
+            "query": "mutation { a: maybeWrite(fail: false) b: maybeShaped { fine strict } c: maybeWrite(fail: false) }"
+        }),
+    )
+    .await;
+    assert_eq!(
+        reply["data"],
+        json!({ "a": "block", "b": null, "c": "block" }),
+        "{reply}"
+    );
+    assert_eq!(
+        reply["errors"][0]["path"],
+        json!(["b", "strict"]),
+        "{reply}"
+    );
     assert_eq!(
         journal.read(),
         [
@@ -413,32 +527,90 @@ async fn a_failing_non_null_root_field_nulls_the_data_and_the_others_still_commi
     );
 }
 
+/// A `null` that stays below the root field — a nullable field's own, or a
+/// Non-Null field's held by a nullable parent — leaves the root field's answer
+/// standing, so its work stands too.
 #[tokio::test]
-async fn a_nested_error_in_a_root_fields_selection_rolls_that_field_back() {
+async fn an_error_whose_null_stays_below_the_root_field_releases_its_block() {
     let (app, journal) = boot().await;
     let reply = post(
         &app,
-        json!({ "query": "mutation { shaped { fine broken } }" }),
+        json!({
+            "query": "mutation { a: shaped { fine broken inner { strict } } b: maybeShaped { broken } }"
+        }),
     )
     .await;
     assert_eq!(
         reply["data"],
-        json!({ "shaped": { "fine": 1, "broken": null } }),
+        json!({
+            "a": { "fine": 1, "broken": null, "inner": null },
+            "b": { "broken": null },
+        }),
         "{reply}"
     );
+    assert_eq!(reply["errors"].as_array().map(Vec::len), Some(3), "{reply}");
     assert_eq!(
-        reply["errors"][0]["path"],
-        json!(["shaped", "broken"]),
-        "{reply}"
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "block released",
+            "block released",
+            "settle graphql.operation true",
+        ],
+        "each root field answered its value: none of its work was rolled back"
     );
+}
+
+#[tokio::test]
+async fn a_batch_settles_each_mutation_on_its_own_answer() {
+    let (app, journal) = boot().await;
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&json!([
+            { "query": "mutation { write(fail: true) }" },
+            { "query": "mutation { write(fail: false) }" },
+        ]))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let replies: Value = resp.json().await.value().deserialize();
+    assert_eq!(replies[0]["data"], Value::Null, "{replies}");
+    assert_eq!(replies[1]["data"]["write"], "block", "{replies}");
     assert_eq!(
         journal.read(),
         [
             "open graphql.operation per_unit",
             "block rolled back",
+            "settle graphql.operation false",
+            "open graphql.operation per_unit",
+            "block released",
             "settle graphql.operation true",
         ],
-        "a field whose response carries an error reports no work"
+    );
+}
+
+/// A driver offering no atomic block fails a mutation field closed; a Non-Null
+/// one's `null` reaches `data`, so the fields after it do not run to fail too.
+#[tokio::test]
+async fn a_driver_offering_no_atomic_block_fails_the_first_root_field_and_resolves_no_later_one() {
+    let (app, journal) = boot_over::<ProbeModule>(Settles::At(Duration::ZERO), false).await;
+    let reply = post(
+        &app,
+        json!({ "query": "mutation { a: write(fail: false) b: write(fail: false) }" }),
+    )
+    .await;
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    let errors = reply["errors"].as_array().expect("one error");
+    assert_eq!(errors.len(), 1, "{reply}");
+    assert_eq!(errors[0]["path"], json!(["a"]), "{reply}");
+    assert_eq!(errors[0]["extensions"]["code"], "INTERNAL", "{reply}");
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "settle graphql.operation false",
+        ],
     );
 }
 
@@ -501,7 +673,7 @@ async fn an_operation_that_does_not_parse_runs_on_the_pool() {
         journal.read(),
         [
             "open graphql.operation pool",
-            "settle graphql.operation true"
+            "settle graphql.operation false"
         ]
     );
 }
@@ -823,6 +995,25 @@ async fn with_no_binding_a_mutation_resolves_bare() {
     assert_eq!(reply["data"]["write"], "none", "{reply}");
 }
 
+/// No binding, nothing to roll back: a Non-Null root field that nulls `data`
+/// still leaves the fields after it unresolved, since the answer reports none.
+#[tokio::test]
+async fn with_no_binding_no_root_field_resolves_after_one_nulls_the_data() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ProbeModule>()
+        .build()
+        .await
+        .expect("the schema boots with no data layer");
+    let reply = post(
+        &app,
+        json!({ "query": "mutation { a: write(fail: true) b: write(fail: false) }" }),
+    )
+    .await;
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(dispatched(&logs), ["write"], "`b` never resolves");
+}
+
 /// The next text frame of a graphql-ws socket, parsed.
 async fn next_message(socket: &mut nest_rs_testing::ws::WsSocket) -> Value {
     match socket.next_frame().await {
@@ -840,6 +1031,7 @@ async fn over_graphql_ws_each_mutation_runs_as_its_unit_inside_the_sockets() {
         .provide_dyn::<dyn UnitOfWork>(Arc::new(Recording {
             journal: Arc::clone(&journal),
             settles: Settles::At(Duration::ZERO),
+            blocks: true,
         }))
         .module::<ProbeModule>()
         .build_ws()
@@ -878,8 +1070,9 @@ async fn over_graphql_ws_each_mutation_runs_as_its_unit_inside_the_sockets() {
             "settle graphql.operation true",
             "open graphql.operation per_unit",
             "block rolled back",
-            "settle graphql.operation true",
+            "settle graphql.operation false",
         ],
-        "the socket's pool unit holds no transaction; each mutation opens and settles its own"
+        "the socket's pool unit holds no transaction; each mutation opens and settles its own, \
+         on its own answer"
     );
 }

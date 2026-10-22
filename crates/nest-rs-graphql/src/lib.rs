@@ -12,7 +12,9 @@
 //! the canary until the crate compiles, then review the SDL snapshot diff.
 //! `src/null_propagation.rs` reads three of its behaviours — a failed field's
 //! key left out, the first of a field's selections to finish kept, a request's
-//! cached parse executed — each held by its tests.
+//! cached parse executed — and a mutation root field reads the operation, its
+//! fragments and the errors filed so far off its context, each held by its
+//! tests.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

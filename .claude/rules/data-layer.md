@@ -106,8 +106,9 @@ whatever a filter or an interceptor then answered (a safe method runs on the
 pool, the unit opened by the edge's `run_unit` around the request's whole
 pipeline, and so does a request carrying units of its own, `/graphql` and
 `/mcp`; what the router answers itself opens none); a GraphQL operation
-once it executed, each mutation root field in a savepoint of it rolled back
-when its answer carries an error (`.claude/decisions/graphql-transactions.md`);
+once it executed with data in its answer, each mutation root field in a
+savepoint of it rolled back when the field answers `null` for an error
+(`.claude/decisions/graphql-transactions.md`);
 a WS message on its success — an error frame fails it, whatever a filter or an
 interceptor then answered — a connection hook unless it unwound or was cut at
 its deadline; an MCP operation on `Ok` with no tool error in band (`isError`); a

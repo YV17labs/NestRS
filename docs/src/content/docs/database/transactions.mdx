@@ -60,7 +60,7 @@ commits on its own outcome — you list nothing for it:
 | Unit | Commits when |
 |---|---|
 | GraphQL query | nothing to commit: it runs on the pool |
-| GraphQL mutation | it executed; each root field kept only when its answer carries no error ([below](#graphql-one-unit-per-operation)) |
+| GraphQL mutation | its answer reports data; each root field kept unless it answers `null` for an error ([below](#graphql-one-unit-per-operation)) |
 | WebSocket message | the reply is not an error frame |
 | WebSocket connect or disconnect hook | the hook ran to its end |
 | MCP operation | it answered `Ok`, with no `isError: true` in the tool's result |
@@ -74,12 +74,14 @@ transaction on its first query, and commits it.
 
 A GraphQL response always answers `200`, so the status line cannot say what
 committed. Each operation of the document is a unit of its own instead, and a
-mutation's root fields each run in a savepoint of it:
+mutation's root fields each run in a savepoint of it, kept or rolled back on
+the answer the field gives. With `createPost` returning `Result<Option<Post>>`,
+a nullable `Post`:
 
 ```graphql
 mutation {
   a: createPost(input: { title: "first" }) { id }   # kept
-  b: createPost(input: { title: "" }) { id }        # errs: rolled back alone
+  b: createPost(input: { title: "" }) { id }        # null: rolled back alone
   c: createPost(input: { title: "third" }) { id }   # kept
 }
 ```
@@ -87,20 +89,22 @@ mutation {
 - **A query** runs on the pool, its own unit, opening no transaction.
 - **A mutation** is one transaction, opened on its first statement. Its root
   fields resolve one after the other, each inside an
-  [atomic block](#atomic-blocks): a field whose answer carries an error — its
-  own, or one a field below it reported, a masked non-null field included — rolls
-  back its writes and drops the events it emitted, and the operation's other
-  fields commit. When its own resolver fails, the field answers `null` beside
-  its error, as the resolver wrote it: a unique violation is its `CONFLICT`,
-  never an empty `500`. When a field below it fails, its block rolls back all
-  the same, but the root field keeps its answer with that field `null`: an
-  error under a mutation field means none of that field's writes stand.
-- **A Non-Null field's `null` climbs to its parent**
-  ([where a failed field's `null` lands](/graphql/errors/#where-a-failed-fields-null-lands)):
-  when `createPost` returns `Result<Post>`, a `Post!`, `b`'s `null` reaches
-  `data`, and the answer reports neither `a` nor `c`, which still commit. A
-  mutation sent beside others whose answers the client needs returns
-  `Result<Option<T>>`.
+  [atomic block](#atomic-blocks): a root field that answers `null` for an
+  error — its own, or a Non-Null field's below it whose `null` climbs to it —
+  rolls back its writes and drops the events it emitted, and the operation's
+  other fields commit. Its error reads as the resolver wrote it: a unique
+  violation is its `CONFLICT`, never an empty `500`.
+- **A `null` that stays below the root field leaves its work standing.** A
+  nullable field that fails under it, or a Non-Null one under a nullable
+  parent, answers `null` where it lands
+  ([where a failed field's `null` lands](/graphql/errors/#where-a-failed-fields-null-lands)),
+  and the root field keeps its answer: what the answer reports, the database
+  holds.
+- **An answer with no data rolls the whole operation back.** A Non-Null root
+  field — `Result<Post>`, a `Post!` — hands its `null` to `data` itself, so the
+  answer reports nothing: the root fields that answered before it roll back
+  too, and none after it runs. A mutation sent beside others whose work must
+  stand on its own returns `Result<Option<T>>`.
 - **A field that never touches the database sends nothing**: its savepoint is
   as lazy as the transaction around it.
 - **A batch** holding a mutation runs its operations one at a time, in

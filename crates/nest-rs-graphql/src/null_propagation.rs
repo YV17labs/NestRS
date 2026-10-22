@@ -8,20 +8,27 @@
 //! off the schema's types and the operation's selections, and only in an
 //! answer whose errors name a path. Each error costs a walk down its own path,
 //! never a pass over the other errors.
+//!
+//! A mutation's root fields read the same placement while they resolve
+//! ([`MutationAnswer`]), so each settles its work on the answer it will give.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_graphql::futures_util::StreamExt;
 use async_graphql::futures_util::stream::BoxStream;
 use async_graphql::indexmap::IndexMap;
 use async_graphql::parser::types::{
-    BaseType, ExecutableDocument, OperationDefinition, OperationType, Selection, SelectionSet,
-    Type, TypeKind, TypeSystemDefinition,
+    BaseType, ExecutableDocument, FragmentDefinition, OperationDefinition, OperationType,
+    Selection, SelectionSet, Type, TypeKind, TypeSystemDefinition,
 };
 use async_graphql::parser::{parse_query, parse_schema};
-use async_graphql::{Data, Executor, Name, PathSegment, Request, Response, ServerError, Value};
+use async_graphql::{
+    Context, Data, Executor, Name, PathSegment, Positioned, Request, Response, ServerError,
+    ServerResult, Value,
+};
 
 use crate::operation_units::selected_operation;
 
@@ -41,11 +48,23 @@ impl<E> NullPropagated<E> {
             types: Arc::new(FieldTypes::of(sdl)),
         }
     }
+
+    /// The document `request` executes, kept for its answer's nulls; a
+    /// mutation's root fields are handed the [`MutationAnswer`] they read.
+    fn keep(&self, request: &mut Request) -> Option<Kept> {
+        let (kept, ty) = Kept::take(request)?;
+        if ty == OperationType::Mutation {
+            request
+                .data
+                .insert(MutationAnswer::new(Arc::clone(&self.types)));
+        }
+        Some(kept)
+    }
 }
 
 impl<E: Executor> Executor for NullPropagated<E> {
     async fn execute(&self, mut request: Request) -> Response {
-        let kept = Kept::take(&mut request);
+        let kept = self.keep(&mut request);
         let mut response = self.executor.execute(request).await;
         if let Some(mut kept) = kept {
             kept.place_nulls(&mut response, &self.types);
@@ -58,7 +77,7 @@ impl<E: Executor> Executor for NullPropagated<E> {
         mut request: Request,
         session_data: Option<Arc<Data>>,
     ) -> BoxStream<'static, Response> {
-        let mut kept = Kept::take(&mut request);
+        let mut kept = self.keep(&mut request);
         let types = Arc::clone(&self.types);
         self.executor
             .execute_stream(request, session_data)
@@ -69,6 +88,82 @@ impl<E: Executor> Executor for NullPropagated<E> {
                 response
             })
             .boxed()
+    }
+}
+
+/// What a mutation's root fields read of the answer their operation builds:
+/// where each one's errors leave it, and whether one already nulled `data`.
+pub(crate) struct MutationAnswer {
+    types: Arc<FieldTypes>,
+    nulled: AtomicBool,
+}
+
+/// What a root field answers once its errors' nulls are placed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RootAnswer {
+    /// Its value, any `null` placed below it.
+    Stands,
+    /// `null`.
+    Null,
+    /// Nothing: its `null` climbed to `data`, so the operation answers none.
+    NoData,
+}
+
+impl MutationAnswer {
+    fn new(types: Arc<FieldTypes>) -> Self {
+        Self {
+            types,
+            nulled: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether a root field already answered [`RootAnswer::NoData`].
+    pub(crate) fn data_nulled(&self) -> bool {
+        self.nulled.load(Ordering::Relaxed)
+    }
+
+    /// What the root field `ctx` resolves answers, given what it `resolved`
+    /// and the errors its resolution `filed`: the same placement its
+    /// operation's answer gets, so the field's work settles on what the
+    /// client reads. An answer of no data is kept for the root fields after it.
+    pub(crate) fn root_field(
+        &self,
+        ctx: &Context<'_>,
+        resolved: &ServerResult<Option<Value>>,
+        filed: &[ServerError],
+    ) -> RootAnswer {
+        if resolved.is_ok() && filed.is_empty() {
+            return RootAnswer::Stands;
+        }
+        let key = &ctx.item.node.response_key().node;
+        let own = [PathSegment::Field(key.to_string())];
+        let mut fields = IndexMap::new();
+        let mut paths: Vec<&[PathSegment]> = Vec::with_capacity(filed.len() + 1);
+        match resolved {
+            Ok(value) => {
+                fields.insert(key.clone(), value.clone().unwrap_or_default());
+            }
+            Err(_) => paths.push(&own),
+        }
+        paths.extend(filed.iter().map(|error| error.path.as_slice()));
+        let mut data = Value::Object(fields);
+        Selections::new(
+            &ctx.query_env.fragments,
+            &self.types,
+            &ctx.query_env.operation.node,
+        )
+        .place(&mut data, paths);
+        let answer = match &data {
+            Value::Object(fields) => match fields.get(key) {
+                Some(Value::Null) | None => RootAnswer::Null,
+                Some(_) => RootAnswer::Stands,
+            },
+            _ => RootAnswer::NoData,
+        };
+        if answer == RootAnswer::NoData {
+            self.nulled.store(true, Ordering::Relaxed);
+        }
+        answer
     }
 }
 
@@ -164,20 +259,23 @@ struct Kept {
 }
 
 impl Kept {
-    /// The document `request` executes, when it selects an operation.
-    fn take(request: &mut Request) -> Option<Self> {
+    /// The document `request` executes, and the type of the operation it
+    /// selects, when it selects one.
+    fn take(request: &mut Request) -> Option<(Self, OperationType)> {
         let wanted = request.operation_name.take();
-        let operation = request
+        let selected = request
             .parsed_query()
             .ok()
             .and_then(|document| selected_operation(document, wanted.as_deref()))
-            .map(|(name, _)| name.cloned());
+            .map(|(name, operation)| (name.cloned(), operation.node.ty));
         request.operation_name = wanted;
-        Some(Self {
-            operation: operation?,
+        let (operation, ty) = selected?;
+        let kept = Self {
+            operation,
             text: std::mem::take(&mut request.query),
             parsed: None,
-        })
+        };
+        Some((kept, ty))
     }
 
     /// `response`'s nulls, placed where its errors' paths say a field erred.
@@ -202,15 +300,17 @@ impl Kept {
         let Some((_, operation)) = selected_operation(document, self.operation.as_deref()) else {
             return;
         };
-        Selections::new(document, types, &operation.node)
-            .place(&mut response.data, &response.errors);
+        Selections::new(&document.fragments, types, &operation.node).place(
+            &mut response.data,
+            response.errors.iter().map(|error| error.path.as_slice()),
+        );
     }
 }
 
 /// An operation's selections, merged by response key and read against the
 /// schema's types as far as the errors' paths go into them.
 struct Selections<'a> {
-    document: &'a ExecutableDocument,
+    fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
     types: &'a FieldTypes,
     /// The operation's root first, then each position read so far.
     positions: Vec<Position<'a>>,
@@ -266,7 +366,7 @@ impl Placement<'_> {
 
 impl<'a> Selections<'a> {
     fn new(
-        document: &'a ExecutableDocument,
+        fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
         types: &'a FieldTypes,
         operation: &'a OperationDefinition,
     ) -> Self {
@@ -279,24 +379,24 @@ impl<'a> Selections<'a> {
             ..Position::default()
         };
         Self {
-            document,
+            fragments,
             types,
             positions: vec![root],
         }
     }
 
-    /// Each error's null placed in `data`, the shortest paths first, so a null
-    /// placed above another error's position answers for both; errors that
-    /// lack one position place one null.
-    fn place(&mut self, data: &mut Value, errors: &[ServerError]) {
+    /// The null of each error, by its path, placed in `data`, the shortest
+    /// paths first, so a null placed above another error's position answers
+    /// for both; errors that lack one position place one null.
+    fn place<'e>(&mut self, data: &mut Value, errors: impl IntoIterator<Item = &'e [PathSegment]>) {
         let mut lacking = HashSet::new();
         let mut erred_in_null = HashMap::<PathKey<'_>, usize>::new();
         let mut paths = Vec::new();
         for error in errors {
-            let Some((len, holder)) = unanswered(data, &error.path) else {
+            let Some((len, holder)) = unanswered(data, error) else {
                 continue;
             };
-            let path = &error.path[..len];
+            let path = &error[..len];
             if !lacking.insert(PathKey(path)) {
                 continue;
             }
@@ -407,7 +507,7 @@ impl<'a> Selections<'a> {
         parent: Option<&'a str>,
         below: &mut IndexMap<&'a str, usize>,
     ) {
-        let (document, types) = (self.document, self.types);
+        let (fragments, types) = (self.fragments, self.types);
         for selection in &set.items {
             match &selection.node {
                 Selection::Field(field) => {
@@ -427,8 +527,7 @@ impl<'a> Selections<'a> {
                         .push((&field.selection_set.node, ty.map(named)));
                 }
                 Selection::FragmentSpread(spread) => {
-                    if let Some(fragment) = document.fragments.get(&spread.node.fragment_name.node)
-                    {
+                    if let Some(fragment) = fragments.get(&spread.node.fragment_name.node) {
                         let on = fragment.node.type_condition.node.on.node.as_str();
                         self.collect(&fragment.node.selection_set.node, Some(on), below);
                     }
@@ -952,14 +1051,9 @@ mod tests {
         let Some((_, operation)) = selected_operation(&document, None) else {
             panic!("the document selects its operation");
         };
-        let error = |segments| {
-            let mut error = ServerError::new("failed", None);
-            error.path = path(segments);
-            error
-        };
         let mut data = value(json!({ "fine": { "fine": 1 }, "maybeLeaves": [{ "fine": 1 }] }));
-        Selections::new(&document, &types, &operation.node)
-            .place(&mut data, &[error(json!(["maybeLeaves", 5]))]);
+        Selections::new(&document.fragments, &types, &operation.node)
+            .place(&mut data, [&path(json!(["maybeLeaves", 5]))[..]]);
         assert_eq!(data, Value::Null, "`[Leaf]!` hands it to `data`");
     }
 
@@ -1065,6 +1159,161 @@ mod tests {
         assert_eq!(
             data.into_json().unwrap_or_else(|error| panic!("{error}")),
             json!({ "a": { "b": [null], "x": null }, "n": { "x": null }, "h": null })
+        );
+    }
+
+    struct Changes;
+
+    #[Object]
+    impl Changes {
+        async fn done(&self) -> i32 {
+            1
+        }
+
+        async fn failed(&self) -> async_graphql::Result<Option<i32>> {
+            Err("the nullable write failed".into())
+        }
+
+        async fn sure_failed(&self) -> async_graphql::Result<i32> {
+            Err("the non-null write failed".into())
+        }
+
+        async fn leaf(&self) -> Option<Leaf> {
+            Some(Leaf)
+        }
+
+        async fn sure_leaf(&self) -> Leaf {
+            Leaf
+        }
+
+        async fn leaves(&self) -> Option<Vec<Leaf>> {
+            Some(vec![Leaf, Leaf])
+        }
+    }
+
+    /// The mutation root, recording what each root field answers as its block
+    /// reads it, and whether `data` is nulled after it.
+    struct Answers {
+        root: Changes,
+        seen: Arc<std::sync::Mutex<Vec<(RootAnswer, bool)>>>,
+    }
+
+    impl async_graphql::OutputType for Answers {
+        fn type_name() -> std::borrow::Cow<'static, str> {
+            <Changes as async_graphql::OutputType>::type_name()
+        }
+
+        fn create_type_info(registry: &mut async_graphql::registry::Registry) -> String {
+            <Changes as async_graphql::OutputType>::create_type_info(registry)
+        }
+
+        async fn resolve(
+            &self,
+            _ctx: &async_graphql::ContextSelectionSet<'_>,
+            _field: &Positioned<async_graphql::parser::types::Field>,
+        ) -> ServerResult<Value> {
+            unreachable!("a root resolves through resolve_field")
+        }
+    }
+
+    impl async_graphql::ContainerType for Answers {
+        async fn resolve_field(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
+            let filed = |ctx: &Context<'_>| {
+                ctx.query_env
+                    .errors
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            };
+            let before = filed(ctx).len();
+            let resolved = self.root.resolve_field(ctx).await;
+            let answer = ctx
+                .data_opt::<MutationAnswer>()
+                .unwrap_or_else(|| panic!("a mutation's root fields read its answer"));
+            let answered = answer.root_field(ctx, &resolved, &filed(ctx)[before..]);
+            self.seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((answered, answer.data_nulled()));
+            resolved
+        }
+    }
+
+    impl async_graphql::ObjectType for Answers {}
+
+    /// Each mutation document, and what each of its root fields answers, as
+    /// the operation's answer places its nulls.
+    #[tokio::test]
+    async fn a_root_field_reads_the_answer_its_errors_leave_it() {
+        use RootAnswer::{NoData, Null, Stands};
+        for (document, answers) in [
+            ("mutation { done }", vec![(Stands, false)]),
+            ("mutation { failed }", vec![(Null, false)]),
+            ("mutation { sureFailed }", vec![(NoData, true)]),
+            // An object whose every field failed answers as that object.
+            ("mutation { leaf { broken } }", vec![(Stands, false)]),
+            ("mutation { leaf { fine strict } }", vec![(Null, false)]),
+            ("mutation { sureLeaf { broken } }", vec![(Stands, false)]),
+            (
+                "mutation { sureLeaf { child { strict } } }",
+                vec![(NoData, true)],
+            ),
+            // `[Leaf!]`: an item cannot be null, so the list, the root field, is.
+            ("mutation { leaves { strict } }", vec![(Null, false)]),
+            (
+                "mutation { a: leaf { broken } b: leaf { strict } c: done }",
+                vec![(Stands, false), (Null, false), (Stands, false)],
+            ),
+            (
+                "mutation { ...Writes } fragment Writes on Changes { leaf { strict } }",
+                vec![(Null, false)],
+            ),
+        ] {
+            let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let schema = Schema::new(
+                Query,
+                Answers {
+                    root: Changes,
+                    seen: Arc::clone(&seen),
+                },
+                async_graphql::EmptySubscription,
+            );
+            let sdl = schema.sdl();
+            NullPropagated::new(schema, &sdl)
+                .execute(Request::new(document))
+                .await;
+            assert_eq!(
+                *seen
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                answers,
+                "{document}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_query_reads_no_mutation_answer() {
+        struct Probe;
+
+        #[Object]
+        impl Probe {
+            async fn handed(&self, ctx: &Context<'_>) -> bool {
+                ctx.data_opt::<MutationAnswer>().is_some()
+            }
+        }
+
+        let schema = Schema::new(Probe, Changes, async_graphql::EmptySubscription);
+        let sdl = schema.sdl();
+        let response = NullPropagated::new(schema, &sdl)
+            .execute(Request::new("{ handed }"))
+            .await;
+        assert_eq!(
+            response
+                .data
+                .into_json()
+                .unwrap_or_else(|error| panic!("{error}")),
+            json!({ "handed": false })
         );
     }
 }

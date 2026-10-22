@@ -4,8 +4,8 @@
 //! each of its phases held to a deadline ([`Phases`]).
 //!
 //! Each request hyper reads is handed to the assembled [`BoxEndpoint`] as a
-//! nestrs [`Request`]; poem's `Server` exposed no hook for the cap, the accept
-//! errors or hyper's timer, so the loop is ours
+//! nestrs [`Request`]. The loop is the framework's own because a library's
+//! server offered no hook for the cap, the accept errors or hyper's timer
 //! (`.claude/decisions/http-server.md`).
 
 use std::convert::Infallible;

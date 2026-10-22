@@ -19,7 +19,7 @@ all-features = true
 
 [features]
 default = []
-# HTTP surface: poem extractors (`Authorize`, `Scope`), the `AbilityGuard`'s
+# HTTP surface: the extractors (`Authorize`, `Scope`), the `AbilityGuard`'s
 # HTTP entry, and the `RouteResponseShaper` that masks responses transparently.
 # The `Bind` route-model extractor lives in `nest_rs_seaorm::Bind` (it must use
 # the data layer). `AbilityGuard` itself is at the crate root and every
@@ -28,7 +28,6 @@ default = []
 # HTTP request, and each in-band feature declares its own edge's view.
 http = [
     "dep:nest-rs-http",
-    "dep:poem",
 ]
 # GraphQL surface: the `ability` accessor, reading the field's unit, and the
 # response mask. The class gate is `class_gate`, every edge's, at the crate
@@ -39,7 +38,6 @@ graphql = [
     # `check_http` entry — so this surface needs `nest-rs-http`, which the
     # GraphQL bindings alone never named.
     "dep:nest-rs-http",
-    "dep:poem",
 ]
 # MCP surface: the response mask. Masking inside a tool body is the
 # transport-free `masked_output_ambient`; the edge opens each operation's unit
@@ -48,7 +46,6 @@ mcp = [
     "dep:nest-rs-mcp",
     # Same as GraphQL: the root guard's `check_http` is what `/mcp`'s request runs.
     "dep:nest-rs-http",
-    "dep:poem",
 ]
 # WebSocket surface: the per-message reply mask (`ws::masked_reply_for`) that
 # `#[messages]` emits from an `#[authorize(Action, Entity)]`, beside the class
@@ -59,7 +56,6 @@ ws = [
     "dep:nest-rs-ws",
     # The root guard's `check_http` entry is what runs on the upgrade.
     "dep:nest-rs-http",
-    "dep:poem",
 ]
 # Enable every transport binding at once — useful for
 # `cargo test -p nest-rs-authz --features full`.
@@ -94,7 +90,6 @@ nest-rs-http = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-mcp = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
-poem = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Self dev-dependency: turn on every transport binding for this crate's own
@@ -133,7 +128,6 @@ serde_json.workspace = true
 # puts a `JsonSchema` bound on their `Json<T>` payloads.
 schemars.workspace = true
 tokio.workspace = true
-poem.workspace = true
 
 [lints]
 workspace = true

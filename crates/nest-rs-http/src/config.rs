@@ -1,8 +1,8 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+use http::HeaderName;
 use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
-use poem::http::HeaderName;
 
 use crate::cors::HttpCors;
 use crate::raw_body::RawBody;

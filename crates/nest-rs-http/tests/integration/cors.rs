@@ -4,9 +4,13 @@
 
 use std::time::Duration;
 
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpCors, controller, routes};
+use nest_rs_core::{ContainerBuilder, Discoverable, module};
+use nest_rs_http::{
+    HttpConfig, HttpCors, HttpEndpointMeta, HttpTransport, Response, controller, endpoint_fn,
+    routes,
+};
 use nest_rs_http::{Method, StatusCode, header};
+use nest_rs_testing::LogCapture;
 
 #[controller(path = "/cors")]
 struct PagesController;
@@ -22,6 +26,56 @@ impl PagesController {
 
 #[module(providers = [PagesController])]
 struct CorsModule;
+
+#[controller(path = "/documents")]
+struct DocumentsController;
+
+#[routes]
+impl DocumentsController {
+    #[get("/{id}")]
+    #[public]
+    async fn read(&self) -> &'static str {
+        "{}"
+    }
+
+    #[put("/{id}")]
+    #[public]
+    async fn replace(&self) -> &'static str {
+        "{}"
+    }
+
+    #[delete("/{id}")]
+    #[public]
+    async fn remove(&self) -> &'static str {
+        ""
+    }
+}
+
+#[module(providers = [DocumentsController])]
+struct DocumentsModule;
+
+/// A self-mount answering every method itself, as MCP's endpoint does.
+struct EveryMethodMount;
+
+impl Discoverable for EveryMethodMount {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<EveryMethodMount, HttpEndpointMeta>(
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/rpc", "rpc", |_container, routes| {
+                routes.route_any(
+                    "/rpc",
+                    endpoint_fn(|_| async { Ok(Response::builder().body("rpc")) }),
+                );
+            })
+            .owned_by("EveryMethodMount"),
+        )
+    }
+}
+
+#[module(providers = [EveryMethodMount])]
+struct EveryMethodModule;
+
+/// The methods WHATWG Fetch forbids a page to send: never one a policy lists.
+const FORBIDDEN: [&str; 3] = ["connect", "trace", "track"];
 
 const LISTED: &str = "https://app.example.com";
 
@@ -182,4 +236,171 @@ async fn a_wildcard_opens_every_origin_method_and_header() {
         "{}",
         preflight.0.status()
     );
+}
+
+/// A policy naming no method lists what the routes serve — and the
+/// CORS-safelisted three, which a preflight still checks — never a method a
+/// page cannot send; a method no route serves is refused.
+#[tokio::test]
+async fn a_policy_naming_no_method_lists_the_methods_the_app_routes() {
+    let client = crate::boot_on::<DocumentsModule>(policy(HttpCors {
+        origins: vec![LISTED.into()],
+        ..HttpCors::default()
+    }))
+    .await;
+
+    let preflight = client
+        .request(Method::OPTIONS, "/documents/7")
+        .header(header::ORIGIN, LISTED)
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PUT")
+        .send()
+        .await;
+    assert!(
+        preflight.0.status().is_success(),
+        "{}",
+        preflight.0.status()
+    );
+    let mut methods = values(&preflight.0, header::ACCESS_CONTROL_ALLOW_METHODS);
+    methods.sort();
+    assert_eq!(methods, ["delete", "get", "head", "post", "put"]);
+
+    let unrouted = client
+        .request(Method::OPTIONS, "/documents/7")
+        .header(header::ORIGIN, LISTED)
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PATCH")
+        .send()
+        .await;
+    unrouted.assert_status(StatusCode::FORBIDDEN);
+}
+
+/// An address answering every method itself admits every method a page sends
+/// under a policy naming none — never a forbidden one.
+#[tokio::test]
+async fn a_mount_answering_every_method_admits_every_method_a_page_sends() {
+    let client = crate::boot_on::<EveryMethodModule>(policy(HttpCors {
+        origins: vec![LISTED.into()],
+        ..HttpCors::default()
+    }))
+    .await;
+
+    let preflight = client
+        .request(Method::OPTIONS, "/rpc")
+        .header(header::ORIGIN, LISTED)
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "DELETE")
+        .send()
+        .await;
+    assert!(
+        preflight.0.status().is_success(),
+        "{}",
+        preflight.0.status()
+    );
+    let mut methods = values(&preflight.0, header::ACCESS_CONTROL_ALLOW_METHODS);
+    methods.sort();
+    assert_eq!(
+        methods,
+        ["delete", "get", "head", "options", "patch", "post", "put"]
+    );
+}
+
+/// The wildcard admits every method, and says so as Fetch spells it, `*`,
+/// rather than as a list naming a method no page can send.
+#[tokio::test]
+async fn a_wildcard_method_list_answers_the_wildcard_and_admits_an_extension_method() {
+    let client = crate::boot_on::<CorsModule>(policy(HttpCors {
+        origins: vec![LISTED.into()],
+        methods: vec!["*".into()],
+        ..HttpCors::default()
+    }))
+    .await;
+
+    let preflight = client
+        .request(Method::OPTIONS, "/cors")
+        .header(header::ORIGIN, LISTED)
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PROPFIND")
+        .send()
+        .await;
+    assert!(
+        preflight.0.status().is_success(),
+        "{}",
+        preflight.0.status()
+    );
+    let methods = values(&preflight.0, header::ACCESS_CONTROL_ALLOW_METHODS);
+    assert_eq!(methods, ["*"]);
+    assert!(
+        !methods.iter().any(|m| FORBIDDEN.contains(&m.as_str())),
+        "{methods:?}"
+    );
+}
+
+/// A method a page cannot send is no method a policy can admit: the boot
+/// refuses it, naming the rule.
+#[test]
+fn a_policy_listing_a_forbidden_method_fails_the_boot() {
+    for method in ["TRACE", "connect", "Track"] {
+        let refused = HttpTransport::from_config(&policy(HttpCors {
+            origins: vec![LISTED.into()],
+            methods: vec!["GET".into(), method.into()],
+            ..HttpCors::default()
+        }))
+        .err()
+        .unwrap_or_else(|| panic!("{method} is refused"));
+        let said = format!("{refused:#}");
+        assert!(said.contains("forbidden method"), "{said}");
+        assert!(said.contains(&method.to_ascii_uppercase()), "{said}");
+    }
+}
+
+/// Each refusal files one `warn` on the transport's target, naming the check
+/// it failed and none of what the request sent.
+#[tokio::test]
+async fn each_refusal_files_one_warn_naming_its_check_and_no_value() {
+    let client = crate::boot_on::<CorsModule>(policy(listed())).await;
+    let cases = [
+        (
+            "origin_not_allowed",
+            Method::GET,
+            "https://evil.example",
+            None,
+            None,
+        ),
+        (
+            "method_not_allowed",
+            Method::OPTIONS,
+            LISTED,
+            Some("DELETE"),
+            None,
+        ),
+        (
+            "headers_not_allowed",
+            Method::OPTIONS,
+            LISTED,
+            Some("PUT"),
+            Some("x-evil-header"),
+        ),
+    ];
+    for (reason, method, origin, requested, headers) in cases {
+        let logs = LogCapture::install();
+        let mut request = client
+            .request(method, "/cors")
+            .header(header::ORIGIN, origin);
+        if let Some(requested) = requested {
+            request = request.header(header::ACCESS_CONTROL_REQUEST_METHOD, requested);
+        }
+        if let Some(headers) = headers {
+            request = request.header(header::ACCESS_CONTROL_REQUEST_HEADERS, headers);
+        }
+        request.send().await.assert_status(StatusCode::FORBIDDEN);
+
+        let line = logs.expect_one(
+            nest_rs_http::target::HTTP,
+            "cross-origin request refused by the CORS policy",
+        );
+        assert_eq!(line.level, "warn", "{line:#?}");
+        assert_eq!(line.field("reason").as_deref(), Some(reason), "{line:#?}");
+        for event in logs.events() {
+            let said = format!("{event:?}");
+            assert!(!said.contains("evil"), "{said}");
+            assert!(!said.contains("DELETE"), "{said}");
+        }
+    }
 }

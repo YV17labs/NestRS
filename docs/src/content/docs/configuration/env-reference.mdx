@@ -106,7 +106,7 @@ config survives adopting or dropping the observability stack.
 | `VERSION_HEADER` | the header the `header` strategy reads — default `X-API-Version`; a value that is no HTTP header name fails the boot, set or pinned |
 | `DEFAULT_VERSION` | the version served to a caller that states none; unset ⇒ the unversioned routes |
 | `CORS_ORIGINS` | comma-separated allowed origins; unset ⇒ no CORS layer. Also the browser origins that may open a WebSocket or GraphQL socket and call MCP: unset, the server's own alone; set, those listed alone, the server's own included only when listed |
-| `CORS_METHODS` | comma-separated allowed request methods |
+| `CORS_METHODS` | comma-separated allowed request methods; unset ⇒ the methods the routes serve and `GET`, `HEAD`, `POST`, or every method a page may send — `PUT`, `DELETE`, `PATCH` and `OPTIONS` too — once a mount answers any method itself, as `/mcp` does; `CONNECT`, `TRACE` or `TRACK` fails the boot |
 | `CORS_HEADERS` | comma-separated allowed request headers |
 | `CORS_EXPOSED` | comma-separated response headers exposed to the browser, beside `Link`, `Location` and `Retry-After`, always exposed |
 | `CORS_CREDENTIALS` | allow credentialed requests — default `false` |

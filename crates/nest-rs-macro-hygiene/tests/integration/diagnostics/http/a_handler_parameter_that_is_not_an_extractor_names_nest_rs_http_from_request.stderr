@@ -1,15 +1,15 @@
-error[E0277]: the trait bound `Settings: nest_rs::nest_rs_http::FromRequest<'_>` is not satisfied
+error[E0277]: the trait bound `Settings: FromRequest<'_>` is not satisfied
   --> tests/integration/diagnostics/http/a_handler_parameter_that_is_not_an_extractor_names_nest_rs_http_from_request.rs:15:37
    |
 15 |     async fn read(&self, _settings: Settings) -> &'static str {
    |                                     ^^^^^^^^ unsatisfied trait bound
    |
-help: the trait `nest_rs::nest_rs_http::FromRequest<'_>` is not implemented for `Settings`
+help: the trait `FromRequest<'_>` is not implemented for `Settings`
   --> tests/integration/diagnostics/http/a_handler_parameter_that_is_not_an_extractor_names_nest_rs_http_from_request.rs:7:1
    |
  7 | struct Settings;
    | ^^^^^^^^^^^^^^^
-   = help: the following other types implement trait `nest_rs::nest_rs_http::FromRequest<'a>`:
+   = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::nest_rs_http::Request
              Authorize<A, S>
              Bind<A, S>
@@ -20,18 +20,18 @@ help: the trait `nest_rs::nest_rs_http::FromRequest<'_>` is not implemented for 
              nest_rs::nest_rs_authz::http::Scope<E, A>
            and $N others
 
-error[E0277]: the trait bound `Settings: nest_rs::nest_rs_http::FromRequest<'_>` is not satisfied
+error[E0277]: the trait bound `Settings: FromRequest<'_>` is not satisfied
   --> tests/integration/diagnostics/http/a_handler_parameter_that_is_not_an_extractor_names_nest_rs_http_from_request.rs:12:1
    |
 12 | #[routes]
    | ^^^^^^^^^ unsatisfied trait bound
    |
-help: the trait `nest_rs::nest_rs_http::FromRequest<'_>` is not implemented for `Settings`
+help: the trait `FromRequest<'_>` is not implemented for `Settings`
   --> tests/integration/diagnostics/http/a_handler_parameter_that_is_not_an_extractor_names_nest_rs_http_from_request.rs:7:1
    |
  7 | struct Settings;
    | ^^^^^^^^^^^^^^^
-   = help: the following other types implement trait `nest_rs::nest_rs_http::FromRequest<'a>`:
+   = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::nest_rs_http::Request
              Authorize<A, S>
              Bind<A, S>

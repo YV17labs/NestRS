@@ -16,7 +16,6 @@ nest-rs = { workspace = true, features = ["testing"] }
 features = { workspace = true, features = ["test-support"] }
 migrations = { workspace = true }
 sea-orm.workspace = true
-poem.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

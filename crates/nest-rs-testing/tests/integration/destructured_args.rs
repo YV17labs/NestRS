@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use nest_rs_core::{Container, injectable, module};
 use nest_rs_graphql::async_graphql::{InputObject, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-// Two `Valid` carriers (the orphan rule): the HTTP one wraps a poem extractor.
+// Two `Valid` carriers (the orphan rule): the HTTP one wraps an extractor.
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpModule, Valid as HttpValid, controller, routes};
 use nest_rs_http::{Json, Path};

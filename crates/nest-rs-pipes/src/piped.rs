@@ -1,6 +1,6 @@
 //! Value-form pipe carriers for transports whose handler argument *is* the wire
 //! value (GraphQL, WS, queue) — the analog of the HTTP `Piped<P, E>` / `Valid<E>`
-//! extractors, which wrap a poem *extractor* `E`.
+//! extractors, which wrap an HTTP *extractor* `E`.
 //!
 //! Each transport's macro strips `Piped<P, T>` / `Valid<T>` from the wire
 //! signature, exposing `T`, runs the pipe and hands the handler this carrier.

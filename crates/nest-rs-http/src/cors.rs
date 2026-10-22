@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use http::Method;
 use nest_rs_config::ConfigService;
 
 /// Cross-Origin Resource Sharing policy. `origins` empty ⇒ no CORS layer
@@ -19,7 +20,12 @@ pub struct HttpCors {
     /// Allowed origins; empty ⇒ no CORS layer installed. Also the browser
     /// origins the socket upgrades and `/mcp` admit.
     pub origins: Vec<String>,
-    /// Allowed request methods (`Access-Control-Allow-Methods`).
+    /// Allowed request methods (`Access-Control-Allow-Methods`); empty ⇒ the
+    /// methods the routes serve and the CORS-safelisted `GET`, `HEAD`,
+    /// `POST`, or every method a page may send (`PUT`, `DELETE`, `PATCH` and
+    /// `OPTIONS` beside those) once an address answers any method itself, as
+    /// `/mcp` does. A method a page cannot send (`CONNECT`, `TRACE`, `TRACK`)
+    /// fails the boot.
     pub methods: Vec<String>,
     /// Allowed request headers (`Access-Control-Allow-Headers`).
     pub headers: Vec<String>,
@@ -38,6 +44,84 @@ pub(crate) const WILDCARD: &str = "*";
 /// The response headers the framework sends on a route's behalf. None is
 /// CORS-safelisted, so a cross-origin client reads them only when exposed.
 pub(crate) const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
+
+/// The methods WHATWG Fetch forbids a page to send (*forbidden method*), which
+/// no preflight asks for.
+const FORBIDDEN_METHODS: [&str; 3] = ["CONNECT", "TRACE", "TRACK"];
+
+/// The CORS-safelisted methods (WHATWG Fetch): a request needs no preflight for
+/// one, but a preflight it needs for a header still checks it.
+const SAFELISTED_METHODS: [Method; 3] = [Method::GET, Method::HEAD, Method::POST];
+
+/// The methods a page may send an address that dispatches on the method
+/// itself: RFC 9110's and `PATCH` (RFC 5789), the forbidden ones aside.
+const SENDABLE_METHODS: [Method; 7] = [
+    Method::GET,
+    Method::HEAD,
+    Method::POST,
+    Method::PUT,
+    Method::DELETE,
+    Method::OPTIONS,
+    Method::PATCH,
+];
+
+/// Whether `method` is one a page cannot send, matched without case.
+fn is_forbidden(method: &str) -> bool {
+    FORBIDDEN_METHODS
+        .iter()
+        .any(|forbidden| forbidden.eq_ignore_ascii_case(method))
+}
+
+/// What a policy naming no method admits: the CORS-safelisted methods, each
+/// method `routed` names, and every method a page may send when an address
+/// answers `every_method` itself — never a forbidden one.
+pub(crate) fn admitted_by_default<'a>(
+    routed: impl IntoIterator<Item = &'a Method>,
+    every_method: bool,
+) -> Vec<Method> {
+    let mut admitted = match every_method {
+        true => SENDABLE_METHODS.to_vec(),
+        false => SAFELISTED_METHODS.to_vec(),
+    };
+    for method in routed {
+        if !is_forbidden(method.as_str()) && !admitted.contains(method) {
+            admitted.push(method.clone());
+        }
+    }
+    admitted
+}
+
+/// Which check of the policy a cross-origin request failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CorsRefusal {
+    /// Its `Origin` is not listed.
+    Origin,
+    /// The method its preflight asks for is not admitted.
+    Method,
+    /// A header its preflight asks for is not admitted.
+    Headers,
+}
+
+impl CorsRefusal {
+    /// The `reason` an operator filters the refusal on.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Origin => "origin_not_allowed",
+            Self::Method => "method_not_allowed",
+            Self::Headers => "headers_not_allowed",
+        }
+    }
+
+    /// The one `warn` a refusal files: the check it failed, and none of what
+    /// the request sent, whose origin is the client's to choose.
+    pub(crate) fn file(self) {
+        tracing::warn!(
+            target: crate::target::HTTP,
+            reason = self.as_str(),
+            "cross-origin request refused by the CORS policy",
+        );
+    }
+}
 
 /// Whether a list holds the wildcard, which admits every value.
 pub(crate) fn holds_wildcard(values: &[String]) -> bool {
@@ -68,6 +152,19 @@ impl HttpCors {
                 &self.exposed_headers,
             ),
         ]
+    }
+
+    /// Refuse a method no page can send: a policy listing it would claim to
+    /// admit what no browser asks for.
+    pub(crate) fn reject_forbidden_methods(&self) -> Result<()> {
+        if let Some(method) = self.methods.iter().find(|method| is_forbidden(method)) {
+            anyhow::bail!(
+                "invalid CORS config: `{}` in `methods` is a forbidden method — WHATWG Fetch \
+                 never lets a page send it, so no preflight asks for it; drop it from the list",
+                method.to_ascii_uppercase(),
+            );
+        }
+        Ok(())
     }
 
     /// Refuse a `*` that credentials turn into a literal no browser honours.
@@ -119,6 +216,27 @@ impl HttpCors {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_admits_the_safelisted_and_routed_methods_never_a_forbidden_one() {
+        let track = Method::from_bytes(b"TRACK").unwrap();
+        let routed = [Method::PUT, Method::GET, Method::TRACE, Method::PUT, track];
+        assert_eq!(
+            admitted_by_default(&routed, false),
+            [Method::GET, Method::HEAD, Method::POST, Method::PUT],
+        );
+    }
+
+    #[test]
+    fn an_address_answering_every_method_admits_every_method_a_page_sends() {
+        let propfind = Method::from_bytes(b"PROPFIND").unwrap();
+        let admitted = admitted_by_default([&propfind], true);
+        for method in [Method::PUT, Method::DELETE, Method::PATCH, propfind] {
+            assert!(admitted.contains(&method), "{method}");
+        }
+        assert!(!admitted.contains(&Method::TRACE));
+        assert!(!admitted.contains(&Method::CONNECT));
+    }
 
     #[test]
     fn from_env_returns_none_when_origins_unset() {

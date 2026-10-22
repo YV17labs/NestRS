@@ -46,9 +46,10 @@ serde_json = "1.0"  # public
 # release by 2027-01-31 and the suites stop mutating the process environment.
 figment = "0.10"
 
-# Past the 12-month bar (3.1.12, 2025-07-28): 4.0 (poem-web/poem#1200) at its
-# release, or none by 2027-01-31 and `.claude/decisions/http-server.md` applies.
-poem = { version = "3.1", features = ["anyhow", "compression", "multipart"] }
+# Past the 12-month bar (3.1.12, 2025-07-28), and nest-rs-http's crate-private
+# adapter alone (`deny.toml`): the adapter's move to axum retires it, by
+# 2027-01-31 at the latest (`.claude/decisions/http-server.md`).
+poem = { version = "3.1", default-features = false, features = ["compression", "multipart"] }
 rustls = "0.23"  # public in nest-rs-testing alone
 rustls-native-certs = "0.8"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }

@@ -15,8 +15,8 @@
 //! Refused, each with the 7.0 spelling where there is one: 6.x's `:name` and
 //! `*rest`, a parameter carrying a pattern (`:id<\d+>`, `{id:\d+}`), text after
 //! a parameter in its segment, and a catch-all before the end. A literal `:`,
-//! `*` or `<` stays refused while poem routes, which would read it as a
-//! parameter (`.claude/decisions/route-template-grammar.md`).
+//! `*` or `<` stays refused, since the router the transport adapts would read
+//! it as a parameter (`.claude/decisions/route-template-grammar.md`).
 //!
 //! The **identity** drops parameter names, which decide nothing about routing.
 

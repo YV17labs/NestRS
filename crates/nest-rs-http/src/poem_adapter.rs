@@ -1,48 +1,111 @@
 //! The HTTP library the transport adapts, poem, behind one crate-private type:
 //! the router the route table compiles into, the CORS and compression
-//! answered around the edge, and the query, form and multipart decoders the
-//! extractors read through. What those do on the wire is pinned by black-box
-//! suites (`tests/integration/{routes,cors,compression,query,form,multipart}.rs`),
+//! answered around the edge, the query, form and multipart decoders the
+//! extractors read through, and the crossings between nestrs's request,
+//! response, body and error and poem's, which never leave this file. What
+//! those do on the wire is pinned by black-box suites
+//! (`tests/integration/{routes,cors,compression,query,form,multipart}.rs`),
 //! so a later library replaces this file and passes them unchanged
 //! (`.claude/decisions/http-server.md`).
+#![expect(
+    clippy::disallowed_types,
+    reason = "poem is the HTTP adapter's, and this file is the one that names it"
+)]
 
+use std::fmt;
+use std::io;
+use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Context;
 use bytes::Bytes;
-use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_RANGE, CONTENT_TYPE, Entry, VARY};
+use http::header::{
+    ACCEPT_ENCODING, ACCESS_CONTROL_ALLOW_METHODS, CONTENT_ENCODING, CONTENT_RANGE, CONTENT_TYPE,
+    Entry, VARY,
+};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
-use poem::error::{NotFoundError, ParseFormError, ParseJsonError, ParseMultipartError};
+use http_body_util::combinators::BoxBody;
+use hyper::upgrade::OnUpgrade;
+use nest_rs_core::{DecodeError, Problem};
+use poem::error::{
+    CorsError, NotFoundError, ParseFormError, ParseJsonError, ParseMultipartError, ParseQueryError,
+};
 use poem::middleware::{Compression, Cors};
-use poem::web::{Compress, CompressionAlgo};
+use poem::web::{Compress, CompressionAlgo, LocalAddr, RemoteAddr};
 use poem::{EndpointExt, FromRequest, IntoResponse, PathPattern};
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncRead;
+use tokio::time::Instant;
 
 use crate::accept_encoding::{AcceptEncoding, Coding};
 use crate::allow::{Chosen, HeadAsGet, Methods, head_of};
 use crate::body::Body;
-use crate::cors::{FRAMEWORK_SENT, HttpCors, listed};
+use crate::cors::{
+    CorsRefusal, FRAMEWORK_SENT, HttpCors, admitted_by_default, holds_wildcard, listed,
+};
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::{
-    FormError, HttpError, JsonError, MultipartError, PathParameterError, Result, RouteError,
+    BoxError, FormError, HttpError, JsonError, MultipartError, PathParameterError, Result,
+    RouteError,
 };
 use crate::fallback::NotAllowed;
 use crate::matched::MatchedRoute;
-use crate::poem_bridge::{
-    body_to_poem, error_from_poem, error_to_poem, from_poem, note_route, request_from_poem,
-    request_to_poem, response_from_poem, response_to_poem, to_poem,
-};
-use crate::request::{Request, Routed};
+use crate::problem::{ProblemDetails, Said, is_raw_text, problem_response, replacing};
+use crate::request::{Request, RequestFacts, Routed};
 use crate::response::Response;
-use crate::routes::{Address, Dispatch, Leaf};
+use crate::routes::{Address, Dispatch};
 
 /// poem, as the transport uses it.
 pub(crate) struct PoemAdapter;
 
-/// A CORS policy as poem's middleware takes it, checked at boot.
-pub(crate) struct CorsPolicy(Cors);
+/// A CORS policy as poem's middleware takes it, checked at boot: it answers
+/// nothing until it knows the route table it serves ([`CorsPolicy::serving`]).
+pub(crate) struct CorsPolicy {
+    cors: Cors,
+    methods: Admitted,
+}
+
+/// A CORS policy serving one route table, every method it admits listed or
+/// said as `*`: the one [`PoemAdapter::around`] answers.
+pub(crate) struct ServedCorsPolicy {
+    cors: Cors,
+    /// Whether it admits every method, said as `*`.
+    wildcard: bool,
+}
+
+/// The methods a CORS policy admits.
+enum Admitted {
+    /// The ones it lists.
+    Listed,
+    /// Every one, said as `*`.
+    Every,
+    /// The ones the route table serves, read once it is built.
+    Routed,
+}
+
+impl CorsPolicy {
+    /// The policy as it serves the route table: one listing no method admits
+    /// the CORS-safelisted ones and those `routed` names, or every method a
+    /// page sends when an address answers `every_method` itself.
+    pub(crate) fn serving<'a>(
+        self,
+        routed: impl IntoIterator<Item = &'a Method>,
+        every_method: bool,
+    ) -> ServedCorsPolicy {
+        let (cors, wildcard) = match self.methods {
+            Admitted::Routed => (
+                admitted_by_default(routed, every_method)
+                    .into_iter()
+                    .fold(self.cors, Cors::allow_method),
+                false,
+            ),
+            Admitted::Listed => (self.cors, false),
+            Admitted::Every => (self.cors, true),
+        };
+        ServedCorsPolicy { cors, wildcard }
+    }
+}
 
 /// A poem endpoint, erased.
 type PoemEndpoint = poem::endpoint::BoxEndpoint<'static, poem::Response>;
@@ -86,13 +149,23 @@ impl PoemAdapter {
 
     /// The policy `cors` describes, or the boot's refusal naming the value it
     /// cannot take. A `*` in `origins`, `methods` or `headers` admits every
-    /// value, which poem spells as an empty list; explicit values map one to one.
+    /// value, which poem spells as an empty list; explicit values map one to
+    /// one; no method at all admits what the routes serve
+    /// ([`CorsPolicy::serving`]).
     pub(crate) fn cors_policy(cors: &HttpCors) -> anyhow::Result<CorsPolicy> {
         cors.reject_wildcards_with_credentials()?;
+        cors.reject_forbidden_methods()?;
         let mut policy = Cors::new();
         for origin in listed(&cors.origins) {
             policy = policy.allow_origin(origin);
         }
+        let methods = if holds_wildcard(&cors.methods) {
+            Admitted::Every
+        } else if cors.methods.is_empty() {
+            Admitted::Routed
+        } else {
+            Admitted::Listed
+        };
         for m in listed(&cors.methods) {
             let method = Method::from_bytes(m.as_bytes())
                 .with_context(|| format!("invalid HTTP method in CORS config: `{m}`"))?;
@@ -121,7 +194,10 @@ impl PoemAdapter {
                 .context("CORS max_age overflows i32 seconds (~68 years); pick a smaller value")?;
             policy = policy.max_age(secs);
         }
-        Ok(CorsPolicy(policy))
+        Ok(CorsPolicy {
+            cors: policy,
+            methods,
+        })
     }
 
     /// `inner` behind the response compression `Accept-Encoding` negotiates,
@@ -129,7 +205,7 @@ impl PoemAdapter {
     /// CORS, so a preflight is never encoded, both in one crossing.
     pub(crate) fn around(
         inner: BoxEndpoint,
-        cors: Option<CorsPolicy>,
+        cors: Option<ServedCorsPolicy>,
         compression: bool,
     ) -> BoxEndpoint {
         let mut endpoint: PoemEndpoint = to_poem(inner).boxed();
@@ -139,8 +215,12 @@ impl PoemAdapter {
             }
             .boxed();
         }
-        if let Some(CorsPolicy(cors)) = cors {
-            endpoint = VariesOnOrigin(endpoint.with(cors)).boxed();
+        if let Some(ServedCorsPolicy { cors, wildcard }) = cors {
+            endpoint = Cross {
+                inner: endpoint.with(cors),
+                wildcard,
+            }
+            .boxed();
         }
         BoxEndpoint::new(from_poem(endpoint))
     }
@@ -239,7 +319,7 @@ impl FieldReader {
 /// A media-type refusal of the library's own extractors, said in nestrs's words:
 /// the type the body had to be, never the one the client sent, which the
 /// library's sentence quotes. `None` for any other error.
-pub(crate) fn media_type_refusal(error: &poem::Error) -> Option<HttpError> {
+fn media_type_refusal(error: &poem::Error) -> Option<HttpError> {
     if let Some(ParseJsonError::InvalidContentType(_) | ParseJsonError::ContentTypeRequired) =
         error.downcast_ref::<ParseJsonError>()
     {
@@ -268,26 +348,6 @@ fn multipart_refusal(refused: poem::Error) -> HttpError {
         ) => MultipartError::MediaType.into(),
         Ok(malformed) => MultipartError::Malformed(Box::new(malformed)).into(),
         Err(other) => error_from_poem(other),
-    }
-}
-
-/// An endpoint still written on poem, registered through the hidden
-/// `route_poem`: it reads poem's own route parameters.
-pub(crate) struct PoemLeaf(PoemEndpoint);
-
-impl PoemLeaf {
-    pub(crate) fn new<E>(endpoint: E) -> Self
-    where
-        E: poem::IntoEndpoint,
-        E::Endpoint: 'static,
-    {
-        Self(endpoint.into_endpoint().map_to_response().boxed())
-    }
-
-    /// The leaf as a nestrs endpoint: the request crosses back into poem with
-    /// what poem matched.
-    pub(crate) fn into_endpoint(self) -> BoxEndpoint {
-        BoxEndpoint::new(from_poem(self.0))
     }
 }
 
@@ -340,8 +400,8 @@ impl Endpoint for Router {
 
 /// What answers at one address once poem's router matched it.
 enum Answers {
-    Any(Leaf),
-    Methods(Methods<Leaf>),
+    Any(BoxEndpoint),
+    Methods(Methods<BoxEndpoint>),
 }
 
 /// One address of the table, as poem's router reaches it: it records the
@@ -422,23 +482,10 @@ impl poem::Endpoint for Matched {
                 }
             },
         };
-        match leaf {
-            Leaf::Endpoint(endpoint) => {
-                let mut request = request_from_poem(req);
-                request.set_route(Arc::clone(&self.template), params);
-                let resp = endpoint.call(request).await.map_err(error_to_poem)?;
-                Ok(response_to_poem(if head { head_of(resp) } else { resp }))
-            }
-            Leaf::Poem(PoemLeaf(endpoint)) => {
-                note_route(&mut req, Routed::new(Arc::clone(&self.template), params));
-                let resp = endpoint.call(req).await?;
-                Ok(if head {
-                    response_to_poem(head_of(response_from_poem(resp)))
-                } else {
-                    resp
-                })
-            }
-        }
+        let mut request = request_from_poem(req);
+        request.set_route(Arc::clone(&self.template), params);
+        let resp = leaf.call(request).await.map_err(error_to_poem)?;
+        Ok(response_to_poem(if head { head_of(resp) } else { resp }))
     }
 }
 
@@ -565,22 +612,45 @@ fn algorithm(coding: Coding) -> CompressionAlgo {
 /// An answer under a CORS policy, which depends on the request's `Origin`
 /// whatever it lists, a refusal included: a shared cache keys it on the origin
 /// (WHATWG Fetch, *CORS protocol and HTTP caches*), where poem says so only for
-/// a pattern.
-struct VariesOnOrigin<E>(E);
+/// a pattern. A refusal files its one `warn`, and a policy admitting every
+/// method says so as Fetch spells it, `*`, where poem lists methods no page
+/// can send.
+struct Cross<E> {
+    inner: E,
+    wildcard: bool,
+}
 
-impl<E: poem::Endpoint> poem::Endpoint for VariesOnOrigin<E> {
+impl<E: poem::Endpoint> poem::Endpoint for Cross<E> {
     type Output = poem::Response;
 
     async fn call(&self, req: poem::Request) -> poem::Result<poem::Response> {
-        let mut resp = match self.0.call(req).await {
+        let mut resp = match self.inner.call(req).await {
             Ok(resp) => resp.into_response(),
             // Rendered as the normalizer outside `around` renders an `Err`, so
             // the refusal of an unlisted origin carries `Vary` too.
-            Err(error) => response_to_poem(error_from_poem(error).answer()),
+            Err(error) => {
+                if let Some(refused) = cors_refusal(&error) {
+                    refused.file();
+                }
+                response_to_poem(error_from_poem(error).answer())
+            }
         };
+        if self.wildcard && resp.headers().contains_key(ACCESS_CONTROL_ALLOW_METHODS) {
+            resp.headers_mut()
+                .insert(ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("*"));
+        }
         vary_on(resp.headers_mut(), http::header::ORIGIN);
         Ok(resp)
     }
+}
+
+/// The check of the policy poem's CORS layer refused `error` for, if it did.
+fn cors_refusal(error: &poem::Error) -> Option<CorsRefusal> {
+    Some(match error.downcast_ref::<CorsError>()? {
+        CorsError::OriginNotAllowed => CorsRefusal::Origin,
+        CorsError::MethodNotAllowed => CorsRefusal::Method,
+        CorsError::HeadersNotAllowed => CorsRefusal::Headers,
+    })
 }
 
 /// Add `name` to `Vary`, unless it is already there or `Vary` is `*`.
@@ -597,12 +667,383 @@ fn vary_on(headers: &mut HeaderMap, name: HeaderName) {
     }
 }
 
+// The crossings between nestrs's vocabulary and poem's: nothing is lost either
+// way, since what one side has no place for rides the other's extensions,
+// privately, and comes back on the return crossing.
+
+/// What poem keeps private about a request it built — its peer, its upgrade,
+/// its route's parameters — emptied of the head nestrs carries, so the way back
+/// restores it.
+#[derive(Clone)]
+struct PoemState(Arc<Mutex<Option<poem::RequestParts>>>);
+
+impl PoemState {
+    fn new(parts: poem::RequestParts) -> Self {
+        Self(Arc::new(Mutex::new(Some(parts))))
+    }
+
+    fn take(self) -> Option<poem::RequestParts> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
+/// hyper's upgrade, cloned before poem moves the original into its private
+/// state: either side may take the socket, both await one receiver.
+#[derive(Clone)]
+struct CarriedUpgrade(OnUpgrade);
+
+/// What a poem request has no place for: the route the router matched, and the
+/// instant the request arrived, which the edge counts its budget from after the
+/// CORS or compression layer ran before it.
+#[derive(Clone, Default)]
+struct Unplaced {
+    route: Option<Routed>,
+    arrival: Option<Instant>,
+}
+
+/// A poem request as nestrs's.
+fn request_from_poem(request: poem::Request) -> Request {
+    let peer = request.remote_addr().as_socket_addr().copied();
+    let local = request.local_addr().as_socket_addr().copied();
+    let scheme = request.scheme().clone();
+    let original_uri = request.original_uri().clone();
+    let (mut parts, body) = request.into_parts();
+    let (mut head, ()) = http::Request::new(()).into_parts();
+    head.method = std::mem::take(&mut parts.method);
+    head.uri = std::mem::take(&mut parts.uri);
+    head.version = parts.version;
+    head.headers = std::mem::take(&mut parts.headers);
+    head.extensions = std::mem::take(&mut parts.extensions);
+    let Unplaced { route, arrival } = head.extensions.remove::<Unplaced>().unwrap_or_default();
+    if let Some(CarriedUpgrade(upgrade)) = head.extensions.remove::<CarriedUpgrade>() {
+        head.extensions.insert(upgrade);
+    }
+    head.extensions.insert(PoemState::new(parts));
+    let facts = RequestFacts {
+        peer,
+        local,
+        scheme,
+        original_uri,
+        route,
+        arrival,
+    };
+    Request::from_raw(head, body_from_poem(body), facts)
+}
+
+/// A nestrs request as poem's.
+fn request_to_poem(request: Request) -> poem::Request {
+    let (mut head, body, facts) = request.into_raw();
+    let mut parts = match head
+        .extensions
+        .remove::<PoemState>()
+        .and_then(PoemState::take)
+    {
+        Some(mut parts) => {
+            parts.method = head.method;
+            parts.uri = head.uri;
+            parts.version = head.version;
+            parts.headers = head.headers;
+            parts.extensions = head.extensions;
+            parts
+        }
+        None => {
+            let upgrade = head.extensions.get::<OnUpgrade>().cloned();
+            // poem reads the URI as sent off the head, then takes the current one.
+            let current = std::mem::replace(&mut head.uri, facts.original_uri);
+            let mut parts = poem::RequestParts::from((
+                head,
+                LocalAddr(addr(facts.local)),
+                RemoteAddr(addr(facts.peer)),
+                facts.scheme,
+            ));
+            parts.uri = current;
+            if let Some(upgrade) = upgrade {
+                parts.extensions.insert(CarriedUpgrade(upgrade));
+            }
+            parts
+        }
+    };
+    if facts.route.is_some() || facts.arrival.is_some() {
+        parts.extensions.insert(Unplaced {
+            route: facts.route,
+            arrival: facts.arrival,
+        });
+    }
+    poem::Request::from_parts(parts, body_to_poem(body))
+}
+
+/// A poem response as nestrs's.
+fn response_from_poem(response: poem::Response) -> Response {
+    let (head, body) = http::Response::<BoxBody<Bytes, io::Error>>::from(response).into_parts();
+    Response::from_parts(head, Body::from_boxed(body))
+}
+
+/// A nestrs response as poem's.
+fn response_to_poem(response: Response) -> poem::Response {
+    let (head, body) = response.into_parts();
+    poem::Response::from_parts(
+        poem::ResponseParts {
+            status: head.status,
+            version: head.version,
+            headers: head.headers,
+            extensions: head.extensions,
+        },
+        body_to_poem(body),
+    )
+}
+
+/// A poem error as nestrs's: an [`HttpError`] that crossed into poem comes
+/// back whole, with what poem's side added to it; any other answers as poem
+/// renders it, its `set_data` values kept inside it — they reach the response,
+/// never [`HttpError::extensions`].
+fn error_from_poem(error: poem::Error) -> HttpError {
+    let status = error.status();
+    let Some(carried) = error.downcast_ref::<Carried>() else {
+        return HttpError::wrapping(Box::new(error), status, render_poem);
+    };
+    let taken = carried.take();
+    // poem hands its error's extensions over only on the response it renders;
+    // the emptied carrier renders an empty one.
+    let added = error.into_response().into_parts().0.extensions;
+    let mut error = taken.unwrap_or_else(|| HttpError::from_status(status));
+    error.extensions_mut().extend(added);
+    error
+}
+
+/// A nestrs error as poem's: a poem error that crossed into nestrs goes back
+/// whole when nestrs added nothing to it; any other is carried, rendered by
+/// nestrs when poem answers it. poem's `downcast_ref` and `is` see only the
+/// carrier, and its `source()` ends there: a poem layer matching errors by
+/// type misses a carried one.
+fn error_to_poem(error: HttpError) -> poem::Error {
+    match error.into_wrapped::<poem::Error>() {
+        Ok(error) => error,
+        Err(error) => poem::Error::from(Carried {
+            status: error.status(),
+            error: Mutex::new(Some(error)),
+        }),
+    }
+}
+
+/// The [`HttpError`] a poem error carries, taken out to be rendered as nestrs
+/// renders it: poem's own rendering would replace the response's extensions with
+/// its error's.
+fn take_carried(error: poem::Error) -> std::result::Result<HttpError, poem::Error> {
+    if error.is::<Carried>() {
+        Ok(error_from_poem(error))
+    } else {
+        Err(error)
+    }
+}
+
+/// A poem body as nestrs's: both wrap one box, which moves.
+fn body_from_poem(body: poem::Body) -> Body {
+    Body::from_boxed(body.into())
+}
+
+/// A nestrs body as poem's: both wrap one box, which moves.
+fn body_to_poem(body: Body) -> poem::Body {
+    poem::Body::from(body.into_boxed())
+}
+
+/// A poem endpoint answering nestrs's requests.
+fn from_poem<E: poem::Endpoint + 'static>(endpoint: E) -> impl Endpoint {
+    FromPoem(endpoint)
+}
+
+/// A nestrs endpoint answering poem's requests.
+fn to_poem<E: Endpoint>(endpoint: E) -> impl poem::Endpoint<Output = poem::Response> {
+    ToPoem(endpoint)
+}
+
+struct FromPoem<E>(E);
+
+impl<E: poem::Endpoint + 'static> Endpoint for FromPoem<E> {
+    async fn call(&self, req: Request) -> Result<Response> {
+        self.0
+            .call(request_to_poem(req))
+            .await
+            .map(|output| response_from_poem(poem::IntoResponse::into_response(output)))
+            .map_err(error_from_poem)
+    }
+}
+
+struct ToPoem<E>(E);
+
+impl<E: Endpoint> poem::Endpoint for ToPoem<E> {
+    type Output = poem::Response;
+
+    async fn call(&self, req: poem::Request) -> poem::Result<poem::Response> {
+        self.0
+            .call(request_from_poem(req))
+            .await
+            .map(response_to_poem)
+            .map_err(error_to_poem)
+    }
+}
+
+/// An [`HttpError`] inside a poem error: taken out when it crosses back, or
+/// rendered when poem answers it.
+struct Carried {
+    status: StatusCode,
+    error: Mutex<Option<HttpError>>,
+}
+
+impl Carried {
+    fn take(&self) -> Option<HttpError> {
+        self.error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+}
+
+impl fmt::Debug for Carried {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Carried")
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The whole chain, said once: the cause cannot be lent out of the lock as a
+/// `source`, so a log line on poem's side reads it here.
+impl fmt::Display for Carried {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &*self.error.lock().unwrap_or_else(PoisonError::into_inner) {
+            Some(error) => f.write_str(&nest_rs_core::error_message(error)),
+            None => fmt::Display::fmt(&self.status, f),
+        }
+    }
+}
+
+impl std::error::Error for Carried {}
+
+impl poem::error::ResponseError for Carried {
+    fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    fn as_response(&self) -> poem::Response {
+        match self.take() {
+            Some(error) => response_to_poem(error.into_response()),
+            None => poem::Response::builder().status(self.status).finish(),
+        }
+    }
+}
+
+/// A poem error answers as poem renders it, each decode failure in its chain
+/// said without its value.
+fn render_poem(error: BoxError, status: StatusCode) -> Response {
+    match error.downcast::<poem::Error>() {
+        Ok(error) => response_from_poem(render_error(*error)),
+        // Unreachable: the box was filled with a poem error by `error_from_poem`.
+        Err(_) => crate::IntoResponse::into_response(ProblemDetails::from_status(status)),
+    }
+}
+
+fn addr(socket: Option<SocketAddr>) -> poem::Addr {
+    socket.map_or_else(poem::Addr::default, poem::Addr::SocketAddr)
+}
+
+/// An `Err` poem raised as the response it renders, by one rule: an error that
+/// renders itself — poem's `ResponseError`, a ready response, an
+/// [`HttpError`] — answers as it renders, but a media-type refusal of poem's
+/// own extractors, which quotes the client's `Content-Type`, answers nestrs's
+/// sentence naming only the type expected. Any other poem
+/// renders as its own sentence, so it is read instead: a [`Problem`] its chain
+/// carries answers its document, and a `5xx` answers opaquely; what either
+/// answer withholds of the chain is filed once at `error`. A raw text body left
+/// says each decode failure in the error's chain without its value.
+///
+/// `Query<T>`'s rejection is transparent over its serde error, so that one is
+/// read off the type.
+fn render_error(err: poem::Error) -> poem::Response {
+    let err = match take_carried(err) {
+        Ok(carried) => return response_to_poem(carried.answer()),
+        Err(err) => err,
+    };
+    if let Some(refused) = media_type_refusal(&err) {
+        return response_to_poem(refused.answer());
+    }
+    let source = std::error::Error::source(&err);
+    let problem = source
+        .and_then(nest_rs_core::__private::find_in_chain::<Problem>)
+        .cloned();
+    let withheld = source.and_then(|chain| match &problem {
+        Some(problem) => nest_rs_core::__private::withheld(problem, chain),
+        None => nest_rs_core::__private::Withheld::behind(err.status().as_u16(), chain),
+    });
+    let sentence = err.to_string();
+    let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
+    if let Some(query) = err.downcast_ref::<ParseQueryError>() {
+        said = DecodeError::redact(&said, Some(&query.0)).into_owned();
+    }
+    let redacted = (said != sentence).then_some(said);
+    let mut resp = err.into_response();
+    if (problem.is_some() || withheld.is_some()) && is_raw_text(resp.headers()) {
+        let body = resp.take_body();
+        if !body.is_empty() {
+            let (parts, _) = resp.into_parts();
+            if let Some(withheld) = withheld {
+                crate::error::file(withheld);
+            }
+            let answer = match problem {
+                Some(problem) => {
+                    let mut answer = problem_response(&problem);
+                    answer.extensions_mut().extend(parts.extensions);
+                    answer
+                }
+                None => replacing(
+                    ProblemDetails::from_status(parts.status),
+                    &parts.headers,
+                    parts.extensions,
+                ),
+            };
+            return response_to_poem(answer);
+        }
+        resp.set_body(body);
+    }
+    let mut resp = match redacted {
+        Some(said) if is_raw_text(resp.headers()) => {
+            let (parts, _) = resp.into_parts();
+            poem::Response::from_parts(parts, poem::Body::from_string(said))
+        }
+        _ => resp,
+    };
+    if is_raw_text(resp.headers()) {
+        resp.extensions_mut().insert(Said);
+    }
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use hyper_util::rt::TokioIo;
+
     use super::*;
     use crate::cors::WILDCARD;
+    use crate::error::BodyError;
+    use crate::testing::{Upgrading, internal_document, read_exactly};
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct Marker(&'static str);
+
+    #[derive(Debug, thiserror::Error, PartialEq)]
+    #[error("the kettle is busy")]
+    struct Busy;
+
+    /// `GET uri`, as poem's own builder makes it.
+    fn poem_get(uri: &'static str) -> poem::Request {
+        poem::Request::builder().uri(Uri::from_static(uri)).finish()
+    }
+
+    /// The body of `response`, read as text.
+    async fn poem_text(response: poem::Response) -> String {
+        response.into_body().into_string().await.unwrap()
+    }
 
     fn cfg(origins: &[&str]) -> HttpCors {
         HttpCors {
@@ -640,10 +1081,7 @@ mod tests {
             vec![Address {
                 template: crate::RouteTemplate::parse("/orgs/@{org}/files/{*rest}").unwrap(),
                 owner: Arc::from("FilesController"),
-                dispatch: Dispatch::Methods(vec![(
-                    Method::GET,
-                    Leaf::Endpoint(BoxEndpoint::new(echo)),
-                )]),
+                dispatch: Dispatch::Methods(vec![(Method::GET, BoxEndpoint::new(echo))]),
             }],
             unrouted,
         )
@@ -827,11 +1265,15 @@ mod tests {
     #[tokio::test]
     async fn the_arrival_crosses_each_layer_to_the_edge() {
         let arrival = tokio::time::Instant::now() - Duration::from_secs(3);
-        type Layer = (&'static str, fn() -> Option<CorsPolicy>, bool);
+        type Layer = (&'static str, fn() -> Option<ServedCorsPolicy>, bool);
         let layers: [Layer; 2] = [
             (
                 "cors",
-                || PoemAdapter::cors_policy(&cfg(&["*"])).ok(),
+                || {
+                    PoemAdapter::cors_policy(&cfg(&["*"]))
+                        .ok()
+                        .map(|policy| policy.serving(std::iter::empty(), false))
+                },
                 false,
             ),
             ("compression", || None, true),
@@ -884,5 +1326,253 @@ mod tests {
             1,
             "`*` varies on everything"
         );
+    }
+
+    /// A request crosses into poem and back with its head, its facts, its
+    /// route, what rides its extensions and its upgrade, which the entry the
+    /// router reaches takes.
+    #[tokio::test]
+    async fn a_request_crosses_into_poem_and_back_whole() {
+        let Upgrading { request, mut peer } = Upgrading::open().await;
+        let mut sent = Request::from(request);
+        sent.extensions_mut().insert(Marker("request"));
+        sent.set_route(
+            "/rooms/{room}".into(),
+            vec![("room".into(), "lobby".into())],
+        );
+        *sent.uri_mut() = "/chat/".parse().unwrap();
+
+        let back = request_from_poem(request_to_poem(request_from_poem(request_to_poem(sent))));
+
+        assert_eq!(back.extensions().get::<Marker>(), Some(&Marker("request")));
+        assert_eq!(back.original_uri(), "/chat");
+        assert_eq!(back.uri(), "/chat/");
+        assert_eq!(back.route(), Some("/rooms/{room}"));
+        assert_eq!(back.path_param("room"), Some("lobby"));
+        let upgrade = back
+            .extensions()
+            .get::<OnUpgrade>()
+            .cloned()
+            .expect("nestrs holds the upgrade");
+        peer.switch().await;
+        let mut socket = TokioIo::new(
+            tokio::time::timeout(Duration::from_secs(5), upgrade)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        peer.send(b"nest").await;
+        assert_eq!(read_exactly(&mut socket, 4).await, b"nest");
+    }
+
+    /// The peer, local address and scheme poem holds cross into nestrs's
+    /// facts and back.
+    #[test]
+    fn a_requests_addresses_and_scheme_cross_both_ways() {
+        let peer: SocketAddr = "203.0.113.9:40001".parse().unwrap();
+        let local: SocketAddr = "10.0.0.2:443".parse().unwrap();
+        let (head, ()) = http::Request::new(()).into_parts();
+        let parts = poem::RequestParts::from((
+            head,
+            LocalAddr(poem::Addr::SocketAddr(local)),
+            RemoteAddr(poem::Addr::SocketAddr(peer)),
+            http::uri::Scheme::HTTPS,
+        ));
+        let sent = poem::Request::from_parts(parts, poem::Body::empty());
+
+        let crossed = request_from_poem(sent);
+        assert_eq!(crossed.peer_addr(), Some(peer));
+        assert_eq!(crossed.local_addr(), Some(local));
+        assert_eq!(crossed.scheme(), &http::uri::Scheme::HTTPS);
+
+        let back = request_to_poem(crossed);
+        assert_eq!(back.remote_addr().as_socket_addr(), Some(&peer));
+        assert_eq!(back.local_addr().as_socket_addr(), Some(&local));
+        assert_eq!(back.scheme(), &http::uri::Scheme::HTTPS);
+    }
+
+    #[test]
+    fn a_poem_error_crosses_into_nestrs_and_back_whole() {
+        let mut raised = poem::Error::new(Busy, StatusCode::IM_A_TEAPOT);
+        raised.set_data(Marker("error"));
+        let crossed = error_from_poem(raised);
+        assert_eq!(crossed.status(), StatusCode::IM_A_TEAPOT);
+        assert_eq!(
+            crossed.downcast_ref::<Busy>(),
+            Some(&Busy),
+            "a downcast reaches into poem's error"
+        );
+        let back = error_to_poem(crossed);
+        assert_eq!(back.status(), StatusCode::IM_A_TEAPOT);
+        assert_eq!(back.data::<Marker>(), Some(&Marker("error")));
+        assert_eq!(back.downcast::<Busy>().ok(), Some(Busy));
+    }
+
+    #[tokio::test]
+    async fn an_http_error_crosses_into_poem_and_comes_back_whole() {
+        let mut raised = HttpError::from(BodyError::TooLarge { limit: 8 });
+        raised.extensions_mut().insert(Marker("nestrs"));
+
+        let mut crossed = error_to_poem(raised);
+        assert_eq!(crossed.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        crossed.set_data(7_u32);
+        let back = error_from_poem(crossed);
+
+        assert_eq!(back.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(back.extensions().get::<Marker>(), Some(&Marker("nestrs")));
+        assert_eq!(
+            back.extensions().get::<u32>(),
+            Some(&7),
+            "what poem's side added is kept"
+        );
+        assert!(matches!(
+            back.downcast::<BodyError>(),
+            Ok(BodyError::TooLarge { limit: 8 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_poem_error_nestrs_added_to_goes_back_with_both_sides_kept() {
+        let crossed_in = || {
+            let mut crossed = error_from_poem(poem::Error::new(Busy, StatusCode::IM_A_TEAPOT));
+            crossed.extensions_mut().insert(Marker("nestrs"));
+            crossed
+        };
+
+        let back = error_from_poem(error_to_poem(crossed_in()));
+        assert_eq!(back.extensions().get::<Marker>(), Some(&Marker("nestrs")));
+        assert_eq!(
+            back.downcast_ref::<Busy>(),
+            Some(&Busy),
+            "the poem cause is still reached"
+        );
+
+        let rendered = render_error(error_to_poem(crossed_in()));
+        assert_eq!(rendered.status(), StatusCode::IM_A_TEAPOT);
+        assert_eq!(
+            rendered.data::<Marker>(),
+            Some(&Marker("nestrs")),
+            "what nestrs added reaches the response"
+        );
+        assert_eq!(
+            rendered.into_body().into_string().await.unwrap(),
+            "the kettle is busy",
+            "the poem cause answers as poem renders it"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_http_error_poem_renders_answers_nestrs_problem_document() {
+        let mut raised = HttpError::from_status(StatusCode::UNAUTHORIZED);
+        raised.extensions_mut().insert(Marker("challenge"));
+
+        let rendered = render_error(error_to_poem(raised));
+
+        assert_eq!(rendered.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(rendered.content_type(), Some("application/problem+json"));
+        assert_eq!(rendered.header("www-authenticate"), Some("Bearer"));
+        assert_eq!(rendered.data::<Marker>(), Some(&Marker("challenge")));
+
+        let by_poem =
+            error_to_poem(HttpError::from_status(StatusCode::UNAUTHORIZED)).into_response();
+        assert_eq!(by_poem.content_type(), Some("application/problem+json"));
+        assert_eq!(by_poem.header("www-authenticate"), Some("Bearer"));
+    }
+
+    #[tokio::test]
+    async fn a_response_crosses_both_ways_with_its_head_and_body() {
+        let sent = Response::builder()
+            .status(StatusCode::CREATED)
+            .header(
+                http::header::LOCATION,
+                HeaderValue::from_static("/orders/7"),
+            )
+            .extension(Marker("response"))
+            .body("made");
+
+        let back = response_from_poem(response_to_poem(sent));
+
+        assert_eq!(back.status(), StatusCode::CREATED);
+        assert_eq!(back.headers()[http::header::LOCATION], "/orders/7");
+        assert_eq!(back.extensions().get::<Marker>(), Some(&Marker("response")));
+        assert_eq!(back.into_body().into_string().await.unwrap(), "made");
+    }
+
+    #[tokio::test]
+    async fn endpoints_answer_across_the_crossing() {
+        let nestrs = crate::endpoint_fn(|req: Request| async move {
+            Ok(Response::builder().body(format!("nestrs saw {}", req.uri().path())))
+        });
+        let answer = poem::Endpoint::get_response(&to_poem(nestrs), poem_get("/here")).await;
+        assert_eq!(poem_text(answer).await, "nestrs saw /here");
+
+        let failing = poem::endpoint::make(|_req: poem::Request| async {
+            Err::<String, _>(poem::Error::new(Busy, StatusCode::SERVICE_UNAVAILABLE))
+        });
+        let refused = from_poem(failing)
+            .call(Request::builder().finish())
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(refused.is::<Busy>());
+    }
+
+    /// poem's own body extractors quote the client's `Content-Type` in their
+    /// `415`; rendered by the edge, the refusal names only the type expected.
+    #[tokio::test]
+    async fn a_foreign_media_type_refusal_never_quotes_the_clients_content_type() {
+        let marker = "text/x-quoted-marker".to_owned();
+        for (refused, expected) in [
+            (
+                poem::Error::from(ParseJsonError::InvalidContentType(marker.clone())),
+                "application/json",
+            ),
+            (
+                poem::Error::from(ParseFormError::InvalidContentType(marker.clone())),
+                "application/x-www-form-urlencoded",
+            ),
+            (
+                poem::Error::from(ParseMultipartError::InvalidContentType(marker.clone())),
+                "multipart/form-data",
+            ),
+        ] {
+            let resp = response_from_poem(render_error(refused));
+            assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            let body = resp.into_body().into_string().await.expect("a body");
+            assert!(!body.contains("x-quoted-marker"), "{body}");
+            assert!(body.contains(expected), "{body}");
+        }
+    }
+
+    /// A plain-text error poem raises says the framework's own sentence, which
+    /// the normalizer lifts onto a problem document as its `detail`.
+    #[tokio::test]
+    async fn a_plain_text_error_poem_raises_is_lifted_onto_the_problem_document() {
+        let raw = render_error(poem::Error::from_string(
+            nest_rs_core::UUID_V7_REQUIRED,
+            StatusCode::BAD_REQUEST,
+        ));
+        let resp = crate::normalize_error_response(response_from_poem(raw)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.headers()[CONTENT_TYPE], "application/problem+json");
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(v["status"], 400);
+        assert_eq!(v["detail"], nest_rs_core::UUID_V7_REQUIRED);
+    }
+
+    /// An error the edge cannot read an answer in, rendered with its chain
+    /// withheld, answers the one opaque document.
+    #[tokio::test]
+    async fn an_unknown_server_error_renders_the_one_opaque_document() {
+        let unknown = poem::Error::new(
+            io::Error::other("connection to db-primary refused"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        let resp = response_from_poem(render_error(unknown));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
+        assert_eq!(v, internal_document());
     }
 }

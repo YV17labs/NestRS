@@ -8,14 +8,12 @@
 use http::{HeaderValue, StatusCode, header};
 use nest_rs_core::problem::code;
 use nest_rs_core::{Code, DecodeError, Problem};
-use poem::error::{ParseQueryError, ResponseError};
-use poem::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::HttpError;
 
-// Defined beside the 401 that carries it, so `ProblemDetails` reaches no
-// poem-typed file; `challenge` re-exports it as RFC 6750's grammar.
+// Defined beside the 401 that carries it; `challenge` re-exports it as RFC
+// 6750's grammar.
 /// The scheme name, matched case-insensitively per RFC 7235 §2.1.
 pub const BEARER: &str = "Bearer";
 
@@ -305,7 +303,7 @@ pub fn framework_sentence(mut response: crate::Response) -> crate::Response {
 
 /// `problem` as the answer, keeping the head of the response it replaces: its
 /// headers, and its extensions, which the layers outside it read.
-fn replacing(
+pub(crate) fn replacing(
     problem: ProblemDetails,
     headers: &http::HeaderMap,
     extensions: http::Extensions,
@@ -336,82 +334,11 @@ fn replacing(
 /// Whether a response with `headers` is a default rendering of an error —
 /// `text/plain`, or no body type at all — rather than a problem or a body
 /// somebody typed.
-fn is_raw_text(headers: &http::HeaderMap) -> bool {
+pub(crate) fn is_raw_text(headers: &http::HeaderMap) -> bool {
     headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_none_or(|ct| ct.starts_with("text/plain"))
-}
-
-/// An `Err` as the response it renders, by one rule: an error that renders
-/// itself — a [`ResponseError`], a ready response, an
-/// [`HttpError`] — answers as it renders, but a media-type refusal of poem's
-/// own extractors, which quotes the client's `Content-Type`, answers nestrs's
-/// sentence naming only the type expected. Any other poem
-/// renders as its own sentence, so it is read instead: a [`Problem`] its chain
-/// carries answers its document, and a `5xx` answers opaquely; what either
-/// answer withholds of the chain is filed once at `error`. A raw text body left
-/// says each decode failure in the error's chain without its value.
-///
-/// `Query<T>`'s rejection is transparent over its serde error, so that one is
-/// read off the type.
-pub(crate) fn render_error(err: poem::Error) -> Response {
-    let err = match crate::poem_bridge::take_carried(err) {
-        Ok(carried) => return crate::poem_bridge::response_to_poem(carried.answer()),
-        Err(err) => err,
-    };
-    if let Some(refused) = crate::poem_adapter::media_type_refusal(&err) {
-        return crate::poem_bridge::response_to_poem(refused.answer());
-    }
-    let source = std::error::Error::source(&err);
-    let problem = source
-        .and_then(nest_rs_core::__private::find_in_chain::<Problem>)
-        .cloned();
-    let withheld = source.and_then(|chain| match &problem {
-        Some(problem) => nest_rs_core::__private::withheld(problem, chain),
-        None => nest_rs_core::__private::Withheld::behind(err.status().as_u16(), chain),
-    });
-    let sentence = err.to_string();
-    let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
-    if let Some(query) = err.downcast_ref::<ParseQueryError>() {
-        said = DecodeError::redact(&said, Some(&query.0)).into_owned();
-    }
-    let redacted = (said != sentence).then_some(said);
-    let mut resp = err.into_response();
-    if (problem.is_some() || withheld.is_some()) && is_raw_text(resp.headers()) {
-        let body = resp.take_body();
-        if !body.is_empty() {
-            let (parts, _) = resp.into_parts();
-            if let Some(withheld) = withheld {
-                crate::error::file(withheld);
-            }
-            let answer = match problem {
-                Some(problem) => {
-                    let mut answer = problem_response(&problem);
-                    answer.extensions_mut().extend(parts.extensions);
-                    answer
-                }
-                None => replacing(
-                    ProblemDetails::from_status(parts.status),
-                    &parts.headers,
-                    parts.extensions,
-                ),
-            };
-            return crate::poem_bridge::response_to_poem(answer);
-        }
-        resp.set_body(body);
-    }
-    let mut resp = match redacted {
-        Some(said) if is_raw_text(resp.headers()) => {
-            let (parts, _) = resp.into_parts();
-            Response::from_parts(parts, poem::Body::from_string(said))
-        }
-        _ => resp,
-    };
-    if is_raw_text(resp.headers()) {
-        resp.extensions_mut().insert(Said);
-    }
-    resp
 }
 
 /// The outermost layer when something wraps the edge: every answer, an `Err`
@@ -436,22 +363,6 @@ impl std::fmt::Display for ProblemDetails {
 }
 
 impl std::error::Error for ProblemDetails {}
-
-impl ResponseError for ProblemDetails {
-    fn status(&self) -> StatusCode {
-        self.status
-    }
-
-    fn as_response(&self) -> Response {
-        crate::poem_bridge::response_to_poem(crate::ResponseError::as_response(self))
-    }
-}
-
-impl IntoResponse for ProblemDetails {
-    fn into_response(self) -> Response {
-        self.as_response()
-    }
-}
 
 impl crate::ResponseError for ProblemDetails {
     fn status(&self) -> StatusCode {
@@ -481,44 +392,7 @@ impl crate::IntoResponse for ProblemDetails {
 mod tests {
     use super::*;
     use crate::testing::internal_document;
-
-    /// A response poem rendered, as the normalizer takes it.
-    fn crossed(response: Response) -> crate::Response {
-        crate::poem_bridge::response_from_poem(response)
-    }
-
-    /// poem's own body extractors quote the client's `Content-Type` in their
-    /// `415`; rendered by the edge, the refusal names only the type expected.
-    #[tokio::test]
-    async fn a_foreign_media_type_refusal_never_quotes_the_clients_content_type() {
-        let marker = "text/x-quoted-marker".to_owned();
-        for (refused, expected) in [
-            (
-                poem::Error::from(poem::error::ParseJsonError::InvalidContentType(
-                    marker.clone(),
-                )),
-                "application/json",
-            ),
-            (
-                poem::Error::from(poem::error::ParseFormError::InvalidContentType(
-                    marker.clone(),
-                )),
-                "application/x-www-form-urlencoded",
-            ),
-            (
-                poem::Error::from(poem::error::ParseMultipartError::InvalidContentType(
-                    marker.clone(),
-                )),
-                "multipart/form-data",
-            ),
-        ] {
-            let resp = crossed(render_error(refused));
-            assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
-            let body = resp.into_body().into_string().await.expect("a body");
-            assert!(!body.contains("x-quoted-marker"), "{body}");
-            assert!(body.contains(expected), "{body}");
-        }
-    }
+    use crate::{Response, ResponseError};
 
     #[test]
     fn constructors_set_status_and_title() {
@@ -596,10 +470,12 @@ mod tests {
             .status(StatusCode::UNAUTHORIZED)
             .header(
                 header::WWW_AUTHENTICATE,
-                "Bearer resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\"",
+                HeaderValue::from_static(
+                    "Bearer resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\"",
+                ),
             )
             .body("nope");
-        let normalized = normalize_error_response(crossed(raw)).await;
+        let normalized = normalize_error_response(raw).await;
 
         let challenges: Vec<_> = normalized
             .headers()
@@ -714,31 +590,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn normalize_lifts_a_raw_plain_text_transport_error() {
-        let raw = render_error(poem::Error::from_string(
-            nest_rs_core::UUID_V7_REQUIRED,
-            StatusCode::BAD_REQUEST,
-        ));
-        let resp = normalize_error_response(crossed(raw)).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.headers()
-                .get(header::CONTENT_TYPE)
-                .map(|v| v.as_bytes()),
-            Some(b"application/problem+json".as_slice()),
-        );
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(v["status"], 400);
-        assert_eq!(v["detail"], nest_rs_core::UUID_V7_REQUIRED);
-    }
-
-    #[tokio::test]
     async fn normalize_passes_through_an_existing_problem() {
         let existing = ProblemDetails::conflict()
             .with_detail("dup name")
             .as_response();
-        let resp = normalize_error_response(crossed(existing)).await;
+        let resp = normalize_error_response(existing).await;
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
@@ -749,9 +605,9 @@ mod tests {
     async fn normalize_leaves_a_deliberate_json_error_body_alone() {
         let typed = Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .content_type("application/json")
+            .content_type(HeaderValue::from_static("application/json"))
             .body(br#"{"custom":"envelope"}"#.to_vec());
-        let resp = normalize_error_response(crossed(typed)).await;
+        let resp = normalize_error_response(typed).await;
         assert_eq!(
             resp.headers()
                 .get(header::CONTENT_TYPE)
@@ -767,7 +623,7 @@ mod tests {
         let echoed = Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .body("unknown session x-quoted-marker".as_bytes().to_vec());
-        let resp = normalize_error_response(crossed(echoed)).await;
+        let resp = normalize_error_response(echoed).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let text = std::str::from_utf8(&bytes).expect("utf8");
@@ -779,12 +635,11 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_drops_server_error_detail() {
-        let raw = poem::Error::from_string(
-            "connection to db-primary refused",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )
-        .into_response();
-        let resp = normalize_error_response(crossed(raw)).await;
+        let raw = Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .content_type(HeaderValue::from_static("text/plain; charset=utf-8"))
+            .body("connection to db-primary refused");
+        let resp = normalize_error_response(raw).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let text = std::str::from_utf8(&bytes).expect("utf8");
@@ -856,28 +711,13 @@ mod tests {
         );
     }
 
-    /// An error the edge cannot read an answer in, rendered with its chain
-    /// withheld, answers the one opaque document.
-    #[tokio::test]
-    async fn an_unknown_server_error_renders_the_one_opaque_document() {
-        let unknown = poem::Error::new(
-            std::io::Error::other("connection to db-primary refused"),
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        let resp = crossed(render_error(unknown));
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
-        assert_eq!(v, internal_document());
-    }
-
     #[tokio::test]
     async fn normalize_preserves_headers_on_a_bodyless_error() {
         let raw = Response::builder()
             .status(StatusCode::UNAUTHORIZED)
-            .header("WWW-Authenticate", "Bearer")
+            .header(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))
             .finish();
-        let resp = normalize_error_response(crossed(raw)).await;
+        let resp = normalize_error_response(raw).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             resp.headers()
@@ -897,11 +737,14 @@ mod tests {
         // The compression layer sits inside this boundary.
         let raw = Response::builder()
             .status(StatusCode::GATEWAY_TIMEOUT)
-            .header(header::CONTENT_ENCODING, "gzip")
-            .header(header::TRANSFER_ENCODING, "chunked")
-            .content_type("text/plain")
+            .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
+            .header(
+                header::TRANSFER_ENCODING,
+                HeaderValue::from_static("chunked"),
+            )
+            .content_type(HeaderValue::from_static("text/plain"))
             .body("upstream timed out");
-        let resp = normalize_error_response(crossed(raw)).await;
+        let resp = normalize_error_response(raw).await;
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(
             resp.headers()

@@ -380,6 +380,34 @@ fn the_scaffold_leaves_validator_to_the_framework() {
     assert!(!cargo.contains("validator"), "{cargo}");
 }
 
+/// The server library is the transport's internal adapter: no manifest the
+/// scaffold writes names it, so an app reaches HTTP through `nest-rs` alone.
+#[test]
+fn no_generated_manifest_names_the_server_library() {
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+    let root = dir.path().join("acme");
+    run_ok(&root, &["new", "blog"]);
+
+    let mut pending = vec![root];
+    let mut manifests = Vec::new();
+    while let Some(folder) = pending.pop() {
+        for entry in fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.file_name().is_some_and(|name| name == "Cargo.toml") {
+                manifests.push(path);
+            }
+        }
+    }
+    assert!(manifests.len() > 3, "{manifests:?}");
+    for manifest in manifests {
+        let text = fs::read_to_string(&manifest).unwrap();
+        assert!(!text.contains("poem"), "{}: {text}", manifest.display());
+    }
+}
+
 /// The test harness is a dev-dependency of each app, never a feature of the
 /// workspace's `nest-rs`: a release build of any app links none of it.
 #[test]

@@ -11,7 +11,6 @@ use nest_rs_database::UnitOfWork;
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::RouteError;
 use crate::fallback::is_under;
-use crate::poem_adapter::PoemLeaf;
 use crate::route_template::RouteTemplate;
 use crate::transport::join_path;
 use crate::versioning::route_matches;
@@ -65,24 +64,6 @@ struct Registrant {
 /// An endpoint put behind something.
 pub(crate) type Wrap = Arc<dyn Fn(BoxEndpoint) -> BoxEndpoint + Send + Sync>;
 
-/// What one registration answers with.
-pub(crate) enum Leaf {
-    /// A nestrs endpoint.
-    Endpoint(BoxEndpoint),
-    /// An endpoint still written on poem, which reads poem's own route
-    /// parameters; removed once every registrant speaks the vocabulary.
-    Poem(PoemLeaf),
-}
-
-impl Leaf {
-    fn into_endpoint(self) -> BoxEndpoint {
-        match self {
-            Self::Endpoint(endpoint) => endpoint,
-            Self::Poem(leaf) => leaf.into_endpoint(),
-        }
-    }
-}
-
 /// One address of the table: its template, who registered it, and what
 /// answers there.
 pub(crate) struct Address {
@@ -95,20 +76,25 @@ impl Address {
     /// The methods this address answers by name; none for an entry answering
     /// every method.
     pub(crate) fn methods(&self) -> impl Iterator<Item = &Method> {
-        let named: &[(Method, Leaf)] = match &self.dispatch {
+        let named: &[(Method, BoxEndpoint)] = match &self.dispatch {
             Dispatch::Any(_) => &[],
             Dispatch::Methods(methods) => methods,
         };
         named.iter().map(|(method, _)| method)
+    }
+
+    /// Whether one entry answers every method here, dispatching on it itself.
+    pub(crate) fn answers_every_method(&self) -> bool {
+        matches!(self.dispatch, Dispatch::Any(_))
     }
 }
 
 /// What answers at one address.
 pub(crate) enum Dispatch {
     /// One entry for every method: it dispatches on the method itself.
-    Any(Leaf),
+    Any(BoxEndpoint),
     /// One entry per method, in registration order.
-    Methods(Vec<(Method, Leaf)>),
+    Methods(Vec<(Method, BoxEndpoint)>),
 }
 
 impl HttpRoutes {
@@ -120,40 +106,14 @@ impl HttpRoutes {
     /// surface's entries: the guards its posture calls for and the app's
     /// exception filters run in front of it.
     pub fn route(&mut self, method: Method, template: &str, endpoint: impl Endpoint) -> &mut Self {
-        self.register(
-            Some(method),
-            template,
-            Leaf::Endpoint(BoxEndpoint::new(endpoint)),
-        );
+        self.register(Some(method), template, BoxEndpoint::new(endpoint));
         self
     }
 
     /// `endpoint` answers every method at `template`: a protocol that
     /// dispatches on the method itself (MCP).
     pub fn route_any(&mut self, template: &str, endpoint: impl Endpoint) -> &mut Self {
-        self.register(None, template, Leaf::Endpoint(BoxEndpoint::new(endpoint)));
-        self
-    }
-
-    /// [`route`](Self::route) for an endpoint still written on poem.
-    #[doc(hidden)]
-    pub fn route_poem<E>(&mut self, method: Method, template: &str, endpoint: E) -> &mut Self
-    where
-        E: poem::IntoEndpoint,
-        E::Endpoint: 'static,
-    {
-        self.register(Some(method), template, Leaf::Poem(PoemLeaf::new(endpoint)));
-        self
-    }
-
-    /// [`route_any`](Self::route_any) for an endpoint still written on poem.
-    #[doc(hidden)]
-    pub fn route_any_poem<E>(&mut self, template: &str, endpoint: E) -> &mut Self
-    where
-        E: poem::IntoEndpoint,
-        E::Endpoint: 'static,
-    {
-        self.register(None, template, Leaf::Poem(PoemLeaf::new(endpoint)));
+        self.register(None, template, BoxEndpoint::new(endpoint));
         self
     }
 
@@ -190,7 +150,7 @@ impl HttpRoutes {
     /// `site`, a route mounted on its own site, answers `method` at
     /// `template`, put behind nothing more.
     pub(crate) fn site(&mut self, method: Method, template: &str, site: BoxEndpoint) {
-        self.register_as(Some(method), template, Leaf::Endpoint(site), false);
+        self.register_as(Some(method), template, site, false);
     }
 
     /// What follows is registered by the self-mount `name`, at the paths it
@@ -250,12 +210,18 @@ impl HttpRoutes {
         self.addresses
     }
 
-    fn register(&mut self, method: Option<Method>, template: &str, leaf: Leaf) {
+    fn register(&mut self, method: Option<Method>, template: &str, leaf: BoxEndpoint) {
         self.register_as(method, template, leaf, true);
     }
 
     /// Register `leaf`, put behind the registrant's wrap when `wrapped`.
-    fn register_as(&mut self, method: Option<Method>, template: &str, leaf: Leaf, wrapped: bool) {
+    fn register_as(
+        &mut self,
+        method: Option<Method>,
+        template: &str,
+        leaf: BoxEndpoint,
+        wrapped: bool,
+    ) {
         if self.refused.is_some() {
             return;
         }
@@ -268,7 +234,7 @@ impl HttpRoutes {
         &mut self,
         method: Option<Method>,
         template: &str,
-        leaf: Leaf,
+        leaf: BoxEndpoint,
         wrapped: bool,
     ) -> Result<(), RouteError> {
         let owner = Arc::clone(&self.registrant.name);
@@ -302,7 +268,7 @@ impl HttpRoutes {
             None => written,
         };
         let leaf = match &self.registrant.wrap {
-            Some(wrap) if wrapped => Leaf::Endpoint(wrap(leaf.into_endpoint())),
+            Some(wrap) if wrapped => wrap(leaf),
             _ => leaf,
         };
         let Some(&at) = self.by_identity.get(template.identity()) else {

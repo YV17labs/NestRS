@@ -9,10 +9,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler};
 use nest_rs_core::{Handler, Layer, LayerSite, Posture, UnitContext};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::__private::{behind_guards, poem_bridge};
-use nest_rs_http::async_trait;
+use nest_rs_http::__private::behind_guards;
+use nest_rs_http::{BoxEndpoint, Endpoint, Request, Response, async_trait, endpoint_fn};
 use nest_rs_testing::LogCapture;
-use poem::{Endpoint, IntoResponse, Request, endpoint::make_sync};
 
 struct Mount;
 
@@ -68,26 +67,21 @@ fn entry(guard: DecisionGuard) -> ResolvedLayer<dyn Guard> {
     }
 }
 
-fn guarded<E>(
-    chain: Vec<ResolvedLayer<dyn Guard>>,
-    inner: E,
-) -> impl Endpoint<Output = poem::Response>
-where
-    E: Endpoint + 'static,
-    E::Output: IntoResponse,
-{
-    poem_bridge::to_poem(
-        behind_guards(
-            &UPGRADE,
-            chain,
-            nest_rs_http::BoxEndpoint::new(poem_bridge::from_poem(inner)),
-        )
-        .expect("a site declaring no `#[meta]` composes"),
-    )
+fn guarded(chain: Vec<ResolvedLayer<dyn Guard>>, inner: impl Endpoint) -> BoxEndpoint {
+    behind_guards(&UPGRADE, chain, BoxEndpoint::new(inner))
+        .expect("a site declaring no `#[meta]` composes")
 }
 
-async fn call_guarded(guard: DecisionGuard) -> poem::Response {
-    guarded(vec![entry(guard)], make_sync(|_| "ok"))
+/// The handler behind the stage, counting its runs into `ran`.
+fn handler(ran: Arc<AtomicU32>) -> impl Endpoint {
+    endpoint_fn(move |_| {
+        ran.fetch_add(1, Ordering::SeqCst);
+        async { Ok(Response::builder().body("ok")) }
+    })
+}
+
+async fn call_guarded(guard: DecisionGuard) -> Response {
+    guarded(vec![entry(guard)], handler(Arc::default()))
         .call(Request::builder().finish())
         .await
         .expect("a guard stage maps a denial to Ok(Response), never Err")
@@ -140,16 +134,12 @@ async fn a_rate_limit_denial_renders_429_with_retry_after() {
 async fn a_denial_short_circuits_before_the_handler_runs() {
     // The handler increments a marker; a denying guard in front must keep it 0.
     let handler_ran = Arc::new(AtomicU32::new(0));
-    let marker = handler_ran.clone();
     let ep = guarded(
         vec![entry(DecisionGuard::deny(
             Denial::forbidden("nope"),
             Arc::new(AtomicU32::new(0)),
         ))],
-        make_sync(move |_| {
-            marker.fetch_add(1, Ordering::SeqCst);
-            "ok"
-        }),
+        handler(handler_ran.clone()),
     );
     let resp = ep
         .call(Request::builder().finish())
@@ -206,7 +196,7 @@ async fn every_guard_of_the_stage_runs_when_each_allows() {
             entry(DecisionGuard::allow(first_ran.clone())),
             entry(DecisionGuard::allow(second_ran.clone())),
         ],
-        make_sync(|_| "ok"),
+        handler(Arc::default()),
     );
     let resp = ep
         .call(Request::builder().finish())
@@ -228,7 +218,7 @@ async fn a_denial_short_circuits_the_guards_listed_after_it() {
             )),
             entry(DecisionGuard::allow(second_ran.clone())),
         ],
-        make_sync(|_| "ok"),
+        handler(Arc::default()),
     );
     let resp = ep
         .call(Request::builder().finish())

@@ -241,3 +241,39 @@ the address does not serve, so the table's `Allow: POST, GET, HEAD` for any
 other method stands beside it; RFC 9110 §10.2.1 lets the set follow the
 request. Refused: `426` with `Upgrade: websocket`, which would point a client
 that wanted a query at a socket.
+
+## 2026-10-22 — poem is the adapter's alone
+
+The decouple the 2026-10-09 entry moved into 7.0 is done: no public
+signature, re-export or macro expansion names a poem type, and no manifest but
+`nest-rs-http`'s declares poem — neither the demo's, the bench's, nor any one
+`nestrs new` writes. poem lives in one crate-private file, `poem_adapter.rs`:
+the router, the CORS and compression layers, the query, form and multipart
+decoders, and the crossings between nestrs's request, response, body and error
+and poem's, which never leave it. The hidden bridge
+(`nest_rs_http::__private::poem_bridge`), `HttpRoutes::route_poem` and
+`route_any_poem`, `nest_rs::http::poem`, and the poem impls kept for the
+migration (`ProblemDetails`' and `Response`'s) are gone.
+
+Two rungs hold it, both in every gate: clippy's `disallowed-types` refuses
+every poem type the adapter names in any other file, lifted there by one
+`#![expect]`; `deny.toml` bans poem with `nest-rs-http` its only wrapper, which
+`just lint`'s dependency policy checks. What neither sees is review's: a public
+item written inside the adapter, such as a trait impl between a public type
+and a poem type, and a poem type the adapter does not name, which the change
+that makes the adapter name it lists in `clippy.toml` — the lint takes no glob.
+The root pin drops poem's `server` and `anyhow` features: the accept loop is
+ours.
+
+Moving the engine is that file's replacement. The owner moved it to axum
+inside 7.0 on 2026-10-14, the change that retires the pin; the conformance
+suites pin what the next adapter answers on the wire, and they now include
+the CORS layer's methods and refusals. A policy naming no method admits the
+methods the route table serves and the three CORS-safelisted ones — every
+method a page may send beside an address answering any method itself, as
+`/mcp` does — where poem listed every method it knows, `CONNECT` and `TRACE`
+among them; `*` answers
+`*`, as Fetch spells the wildcard; a configured method Fetch forbids a page to
+send fails the boot; and each refusal files one `warn` on `nest_rs::http`
+naming the check it failed — origin, method or headers — and nothing the
+request sent, where a refusal answered outside the edge filed nothing.

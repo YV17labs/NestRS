@@ -37,13 +37,10 @@ aws-lc-rs.workspace = true
 
 
 [dev-dependencies]
-# The guard's unit tests hand it a request with a peer address, which only
-# poem's request carries until the HTTP edge moves onto its own vocabulary.
-poem.workspace = true
-# The wiring suite boots a real app: `#[routes]` wraps each verb in poem's own
-# `#[handler]`, and a rate-limited controller is the shape the docs describe.
-# `test-util` (not part of tokio's `full`) pauses time, so a store that never
-# answers is denied at `HIT_TIMEOUT` without the suite waiting those seconds out.
+# The wiring suite boots a real app, a rate-limited controller as the docs
+# describe it. `test-util` (not part of tokio's `full`) pauses time, so a store
+# that never answers is denied at `HIT_TIMEOUT` without the suite waiting those
+# seconds out.
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # The scope half of the guard's contract is only observable in a status code:
 # `guard.rs` boots the documented global wiring and counts requests against a

@@ -20,8 +20,8 @@
 //! - `Content-Security-Policy`, `Cross-Origin-Embedder-Policy` and
 //!   `Permissions-Policy` — they govern the app's own documents.
 
+use http::{HeaderName, HeaderValue, header};
 use nest_rs_config::{ConfigError, ConfigService, Result};
-use poem::http::{HeaderName, HeaderValue, header};
 
 /// HSTS default: one year, include subdomains. `preload` is an explicit opt-in.
 const DEFAULT_HSTS: &str = "max-age=31536000; includeSubDomains";

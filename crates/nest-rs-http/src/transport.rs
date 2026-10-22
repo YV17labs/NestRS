@@ -42,7 +42,7 @@ use crate::versioning::VersionedEndpoint;
 /// The `Server` value a transport sends when [`HttpConfig::server_header`](crate::HttpConfig::server_header) is on.
 const SERVER_VALUE: &str = concat!("nestrs/", env!("CARGO_PKG_VERSION"));
 
-/// Join a controller prefix with a route path the way poem's nesting does:
+/// Join a controller prefix with a route path, one `/` between them:
 /// `("/health", "/live") -> "/health/live"`.
 pub fn join_path(prefix: &str, rest: &str) -> String {
     let p = prefix.trim_end_matches('/');
@@ -170,8 +170,8 @@ fn normalize_global_prefix(raw: &str) -> Option<String> {
 
 /// The canonical form of a mount path: `"/x"`, with the root as `"/"`.
 ///
-/// The collision checks compare mount paths as strings, while `Route::nest` makes
-/// `"/x"` and `"/x/"` one key: left raw, the pair slips past and poem panics.
+/// The collision checks compare mount paths as strings, while the router makes
+/// `"/x"` and `"/x/"` one address: left raw, the pair would slip past them.
 pub fn normalize_mount_path(raw: &str) -> String {
     match normalize_global_prefix(raw) {
         Some(path) => path,
@@ -708,8 +708,13 @@ impl Transport for HttpTransport {
         // swallow it.
         let self_mounts = routes.take_self_mounted();
         let addresses = routes.into_addresses();
-        let known_methods =
-            KnownMethods::with(addresses.iter().flat_map(Address::methods).cloned());
+        let routed: Vec<Method> = addresses
+            .iter()
+            .flat_map(Address::methods)
+            .cloned()
+            .collect();
+        let every_method = addresses.iter().any(Address::answers_every_method);
+        let known_methods = KnownMethods::with(routed.iter().cloned());
         // What the router answers itself, as one site: its 404s and 405s, and
         // the fallback a module mounts.
         let fallback_chains = FALLBACK_SITE.chains(container)?;
@@ -795,7 +800,9 @@ impl Transport for HttpTransport {
             // Outside the edge, so a preflight carries no request scope.
             false => BoxEndpoint::new(Normalized(PoemAdapter::around(
                 endpoint,
-                self.cors.take(),
+                self.cors
+                    .take()
+                    .map(|cors| cors.serving(&routed, every_method)),
                 self.compression,
             ))),
         };

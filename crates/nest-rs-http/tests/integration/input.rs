@@ -1,8 +1,6 @@
 //! `#[input]` carries every derive an HTTP wire DTO needs.
 
-use nest_rs_http::input;
-use nest_rs_http::poem::IntoResponse;
-use nest_rs_http::poem::web::Json;
+use nest_rs_http::{IntoResponse, Json, input};
 use schemars::JsonSchema;
 use validator::Validate;
 
@@ -58,14 +56,4 @@ fn input_validation_rules_still_apply() {
         parsed.validate().is_err(),
         "`#[validate(length(min = 1))]` is live on an `#[input]` DTO",
     );
-}
-
-#[test]
-fn input_derives_serialize_so_a_dto_answers_through_the_vocabulary_json() {
-    fn assert_answerable<T: serde::Serialize>()
-    where
-        nest_rs_http::Json<T>: nest_rs_http::IntoResponse,
-    {
-    }
-    assert_answerable::<CreateUser>();
 }

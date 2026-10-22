@@ -18,7 +18,6 @@ use nest_rs_http::{
     controller, routes,
 };
 use nest_rs_testing::LogCapture;
-use poem::handler;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Notify;
@@ -797,7 +796,7 @@ impl Interceptor for Forwarding {
     }
 }
 
-/// What both upgrading leaves answer: the switch to the `echo` protocol.
+/// What the upgrading leaf answers: the switch to the `echo` protocol.
 fn switching() -> nest_rs_http::Response {
     nest_rs_http::Response::builder()
         .status(nest_rs_http::StatusCode::SWITCHING_PROTOCOLS)
@@ -820,23 +819,6 @@ async fn echo_four(mut socket: impl AsyncRead + tokio::io::AsyncWrite + Unpin) {
     }
 }
 
-/// A poem leaf taking the socket through poem's own upgrade, as a WebSocket
-/// gateway does until it leaves poem.
-#[handler]
-fn poem_side(req: &poem::Request) -> poem::Response {
-    let Ok(upgrade) = req.take_upgrade() else {
-        return poem::Response::builder()
-            .status(nest_rs_http::StatusCode::UPGRADE_REQUIRED)
-            .finish();
-    };
-    tokio::spawn(async move {
-        if let Ok(socket) = upgrade.await {
-            echo_four(socket).await;
-        }
-    });
-    nest_rs_http::__private::poem_bridge::response_to_poem(switching())
-}
-
 /// A leaf on nestrs's vocabulary taking the socket through hyper's upgrade
 /// the request carries.
 async fn nestrs_side(req: nest_rs_http::Request) -> nest_rs_http::Result<nest_rs_http::Response> {
@@ -853,7 +835,7 @@ async fn nestrs_side(req: nest_rs_http::Request) -> nest_rs_http::Result<nest_rs
     Ok(switching())
 }
 
-/// Both upgrading leaves, self-mounted.
+/// The upgrading leaf, self-mounted.
 struct Upgrades;
 
 impl nest_rs_core::Discoverable for Upgrades {
@@ -861,19 +843,16 @@ impl nest_rs_core::Discoverable for Upgrades {
         builder.attach_meta::<Upgrades, HttpEndpointMeta>(
             HttpEndpointMeta::new(
                 &crate::PUBLIC_MOUNT,
-                "/upgrade/poem",
+                "/upgrade",
                 "upgrade",
                 |_container, routes| {
-                    routes
-                        .route_poem(Method::GET, "/upgrade/poem", poem_side)
-                        .route(
-                            Method::GET,
-                            "/upgrade/nestrs",
-                            nest_rs_http::endpoint_fn(nestrs_side),
-                        );
+                    routes.route(
+                        Method::GET,
+                        "/upgrade",
+                        nest_rs_http::endpoint_fn(nestrs_side),
+                    );
                 },
             )
-            .also_mounts(["/upgrade/nestrs"])
             .owned_by("Upgrades"),
         )
     }
@@ -886,43 +865,35 @@ struct UpgradeModule;
 struct LayeredUpgradeModule;
 
 /// An upgrade request crosses the edge, its site — layered when a unit-stage
-/// interceptor runs there — and the router with its socket still reachable: a
-/// nestrs entry and a poem leaf on one table each switch it.
+/// interceptor runs there — and the router with its socket still reachable:
+/// the entry it reaches switches it.
 #[tokio::test]
-async fn a_converter_leaf_and_a_poem_leaf_both_upgrade() {
+async fn an_upgrade_request_reaches_its_entry_with_its_socket() {
     for banded in [false, true] {
         let builder = match banded {
             false => App::builder().module::<UpgradeModule>(),
             true => App::builder().module::<LayeredUpgradeModule>(),
         };
         let serving = serve_app(builder, HttpConfig::default()).await;
-        for leaf in ["/upgrade/poem", "/upgrade/nestrs"] {
-            let mut stream = connect(serving.port).await;
-            stream
-                .write_all(
-                    format!(
-                        "GET {leaf} HTTP/1.1\r\nhost: localhost\r\nconnection: upgrade\r\n\
-                         upgrade: echo\r\n\r\n"
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .expect("the upgrade is asked for");
-            let head = tokio::time::timeout(PATIENCE, read_head(&mut stream))
-                .await
-                .expect("answered");
-            assert!(
-                head.starts_with("HTTP/1.1 101"),
-                "{leaf}, banded {banded}: {head}"
-            );
-            stream.write_all(b"ping").await.expect("sent on the socket");
-            let mut echoed = [0_u8; 4];
-            tokio::time::timeout(PATIENCE, stream.read_exact(&mut echoed))
-                .await
-                .expect("echoed in time")
-                .expect("echoed");
-            assert_eq!(&echoed, b"ping", "{leaf}, banded {banded}");
-        }
+        let mut stream = connect(serving.port).await;
+        stream
+            .write_all(
+                b"GET /upgrade HTTP/1.1\r\nhost: localhost\r\nconnection: upgrade\r\n\
+                  upgrade: echo\r\n\r\n",
+            )
+            .await
+            .expect("the upgrade is asked for");
+        let head = tokio::time::timeout(PATIENCE, read_head(&mut stream))
+            .await
+            .expect("answered");
+        assert!(head.starts_with("HTTP/1.1 101"), "banded {banded}: {head}");
+        stream.write_all(b"ping").await.expect("sent on the socket");
+        let mut echoed = [0_u8; 4];
+        tokio::time::timeout(PATIENCE, stream.read_exact(&mut echoed))
+            .await
+            .expect("echoed in time")
+            .expect("echoed");
+        assert_eq!(&echoed, b"ping", "banded {banded}");
         serving.cancel.cancel();
     }
 }
@@ -1264,7 +1235,12 @@ impl nest_rs_core::Discoverable for CarryingMount {
         builder
             .attach_meta::<CarryingMount, HttpEndpointMeta>(
                 HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/units", "units", |_c, routes| {
-                    routes.route_any_poem("/units", poem::endpoint::make_sync(|_| "units"));
+                    routes.route_any(
+                        "/units",
+                        nest_rs_http::endpoint_fn(|_| async {
+                            Ok(nest_rs_http::Response::builder().body("units"))
+                        }),
+                    );
                 })
                 .carries::<Units>()
                 .owned_by("CarryingMount"),

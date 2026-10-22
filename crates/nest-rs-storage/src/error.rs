@@ -139,8 +139,8 @@ pub enum StorageError {
     },
 }
 
-/// Lets a `get_stream` chunk feed `poem::Body::from_bytes_stream` directly,
-/// which requires `E: Into<std::io::Error>`.
+/// Lets a `get_stream` chunk feed what reads a stream of `io::Result`s, such
+/// as `tokio_util::io::StreamReader`, which requires `E: Into<std::io::Error>`.
 impl From<StorageError> for std::io::Error {
     fn from(error: StorageError) -> Self {
         std::io::Error::other(error)

@@ -57,6 +57,8 @@ pub mod redis_schedule;
 pub mod redis_throttler;
 #[cfg(feature = "graphql")]
 pub mod resolver;
+#[cfg(feature = "authn")]
+pub mod strategy;
 #[cfg(feature = "schedule")]
 pub mod tasks;
 #[cfg(feature = "mcp")]

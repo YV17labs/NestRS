@@ -193,6 +193,16 @@ pub struct ApiModule;
 `credentials`, a `*` in any list fails the boot: a browser reads it as a
 literal on a credentialed request, so it would open nothing.
 
+With no `methods`, the policy admits the methods your routes serve, beside the
+CORS-safelisted `GET`, `HEAD` and `POST` — every method a page may send when a
+mount answers any method itself, as `/mcp` does. A method the Fetch standard
+forbids a page to send — `CONNECT`, `TRACE`, `TRACK` — fails the boot when
+`methods` lists it. A request the policy refuses — an unlisted origin, or a
+method or header its preflight asks for that the policy does not admit —
+answers `403` and files one `warn` on `nest_rs::http`, `cross-origin request
+refused by the CORS policy`, whose `reason` names the check it failed and
+nothing the request sent.
+
 The same origins decide who opens a socket or calls MCP. A browser consults
 CORS neither before a WebSocket upgrade nor before a request simple enough to
 need no preflight, so the WebSocket gateways, the GraphQL subscription socket

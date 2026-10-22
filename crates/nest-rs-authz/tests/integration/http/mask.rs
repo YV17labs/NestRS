@@ -521,7 +521,7 @@ async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked(
         .collect();
     assert!(!routes.is_empty(), "the controller is discovered at all");
 
-    // The media-type probes return a bare `poem::Response` to set (or omit) a
+    // The media-type probes return a bare `Response` to set (or omit) a
     // `Content-Type`; with no schema to publish they are exempt from the
     // `response` half, by name.
     const OPAQUE_BY_CONSTRUCTION: &[&str] = &["vendor", "upper", "charset", "untyped", "csv"];

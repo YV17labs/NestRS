@@ -134,10 +134,6 @@ nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 # `#[derive(SimpleObject)]` on the payload those two share.
 async-graphql.workspace = true
-# The suites' handlers, interceptors, filters and exception filters still
-# answer poem's types until the HTTP edge's contracts leave it; the client
-# names none of them.
-poem.workspace = true
 # `test-util` (not part of tokio's `full`) pauses time, so the close of a
 # transport that unwinds for seconds is asserted on a virtual clock.
 tokio = { workspace = true, features = ["test-util"] }

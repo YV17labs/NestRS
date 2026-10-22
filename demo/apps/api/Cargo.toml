@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 nest-rs.workspace = true
 features.workspace = true
-poem.workspace = true
 anyhow.workspace = true
 uuid.workspace = true
 sea-orm.workspace = true

@@ -96,8 +96,8 @@ impl Body {
 
     /// Any body of [`Bytes`].
     ///
-    /// A `Body` or poem's box is kept as it is. Any other body, `Sync` or not,
-    /// is boxed once more inside a `Mutex` that each frame reaches through
+    /// A `Body`, or the box one wraps, is kept as it is. Any other body, `Sync`
+    /// or not, is boxed once more inside a `Mutex` that each frame reaches through
     /// `get_mut`, never by locking: that is how a body that is not `Sync` (a
     /// stream's) still lets a `&Request` holding it cross an `.await` in a
     /// `Send` future.
@@ -227,12 +227,13 @@ impl Body {
         BodyDataStream::new(self.0)
     }
 
-    /// A body around `boxed`: poem wraps the same box, which the bridge moves.
+    /// A body around `boxed`, the box the HTTP adapter's library wraps too: it
+    /// moves across, never copied.
     pub(crate) fn from_boxed(boxed: BoxBody<Bytes, io::Error>) -> Self {
         Self(boxed)
     }
 
-    /// The box, for poem, which wraps the same type.
+    /// The box, for the HTTP adapter's library, which wraps the same type.
     pub(crate) fn into_boxed(self) -> BoxBody<Bytes, io::Error> {
         self.0
     }

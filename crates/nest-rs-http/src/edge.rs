@@ -389,14 +389,12 @@ mod tests {
     use bytes::Bytes;
     use futures_util::StreamExt;
     use nest_rs_core::current_request_scope;
-    use poem::handler;
 
     use http::StatusCode;
 
     use super::*;
-    use crate::endpoint::BoxEndpoint;
+    use crate::endpoint::{BoxEndpoint, endpoint_fn};
     use crate::error::HttpError;
-    use crate::poem_bridge::from_poem;
     use crate::testing::{answer, get, internal_document, text};
 
     /// The gap bound the edges below hold a body to.
@@ -453,44 +451,55 @@ mod tests {
         )]
     }
 
-    #[handler]
-    async fn observe_scope() -> &'static str {
-        assert!(
-            current_request_scope().is_some(),
-            "the edge installs the ambient request scope",
-        );
-        "ok"
+    fn observe_scope() -> impl Endpoint {
+        endpoint_fn(|_| async {
+            assert!(
+                current_request_scope().is_some(),
+                "the edge installs the ambient request scope",
+            );
+            Ok(Response::builder().body("ok"))
+        })
     }
 
-    #[handler]
-    async fn echo_len(body: Vec<u8>) -> String {
-        body.len().to_string()
+    /// Reads the whole body and answers its length; a read the edge refused
+    /// answers as that refusal.
+    fn echo_len() -> impl Endpoint {
+        endpoint_fn(|req: Request| async move {
+            let body = req.into_body().into_bytes().await?;
+            Ok(Response::builder().body(body.len().to_string()))
+        })
     }
 
-    #[handler]
-    async fn slow() -> &'static str {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        "late"
+    fn slow() -> impl Endpoint {
+        endpoint_fn(|_| async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Ok(Response::builder().body("late"))
+        })
     }
 
-    #[handler]
-    fn sets_header() -> poem::Response {
-        poem::Response::builder()
-            .header("x-content-type-options", "handler-value")
-            .body("ok")
+    fn sets_header() -> impl Endpoint {
+        endpoint_fn(|_| async {
+            Ok(Response::builder()
+                .header(
+                    HeaderName::from_static("x-content-type-options"),
+                    HeaderValue::from_static("handler-value"),
+                )
+                .body("ok"))
+        })
     }
 
-    #[handler]
-    async fn panics_after_waiting() -> &'static str {
-        tokio::task::yield_now().await;
-        panic!("the handler panicked");
+    fn panics_after_waiting() -> impl Endpoint {
+        endpoint_fn(|_| async {
+            tokio::task::yield_now().await;
+            panic!("the handler panicked");
+        })
     }
 
     /// Past an await, so the panic unwinds out of a poll rather than a first call.
     #[tokio::test]
     async fn a_handler_panic_answers_500_and_files_its_line_panic() {
         let logs = nest_rs_testing::LogCapture::install();
-        let ep = edge(from_poem(panics_after_waiting), None, None, nosniff());
+        let ep = edge(panics_after_waiting(), None, None, nosniff());
         let resp = answer(&ep, get()).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(
@@ -537,7 +546,7 @@ mod tests {
             .build()
             .expect("the container builds");
         let ep = EdgeEndpoint::new(
-            from_poem(panics_after_waiting),
+            panics_after_waiting(),
             container,
             None,
             crate::RawBody::DEFAULT_LIMIT,
@@ -564,21 +573,18 @@ mod tests {
         );
     }
 
-    #[handler]
-    fn panics_over_a_decode_failure() -> &'static str {
-        let parsed: u64 = serde_json::from_str(r#""sk_live_51HsecretTOKEN""#).expect("a number");
-        if parsed == 0 { "zero" } else { "some" }
+    fn panics_over_a_decode_failure() -> impl Endpoint {
+        endpoint_fn(|_| async {
+            let parsed: u64 =
+                serde_json::from_str(r#""sk_live_51HsecretTOKEN""#).expect("a number");
+            Ok(Response::builder().body(if parsed == 0 { "zero" } else { "some" }))
+        })
     }
 
     #[tokio::test]
     async fn the_logged_payload_is_redacted() {
         let logs = nest_rs_testing::LogCapture::install();
-        let ep = edge(
-            from_poem(panics_over_a_decode_failure),
-            None,
-            None,
-            Vec::new(),
-        );
+        let ep = edge(panics_over_a_decode_failure(), None, None, Vec::new());
         let resp = answer(&ep, get()).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
@@ -596,7 +602,7 @@ mod tests {
 
     #[tokio::test]
     async fn installs_a_request_scope_and_forwards_the_response() {
-        let ep = edge(from_poem(observe_scope), None, None, Vec::new());
+        let ep = edge(observe_scope(), None, None, Vec::new());
         let resp = answer(&ep, get()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(text(resp).await, "ok");
@@ -625,7 +631,7 @@ mod tests {
 
     #[tokio::test]
     async fn declared_length_over_the_cap_is_rejected_with_headers() {
-        let ep = edge(from_poem(echo_len), None, Some(8), nosniff());
+        let ep = edge(echo_len(), None, Some(8), nosniff());
         let resp = answer(&ep, declaring_64_bytes()).await;
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
@@ -633,7 +639,7 @@ mod tests {
 
     #[tokio::test]
     async fn declared_length_within_the_cap_passes_the_body_through() {
-        let ep = edge(from_poem(echo_len), None, Some(1024), Vec::new());
+        let ep = edge(echo_len(), None, Some(1024), Vec::new());
         let resp = answer(&ep, declaring_64_bytes()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(text(resp).await, "64");
@@ -642,26 +648,21 @@ mod tests {
     #[tokio::test]
     async fn an_undeclared_length_body_is_capped_as_its_reader_takes_it() {
         // No Content-Length: the wrapper counts what arrives.
-        let ep = edge(from_poem(echo_len), None, Some(8), Vec::new());
+        let ep = edge(echo_len(), None, Some(8), Vec::new());
         let resp = answer(&ep, post(Version::HTTP_11, Body::from(vec![0u8; 64]))).await;
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
     async fn a_bodyless_request_passes_under_the_cap() {
-        let ep = edge(from_poem(observe_scope), None, Some(8), Vec::new());
+        let ep = edge(observe_scope(), None, Some(8), Vec::new());
         let resp = answer(&ep, get()).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn overrunning_handler_answers_503_with_a_retry_after_and_headers() {
-        let ep = edge(
-            from_poem(slow),
-            Some(Duration::from_millis(20)),
-            None,
-            nosniff(),
-        );
+        let ep = edge(slow(), Some(Duration::from_millis(20)), None, nosniff());
         let resp = answer(&ep, get()).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(resp.headers()[header::RETRY_AFTER], "1");
@@ -672,7 +673,7 @@ mod tests {
     async fn synchronous_response_under_a_timeout_is_forwarded() {
         // The lazy timer's fast path: a first poll that resolves never arms it.
         let ep = edge(
-            from_poem(observe_scope),
+            observe_scope(),
             Some(Duration::from_secs(30)),
             None,
             Vec::new(),
@@ -682,17 +683,18 @@ mod tests {
         assert_eq!(text(resp).await, "ok");
     }
 
-    #[handler]
-    async fn briefly_slow() -> &'static str {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        "made it"
+    fn briefly_slow() -> impl Endpoint {
+        endpoint_fn(|_| async {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            Ok(Response::builder().body("made it"))
+        })
     }
 
     #[tokio::test]
     async fn pending_handler_within_budget_completes_after_arming_the_timer() {
         // The lazy timer's slow path: a first `Pending` arms it.
         let ep = edge(
-            from_poem(briefly_slow),
+            briefly_slow(),
             Some(Duration::from_secs(30)),
             None,
             Vec::new(),
@@ -816,7 +818,7 @@ mod tests {
             HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("DENY"),
         ));
-        let ep = edge(from_poem(sets_header), None, None, headers);
+        let ep = edge(sets_header(), None, None, headers);
         let resp = answer(&ep, get()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
@@ -832,7 +834,7 @@ mod tests {
 
     #[tokio::test]
     async fn fused_normalize_lifts_a_413_onto_problem_json_with_headers() {
-        let ep = fused_edge(from_poem(echo_len), Some(8), nosniff());
+        let ep = fused_edge(echo_len(), Some(8), nosniff());
         let resp = answer(&ep, declaring_64_bytes()).await;
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
@@ -844,11 +846,12 @@ mod tests {
 
     /// Reads its body to the end and answers `200` whatever the read made of
     /// it: the edge's answer must not depend on how a reader takes a failure.
-    #[handler]
-    async fn swallows_read_errors(body: poem::Body) -> &'static str {
-        let mut frames = body.into_bytes_stream();
-        while frames.next().await.is_some() {}
-        "read"
+    fn swallows_read_errors() -> impl Endpoint {
+        endpoint_fn(|req: Request| async move {
+            let mut frames = std::pin::pin!(req.into_body().into_stream());
+            while frames.next().await.is_some() {}
+            Ok(Response::builder().body("read"))
+        })
     }
 
     /// One frame, then nothing for ever.
@@ -876,7 +879,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_body_past_the_cap_answers_413_whatever_its_reader_made_of_it() {
-        let ep = edge(from_poem(swallows_read_errors), None, Some(8), nosniff());
+        let ep = edge(swallows_read_errors(), None, Some(8), nosniff());
         let resp = ep
             .call(post(Version::HTTP_11, Body::from(vec![0u8; 64])))
             .await
@@ -887,7 +890,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_stalled_body_answers_408_closing_an_http1_connection() {
-        let ep = edge(from_poem(swallows_read_errors), None, Some(1024), nosniff());
+        let ep = edge(swallows_read_errors(), None, Some(1024), nosniff());
         let resp = ep
             .call(post(Version::HTTP_11, stalling()))
             .await
@@ -903,12 +906,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_stalled_body_on_http2_answers_408_without_a_connection_header() {
-        let ep = edge(
-            from_poem(swallows_read_errors),
-            None,
-            Some(1024),
-            Vec::new(),
-        );
+        let ep = edge(swallows_read_errors(), None, Some(1024), Vec::new());
         let resp = ep
             .call(post(Version::HTTP_2, stalling()))
             .await

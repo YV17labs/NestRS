@@ -1,5 +1,5 @@
-//! HTTP transport for nestrs — a [`nest_rs_core::Transport`] routed by poem and
-//! served by its own accept loop on hyper.
+//! HTTP transport for nestrs — a [`nest_rs_core::Transport`] served by its own
+//! accept loop on hyper.
 //!
 //! [`HttpTransport`], built from the app's [`HttpConfig`] alone, assembles one
 //! route table, [`HttpRoutes`], from every `#[routes]` controller and every
@@ -48,7 +48,6 @@ mod path;
 mod phase;
 mod pipe;
 mod poem_adapter;
-mod poem_bridge;
 mod problem;
 mod query;
 mod raw_body;
@@ -268,9 +267,7 @@ pub mod __private {
     pub use nest_rs_guards::__private::global_guards_active;
     pub use nest_rs_pipes::PipeSpec;
 
-    pub use serde;
     pub use tracing;
-    pub use validator;
 
     /// Whether a request asks for a WebSocket and, behind the `websocket`
     /// feature, the opening handshake on hyper's upgrade, the socket above it
@@ -285,20 +282,8 @@ pub mod __private {
             WebSocketUpgrade, close_frame, read_failed,
         };
     }
-
-    /// Converts between this crate's HTTP vocabulary and poem's, losing nothing
-    /// either way, while the transport moves onto the vocabulary; removed once
-    /// poem leaves the public surface.
-    pub mod poem_bridge {
-        pub use crate::poem_bridge::{
-            body_from_poem, body_to_poem, downcast_from_poem, error_from_poem, error_to_poem,
-            from_poem, request_from_poem, request_from_poem_at, request_to_poem,
-            response_from_poem, response_to_poem, to_poem, wrap_poem,
-        };
-    }
 }
 
-pub use poem;
 // The stream vocabulary an `#[sse]` route is built from.
 pub use futures_util;
 pub use schemars;

@@ -54,11 +54,6 @@ pub enum RedisDatabase {
     PostsRollback = 7,
 }
 
-const _: () = assert!(
-    RedisDatabase::SUITES < *RedisDatabase::OWN.start()
-        && *RedisDatabase::OWN.end() < RedisDatabase::TRANSCODES
-);
-
 impl RedisDatabase {
     pub const SUITES: u8 = 1;
     const OWN: std::ops::RangeInclusive<u8> = 2..=7;
@@ -88,3 +83,8 @@ impl RedisDatabase {
         (Self::SUITES..=Self::TRANSCODES).find(|&index| url_on(url, index) == url)
     }
 }
+
+const _: () = assert!(
+    RedisDatabase::SUITES < *RedisDatabase::OWN.start()
+        && *RedisDatabase::OWN.end() < RedisDatabase::TRANSCODES
+);

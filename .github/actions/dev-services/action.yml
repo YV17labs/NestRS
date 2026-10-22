@@ -20,13 +20,12 @@ runs:
       shell: bash
       run: docker compose -f .devcontainer/compose/base.yml up --detach --wait --no-deps postgres valkey-standalone rustfs
     # The names a committed `.env` reaches Valkey and RustFS by: a URL no job
-    # variable overrides, such as a named Redis instance's, keeps its host.
+    # variable overrides keeps its host — a named Redis instance's, and the
+    # storage URL and endpoint, since a variable set beside the in-process
+    # store an app may open instead would refuse its boot.
     - name: Name the services
       shell: bash
       run: echo '127.0.0.1 valkey-standalone rustfs' | sudo tee -a /etc/hosts
-    # The development profile's storage URL and endpoint, unchanged: a variable
-    # set beside the in-process store an app may open instead would refuse its
-    # boot.
     - name: Create the bucket
       shell: bash
       run: sh .devcontainer/scripts/create-bucket.sh https://rustfs:9000

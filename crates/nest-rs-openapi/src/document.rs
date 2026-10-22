@@ -9,7 +9,7 @@ use nest_rs_http::{
     ApiVersioning, HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
     declared_versions, join_path,
 };
-use nest_rs_http::{StatusCode, header};
+use nest_rs_http::{ProblemDetails, StatusCode, header};
 use schemars::SchemaGenerator;
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
@@ -542,7 +542,7 @@ fn operation_object(
     }
     responses.insert(status.to_string(), Value::Object(ok));
     for status in error_statuses(route, full_path, denials, requires_parameter) {
-        let mut response = problem_response(error_title(status));
+        let mut response = problem_response(&error_title(status));
         if let Value::Object(map) = &mut response {
             match status {
                 401 => {
@@ -679,16 +679,13 @@ fn error_statuses(
     out
 }
 
-/// An error response's description: RFC 9110's reason phrase, which renamed
-/// `413` from the one the `http` crate still spells.
-fn error_title(status: u16) -> &'static str {
-    match status {
-        413 => "Content Too Large",
-        _ => StatusCode::from_u16(status)
-            .ok()
-            .and_then(|code| code.canonical_reason())
-            .unwrap_or("Error"),
-    }
+/// An error response's description: the `title` of the problem document the
+/// edge answers `status` with.
+fn error_title(status: u16) -> String {
+    StatusCode::from_u16(status).map_or_else(
+        |_| "Error".to_owned(),
+        |code| ProblemDetails::from_status(code).title,
+    )
 }
 
 fn is_redirect(status: u16) -> bool {

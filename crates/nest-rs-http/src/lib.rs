@@ -266,7 +266,6 @@ pub mod __private {
     };
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
     pub use crate::view::with_view;
-    pub use nest_rs_guards::__private::global_guards_active;
     pub use nest_rs_pipes::PipeSpec;
 
     pub use tracing;

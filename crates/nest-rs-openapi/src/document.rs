@@ -634,9 +634,9 @@ fn error_statuses(
     requires_parameter: bool,
 ) -> Vec<(&'static str, &'static str)> {
     let mut out = Vec::new();
-    // A paginated list refuses a cursor no page issued.
+    // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`),
+    // and a list linking its next page refuses a cursor no page issued.
     if route.request_body().is_some() || requires_parameter || route.sets_next_link() {
-        // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`).
         out.push(("400", "Bad Request"));
     }
     // The transport's body cap, whatever the media type.

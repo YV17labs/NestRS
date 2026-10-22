@@ -23,7 +23,7 @@ use nest_rs::authn::AuthnConfig;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::TestResponse;
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
-use serde_json::json;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, RedisDatabase};
@@ -67,55 +67,35 @@ pub(crate) async fn token_with_sub(org_id: &str, role: &str, sub: Uuid) -> Strin
 }
 
 pub(crate) async fn create_user(app: &TestApp, bearer: &str, name: &str, email: &str) -> String {
-    let resp = app
-        .http()
-        .post("/users")
-        .header(header::AUTHORIZATION, bearer)
-        .body_json(&json!({ "name": name, "email": email }))
-        .send()
-        .await;
-    resp.assert_status(StatusCode::CREATED);
-    let location = location_of(&resp);
-    let id = resp
-        .json()
-        .await
-        .value()
-        .object()
-        .get("id")
-        .string()
-        .to_owned();
-    assert_created_location(location.as_deref(), "/users", &id);
-    id
+    create(
+        app,
+        bearer,
+        "/users",
+        json!({ "name": name, "email": email }),
+    )
+    .await
 }
 
 pub(crate) async fn create_post(app: &TestApp, bearer: &str, title: &str, body: &str) -> String {
-    let resp = app
-        .http()
-        .post("/posts")
-        .header(header::AUTHORIZATION, bearer)
-        .body_json(&json!({ "title": title, "body": body }))
-        .send()
-        .await;
-    resp.assert_status(StatusCode::CREATED);
-    let location = location_of(&resp);
-    let id = resp
-        .json()
-        .await
-        .value()
-        .object()
-        .get("id")
-        .string()
-        .to_owned();
-    assert_created_location(location.as_deref(), "/posts", &id);
-    id
+    create(
+        app,
+        bearer,
+        "/posts",
+        json!({ "title": title, "body": body }),
+    )
+    .await
 }
 
 pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> String {
+    create(app, bearer, "/orgs", json!({ "name": name })).await
+}
+
+async fn create(app: &TestApp, bearer: &str, collection: &str, body: Value) -> String {
     let resp = app
         .http()
-        .post("/orgs")
+        .post(collection)
         .header(header::AUTHORIZATION, bearer)
-        .body_json(&json!({ "name": name }))
+        .body_json(&body)
         .send()
         .await;
     resp.assert_status(StatusCode::CREATED);
@@ -128,7 +108,7 @@ pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> Strin
         .get("id")
         .string()
         .to_owned();
-    assert_created_location(location.as_deref(), "/orgs", &id);
+    assert_created_location(location.as_deref(), collection, &id);
     id
 }
 

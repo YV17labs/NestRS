@@ -35,9 +35,12 @@ impl<P: std::fmt::Debug> std::fmt::Debug for RegisteredClient<P> {
     }
 }
 
-/// The principal established by authenticating a [`RegisteredClient`]. A machine
-/// actor with no per-user identity, so [`PrincipalIdentity::actor_id`] is `None`
-/// — the `payload` carries whatever the app logs and authorizes on.
+/// The principal established by authenticating a [`RegisteredClient`] at the
+/// token endpoint (RFC 6749 §2.3.1). It names no subject, so
+/// [`PrincipalIdentity::actor_id`] is `None` — the `payload` carries whatever the
+/// app logs and authorizes on — and a gated MCP endpoint whose guard admits it
+/// opens it no session. The access token an app issues it names the client's id
+/// as its `sub`, as RFC 9068 §2.2 requires: the subject a resource server binds.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedClient<P> {
     /// The matched client's app-defined payload — what the app logs and

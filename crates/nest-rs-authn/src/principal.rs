@@ -7,12 +7,13 @@
 //! ambient for the request and every job it pushes.
 
 /// Stable audit identifier of a principal — the value recorded as the
-/// request span's `actor_id` field. Return `None` when the principal
-/// carries no stable identity (an anonymous or machine principal without
-/// a subject).
+/// request span's `actor_id` field, and the subject an MCP session is bound
+/// to. Return the subject the verified credential names: an access token's
+/// `sub`, which RFC 9068 §2.2 requires, the client's own id when the client
+/// acts on its own behalf.
 pub trait PrincipalIdentity {
-    /// The principal's stable audit id, or `None` for an anonymous/machine
-    /// principal with no subject.
+    /// The subject the verified credential names, or `None` for a principal
+    /// naming none, which a gated MCP endpoint opens no session for.
     fn actor_id(&self) -> Option<String>;
 
     /// The tenant this principal acts within, or `None` (the default) for one

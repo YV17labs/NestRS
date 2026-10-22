@@ -130,7 +130,7 @@ async fn posts_round_trip() {
         .body_json(&json!({ "title": "Hello", "body": "World" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let body = created.json().await;
     let id = body.value().object().get("id").string().to_owned();
     assert_eq!(body.value().object().get("title").string(), "Hello");

@@ -97,7 +97,7 @@ async fn posts_round_trip() {
         .body_json(&json!({ "title": "Hello", "body": "World" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let body = created.json().await;
     let id = body.value().object().get("id").string().to_owned();
     assert_eq!(body.value().object().get("title").string(), "Hello");
@@ -154,7 +154,7 @@ async fn audit_interceptor_is_transparent_to_posts_requests() {
         .body_json(&json!({ "title": "Audited", "body": "World" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let id = created
         .json()
         .await
@@ -183,7 +183,7 @@ async fn publish_transitions_a_draft_to_published() {
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let body = created.json().await;
     let id = body.value().object().get("id").string().to_owned();
     assert_eq!(body.value().object().get("status").string(), "draft");
@@ -221,7 +221,7 @@ async fn re_publishing_returns_rfc9457_problem_json() {
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let id = created
         .json()
         .await
@@ -282,7 +282,7 @@ async fn publish_writes_the_status_and_an_audit_row_atomically() {
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let id_str = created
         .json()
         .await
@@ -338,7 +338,7 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let id_str = created
         .json()
         .await
@@ -406,7 +406,7 @@ async fn two_concurrent_publishes_of_one_post_answer_once_and_conflict_once() {
         .body_json(&json!({ "title": "Race", "body": "Twice" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let id_str = created
         .json()
         .await

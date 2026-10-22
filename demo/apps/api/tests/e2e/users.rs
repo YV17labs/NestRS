@@ -26,7 +26,7 @@ async fn users_are_scoped_to_their_org_and_bound_by_id() {
         .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let user_a = created
         .json()
         .await
@@ -116,7 +116,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .body_json(&json!({ "name": "Ada", "email": "ada-writes@acme.test" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let user_a = created
         .json()
         .await
@@ -233,7 +233,7 @@ async fn a_plain_user_get_by_id_masks_the_email() {
         .body_json(&json!({ "name": "Bob", "email": "bob@initech.test" }))
         .send()
         .await
-        .assert_status_is_ok();
+        .assert_status(StatusCode::CREATED);
 
     let listed = app
         .http()
@@ -290,7 +290,7 @@ async fn a_plain_user_listing_masks_the_email() {
         .body_json(&json!({ "name": "Bob", "email": "bob@initech.test" }))
         .send()
         .await
-        .assert_status_is_ok();
+        .assert_status(StatusCode::CREATED);
 
     let user = format!("Bearer {}", token_for(&org, "user").await);
     let listed = app
@@ -328,7 +328,7 @@ async fn a_failed_mutation_persists_nothing() {
         .body_json(&json!({ "name": "Ada", "email": "dup@hooli.test" }))
         .send()
         .await
-        .assert_status_is_ok();
+        .assert_status(StatusCode::CREATED);
 
     app.http()
         .post("/users")
@@ -364,7 +364,7 @@ async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
         .body_json(&body)
         .send()
         .await
-        .assert_status_is_ok();
+        .assert_status(StatusCode::CREATED);
     app.http()
         .post("/users")
         .header(header::AUTHORIZATION, &token)

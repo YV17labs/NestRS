@@ -150,14 +150,22 @@ pub struct UsersController {
 )]
 impl UsersController {
     #[post("/")]
+    #[http_code(201)]
     #[authorize(Create, UserEntity)]
     // … #[api(…)]
-    async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
+    async fn create(
+        &self,
+        req: &Request,
+        auth: Ctx<Claims>,
+        body: Valid<Json<CreateUser>>,
+    ) -> Result<Response> {
         let user = self
             .svc
             .create_in_org(body.into_inner(), auth.org_id)
             .await?;
-        Ok(Json(User::from(&user)))
+        let mut res = Json(User::from(&user)).into_response();
+        set_created_location(&mut res, caller_path(req), user.id);
+        Ok(res)
     }
 
     #[get("/{id}")]
@@ -170,7 +178,10 @@ impl UsersController {
 
 The `create` and `get` methods take over their generated counterparts; the
 default `list`, `update` and `delete` are still emitted. Names match by
-ident — a hand-written `delete` cancels the generated one.
+ident — a hand-written `delete` cancels the generated one. An override
+answers what the generated method does: this `create` keeps the `201` and
+its `Location` with `#[http_code(201)]` and `set_created_location`, built on
+the path `caller_path` reads.
 
 ## The GraphQL twin
 

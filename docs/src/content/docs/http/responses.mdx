@@ -57,13 +57,19 @@ thing changing is the status, a header, or a redirect, three attribute
 macros sit beside the verb attribute:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::{Json, http_code, redirect, response_header};
+use nest_rs::http::{
+    IntoResponse, Json, Request, Response, Result, caller_path, http_code, redirect,
+    response_header, set_created_location,
+};
 
 #[post("/posts")]
 #[http_code(201)]
 #[response_header("x-cache-status", "miss")]
-async fn create(&self, body: Valid<Json<CreatePost>>) -> Json<Post> {
-    Json(self.svc.create(body.into_inner()))
+async fn create(&self, req: &Request, body: Valid<Json<CreatePost>>) -> Result<Response> {
+    let post = self.svc.create(body.into_inner()).await?;
+    let mut res = Json(&post).into_response();
+    set_created_location(&mut res, caller_path(req), &post.id);
+    Ok(res)
 }
 
 #[get("/old-path")]
@@ -82,6 +88,12 @@ Overrides the response status on the **success path**. `N` must be in
 renamed on import, or a `type Outcome<T> = Result<T, MyError>`, short-circuits
 the same way. Mutually exclusive with `#[redirect]` — the two macros cannot both
 decorate the same handler.
+
+A `201` names what it created (RFC 9110 §15.3.2), so the `create` above
+returns a `Response` stamped by `set_created_location`, as the
+[`#[crud]` create](/database/crud/#override-one-handler-keep-the-rest) does.
+`caller_path(req)` is the collection the caller addressed, global prefix and
+version included.
 
 ### `#[response_header("name", "value")]`
 
@@ -120,14 +132,17 @@ practice:
 #[http_code(201)]
 #[response_header("x-cache-status", "miss")]
 #[response_header("link", "</posts>; rel=collection")]
-async fn create(&self, body: Valid<Json<CreatePost>>) -> Json<Post> {
-    Json(self.svc.create(body.into_inner()))
+async fn create(&self, req: &Request, body: Valid<Json<CreatePost>>) -> Result<Response> {
+    let post = self.svc.create(body.into_inner()).await?;
+    let mut res = Json(&post).into_response();
+    set_created_location(&mut res, caller_path(req), &post.id);
+    Ok(res)
 }
 ```
 
-The handler returns `Json<Post>`; `#[http_code(201)]` rewrites the status
-from `200` to `201`; the two `#[response_header]` attributes append their
-headers. `#[redirect]` cannot stack with `#[http_code]` — they decide the
+The handler returns the post with its `Location`; `#[http_code(201)]`
+rewrites the status from `200` to `201`; the two `#[response_header]`
+attributes append their headers. `#[redirect]` cannot stack with `#[http_code]` — they decide the
 same facet (the response status) two different ways.
 
 A handler that returns a `Result` keeps its error contract intact: on
@@ -143,13 +158,20 @@ whether an entity already existed, the headers depend on the resolved
 user — go back to a plain tuple return and let the handler decide:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::{IntoResponse, Json, Result, StatusCode};
+use nest_rs::http::{
+    IntoResponse, Json, Request, Response, Result, StatusCode, caller_path,
+    set_created_location,
+};
 
 #[post("/posts")]
-async fn upsert(&self, body: Valid<Json<CreatePost>>) -> Result<impl IntoResponse> {
+async fn upsert(&self, req: &Request, body: Valid<Json<CreatePost>>) -> Result<Response> {
     let (post, created) = self.svc.upsert(body.into_inner()).await?;
-    let status = if created { StatusCode::CREATED } else { StatusCode::OK };
-    Ok((status, Json(post)))
+    if !created {
+        return Ok(Json(post).into_response());
+    }
+    let mut res = (StatusCode::CREATED, Json(&post)).into_response();
+    set_created_location(&mut res, caller_path(req), &post.id);
+    Ok(res)
 }
 ```
 

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use nest_rs::authz::{Create, Update};
-use nest_rs::http::{Ctx, Json, Result, Valid, controller, crud};
+use nest_rs::http::{
+    Ctx, IntoResponse, Json, Request, Response, Result, Valid, caller_path, controller, crud,
+    set_created_location,
+};
 use nest_rs::seaorm::Bind;
 
 use super::exception_filter::PostProblemFilter;
@@ -30,25 +33,30 @@ pub struct PostsController {
 )]
 impl PostsController {
     #[post("/")]
+    #[http_code(201)]
     #[authorize(Create, PostEntity)]
     #[use_guards(PostAuthorGuard)]
     #[api(
         summary = "Create a post in the caller's org",
         description = "Requires a bearer JWT with a subject. The org and author are taken from \
-                       the token, never the body."
+                       the token, never the body.",
+        response = Post
     )]
     async fn create(
         &self,
+        req: &Request,
         auth: Ctx<Claims>,
         author: Ctx<PostAuthor>,
         body: Valid<Json<CreatePost>>,
-    ) -> Result<Json<Post>> {
+    ) -> Result<Response> {
         let PostAuthor(author_id) = *author;
-        Ok(Json(
-            self.svc
-                .create_in_org(body.into_inner(), auth.org_id, author_id)
-                .await?,
-        ))
+        let post = self
+            .svc
+            .create_in_org(body.into_inner(), auth.org_id, author_id)
+            .await?;
+        let mut res = Json(&post).into_response();
+        set_created_location(&mut res, caller_path(req), &post.id);
+        Ok(res)
     }
 
     #[post("/{id}/publish")]

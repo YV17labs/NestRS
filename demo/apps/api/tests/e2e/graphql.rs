@@ -23,7 +23,7 @@ async fn graphql_requires_a_jwt_and_scopes_to_the_callers_org() {
         .body_json(&json!({ "name": "Gql Ada", "email": "gqlada@acme.test" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let user_a = created
         .json()
         .await
@@ -155,7 +155,7 @@ async fn graphql_auto_resolved_relations_respect_ability_scope() {
             .body_json(&json!({ "name": "Twin", "email": email }))
             .send()
             .await
-            .assert_status_is_ok();
+            .assert_status(StatusCode::CREATED);
     }
 
     let resp = app

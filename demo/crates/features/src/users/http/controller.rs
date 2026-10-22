@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use nest_rs::authz::{Create, Read};
-use nest_rs::http::{Ctx, Json, Result, Valid, controller, crud};
+use nest_rs::http::{
+    Ctx, IntoResponse, Json, Request, Response, Result, Valid, caller_path, controller, crud,
+    set_created_location,
+};
 use nest_rs::seaorm::Bind;
 
 use crate::Claims;
@@ -25,18 +28,27 @@ pub struct UsersController {
 )]
 impl UsersController {
     #[post("/")]
+    #[http_code(201)]
     #[authorize(Create, UserEntity)]
     #[api(
         summary = "Create a user in the caller's org",
         description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The \
-                       user's org is taken from the caller's token, never the body."
+                       user's org is taken from the caller's token, never the body.",
+        response = User
     )]
-    async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
+    async fn create(
+        &self,
+        req: &Request,
+        auth: Ctx<Claims>,
+        body: Valid<Json<CreateUser>>,
+    ) -> Result<Response> {
         let user = self
             .svc
             .create_in_org(body.into_inner(), auth.org_id)
             .await?;
-        Ok(Json(User::from(&user)))
+        let mut res = Json(User::from(&user)).into_response();
+        set_created_location(&mut res, caller_path(req), user.id);
+        Ok(res)
     }
 
     #[get("/{id}")]

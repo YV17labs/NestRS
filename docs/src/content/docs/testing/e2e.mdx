@@ -76,7 +76,7 @@ async fn users_are_scoped_to_their_org_and_bound_by_id() {
         .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     // …
 }
 ```
@@ -263,6 +263,7 @@ in:
 ```rust title="apps/api/tests/e2e/users.rs"
 use std::sync::Arc;
 
+use nest_rs::http::StatusCode;
 use parking_lot::Mutex;
 
 #[derive(Default)]
@@ -296,7 +297,7 @@ async fn signup_emails_the_new_user() {
         .body_json(&json!({ "email": "ada@example.com" }))
         .send()
         .await
-        .assert_status_is_ok();
+        .assert_status(StatusCode::CREATED);
 
     assert_eq!(mailer.sent(), vec!["ada@example.com".to_string()]);
 }

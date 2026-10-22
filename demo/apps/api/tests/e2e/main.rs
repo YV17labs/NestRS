@@ -74,14 +74,18 @@ pub(crate) async fn create_user(app: &TestApp, bearer: &str, name: &str, email: 
         .body_json(&json!({ "name": name, "email": email }))
         .send()
         .await;
-    resp.assert_status_is_ok();
-    resp.json()
+    resp.assert_status(StatusCode::CREATED);
+    let location = location_of(&resp);
+    let id = resp
+        .json()
         .await
         .value()
         .object()
         .get("id")
         .string()
-        .to_owned()
+        .to_owned();
+    assert_created_location(location.as_deref(), "/users", &id);
+    id
 }
 
 pub(crate) async fn create_post(app: &TestApp, bearer: &str, title: &str, body: &str) -> String {
@@ -92,14 +96,18 @@ pub(crate) async fn create_post(app: &TestApp, bearer: &str, title: &str, body: 
         .body_json(&json!({ "title": title, "body": body }))
         .send()
         .await;
-    resp.assert_status_is_ok();
-    resp.json()
+    resp.assert_status(StatusCode::CREATED);
+    let location = location_of(&resp);
+    let id = resp
+        .json()
         .await
         .value()
         .object()
         .get("id")
         .string()
-        .to_owned()
+        .to_owned();
+    assert_created_location(location.as_deref(), "/posts", &id);
+    id
 }
 
 pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> String {

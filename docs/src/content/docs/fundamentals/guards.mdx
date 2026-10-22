@@ -104,6 +104,29 @@ say which unit this is. `cx.peer()` names the connection a WebSocket message
 came on; the other edges leave it empty. An entry you do not
 override costs nothing: it is answered without an allocation.
 
+### What a route's document lists
+
+A route's [OpenAPI document](/openapi/) lists the statuses its guards can
+refuse it with — the app's pool, its controller's and its own, the chain the
+route runs — whatever each guard is named or aliased. A guard declares them
+in `denial_statuses`, read off its `Err` paths; the default is `401` and `403`
+on a route that is not `#[public]` and nothing on one that is. The rate limit
+above answers neither:
+
+```rust title="crates/features/src/posts/guard.rs"
+impl Guard for RateLimitGuard {
+    // …
+    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+        &[429]
+    }
+}
+```
+
+The framework's guards declare theirs: `AuthnGuard` a `503` on every route
+and a `401` off a `#[public]` one, `ThrottlerGuard` a `429`, the ability guard
+none — the `403` an ability earns is answered where it is read, and a masked
+route lists it. A `500` is never declared: every route lists it.
+
 ## Secure the post API
 
 After [Modules](/fundamentals/modules/#extract-a-feature), `PostsController`
@@ -418,6 +441,10 @@ impl Guard for WebhookSignature {
         req.set_body(body);
         Ok(())
     }
+
+    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+        &[401]
+    }
 }
 
 impl GuardFor<HttpView> for WebhookSignature {}
@@ -439,7 +466,8 @@ async fn receive(&self, body: RawBody) -> Result<()> {
 
 A body past the cap answers `413` and one that stops arriving `408`, whatever
 the guard made of the failed read; a refusal is the guard's own `401`, logged
-at `warn` like any denial.
+at `warn` like any denial, and declared, so the route's document lists it
+beside its `#[public]` opening.
 
 ## Declare on the provider
 

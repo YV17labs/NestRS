@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use http::Method;
+use nest_rs_core::__private::Site;
 use nest_rs_core::Container;
 
 use crate::deprecation::DeprecationMeta;
@@ -77,7 +78,6 @@ impl RequestBodyMeta {
 /// #   query_params: &[],
 /// #   header_params: &[],
 /// #   may_conflict: false,
-/// #   throttled: false,
 /// #   sets_location: false,
 /// #   sets_next_link: false,
 /// #   response_headers: &[],
@@ -85,6 +85,7 @@ impl RequestBodyMeta {
 /// #   scoped_guarded: false,
 /// #   public: false,
 /// #   deprecation: None,
+/// #   site: todo!(),
 /// };
 /// ```
 #[derive(Clone)]
@@ -116,7 +117,6 @@ pub struct HttpRouteParts {
     pub query_params: &'static [SchemaFn],
     pub header_params: &'static [SchemaFn],
     pub may_conflict: bool,
-    pub throttled: bool,
     pub sets_location: bool,
     pub sets_next_link: bool,
     pub response_headers: &'static [(&'static str, &'static str)],
@@ -124,11 +124,26 @@ pub struct HttpRouteParts {
     pub scoped_guarded: bool,
     pub public: bool,
     pub deprecation: Option<DeprecationMeta>,
+    /// The site the route dispatches through, whose guard stage the route's
+    /// document reads.
+    pub site: &'static Site,
 }
 
 /// The record `#[routes]` builds for one handler out of what it read.
 pub fn http_route_meta(parts: HttpRouteParts) -> HttpRouteMeta {
     HttpRouteMeta { parts }
+}
+
+/// The statuses `route`'s guards declare they can refuse a request with: its
+/// site's guard stage, the chain the route runs, as `container` composed it
+/// when the route mounted. A site that does not compose refuses the boot
+/// before any document reads it.
+pub fn route_denial_statuses(
+    container: &Container,
+    route: &HttpRouteMeta,
+) -> anyhow::Result<Vec<u16>> {
+    let chains = route.parts.site.chains(container)?;
+    Ok(chains.denial_statuses(route.parts.public))
 }
 
 impl HttpRouteMeta {
@@ -228,13 +243,6 @@ impl HttpRouteMeta {
     /// `#[crud]`'s create/update/delete ops.
     pub fn may_conflict(&self) -> bool {
         self.parts.may_conflict
-    }
-
-    /// A `ThrottlerGuard` rate-limits this route, so it can answer `429` with a
-    /// `Retry-After` header. Detected by the guard's type name, so a handler
-    /// throttling by other means reads `false`.
-    pub fn throttled(&self) -> bool {
-        self.parts.throttled
     }
 
     /// The route's success response carries a `Location` header that the
@@ -393,7 +401,36 @@ impl HttpControllerMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::any::TypeId;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use nest_rs_core::__private::{
+        GlobalLayers, HandlerDeclaration, MetaLevels, SiteDeclaration, SiteLayers, declare_handler,
+        declare_site,
+    };
+    use nest_rs_core::{Handler, Posture};
+
+    struct Users;
+
+    static SHOW: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::REQUEST,
+        host: TypeId::of::<Users>(),
+        host_name: "Users",
+        method: "show",
+        address: "/{id}",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    static SHOW_SITE: Site = declare_site(
+        &SHOW,
+        SiteDeclaration {
+            layers: SiteLayers::default,
+            global: GlobalLayers::ALL,
+            guard_stage: None,
+            class_gate: None,
+        },
+    );
 
     #[test]
     fn schema_of_records_a_subschema_for_the_payload_type() {
@@ -501,7 +538,6 @@ mod tests {
             query_params: &[],
             header_params: &[],
             may_conflict: false,
-            throttled: false,
             sets_location: false,
             sets_next_link: false,
             response_headers: &[],
@@ -510,6 +546,7 @@ mod tests {
             public: false,
             deprecation: None,
             versions: &[],
+            site: &SHOW_SITE,
         }
     }
 
@@ -556,7 +593,6 @@ mod tests {
             query_params: &[schema, schema],
             header_params: &[schema, schema, schema],
             may_conflict: true,
-            throttled: true,
             sets_location: true,
             sets_next_link: true,
             response_headers: &[("x-kind", "user")],
@@ -564,6 +600,7 @@ mod tests {
             scoped_guarded: true,
             public: true,
             deprecation: Some(deprecation),
+            site: &SHOW_SITE,
         });
         assert_eq!(route.method(), Method::PUT);
         assert_eq!(route.path(), "/{id}");
@@ -584,7 +621,6 @@ mod tests {
         assert_eq!(route.query_params().len(), 2);
         assert_eq!(route.header_params().len(), 3);
         assert!(route.may_conflict());
-        assert!(route.throttled());
         assert!(route.sets_location());
         assert!(route.sets_next_link());
         assert_eq!(route.response_headers(), &[("x-kind", "user")]);

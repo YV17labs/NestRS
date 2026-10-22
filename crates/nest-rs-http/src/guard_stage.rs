@@ -134,6 +134,19 @@ impl GuardStage for HttpGuardStage {
             }
         })
     }
+
+    /// The union of what each guard declares, the chain the stage runs.
+    fn denial_statuses(&self, public: bool) -> Vec<u16> {
+        let mut statuses: Vec<u16> = self
+            .guards
+            .iter()
+            .flat_map(|entry| entry.layer.denial_statuses(public))
+            .copied()
+            .collect();
+        statuses.sort_unstable();
+        statuses.dedup();
+        statuses
+    }
 }
 
 /// The stage of a gated self-mount carrying in-band units with no guard at its
@@ -605,6 +618,27 @@ mod tests {
             source: LayerSite::Global,
             layer: Arc::new(guard),
         }]
+    }
+
+    /// Declares what an unreachable dependency and a refused tenant answer, on
+    /// every route.
+    struct Busy;
+
+    impl Layer for Busy {}
+
+    impl Guard for Busy {
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[503, 403]
+        }
+    }
+
+    #[test]
+    fn a_stage_declares_each_status_its_guards_do_once_and_in_order() {
+        let mut guards = chain(Witness);
+        guards.extend(chain(Busy));
+        let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { unmasked: true });
+        assert_eq!(stage.denial_statuses(false), [401, 403, 503]);
+        assert_eq!(stage.denial_statuses(true), [403, 503]);
     }
 
     fn tenant_request() -> Request {

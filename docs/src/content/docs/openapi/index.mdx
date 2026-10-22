@@ -155,11 +155,15 @@ The document composes from the route table, so everything in it is derived:
 - a shared `components.schemas` holding every type an operation reaches and
   nothing else, an id keeping `format: uuid` and a timestamp `format: date-time`;
 - a `bearerAuth` entry in `components.securitySchemes`, per-operation
-  `security` on guarded routes, and `security: []` on a `#[public]` one;
-- the error statuses an operation can actually produce — `400`, `401` with its
-  `WWW-Authenticate` challenge, `403`, `404`, `409`, `413`, `429` with its
-  `Retry-After`, and `500`, each where it applies — as RFC 9457
-  `ProblemDetails`, beside any body `#[api(error(...))]` declares;
+  `security` on a route whose guards can answer `401`, and `security: []` on a
+  `#[public]` one;
+- the error statuses an operation can actually produce — `400`, `404`, `409`,
+  `413` and `500` where the route can answer them, `403` where a mask's
+  ability can be refused, and every status the route's guards
+  [declare](/fundamentals/guards/#what-a-routes-document-lists), the app's
+  pool included: `401` with its `WWW-Authenticate` challenge, `429` and `503`
+  with their `Retry-After` — as RFC 9457 `ProblemDetails`, beside any body
+  `#[api(error(...))]` declares;
 - the response headers the framework sends: `Location`, the `Link` to a
   paginated `#[crud]` list's next page, `Deprecation` on a deprecated route,
   and every `#[response_header]` with its value;

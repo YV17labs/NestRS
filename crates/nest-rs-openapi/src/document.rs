@@ -1,10 +1,10 @@
 //! Assemble an OpenAPI 3.1 document from the discovered HTTP controllers.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Discovery};
-use nest_rs_http::__private::global_guards_active;
+use nest_rs_http::__private::route_denial_statuses;
 use nest_rs_http::{
     ApiVersioning, HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
     declared_versions, join_path,
@@ -39,7 +39,6 @@ pub(crate) fn build_document(
     settings.definitions_path = "/components/schemas".into();
     let mut generator = settings.into_generator();
 
-    let global_guards = global_guards_active(container);
     let selection = VersionSelection::resolve(container, claims);
 
     let controllers = discovery.meta::<HttpControllerMeta>();
@@ -104,12 +103,13 @@ pub(crate) fn build_document(
                 _ => None,
             };
             let id = operation_id(meta.token(), route.handler(), version);
+            let denials = guard_denials(container, meta, route);
             let operation = operation_object(
                 route,
                 &full,
                 &id,
                 &mut generator,
-                global_guards,
+                &denials,
                 version_parameter,
             );
             let method = route.method().as_str();
@@ -422,16 +422,33 @@ fn problem_details_schema() -> Value {
     })
 }
 
-fn route_is_guarded(route: &HttpRouteMeta, global_guards: bool) -> bool {
-    (route.scoped_guarded() || global_guards) && !route.public()
+/// The statuses `route`'s guards declare, read off the chain it runs: the
+/// app's pool, its controller's and its own, composed once when it mounted.
+fn guard_denials(
+    container: &Container,
+    meta: &HttpControllerMeta,
+    route: &HttpRouteMeta,
+) -> Vec<u16> {
+    route_denial_statuses(container, route).unwrap_or_else(|refused| {
+        tracing::warn!(
+            target: crate::TARGET,
+            controller = meta.controller(),
+            handler = route.handler(),
+            error = %nest_rs_core::error_message(&*refused),
+            "the route's guard refusals are omitted from the document: its chain does not compose",
+        );
+        Vec::new()
+    })
 }
 
+/// `denials` are the statuses the route's guards declare
+/// ([`guard_denials`]).
 fn operation_object(
     route: &HttpRouteMeta,
     full_path: &RouteTemplate,
     operation_id: &str,
     generator: &mut SchemaGenerator,
-    global_guards: bool,
+    denials: &[u16],
     version_parameter: Option<Value>,
 ) -> Value {
     let mut op = Map::new();
@@ -479,12 +496,12 @@ fn operation_object(
         );
     }
 
-    if route_is_guarded(route, global_guards) {
-        op.insert("security".into(), json!([{ "bearerAuth": [] }]));
-    } else if route.public() {
+    if route.public() {
         // OpenAPI 3.1 §4.8.10.1: an empty list removes any requirement, the
         // `#[public]` opening stated in the document as in the code.
         op.insert("security".into(), json!([]));
+    } else if denials.contains(&401) {
+        op.insert("security".into(), json!([{ "bearerAuth": [] }]));
     }
 
     let mut responses = Map::new();
@@ -524,20 +541,20 @@ fn operation_object(
         ok.insert("headers".into(), Value::Object(headers));
     }
     responses.insert(status.to_string(), Value::Object(ok));
-    for (status, title) in error_statuses(route, full_path, global_guards, requires_parameter) {
-        let mut response = problem_response(title);
+    for status in error_statuses(route, full_path, denials, requires_parameter) {
+        let mut response = problem_response(error_title(status));
         if let Value::Object(map) = &mut response {
             match status {
-                "401" => {
+                401 => {
                     map.insert("headers".into(), challenge_header());
                 }
-                "429" => {
-                    map.insert("headers".into(), retry_after_header());
+                429 | 503 => {
+                    map.insert("headers".into(), retry_after_header(status));
                 }
                 _ => {}
             }
         }
-        responses.insert(status.into(), response);
+        responses.insert(status.to_string(), response);
     }
     // A body the handler writes itself sits beside the framework's problem
     // document for that status, when both can answer.
@@ -626,43 +643,52 @@ fn resolve_ref(schema: &Value, defs: &Map<String, Value>) -> Value {
     schema.clone()
 }
 
-/// The error responses an operation can actually produce, as `(status, title)`.
+/// The error statuses an operation can actually produce, ascending: what the
+/// edge answers on the route's behalf, and the `denials` its guards declare.
 fn error_statuses(
     route: &HttpRouteMeta,
     full_path: &RouteTemplate,
-    global_guards: bool,
+    denials: &[u16],
     requires_parameter: bool,
-) -> Vec<(&'static str, &'static str)> {
-    let mut out = Vec::new();
+) -> BTreeSet<u16> {
+    let mut out: BTreeSet<u16> = denials.iter().copied().collect();
     // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`),
     // and a list linking its next page refuses a cursor no page issued.
     if route.request_body().is_some() || requires_parameter || route.sets_next_link() {
-        out.push(("400", "Bad Request"));
+        out.insert(400);
     }
-    // The transport's body cap, whatever the media type.
-    let content_too_large = route
-        .request_body()
-        .is_some()
-        .then_some(("413", "Content Too Large"));
-    if route_is_guarded(route, global_guards) {
-        out.push(("401", "Unauthorized"));
-        out.push(("403", "Forbidden"));
+    if route.request_body().is_some() {
+        // The transport's body cap, whatever the media type.
+        out.insert(413);
+    }
+    // An ability that does not grant the action is refused where the mask's
+    // shaper reads it: the class gate `Authorize` runs, or `Bind`'s load.
+    if route.masked() {
+        out.insert(403);
     }
     // Off the path, not `path_params`: a `Bind<_, _>` route can 404 and has none.
     if full_path.parameters().next().is_some() {
-        out.push(("404", "Not Found"));
+        out.insert(404);
     }
     if route.may_conflict() {
-        out.push(("409", "Conflict"));
-    }
-    out.extend(content_too_large);
-    if route.throttled() {
-        out.push(("429", "Too Many Requests"));
+        out.insert(409);
     }
     // A handler's `Err` answers an opaque `500`; not `default`, which would
     // also claim a status a handler writes with a body of its own.
-    out.push(("500", "Internal Server Error"));
+    out.insert(500);
     out
+}
+
+/// An error response's description: RFC 9110's reason phrase, which renamed
+/// `413` from the one the `http` crate still spells.
+fn error_title(status: u16) -> &'static str {
+    match status {
+        413 => "Content Too Large",
+        _ => StatusCode::from_u16(status)
+            .ok()
+            .and_then(|code| code.canonical_reason())
+            .unwrap_or("Error"),
+    }
 }
 
 fn is_redirect(status: u16) -> bool {
@@ -721,11 +747,16 @@ fn challenge_header() -> Value {
     })
 }
 
-/// The `Retry-After` header a `429` carries, in seconds (RFC 9110 §10.2.3).
-fn retry_after_header() -> Value {
+/// The `Retry-After` header a `429` and a `503` carry, in seconds (RFC 9110
+/// §10.2.3): a rate limit's always, an unavailable dependency's when it said.
+fn retry_after_header(status: u16) -> Value {
+    let description = match status {
+        429 => "Seconds to wait before retrying, until the rate-limit window resets.",
+        _ => "Seconds to wait before retrying, when what did not answer said how long.",
+    };
     json!({
         "Retry-After": {
-            "description": "Seconds to wait before retrying, until the rate-limit window resets.",
+            "description": description,
             "schema": { "type": "integer", "format": "int32", "minimum": 0 }
         }
     })
@@ -855,6 +886,13 @@ fn openapi_path(template: &RouteTemplate) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::TypeId;
+
+    use nest_rs_core::__private::{
+        GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers,
+        declare_handler, declare_site,
+    };
+    use nest_rs_core::{Handler, Posture};
     use nest_rs_http::__private::{HttpRouteParts, http_controller_meta, http_route_meta};
     use nest_rs_http::{DEFAULT_VERSION_HEADER, Method, RequestBodyMeta};
     use schemars::JsonSchema;
@@ -968,6 +1006,30 @@ mod tests {
         generator.subschema_for::<OptionalHeader>()
     }
 
+    struct Routes;
+
+    static ROUTE: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: TypeId::of::<Routes>(),
+        host_name: "Routes",
+        method: "route",
+        address: "/",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    /// A site with no guard stage: a unit test hands its route's guard
+    /// statuses to [`operation_object`] itself.
+    static SITE: Site = declare_site(
+        &ROUTE,
+        SiteDeclaration {
+            layers: SiteLayers::default,
+            global: GlobalLayers::ALL,
+            guard_stage: None,
+            class_gate: None,
+        },
+    );
+
     fn route(handler: &'static str, path: &'static str) -> HttpRouteParts {
         HttpRouteParts {
             method: Method::GET,
@@ -985,7 +1047,6 @@ mod tests {
             query_params: &[],
             header_params: &[],
             may_conflict: false,
-            throttled: false,
             sets_location: false,
             sets_next_link: false,
             response_headers: &[],
@@ -994,6 +1055,7 @@ mod tests {
             public: false,
             deprecation: None,
             versions: &[],
+            site: &SITE,
         }
     }
 
@@ -1003,7 +1065,7 @@ mod tests {
         route: &HttpRouteParts,
         full_path: &str,
         generator: &mut SchemaGenerator,
-        global_guards: bool,
+        denials: &[u16],
         version_parameter: Option<Value>,
     ) -> Value {
         operation_object(
@@ -1011,7 +1073,7 @@ mod tests {
             &template(full_path),
             &operation_id(HOST_TOKEN, route.handler, None),
             generator,
-            global_guards,
+            denials,
             version_parameter,
         )
     }
@@ -1021,37 +1083,70 @@ mod tests {
         let bound = error_statuses(
             &http_route_meta(route("get_user", "/users/{id}")),
             &template("/users/{id}"),
-            false,
+            &[],
             false,
         );
-        assert!(
-            bound.iter().any(|(s, _)| *s == "404"),
-            "an `{{id}}` route advertises 404",
-        );
+        assert!(bound.contains(&404), "an `{{id}}` route advertises 404");
 
         let literal = error_statuses(
             &http_route_meta(route("weird", "/a-b/list")),
             &template("/a-b/list"),
-            false,
+            &[],
             false,
         );
         assert!(
-            !literal.iter().any(|(s, _)| *s == "404"),
+            !literal.contains(&404),
             "a literal segment must not advertise 404",
         );
     }
 
     #[test]
-    fn a_throttled_route_advertises_429_with_a_retry_after_header() {
+    fn a_rate_limit_its_guards_declare_is_a_429_with_its_wait() {
         let mut g = generator();
-        let mut r = route("upload", "/audio/uploads");
-        r.throttled = true;
-        let op = operation(&r, "/audio/uploads", &mut g, false, None);
+        let r = route("upload", "/audio/uploads");
+        let op = operation(&r, "/audio/uploads", &mut g, &[429], None);
         let too_many = &op["responses"]["429"];
         assert_eq!(too_many["description"], "Too Many Requests");
         assert!(
             too_many["headers"]["Retry-After"]["schema"]["type"] == "integer",
             "429 must document the Retry-After header: {too_many}",
+        );
+        assert!(
+            op.get("security").is_none() && op["responses"].get("401").is_none(),
+            "a rate limit asks for no credential: {op}",
+        );
+    }
+
+    #[test]
+    fn an_unavailable_dependency_its_guards_declare_is_a_503_with_its_wait() {
+        let mut g = generator();
+        let op = operation(
+            &route("list", "/users"),
+            "/users",
+            &mut g,
+            &[401, 503],
+            None,
+        );
+        let unavailable = &op["responses"]["503"];
+        assert_eq!(unavailable["description"], "Service Unavailable", "{op}");
+        assert_eq!(
+            unavailable["headers"]["Retry-After"]["schema"]["type"], "integer",
+            "{unavailable}"
+        );
+    }
+
+    #[test]
+    fn a_masked_route_documents_the_403_its_ability_can_be_refused() {
+        let mut g = generator();
+        let mut r = route("show", "/users/{id}");
+        r.masked = true;
+        let op = operation(&r, "/users/{id}", &mut g, &[401, 503], None);
+        assert_eq!(op["responses"]["403"]["description"], "Forbidden", "{op}");
+
+        let unmasked = operation(&route("me", "/me"), "/me", &mut g, &[401, 503], None);
+        assert!(
+            unmasked["responses"].get("403").is_none(),
+            "no guard declares it and no mask reads an ability: {unmasked}",
         );
     }
 
@@ -1062,7 +1157,7 @@ mod tests {
         r.method = Method::POST;
         r.success_status = 201;
         r.sets_location = true;
-        let op = operation(&r, "/orgs", &mut g, false, None);
+        let op = operation(&r, "/orgs", &mut g, &[], None);
         let created = &op["responses"]["201"];
         assert_eq!(created["description"], "Created");
         assert_eq!(
@@ -1083,7 +1178,7 @@ mod tests {
         let mut r = route("legacy", "/old");
         r.success_status = 301;
         r.sets_location = true;
-        let op = operation(&r, "/old", &mut g, false, None);
+        let op = operation(&r, "/old", &mut g, &[], None);
         let moved = &op["responses"]["301"];
         assert_eq!(
             moved["headers"]["Location"]["schema"]["format"], "uri-reference",
@@ -1100,24 +1195,73 @@ mod tests {
     #[test]
     fn a_route_that_sends_no_location_declares_none() {
         let mut g = generator();
-        let op = operation(&route("list", "/orgs"), "/orgs", &mut g, false, None);
+        let op = operation(&route("list", "/orgs"), "/orgs", &mut g, &[], None);
         assert!(
             op["responses"]["200"].get("headers").is_none(),
             "a route with no Location must not declare one: {op}",
         );
     }
 
+    fn refusing_stage(
+        _: &Container,
+        _: &Handler,
+    ) -> nest_rs_core::anyhow::Result<Option<Arc<dyn nest_rs_core::__private::GuardStage>>> {
+        Err(nest_rs_core::anyhow::Error::msg(
+            "a guard the route declares is provided by no imported module",
+        ))
+    }
+
+    static REFUSING: Site = declare_site(
+        &ROUTE,
+        SiteDeclaration {
+            layers: SiteLayers::default,
+            global: GlobalLayers::ALL,
+            guard_stage: Some(refusing_stage),
+            class_gate: None,
+        },
+    );
+
     #[test]
-    fn an_unthrottled_route_does_not_advertise_429() {
+    fn a_route_whose_chain_does_not_compose_lists_no_guard_refusal_and_says_why() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let meta = http_controller_meta(
+            "UsersController",
+            "users",
+            "/users",
+            &[],
+            Vec::new(),
+            |_, _| {},
+        );
+        let route = http_route_meta(HttpRouteParts {
+            site: &REFUSING,
+            ..route("list", "/users")
+        });
+
+        assert!(guard_denials(&Container::default(), &meta, &route).is_empty());
+        let line = logs.expect_one(
+            crate::TARGET,
+            "the route's guard refusals are omitted from the document: its chain does not compose",
+        );
+        assert_eq!(line.level, "warn");
+        assert!(
+            line.field("error")
+                .is_some_and(|error| error.contains("no imported module")),
+            "{:?}",
+            line.fields,
+        );
+    }
+
+    #[test]
+    fn a_route_whose_guards_declare_no_rate_limit_documents_no_429() {
         let statuses = error_statuses(
             &http_route_meta(route("list", "/audio")),
             &template("/audio"),
-            false,
+            &[401, 403],
             false,
         );
         assert!(
-            !statuses.iter().any(|(s, _)| *s == "429"),
-            "a route with no ThrottlerGuard must not advertise 429",
+            !statuses.contains(&429),
+            "a route whose guards declare no rate limit must not advertise 429",
         );
     }
 
@@ -1126,7 +1270,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("get_health", "/health");
         r.tags = &["health"];
-        let op = operation(&r, "/health", &mut g, false, None);
+        let op = operation(&r, "/health", &mut g, &[], None);
         assert_eq!(op["operationId"], "test_get_health");
         assert_eq!(op["tags"][0], "health");
     }
@@ -1134,7 +1278,7 @@ mod tests {
     #[test]
     fn operation_object_skips_optional_metadata_when_absent() {
         let mut g = generator();
-        let op = operation(&route("h", "/h"), "/h", &mut g, false, None);
+        let op = operation(&route("h", "/h"), "/h", &mut g, &[], None);
         let obj = op.as_object().unwrap();
         assert!(!obj.contains_key("summary"));
         assert!(!obj.contains_key("description"));
@@ -1148,7 +1292,7 @@ mod tests {
         let mut r = route("h", "/h");
         r.summary = Some("Quick");
         r.description = Some("Full prose");
-        let op = operation(&r, "/h", &mut g, false, None);
+        let op = operation(&r, "/h", &mut g, &[], None);
         assert_eq!(op["summary"], "Quick");
         assert_eq!(op["description"], "Full prose");
     }
@@ -1157,7 +1301,7 @@ mod tests {
     fn operation_object_inlines_parameters_when_path_has_any() {
         let mut g = generator();
         let r = route("get_user", "/users/{id}");
-        let op = operation(&r, "/users/{id}", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, &[], None);
         assert!(op["parameters"].is_array());
         assert_eq!(op["parameters"][0]["name"], "id");
     }
@@ -1167,7 +1311,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("create_user", "/users");
         r.request_body = Some(RequestBodyMeta::Json(schema_for_dummy));
-        let op = operation(&r, "/users", &mut g, false, None);
+        let op = operation(&r, "/users", &mut g, &[], None);
         assert_eq!(op["requestBody"]["required"], true);
         assert!(op["requestBody"]["content"]["application/json"]["schema"].is_object());
     }
@@ -1178,7 +1322,7 @@ mod tests {
         let mut r = route("upload", "/audio/uploads/direct");
         r.method = Method::POST;
         r.request_body = Some(RequestBodyMeta::Multipart(Some(schema_for_dummy)));
-        let op = operation(&r, "/audio/uploads/direct", &mut g, false, None);
+        let op = operation(&r, "/audio/uploads/direct", &mut g, &[], None);
         assert!(
             op["requestBody"]["content"]["multipart/form-data"]["schema"].is_object(),
             "the parts are typed under multipart/form-data: {op}",
@@ -1197,7 +1341,7 @@ mod tests {
         let mut r = route("upload", "/uploads");
         r.method = Method::POST;
         r.request_body = Some(RequestBodyMeta::Multipart(None));
-        let op = operation(&r, "/uploads", &mut g, false, None);
+        let op = operation(&r, "/uploads", &mut g, &[], None);
         let schema = &op["requestBody"]["content"]["multipart/form-data"]["schema"];
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], true);
@@ -1212,7 +1356,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("download", "/audio/download");
         r.response_content_type = Some("audio/mpeg");
-        let op = operation(&r, "/audio/download", &mut g, false, None);
+        let op = operation(&r, "/audio/download", &mut g, &[], None);
         let content = &op["responses"]["200"]["content"];
         assert_eq!(content["audio/mpeg"]["schema"]["type"], "string");
         assert_eq!(content["audio/mpeg"]["schema"]["format"], "binary");
@@ -1227,7 +1371,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("events", "/audio/events");
         r.response_content_type = Some("text/event-stream");
-        let op = operation(&r, "/audio/events", &mut g, false, None);
+        let op = operation(&r, "/audio/events", &mut g, &[], None);
         let schema = &op["responses"]["200"]["content"]["text/event-stream"]["schema"];
         assert_eq!(schema["type"], "string");
         assert!(schema.get("format").is_none(), "{schema}");
@@ -1239,7 +1383,7 @@ mod tests {
         let mut r = route("export", "/exports");
         r.response = Some(schema_for_dummy);
         r.response_content_type = Some("application/x-ndjson");
-        let op = operation(&r, "/exports", &mut g, false, None);
+        let op = operation(&r, "/exports", &mut g, &[], None);
         assert!(op["responses"]["200"]["content"]["application/x-ndjson"]["schema"].is_object());
     }
 
@@ -1249,7 +1393,7 @@ mod tests {
         let mut r = route("purge", "/exports");
         r.success_status = 204;
         r.response_content_type = Some("application/octet-stream");
-        let op = operation(&r, "/exports", &mut g, false, None);
+        let op = operation(&r, "/exports", &mut g, &[], None);
         assert!(op["responses"]["204"].get("content").is_none());
     }
 
@@ -1258,7 +1402,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("list", "/things");
         r.header_params = &[schema_for_dummy];
-        let op = operation(&r, "/things", &mut g, false, None);
+        let op = operation(&r, "/things", &mut g, &[], None);
         let params = op["parameters"].as_array().expect("parameters");
         let header: Vec<&str> = params
             .iter()
@@ -1278,7 +1422,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("events", "/audio/events");
         r.header_params = &[schema_for_optional];
-        let op = operation(&r, "/audio/events", &mut g, false, None);
+        let op = operation(&r, "/audio/events", &mut g, &[], None);
         assert_eq!(op["parameters"][0]["in"], "header");
         assert_eq!(op["parameters"][0]["required"], false);
         assert!(op["responses"].get("400").is_none(), "{op}");
@@ -1290,7 +1434,7 @@ mod tests {
         let mut r = route("events", "/audio/events");
         r.query_params = &[schema_for_dummy];
         r.header_params = &[schema_for_optional];
-        let op = operation(&r, "/audio/events", &mut g, false, None);
+        let op = operation(&r, "/audio/events", &mut g, &[], None);
         let locations: Vec<&str> = op["parameters"]
             .as_array()
             .expect("parameters")
@@ -1303,7 +1447,7 @@ mod tests {
     #[test]
     fn operation_object_always_emits_a_200_response_with_description() {
         let mut g = generator();
-        let op = operation(&route("h", "/h"), "/h", &mut g, false, None);
+        let op = operation(&route("h", "/h"), "/h", &mut g, &[], None);
         assert_eq!(op["responses"]["200"]["description"], "OK");
         assert!(op["responses"]["200"].get("content").is_none());
     }
@@ -1313,7 +1457,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("get_user", "/users/{id}");
         r.response = Some(schema_for_dummy);
-        let op = operation(&r, "/users/{id}", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, &[], None);
         assert!(op["responses"]["200"]["content"]["application/json"]["schema"].is_object());
     }
 
@@ -1323,7 +1467,7 @@ mod tests {
         let mut r = route("list_users", "/users");
         r.response = Some(schema_for_dummy);
         r.masked = true;
-        let op = operation(&r, "/users", &mut g, false, None);
+        let op = operation(&r, "/users", &mut g, &[], None);
         assert!(
             op["responses"]["200"]["content"]["application/json"]["schema"].is_object(),
             "the shape is published: {op}",
@@ -1345,7 +1489,7 @@ mod tests {
         r.response = Some(schema_for_dummy);
         r.masked = true;
         r.success_status = 204;
-        let op = operation(&r, "/users/{id}", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, &[], None);
         assert_eq!(op["responses"]["204"]["description"], "No Content");
         assert!(op["responses"]["204"].get("content").is_none());
     }
@@ -1356,7 +1500,7 @@ mod tests {
         let mut r = route("create_user", "/users");
         r.success_status = 201;
         r.response = Some(schema_for_dummy);
-        let op = operation(&r, "/users", &mut g, false, None);
+        let op = operation(&r, "/users", &mut g, &[], None);
         assert!(op["responses"].get("200").is_none(), "no bogus 200");
         assert_eq!(op["responses"]["201"]["description"], "Created");
         assert!(op["responses"]["201"]["content"]["application/json"]["schema"].is_object());
@@ -1369,7 +1513,7 @@ mod tests {
             let mut r = route("delete_user", "/users/{id}");
             r.success_status = status;
             r.response = Some(schema_for_dummy);
-            let op = operation(&r, "/users/{id}", &mut g, false, None);
+            let op = operation(&r, "/users/{id}", &mut g, &[], None);
             let key = status.to_string();
             assert_eq!(op["responses"][&key]["description"], reason);
             assert!(
@@ -1380,10 +1524,10 @@ mod tests {
     }
 
     #[test]
-    fn a_global_guard_pool_marks_an_otherwise_unguarded_route_as_secured() {
+    fn a_401_its_guards_declare_secures_the_route_and_names_its_challenge() {
         let mut g = generator();
         let r = route("list", "/users");
-        let op = operation(&r, "/users", &mut g, true, None);
+        let op = operation(&r, "/users", &mut g, &[401, 403], None);
         assert_eq!(op["security"][0]["bearerAuth"], json!([]));
         assert_eq!(
             op["responses"]["401"]["headers"]["WWW-Authenticate"]["required"], true,
@@ -1393,11 +1537,11 @@ mod tests {
     }
 
     #[test]
-    fn a_public_route_stays_unsecured_even_under_a_global_guard_pool() {
+    fn a_public_route_stays_unsecured_whatever_its_guards_declare() {
         let mut g = generator();
         let mut r = route("health", "/health");
         r.public = true;
-        let op = operation(&r, "/health", &mut g, true, None);
+        let op = operation(&r, "/health", &mut g, &[503], None);
         assert_eq!(
             op["security"],
             json!([]),
@@ -1409,7 +1553,7 @@ mod tests {
     #[test]
     fn an_implicit_route_claims_no_posture_in_the_document() {
         let mut g = generator();
-        let op = operation(&route("list", "/things"), "/things", &mut g, false, None);
+        let op = operation(&route("list", "/things"), "/things", &mut g, &[], None);
         assert!(
             op.get("security").is_none(),
             "neither guarded nor `#[public]`: the document states nothing the code does not: {op}",
@@ -1419,7 +1563,7 @@ mod tests {
     #[test]
     fn every_operation_types_the_opaque_500_as_problem_details() {
         let mut g = generator();
-        let op = operation(&route("h", "/h"), "/h", &mut g, false, None);
+        let op = operation(&route("h", "/h"), "/h", &mut g, &[], None);
         assert_eq!(
             op["responses"]["500"]["content"]["application/problem+json"]["schema"]["$ref"],
             "#/components/schemas/ProblemDetails",
@@ -1437,7 +1581,7 @@ mod tests {
         let mut r = route("upload", "/uploads");
         r.method = Method::POST;
         r.request_body = Some(RequestBodyMeta::Multipart(None));
-        let op = operation(&r, "/uploads", &mut g, false, None);
+        let op = operation(&r, "/uploads", &mut g, &[], None);
         assert_eq!(
             op["responses"]["413"]["description"], "Content Too Large",
             "{op}"
@@ -1452,7 +1596,7 @@ mod tests {
             since: "2026-10-08",
             header: "@1791417600",
         });
-        let op = operation(&r, "/v1/posts", &mut g, false, None);
+        let op = operation(&r, "/v1/posts", &mut g, &[], None);
         assert_eq!(op["deprecated"], true, "{op}");
         let header = &op["responses"]["200"]["headers"]["Deprecation"];
         assert_eq!(header["schema"]["const"], "@1791417600", "{op}");
@@ -1462,13 +1606,7 @@ mod tests {
                 .is_some_and(|d| d.contains("2026-10-08")),
             "{header}",
         );
-        let current = operation(
-            &route("list", "/v2/posts"),
-            "/v2/posts",
-            &mut g,
-            false,
-            None,
-        );
+        let current = operation(&route("list", "/v2/posts"), "/v2/posts", &mut g, &[], None);
         assert!(current.get("deprecated").is_none());
     }
 
@@ -1477,7 +1615,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("ready", "/health/ready");
         r.error_responses = &[(503, schema_for_dummy)];
-        let op = operation(&r, "/health/ready", &mut g, false, None);
+        let op = operation(&r, "/health/ready", &mut g, &[], None);
         let unavailable = &op["responses"]["503"];
         assert_eq!(unavailable["description"], "Service Unavailable", "{op}");
         assert!(
@@ -1496,7 +1634,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("get", "/users/{id}");
         r.error_responses = &[(404, schema_for_dummy)];
-        let op = operation(&r, "/users/{id}", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, &[], None);
         let content = &op["responses"]["404"]["content"];
         assert!(content["application/problem+json"].is_object(), "{op}");
         assert!(content["application/json"].is_object(), "{op}");
@@ -1528,7 +1666,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("list", "/posts");
         r.sets_next_link = true;
-        let op = operation(&r, "/posts", &mut g, false, None);
+        let op = operation(&r, "/posts", &mut g, &[], None);
         let header = &op["responses"]["200"]["headers"]["Link"];
         assert_eq!(header["schema"]["type"], "string", "{op}");
         assert!(
@@ -1543,7 +1681,7 @@ mod tests {
         let mut r = route("list", "/posts");
         r.query_params = &[schema_for_optional];
         r.sets_next_link = true;
-        let op = operation(&r, "/posts", &mut g, false, None);
+        let op = operation(&r, "/posts", &mut g, &[], None);
         assert!(
             op["responses"].get("400").is_some(),
             "the list refuses a cursor no page issued: {op}",
@@ -1555,7 +1693,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("feed", "/feed");
         r.response_headers = &[("cache-control", "no-store")];
-        let op = operation(&r, "/feed", &mut g, false, None);
+        let op = operation(&r, "/feed", &mut g, &[], None);
         let header = &op["responses"]["200"]["headers"]["cache-control"];
         assert_eq!(header["required"], true, "{op}");
         assert_eq!(header["schema"]["const"], "no-store", "{op}");
@@ -1566,7 +1704,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("login", "/login");
         r.response_headers = &[("set-cookie", "a=1"), ("x-tier", "a"), ("x-tier", "b")];
-        let op = operation(&r, "/login", &mut g, false, None);
+        let op = operation(&r, "/login", &mut g, &[], None);
         let headers = &op["responses"]["200"]["headers"];
         assert!(
             headers["set-cookie"]["schema"].get("const").is_none(),
@@ -1836,7 +1974,7 @@ mod tests {
             &r,
             "/posts",
             &mut g,
-            false,
+            &[],
             Some(selection.parameter("2", &http_route_meta(r.clone()))),
         );
         assert_eq!(op["parameters"][0]["name"], DEFAULT_VERSION_HEADER);
@@ -1848,7 +1986,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("search", "/posts");
         r.query_params = &[schema_for_dummy];
-        let op = operation(&r, "/posts", &mut g, false, None);
+        let op = operation(&r, "/posts", &mut g, &[], None);
         assert_eq!(op["parameters"][0]["in"], "query");
         assert_eq!(op["parameters"][0]["required"], true);
         assert!(
@@ -1862,7 +2000,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("list", "/posts");
         r.query_params = &[schema_for_optional];
-        let op = operation(&r, "/posts", &mut g, false, None);
+        let op = operation(&r, "/posts", &mut g, &[], None);
         assert_eq!(op["parameters"][0]["required"], false);
         assert!(op["responses"].get("400").is_none(), "{op}");
     }
@@ -1874,7 +2012,7 @@ mod tests {
             &route("get", "/users/{id}"),
             "/users/{id}",
             &mut g,
-            false,
+            &[],
             None,
         );
         assert_eq!(op["parameters"][0]["in"], "path");

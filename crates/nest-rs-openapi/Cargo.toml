@@ -40,6 +40,9 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 # A global deny-all guard, to prove the documentation edges are public — the
 # exposure that makes `enabled = false` the production posture.
 nest-rs-guards = { path = "../nest-rs-guards" }
+# The framework guards whose declared statuses a route's document lists.
+nest-rs-authn = { path = "../nest-rs-authn" }
+nest-rs-throttler = { path = "../nest-rs-throttler" }
 # `figment::Jail` isolates `NESTRS_ENV` for the one config branch that reads the
 # *process* environment rather than a `ConfigService`.
 figment = { workspace = true, features = ["test"] }

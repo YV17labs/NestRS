@@ -3032,11 +3032,13 @@ name = "nest-rs-openapi"
 version = "7.0.0"
 dependencies = [
  "figment",
+ "nest-rs-authn",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-testing",
+ "nest-rs-throttler",
  "schemars",
  "serde",
  "serde_json",

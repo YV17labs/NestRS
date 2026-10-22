@@ -351,3 +351,224 @@ async fn the_uri_strategy_document_does_not_move() {
         "and no second document is mounted",
     );
 }
+
+/// A route lists what its guards declare they refuse a request with — the
+/// global pool's, its controller's and its own — whatever the guard is named.
+mod guards {
+    use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy};
+    use nest_rs_core::{AmbientValue, Layer, UnitContext, injectable, module};
+    use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+    use nest_rs_http::{HttpView, Request, async_trait, controller, routes};
+    use nest_rs_testing::TestApp;
+    use nest_rs_throttler::ThrottlerGuard as Limit;
+    use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
+    use serde_json::Value;
+
+    use super::{document, openapi};
+
+    /// Refuses a caller outside the office network, `#[public]` routes
+    /// included.
+    #[injectable]
+    #[derive(Default)]
+    struct OfficeOnly;
+
+    impl Layer for OfficeOnly {}
+
+    #[async_trait]
+    impl Guard for OfficeOnly {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Err(Denial::forbidden("outside the office network"))
+        }
+
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[403]
+        }
+    }
+
+    impl GuardFor<HttpView> for OfficeOnly {}
+
+    #[controller(path = "/rated")]
+    struct RatedController;
+
+    #[routes]
+    impl RatedController {
+        #[get("/")]
+        async fn list(&self) -> &'static str {
+            "[]"
+        }
+
+        #[get("/feed")]
+        #[public]
+        async fn feed(&self) -> &'static str {
+            "[]"
+        }
+
+        #[get("/office")]
+        #[public]
+        #[use_guards(OfficeOnly)]
+        async fn office(&self) -> &'static str {
+            "[]"
+        }
+    }
+
+    #[module(
+        imports = [openapi(), ThrottlerModule::for_root(None)],
+        providers = [OfficeOnly, RatedController],
+    )]
+    struct RatedApp;
+
+    /// The throttler as the rate-limiting page binds it: in the pool alone.
+    async fn throttled_globally() -> Value {
+        let app = TestApp::builder()
+            .module::<RatedApp>()
+            .use_guards_global([guard::<ThrottlerGuard>()])
+            .build()
+            .await
+            .expect("importing ThrottlerModule provides the guard the pool names");
+        document(&app, "/api-json").await
+    }
+
+    #[controller(path = "/limited")]
+    struct LimitedController;
+
+    #[routes]
+    impl LimitedController {
+        #[get("/")]
+        #[use_guards(Limit)]
+        async fn list(&self) -> &'static str {
+            "[]"
+        }
+    }
+
+    #[module(
+        imports = [openapi(), ThrottlerModule::for_root(None)],
+        providers = [LimitedController],
+    )]
+    struct LimitedApp;
+
+    #[derive(Clone)]
+    struct Caller;
+
+    impl AmbientValue for Caller {}
+
+    impl PrincipalIdentity for Caller {
+        fn actor_id(&self) -> Option<String> {
+            Some("caller".into())
+        }
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct Bearer;
+
+    #[async_trait]
+    impl Strategy for Bearer {
+        type Principal = Caller;
+
+        async fn authenticate(&self, _req: &mut Request) -> Result<Caller, AuthError> {
+            Err(AuthError::MissingCredentials)
+        }
+    }
+
+    type Authn = AuthnGuard<Bearer>;
+
+    #[controller(path = "/accounts")]
+    #[use_guards(Authn)]
+    struct AccountsController;
+
+    #[routes]
+    impl AccountsController {
+        #[get("/")]
+        async fn list(&self) -> &'static str {
+            "[]"
+        }
+
+        #[get("/signup")]
+        #[public]
+        async fn signup(&self) -> &'static str {
+            "{}"
+        }
+    }
+
+    #[module(imports = [openapi()], providers = [Bearer, Authn, AccountsController])]
+    struct AccountsApp;
+
+    fn responses<'d>(document: &'d Value, path: &str) -> &'d Value {
+        &document["paths"][path]["get"]["responses"]
+    }
+
+    fn assert_the_wait_is_declared(response: &Value) {
+        assert_eq!(
+            response["headers"]["Retry-After"]["schema"]["type"], "integer",
+            "the status declares the Retry-After it carries: {response}",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_route_behind_the_global_throttler_documents_its_429_and_the_wait() {
+        let doc = throttled_globally().await;
+        let responses = responses(&doc, "/rated");
+        assert_the_wait_is_declared(&responses["429"]);
+        for status in ["401", "403"] {
+            assert!(
+                responses.get(status).is_none(),
+                "a throttler refuses no credential, so no {status}: {responses}",
+            );
+        }
+        assert!(
+            doc["paths"]["/rated"]["get"].get("security").is_none(),
+            "a route no guard authenticates requires no credential: {doc}",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_public_route_under_the_global_throttler_documents_its_429_and_no_401() {
+        let doc = throttled_globally().await;
+        let responses = responses(&doc, "/rated/feed");
+        assert_the_wait_is_declared(&responses["429"]);
+        assert!(responses.get("401").is_none(), "{responses}");
+        assert_eq!(
+            doc["paths"]["/rated/feed"]["get"]["security"],
+            Value::Array(Vec::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_aliased_throttler_documents_its_429() {
+        let app = TestApp::for_module::<LimitedApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        assert_the_wait_is_declared(&responses(&doc, "/limited")["429"]);
+    }
+
+    #[tokio::test]
+    async fn a_guard_s_own_declaration_reaches_the_document_on_a_public_route() {
+        let doc = throttled_globally().await;
+        let responses = responses(&doc, "/rated/office");
+        assert_eq!(responses["403"]["description"], "Forbidden", "{responses}");
+        assert!(
+            responses.get("429").is_some() && responses.get("401").is_none(),
+            "the pool's declaration beside the route's own: {responses}",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_authenticated_route_documents_the_strategy_that_could_not_answer() {
+        let app = TestApp::for_module::<AccountsApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let gated = responses(&doc, "/accounts");
+        assert_eq!(
+            gated["401"]["headers"]["WWW-Authenticate"]["required"], true,
+            "{gated}"
+        );
+        assert_the_wait_is_declared(&gated["503"]);
+        assert!(
+            gated.get("403").is_none(),
+            "an authentication guard decides no authorization: {gated}",
+        );
+
+        let public = responses(&doc, "/accounts/signup");
+        assert_the_wait_is_declared(&public["503"]);
+        assert!(public.get("401").is_none(), "{public}");
+    }
+}

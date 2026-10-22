@@ -47,6 +47,10 @@ impl Guard for PostAuthorGuard {
         Self::author(&claims).map(|_| ())
     }
 
+    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+        &[403]
+    }
+
     fn files_its_denials(&self) -> bool {
         true
     }

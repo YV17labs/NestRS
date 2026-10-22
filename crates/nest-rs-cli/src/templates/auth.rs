@@ -182,6 +182,10 @@ impl Guard for DevOnlyGuard {
         }
         Err(Denial::forbidden("development-only route"))
     }
+
+    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+        &[403]
+    }
 }
 
 impl GuardFor<HttpView> for DevOnlyGuard {}

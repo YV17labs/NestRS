@@ -70,6 +70,15 @@ impl<T: Tail> ErasedTail for T {
 pub trait GuardStage: Send + Sync {
     /// Run every guard of the stage on the unit `cx` describes.
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>>;
+
+    /// The HTTP statuses the stage's guards declare they can refuse a unit
+    /// with, at a public site (`public`) or a gated one, each once and in
+    /// ascending order: what a document generator lists for the site. None
+    /// by default.
+    fn denial_statuses(&self, public: bool) -> Vec<u16> {
+        let _ = public;
+        Vec::new()
+    }
 }
 
 /// Builds a site's guard stage against a container; `None` when no guard

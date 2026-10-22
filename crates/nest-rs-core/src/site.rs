@@ -239,6 +239,14 @@ impl UnitChains {
         self.shape
     }
 
+    /// The statuses the site's guard stage declares
+    /// ([`GuardStage::denial_statuses`]); none without one.
+    pub fn denial_statuses(&self, public: bool) -> Vec<u16> {
+        self.guard_stage
+            .as_ref()
+            .map_or_else(Vec::new, |stage| stage.denial_statuses(public))
+    }
+
     pub(crate) fn compose(
         container: &Container,
         handler: &Handler,

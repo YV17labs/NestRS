@@ -80,7 +80,7 @@ recipe uses [Hey API](https://heyapi.dev) and its
    ```
 
    `auth` is called only for the operations the document marks `security` —
-   the guarded routes — never for a `#[public]` one. The next page is the
+   the routes a guard can answer `401` on — never for a `#[public]` one. The next page is the
    RFC 8288 `Link` a list answers with, `rel="next"`, absent on the last page.
 
 4. **Allow the frontend's origin.** A browser app on another origin needs

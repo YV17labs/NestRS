@@ -77,7 +77,6 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         guards.iter(),
         quote!(::nest_rs_guards::GuardFor<::nest_rs_http::HttpView>),
     );
-    let controller_has_throttler = guards.iter().any(crate::routes::guard_path_is_throttler);
     let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
     let exception_filter_specs = quote! {
         ::std::vec![#(::nest_rs_core::exception_filter::<#exception_filters>()),*]
@@ -129,13 +128,6 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
                 -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
             {
                 #guard_specs
-            }
-
-            /// Whether a controller-level `#[use_guards(...)]` includes
-            /// `ThrottlerGuard`, so `#[routes]` advertises a `429`.
-            #[doc(hidden)]
-            pub fn __nestrs_controller_has_throttler() -> bool {
-                #controller_has_throttler
             }
 
             /// Controller-level `#[use_pipes(...)]`, read by `#[routes]`.

@@ -247,7 +247,9 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::controller::{HttpRouteParts, http_controller_meta, http_route_meta, schema_of};
+    pub use crate::controller::{
+        HttpRouteParts, http_controller_meta, http_route_meta, route_denial_statuses, schema_of,
+    };
     pub use crate::deprecation::deprecated_route;
     pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};

@@ -104,7 +104,10 @@ pub struct PostsController { /* … */ }
 ```
 
 Every route on this controller now goes through the throttler. The
-default limit applies unless a handler overrides it.
+default limit applies unless a handler overrides it. Each route's
+[OpenAPI document](/openapi/) lists its `429` and the `Retry-After` it
+carries, wherever the guard is bound — the controller, the route, an alias,
+the global pool — `#[public]` routes included.
 
 ## Override per route
 

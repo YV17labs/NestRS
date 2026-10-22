@@ -224,6 +224,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // Qualified by the controller: each wrapper is a module-level type, and two
         // controllers in one file (`V1Controller::list`, `V2Controller::list`) share it.
         let wrapper_name = format_ident!("__nestrs_route_{}_{}", ctrl_name, method_name);
+        let site_name = site_ident(&ctrl_name, &method_name);
 
         let mut inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
         let arg_idents = match normalize_forwarded_args(&mut inputs) {
@@ -283,7 +284,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Err(err) => return err.to_compile_error().into(),
         };
         let method_guarded = !guards.is_empty();
-        let method_throttled = guards.iter().any(guard_path_is_throttler);
         if let Err(err) = refuse_rust_deprecated(&method.attrs, "a `#[routes]` handler") {
             return err.to_compile_error().into();
         }
@@ -741,8 +741,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 query_params: #query_params,
                 header_params: #header_params,
                 may_conflict: #may_conflict,
-                throttled: #method_throttled
-                    || <#self_ty>::__nestrs_controller_has_throttler(),
                 sets_location: #sets_location,
                 sets_next_link: #sets_next_link,
                 response_headers: #response_headers,
@@ -752,6 +750,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 public: #is_public,
                 deprecation: #deprecation_meta,
                 versions: #route_versions,
+                site: &#site_name,
             })
         });
     }
@@ -1136,6 +1135,12 @@ struct EmittedRoute {
     mount: TokenStream2,
 }
 
+/// The `static` site a route dispatches through, named as its record points
+/// at it.
+fn site_ident(ctrl_name: &syn::Ident, method_name: &syn::Ident) -> syn::Ident {
+    format_ident!("__nestrs_site_{}_{}", ctrl_name, method_name)
+}
+
 fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident) -> EmittedRoute {
     let RouteHandler {
         method,
@@ -1159,7 +1164,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         method_name,
     } = handler;
     let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
-    let site = format_ident!("__nestrs_site_{}_{}", ctrl_name, method_name);
+    let site = site_ident(ctrl_name, method_name);
     let layers_fn = format_ident!("__nestrs_layers_{}_{}", ctrl_name, method_name);
     let guards_fn = format_ident!("__nestrs_guards_{}_{}", ctrl_name, method_name);
 
@@ -1300,14 +1305,6 @@ fn route_path(attr: &Attribute, verb: &syn::Ident) -> syn::Result<LitStr> {
         }) => Ok(path.clone()),
         other => Err(refused(other)),
     }
-}
-
-/// Whether a guard path's last segment names `ThrottlerGuard`, so the route
-/// documents a `429`. By name: an alias is missed, a namesake counts.
-pub(crate) fn guard_path_is_throttler(path: &Path) -> bool {
-    path.segments
-        .last()
-        .is_some_and(|seg| seg.ident == "ThrottlerGuard")
 }
 
 #[derive(Default)]
@@ -1585,23 +1582,6 @@ mod tests {
         "error(503 = Type)",
         "deprecated = \"2026-10-08\"",
     ];
-
-    #[test]
-    fn guard_path_is_throttler_matches_the_last_segment_only() {
-        let plain: Path = parse_quote!(ThrottlerGuard);
-        let qualified: Path = parse_quote!(nest_rs_throttler::ThrottlerGuard);
-        let absolute: Path = parse_quote!(::nest_rs_throttler::ThrottlerGuard);
-        assert!(guard_path_is_throttler(&plain));
-        assert!(guard_path_is_throttler(&qualified));
-        assert!(guard_path_is_throttler(&absolute));
-
-        let other: Path = parse_quote!(AuthnGuard);
-        let lookalike: Path = parse_quote!(MyThrottlerGuardWrapper);
-        let module_named: Path = parse_quote!(ThrottlerGuard::helper);
-        assert!(!guard_path_is_throttler(&other));
-        assert!(!guard_path_is_throttler(&lookalike));
-        assert!(!guard_path_is_throttler(&module_named));
-    }
 
     fn api_attr(tokens: TokenStream2) -> syn::Result<ApiMeta> {
         let attr: Attribute = parse_quote!(#[api(#tokens)]);

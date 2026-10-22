@@ -14,7 +14,7 @@ use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, async_trait, controller, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
-use nest_rs_testing::mcp::{call_tool_as, initialize_request};
+use nest_rs_testing::mcp::{call_tool_as, call_tool_statelessly, initialize_request};
 use nest_rs_testing::{TestApp, TestAppBuilder};
 use nest_rs_ws::{WsModule, gateway, messages};
 
@@ -177,7 +177,15 @@ async fn a_pooled_unit_check_gates_every_in_band_unit_and_no_route() {
 
     // No guard names a caller at the request, so no session opens for one: a
     // stateless call reaches the operation.
-    let tool = crate::call_tool_statelessly(app.http(), "/mcp/markers", "ping").await;
+    let tool = call_tool_statelessly(
+        app.http(),
+        "/mcp/markers",
+        "ping",
+        None,
+        &[],
+        serde_json::json!({}),
+    )
+    .await;
     assert!(
         !tool.contains(REACHED) && tool.contains("refused by a unit check"),
         "the operation is refused by the guard's own check: {tool}",

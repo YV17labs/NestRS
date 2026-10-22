@@ -10,8 +10,13 @@ use crate::{TestClient, TestResponse};
 /// `LATEST_WITH_INITIALIZE`, pinned by `mcp::the_driver_negotiates_the_sdk_latest_handshake`.
 ///
 /// Not `LATEST` (`2026-07-28`): SEP-2567 serves that revision statelessly,
-/// retiring the `initialize` and `mcp-session-id` model [`open_session`] implements.
+/// retiring the `initialize` and `mcp-session-id` model [`open_session`] implements;
+/// [`call_tool_statelessly`] drives it.
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
+
+/// The revision [`call_tool_statelessly`] names — rmcp's own `LATEST`, pinned by
+/// `tests::the_stateless_driver_names_the_sdk_latest`.
+const STATELESS_PROTOCOL_VERSION: &str = "2026-07-28";
 
 /// The `initialize` request body, declaring no client capabilities.
 pub fn initialize_request() -> Value {
@@ -215,6 +220,9 @@ pub async fn notify(
 
 /// Drive the full handshake and call `tool` with no arguments, returning the
 /// response body.
+///
+/// Panics if the endpoint refuses the handshake, as a gated one does for a
+/// principal naming no subject: [`call_tool_statelessly`] reaches the tool then.
 pub async fn call_tool(
     client: &TestClient,
     path: &str,
@@ -256,4 +264,67 @@ pub async fn call_tool_as(
         json!({ "name": tool, "arguments": arguments }),
     )
     .await
+}
+
+/// Call `tool` with an `arguments` object as a `2026-07-28` client does, and
+/// return the response body: the lifecycle travels in the call's `_meta` and no
+/// session opens, so a principal a gated endpoint opens no session for — one
+/// naming no subject — reaches the tool this way. `bearer` and `headers` are
+/// sent as [`post_message_with`] sends them.
+pub async fn call_tool_statelessly(
+    client: &TestClient,
+    path: &str,
+    tool: &str,
+    bearer: Option<&str>,
+    headers: &[(&str, &str)],
+    arguments: Value,
+) -> String {
+    let mut sent = vec![
+        ("mcp-protocol-version", STATELESS_PROTOCOL_VERSION),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", tool),
+    ];
+    sent.extend_from_slice(headers);
+    let response = post_message_with(
+        client,
+        path,
+        None,
+        bearer,
+        &sent,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": arguments,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": STATELESS_PROTOCOL_VERSION,
+                    "io.modelcontextprotocol/clientInfo": { "name": "nest-rs-testing", "version": "0" },
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        }),
+    )
+    .await;
+    response
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a JSON-RPC response body")
+}
+
+#[cfg(test)]
+mod tests {
+    /// rmcp accepts every older revision, so nothing else fails when the
+    /// stateless driver falls behind.
+    #[test]
+    fn the_stateless_driver_names_the_sdk_latest() {
+        assert_eq!(
+            super::STATELESS_PROTOCOL_VERSION,
+            nest_rs_mcp::ProtocolVersion::LATEST.as_str(),
+            "rmcp moved its LATEST: bump `STATELESS_PROTOCOL_VERSION` to match",
+        );
+    }
 }

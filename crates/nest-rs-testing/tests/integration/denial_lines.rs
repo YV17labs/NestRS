@@ -10,7 +10,7 @@ use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, async_trait, controller, routes};
 use nest_rs_mcp::{McpError, McpView, mcp, tools};
-use nest_rs_testing::mcp::{initialize_request, post_message};
+use nest_rs_testing::mcp::{call_tool_statelessly, initialize_request, post_message};
 use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};
 use nest_rs_ws::{WsModule, WsView, gateway, messages};
 
@@ -313,7 +313,8 @@ async fn units_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
     // No guard names a caller at the request, so no session opens for one: a
     // stateless call reaches the operation.
     let seen = filed(&logs);
-    let mcp = crate::call_tool_statelessly(app.http(), "/mcp", "ping").await;
+    let mcp =
+        call_tool_statelessly(app.http(), "/mcp", "ping", None, &[], serde_json::json!({})).await;
     assert!(mcp.contains("closed"), "the tool call is refused: {mcp}");
     assert_one_line(&logs, seen, "an MCP operation", guard_files, silent);
 }

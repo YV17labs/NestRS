@@ -25,11 +25,12 @@ use crate::operation::McpOperationKind;
 /// ```
 /// use nest_rs_core::{Layer, UnitContext, injectable, module};
 /// use nest_rs_guards::{Denial, Guard, GuardFor};
-/// use nest_rs_http::{EndpointGuards, HttpView, StatusCode, async_trait};
+/// use nest_rs_http::{EndpointGuards, HttpView, async_trait};
 /// use nest_rs_mcp::McpView;
-/// # use nest_rs_mcp::{McpError, ProtocolVersion, mcp, tools};
-/// # use nest_rs_testing::{TestApp, TestResponse};
-/// # use nest_rs_testing::mcp::post_message_with;
+/// # use nest_rs_mcp::{McpError, mcp, tools};
+/// # use nest_rs_testing::TestApp;
+/// # use nest_rs_testing::mcp::{call_tool_statelessly, result};
+/// # use serde_json::{Value, json};
 ///
 /// #[injectable]
 /// #[derive(Default)]
@@ -64,26 +65,16 @@ use crate::operation::McpOperationKind;
 ///
 /// #[module(providers = [ApiKeyGuard, ReportsHost, EndpointGuards<McpView, (ApiKeyGuard,)>])]
 /// struct ReportsModule;
-/// # async fn list_tools(app: &TestApp, headers: &[(&str, &str)]) -> TestResponse {
-/// #     let version = ProtocolVersion::LATEST;
-/// #     let mut sent = vec![("mcp-protocol-version", version.as_str()), ("mcp-method", "tools/list")];
-/// #     sent.extend_from_slice(headers);
-/// #     let request = serde_json::json!({
-/// #         "jsonrpc": "2.0", "id": 1, "method": "tools/list",
-/// #         "params": { "_meta": {
-/// #             "io.modelcontextprotocol/protocolVersion": version.as_str(),
-/// #             "io.modelcontextprotocol/clientInfo": { "name": "docs", "version": "0" },
-/// #             "io.modelcontextprotocol/clientCapabilities": {},
-/// #         } },
-/// #     });
-/// #     post_message_with(app.http(), "/mcp", None, None, &sent, &request).await
-/// # }
 /// # #[nest_rs_core::main]
 /// # async fn main() -> nest_rs_core::anyhow::Result<()> {
 /// # let app = TestApp::for_module::<ReportsModule>().await?;
 ///
-/// list_tools(&app, &[]).await.assert_status(StatusCode::UNAUTHORIZED);
-/// list_tools(&app, &[("x-api-key", "k")]).await.assert_status_is_ok();
+/// let keyed = [("x-api-key", "k")];
+/// let refused = call_tool_statelessly(app.http(), "/mcp", "count", None, &[], json!({})).await;
+/// let counted = call_tool_statelessly(app.http(), "/mcp", "count", None, &keyed, json!({})).await;
+///
+/// assert_eq!(serde_json::from_str::<Value>(&refused)?["status"], 401);
+/// assert_eq!(result(&counted)["result"]["content"][0]["text"], "0");
 /// # Ok(())
 /// # }
 /// ```

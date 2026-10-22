@@ -160,7 +160,8 @@ conformant access token always names its subject — RFC 9068 §2.2 requires
 `sub`, the client's own id when it acts on its own behalf — so return it from
 `actor_id` ([Authentication](/security/authentication/#advanced-write-your-own-strategy)).
 A client that has none still calls statelessly, on protocol `2026-07-28`,
-which opens no session.
+which opens no session; in a suite, `nest_rs::testing::mcp::call_tool_statelessly`
+calls a tool that way.
 
 A public endpoint (`McpOptions::posture = Posture::Public`) runs no guard at
 its request, so it authenticates no one: its sessions all belong to the

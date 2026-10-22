@@ -237,6 +237,12 @@ impl Guard for ThrottlerGuard {
         Err(rate_limited(decision.retry_after))
     }
 
+    /// `429` on every route, `#[public]` included: over the limit, and for a
+    /// hit the store could not count.
+    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+        &[429]
+    }
+
     /// Every refusal is filed here, on `nest_rs::throttler`: the limit, or the
     /// store that could not count the hit.
     fn files_its_denials(&self) -> bool {
@@ -541,6 +547,26 @@ mod tests {
         fn in_process(&self) -> bool {
             true
         }
+    }
+
+    /// A refusal is a `429` on every route, `#[public]` or not — past the
+    /// limit, or for a hit the store could not count — and so is all the
+    /// guard declares.
+    #[tokio::test]
+    async fn it_declares_the_rate_limit_it_refuses_with_on_every_route() {
+        let guard = ThrottlerGuard::new(Arc::new(Exhausted), DEFAULT_THROTTLE, None)
+            .expect("an in-process store needs no pseudonym key");
+        assert_eq!(guard.denial_statuses(true), [429]);
+        assert_eq!(guard.denial_statuses(false), [429]);
+
+        let denial = check_request(
+            &LOGIN,
+            [("ThrottlerGuard", &guard as &dyn Guard)],
+            &mut from_peer("203.0.113.7"),
+        )
+        .await
+        .expect_err("past its limit");
+        assert_eq!(denial.http_status(), 429);
     }
 
     /// The line names the template the router matched; a request it matched

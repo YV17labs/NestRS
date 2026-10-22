@@ -117,6 +117,13 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         Some(PrincipalClaim::of::<F::Actor>())
     }
 
+    /// None: a request is refused here only for a wiring defect, a `500`. The
+    /// `403` an ability earns is answered by what reads it — the route's class
+    /// gate, its `Bind`, its service.
+    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+        &[]
+    }
+
     /// Every refusal is filed here, on `nest_rs::authz`.
     fn files_its_denials(&self) -> bool {
         true
@@ -316,6 +323,14 @@ mod tests {
             panic!("no authentication guard ran, so the route is refused");
         };
         assert_eq!(denial.http_status(), 500);
+    }
+
+    /// Its one refusal of a request is that wiring `500`, which no guard
+    /// declares; a `403` is answered by what reads the ability it attaches.
+    #[test]
+    fn it_declares_no_status_of_its_own_on_any_route() {
+        assert!(guard().denial_statuses(true).is_empty());
+        assert!(guard().denial_statuses(false).is_empty());
     }
 
     #[tokio::test]

@@ -130,6 +130,33 @@ pub trait Guard: Layer {
         None
     }
 
+    /// The statuses [`check_http`](Self::check_http) can refuse a request
+    /// with on a route that is `#[public]` (`public`) or not, each one a
+    /// [`Denial::http_status`]: what a route's document lists for this guard.
+    /// A `500` is not declared — [`Denial::Internal`] is a wiring defect, and
+    /// every route documents it.
+    ///
+    /// The default is `401` and `403` on a route that is not `#[public]`, and
+    /// nothing on one that is. A guard refusing with anything else says so,
+    /// read off its `Err` paths — one answering `403` to a caller outside the
+    /// office network, on every route:
+    ///
+    /// ```
+    /// # use nest_rs_core::Layer;
+    /// # use nest_rs_guards::Guard;
+    /// struct OfficeOnly;
+    /// # impl Layer for OfficeOnly {}
+    ///
+    /// impl Guard for OfficeOnly {
+    ///     fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+    ///         &[403]
+    ///     }
+    /// }
+    /// ```
+    fn denial_statuses(&self, public: bool) -> &'static [u16] {
+        if public { &[] } else { &[401, 403] }
+    }
+
     /// Whether this guard files one line of its own, on its crate's target, for
     /// every denial it returns. The edge then files none, so one denial is one
     /// line, the decider's; by default the edge files `guard denied …` on
@@ -190,6 +217,10 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
 
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         (**self).expected_principal()
+    }
+
+    fn denial_statuses(&self, public: bool) -> &'static [u16] {
+        (**self).denial_statuses(public)
     }
 
     fn files_its_denials(&self) -> bool {
@@ -264,6 +295,34 @@ mod tests {
         let (unit, made) = run_counting(|| guard.as_ref().check(&mut cx));
         assert!(unit.is_ok());
         assert_eq!(made, 0, "the default unit entry allocates nothing");
+    }
+
+    /// Refuses a caller outside the office network, wherever it is bound.
+    struct OfficeOnly;
+
+    impl Layer for OfficeOnly {}
+
+    impl Guard for OfficeOnly {
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[403]
+        }
+    }
+
+    #[test]
+    fn a_guard_declaring_no_statuses_answers_an_authentication_guard_s_off_a_public_route() {
+        let guard: Arc<dyn Guard> = Arc::new(Neither);
+        assert_eq!(guard.denial_statuses(false), [401, 403]);
+        assert!(
+            guard.denial_statuses(true).is_empty(),
+            "a guard that says nothing claims no refusal on a `#[public]` route",
+        );
+    }
+
+    #[test]
+    fn an_arc_answers_the_statuses_its_guard_declares() {
+        let guard = Arc::new(OfficeOnly);
+        assert_eq!(Guard::denial_statuses(&guard, false), [403]);
+        assert_eq!(Guard::denial_statuses(&guard, true), [403]);
     }
 
     #[test]

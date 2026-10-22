@@ -202,6 +202,34 @@ async fn an_in_band_request_still_verifies_a_presented_credential() {
     );
 }
 
+/// What a route's document lists for the guard is what it answers: every
+/// refusal on a route of either posture carries a status declared for it.
+#[tokio::test]
+async fn every_refusal_carries_a_status_the_guard_declares_for_the_route() {
+    let outcomes: [fn() -> AuthError; 5] = [
+        || AuthError::MissingCredentials,
+        || AuthError::InvalidSignature,
+        || AuthError::Expired,
+        || AuthError::failed("refused"),
+        || AuthError::unavailable("store unreachable", None),
+    ];
+    for outcome in outcomes {
+        let guard = AuthnGuard::new(Arc::new(RejectWith(outcome)));
+        for (site, public) in [(&GATED, false), (&PUBLIC, true)] {
+            if let Err(denial) = check(&guard, site, &mut bare()).await {
+                let declared = guard.denial_statuses(public);
+                assert!(
+                    declared.contains(&denial.http_status()),
+                    "{:?} on a route (public: {public}) answers {}, outside the declared \
+                     {declared:?}",
+                    outcome(),
+                    denial.http_status(),
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn unreachable_store_fails_closed_even_on_a_public_route() {
     // The credential was never evaluated, so serving the caller as anonymous

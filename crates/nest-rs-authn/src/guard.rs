@@ -256,6 +256,13 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         Some(PrincipalClaim::of::<S::Principal>())
     }
 
+    /// `503` on every route, `#[public]` included: a credential the strategy
+    /// could not evaluate. `401` off a `#[public]` route: one that is missing
+    /// or refused.
+    fn denial_statuses(&self, public: bool) -> &'static [u16] {
+        if public { &[503] } else { &[401, 503] }
+    }
+
     /// Every refusal is filed here, on `nest_rs::authn`, with the strategy and
     /// its reason.
     fn files_its_denials(&self) -> bool {
@@ -268,3 +275,40 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
 /// attaches there is ambient for every operation they carry. The declaration
 /// lets a `#[controller]` or a `#[gateway]` struct bind it.
 impl<S: Strategy> GuardFor<HttpView> for AuthnGuard<S> {}
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_core::AmbientValue;
+
+    use super::*;
+    use crate::PrincipalIdentity;
+
+    #[derive(Clone)]
+    struct Anyone;
+
+    impl AmbientValue for Anyone {}
+
+    impl PrincipalIdentity for Anyone {
+        fn actor_id(&self) -> Option<String> {
+            None
+        }
+    }
+
+    struct Admits;
+
+    #[async_trait]
+    impl Strategy for Admits {
+        type Principal = Anyone;
+
+        async fn authenticate(&self, _req: &mut Request) -> Result<Anyone, AuthError> {
+            Ok(Anyone)
+        }
+    }
+
+    #[test]
+    fn it_declares_an_unevaluated_credential_everywhere_and_a_refused_one_off_a_public_route() {
+        let guard = AuthnGuard::new(Arc::new(Admits));
+        assert_eq!(guard.denial_statuses(false), [401, 503]);
+        assert_eq!(guard.denial_statuses(true), [503]);
+    }
+}

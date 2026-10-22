@@ -151,9 +151,10 @@ async fn openapi_document_describes_the_routes() {
         list["parameters"][0]["required"], false,
         "pagination is optional: {list}",
     );
-    assert!(
-        list["responses"].get("400").is_none(),
-        "and an operation whose parameters are all optional advertises none: {list}",
+    assert_eq!(
+        list["responses"]["400"]["content"]["application/problem+json"]["schema"]["$ref"],
+        "#/components/schemas/ProblemDetails",
+        "yet a cursor no page issued is a 400 the list advertises: {list}",
     );
     assert_eq!(
         list["responses"]["200"]["headers"]["Link"]["schema"]["type"], "string",

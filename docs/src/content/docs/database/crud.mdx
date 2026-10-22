@@ -326,6 +326,8 @@ Keyset pagination (`cursor`) is the default — stable under inserts, and the
 body stays a plain array so response masking works unchanged. Those two
 values are the whole knob: there is no offset mode, and a consumer that
 needs page numbers plus a total hand-writes that operation on the service.
+An `after` no page issued is refused — a `400` on REST, a field error on
+GraphQL — and never read as the first page.
 
 See [Pagination](/database/pagination/) for the shape end to end.
 

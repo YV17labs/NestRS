@@ -5,9 +5,9 @@
 //! - [`Valid<E>`] (e.g. `Valid<Json<T>>`) validates with `validator::Validate`.
 //! - [`Piped<P, E>`] applies pipe `P` to what `E` produced.
 //!
-//! Both reject with an RFC-9457 `application/problem+json` `400`
-//! ([`ProblemDetails`]) carrying the [`PipeError`]'s message as `detail` and
-//! any field-level errors as an `errors` extension member.
+//! Both reject through [`pipe_error`]: an RFC-9457 `application/problem+json`
+//! `400` ([`ProblemDetails`]) carrying the [`PipeError`]'s message as `detail`
+//! and any field-level errors as an `errors` extension member.
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -17,7 +17,9 @@ use std::pin::Pin;
 use nest_rs_pipes::{Pipe, PipeError, ValidationPipe};
 use validator::Validate;
 
-use crate::{Form, FromRequest, Header, Json, Path, ProblemDetails, Query, Request, RequestBody};
+use crate::{
+    Form, FromRequest, Header, HttpError, Json, Path, ProblemDetails, Query, Request, RequestBody,
+};
 
 /// Owned-unwrap for an extractor, so a pipe can take the value it carries
 /// without cloning.
@@ -44,13 +46,22 @@ macro_rules! into_inner {
 
 into_inner!(Json<T>, Path<T>, Query<T>, Form<T>, Header<T>);
 
-/// A pipe's refusal, as the `400` problem every edge's rejection is.
-pub(crate) fn rejection(err: PipeError) -> ProblemDetails {
+/// Render a [`PipeError`] as the `400` problem document it answers, its
+/// field-level errors under the `errors` extension member.
+///
+/// ```
+/// use nest_rs_http::{StatusCode, pipe_error};
+/// use nest_rs_pipes::PipeError;
+///
+/// let refused = pipe_error(&PipeError::new("after is not a cursor this endpoint issued"));
+/// assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+/// ```
+pub fn pipe_error(err: &PipeError) -> HttpError {
     let mut problem = ProblemDetails::bad_request().with_detail(err.message().to_owned());
-    if let Some(details) = err.into_details() {
-        problem = problem.with_extension("errors", details);
+    if let Some(details) = err.details() {
+        problem = problem.with_extension("errors", details.clone());
     }
-    problem
+    problem.into()
 }
 
 /// Extract `E` and unwrap it to its inner value; each extractor of the
@@ -103,7 +114,7 @@ where
         let input = extract_inner::<E>(req, body).await?;
         P::transform(input)
             .map(Self::of)
-            .map_err(|refused| rejection(refused).into())
+            .map_err(|refused| pipe_error(&refused))
     }
 }
 
@@ -138,7 +149,7 @@ where
         let input = extract_inner::<E>(req, body).await?;
         ValidationPipe::<E::Inner>::transform(input)
             .map(Valid)
-            .map_err(|refused| rejection(refused).into())
+            .map_err(|refused| pipe_error(&refused))
     }
 }
 
@@ -148,7 +159,6 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::{HttpError, IntoResponse};
 
     async fn problem_of(err: HttpError) -> (StatusCode, serde_json::Value, String) {
         let resp = err.into_response();
@@ -160,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_rejection_is_a_problem_json_400_with_the_message() {
-        let resp = rejection(PipeError::new("not a uuid")).into_response();
+        let resp = pipe_error(&PipeError::new("not a uuid")).into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.headers()[header::CONTENT_TYPE],
@@ -183,7 +193,7 @@ mod tests {
             "validation failed",
             serde_json::json!({ "email": ["not an email"] }),
         );
-        let (_, json, _) = problem_of(rejection(err).into()).await;
+        let (_, json, _) = problem_of(pipe_error(&err)).await;
         assert_eq!(json["detail"], "validation failed");
         assert_eq!(json["errors"]["email"][0], "not an email");
     }

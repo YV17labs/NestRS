@@ -366,6 +366,42 @@ fn node_ids(connection: &serde_json::Value) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn a_crud_list_pages_on_from_the_last_id_it_served() {
+    let (_db, app) = boot().await;
+    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let mut created = Vec::new();
+    for name in ["GqlPage0", "GqlPage1", "GqlPage2"] {
+        created.push(create_org(&app, &admin, name).await);
+    }
+
+    let first = org_ids(&graphql(&app, &admin, "{ orgs(first: 2) { id } }").await);
+    assert_eq!(first, created[..2], "the first page is the first two keys");
+    let last = &first[1];
+    let next = org_ids(
+        &graphql(
+            &app,
+            &admin,
+            &format!(r#"{{ orgs(first: 2, after: "{last}") {{ id }} }}"#),
+        )
+        .await,
+    );
+    assert_eq!(
+        next,
+        created[2..],
+        "the next page starts after the last id served"
+    );
+}
+
+fn org_ids(body: &serde_json::Value) -> Vec<String> {
+    body["data"]["orgs"]
+        .as_array()
+        .unwrap_or_else(|| panic!("orgs is a list: {body}"))
+        .iter()
+        .map(|o| o["id"].as_str().expect("an org id").to_owned())
+        .collect()
+}
+
+#[tokio::test]
 async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
     let (_db, app) = boot().await;
     let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);

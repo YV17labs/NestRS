@@ -8,14 +8,14 @@ use nest_rs_graphql::async_graphql::connection::{Connection, Edge};
 ///
 /// The window travels in the key: keyed by parent alone, two sibling selections
 /// asking different windows of one relation would both get the first one's page.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RelationKey<K> {
     /// The parent row's primary key — the child's foreign-key value.
     pub parent: K,
     /// Page size, already clamped by [`clamp_page_size`](crate::clamp_page_size).
     pub first: u64,
     /// Exclusive cursor: the last child key of the previous page.
-    pub after: Option<uuid::Uuid>,
+    pub after: Option<crate::PageCursor>,
 }
 
 /// One parent's page of children, as the loader hands it back: each child

@@ -77,9 +77,9 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     first: ::core::option::Option<u64>,
                     after: ::core::option::Option<::std::string::String>,
                 ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
-                    let __after = after
-                        .as_deref()
-                        .and_then(|__s| ::nest_rs_seaorm::__private::uuid::Uuid::parse_str(__s).ok());
+                    let __after = ::nest_rs_seaorm::__private::graphql_page_cursor(
+                        ::core::option::Option::as_deref(&after),
+                    )?;
                     let __page = ::nest_rs_seaorm::CrudService::page(
                         &*self.#service,
                         ::core::option::Option::unwrap_or(

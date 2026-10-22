@@ -450,5 +450,9 @@ router parses. The rewrite is skipped when nothing is versioned.
   is deprecated with `#[api(deprecated = "…")]`, never Rust's `#[deprecated]`
   (`.claude/decisions/route-deprecation.md`), and a list links its next page
   (`.claude/decisions/pagination-link-header.md`).
+- **A page cursor is parsed at the edge.** An `after` no page issued is the
+  edge's client error wherever one is read — a `#[crud]` list's `400` or field
+  error, a relation's field error — never the first page; an empty one is the
+  first page. Held by `nest-rs-seaorm`'s in-process suite, one test per edge.
 - **The throttler's** in-memory default is an ordinary factory a vendor binding
   supersedes; a hit's net sits below the HTTP request timeout.

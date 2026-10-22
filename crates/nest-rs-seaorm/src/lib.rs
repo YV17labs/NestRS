@@ -88,7 +88,7 @@ pub use executor::{
     current_executor_scope, with_executor, with_job_executor, with_request_executor,
 };
 pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};
-pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageParams, clamp_page_size};
+pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageCursor, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
 pub use savepoint::Savepoint;
 pub use service::{
@@ -116,6 +116,8 @@ pub mod __private {
     #[cfg(feature = "http")]
     pub use crate::error::http_crud_error;
     pub use crate::error::masking;
+    #[cfg(feature = "graphql")]
+    pub use crate::page::graphql_page_cursor;
 
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use inventory;

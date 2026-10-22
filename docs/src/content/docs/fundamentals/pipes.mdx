@@ -92,6 +92,11 @@ the handler body never runs:
 | MCP | `invalid_params` (`-32602`), the field errors in the error's `data` |
 | Queue | A job error — the queue's retry/failure policy applies |
 
+A handler that parses a value itself answers its `PipeError` the same way,
+through its edge's `pipe_error`: `nest_rs::http::pipe_error`,
+`nest_rs::graphql::pipe_error`, `nest_rs::mcp::pipe_error`, and
+`WsReply::pipe_error` on WebSockets.
+
 `ValidationPipe<T>` attaches the structured field-level errors to the
 rejection, and **every** transport carries them through under the name
 `errors`: an RFC 9457 extension member on HTTP, `extensions.errors` on

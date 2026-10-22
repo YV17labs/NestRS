@@ -221,7 +221,7 @@ pub use nest_rs_core::input;
 pub use nest_rs_core::{current_request_scope, with_request_scope};
 pub use opaque::Opaque;
 pub use path::Path;
-pub use pipe::{IntoInner, Piped, Valid};
+pub use pipe::{IntoInner, Piped, Valid, pipe_error};
 pub use problem::{ProblemDetails, normalize_error_response};
 pub use query::Query;
 pub use raw_body::{RawBody, current_body_limit};

@@ -279,7 +279,7 @@ fn emit_fk_loaders(
                     // Two aliases of one relation may ask for different windows.
                     let mut __windows: ::std::vec::Vec<(
                         u64,
-                        ::core::option::Option<::nest_rs_seaorm::__private::uuid::Uuid>,
+                        ::core::option::Option<::nest_rs_seaorm::PageCursor>,
                         ::std::vec::Vec<#fk_ty>,
                     )> = ::std::vec::Vec::new();
                     for __key in __keys {
@@ -292,7 +292,7 @@ fn emit_fk_loaders(
                             }
                             ::core::option::Option::None => __windows.push((
                                 __key.first,
-                                __key.after,
+                                ::core::clone::Clone::clone(&__key.after),
                                 ::std::vec![::core::clone::Clone::clone(&__key.parent)],
                             )),
                         }
@@ -305,7 +305,7 @@ fn emit_fk_loaders(
                             Column::#fk_col,
                             &__parents,
                             __first,
-                            __after,
+                            ::core::clone::Clone::clone(&__after),
                             ::nest_rs_seaorm::sea_orm::Condition::all(),
                         )
                         .await?;
@@ -320,7 +320,9 @@ fn emit_fk_loaders(
                                 >(__row)
                                 .map_err(|__e| ::nest_rs_seaorm::__private::masking(&__e))?;
                                 __edges.push((
-                                    ::std::string::ToString::to_string(&__row.#pk_ident),
+                                    ::std::string::ToString::to_string(
+                                        &::nest_rs_seaorm::PageCursor::from(__row.#pk_ident),
+                                    ),
                                     __wire,
                                 ));
                             }
@@ -328,7 +330,7 @@ fn emit_fk_loaders(
                                 ::nest_rs_seaorm::graphql::RelationKey {
                                     parent: __parent,
                                     first: __first,
-                                    after: __after,
+                                    after: ::core::clone::Clone::clone(&__after),
                                 },
                                 ::nest_rs_seaorm::graphql::RelationPage {
                                     edges: __edges,
@@ -512,6 +514,10 @@ fn emit_has_many_method(
                 <#target as #related>::Wire,
             >,
         > {
+            let __after = ::nest_rs_seaorm::__private::graphql_page_cursor(
+                ::core::option::Option::as_deref(&after),
+            )?;
+            let __has_previous_page = ::core::option::Option::is_some(&__after);
             // Never `data_unchecked`: a loader whose owner module this app does
             // not import would panic at request time.
             let __loader = __ctx
@@ -531,14 +537,6 @@ fn emit_has_many_method(
                         >(),
                     ))
                 })?;
-            // An unparsable cursor pages from the start, as
-            // `nest_rs_seaorm::PageParams::after_uuid` does over HTTP.
-            let __after = ::core::option::Option::and_then(
-                ::core::option::Option::as_deref(&after),
-                |__c| ::core::result::Result::ok(
-                    ::nest_rs_seaorm::__private::uuid::Uuid::parse_str(__c),
-                ),
-            );
             let __page = __loader
                 .load_one(::nest_rs_seaorm::graphql::RelationKey {
                     parent: #key_expr,
@@ -553,7 +551,7 @@ fn emit_has_many_method(
             ::core::result::Result::Ok(
                 ::nest_rs_seaorm::graphql::RelationPage::into_connection(
                     __page,
-                    ::core::option::Option::is_some(&__after),
+                    __has_previous_page,
                 ),
             )
         }

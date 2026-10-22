@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::Hash;
+use std::str::FromStr;
 
+use nest_rs_pipes::PipeError;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::{
     Asterisk, Condition, Expr, ExprTrait, Order, Query, Value, ValueType, WindowStatement,
@@ -22,9 +25,94 @@ pub struct Page<M> {
     pub items: Vec<M>,
     /// Cursor to pass as `after` for the next page — the last row's key, set
     /// only when [`has_more`](Self::has_more).
-    pub next_cursor: Option<Uuid>,
+    pub next_cursor: Option<PageCursor>,
     /// Whether a further page exists (an extra row was over-fetched).
     pub has_more: bool,
+}
+
+/// The refusal of an `after` no page issued: it names the parameter, never the
+/// value a client sent.
+const NOT_A_CURSOR: &str = "after is not a cursor this endpoint issued";
+
+/// Where a keyset page starts: the last key of the page before.
+///
+/// Its text is the key's own — a UUID's hyphenated form — so a client passes
+/// back what a page gave it, and reads any spelling of that UUID back the same.
+///
+/// ```
+/// use nest_rs_seaorm::PageCursor;
+///
+/// let cursor: PageCursor = "0195b4a6-4c1c-7d3e-8f00-000000000001".parse()?;
+/// assert_eq!(cursor.to_string(), "0195b4a6-4c1c-7d3e-8f00-000000000001");
+/// assert!("not-a-cursor".parse::<PageCursor>().is_err());
+/// # Ok::<(), nest_rs_pipes::PipeError>(())
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PageCursor(Uuid);
+
+impl PageCursor {
+    /// The key the page starts after.
+    pub(crate) fn key(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for PageCursor {
+    fn from(key: Uuid) -> Self {
+        Self(key)
+    }
+}
+
+impl fmt::Display for PageCursor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0.hyphenated(), f)
+    }
+}
+
+impl FromStr for PageCursor {
+    type Err = PipeError;
+
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the refusal names the parameter and what it expected, never a parser's internals"
+    )]
+    fn from_str(text: &str) -> Result<Self, PipeError> {
+        Uuid::parse_str(text)
+            .map(Self)
+            .map_err(|_| PipeError::new(NOT_A_CURSOR))
+    }
+}
+
+impl serde::Serialize for PageCursor {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// The cursor an `after` argument names: `None` when it is absent or empty,
+/// the refusal when it is not a cursor.
+pub(crate) fn parse_after(after: Option<&str>) -> Result<Option<PageCursor>, PipeError> {
+    match after {
+        None | Some("") => Ok(None),
+        Some(text) => text.parse().map(Some),
+    }
+}
+
+/// An `after` argument read at the GraphQL edge, a `#[crud]` list's or a
+/// relation's: its refusal is the `INVALID_ARGUMENT` field error a malformed
+/// id answers there.
+#[cfg(feature = "graphql")]
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal is one constant sentence, the one `FromStr` gives"
+)]
+pub fn graphql_page_cursor(after: Option<&str>) -> async_graphql::Result<Option<PageCursor>> {
+    parse_after(after).map_err(|_| {
+        nest_rs_graphql::problem_error(
+            &nest_rs_core::Problem::new(400, nest_rs_core::problem::code::INVALID_ARGUMENT)
+                .with_detail(NOT_A_CURSOR),
+        )
+    })
 }
 
 /// Clamp the requested page size to the `1..=100` window [`PageParams::limit`]
@@ -53,10 +141,10 @@ fn rank_per_parent<E: EntityTrait>(
     fk: E::Column,
     pk: E::Column,
     limit: u64,
-    after: Option<Uuid>,
+    after: Option<PageCursor>,
 ) -> sea_orm::sea_query::SelectStatement {
     let scoped = match after {
-        Some(after) => scoped.filter(pk.gt(after)),
+        Some(after) => scoped.filter(pk.gt(after.key())),
         None => scoped,
     };
     let mut ranked = scoped.into_query();
@@ -92,21 +180,22 @@ pub(crate) fn next_cursor_from<M>(
     items: &[M],
     has_more: bool,
     pk: impl FnMut(&M) -> Option<Uuid>,
-) -> Option<Uuid> {
+) -> Option<PageCursor> {
     if has_more {
-        items.last().and_then(pk)
+        items.last().and_then(pk).map(PageCursor::from)
     } else {
         None
     }
 }
 
-/// The `?first=&after=` cursor query. An unparsable `after` is ignored — paging
-/// from the start, never an error.
+/// The `?first=&after=` cursor query. An `after` no page issued is refused,
+/// never read as the first page.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct PageParams {
     /// Requested page size; defaults to 20 and is clamped to `1..=100`.
     pub first: Option<u64>,
-    /// Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.
+    /// The cursor a prior page's `next` link carries, passed back as given;
+    /// absent or empty for the first page, refused when no page issued it.
     pub after: Option<String>,
 }
 
@@ -116,10 +205,10 @@ impl PageParams {
         clamp_page_size(self.first.unwrap_or(DEFAULT_PAGE_SIZE))
     }
 
-    /// The `after` cursor parsed as a primary key, or `None` when absent or
-    /// malformed — an unparsable cursor pages from the start rather than erroring.
-    pub fn after_uuid(&self) -> Option<Uuid> {
-        self.after.as_deref().and_then(|s| Uuid::parse_str(s).ok())
+    /// The page's start: `None` when `after` is absent or empty, the refusal
+    /// when it is not a cursor a page issued.
+    pub fn cursor(&self) -> Result<Option<PageCursor>, PipeError> {
+        parse_after(self.after.as_deref())
     }
 }
 
@@ -133,7 +222,7 @@ where
     /// `extra` is ANDed onto the scope (e.g. a tenant predicate).
     pub async fn page(
         first: u64,
-        after: Option<Uuid>,
+        after: Option<PageCursor>,
         extra: Condition,
     ) -> Result<Page<E::Model>, DbErr> {
         let conn = Self::conn()?;
@@ -146,7 +235,7 @@ where
             .filter(extra)
             .cursor_by(pk_col);
         if let Some(after) = after {
-            cursor.after(after);
+            cursor.after(after.key());
         }
         cursor.first(limit + 1);
 
@@ -203,7 +292,7 @@ where
         fk: E::Column,
         keys: &[K],
         first: u64,
-        after: Option<Uuid>,
+        after: Option<PageCursor>,
         extra: Condition,
     ) -> Result<HashMap<K, Page<E::Model>>, DbErr>
     where
@@ -400,7 +489,7 @@ mod tests {
         );
     }
 
-    fn relation_sql(limit: u64, after: Option<Uuid>) -> String {
+    fn relation_sql(limit: u64, after: Option<PageCursor>) -> String {
         use sea_orm::sea_query::PostgresQueryBuilder;
 
         rank_per_parent(
@@ -444,7 +533,7 @@ mod tests {
     fn relation_pages_applies_the_cursor_inside_the_ranking() {
         // Applied outside, a parent's rank would count rows the caller already
         // has, and page 2 would come back short.
-        let after = Uuid::now_v7();
+        let after = PageCursor::from(Uuid::now_v7());
         let sql = relation_sql(2, Some(after));
         let (inner, outer) = sql
             .split_once(r#") AS "__nest_rs_ranked""#)
@@ -481,16 +570,63 @@ mod tests {
     }
 
     #[test]
-    fn after_uuid_returns_none_for_garbage() {
-        assert!(params(None, Some("not-a-uuid")).after_uuid().is_none());
-        assert!(params(None, Some("")).after_uuid().is_none());
+    fn a_cursor_no_page_issued_is_refused_naming_after_never_the_value() {
+        for sent in [
+            "zzz",
+            "0195b4a6-4c1c-7d3e-8f00",
+            "0195b4a6-4c1c-7d3e-8f00-00000000000g",
+        ] {
+            let refused = params(None, Some(sent))
+                .cursor()
+                .expect_err("a cursor no page issued is refused");
+            assert!(refused.message().contains("after"), "{refused}");
+            assert!(!refused.message().contains(sent), "{refused}");
+            assert!(
+                refused.details().is_none(),
+                "one value, not a form: {refused}"
+            );
+        }
     }
 
     #[test]
-    fn after_uuid_round_trips_a_v7() {
-        let uuid = Uuid::now_v7();
-        let parsed = params(None, Some(&uuid.to_string())).after_uuid();
-        assert_eq!(parsed, Some(uuid));
+    fn an_absent_or_empty_cursor_is_the_first_page() {
+        assert_eq!(params(None, None).cursor().expect("absent"), None);
+        assert_eq!(params(None, Some("")).cursor().expect("empty"), None);
+    }
+
+    #[test]
+    fn a_cursor_round_trips_through_its_text() {
+        let cursor = PageCursor::from(Uuid::now_v7());
+        let text = cursor.to_string();
+        assert_eq!(text, cursor.key().hyphenated().to_string());
+        assert_eq!(text.parse::<PageCursor>().expect("its own text"), cursor);
+        assert_eq!(
+            params(None, Some(&text)).cursor().expect("a page's cursor"),
+            Some(cursor),
+        );
+    }
+
+    #[test]
+    fn a_cursor_reads_every_spelling_of_its_key() {
+        let cursor = PageCursor::from(Uuid::now_v7());
+        let key = cursor.key();
+        for spelling in [
+            key.simple().to_string(),
+            key.braced().to_string(),
+            key.urn().to_string(),
+            key.hyphenated().to_string().to_uppercase(),
+        ] {
+            assert_eq!(spelling.parse::<PageCursor>().expect(&spelling), cursor);
+        }
+    }
+
+    #[test]
+    fn a_cursor_serializes_as_its_text() {
+        let cursor = PageCursor::from(Uuid::now_v7());
+        assert_eq!(
+            serde_json::to_value(&cursor).expect("a cursor serializes"),
+            serde_json::Value::String(cursor.to_string()),
+        );
     }
 
     #[test]
@@ -535,10 +671,10 @@ mod tests {
 
     #[test]
     fn page_struct_fields_are_publicly_constructible() {
-        let cursor = Uuid::now_v7();
+        let cursor = PageCursor::from(Uuid::now_v7());
         let page = Page {
             items: vec!["a", "b"],
-            next_cursor: Some(cursor),
+            next_cursor: Some(cursor.clone()),
             has_more: true,
         };
         assert_eq!(page.items.len(), 2);
@@ -550,7 +686,7 @@ mod tests {
     fn next_cursor_from_returns_last_pk_when_more_to_fetch() {
         let cursor = Uuid::now_v7();
         let next = next_cursor_from(&[1, 2, 3], true, |_| Some(cursor));
-        assert_eq!(next, Some(cursor));
+        assert_eq!(next, Some(PageCursor::from(cursor)));
     }
 
     #[test]
@@ -584,7 +720,7 @@ mod tests {
             seen = Some(*m);
             Some(cursor)
         });
-        assert_eq!(next, Some(cursor));
+        assert_eq!(next, Some(PageCursor::from(cursor)));
         assert_eq!(seen, Some(30), "the closure receives the LAST item");
     }
 

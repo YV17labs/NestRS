@@ -23,7 +23,7 @@ use crate::deadline::RequestDeadline;
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::{HttpError, Result, file};
 use crate::guard_stage::denial_response;
-use crate::pipe::rejection;
+use crate::pipe::pipe_error;
 use crate::problem::{ProblemDetails, problem_response};
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
@@ -328,7 +328,7 @@ fn unanswered(failure: &Failure) -> Response {
         return problem_response(problem);
     }
     if let Some(refused) = failure.find::<PipeError>() {
-        return rejection(refused.clone()).into_response();
+        return pipe_error(refused).into_response();
     }
     if let Some(decode) = failure.find::<DecodeError>() {
         return ProblemDetails::bad_request()

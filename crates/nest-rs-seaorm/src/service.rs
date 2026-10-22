@@ -12,7 +12,7 @@ use nest_rs_authz::{Action, ActionMarker};
 use nest_rs_database::atomic;
 
 use crate::error::AtomicDbError;
-use crate::page::Page;
+use crate::page::{Page, PageCursor};
 use crate::repo::{Repo, ability_scope, pk_condition};
 
 /// Build a fresh `ActiveModel` from a create-input DTO. Implemented by `#[expose]`
@@ -289,13 +289,13 @@ where
     async fn page(
         &self,
         first: u64,
-        after: Option<Uuid>,
+        after: Option<PageCursor>,
     ) -> Result<Page<<Self::Entity as EntityTrait>::Model>, DbErr>
     where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
         <Self::Entity as EntityTrait>::Model: Send + Sync,
     {
-        tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), first, ?after, "paging rows");
+        tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), first, after = after.as_ref().map(tracing::field::display), "paging rows");
         Repo::<Self::Entity>::page(first, after, Condition::all()).await
     }
 

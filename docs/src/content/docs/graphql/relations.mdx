@@ -107,7 +107,9 @@ The `has_many` side is a **Relay connection**, not a list: `edges { cursor node 
 plus `pageInfo`, with the child's own primary key as the cursor — the same keyset
 `Repo::page` uses everywhere else. `first` defaults to 20 and is clamped to
 `1..=100` by `clamp_page_size`, so a relation over millions of rows is walked a
-page at a time.
+page at a time. Pass `endCursor` back as `after` to read the next page; an
+`after` no page issued is an `INVALID_ARGUMENT` field error naming `after`,
+never the first page.
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/graphql -d \

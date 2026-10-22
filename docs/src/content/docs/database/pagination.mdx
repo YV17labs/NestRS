@@ -57,8 +57,20 @@ cursor, and is built on the path the caller addressed, global prefix and
 version included. The last page has no `Link`.
 
 The query carries `first` (page size, defaulting to 20, clamped to
-`1..=100`) and `after` (the cursor the previous page's link carries). An
-unparseable cursor pages from the start — never an error.
+`1..=100`) and `after` (the cursor the previous page's link carries, passed
+back as given; absent or empty for the first page). A cursor no page issued
+is a `400`, never the first page — a sync loop following `next` never
+restarts the collection silently:
+
+```bash frame="terminal"
+$ curl -si '/posts?first=20&after=0193f1b2'
+HTTP/1.1 400 Bad Request
+content-type: application/problem+json
+
+{"type":"about:blank","title":"Bad Request","status":400,"detail":"after is not a cursor this endpoint issued"}
+```
+
+The refusal names the parameter, never the value it was sent.
 
 ## Keyset, the GraphQL shape
 
@@ -75,8 +87,10 @@ query {
 # next page: posts(first: 20, after: "<last id of the previous page>")
 ```
 
-UUID-v7 keys are time-ordered, so the cursor is just the previous
-page's last `id` — no opaque cursor type. An empty page means you reached
+UUID-v7 keys are time-ordered, so the cursor is the previous page's last
+`id`, as its text — no opaque encoding. An `after` that is not one is a
+field error naming `after`, never the first page; its `extensions.code` is
+`INVALID_ARGUMENT`, as for a malformed `id`. An empty page means you reached
 the end.
 
 ## What `Page<M>` carries
@@ -86,7 +100,7 @@ The keyset shape, before serialization:
 ```rust title="nest_rs::seaorm::Page"
 pub struct Page<M> {
     pub items: Vec<M>,
-    pub next_cursor: Option<Uuid>,
+    pub next_cursor: Option<PageCursor>,
     pub has_more: bool,
 }
 ```
@@ -96,15 +110,22 @@ The implementation fetches `limit + 1` rows, truncates the probe row from
 cursor is the last visible row's primary key — present only when there is
 more to fetch.
 
+`PageCursor` is that key as a type. It writes the key's own text
+(`Display`), reads any spelling of a UUID back (`FromStr`), and refuses
+anything else with a `PipeError` that names `after` — the refusal every
+edge answers as its native client error. `PageParams::cursor()` reads the
+query's `after` that way, an empty one as the first page.
+
 `CrudService::page(first, after)` returns a `Page<E::Model>` directly;
-callers paginating a custom query reach for `Repo::<E>::page(first,
-after)`.
+callers paginating a query of their own reach for `Repo::<E>::page(first,
+after, extra)`.
 
 ## A custom paginated query
 
-When the auto-emitted `page` does not match — say you want only one
-author's posts — call `Repo::scoped`, clamp the page size with
-`clamp_page_size`, and fetch one row past it to learn whether there is more:
+When the auto-emitted list does not match — say you want only one author's
+posts — pass the filter to `Repo::page` as its `extra` condition. It is
+ANDed onto the ability scope, so the keyset, the clamp and the over-fetch
+stay the framework's:
 
 ```rust title="crates/features/src/posts/service.rs"
 impl PostsService {
@@ -112,34 +133,39 @@ impl PostsService {
         &self,
         author_id: Uuid,
         first: u64,
-        after: Option<Uuid>,
-    ) -> Result<Page<Post>, ServiceError> {
-        let conn = Repo::<Posts>::conn()?;
-        let limit = nest_rs::seaorm::clamp_page_size(first);
-
-        let mut cursor = Repo::<Posts>::scoped(Action::Read)
-            .filter(entity::Column::AuthorId.eq(author_id))
-            .cursor_by(entity::Column::Id);
-        if let Some(after) = after {
-            cursor.after(after);
-        }
-        cursor.first(limit + 1);
-
-        let mut rows = cursor.all(&conn).await?;
-        let has_more = rows.len() as u64 > limit;
-        rows.truncate(limit as usize);
-        let next_cursor = if has_more { rows.last().map(|row| row.id) } else { None };
-
-        Ok(Page {
-            items: rows.iter().map(Post::from).collect(),
-            next_cursor,
-            has_more,
-        })
+        after: Option<PageCursor>,
+    ) -> Result<Page<entity::Model>, ServiceError> {
+        let by_author = Condition::all().add(entity::Column::AuthorId.eq(author_id));
+        Ok(Repo::<Posts>::page(first, after, by_author).await?)
     }
 }
 ```
 
-`Repo::scoped(Action::Read)` is the entry point — the ability filter
+The route reads the query as `PageParams`, and answers a cursor no page
+issued with the `400` every list answers, through `pipe_error`:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[get("/by-author/{author_id}")]
+#[authorize(Read, PostEntity)]
+#[api(response = Vec<Post>)]
+async fn by_author(
+    &self,
+    req: &Request,
+    author_id: Path<Uuid>,
+    params: Query<PageParams>,
+) -> Result<Response> {
+    let after = params.cursor().map_err(|refused| pipe_error(&refused))?;
+    let page = self.svc.page_by_author(author_id.0, params.limit(), after).await?;
+    let posts: Vec<Post> = page.items.iter().map(Post::from).collect();
+    let mut res = Json(posts).into_response();
+    if let Some(cursor) = page.next_cursor {
+        set_next_link(&mut res, caller_path(req), params.limit(), cursor);
+    }
+    Ok(res)
+}
+```
+
+`Repo::page` runs under `scoped(Action::Read)` — the ability filter
 applies, and a request without one denies every row (fail-closed).
 
 ## Limits

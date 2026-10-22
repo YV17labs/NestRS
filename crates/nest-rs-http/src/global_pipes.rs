@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::body::Body;
 use crate::error::{BodyError, HttpError, Result};
-use crate::pipe::rejection;
+use crate::pipe::pipe_error;
 use crate::request::Request;
 use crate::view::with_view;
 
@@ -115,7 +115,7 @@ async fn apply_body_pipes(
             .try_for_each(|entry| entry.layer.transform(cx, ArgumentKind::Body, &mut value))
     });
     if let Err(err) = folded {
-        return Err(HttpError::from(rejection(err)));
+        return Err(pipe_error(&err));
     }
     // A re-serialization failure must not hand the handler an empty body
     // silently — fail the request instead.

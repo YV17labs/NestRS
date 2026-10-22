@@ -101,10 +101,14 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __page: ::nest_rs_http::Query<::nest_rs_seaorm::PageParams>,
                 ) -> ::nest_rs_http::Result<::nest_rs_http::Response> {
                     let __first = __page.0.limit();
+                    let __after = __page
+                        .0
+                        .cursor()
+                        .map_err(|__e| ::nest_rs_http::pipe_error(&__e))?;
                     let __p = ::nest_rs_seaorm::CrudService::page(
                         &*self.#service,
                         __first,
-                        __page.0.after_uuid(),
+                        __after,
                     )
                     .await
                     .map_err(::nest_rs_seaorm::__private::http_crud_error)?;

@@ -123,8 +123,10 @@ Review a new edge, or a change to one, against it:
     never with its detail on a `5xx`, a denial carries the same `code` on
     every edge (`denial_code`), an opaque answer the `INTERNAL` one through
     one constructor per edge, a problem HTTP builds from a status alone the
-    class core names for that status — none for a status no class names —
-    and every code the framework emits is a
+    class core names for that status — none for a status no class names —,
+    a decode failure the `INVALID_ARGUMENT` one wherever its answer has a
+    member for it, as a pipe's refusal where that member is not its field
+    map, and every code the framework emits is a
     `nest_rs_core::problem::code` constant. The edge decides **by type**
     where it names the handler's error — GraphQL's, WS's and MCP's wrappers
     probe `ToProblem` before the chain — and a `Problem`, `PipeError` or decode failure its

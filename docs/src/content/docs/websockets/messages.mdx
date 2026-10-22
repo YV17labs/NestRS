@@ -214,7 +214,8 @@ someone meant it to read:
 - the framework's own vocabulary found in the chain — a `Problem`, a pipe
   rejection, a decode failure said without its value
   (`invalid type: a string, expected u64 at line 1 column 24`) — answers in its
-  own form;
+  own form, a decode failure under `code: "INVALID_ARGUMENT"` as a payload or
+  an envelope that does not decode does;
 - **anything else answers `"internal error"`** under `code: "INTERNAL"`, and
   its whole chain is filed once at `error` on `nest_rs::ws`.
 
@@ -241,6 +242,9 @@ the HTTP body does:
   }
 }
 ```
+
+A pipe's rejection carries that field map alone under `errors`, with no
+`code` beside it, since a payload may have a field named `code`.
 
 Each entry is `{ code, message, params }`. `params` carries the rule's own
 bounds — `min`, `max`, the regex name — so a client renders "at least 1

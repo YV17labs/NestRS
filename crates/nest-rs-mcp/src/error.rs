@@ -155,6 +155,16 @@ pub(crate) fn opaque_answer() -> McpError {
     rendered(&Problem::new(500, code::INTERNAL))
 }
 
+/// The refusal of a value that does not decode: JSON-RPC's invalid params in
+/// `sentence`, under the `INVALID_ARGUMENT` code HTTP's `400` names for a body
+/// that does not.
+pub(crate) fn invalid_argument(sentence: String) -> McpError {
+    McpError::invalid_params(
+        sentence,
+        Some(serde_json::json!({ "code": code::INVALID_ARGUMENT.as_str() })),
+    )
+}
+
 /// The vocabulary `error`'s chain carries, else the opaque answer: the
 /// method's own error, a problem, a pipe's refusal or a decode failure,
 /// first found from the error itself down.
@@ -169,7 +179,7 @@ fn chain_error(error: &(dyn StdError + 'static)) -> McpError {
         return pipe_error(rejection);
     }
     if let Some(report) = DecodeError::in_chain(error) {
-        return McpError::invalid_params(report.to_string(), None);
+        return invalid_argument(report.to_string());
     }
     opaque_error(error)
 }
@@ -912,6 +922,11 @@ mod tests {
         let said = ErrorReport(decode).into_failure().into_answer();
         assert!(!said.message.contains("sk_live"), "{}", said.message);
         assert_eq!(said.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(
+            said.data,
+            Some(serde_json::json!({ "code": "INVALID_ARGUMENT" })),
+            "the class HTTP's 400 names for a body that does not decode",
+        );
     }
 
     /// What an operation wrote goes out when no filter answered over it.

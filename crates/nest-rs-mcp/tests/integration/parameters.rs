@@ -102,5 +102,10 @@ async fn a_prompt_s_arguments_that_do_not_decode_are_refused_without_their_value
         answer["error"]["message"],
         json!("failed to deserialize parameters: invalid type: a string, expected u64"),
     );
+    assert_eq!(
+        answer["error"]["data"],
+        json!({ "code": "INVALID_ARGUMENT" }),
+        "the class HTTP's 400 names for a body that does not decode: {answer}",
+    );
     assert!(!body.contains(SECRET), "{body}");
 }

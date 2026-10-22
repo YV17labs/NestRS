@@ -98,8 +98,8 @@ with no resolver call.
 Beyond shape checks, an argument binds a [pipe](/fundamentals/pipes/)
 per parameter: `Valid<T>` runs `validator` rules over an input object,
 `Piped<P, T>` names a custom transform. The SDL still shows `T`; a
-rejection surfaces in the response's `errors` — the resolver body never
-runs.
+rejection surfaces in the response's `errors`, under `extensions.code:
+"INVALID_ARGUMENT"` — the resolver body never runs.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 use async_graphql::InputObject;

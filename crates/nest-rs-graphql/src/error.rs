@@ -41,21 +41,21 @@ pub const FIELD_ERRORS_EXTENSION: &str = "errors";
 /// branches on.
 pub const CODE_EXTENSION: &str = "code";
 
-/// Render a [`PipeError`] as an `async_graphql::Error`, carrying any structured
-/// field errors under `extensions.errors`.
+/// Render a [`PipeError`] as an `async_graphql::Error`: its message, the
+/// `INVALID_ARGUMENT` code HTTP's `400` names under `extensions.code`, and any
+/// structured field errors under `extensions.errors`.
 pub fn pipe_error(err: &PipeError) -> Error {
-    let message = err.message().to_owned();
-    match err.details() {
-        // Plain JSON always converts; a failure would drop the extension, not the error.
-        Some(details) => match async_graphql::Value::from_json(details.clone()) {
-            Ok(value) => {
-                Error::new(message).extend_with(move |_, e| e.set(FIELD_ERRORS_EXTENSION, value))
-            }
-            Err(_) => Error::new(message),
-        },
-        // Absent, not null: a client branches on presence.
-        None => Error::new(message),
-    }
+    // Plain JSON always converts; a failure would drop the field map, not the
+    // error. Absent, not null: a client branches on presence.
+    let details = err
+        .details()
+        .and_then(|details| async_graphql::Value::from_json(details.clone()).ok());
+    Error::new(err.message()).extend_with(move |_, e| {
+        e.set(CODE_EXTENSION, code::INVALID_ARGUMENT.as_str());
+        if let Some(details) = details {
+            e.set(FIELD_ERRORS_EXTENSION, details);
+        }
+    })
 }
 
 /// Render a guard's [`Denial`] as an `async_graphql::Error`: its message, its
@@ -418,15 +418,21 @@ mod tests {
 
         assert_eq!(err.message, "validation failed");
         assert_eq!(extensions(&err)[FIELD_ERRORS_EXTENSION], details);
+        assert_eq!(
+            extensions(&err)[CODE_EXTENSION],
+            "INVALID_ARGUMENT",
+            "the class HTTP's 400 names, beside the field map",
+        );
     }
 
     #[test]
-    fn a_rejection_without_details_carries_no_extensions() {
+    fn a_rejection_without_details_carries_its_class_and_no_field_map() {
         let err = pipe_error(&PipeError::new("must be a valid UUID"));
         assert_eq!(err.message, "must be a valid UUID");
-        assert!(
-            err.extensions.is_none(),
-            "absent, not null — a client branches on presence",
+        assert_eq!(
+            extensions(&err),
+            serde_json::json!({ CODE_EXTENSION: "INVALID_ARGUMENT" }),
+            "`errors` absent, not null — a client branches on presence",
         );
     }
 

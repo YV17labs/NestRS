@@ -13,8 +13,11 @@ use rmcp::model::JsonObject;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
+use crate::error::invalid_argument;
+
 /// rmcp's own words: its tool router turns an `invalid_params` opening with them
-/// into an `isError` tool result, as the specification asks. Pinned by the suite.
+/// into an `isError` tool result, as the specification asks, its text alone —
+/// a prompt's refusal keeps its `data`. Pinned by the suite.
 const REFUSED: &str = "failed to deserialize parameters";
 
 /// A tool's or a prompt's typed arguments, deserialized from the call.
@@ -23,7 +26,8 @@ const REFUSED: &str = "failed to deserialize parameters";
 /// destructured as `Parameters(args): Parameters<T>`, with `T`'s JSON Schema
 /// advertised as the operation's input — rmcp's `#[tool]` / `#[prompt]` find the
 /// argument by its name. A call whose arguments do not decode is refused with
-/// `invalid_params` naming where and what kind, never the value.
+/// `invalid_params` naming where and what kind, never the value, under the
+/// `INVALID_ARGUMENT` code.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct Parameters<P>(pub P);
@@ -45,9 +49,7 @@ impl<P: DeserializeOwned> Parameters<P> {
         let arguments = serde_json::Value::Object(arguments.unwrap_or_default());
         serde_json::from_value(arguments)
             .map(Self)
-            .map_err(|error| {
-                McpError::invalid_params(format!("{REFUSED}: {}", DecodeError::new(&error)), None)
-            })
+            .map_err(|error| invalid_argument(format!("{REFUSED}: {}", DecodeError::new(&error))))
     }
 }
 

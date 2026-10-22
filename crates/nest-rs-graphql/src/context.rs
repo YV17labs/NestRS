@@ -14,6 +14,7 @@ use async_graphql::{
 use futures_util::TryStreamExt;
 use nest_rs_core::__private::serde::Serialize;
 use nest_rs_core::__private::serde::de::DeserializeOwned;
+use nest_rs_core::problem::code;
 use nest_rs_core::{
     Container, Discovery, Handler, Posture, ReachableProviders, UngatedDiscoveryError, UnitContext,
 };
@@ -293,12 +294,8 @@ async fn read_batch(req: &Request, body: Body) -> Result<BatchRequest, Response>
             .await
             .map_err(|refusal| multipart_refused(&refusal));
     }
-    let bytes = body
-        .into_bytes()
-        .await
-        .map_err(|_| refused(UNREADABLE, StatusCode::BAD_REQUEST))?;
-    serde_json::from_slice::<BatchRequest>(&bytes)
-        .map_err(|_| refused(&what_it_is_not(&bytes), StatusCode::BAD_REQUEST))
+    let bytes = body.into_bytes().await.map_err(|_| refused(UNREADABLE))?;
+    serde_json::from_slice::<BatchRequest>(&bytes).map_err(|_| refused(&what_it_is_not(&bytes)))
 }
 
 /// What a body that failed to read is said as; the body cap answers `413` itself.
@@ -331,7 +328,7 @@ fn multipart_refused(refusal: &ParseRequestError) -> Response {
         Refused::Io(_) => UNREADABLE.to_owned(),
         fixed => fixed.to_string(),
     };
-    refused(&reason, StatusCode::BAD_REQUEST)
+    refused(&reason)
 }
 
 /// Why `bytes` is not a GraphQL request, as the shape it was decodes it.
@@ -347,31 +344,41 @@ fn what_it_is_not(bytes: &[u8]) -> String {
     }
 }
 
-/// Answer a request that is not a GraphQL request: GraphQL-over-HTTP's 4xx with
-/// an `errors` entry, and no `data` member since nothing was executed.
-fn refused(reason: &str, status: StatusCode) -> Response {
+/// Answer a request that is not a GraphQL request: GraphQL-over-HTTP's `400`
+/// with an `errors` entry under its class, `INVALID_ARGUMENT`, and no `data`
+/// member since nothing was executed.
+fn refused(reason: &str) -> Response {
     tracing::debug!(
         target: crate::TARGET,
         reason,
         "graphql request refused: the body is not a GraphQL request",
     );
     let body = serde_json::json!({
-        "errors": [{ "message": format!("the body is not a GraphQL request: {reason}") }],
+        "errors": [{
+            "message": format!("the body is not a GraphQL request: {reason}"),
+            "extensions": { crate::CODE_EXTENSION: code::INVALID_ARGUMENT.as_str() },
+        }],
     });
     Response::builder()
-        .status(status)
+        .status(StatusCode::BAD_REQUEST)
         .content_type(HeaderValue::from_static("application/json"))
         .body(serde_json::to_vec(&body).unwrap_or_default())
 }
 
-/// A variable-pipe `PipeError` as one GraphQL error: its message, field-level
-/// errors under `extensions.errors`.
+/// A variable-pipe `PipeError` as one GraphQL error, as a resolver's pipe
+/// refusal reads ([`pipe_error`](crate::pipe_error)): its message, the
+/// `INVALID_ARGUMENT` code under `extensions.code`, and field-level errors
+/// under `extensions.errors`.
 pub(crate) fn variable_pipe_error(err: &PipeError) -> serde_json::Value {
-    let mut error = serde_json::json!({ "message": err.message() });
+    let mut extensions = serde_json::Map::new();
+    extensions.insert(
+        crate::CODE_EXTENSION.to_owned(),
+        code::INVALID_ARGUMENT.as_str().into(),
+    );
     if let Some(details) = err.details() {
-        error["extensions"] = serde_json::json!({ crate::FIELD_ERRORS_EXTENSION: details });
+        extensions.insert(crate::FIELD_ERRORS_EXTENSION.to_owned(), details.clone());
     }
-    error
+    serde_json::json!({ "message": err.message(), "extensions": extensions })
 }
 
 /// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
@@ -586,6 +593,33 @@ mod tests {
         assert!(!message.contains("sk_live"), "never the value: {message}");
         let error = variable_pipe_error(&refusal);
         assert_eq!(error["message"], message, "{error}");
+    }
+
+    /// A variable pipe's refusal names the class HTTP's `400` names, beside its
+    /// field map when it has one, as a resolver's pipe refusal does.
+    #[test]
+    fn a_variable_pipe_s_refusal_names_the_invalid_argument_class() {
+        let bare = variable_pipe_error(&PipeError::new("must be a valid UUID"));
+        assert_eq!(
+            bare,
+            serde_json::json!({
+                "message": "must be a valid UUID",
+                "extensions": { "code": "INVALID_ARGUMENT" },
+            }),
+        );
+
+        let details = serde_json::json!({ "name": [{ "code": "length" }] });
+        let detailed = variable_pipe_error(&PipeError::with_details(
+            "validation failed",
+            details.clone(),
+        ));
+        assert_eq!(
+            detailed,
+            serde_json::json!({
+                "message": "validation failed",
+                "extensions": { "code": "INVALID_ARGUMENT", "errors": details },
+            }),
+        );
     }
 
     /// A file past the cap is answered as the cap answers a body past it; the

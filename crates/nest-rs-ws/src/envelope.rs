@@ -99,6 +99,12 @@ impl WsError {
         Self::from_problem(&Problem::new(500, code::INTERNAL))
     }
 
+    /// The frame a value that does not decode answers: `sentence`, under the
+    /// `INVALID_ARGUMENT` code HTTP's `400` names for a body that does not.
+    pub(crate) fn invalid_argument(sentence: impl Into<std::borrow::Cow<'static, str>>) -> Self {
+        Self::from_problem(&Problem::new(400, code::INVALID_ARGUMENT).with_detail(sentence))
+    }
+
     /// The frame a [`PipeError`] answers: its message, and its field-level
     /// detail under `errors` when it has some.
     fn from_pipe(rejection: &PipeError) -> Self {
@@ -169,8 +175,9 @@ impl WsReply {
     }
 
     /// The error frame a payload that does not deserialize puts on the wire,
-    /// with a `warn`. Both say where it failed and what kind of value was found
-    /// ([`DecodeError`]), never the value.
+    /// under the `INVALID_ARGUMENT` code, with a `warn`. Both say where it
+    /// failed and what kind of value was found ([`DecodeError`]), never the
+    /// value.
     pub fn payload_error(event: &str, error: &serde_json::Error) -> WsReply {
         let error = nest_rs_core::DecodeError::new(error);
         tracing::warn!(
@@ -179,7 +186,7 @@ impl WsReply {
             error = %error,
             "subscribe_message payload failed to deserialize",
         );
-        WsReply::Error(WsError::new(format!(
+        WsReply::Error(WsError::invalid_argument(format!(
             "invalid payload for `{event}`: {error}"
         )))
     }
@@ -200,7 +207,8 @@ impl WsReply {
     /// The error frame a handler's `Err` produces, read off the vocabulary its
     /// chain carries: a [`WsError`] is sent whole, a [`Problem`] in its frame
     /// ([`WsError::from_problem`]), a [`PipeError`] with its detail, a decode
-    /// failure without its value — each with a `warn` carrying the whole chain.
+    /// failure without its value under the `INVALID_ARGUMENT` code — each with
+    /// a `warn` carrying the whole chain.
     /// Anything else answers [`OPAQUE_CLIENT_MESSAGE`] under the `INTERNAL`
     /// code, its chain filed once at `error`, as is the chain behind a `5xx`
     /// problem.
@@ -272,7 +280,7 @@ pub(crate) fn chain_rendered(error: &(dyn Error + 'static)) -> Rendered {
     } else if let Some(rejection) = find_in_chain::<PipeError>(error) {
         WsError::from_pipe(rejection)
     } else if let Some(report) = DecodeError::in_chain(error) {
-        WsError::new(report.to_string())
+        WsError::invalid_argument(report.to_string())
     } else {
         return opaque_rendered(nest_rs_core::error_message(error));
     };
@@ -633,6 +641,31 @@ mod tests {
                 );
             }
             _ => panic!("expected Error"),
+        }
+    }
+
+    /// A value that does not decode names the class HTTP's `400` names under
+    /// `errors`, its sentence kept and its value never said, whichever tier
+    /// read it: the payload's own decode, or a decode failure a handler's chain
+    /// carries.
+    #[test]
+    fn a_decode_failure_names_the_invalid_argument_class() {
+        let _logs = nest_rs_testing::LogCapture::install();
+        let error = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+
+        let WsReply::Error(payload) = WsReply::payload_error("named", &error) else {
+            panic!("a payload that does not decode answers an error frame");
+        };
+        let carried = chain_rendered(&error).frame;
+
+        for frame in [payload, carried] {
+            assert_eq!(
+                frame.errors,
+                Some(serde_json::json!({ "code": "INVALID_ARGUMENT" })),
+                "{frame:?}",
+            );
+            assert!(frame.error.contains("invalid type"), "{frame:?}");
+            assert!(!frame.error.contains("sk_live"), "{frame:?}");
         }
     }
 

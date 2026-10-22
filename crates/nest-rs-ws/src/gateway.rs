@@ -846,7 +846,7 @@ async fn handle_text<G: Gateway>(
         Err(_) => {
             return Some(error_frame(
                 "error",
-                &crate::WsError::new("invalid envelope"),
+                &crate::WsError::invalid_argument("invalid envelope"),
             ));
         }
     };
@@ -1237,6 +1237,29 @@ mod tests {
         .expect("an error frame");
         assert!(!frame.contains("hi"), "{frame}");
         assert!(frame.contains("unknown event"), "{frame}");
+    }
+
+    /// A text message that is no envelope names the class HTTP's `400` names
+    /// for a body that does not decode.
+    #[tokio::test]
+    async fn a_message_that_is_no_envelope_names_the_invalid_argument_class() {
+        let frame = handle_text(
+            &Echo,
+            &MessageTable::new(),
+            &wiring(),
+            &WsClient::for_test(),
+            r#"{"data":"sk_live_secret"}"#,
+        )
+        .await
+        .expect("an error frame");
+        let frame: serde_json::Value = serde_json::from_str(&frame).expect("a JSON frame");
+        assert_eq!(
+            frame,
+            serde_json::json!({
+                "event": "error",
+                "data": { "error": "invalid envelope", "errors": { "code": "INVALID_ARGUMENT" } },
+            }),
+        );
     }
 
     /// A handler whose future holds `N` bytes across an await.

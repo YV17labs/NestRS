@@ -290,6 +290,11 @@ async fn a_body_that_is_not_a_graphql_request_is_answered_with_an_error_entry_an
         "the decode failure is said: {message}",
     );
     assert!(!message.contains("sk_live"), "without the value: {message}");
+    assert_eq!(
+        body["errors"][0]["extensions"],
+        serde_json::json!({ "code": "INVALID_ARGUMENT" }),
+        "the class HTTP's 400 names for a body that does not decode: {body}",
+    );
     assert!(body.get("data").is_none(), "nothing executed: {body}");
 }
 
@@ -715,7 +720,10 @@ mod the_answer_on_the_wire {
         resp.assert_status(StatusCode::BAD_REQUEST);
         resp.assert_content_type("application/json");
         resp.assert_json(json!({
-            "errors": [{ "message": "the body is not a GraphQL request: Missing \"map\" part" }],
+            "errors": [{
+                "message": "the body is not a GraphQL request: Missing \"map\" part",
+                "extensions": { "code": "INVALID_ARGUMENT" },
+            }],
         }))
         .await;
     }

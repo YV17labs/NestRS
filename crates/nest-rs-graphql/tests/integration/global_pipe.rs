@@ -176,6 +176,16 @@ async fn a_rejecting_variable_pipe_surfaces_a_graphql_error() {
         first.object().get("message").string(),
         "boom is not allowed"
     );
+    assert_eq!(
+        first
+            .object()
+            .get("extensions")
+            .object()
+            .get("code")
+            .string(),
+        "INVALID_ARGUMENT",
+        "the class HTTP's 400 names for a pipe's refusal",
+    );
 }
 
 #[tokio::test]
@@ -323,7 +333,10 @@ async fn a_pipe_refusing_an_operation_on_the_socket_answers_its_error_and_the_so
         serde_json::json!({
             "type": "error",
             "id": "1",
-            "payload": [{ "message": "boom is not allowed" }],
+            "payload": [{
+                "message": "boom is not allowed",
+                "extensions": { "code": "INVALID_ARGUMENT" },
+            }],
         }),
         "the operation is refused before it runs, in the protocol's error",
     );

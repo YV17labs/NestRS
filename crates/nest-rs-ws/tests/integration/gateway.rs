@@ -790,6 +790,11 @@ async fn a_malformed_payload_is_reported_without_its_value() {
         frame.error,
         "invalid payload for `named`: invalid type: an integer, expected a string"
     );
+    assert_eq!(
+        frame.errors,
+        Some(serde_json::json!({ "code": "INVALID_ARGUMENT" })),
+        "the class HTTP's 400 names for a body that does not decode",
+    );
     let event = logs.expect_one(
         "nest_rs::ws",
         "subscribe_message payload failed to deserialize",
@@ -1811,13 +1816,16 @@ async fn a_hook_compiled_in_survives_a_compiled_out_one_declared_after_it() {
 async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_value() {
     const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
     let logs = nest_rs_testing::LogCapture::install();
-    for (event, framed) in [
-        ("decode_anyhow", REPORT.to_owned()),
-        ("decode_serde", REPORT.to_owned()),
-        ("decode_unsendable", REPORT.to_owned()),
+    let invalid = nest_rs_core::problem::code::INVALID_ARGUMENT.as_str();
+    let internal = nest_rs_core::problem::code::INTERNAL.as_str();
+    for (event, framed, class) in [
+        ("decode_anyhow", REPORT.to_owned(), invalid),
+        ("decode_serde", REPORT.to_owned(), invalid),
+        ("decode_unsendable", REPORT.to_owned(), invalid),
         (
             "decode_display_only",
             nest_rs_core::OPAQUE_CLIENT_MESSAGE.to_owned(),
+            internal,
         ),
     ] {
         let reply = TestGateway
@@ -1827,6 +1835,11 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
             panic!("{event}: a failed handler answers with an error frame");
         };
         assert_eq!(frame.error, framed, "{event}");
+        assert_eq!(
+            frame.errors,
+            Some(serde_json::json!({ "code": class })),
+            "{event}",
+        );
     }
     let quoting: Vec<String> = logs
         .events()

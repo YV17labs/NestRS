@@ -391,10 +391,13 @@ can own is the database. Two settings keep a suite apart:
 - **The suites' default is not your app's.** A committed `.env.test`,
   loaded only under the test profile, points every suite at a database
   nothing drains, so what a test enqueues never reaches the app you are
-  running:
+  running. A named instance reads a URL of its own, so it takes a line of
+  its own, on another database — without one, the test profile reads the
+  URL your running app writes to:
 
   ```bash title=".env.test"
   NESTRS_REDIS__URL=rediss://valkey-standalone:6379/1
+  NESTRS_REDIS__TRANSCODES__URL=rediss://valkey-standalone:6379/8
   ```
 
 - **A test that starts a worker takes a database of its own**, and seeds it

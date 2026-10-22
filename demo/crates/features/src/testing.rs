@@ -54,9 +54,15 @@ pub enum RedisDatabase {
     PostsRollback = 7,
 }
 
+const _: () = assert!(
+    RedisDatabase::SUITES < *RedisDatabase::OWN.start()
+        && *RedisDatabase::OWN.end() < RedisDatabase::TRANSCODES
+);
+
 impl RedisDatabase {
-    const SUITES: u8 = 1;
+    pub const SUITES: u8 = 1;
     const OWN: std::ops::RangeInclusive<u8> = 2..=7;
+    pub const TRANSCODES: u8 = 8;
 
     pub fn config(self) -> RedisConfig {
         let index = self as u8;
@@ -68,7 +74,7 @@ impl RedisDatabase {
         nest_rs::testing::load_project_env();
         let suites = RedisConfig::load().expect("the suites' Redis config parses");
         assert!(
-            url_on(&suites.url, Self::SUITES) == suites.url,
+            Self::held(&suites.url) == Some(Self::SUITES),
             "the e2e suites' Redis URL must name database {}, the one nothing drains",
             Self::SUITES,
         );
@@ -76,5 +82,9 @@ impl RedisDatabase {
             url: url_on(&suites.url, index),
             ..suites
         }
+    }
+
+    pub fn held(url: &str) -> Option<u8> {
+        (Self::SUITES..=Self::TRANSCODES).find(|&index| url_on(url, index) == url)
     }
 }

@@ -90,8 +90,17 @@ mutation {
   [atomic block](#atomic-blocks): a field whose answer carries an error — its
   own, or one a field below it reported, a masked non-null field included — rolls
   back its writes and drops the events it emitted, and the operation's other
-  fields commit. The field's error reaches the client as the resolver wrote
-  it: a unique violation is its `CONFLICT`, never an empty `500`.
+  fields commit. When its own resolver fails, the field answers `null` beside
+  its error, as the resolver wrote it: a unique violation is its `CONFLICT`,
+  never an empty `500`. When a field below it fails, its block rolls back all
+  the same, but the root field keeps its answer with that field `null`: an
+  error under a mutation field means none of that field's writes stand.
+- **A Non-Null field's `null` climbs to its parent**
+  ([where a failed field's `null` lands](/graphql/errors/#where-a-failed-fields-null-lands)):
+  when `createPost` returns `Result<Post>`, a `Post!`, `b`'s `null` reaches
+  `data`, and the answer reports neither `a` nor `c`, which still commit. A
+  mutation sent beside others whose answers the client needs returns
+  `Result<Option<T>>`.
 - **A field that never touches the database sends nothing**: its savepoint is
   as lazy as the transaction around it.
 - **A batch** holding a mutation runs its operations one at a time, in

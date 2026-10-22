@@ -264,6 +264,37 @@ async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
 }
 ```
 
+## Where a failed field's `null` lands
+
+A field that fails answers `null`, and its error carries the `path` to it, as
+the GraphQL specification handles a field error (§6.4.4). Its siblings keep
+their answers:
+
+```json
+{
+    "data": { "users": [{ "id": "0192…" }], "bad": null },
+    "errors": [{ "message": "id must be a UUID v7", "path": ["bad"],
+                 "extensions": { "code": "INVALID_ARGUMENT" } }]
+}
+```
+
+That is `{ users { id } bad: user(id: "not-a-uuid") { id } }`, whose `user`
+returns `Result<Option<User>>`, a nullable `User`. A Non-Null field cannot hold
+the `null`: a `Result<T>` is `T!` in the schema, so its parent answers `null` in
+its place, up to the nearest nullable field — and `data` itself answers `null`
+when a Non-Null root field fails. Pick the return by what its failure may cost
+the answer around it: `Result<Option<T>>` keeps its siblings, `Result<T>`
+promises a value wherever its parent has one. The rule holds on `POST`, for each
+operation of a batch, and over the socket.
+
+Two selections fall outside it, both from async-graphql 7.2.1. A field selected
+on an interface type reports its error without a `path`, so its key stays
+absent: select it inside `... on <ConcreteType>` and its error carries the path,
+so its `null` lands. And an object selected twice at one place — two fragments
+that each select `org` — keeps whichever copy finishes first. When that copy's
+every field failed, the object answers `null`, or its nearest nullable parent
+does, never an object missing what the other copy answered.
+
 ## Multiple errors in one response
 
 GraphQL allows several errors per response. A query selecting two
@@ -274,7 +305,8 @@ pointing at each failed field.
 
 This matters most for partial-success shapes (one ok, one denied)
 where the client wants the available data plus a clear refusal on the
-rest. The framework does not need any code for this — return the
+rest — the denied field nullable, so that its `null` stands beside the
+data. The framework does not need any code for this — return the
 `Result` from each `#[field_resolver]` and async-graphql does the
 gathering.
 

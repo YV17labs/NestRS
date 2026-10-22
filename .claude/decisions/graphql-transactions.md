@@ -53,3 +53,21 @@ mutation's response resolves through a DataLoader reads the pool, so it does
 not see the rows the operation wrote: running a mutation's batches on its own
 transaction, joined before the field's block settles, is planned for 7.x
 (`ambient-carry.md`) — it changes no API.
+
+**2026-10-22 — a field that errs answers `null`.** An answer now follows
+GraphQL §6.4.4 (`fix/graphql-errored-field-answers-null`): a root field whose
+block rolled back answers `null` beside its error, where async-graphql left
+its key out, and a Non-Null field's `null` climbs to its nearest nullable
+parent. The blocks settle as before. Two consequences are left to the
+owner, since each reopens how a block settles:
+
+- A Non-Null mutation root field that errs (`Result<T>`, the usual shape)
+  nulls `data`, while the root fields that answered keep their released blocks
+  and commit: the answer reports none of the work that stands, and a client
+  that retries the document applies it twice. Rolling the operation back
+  whenever its `data` is nulled, and leaving the later root fields unresolved,
+  as the specification allows, would keep the answer and the database in step.
+- A root field whose block rolls back for a nullable field's error below it
+  still answers its value, that field `null`: the response reports work that
+  was rolled back. Settling the block on whether the field itself answers
+  `null` — the specification's "the field errs" — would keep the promise.

@@ -1,0 +1,19 @@
+# Security updates alone, for the trees `just audit` reads: no version-update
+# pull request may be open, so Dependabot opens one only for an advisory a
+# release fixes, against the default branch. Alerts and security updates are
+# turned on in the repository's settings. The benchmarks' trees stay out
+# (.claude/decisions/ci-on-change.md).
+
+version: 2
+updates:
+  # A security update takes no cooldown, and no version update is opened.
+  - package-ecosystem: cargo # zizmor: ignore[dependabot-cooldown]
+    directories:
+      - /
+      - /demo
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: fix
+      include: scope

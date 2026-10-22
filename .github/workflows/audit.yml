@@ -1,22 +1,25 @@
 # The framework's and the demo's Cargo trees against RustSec through
-# cargo-deny, blocking a change to either; `publish.yml` runs it again before a
-# release. Not audited: the benchmarks' trees (.claude/decisions/ci-on-change.md)
-# and the npm trees (.claude/decisions/npm-lockfile-advisories.md).
+# cargo-deny. A pull request is refused only for an advisory it brings, and
+# warned of one its base holds. Each day the default branch and every release
+# branch are checked whole: a red run alerts and blocks nothing, and its fix is
+# a Dependabot security update (the default branch only) or a bump by hand.
+# `publish.yml` runs the whole check before a release. Not audited: the
+# benchmarks' trees (.claude/decisions/ci-on-change.md) and the npm trees
+# (.claude/decisions/npm-lockfile-advisories.md).
 
 name: Audit
 
 on:
-  push:
-    branches: [main, 'release/**']
-    paths: &tree
+  pull_request:
+    paths:
       - '**/Cargo.lock'
       - '**/Cargo.toml'
       - '!bench/**'
       - 'deny.toml'
       - 'Justfile'
       - '.github/workflows/audit.yml'
-  pull_request:
-    paths: *tree
+  schedule:
+    - cron: '43 5 * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -26,18 +29,70 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  advisories:
+  change:
     name: advisories
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
+      # The merge commit and its parents: its first is the base it was merged onto.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 2
           persist-credentials: false
       # cargo-deny reads the tree through `cargo metadata`, so the pinned
       # toolchain is all it needs: nothing is compiled.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: just@1,cargo-deny@0.20
+      - run: just audit HEAD^1
+
+  heads:
+    name: branches
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      heads: ${{ steps.list.outputs.heads }}
+    steps:
+      # A schedule's event carries no repository, so the remote's HEAD names the
+      # default branch; a listing without it fails, never an empty matrix.
+      - id: list
+        name: List the default branch and every release branch
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          git ls-remote --symref "$REPOSITORY" HEAD 'refs/heads/release/*' \
+            | jq -R -n -r '
+                [inputs | split("\t")]
+                | (first(.[] | .[0] | select(startswith("ref: refs/heads/")) | ltrimstr("ref: refs/heads/"))
+                    // error("the remote names no default branch")) as $default
+                | map(select(.[0] | startswith("ref: ") | not)
+                    | {sha: .[0], branch: (.[1] | if . == "HEAD" then $default else ltrimstr("refs/heads/") end)})
+                | unique_by(.branch)
+                | "heads=\(tojson)"' >> "$GITHUB_OUTPUT"
+
+  head:
+    name: advisories on ${{ matrix.head.branch }}
+    needs: heads
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        head: ${{ fromJSON(needs.heads.outputs.heads) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.head.sha }}
+          persist-credentials: false
       - name: Install the pinned toolchain
         run: rustup toolchain install --profile minimal
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22

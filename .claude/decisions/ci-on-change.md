@@ -37,3 +37,38 @@ tag.
   every release run rebuilt from a stale cache. rust-cache saves on every
   branch by default; the long-lived branches save, a pull request restores its
   base's.
+
+## 2026-10-22 — the audit runs on a clock again, and a change answers only for what it brings
+
+RUSTSEC-2026-0381, 0382 and 0383 were published against versions every
+lockfile already held, and `Audit` turned pull request #4 red: it moved
+`Cargo.lock` by one unrelated line, and `just audit` failed on every advisory
+in the tree, wherever it came from. An alert is wanted; a pipeline that stops
+every change until a third party ships a fix is not. The owner reversed the
+refused scheduled run for the audit alone: an advisory is the one red that
+comes from a clock, not a change.
+
+- A pull request runs `just audit <base>`, which fails only on a diagnostic
+  absent at the base — the same advisory on the same crate and version, per
+  lockfile, the base judged by its own `deny.toml` — and warns of one already
+  there.
+- A daily run, and `workflow_dispatch`, check the default branch and every
+  `release/**` head whole, one job per branch: red alerts and blocks nobody.
+  Its fix is a Dependabot security update, with version updates off, or a bump
+  by hand on a release branch, which Dependabot never targets.
+- `publish.yml` keeps the whole check: a release ships no advisory nobody
+  decided, its exit a bump or an `ignore` with its reason.
+- The push trigger went: a protected branch receives its changes through a
+  checked pull request.
+
+**Refused:**
+
+- **GitHub's dependency review** for the pull request: it reads
+  vulnerabilities alone, while `deny.toml` also refuses unsound, unmaintained
+  and yanked crates.
+- **A diff of the lockfiles** in place of a run at each end: it misses a change
+  to `deny.toml` — an ignore removed, a stale one added — which turns the check
+  red as surely as a version does.
+- **The pull request's check left non-blocking**: it would let through the one
+  advisory a change can settle, its own.
+- **A second recipe**: `just audit` takes the base as an optional argument.

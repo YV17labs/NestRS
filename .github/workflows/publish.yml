@@ -50,8 +50,8 @@ jobs:
         with:
           tool: just@1,cargo-deny@0.20
 
-      # A release never ships a tree with a known advisory, whatever the last
-      # audit run said.
+      # The whole check, whatever the last audit run said: a release ships no
+      # advisory nobody decided, by a bump or by an ignore with its reason.
       - name: Audit the tree
         run: just audit
 

@@ -27,7 +27,8 @@ struct Tenant(&'static str);
 
 impl AmbientValue for Tenant {}
 
-/// Attaches a [`Caller`] to every request.
+/// Attaches a [`Caller`] to every request, named its actor as the
+/// authentication guard names it, so a session opens for it.
 #[injectable]
 #[derive(Default)]
 struct Attaching;
@@ -37,6 +38,7 @@ impl Layer for Attaching {}
 #[async_trait]
 impl Guard for Attaching {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("ada");
         cx.attach(Caller("ada"));
         Ok(())
     }

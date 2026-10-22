@@ -24,7 +24,7 @@ struct Actor;
 impl nest_rs_core::AmbientValue for Actor {}
 
 /// Stands in for the app's authn guard: attaches the principal `AbilityGuard`
-/// builds the caller's rules from.
+/// builds the caller's rules from, and names it as the authn guard does.
 #[injectable]
 #[derive(Default)]
 struct ActorGuard;
@@ -34,6 +34,7 @@ impl Layer for ActorGuard {}
 #[async_trait]
 impl Guard for ActorGuard {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("actor");
         cx.attach(Actor);
         Ok(())
     }

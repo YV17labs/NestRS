@@ -43,7 +43,8 @@ fn too_narrow() -> Ability {
 /// The one list every edge names: what the narrowest grant lacks.
 const NEEDED: [&str; 1] = ["widgets:read"];
 
-/// Attaches [`too_narrow`] to every request it checks.
+/// Attaches [`too_narrow`] to every request it checks, naming its caller as
+/// the authentication guard does.
 #[injectable]
 #[derive(Default)]
 struct NarrowToken;
@@ -53,6 +54,7 @@ impl Layer for NarrowToken {}
 #[async_trait]
 impl Guard for NarrowToken {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("narrow");
         cx.attach(too_narrow());
         Ok(())
     }

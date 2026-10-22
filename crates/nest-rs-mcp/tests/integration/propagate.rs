@@ -361,7 +361,7 @@ async fn await_seen(seen: &Seen, expected: &[&str]) {
 async fn every_server_handler_method_reaches_the_wrapped_host() {
     let seen: Seen = Arc::default();
     let host = ProbeHandler { seen: seen.clone() };
-    let client = TestClient::new(endpoint(McpMount::new(), move || host.clone()));
+    let client = TestClient::new(endpoint(McpMount::public(), move || host.clone()));
 
     // A legacy session: the capabilities reachable through `initialize`.
     let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
@@ -462,7 +462,7 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
     let host = ProbeHandler {
         seen: Arc::default(),
     };
-    let client = TestClient::new(endpoint(McpMount::new(), move || host.clone()));
+    let client = TestClient::new(endpoint(McpMount::public(), move || host.clone()));
     let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
 
     let requests: &[(&str, serde_json::Value)] = &[

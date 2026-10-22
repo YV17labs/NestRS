@@ -113,8 +113,9 @@ move it.
 
 Every request is authenticated by its own bearer, and the session is never the
 credential. On top of that, a session is bound to the principal its
-`initialize` was served for: the actor id and the tenant your authentication
-guard read off the verified credential. A later request naming the session — a
+`initialize` was served for: the subject and the tenant your authentication
+guard read off the verified credential — what its `PrincipalIdentity` returns
+from `actor_id` and `tenant_id`. A later request naming the session — a
 `POST`, the standalone `GET` stream, a resume with `Last-Event-ID`, a
 `DELETE` — is served only when its own credential resolves to that same
 principal. Any other caller reads exactly what a session the endpoint does not
@@ -140,10 +141,37 @@ session. A session stored by an earlier release, without that key, is refused
 to every caller, said at `warn` as `mcp session refused: stored without its
 principal`, and its client opens a new one.
 
+A session needs something unique to its principal to be bound to, and on a
+gated endpoint that is the subject. A tenant is shared by every machine client
+acting within it, so a principal your guards admit with no `actor_id` opens no
+session — two of them would each be served the other's. Its `initialize` is
+answered `403`, with no session id:
+
+```http
+HTTP/1.1 403 Forbidden
+content-type: application/problem+json
+
+{"type":"about:blank","title":"Forbidden","status":403,"detail":"a session is bound to the subject of the credential that opens it, and this credential names none","code":"FORBIDDEN"}
+```
+
+One `warn` on `nest_rs::mcp`, `mcp session refused: its principal names no
+subject`, carries a `hint` and never the credential or its tenant. A
+conformant access token always names its subject — RFC 9068 §2.2 requires
+`sub`, the client's own id when it acts on its own behalf — so return it from
+`actor_id` ([Authentication](/security/authentication/#advanced-write-your-own-strategy)).
+A client that has none still calls statelessly, on protocol `2026-07-28`,
+which opens no session. A session an earlier release stored for such a
+principal is refused to every caller, said at `warn` as `mcp session refused:
+stored for a principal naming no subject`.
+
 A public endpoint (`McpOptions::posture = Posture::Public`) runs no guard at
 its request, so it authenticates no one: its sessions all belong to the
-anonymous principal, and the session id is their only key. A principal whose
-`actor_id` is `None` is told apart by its tenant alone.
+anonymous principal, and the session id is their only key.
+
+A task lives in the host its session built, and every session builds its own
+hosts, so a task id reaches its task only through the session that started it.
+A `TaskManager` a host shares across sessions — held by a provider it injects —
+is your own state, and its `tasks/*` methods decide who may reach each task.
 
 ## The host allowlist
 

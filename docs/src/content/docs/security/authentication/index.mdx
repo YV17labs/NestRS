@@ -161,6 +161,13 @@ for an anonymous caller. It is an **audit** identity and never an authorization
 input: what a caller may *do* is the ambient `Ability`, decided in a guard. See
 [Correlation](/fundamentals/correlation/).
 
+Return the credential's subject. RFC 9068 §2.2 requires `sub` in a JWT access
+token — the client's own id when it acts on its own behalf — so a conformant
+credential always names one. A principal whose `actor_id` is `None` can still be
+authorized, but nothing can be bound to it alone: an
+[MCP session](/mcp/configuration/#a-session-belongs-to-the-principal-that-opened-it)
+never opens for one.
+
 A principal bound to a tenant declares it beside, with `fn tenant_id(&self) ->
 Option<String>`, read off the verified credential — a claim its issuer signed,
 never a header the caller sends beside it. The tenant is the opposite of the

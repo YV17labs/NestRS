@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use http::uri::Authority;
 use nest_rs_core::problem::code;
-use nest_rs_core::{Container, Correlation, Problem, current_request_scope};
+use nest_rs_core::{Container, Correlation, Posture, Problem, current_request_scope};
 use nest_rs_http::__private::framework_sentence;
 use nest_rs_http::ResponseError as _;
 use nest_rs_http::{
@@ -29,7 +29,7 @@ use crate::error::{
 };
 use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains};
 use crate::registry::MountIndex;
-use crate::sessions::{BoundedSessions, Principal, Refused, ReportedStore};
+use crate::sessions::{BoundedSessions, Principal, Refused, ReportedStore, say_no_subject};
 use nest_rs_database::UnitOfWork;
 
 /// The wait, in seconds, a client refused a session is told to take before
@@ -58,11 +58,15 @@ pub struct McpMount {
     /// What the path's hosts declare, read at mount; a hand-built
     /// [`endpoint`]'s handler is asked through `get_tool`.
     index: Option<Arc<MountIndex>>,
+    /// Who the endpoint serves, which decides what its sessions are bound to.
+    posture: Posture,
 }
 
 impl McpMount {
     /// A mount on [`McpConfig::default`], with no app's layers and no unit of
-    /// work: a hand-built endpoint's, in a test.
+    /// work: a hand-built endpoint's, in a test. It is gated, as an app's
+    /// endpoint is until the app opens it, so a caller naming no subject
+    /// opens no session.
     pub fn new() -> Self {
         Self {
             chains: RequestChains::Bare,
@@ -71,6 +75,17 @@ impl McpMount {
             session_store: None,
             detached: DetachedWork::new(),
             index: None,
+            posture: Posture::Gated,
+        }
+    }
+
+    /// [`new`](Self::new), opened as `McpOptions::posture = Posture::Public`
+    /// opens an app's endpoint: no guard runs in front of it, so its sessions
+    /// are the anonymous caller's.
+    pub fn public() -> Self {
+        Self {
+            posture: Posture::Public,
+            ..Self::new()
         }
     }
 
@@ -82,7 +97,8 @@ impl McpMount {
     ///   through — without one a `Repo`-backed handler fails **closed**;
     /// * [`McpConfig`], if `McpModule` was imported, else its defaults;
     /// * a registered `dyn SessionStore` (rmcp 3.x cross-instance session
-    ///   recovery), if the app provides one.
+    ///   recovery), if the app provides one;
+    /// * the posture the app declared, `McpOptions::posture`.
     pub(crate) fn from_container(container: &Container) -> Self {
         let config = container
             .get::<McpConfig>()
@@ -130,6 +146,7 @@ impl McpMount {
             session_store: container.get_dyn::<dyn SessionStore>(),
             detached: DetachedWork::new(),
             index: None,
+            posture: crate::module::posture(container),
         }
     }
 
@@ -171,6 +188,7 @@ where
         session_store,
         detached,
         index,
+        posture,
     } = mount;
 
     let units = OperationUnits::new(
@@ -187,10 +205,11 @@ where
         units: units.clone(),
     });
 
-    let session_store = session_store.map(|store| Arc::new(ReportedStore(store)));
+    let session_store = session_store.map(|store| Arc::new(ReportedStore::new(store, posture)));
     let sessions = Arc::new(BoundedSessions::new(
         config.to_session_config(),
         config.max_concurrent_sessions,
+        posture,
         session_store.clone(),
     ));
 
@@ -235,6 +254,19 @@ fn unknown_session() -> Response {
         .body(SESSION_NOT_FOUND)
 }
 
+/// Why a client whose credential names no subject is refused a session, in
+/// words that quote nothing it sent.
+const NO_SUBJECT: &str = "a session is bound to the subject of the credential that opens it, and \
+                          this credential names none";
+
+/// The answer to a session refused because the caller's principal names no
+/// subject: `403`, saying why, and no session id.
+fn no_subject() -> Response {
+    Problem::new(403, code::FORBIDDEN)
+        .with_detail(NO_SUBJECT)
+        .as_response()
+}
+
 /// What refuses an `initialize` before rmcp opens a session past the cap.
 struct SessionCap {
     sessions: Arc<BoundedSessions>,
@@ -246,14 +278,15 @@ struct SessionCap {
 
 impl SessionCap {
     /// The answer refusing `req`, when it would open a session past the cap —
-    /// the body read and handed back otherwise.
+    /// the body read and handed back otherwise. A `caller` no session could
+    /// be bound to reads that refusal instead, never told to retry.
     ///
     /// Only a full mount reads the body, and only of a `POST` naming no session:
     /// an `initialize` is the one message that opens a session, and a stateless
     /// request is served at the cap. A creation racing past this check, or a
     /// session restored from the app's store past the cap, is refused by
     /// [`BoundedSessions`] itself, and answered [`refused`](Self::refused) too.
-    async fn refusal(&self, req: &mut Request) -> Option<Response> {
+    async fn refusal(&self, req: &mut Request, caller: &Principal) -> Option<Response> {
         if !self.legacy
             || req.method() != Method::POST
             || req.headers().contains_key(HEADER_SESSION_ID)
@@ -272,6 +305,10 @@ impl SessionCap {
         if !opens_a_session(&body) {
             req.set_body(body);
             return None;
+        }
+        if !self.sessions.binds(caller) {
+            say_no_subject();
+            return Some(no_subject());
         }
         self.sessions.say_full();
         Some(Self::refused())
@@ -578,12 +615,14 @@ where
     H: ServerHandler + Send + 'static,
 {
     async fn call(&self, mut req: Request) -> Result<Response> {
-        if let Some(refused) = self.session_cap.refusal(&mut req).await {
-            return Ok(refused);
-        }
         // Read once: two reads would mint two ids for one operation.
         let correlation = nest_rs_core::__private::current_correlation()
             .unwrap_or_else(|| Correlation::minted(None));
+        // Past the request's guards: the principal its session is bound to.
+        let caller = Principal::of(&correlation);
+        if let Some(refused) = self.session_cap.refusal(&mut req, &caller).await {
+            return Ok(refused);
+        }
         if let Some(undeclared) = &self.undeclared
             && let Some(refused) = undeclared.refusal(&mut req, &correlation).await
         {
@@ -600,8 +639,6 @@ where
         // A `GET` is the session's standalone stream, with no end of its own.
         let standalone = req.method() == Method::GET;
 
-        // Past the request's guards: the principal its session is bound to.
-        let caller = Principal::of(&correlation);
         // Also installed here, for an operation rmcp resolves inline.
         let (response, refused) = BoundedSessions::answering(
             caller,
@@ -614,6 +651,7 @@ where
         .await;
         let response = match refused {
             Some(Refused::Full) => return Ok(SessionCap::refused()),
+            Some(Refused::NoSubject) => return Ok(no_subject()),
             Some(Refused::Unknown) => unknown_session(),
             None => Response::from(response),
         };
@@ -746,6 +784,20 @@ mod tests {
             None,
             "a host the index could not read may serve it",
         );
+    }
+
+    /// A session refused for a principal naming no subject reads why, in a
+    /// sentence quoting nothing it sent, and carries no session.
+    #[tokio::test]
+    async fn a_principal_naming_no_subject_is_answered_why_and_no_session() {
+        let answer = no_subject();
+
+        assert_eq!(answer.status(), StatusCode::FORBIDDEN);
+        assert!(!answer.headers().contains_key(HEADER_SESSION_ID));
+        let body = answer.into_body().into_bytes().await.expect("a body");
+        let problem: serde_json::Value = serde_json::from_slice(&body).expect("a problem");
+        assert_eq!(problem["code"], code::FORBIDDEN.as_str(), "{problem}");
+        assert_eq!(problem["detail"], NO_SUBJECT, "{problem}");
     }
 
     #[test]

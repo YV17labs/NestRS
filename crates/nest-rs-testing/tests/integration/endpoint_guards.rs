@@ -32,8 +32,8 @@ impl Checks {
     }
 }
 
-/// Stands in for `AuthnGuard` on a gated endpoint: requires a bearer, counting
-/// each request it checks.
+/// Stands in for `AuthnGuard` on a gated endpoint: requires a bearer, naming
+/// its caller as `AuthnGuard` does, and counts each request it checks.
 #[injectable]
 struct Bearer {
     #[inject]
@@ -46,12 +46,15 @@ impl Layer for Bearer {}
 impl Guard for Bearer {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         self.checks.seen.fetch_add(1, Ordering::SeqCst);
-        if cx.reflector().posture() == Posture::InBand
-            || HttpView::of(cx)?
-                .request()
-                .header("authorization")
-                .is_some()
+        if cx.reflector().posture() == Posture::InBand {
+            return Ok(());
+        }
+        if HttpView::of(cx)?
+            .request()
+            .header("authorization")
+            .is_some()
         {
+            nest_rs_core::__private::set_actor_id("bearer");
             return Ok(());
         }
         Err(Denial::unauthorized("missing bearer token"))

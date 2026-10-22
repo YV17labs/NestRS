@@ -2,6 +2,12 @@
 //! bound to the principal that opened it — and [`ReportedStore`], the app's
 //! session store, keeping that principal beside each session. Each says the
 //! failures it hands rmcp, whose own lines are clamped.
+//!
+//! A session is bound only to what is unique to its principal, as MCP's
+//! security guidance asks: on a gated mount the subject its credential names,
+//! so a principal naming none is refused a session; on a public mount no guard
+//! runs, every caller is anonymous and the session id is a session's only key
+//! (`.claude/decisions/mcp-session-bound-to-its-principal.md`).
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -9,7 +15,7 @@ use std::future::Future;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use futures_util::Stream;
-use nest_rs_core::{Correlation, current_tenant_id, error_message};
+use nest_rs_core::{Correlation, Posture, current_tenant_id, error_message};
 use rmcp::model::{ClientJsonRpcMessage, InitializeRequestParams, ServerJsonRpcMessage};
 use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManager, LocalSessionManagerError, SessionConfig,
@@ -56,6 +62,9 @@ pub(crate) enum Refused {
     /// The session is another principal's, or one the mount does not hold:
     /// answered as rmcp answers a session it does not hold.
     Unknown,
+    /// The caller's principal names no subject a session could be bound to:
+    /// the endpoint answers why, and opens none.
+    NoSubject,
 }
 
 /// Who a request is served for, as a session is bound to it: the actor id and
@@ -64,7 +73,9 @@ pub(crate) enum Refused {
 ///
 /// MCP's security guidance binds a session to "information unique to the
 /// authorized user": a request on a session another principal opened is
-/// answered as one on a session the mount does not hold.
+/// answered as one on a session the mount does not hold. The tenant alone is
+/// not unique to a principal, so on a gated mount only one naming its subject
+/// is bound a session ([`binds_on`](Self::binds_on)).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Principal {
@@ -86,6 +97,13 @@ impl Principal {
             actor: request.actor_id().map(str::to_owned),
             tenant: current_tenant_id(),
         }
+    }
+
+    /// Whether a session may be bound to this principal on a mount of
+    /// `posture`: on a public one every caller is anonymous and the session
+    /// id is the key; on any other, only a principal naming its subject.
+    pub(crate) fn binds_on(&self, posture: Posture) -> bool {
+        posture == Posture::Public || self.actor.is_some()
     }
 }
 
@@ -144,6 +162,23 @@ fn foreign(call: &'static str) -> SessionsError {
     SessionsError::Unknown
 }
 
+/// What a refusal for a principal naming no subject tells the operator.
+const NO_SUBJECT_HINT: &str = "return the verified credential's subject from \
+                               PrincipalIdentity::actor_id (RFC 9068 §2.2 requires `sub`); a \
+                               client with none calls statelessly, on protocol 2026-07-28";
+
+/// Say a session refused because its principal names no subject: by the
+/// check in front of rmcp, or by the manager past it; the client reads one
+/// `403` either way, and the line names neither the credential nor the
+/// tenant.
+pub(crate) fn say_no_subject() {
+    tracing::warn!(
+        target: crate::TARGET,
+        hint = NO_SUBJECT_HINT,
+        "mcp session refused: its principal names no subject",
+    );
+}
+
 /// Keep `state`, what the app's store holds for session `id`, on the request
 /// being answered, for its restore to take.
 fn keep_stored(id: &SessionId, state: Option<SessionState>) {
@@ -180,17 +215,20 @@ pub(crate) struct BoundedSessions {
     /// The principal each live session is bound to: the one its `initialize`,
     /// or the request restoring it, was served for.
     owners: RwLock<HashMap<SessionId, Principal>>,
+    /// Who the mount serves, which decides what a session is bound to.
+    posture: Posture,
     /// The app's store, holding the sessions other instances opened.
     store: Option<Arc<ReportedStore>>,
 }
 
 impl BoundedSessions {
     /// rmcp's local manager running each session on `session`, holding at
-    /// most `max` live sessions, and asking `store` whose a session it does
-    /// not hold is.
+    /// most `max` live sessions on a mount of `posture`, and asking `store`
+    /// whose a session it does not hold is.
     pub(crate) fn new(
         session: SessionConfig,
         max: usize,
+        posture: Posture,
         store: Option<Arc<ReportedStore>>,
     ) -> Self {
         // `#[non_exhaustive]`: rmcp's default, its session config replaced.
@@ -201,8 +239,14 @@ impl BoundedSessions {
             max,
             creating: Mutex::new(()),
             owners: RwLock::new(HashMap::new()),
+            posture,
             store,
         }
+    }
+
+    /// Whether this mount may bind a session to `caller`.
+    pub(crate) fn binds(&self, caller: &Principal) -> bool {
+        caller.binds_on(self.posture)
     }
 
     /// Whether a new session would be refused now.
@@ -225,6 +269,14 @@ impl BoundedSessions {
         self.say_full();
         refuse(Refused::Full);
         SessionsError::Full
+    }
+
+    /// `SessionsError::NoSubject`, said, and marked on the request being
+    /// answered.
+    fn no_subject() -> SessionsError {
+        say_no_subject();
+        refuse(Refused::NoSubject);
+        SessionsError::NoSubject
     }
 
     /// `answering`, the answer to one request served for `caller`, and why a
@@ -322,7 +374,12 @@ impl SessionManager for BoundedSessions {
     type Error = SessionsError;
     type Transport = <LocalSessionManager as SessionManager>::Transport;
 
+    /// A session opens only for a principal it can be bound to, and under the
+    /// cap.
     async fn create_session(&self) -> Result<(SessionId, Self::Transport), Self::Error> {
+        if !self.binds(&caller()) {
+            return Err(Self::no_subject());
+        }
         let _creating = self.creating.lock().await;
         if self.is_full().await {
             return Err(self.full());
@@ -494,12 +551,21 @@ fn take_principal(params: &mut InitializeRequestParams) -> Option<Principal> {
 
 /// The app's `SessionStore`, keeping beside each session the principal it is
 /// bound to and each failure said: rmcp's own lines name the session.
-pub(crate) struct ReportedStore(pub(crate) Arc<dyn SessionStore>);
+pub(crate) struct ReportedStore {
+    inner: Arc<dyn SessionStore>,
+    /// Who the mount serves, which decides what a stored binding may hold.
+    posture: Posture,
+}
 
 impl ReportedStore {
+    /// `inner`, the app's store, behind a mount of `posture`.
+    pub(crate) fn new(inner: Arc<dyn SessionStore>, posture: Posture) -> Self {
+        Self { inner, posture }
+    }
+
     /// The state the store holds for session `id`, said when the load fails.
     async fn loaded(&self, id: &str) -> Result<Option<SessionState>, SessionStoreError> {
-        self.0.load(id).await.inspect_err(|error| {
+        self.inner.load(id).await.inspect_err(|error| {
             tracing::error!(
                 target: crate::TARGET,
                 call = "load",
@@ -510,9 +576,11 @@ impl ReportedStore {
     }
 
     /// The principal session `id` is bound to and its state as the client
-    /// sent it, when the store holds it with one. A session stored without one
-    /// — by a release before the binding — is said at `warn` by the `call`
-    /// reading it, and read as none: no caller adopts it.
+    /// sent it, when the store holds it with one this mount binds. A session
+    /// stored without one — by a release before the binding — or bound to a
+    /// principal naming no subject on a gated mount — by a release before
+    /// that refusal — is said at `warn` by the `call` reading it, and read as
+    /// none: no caller adopts it.
     async fn bound(
         &self,
         id: &str,
@@ -529,6 +597,14 @@ impl ReportedStore {
             );
             return Ok(None);
         };
+        if !owner.binds_on(self.posture) {
+            tracing::warn!(
+                target: crate::TARGET,
+                call,
+                "mcp session refused: stored for a principal naming no subject",
+            );
+            return Ok(None);
+        }
         Ok(Some((owner, state)))
     }
 }
@@ -558,19 +634,22 @@ impl SessionStore for ReportedStore {
     async fn store(&self, session_id: &str, state: &SessionState) -> Result<(), SessionStoreError> {
         let mut bound = state.clone();
         put_principal(&mut bound.initialize_params, &caller());
-        self.0.store(session_id, &bound).await.inspect_err(|error| {
-            tracing::warn!(
-                target: crate::TARGET,
-                call = "store",
-                error = %error_message(error.as_ref()),
-                "mcp session store failed",
-            );
-        })
+        self.inner
+            .store(session_id, &bound)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    call = "store",
+                    error = %error_message(error.as_ref()),
+                    "mcp session store failed",
+                );
+            })
     }
 
     /// rmcp closes the session all the same, its stored state left behind.
     async fn delete(&self, session_id: &str) -> Result<(), SessionStoreError> {
-        self.0.delete(session_id).await.inspect_err(|error| {
+        self.inner.delete(session_id).await.inspect_err(|error| {
             tracing::warn!(
                 target: crate::TARGET,
                 call = "delete",
@@ -587,8 +666,14 @@ mod tests {
 
     use super::*;
 
+    /// One place, on a public mount: every caller here is anonymous.
     fn one_place() -> BoundedSessions {
-        BoundedSessions::new(SessionConfig::default(), 1, None)
+        BoundedSessions::new(SessionConfig::default(), 1, Posture::Public, None)
+    }
+
+    /// Two places on a gated mount, holding no store.
+    fn gated() -> BoundedSessions {
+        BoundedSessions::new(SessionConfig::default(), 2, Posture::Gated, None)
     }
 
     /// The session id a client names, which no line may carry.
@@ -711,7 +796,7 @@ mod tests {
     /// without it, at the level of what rmcp does next.
     #[tokio::test]
     async fn a_store_failure_is_said_at_the_level_of_what_rmcp_does_next() {
-        let store = ReportedStore(Arc::new(Down));
+        let store = ReportedStore::new(Arc::new(Down), Posture::Gated);
         let state: SessionState = serde_json::from_value(serde_json::json!({
             "initialize_params": {
                 "protocolVersion": "2025-06-18",
@@ -880,7 +965,7 @@ mod tests {
     /// files one line.
     #[tokio::test]
     async fn every_call_reaching_another_principals_session_refuses_it() {
-        let sessions = BoundedSessions::new(SessionConfig::default(), 2, None);
+        let sessions = gated();
         let id = opened_by(&sessions, named_actor("alice")).await;
         let logs = LogCapture::install();
 
@@ -937,7 +1022,7 @@ mod tests {
     /// opened it.
     #[tokio::test]
     async fn rmcps_own_close_outside_a_request_closes_any_session() {
-        let sessions = BoundedSessions::new(SessionConfig::default(), 2, None);
+        let sessions = gated();
         let id = opened_by(&sessions, named_actor("alice")).await;
 
         sessions
@@ -978,6 +1063,139 @@ mod tests {
             crate::TARGET,
             "mcp session refused: another principal opened it",
         );
+    }
+
+    fn principal(actor: Option<&str>, tenant: Option<&str>) -> Principal {
+        Principal {
+            actor: actor.map(str::to_owned),
+            tenant: tenant.map(str::to_owned),
+        }
+    }
+
+    /// Only the subject is unique to a principal: the tenant alone is shared
+    /// by every machine client of it, and no tenant by every caller naming
+    /// none. A public mount binds the anonymous caller, the session id its
+    /// only key; any posture but `Public` binds as a gated mount does.
+    #[test]
+    fn a_session_binds_a_principal_naming_its_subject_or_any_caller_of_a_public_mount() {
+        for (owner, gated) in [
+            (principal(None, None), false),
+            (principal(None, Some("acme")), false),
+            (principal(Some("alice"), None), true),
+            (principal(Some("alice"), Some("acme")), true),
+        ] {
+            assert!(owner.binds_on(Posture::Public), "{owner:?}");
+            assert_eq!(owner.binds_on(Posture::Gated), gated, "{owner:?}");
+            assert_eq!(owner.binds_on(Posture::InBand), gated, "{owner:?}");
+        }
+    }
+
+    /// A gated mount opens no session for a principal naming no subject,
+    /// whichever tenant it acts within: the request is marked for the
+    /// endpoint's `403` and files one line, naming neither.
+    #[tokio::test]
+    async fn a_gated_mount_opens_no_session_for_a_principal_naming_no_subject() {
+        let sessions = gated();
+        let logs = LogCapture::install();
+
+        for caller in [principal(None, Some("acme")), principal(None, None)] {
+            let (created, refused) = BoundedSessions::answering(caller.clone(), async {
+                sessions.create_session().await.map(|(id, _)| id)
+            })
+            .await;
+            assert!(
+                matches!(created, Err(SessionsError::NoSubject)),
+                "{caller:?}: {created:?}"
+            );
+            assert_eq!(refused, Some(Refused::NoSubject), "{caller:?}");
+        }
+        assert!(
+            sessions.inner.sessions.read().await.is_empty(),
+            "no session opened"
+        );
+        let said = logs.find(
+            crate::TARGET,
+            "mcp session refused: its principal names no subject",
+        );
+        assert_eq!(said.len(), 2, "{said:?}");
+        for event in &said {
+            assert_eq!(event.level, "warn");
+            assert!(event.field("hint").is_some(), "{:?}", event.fields);
+            assert!(
+                event.fields.values().all(|value| !value.contains("acme")),
+                "{:?}",
+                event.fields
+            );
+        }
+
+        opened_by(&sessions, principal(Some("alice"), Some("acme"))).await;
+        opened_by(&one_place(), ANONYMOUS).await;
+    }
+
+    /// The app's store holding one session's state, as a deployment's would.
+    #[derive(Default)]
+    struct OneSession(std::sync::Mutex<Option<SessionState>>);
+
+    #[async_trait::async_trait]
+    impl SessionStore for OneSession {
+        async fn load(&self, _: &str) -> Result<Option<SessionState>, SessionStoreError> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone())
+        }
+
+        async fn store(&self, _: &str, state: &SessionState) -> Result<(), SessionStoreError> {
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(state.clone());
+            Ok(())
+        }
+
+        async fn delete(&self, _: &str) -> Result<(), SessionStoreError> {
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            Ok(())
+        }
+    }
+
+    /// A session an earlier release bound to a principal naming no subject:
+    /// a gated mount adopts it for no caller and says so; a public mount's
+    /// sessions are all bound so.
+    #[tokio::test]
+    async fn a_stored_binding_naming_no_subject_is_adopted_on_a_public_mount_alone() {
+        for owner in [principal(None, Some("acme")), ANONYMOUS] {
+            let mut params = handshake(None);
+            put_principal(&mut params, &owner);
+            let held = Arc::new(OneSession(std::sync::Mutex::new(Some(SessionState::new(
+                params,
+            )))));
+
+            let logs = LogCapture::install();
+            let gated = ReportedStore::new(held.clone(), Posture::Gated);
+            let (loaded, refused) = BoundedSessions::answering(owner.clone(), async {
+                gated.load(NAMED).await.expect("the store answers")
+            })
+            .await;
+            assert!(loaded.is_none(), "{owner:?} adopts it on a gated mount");
+            assert_eq!(refused, None, "read as a session the store does not hold");
+            let event = logs.expect_one(
+                crate::TARGET,
+                "mcp session refused: stored for a principal naming no subject",
+            );
+            assert_eq!(event.level, "warn");
+            assert_eq!(event.field("call").as_deref(), Some("load"));
+            without_the_session(&event);
+
+            let public = ReportedStore::new(held, Posture::Public);
+            let (loaded, _) = BoundedSessions::answering(ANONYMOUS, async {
+                public.load(NAMED).await.expect("the store answers")
+            })
+            .await;
+            assert_eq!(
+                loaded.is_some(),
+                owner == ANONYMOUS,
+                "a public mount serves its anonymous sessions alone: {owner:?}"
+            );
+        }
     }
 
     /// What `has_session` read of the app's store is handed to the restore of

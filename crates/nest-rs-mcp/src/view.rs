@@ -19,15 +19,17 @@ use crate::operation::McpOperationKind;
 ///
 /// It also names `/mcp` to [`EndpointGuards`](nest_rs_http::EndpointGuards):
 /// the guards a module declares for `McpView` run at every `/mcp` request.
+/// An API key names no subject, so the calls it admits are stateless: a
+/// session is bound to the subject an authentication guard names.
 ///
 /// ```
 /// use nest_rs_core::{Layer, UnitContext, injectable, module};
 /// use nest_rs_guards::{Denial, Guard, GuardFor};
 /// use nest_rs_http::{EndpointGuards, HttpView, StatusCode, async_trait};
 /// use nest_rs_mcp::McpView;
-/// # use nest_rs_mcp::{McpError, mcp, tools};
-/// # use nest_rs_testing::TestApp;
-/// # use nest_rs_testing::mcp::{initialize_request, post_message_with};
+/// # use nest_rs_mcp::{McpError, ProtocolVersion, mcp, tools};
+/// # use nest_rs_testing::{TestApp, TestResponse};
+/// # use nest_rs_testing::mcp::post_message_with;
 ///
 /// #[injectable]
 /// #[derive(Default)]
@@ -62,16 +64,26 @@ use crate::operation::McpOperationKind;
 ///
 /// #[module(providers = [ApiKeyGuard, ReportsHost, EndpointGuards<McpView, (ApiKeyGuard,)>])]
 /// struct ReportsModule;
+/// # async fn list_tools(app: &TestApp, headers: &[(&str, &str)]) -> TestResponse {
+/// #     let version = ProtocolVersion::LATEST;
+/// #     let mut sent = vec![("mcp-protocol-version", version.as_str()), ("mcp-method", "tools/list")];
+/// #     sent.extend_from_slice(headers);
+/// #     let request = serde_json::json!({
+/// #         "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+/// #         "params": { "_meta": {
+/// #             "io.modelcontextprotocol/protocolVersion": version.as_str(),
+/// #             "io.modelcontextprotocol/clientInfo": { "name": "docs", "version": "0" },
+/// #             "io.modelcontextprotocol/clientCapabilities": {},
+/// #         } },
+/// #     });
+/// #     post_message_with(app.http(), "/mcp", None, None, &sent, &request).await
+/// # }
 /// # #[nest_rs_core::main]
 /// # async fn main() -> nest_rs_core::anyhow::Result<()> {
 /// # let app = TestApp::for_module::<ReportsModule>().await?;
-/// # let init = initialize_request();
 ///
-/// let anonymous = post_message_with(app.http(), "/mcp", None, None, &[], &init).await;
-/// anonymous.assert_status(StatusCode::UNAUTHORIZED);
-///
-/// let keyed = [("x-api-key", "k")];
-/// post_message_with(app.http(), "/mcp", None, None, &keyed, &init).await.assert_status_is_ok();
+/// list_tools(&app, &[]).await.assert_status(StatusCode::UNAUTHORIZED);
+/// list_tools(&app, &[("x-api-key", "k")]).await.assert_status_is_ok();
 /// # Ok(())
 /// # }
 /// ```

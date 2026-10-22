@@ -15,7 +15,8 @@ use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 
-/// Attaches an ability to every request, as the authorization guard does.
+/// Attaches an ability to every request, as the authorization guard does,
+/// naming its caller as the authentication guard does.
 #[injectable]
 #[derive(Default)]
 struct Granting;
@@ -25,6 +26,7 @@ impl Layer for Granting {}
 #[nest_rs_guards::async_trait]
 impl Guard for Granting {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("granted");
         let ability = AbilityBuilder::new()
             .build()
             .expect("an ability with no rule builds");

@@ -82,3 +82,60 @@ own. Another principal's request registers no restore of a session the
 instance does not hold, so that instant follows only a restore failing for
 every caller (a session the store does not hold, or holds without its
 principal) or the owner's own (the cap, the store failing).
+
+## 2026-10-22 — a principal naming no subject opens no session
+
+**Correction.** The entry above says the tenant keeps "two machine principals
+with no actor id" apart. It does so across tenants only: two such principals
+in one tenant, or in none, were one principal, each served the other's
+sessions — a `POST`, the standalone stream and its resume, a `DELETE` — and
+with no tenant such a principal was also the anonymous one. A tenant is not
+"user-specific information" in the sense of MCP's security best practices
+(2025-06-18, *Session Hijacking*): every machine client acting within it
+shares it.
+
+**What a session is bound to, on a gated mount, is the subject** — the
+`actor_id` the authentication guard read off the verified principal, the
+tenant still beside it, so one id in two tenants stays two principals. A
+principal the guards admitted with no subject has nothing of its own to bind
+a session to, so none opens for it: its `initialize` is answered `403`, a
+problem document whose code is `FORBIDDEN` and whose detail says why, with no
+session id, and one `warn` on `nest_rs::mcp` (`mcp session refused: its
+principal names no subject`, a `hint` beside it) names neither the credential
+nor the tenant. The session manager refuses it in `create_session`, the one
+call that opens a session; the cap's check in front of rmcp answers it the
+same way when the mount is full, never with the cap's `503` and its
+`Retry-After`, since no freed place would change the answer. A session the
+release before stored for such a principal is adopted by no caller on a gated
+mount, said at `warn` as stored for a principal naming no subject. A public
+mount is unchanged: no guard runs there, every caller is anonymous, and the
+session id is a session's only key.
+
+The posture is the app's declared one (`McpOptions::posture`), read once at
+mount. A hand-built endpoint (`McpMount::new`, the test seam) is gated, as an
+app's endpoint is until the app opens it; `McpMount::public` opens it.
+
+**Why refuse rather than bind to something else**: no standard the framework
+verifies binds such a principal uniquely. RFC 9068 §2.2 makes `sub` REQUIRED
+in a JWT access token — the client's own id when it acts on its own behalf —
+so a conformant credential always names one, and the authentication page
+tells an app to return it from `actor_id`. Binding to the credential itself
+stays refused (above), and the endpoint cannot tell which header a guard
+read. A sender-constrained credential (RFC 8705's certificate thumbprint,
+RFC 9449's DPoP key) would bind uniquely, and the framework verifies neither.
+A client with no subject still calls statelessly, on protocol `2026-07-28`,
+which opens no session; so does every client once
+`<PREFIX>_MCP__LEGACY_SESSION_MODE` is off.
+
+**Tasks, the family's other state addressed by id.** rmcp holds no
+`TaskManager`: a host does, and the endpoint builds its hosts for each
+session (and for each stateless request), a field that is not `#[inject]`ed
+taking its `Default`. A task therefore lives in the session that started it,
+reached only through that session, which serves its principal alone (held by
+`a_task_is_reached_only_through_the_session_that_started_it`). A
+`TaskManager` an app shares across sessions through a provider it injects is
+the app's own state, and its `tasks/*` methods decide who may reach each
+task: the framework sees no task created, so it has nothing to bind. Refused:
+binding task ids at the composite handler, which would read every
+`CreateTaskResult`, keep a map under a retention it does not own, and still
+miss a host answering task ids its own way.

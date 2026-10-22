@@ -23,9 +23,9 @@ use nest_rs_mcp::rmcp;
 use nest_rs_testing::mcp::{initialize_request, post_message, post_message_with};
 use nest_rs_testing::{TestApp, TestResponse};
 
-/// Stands in for `AuthnGuard`: requires a bearer unless the surface admits an
-/// anonymous caller — a public handler, or an in-band endpoint whose
-/// operations decide.
+/// Stands in for `AuthnGuard`: requires a bearer, naming its caller as
+/// `AuthnGuard` does, unless the surface admits an anonymous caller — a public
+/// handler, or an in-band endpoint whose operations decide.
 #[injectable]
 #[derive(Default)]
 struct BearerGuard;
@@ -35,12 +35,15 @@ impl Layer for BearerGuard {}
 #[async_trait]
 impl Guard for BearerGuard {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand)
-            || HttpView::of(cx)?
-                .request()
-                .header("authorization")
-                .is_some()
+        if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) {
+            return Ok(());
+        }
+        if HttpView::of(cx)?
+            .request()
+            .header("authorization")
+            .is_some()
         {
+            nest_rs_core::__private::set_actor_id("bearer");
             return Ok(());
         }
         Err(Denial::unauthorized("missing bearer token"))
@@ -146,7 +149,8 @@ impl Trail {
     }
 }
 
-/// A guard admitting every request after writing its name on the [`Trail`].
+/// A guard admitting every request after writing its name on the [`Trail`],
+/// naming the caller by it as `AuthnGuard` does.
 macro_rules! recording_guard {
     ($name:ident, $label:literal) => {
         #[injectable]
@@ -164,6 +168,7 @@ macro_rules! recording_guard {
                 _cx: &mut nest_rs_core::UnitContext<'_>,
             ) -> Result<(), Denial> {
                 self.trail.seen.lock().expect("trail lock").push($label);
+                nest_rs_core::__private::set_actor_id($label);
                 Ok(())
             }
         }

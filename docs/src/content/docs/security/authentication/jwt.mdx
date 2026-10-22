@@ -114,9 +114,11 @@ request — every guard after it, `Ctx<Claims>` in a handler and a resolver belo
 `/graphql` read them there. `PrincipalIdentity` names the audit identity: on a
 successful authentication `AuthnGuard` records `actor_id` onto the request
 span, so every downstream event — denials included — is attributable without
-threading the identity through each call site. Return `None` for a principal
-that genuinely has no identity (a machine token scoped to an org, say).
-`nestrs g auth` writes the struct and both impls.
+threading the identity through each call site. A conformant token always names
+its subject — RFC 9068 §2.2 requires `sub`, the client's own id for a machine
+token — so `actor_id` returns it; `None` is a token with no subject, which an
+[MCP session](/mcp/configuration/#a-session-belongs-to-the-principal-that-opened-it)
+never opens for. `nestrs g auth` writes the struct and both impls.
 
 The handler reads them back through `Ctx<Claims>`:
 

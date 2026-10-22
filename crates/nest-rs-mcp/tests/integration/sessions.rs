@@ -2,6 +2,8 @@
 //! alone. Another principal's request naming it — a `POST`, the standalone
 //! stream, a resume, a `DELETE` — reads what a session the mount does not
 //! hold reads, here and on an instance that restores it from the app's store.
+//! A principal naming no subject opens none, and a task is reached only
+//! through the session that started it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,8 +15,8 @@ use nest_rs_http::{Request, StatusCode};
 use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
     SessionState, SessionStore, SessionStoreError,
 };
-use nest_rs_mcp::{McpError, mcp, tools};
-use nest_rs_testing::mcp::{call_method, open_session, post_message};
+use nest_rs_mcp::{McpConfig, McpError, McpModule, mcp, tools};
+use nest_rs_testing::mcp::{call_method, initialize_request, open_session, post_message, result};
 use nest_rs_testing::{LogCapture, TestApp, TestResponse};
 use serde_json::json;
 use tokio::sync::{Notify, Semaphore};
@@ -25,6 +27,12 @@ const PATH: &str = "/mcp/owned";
 
 /// The line a request on another principal's session files.
 const REFUSED: &str = "mcp session refused: another principal opened it";
+
+/// The line an `initialize` refused for a principal naming no subject files.
+const NO_SUBJECT: &str = "mcp session refused: its principal names no subject";
+
+/// The line a session stored for a principal naming no subject files.
+const STORED_FOR_NO_SUBJECT: &str = "mcp session refused: stored for a principal naming no subject";
 
 /// Who a bearer names: `<actor>`, `<actor>@<tenant>`, or `-@<tenant>` for a
 /// principal with no actor id of its own, as a machine client's is.
@@ -83,7 +91,7 @@ impl OwnedTools {
     }
 }
 
-#[module(providers = [ByName, ByNameAuthn, OwnedTools])]
+#[module(providers = [ByName, ByNameAuthn, OwnedTools, OwnedTasks])]
 struct GatedModule;
 
 #[module(imports = [crate::open_mcp()], providers = [ByName, ByNameAuthn, OwnedTools])]
@@ -305,8 +313,7 @@ async fn a_public_endpoints_sessions_are_the_anonymous_principals() {
 }
 
 /// The tenant the principal acts within is part of who it is: the same actor
-/// id in another tenant, or a principal naming no actor id in another
-/// tenant, is another principal.
+/// id in another tenant is another principal.
 #[tokio::test]
 async fn a_principal_in_another_tenant_is_another_principal() {
     let app = serving::<GatedModule>(None).await;
@@ -319,12 +326,209 @@ async fn a_principal_in_another_tenant_is_another_principal() {
         .await
         .assert_status(StatusCode::NOT_FOUND);
     assert!(serves(&app, &acme, Some("alice@acme")).await);
+}
 
-    let machine = open_session(app.http(), PATH, Some(&bearer("-@acme"))).await;
-    list(&app, &machine, Some("-@globex"))
+/// What `named` reads asking to open a session.
+async fn initialize_as(app: &TestApp, named: &str) -> TestResponse {
+    post_message(
+        app.http(),
+        PATH,
+        None,
+        Some(&bearer(named)),
+        &initialize_request(),
+    )
+    .await
+}
+
+/// A principal naming no subject has nothing of its own a session could be
+/// bound to: two machine clients of one tenant, or of none, would each be
+/// served the other's sessions. So no session opens for one, whichever tenant
+/// it acts within, and the client reads why.
+#[tokio::test]
+async fn a_principal_naming_no_subject_is_refused_a_session() {
+    let app = serving::<GatedModule>(None).await;
+    let logs = LogCapture::install();
+
+    for named in ["-@acme", "-@acme", "-"] {
+        let refused = initialize_as(&app, named).await;
+        refused.assert_status(StatusCode::FORBIDDEN);
+        assert!(
+            !refused.0.headers().contains_key("mcp-session-id"),
+            "{named} is handed no session"
+        );
+        let (_, content_type, body) = read(refused).await;
+        assert_eq!(
+            content_type.as_deref(),
+            Some("application/problem+json"),
+            "{named}"
+        );
+        let problem: serde_json::Value = serde_json::from_str(&body).expect("a problem document");
+        assert_eq!(problem["code"], "FORBIDDEN", "{named}: {problem}");
+        assert!(
+            problem["detail"].is_string(),
+            "{named} reads why: {problem}"
+        );
+    }
+
+    let said = logs.find("nest_rs::mcp", NO_SUBJECT);
+    assert_eq!(said.len(), 3, "one line per refusal: {said:?}");
+    for event in &said {
+        assert_eq!(event.level, "warn");
+        assert!(
+            event.fields.values().all(|value| !value.contains("acme")),
+            "the line names the tenant: {:?}",
+            event.fields,
+        );
+    }
+    logs.expect_none("nest_rs::mcp", "mcp session manager failed");
+
+    let session = open_session(app.http(), PATH, Some(&bearer("alice@acme"))).await;
+    assert!(
+        serves(&app, &session, Some("alice@acme")).await,
+        "a principal naming its subject is served its own session"
+    );
+}
+
+#[module(
+    imports = [McpModule::for_root(McpConfig {
+        max_concurrent_sessions: 1,
+        ..McpConfig::default()
+    })],
+    providers = [ByName, ByNameAuthn, OwnedTools],
+)]
+struct OnePlaceModule;
+
+/// A full mount tells a principal naming no subject why it opens no session,
+/// never to retry: a place freeing would change nothing for it.
+#[tokio::test]
+async fn a_full_mount_refuses_a_principal_naming_no_subject_for_its_subject() {
+    let app = serving::<OnePlaceModule>(None).await;
+    open_session(app.http(), PATH, Some(&bearer("alice"))).await;
+    let logs = LogCapture::install();
+
+    let refused = initialize_as(&app, "-@acme").await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    assert!(!refused.0.headers().contains_key("retry-after"));
+    logs.expect_one("nest_rs::mcp", NO_SUBJECT);
+    logs.expect_none(
+        "nest_rs::mcp",
+        "mcp session refused: the mount holds its maximum",
+    );
+
+    initialize_as(&app, "bob")
         .await
-        .assert_status(StatusCode::NOT_FOUND);
-    assert!(serves(&app, &machine, Some("-@acme")).await);
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// A session a release before the refusal bound to a principal naming no
+/// subject is refused to every caller, never adopted by the principals it
+/// would match.
+#[tokio::test]
+async fn a_session_stored_for_a_principal_naming_no_subject_is_refused_to_every_caller() {
+    let store = Arc::new(MemoryStore::default());
+    store.put_bound(
+        "stored-for-none",
+        json!({ "actor": null, "tenant": "acme" }),
+    );
+    let app = serving::<GatedModule>(Some(&store)).await;
+    let logs = LogCapture::install();
+
+    for named in ["-@acme", "alice@acme"] {
+        list(&app, "stored-for-none", Some(named))
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+
+    let said = logs.find("nest_rs::mcp", STORED_FOR_NO_SUBJECT);
+    assert_eq!(said.len(), 2, "one line per request: {said:?}");
+    for event in &said {
+        assert_eq!(event.level, "warn");
+        assert!(
+            event
+                .fields
+                .values()
+                .all(|value| !value.contains("stored-for-none") && !value.contains("acme")),
+            "the line names the session or its tenant: {:?}",
+            event.fields,
+        );
+    }
+    logs.expect_none("nest_rs::mcp", REFUSED);
+}
+
+const TASKS: &str = "/mcp/owned-tasks";
+task_host!(OwnedTasks, "/mcp/owned-tasks", "start");
+
+/// `method` on the task `task` names, through `session` as `named`.
+async fn on_task(app: &TestApp, session: &str, named: &str, method: &str, task: &str) -> String {
+    let mut params = json!({ "taskId": task });
+    if method == "tasks/update" {
+        params["inputResponses"] = json!({});
+    }
+    call_method(
+        app.http(),
+        TASKS,
+        session,
+        Some(&bearer(named)),
+        method,
+        params,
+    )
+    .await
+}
+
+/// A host is built for each session, so the `TaskManager` it holds is that
+/// session's: a task id reaches its task only through the session that
+/// started it, which serves its principal alone.
+#[tokio::test]
+async fn a_task_is_reached_only_through_the_session_that_started_it() {
+    let app = serving::<GatedModule>(None).await;
+    let alice = crate::tasks_session(&app, TASKS, Some(&bearer("alice@acme"))).await;
+    let started = result(
+        &call_method(
+            app.http(),
+            TASKS,
+            &alice,
+            Some(&bearer("alice@acme")),
+            "tools/call",
+            json!({ "name": "start", "arguments": {} }),
+        )
+        .await,
+    );
+    let task = started["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the started task's id: {started}"))
+        .to_owned();
+    let got = result(&on_task(&app, &alice, "alice@acme", "tasks/get", &task).await);
+    assert_eq!(got["result"]["taskId"], json!(task), "{got}");
+
+    let bob = crate::tasks_session(&app, TASKS, Some(&bearer("bob@acme"))).await;
+    let alice_again = crate::tasks_session(&app, TASKS, Some(&bearer("alice@acme"))).await;
+    for (session, named) in [(&bob, "bob@acme"), (&alice_again, "alice@acme")] {
+        for method in ["tasks/get", "tasks/update", "tasks/cancel"] {
+            let refused = result(&on_task(&app, session, named, method, &task).await);
+            assert_eq!(
+                refused["error"]["message"],
+                json!("unknown task"),
+                "{named} {method}: {refused}"
+            );
+        }
+    }
+
+    let foreign = post_message(
+        app.http(),
+        TASKS,
+        Some(&alice),
+        Some(&bearer("bob@acme")),
+        &json!({ "jsonrpc": "2.0", "id": 3, "method": "tasks/get", "params": { "taskId": task } }),
+    )
+    .await;
+    foreign.assert_status(StatusCode::NOT_FOUND);
+
+    let still = result(&on_task(&app, &alice, "alice@acme", "tasks/get", &task).await);
+    assert_eq!(
+        still["result"]["taskId"],
+        json!(task),
+        "nothing another principal sent reached it: {still}"
+    );
 }
 
 /// A session restored on another instance keeps the principal that opened it.

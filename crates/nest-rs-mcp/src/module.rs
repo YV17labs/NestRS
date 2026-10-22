@@ -9,7 +9,9 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Posture, Registering, module};
+use nest_rs_core::{
+    Collecting, Container, ContainerBuilder, DynamicModule, Posture, Registering, module,
+};
 use nest_rs_http::__private::EndpointPosture;
 
 use crate::config::McpConfig;
@@ -153,6 +155,16 @@ const IDENTITY: &str = "nest_rs::mcp::identity";
 /// The app's opening of its MCP endpoints, declared by the one import setting
 /// [`Posture::Public`].
 struct McpPosture;
+
+/// The posture the app's MCP endpoints run under: [`Posture::Public`] when an
+/// import opened them, [`Posture::Gated`] otherwise.
+pub(crate) fn posture(container: &Container) -> Posture {
+    if container.get::<McpPosture>().is_some() {
+        Posture::Public
+    } else {
+        Posture::Gated
+    }
+}
 
 impl DynamicModule for McpSetup {
     fn module() -> TypeId {

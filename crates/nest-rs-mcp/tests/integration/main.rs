@@ -8,6 +8,109 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
+/// One host on `$path` holding its tasks in rmcp's `TaskManager`, as the docs
+/// point a host to: the tool `$starts` starts one and answers its id.
+macro_rules! task_host {
+    ($host:ident, $path:literal, $starts:literal) => {
+        #[::nest_rs_mcp::mcp(path = $path)]
+        #[derive(Clone, Default)]
+        struct $host {
+            tasks: ::nest_rs_mcp::rmcp::task_manager::TaskManager,
+        }
+
+        impl ::nest_rs_mcp::ServerHandler for $host {
+            fn get_info(&self) -> ::nest_rs_mcp::ServerConfig {
+                ::nest_rs_mcp::ServerConfig::new(
+                    ::nest_rs_mcp::ServerCapabilities::builder()
+                        .enable_tools()
+                        .enable_tasks()
+                        .build(),
+                )
+            }
+
+            async fn list_tools(
+                &self,
+                _request: Option<::nest_rs_mcp::model::PaginatedRequestParams>,
+                _context: ::nest_rs_mcp::service::RequestContext<
+                    ::nest_rs_mcp::service::RoleServer,
+                >,
+            ) -> Result<::nest_rs_mcp::model::ListToolsResult, ::nest_rs_mcp::McpError> {
+                Ok(::nest_rs_mcp::model::ListToolsResult::with_all_items(vec![
+                    ::nest_rs_mcp::model::Tool::new(
+                        $starts,
+                        "Start a task.",
+                        ::std::sync::Arc::new(::nest_rs_mcp::model::JsonObject::new()),
+                    ),
+                ]))
+            }
+
+            async fn call_tool(
+                &self,
+                request: ::nest_rs_mcp::model::CallToolRequestParams,
+                _context: ::nest_rs_mcp::service::RequestContext<
+                    ::nest_rs_mcp::service::RoleServer,
+                >,
+            ) -> Result<::nest_rs_mcp::model::CallToolResponse, ::nest_rs_mcp::McpError> {
+                if request.name != $starts {
+                    return Err(::nest_rs_mcp::McpError::invalid_params(
+                        "tool not found",
+                        None,
+                    ));
+                }
+                let task = self.tasks.spawn(
+                    ::nest_rs_mcp::rmcp::task_manager::TaskOptions::new(),
+                    |_| {
+                        Box::pin(async {
+                            Ok(::nest_rs_mcp::CallToolResult::success(vec![
+                                ::nest_rs_mcp::ContentBlock::text("done"),
+                            ]))
+                        })
+                    },
+                );
+                Ok(
+                    ::nest_rs_mcp::CallToolResult::success(vec![
+                        ::nest_rs_mcp::ContentBlock::text(task.task_id),
+                    ])
+                    .into(),
+                )
+            }
+
+            async fn get_task(
+                &self,
+                request: ::nest_rs_mcp::model::GetTaskParams,
+                _context: ::nest_rs_mcp::service::RequestContext<
+                    ::nest_rs_mcp::service::RoleServer,
+                >,
+            ) -> Result<::nest_rs_mcp::model::GetTaskResult, ::nest_rs_mcp::McpError> {
+                Ok(::nest_rs_mcp::model::GetTaskResult::new(
+                    self.tasks.get_task(&request.task_id)?,
+                ))
+            }
+
+            async fn update_task(
+                &self,
+                request: ::nest_rs_mcp::model::UpdateTaskParams,
+                _context: ::nest_rs_mcp::service::RequestContext<
+                    ::nest_rs_mcp::service::RoleServer,
+                >,
+            ) -> Result<(), ::nest_rs_mcp::McpError> {
+                self.tasks
+                    .update_task(&request.task_id, request.input_responses)
+            }
+
+            async fn cancel_task(
+                &self,
+                request: ::nest_rs_mcp::model::CancelTaskParams,
+                _context: ::nest_rs_mcp::service::RequestContext<
+                    ::nest_rs_mcp::service::RoleServer,
+                >,
+            ) -> Result<(), ::nest_rs_mcp::McpError> {
+                self.tasks.cancel_task(&request.task_id)
+            }
+        }
+    };
+}
+
 mod ambient;
 mod endpoint;
 mod error;
@@ -44,6 +147,64 @@ pub(crate) fn open_mcp() -> nest_rs_mcp::McpSetup {
         posture: nest_rs_core::Posture::Public,
         ..Default::default()
     })
+}
+
+/// A session on `path` declaring the tasks extension, which `tasks/*`
+/// requires, opened as `bearer` says or anonymously.
+pub(crate) async fn tasks_session(
+    app: &nest_rs_testing::TestApp,
+    path: &str,
+    bearer: Option<&str>,
+) -> String {
+    nest_rs_testing::mcp::open_session_with(
+        app.http(),
+        path,
+        bearer,
+        &[],
+        serde_json::json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } }),
+    )
+    .await
+}
+
+/// Call `tool` on `path` with no arguments as a `2026-07-28` client does,
+/// statelessly: no session opens, so none needs a caller to be bound to.
+pub(crate) async fn call_tool_statelessly(
+    client: &nest_rs_testing::TestClient,
+    path: &str,
+    tool: &str,
+) -> String {
+    let version = nest_rs_mcp::ProtocolVersion::LATEST;
+    nest_rs_testing::mcp::post_message_with(
+        client,
+        path,
+        None,
+        None,
+        &[
+            ("mcp-protocol-version", version.as_str()),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", tool),
+        ],
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": {},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": version.as_str(),
+                    "io.modelcontextprotocol/clientInfo": { "name": "nest-rs-mcp", "version": "0" },
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        }),
+    )
+    .await
+    .0
+    .into_body()
+    .into_string()
+    .await
+    .expect("a response body")
 }
 
 /// What a store refusing the connection reports: the cause a guard keeps.
@@ -111,14 +272,30 @@ impl MemoryStore {
     /// Hold `session` as a release before the binding stored it: the client's
     /// handshake alone.
     pub(crate) fn put_unbound(&self, session: &str) {
-        let state = serde_json::from_value(serde_json::json!({
-            "initialize_params": {
-                "protocolVersion": nest_rs_testing::mcp::PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "elsewhere", "version": "0" },
-            },
-        }))
-        .expect("a session's state");
+        self.put(session, serde_json::json!({}));
+    }
+
+    /// Hold `session` as a release binding it to `principal` stored it: under
+    /// the `_meta` key the MCP sessions page names.
+    pub(crate) fn put_bound(&self, session: &str, principal: serde_json::Value) {
+        self.put(
+            session,
+            serde_json::json!({ "_meta": { "dev.nestrs/principal": principal } }),
+        );
+    }
+
+    /// Hold `session` as the client's handshake, `extra` laid over it.
+    fn put(&self, session: &str, extra: serde_json::Value) {
+        let mut params = serde_json::json!({
+            "protocolVersion": nest_rs_testing::mcp::PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "elsewhere", "version": "0" },
+        });
+        if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+            params.extend(extra.clone());
+        }
+        let state = serde_json::from_value(serde_json::json!({ "initialize_params": params }))
+            .expect("a session's state");
         self.states
             .lock()
             .unwrap()

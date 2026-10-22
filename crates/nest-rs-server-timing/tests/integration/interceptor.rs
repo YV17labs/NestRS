@@ -241,8 +241,8 @@ fn a_switched_off_header_mounts_nothing() {
     );
 }
 
-/// Admits every request, and refuses every in-band unit — a GraphQL field, an
-/// MCP operation — a rate.
+/// Admits every request, naming its caller as `AuthnGuard` does, and refuses
+/// every in-band unit — a GraphQL field, an MCP operation — a rate.
 #[injectable]
 #[derive(Default)]
 struct OperationLimit;
@@ -251,6 +251,11 @@ impl Layer for OperationLimit {}
 
 #[async_trait]
 impl Guard for OperationLimit {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("limited");
+        Ok(())
+    }
+
     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::rate_limited(30, "slow down"))
     }

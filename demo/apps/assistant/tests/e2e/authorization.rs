@@ -1,5 +1,5 @@
 use nest_rs::http::{StatusCode, header};
-use nest_rs::testing::mcp::{call_method, open_session, post_message};
+use nest_rs::testing::mcp::{call_method, initialize_request, open_session, post_message};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -74,6 +74,28 @@ async fn discovery_is_reachable_without_a_token_but_tools_are_not() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_token_naming_no_subject_opens_no_session() {
+    let (_db, app) = boot().await;
+    let machine = format!("Bearer {}", token_for(ORG_ID, "admin", None));
+
+    let refused = post_message(
+        app.http(),
+        SHARED_ENDPOINT,
+        None,
+        Some(&machine),
+        &initialize_request(),
+    )
+    .await;
+
+    refused.assert_status(StatusCode::FORBIDDEN);
+    assert!(!refused.0.headers().contains_key("mcp-session-id"));
+    let problem: Value =
+        serde_json::from_slice(&refused.0.into_body().into_bytes().await.expect("a body"))
+            .expect("a problem document");
+    assert_eq!(problem["code"], "FORBIDDEN", "{problem}");
 }
 
 #[tokio::test]

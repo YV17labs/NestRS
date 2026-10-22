@@ -6,25 +6,21 @@ use std::sync::Arc;
 use nest_rs_core::{Discovery, module};
 use nest_rs_http::HttpEndpointMeta;
 use nest_rs_mcp::model::{
-    CallToolRequestParams, CallToolResponse, CancelTaskParams, CompleteRequestParams,
-    CompleteResult, GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams,
-    GetTaskResult, Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult,
-    PaginatedRequestParams, Prompt, PromptMessage, ProtocolVersion, ReadResourceRequestParams,
-    ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities,
-    ServerConfig, Tool, UpdateTaskParams,
+    CallToolRequestParams, CallToolResponse, CompleteRequestParams, CompleteResult,
+    GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt, PromptMessage,
+    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
 };
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
-use nest_rs_mcp::rmcp::task_manager::{TaskManager, TaskOptions};
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule, McpOptions,
     McpSetup, ServerHandler, hosts_on, mcp, prompt, prompt_handler, prompt_router, tool,
     tool_handler, tool_router, tools,
 };
-use nest_rs_testing::mcp::{
-    call_method, call_tool, initialize, open_session, open_session_with, result,
-};
+use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
 
 /// Where a bare `#[mcp]` lands. Spelled out, not read from the crate: a test
@@ -498,82 +494,6 @@ async fn a_prompt_is_answered_by_the_host_declaring_it_whatever_it_answers() {
     );
 }
 
-/// One host on `$path` holding its tasks in rmcp's `TaskManager`, as the docs
-/// point a host to: the tool `$starts` starts one and answers its id.
-macro_rules! task_host {
-    ($host:ident, $path:literal, $starts:literal) => {
-        #[mcp(path = $path)]
-        #[derive(Clone, Default)]
-        struct $host {
-            tasks: TaskManager,
-        }
-
-        impl ServerHandler for $host {
-            fn get_info(&self) -> ServerConfig {
-                ServerConfig::new(
-                    ServerCapabilities::builder()
-                        .enable_tools()
-                        .enable_tasks()
-                        .build(),
-                )
-            }
-
-            async fn list_tools(
-                &self,
-                _request: Option<PaginatedRequestParams>,
-                _context: RequestContext<RoleServer>,
-            ) -> Result<ListToolsResult, McpError> {
-                Ok(ListToolsResult::with_all_items(vec![Tool::new(
-                    $starts,
-                    "Start a task.",
-                    Arc::new(rmcp::model::JsonObject::new()),
-                )]))
-            }
-
-            async fn call_tool(
-                &self,
-                request: CallToolRequestParams,
-                _context: RequestContext<RoleServer>,
-            ) -> Result<CallToolResponse, McpError> {
-                if request.name != $starts {
-                    return Err(McpError::invalid_params("tool not found", None));
-                }
-                let task = self.tasks.spawn(TaskOptions::new(), |_| {
-                    Box::pin(async {
-                        Ok(CallToolResult::success(vec![ContentBlock::text("done")]))
-                    })
-                });
-                Ok(CallToolResult::success(vec![ContentBlock::text(task.task_id)]).into())
-            }
-
-            async fn get_task(
-                &self,
-                request: GetTaskParams,
-                _context: RequestContext<RoleServer>,
-            ) -> Result<GetTaskResult, McpError> {
-                Ok(GetTaskResult::new(self.tasks.get_task(&request.task_id)?))
-            }
-
-            async fn update_task(
-                &self,
-                request: UpdateTaskParams,
-                _context: RequestContext<RoleServer>,
-            ) -> Result<(), McpError> {
-                self.tasks
-                    .update_task(&request.task_id, request.input_responses)
-            }
-
-            async fn cancel_task(
-                &self,
-                request: CancelTaskParams,
-                _context: RequestContext<RoleServer>,
-            ) -> Result<(), McpError> {
-                self.tasks.cancel_task(&request.task_id)
-            }
-        }
-    };
-}
-
 const TASKS: &str = "/mcp/tasks";
 task_host!(FirstTasks, "/mcp/tasks", "start_first");
 task_host!(SecondTasks, "/mcp/tasks", "start_second");
@@ -587,18 +507,6 @@ task_host!(LoneTasks, "/mcp/lone-tasks", "start_lone");
 #[module(imports = [crate::open_mcp()], providers = [LoneTasks])]
 struct LoneTasksApp;
 
-/// A session declaring the tasks extension, which `tasks/*` requires.
-async fn tasks_session(app: &TestApp, path: &str) -> String {
-    open_session_with(
-        app.http(),
-        path,
-        None,
-        &[],
-        json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } }),
-    )
-    .await
-}
-
 /// rmcp's `TaskManager` refuses a task it does not hold as `unknown task:
 /// <id>`, the id the client sent: it is answered by kind on every `tasks/*`
 /// method, through a lone host or several.
@@ -611,7 +519,7 @@ async fn a_task_no_host_holds_is_refused_without_its_id() {
         .await
         .expect("a task host boots");
     for (app, path) in [(&shared, TASKS), (&lone, LONE_TASKS)] {
-        let session = tasks_session(app, path).await;
+        let session = crate::tasks_session(app, path, None).await;
         for (method, params) in [
             ("tasks/get", json!({ "taskId": "marked-task" })),
             (
@@ -640,7 +548,7 @@ async fn a_task_reaches_the_host_holding_it_past_another_host_s_refusal() {
     let app = TestApp::for_module::<TasksApp>()
         .await
         .expect("two task hosts on one path boot");
-    let session = tasks_session(&app, TASKS).await;
+    let session = crate::tasks_session(&app, TASKS, None).await;
     let started = result(
         &call_method(
             app.http(),

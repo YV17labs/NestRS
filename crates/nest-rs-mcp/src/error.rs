@@ -544,8 +544,8 @@ pub(crate) enum ScopeError {
 ///
 /// rmcp writes the `Display` into the `500` it answers a refused session with
 /// — which the endpoint answers as the cap's `503` for [`Full`](Self::Full),
-/// and as a session it does not hold for [`Unknown`](Self::Unknown) — so no
-/// variant names the session.
+/// as a session it does not hold for [`Unknown`](Self::Unknown), and as a
+/// `403` for [`NoSubject`](Self::NoSubject) — so no variant names the session.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SessionsError {
     /// The mount holds its `max_concurrent_sessions`.
@@ -554,6 +554,9 @@ pub(crate) enum SessionsError {
     /// The session is another principal's, or one the mount does not hold.
     #[error("no session of the caller's")]
     Unknown,
+    /// The caller's principal names no subject a session could be bound to.
+    #[error("the caller's principal names no subject to bind a session to")]
+    NoSubject,
     /// The app's session store failed to say whose a session is.
     #[error("the session store failed")]
     Store(#[source] SessionStoreError),

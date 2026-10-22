@@ -3,14 +3,15 @@
 mod mask;
 
 use nest_rs_core::{Layer, Module, injectable};
-use nest_rs_guards::{Guard, GuardFor};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool_as;
 
 pub(crate) use crate::widget;
 
-/// No-op stand-in for the authentication guard at the request.
+/// Stand-in for the authentication guard at the request: admits it, naming
+/// its caller as the authentication guard does.
 #[injectable]
 #[derive(Default)]
 pub(crate) struct PassGuard;
@@ -18,7 +19,12 @@ pub(crate) struct PassGuard;
 impl Layer for PassGuard {}
 
 #[async_trait]
-impl Guard for PassGuard {}
+impl Guard for PassGuard {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("caller");
+        Ok(())
+    }
+}
 
 impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 

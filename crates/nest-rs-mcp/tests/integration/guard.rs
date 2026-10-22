@@ -123,7 +123,9 @@ impl Trail {
     }
 }
 
-/// A guard admitting every request after writing its name on the [`Trail`].
+/// A guard admitting every request after writing its name on the [`Trail`],
+/// naming the caller by it as the authentication guard does, so a session
+/// opens for it.
 macro_rules! recording_guard {
     ($name:ident, $label:literal) => {
         #[injectable]
@@ -138,6 +140,7 @@ macro_rules! recording_guard {
         impl Guard for $name {
             async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
                 self.trail.seen.lock().expect("trail lock").push($label);
+                nest_rs_core::__private::set_actor_id($label);
                 Ok(())
             }
         }
@@ -322,7 +325,8 @@ struct Caller(&'static str);
 
 impl AmbientValue for Caller {}
 
-/// Attaches a [`Caller`] to every request.
+/// Attaches a [`Caller`] to every request, named its actor as the
+/// authentication guard names it, so a session opens for it.
 #[injectable]
 #[derive(Default)]
 struct Attaching;
@@ -332,6 +336,7 @@ impl Layer for Attaching {}
 #[async_trait]
 impl Guard for Attaching {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("ada");
         cx.attach(Caller("ada"));
         Ok(())
     }

@@ -163,7 +163,7 @@ async fn a_scoped_parameter_that_resolves_nothing_answers_opaquely_and_names_it_
     let container = nest_rs_core::Container::builder()
         .build()
         .expect("the container builds");
-    let inner = endpoint(McpMount::new(), || CouponTools);
+    let inner = endpoint(McpMount::public(), || CouponTools);
     let scoped = endpoint_fn(move |req| {
         let inner = inner.clone();
         let scope = Arc::new(nest_rs_core::RequestScope::new(container.clone()));
@@ -234,7 +234,7 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
     let seen: SeenSpan = Arc::default();
     let host = SpanProbeTool { seen: seen.clone() };
     let app = under_span(
-        endpoint(McpMount::new(), move || host.clone()),
+        endpoint(McpMount::public(), move || host.clone()),
         tracing::info_span!("http.request"),
     );
 

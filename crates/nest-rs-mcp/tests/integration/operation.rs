@@ -243,6 +243,8 @@ fn an_operation_kind_reads_as_the_router_serving_it() {
 static POOLED_HTTP_CALLS: AtomicUsize = AtomicUsize::new(0);
 static POOLED_MCP_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+/// Admits every request, naming its caller as the authentication guard does,
+/// and every operation.
 #[injectable]
 #[derive(Default)]
 struct Pooled;
@@ -253,6 +255,7 @@ impl Layer for Pooled {}
 impl Guard for Pooled {
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         POOLED_HTTP_CALLS.fetch_add(1, Ordering::SeqCst);
+        nest_rs_core::__private::set_actor_id("pooled");
         Ok(())
     }
 
@@ -370,7 +373,9 @@ async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
         .await
         .expect("a global MCP-only guard and no endpoint guards boots");
 
-    let body = call_tool(app.http(), "/mcp/pool-only", "ping", None).await;
+    // No guard at the request names a caller, so no session opens for one:
+    // a stateless call reaches the operation.
+    let body = crate::call_tool_statelessly(app.http(), "/mcp/pool-only", "ping").await;
 
     assert_eq!(
         POOL_ONLY_MCP_CALLS.load(Ordering::SeqCst),
@@ -410,14 +415,21 @@ impl Guard for DeclaredEverywhere {
 
 impl GuardFor<nest_rs_mcp::McpView> for DeclaredEverywhere {}
 
-/// Admits every request: the endpoint's own guard, beside the pool.
+/// Admits every request, naming its caller as the authentication guard does:
+/// the endpoint's own guard, beside the pool.
 #[injectable]
 #[derive(Default)]
 struct AdmitRequest;
 
 impl Layer for AdmitRequest {}
 
-impl Guard for AdmitRequest {}
+#[async_trait]
+impl Guard for AdmitRequest {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("admitted");
+        Ok(())
+    }
+}
 
 impl GuardFor<nest_rs_http::HttpView> for AdmitRequest {}
 
@@ -508,7 +520,7 @@ async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_say
         .build()
         .expect("the container builds");
     let inner =
-        nest_rs_mcp::__private::endpoint(nest_rs_mcp::__private::McpMount::new(), || OrphanTool);
+        nest_rs_mcp::__private::endpoint(nest_rs_mcp::__private::McpMount::public(), || OrphanTool);
     let scoped = nest_rs_http::endpoint_fn(move |req| {
         let inner = inner.clone();
         let scope = Arc::new(nest_rs_core::RequestScope::new(container.clone()));

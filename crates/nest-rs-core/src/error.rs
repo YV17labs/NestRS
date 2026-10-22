@@ -106,8 +106,9 @@ impl AccessError {
 
 /// What [`ContainerBuilder::build`](crate::ContainerBuilder::build) refuses a
 /// container built by hand with: the first refusal the builder holds, read in
-/// the boot's order — what its register phase left, then what the seal reads
-/// off its modules. The access graph is the boot's alone: it holds a provider
+/// the boot's order — a contest, a seed its factory's check refuses, what its
+/// register phase left, then what the seal reads off its modules. The access
+/// graph is the boot's alone: it holds a provider
 /// to what is global, a seed or a factory's output, which a builder made by
 /// hand cannot tell from what its modules register, both being calls on it.
 /// So are the wirings, which fill their registries from the reachable set the
@@ -118,6 +119,10 @@ pub enum ContainerError {
     /// Two import sites declared a value for one type.
     #[error(transparent)]
     ContestedDeclaration(#[from] ContestedDeclarationError),
+    /// A seed of a factory's output its module's check refuses, as a value
+    /// the factory read would be refused.
+    #[error(transparent)]
+    SeedRefused(anyhow::Error),
     /// What a `register` filed with
     /// [`ContainerBuilder::refuse`](crate::ContainerBuilder::refuse), as it
     /// filed it.
@@ -154,6 +159,7 @@ impl ContainerError {
     pub(crate) fn into_anyhow(self) -> anyhow::Error {
         match self {
             Self::ContestedDeclaration(e) => anyhow::Error::new(e),
+            Self::SeedRefused(e) => e,
             Self::Refused(e) => e,
             Self::LateFactory(e) => anyhow::Error::new(e),
             Self::ProviderCycle(e) => anyhow::Error::new(e),

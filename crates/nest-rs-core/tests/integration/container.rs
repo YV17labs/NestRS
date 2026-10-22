@@ -595,3 +595,40 @@ fn a_container_built_by_hand_refuses_request_scoped_providers_waiting_on_each_ot
     };
     assert_eq!(cycle.to_string(), booted.to_string(), "the boot's refusal");
 }
+
+/// A limit a factory resolves, whose read refuses `0`.
+struct SeedLimit(u32);
+
+/// The check a seed of [`SeedLimit`] passes, as a read one would.
+fn limit_is_positive(container: &Container) -> anyhow::Result<()> {
+    match container.get::<SeedLimit>() {
+        Some(limit) if limit.0 == 0 => anyhow::bail!("a limit of 0 admits nothing"),
+        _ => Ok(()),
+    }
+}
+
+/// `limit` seeded by hand over the factory a module would queue for it, with
+/// the check that factory's seeds pass.
+fn seeded_limit(limit: u32) -> ContainerBuilder {
+    nest_rs_core::__private::check_seed(
+        Container::builder()
+            .provide(SeedLimit(limit))
+            .provide_factory::<SeedLimit, _, _>(|_| async { Ok(SeedLimit(1)) }),
+        std::any::TypeId::of::<SeedLimit>(),
+        limit_is_positive,
+    )
+}
+
+#[test]
+fn a_container_built_by_hand_refuses_a_seed_its_check_refuses() {
+    let Err(ContainerError::SeedRefused(refused)) = seeded_limit(0).build() else {
+        panic!("the seed passes no check a read one would");
+    };
+    assert_eq!(refused.to_string(), "a limit of 0 admits nothing");
+}
+
+#[test]
+fn a_container_built_by_hand_keeps_a_seed_its_check_passes() {
+    let built = seeded_limit(2).build().expect("the seed passes its check");
+    assert_eq!(built.get::<SeedLimit>().map(|limit| limit.0), Some(2));
+}

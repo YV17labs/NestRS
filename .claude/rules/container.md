@@ -196,8 +196,9 @@ variables or tiers.
   and review.
 - **A seed pins the value, never the checks**: a seeded config passes every
   bound and `validate()` before anything reads it (`Config::check`, run where
-  the seed makes its factory skip), on every boot that drains factories — a
-  container built by hand drains none.
+  the seed makes its factory skip), on every boot that drains factories, and
+  at `ContainerBuilder::build` for a container built by hand, which drains
+  none (`ContainerError::SeedRefused`).
 - **A duration a deployment sets has a floor and a ceiling**, refused naming the
   variable whether pinned or read, never clamped. The floor is where the thing
   stops working; the ceiling is where a value becomes a slip, **and never above

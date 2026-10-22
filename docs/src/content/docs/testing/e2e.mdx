@@ -347,7 +347,9 @@ A seeded config is held to the same ranges and validation as one read
 from the environment, before any factory reads it: a test that seeds
 `HttpConfig { shutdown_timeout: Duration::MAX, .. }` fails the boot
 naming `HttpConfig::shutdown_timeout` and its range. So is a config
-given through an override.
+given through an override, and one seeded on a container built by hand
+with `Container::builder()`, whose `build` refuses it as
+`ContainerError::SeedRefused`.
 
 External-IO services — HTTP clients to third-party APIs, queue producers
 reaching an outside system — are the right override target. **The

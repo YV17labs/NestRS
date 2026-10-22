@@ -119,3 +119,18 @@ provider never built names the order of the builder's calls
 - **Running the wirings at `build`**: a wiring fills its registry from the
   reachable set and the provider order the boot's seal hands the container,
   which a container built by hand never holds.
+
+## 2026-10-22 — a container built by hand holds its seeds to their checks, after a contest
+
+`ContainerBuilder::build` now runs the check each queued factory declares on
+a seed of its output (`__private::check_seed`, which `ConfigModule` declares
+for each config it queues), where the boot's factory phase runs it: after a
+contested declaration, before what the register phase leaves. A builder made
+by hand drains no factory, so a seeded config skipped its `Config::check` and
+passed a driver's own suite only to fail the app's boot. The refusal is
+`ContainerError::SeedRefused`, carrying the check's own error, which the boot
+returns unwrapped.
+
+**Refused:** running the check at `provide`, which cannot know whether a
+factory of that type will be queued, nor read the configs a check compares
+against, registered later in the builder's calls.

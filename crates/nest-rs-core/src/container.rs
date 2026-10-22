@@ -1473,8 +1473,9 @@ impl ContainerBuilder {
     /// # Errors
     ///
     /// The first refusal the builder holds, in the boot's order
-    /// ([`ContainerError`](crate::ContainerError)): a declaration contested,
-    /// what a `register` filed with [`refuse`](Self::refuse), a factory
+    /// ([`ContainerError`](crate::ContainerError)): a declaration contested, a
+    /// seed the check its queued factory declares refuses, what a `register`
+    /// filed with [`refuse`](Self::refuse), a factory
     /// nothing drains — a module whose `collect` queued one is left out by
     /// [`import`](Self::import) —, a module collected alone, a type registered
     /// twice, then a cycle among request-scoped and transient providers, one
@@ -1494,9 +1495,33 @@ impl ContainerBuilder {
     /// assert!(matches!(refused, Err(ContainerError::DuplicateProvider(_))));
     /// ```
     pub fn build(mut self) -> Result<Container, crate::ContainerError> {
+        // The boot reads a contest before its factory phase, where a seed
+        // passes its check (`.claude/decisions/boot-refusal-order.md`).
+        if let Some(contested) = self.contested_refusal() {
+            return Err(contested.into());
+        }
+        self.seed_refusal()?;
         self.register_refusal()?;
         self.seal_refusal()?;
         Ok(self.freeze())
+    }
+
+    /// The first seed a queued factory's check refuses, as the boot's factory
+    /// phase runs it where the seed makes the factory skip: a builder made by
+    /// hand drains no factory, so its seeds pass their checks here.
+    fn seed_refusal(&self) -> Result<(), crate::ContainerError> {
+        let mut seeded = self
+            .factories
+            .iter()
+            .map(QueuedFactory::id)
+            .filter(|id| self.contains(*id))
+            .filter_map(|id| self.seed_check(id))
+            .peekable();
+        if seeded.peek().is_none() {
+            return Ok(());
+        }
+        let built = self.snapshot();
+        seeded.try_for_each(|check| check(&built).map_err(crate::ContainerError::SeedRefused))
     }
 
     /// What the register phase leaves to refuse, on every path, in the boot's

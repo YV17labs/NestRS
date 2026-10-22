@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigError, ConfigModule, ConfigService, MapSource, config};
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, injectable, module};
+use nest_rs_core::{
+    Collecting, Container, ContainerBuilder, ContainerError, DynamicModule, injectable, module,
+};
 use nest_rs_http::HttpConfig;
 use nest_rs_testing::HeadlessApp;
 
@@ -200,6 +202,29 @@ async fn a_seed_outside_the_validation_its_read_passes_fails_the_boot_naming_the
         .await
     else {
         panic!("a seed no read would accept boots");
+    };
+    let config = refused
+        .downcast_ref::<ConfigError>()
+        .unwrap_or_else(|| panic!("not the config's refusal: {refused:#}"));
+    assert!(
+        matches!(config, ConfigError::Validation { namespace, .. } if namespace == "demoapp"),
+        "{refused:#}"
+    );
+}
+
+/// A driver's own suite builds by hand, so a seed passes there the checks it
+/// passes in an app's boot.
+#[test]
+fn a_seed_outside_the_validation_its_read_passes_is_refused_by_a_container_built_by_hand() {
+    let Err(ContainerError::SeedRefused(refused)) = Container::builder()
+        .provide(DemoConfig {
+            url: String::new(),
+            max_connections: 0,
+        })
+        .import::<DemoModule>()
+        .build()
+    else {
+        panic!("a seed no read would accept builds by hand");
     };
     let config = refused
         .downcast_ref::<ConfigError>()

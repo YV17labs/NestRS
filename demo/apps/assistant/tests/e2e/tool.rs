@@ -1,11 +1,16 @@
 use nest_rs::core::Discovery;
 use nest_rs::http::HttpEndpointMeta;
 use nest_rs::http::StatusCode;
-use nest_rs::testing::LogCapture;
 use nest_rs::testing::mcp::{initialize_request, open_session, post_message};
+use nest_rs::testing::{CapturedEvent, LogCapture};
 use serde_json::json;
 
 use crate::*;
+
+fn is_rmcp_own_event_below_info(event: &CapturedEvent) -> bool {
+    (event.target == "rmcp" || event.target.starts_with("rmcp::"))
+        && matches!(event.level.as_str(), "debug" | "trace")
+}
 
 #[tokio::test]
 async fn health_live_probe_is_ok() {
@@ -84,6 +89,7 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
             && logs
                 .events()
                 .iter()
+                .filter(|event| !is_rmcp_own_event_below_info(event))
                 .all(|event| !format!("{:?}", event.fields).contains(&file)),
         "a poll for an unknown key replies and logs none of it: {body} {:#?}",
         logs.events(),

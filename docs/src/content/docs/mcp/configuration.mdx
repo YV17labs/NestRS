@@ -160,13 +160,15 @@ conformant access token always names its subject — RFC 9068 §2.2 requires
 `sub`, the client's own id when it acts on its own behalf — so return it from
 `actor_id` ([Authentication](/security/authentication/#advanced-write-your-own-strategy)).
 A client that has none still calls statelessly, on protocol `2026-07-28`,
-which opens no session. A session an earlier release stored for such a
-principal is refused to every caller, said at `warn` as `mcp session refused:
-stored for a principal naming no subject`.
+which opens no session.
 
 A public endpoint (`McpOptions::posture = Posture::Public`) runs no guard at
 its request, so it authenticates no one: its sessions all belong to the
-anonymous principal, and the session id is their only key.
+anonymous principal, and the session id is their only key. That principal
+names no subject, so a gated endpoint reading the same `SessionStore` — yours
+once you close the endpoint, or another app's sharing the store — refuses
+those sessions to every caller, said at `warn` as `mcp session refused: stored
+for a principal naming no subject`, and their clients open new ones.
 
 A task lives in the host its session built, and every session builds its own
 hosts, so a task id reaches its task only through the session that started it.

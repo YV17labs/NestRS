@@ -577,11 +577,12 @@ impl ReportedStore {
     }
 
     /// The principal session `id` is bound to and its state as the client
-    /// sent it, when the store holds it with one this mount binds. A session
-    /// stored without one — by a release before the binding — or bound to a
-    /// principal naming no subject on a gated mount — by a release before
-    /// that refusal — is said at `warn` by the `call` reading it, and read as
-    /// none: no caller adopts it.
+    /// sent it, when the store holds it with one this mount binds. Read as
+    /// none, said at `warn` by the `call` reading it, so no caller adopts it:
+    /// a session stored without one, by a release before the binding, and on
+    /// a gated mount one bound to a principal naming no subject — every
+    /// session a public mount sharing the store opened, bound to the
+    /// anonymous principal.
     async fn bound(
         &self,
         id: &str,
@@ -1151,9 +1152,10 @@ mod tests {
         }
     }
 
-    /// A session an earlier release bound to a principal naming no subject:
-    /// a gated mount adopts it for no caller and says so; a public mount's
-    /// sessions are all bound so.
+    /// A session bound to a principal naming no subject, as a public mount
+    /// binds each of its own to the anonymous principal: a gated mount
+    /// reading the same store adopts it for no caller and says so, and a
+    /// public mount serves its anonymous sessions alone.
     #[tokio::test]
     async fn a_stored_binding_naming_no_subject_is_adopted_on_a_public_mount_alone() {
         for owner in [principal(None, Some("acme")), ANONYMOUS] {

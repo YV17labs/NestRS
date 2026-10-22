@@ -417,39 +417,44 @@ async fn a_full_mount_refuses_a_principal_naming_no_subject_for_its_subject() {
         .assert_status(StatusCode::SERVICE_UNAVAILABLE);
 }
 
-/// A session a release before the refusal bound to a principal naming no
-/// subject is refused to every caller, never adopted by the principals it
-/// would match.
+/// A public endpoint binds each session it opens to the anonymous principal,
+/// which names no subject. A gated endpoint reading the same store — the app
+/// once it closes its endpoint, or another app sharing the store — adopts
+/// none of them, not even for a principal naming neither a subject nor a
+/// tenant, whom the anonymous binding would match.
 #[tokio::test]
-async fn a_session_stored_for_a_principal_naming_no_subject_is_refused_to_every_caller() {
+async fn a_session_a_public_endpoint_stored_is_refused_to_every_caller_of_a_gated_one() {
     let store = Arc::new(MemoryStore::default());
-    store.put_bound(
-        "stored-for-none",
-        json!({ "actor": null, "tenant": "acme" }),
+    let public = serving::<PublicModule>(Some(&store)).await;
+    let session = open_session(public.http(), PATH, None).await;
+    assert!(
+        store.holds(&session),
+        "the public endpoint stores its session"
     );
-    let app = serving::<GatedModule>(Some(&store)).await;
+    let gated = serving::<GatedModule>(Some(&store)).await;
     let logs = LogCapture::install();
 
-    for named in ["-@acme", "alice@acme"] {
-        list(&app, "stored-for-none", Some(named))
+    for named in ["-", "-@acme", "alice"] {
+        list(&gated, &session, Some(named))
             .await
             .assert_status(StatusCode::NOT_FOUND);
     }
 
     let said = logs.find("nest_rs::mcp", STORED_FOR_NO_SUBJECT);
-    assert_eq!(said.len(), 2, "one line per request: {said:?}");
+    assert_eq!(said.len(), 3, "one line per request: {said:?}");
     for event in &said {
         assert_eq!(event.level, "warn");
         assert!(
-            event
-                .fields
-                .values()
-                .all(|value| !value.contains("stored-for-none") && !value.contains("acme")),
-            "the line names the session or its tenant: {:?}",
+            event.fields.values().all(|value| !value.contains(&session)),
+            "the line names the session: {:?}",
             event.fields,
         );
     }
     logs.expect_none("nest_rs::mcp", REFUSED);
+    assert!(
+        serves(&public, &session, None).await,
+        "the public endpoint still serves it"
+    );
 }
 
 const TASKS: &str = "/mcp/owned-tasks";

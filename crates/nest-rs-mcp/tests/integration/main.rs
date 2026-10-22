@@ -231,31 +231,14 @@ impl MemoryStore {
     /// Hold `session` as a release before the binding stored it: the client's
     /// handshake alone.
     pub(crate) fn put_unbound(&self, session: &str) {
-        self.put(session, None);
-    }
-
-    /// Hold `session` as a release binding it to `principal` stored it: under
-    /// the `_meta` key the MCP sessions page names.
-    pub(crate) fn put_bound(&self, session: &str, principal: serde_json::Value) {
-        self.put(
-            session,
-            Some(serde_json::json!({ "dev.nestrs/principal": principal })),
-        );
-    }
-
-    /// Hold `session` as the client's handshake, carrying `meta` as its
-    /// `_meta` when there is one.
-    fn put(&self, session: &str, meta: Option<serde_json::Value>) {
-        let mut params = serde_json::json!({
-            "protocolVersion": nest_rs_testing::mcp::PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": { "name": "elsewhere", "version": "0" },
-        });
-        if let Some(meta) = meta {
-            params["_meta"] = meta;
-        }
-        let state = serde_json::from_value(serde_json::json!({ "initialize_params": params }))
-            .expect("a session's state");
+        let state = serde_json::from_value(serde_json::json!({
+            "initialize_params": {
+                "protocolVersion": nest_rs_testing::mcp::PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "elsewhere", "version": "0" },
+            },
+        }))
+        .expect("a session's state");
         self.states
             .lock()
             .unwrap()

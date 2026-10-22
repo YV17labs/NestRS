@@ -105,11 +105,14 @@ principal names no subject`, a `hint` beside it) names neither the credential
 nor the tenant. The session manager refuses it in `create_session`, the one
 call that opens a session; the cap's check in front of rmcp answers it the
 same way when the mount is full, never with the cap's `503` and its
-`Retry-After`, since no freed place would change the answer. A session the
-release before stored for such a principal is adopted by no caller on a gated
-mount, said at `warn` as stored for a principal naming no subject. A public
-mount is unchanged: no guard runs there, every caller is anonymous, and the
-session id is a session's only key.
+`Retry-After`, since no freed place would change the answer. A public mount
+is unchanged: no guard runs there, every caller is anonymous, and the session
+id is a session's only key. So every session it stores is bound to the
+anonymous principal, and a gated mount reading the same store — the app once
+it closes its endpoint, or another app sharing the store — adopts none of
+them, said at `warn` as stored for a principal naming no subject; before this
+entry, an authenticated principal naming neither a subject nor a tenant was
+that principal, and adopted them.
 
 The posture is the app's declared one (`McpOptions::posture`), read once at
 mount. A hand-built endpoint (`McpMount::new`, the test seam) is gated, as an

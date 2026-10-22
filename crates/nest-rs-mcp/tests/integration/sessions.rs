@@ -4,16 +4,20 @@
 //! hold reads, here and on an instance that restores it from the app's store.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy, bearer_token};
 use nest_rs_core::{AmbientValue, injectable, module};
 use nest_rs_guards::guard;
 use nest_rs_http::{Request, StatusCode};
-use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::SessionStore;
+use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
+    SessionState, SessionStore, SessionStoreError,
+};
 use nest_rs_mcp::{McpError, mcp, tools};
 use nest_rs_testing::mcp::{call_method, open_session, post_message};
 use nest_rs_testing::{LogCapture, TestApp, TestResponse};
 use serde_json::json;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::MemoryStore;
 
@@ -337,19 +341,93 @@ async fn a_restored_session_keeps_its_principal() {
         list(&elsewhere, "no-such-session", Some("bob")).await,
     )
     .await;
-    expect_refused(&logs, &session, "load");
+    expect_refused(&logs, &session, "has_session");
 
-    // rmcp 3.5 drops a failed restore's entry on a task of its own, and a
-    // request restoring the same session before that task runs reads the
-    // failure as its own (`PendingRestoreGuard`).
-    tokio::task::yield_now().await;
+    let read = store.loads();
     assert!(
         serves(&elsewhere, &session, Some("alice")).await,
         "its owner is served where it was restored"
     );
+    assert_eq!(store.loads() - read, 1, "its restore reads the store once");
     list(&elsewhere, &session, Some("bob"))
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// The app's store, whose next load waits until the test lets it answer.
+struct HeldStore {
+    inner: MemoryStore,
+    hold_next: AtomicBool,
+    held: Notify,
+    release: Semaphore,
+}
+
+impl HeldStore {
+    fn new() -> Self {
+        Self {
+            inner: MemoryStore::default(),
+            hold_next: AtomicBool::new(false),
+            held: Notify::new(),
+            release: Semaphore::new(0),
+        }
+    }
+}
+
+#[nest_rs_http::async_trait]
+impl SessionStore for HeldStore {
+    async fn load(&self, session: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        if self.hold_next.swap(false, Ordering::SeqCst) {
+            self.held.notify_one();
+            let _released = self.release.acquire().await.expect("never closed");
+        }
+        self.inner.load(session).await
+    }
+
+    async fn store(&self, session: &str, state: &SessionState) -> Result<(), SessionStoreError> {
+        self.inner.store(session, state).await
+    }
+
+    async fn delete(&self, session: &str) -> Result<(), SessionStoreError> {
+        self.inner.delete(session).await
+    }
+}
+
+/// rmcp restores one session for one request at a time, every other request
+/// naming it waiting on that restore and reading its outcome. Another
+/// principal's request held on the store never stands in front of the
+/// owner's.
+#[tokio::test]
+async fn the_owner_is_served_while_another_principals_request_is_held_on_the_store() {
+    let store = Arc::new(HeldStore::new());
+    let with_store = || {
+        TestApp::builder()
+            .module::<GatedModule>()
+            .provide_dyn::<dyn SessionStore>(Arc::clone(&store) as Arc<dyn SessionStore>)
+            .use_guards_global([guard::<ByNameAuthn>()])
+            .build()
+    };
+    let opened_here = with_store().await.expect("boots");
+    let session = open_session(opened_here.http(), PATH, Some(&bearer("alice"))).await;
+    let elsewhere = with_store().await.expect("boots");
+
+    store.hold_next.store(true, Ordering::SeqCst);
+    let bob = list(&elsewhere, &session, Some("bob"));
+    let alice = async {
+        store.held.notified().await;
+        let alice = list(&elsewhere, &session, Some("alice"));
+        // Bob's load answers once alice's request is well under way.
+        let release = async {
+            for _ in 0..200 {
+                tokio::task::yield_now().await;
+            }
+            store.release.add_permits(1);
+        };
+        tokio::join!(alice, release).0
+    };
+    let (bob, alice) = tokio::join!(bob, alice);
+
+    alice.assert_status_is_ok();
+    bob.assert_status(StatusCode::NOT_FOUND);
 }
 
 /// A `DELETE` on an instance not holding the session reaches the app's store,

@@ -23,6 +23,7 @@ mod unit;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use nest_rs_core::{App, Layer, Module, Transport, UnitContext, injectable};
@@ -93,12 +94,18 @@ impl GuardFor<nest_rs_mcp::McpView> for StoreDown {}
 #[derive(Default)]
 pub(crate) struct MemoryStore {
     states: Mutex<HashMap<String, SessionState>>,
+    loads: AtomicUsize,
 }
 
 impl MemoryStore {
     /// Whether it holds `session`.
     pub(crate) fn holds(&self, session: &str) -> bool {
         self.states.lock().unwrap().contains_key(session)
+    }
+
+    /// How many loads it has answered.
+    pub(crate) fn loads(&self) -> usize {
+        self.loads.load(Ordering::SeqCst)
     }
 
     /// Hold `session` as a release before the binding stored it: the client's
@@ -122,6 +129,7 @@ impl MemoryStore {
 #[async_trait]
 impl SessionStore for MemoryStore {
     async fn load(&self, session: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
         Ok(self.states.lock().unwrap().get(session).cloned())
     }
 

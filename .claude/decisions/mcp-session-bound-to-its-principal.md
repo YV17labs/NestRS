@@ -46,6 +46,20 @@ rmcp lets a request waiting on another request's restore of the same session
 past its `has_session`, so the endpoint installs who the request is served for
 on the task answering it and each session-manager call compares it.
 
+**Refused before rmcp registers a restore.** rmcp 3.5 restores one session for
+one request at a time: the first request naming a session it does not hold
+registers a restore, and every later one waits on it and takes its outcome. A
+refusal inside the store's `load` came after that registration, so for a
+whole store round trip another principal's request held the owner's own
+requests on its failure, on every instance not holding the session in memory
+— a hijacker could end its owner's session at will. `has_session` therefore
+reads the stored owner itself when the instance does not hold the session, and
+refuses another principal's with an error, which rmcp answers at once without
+registering anything (the endpoint answers it `404`); a `false` would still
+register a restore that fails. What it read is kept on the request for the
+`load` that follows, so a restore costs one store read and a session stored
+without its principal is said once.
+
 **The binding travels with the session.** rmcp's stored state is its
 `initialize` params alone (`SessionState` is non-exhaustive, one field), so the
 mount writes the principal into the params' `_meta` under `dev.nestrs/principal`
@@ -62,5 +76,9 @@ above).
 Left as rmcp's: a `tools/call` naming a tool no host declares is answered
 before rmcp whatever session it names, reaching no session and reading the same
 for every session id (`endpoint.rs`, `UndeclaredTools`); and rmcp 3.5 removes a
-failed restore's entry on a task of its own, so a request restoring the same
-session in that instant reads the failure as its own.
+failed restore's entry on a task of its own (`PendingRestoreGuard`), so a
+request restoring the same session in that instant reads the failure as its
+own. Another principal's request registers no restore of a session the
+instance does not hold, so that instant follows only a restore failing for
+every caller (a session the store does not hold, or holds without its
+principal) or the owner's own (the cap, the store failing).

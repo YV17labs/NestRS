@@ -31,11 +31,20 @@ tokio::task_local! {
     static ANSWERING: Answering;
 }
 
-/// The request rmcp is answering: who it is served for, and why a manager
-/// refused it, which the endpoint answers in place of rmcp.
+/// The request rmcp is answering: who it is served for, why a manager refused
+/// it, which the endpoint answers in place of rmcp, and what the app's store
+/// held for its session, read for the restore that follows.
 struct Answering {
     caller: Principal,
     refused: Cell<Option<Refused>>,
+    stored: Cell<Option<Stored>>,
+}
+
+/// What the app's store held for a session, the caller's or none, when the
+/// request being answered asked whose it is.
+struct Stored {
+    id: SessionId,
+    state: Option<SessionState>,
 }
 
 /// Why a manager refused the request rmcp is answering.
@@ -128,6 +137,37 @@ fn refuse_foreign(call: &'static str) {
     refuse(Refused::Unknown);
 }
 
+/// [`SessionsError::Unknown`], the request being answered refused at `call`
+/// a session another principal opened.
+fn foreign(call: &'static str) -> SessionsError {
+    refuse_foreign(call);
+    SessionsError::Unknown
+}
+
+/// Keep `state`, what the app's store holds for session `id`, on the request
+/// being answered, for its restore to take.
+fn keep_stored(id: &SessionId, state: Option<SessionState>) {
+    ANSWERING
+        .try_with(|answering| {
+            answering.stored.set(Some(Stored {
+                id: id.clone(),
+                state,
+            }));
+        })
+        .unwrap_or_default();
+}
+
+/// What the request being answered read of session `id` in the app's store,
+/// taken; `None` when it read nothing of it.
+fn take_stored(id: &str) -> Option<Option<SessionState>> {
+    ANSWERING
+        .try_with(|answering| answering.stored.take())
+        .ok()
+        .flatten()
+        .filter(|stored| &*stored.id == id)
+        .map(|stored| stored.state)
+}
+
 /// rmcp's local session manager, refusing a session past `max` with
 /// [`SessionsError::Full`] and serving each session to the principal that
 /// opened it alone.
@@ -196,6 +236,7 @@ impl BoundedSessions {
         let request = Answering {
             caller,
             refused: Cell::new(None),
+            stored: Cell::new(None),
         };
         ANSWERING
             .scope(request, async {
@@ -228,10 +269,7 @@ impl BoundedSessions {
     /// principal opened; one this manager does not hold is rmcp's to refuse.
     fn admit(&self, id: &SessionId, call: &'static str) -> Result<(), SessionsError> {
         match self.bound_to_caller(id) {
-            Some(false) => {
-                refuse_foreign(call);
-                Err(SessionsError::Unknown)
-            }
+            Some(false) => Err(foreign(call)),
             Some(true) | None => Ok(()),
         }
     }
@@ -254,10 +292,7 @@ impl BoundedSessions {
         }
         match bound {
             Some(true) => Ok(()),
-            Some(false) => {
-                refuse_foreign("close_session");
-                Err(SessionsError::Unknown)
-            }
+            Some(false) => Err(foreign("close_session")),
             None => {
                 refuse(Refused::Unknown);
                 Err(SessionsError::Unknown)
@@ -309,19 +344,33 @@ impl SessionManager for BoundedSessions {
         )
     }
 
-    /// A session another principal opened is one the caller does not have;
-    /// one restored but not bound yet waits for the request restoring it.
+    /// Whether the caller's session `id` is here; `false` sends rmcp to the
+    /// app's store. Another principal's, here or in the store, is an error,
+    /// which rmcp answers at once: on `false` it registers a restore, and
+    /// every request naming the session waits on that restore and reads its
+    /// refusal as its own, the owner's included.
     async fn has_session(&self, id: &SessionId) -> Result<bool, Self::Error> {
-        if !said("has_session", self.inner.has_session(id).await)? {
-            return Ok(false);
+        if said("has_session", self.inner.has_session(id).await)? {
+            return match self.bound_to_caller(id) {
+                Some(true) => Ok(true),
+                Some(false) => Err(foreign("has_session")),
+                // Restored, not bound yet: the caller waits on that restore.
+                None => Ok(false),
+            };
         }
-        match self.bound_to_caller(id) {
-            Some(true) => Ok(true),
-            Some(false) => {
-                refuse_foreign("has_session");
+        let Some(store) = &self.store else {
+            return Ok(false);
+        };
+        match store
+            .bound(id, "has_session")
+            .await
+            .map_err(SessionsError::Store)?
+        {
+            Some((owner, _)) if !is_caller(&owner) => Err(foreign("has_session")),
+            stored => {
+                keep_stored(id, stored.map(|(_, state)| state));
                 Ok(false)
             }
-            None => Ok(false),
         }
     }
 
@@ -487,11 +536,12 @@ impl ReportedStore {
 #[async_trait::async_trait]
 impl SessionStore for ReportedStore {
     /// rmcp answers a failed load `500`, and a session it is not handed
-    /// `404`: one bound to another principal is not handed.
+    /// `404`: one bound to another principal is not handed. What
+    /// [`BoundedSessions::has_session`] read for the request is handed as
+    /// read, its owner checked there.
     async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
-        // Refused already: the session is another principal's in memory.
-        if refused() {
-            return Ok(None);
+        if let Some(read) = take_stored(session_id) {
+            return Ok(read);
         }
         let Some((owner, state)) = self.bound(session_id, "load").await? else {
             return Ok(None);
@@ -866,10 +916,13 @@ mod tests {
         logs.expect_none(crate::TARGET, "mcp session manager failed");
 
         let (held, refused) = BoundedSessions::answering(named_actor("bob"), async {
-            sessions.has_session(&id).await.expect("answered")
+            sessions.has_session(&id).await
         })
         .await;
-        assert!(!held, "another principal does not have it");
+        assert!(
+            matches!(held, Err(SessionsError::Unknown)),
+            "refused, so rmcp registers no restore of it: {held:?}"
+        );
         assert_eq!(refused, Some(Refused::Unknown));
 
         let (held, refused) = BoundedSessions::answering(named_actor("alice"), async {
@@ -924,6 +977,28 @@ mod tests {
         logs.expect_none(
             crate::TARGET,
             "mcp session refused: another principal opened it",
+        );
+    }
+
+    /// What `has_session` read of the app's store is handed to the restore of
+    /// that session alone, once.
+    #[tokio::test]
+    async fn a_store_read_is_handed_to_its_sessions_restore_alone_once() {
+        let state: SessionState =
+            serde_json::from_value(serde_json::json!({ "initialize_params": handshake(None) }))
+                .expect("a session's state");
+
+        let (taken, _) = BoundedSessions::answering(ANONYMOUS, async {
+            keep_stored(&named(), Some(state.clone()));
+            let another = take_stored("another-session");
+            keep_stored(&named(), Some(state));
+            [another, take_stored(NAMED), take_stored(NAMED)]
+        })
+        .await;
+
+        assert_eq!(
+            taken.map(|read| read.map(|state| state.is_some())),
+            [None, Some(true), None]
         );
     }
 

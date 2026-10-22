@@ -164,8 +164,10 @@ pub enum AuthError {
     /// An identity store or an identity provider could not be reached, or did
     /// not answer — an infrastructure failure, **not** a credential signal: the
     /// caller did nothing wrong. Rendered as **503**, with a `Retry-After` when
-    /// `retry_after` is known (RFC 9110 §15.6.4), and logged at `error`; it
-    /// displays `"authentication unavailable"`, the body every caller reads.
+    /// `retry_after` is known (RFC 9110 §15.6.4); the guard meeting it files
+    /// it at `error`, and the HTTP edge files one a handler answers at `warn`,
+    /// as every `503`. It displays `"authentication unavailable"`, the body
+    /// every caller reads.
     /// Built by [`unavailable`](Self::unavailable) or, with what failed,
     /// [`unavailable_because`](Self::unavailable_because).
     #[error("{}", UNAVAILABLE)]
@@ -322,18 +324,15 @@ fn shared(
 }
 
 impl AuthError {
-    /// The wire rendering, logged once. Shared by [`IntoResponse`] (a handler
-    /// returning the error directly) and [`ResponseError`] (a handler `?`-ing
-    /// it), so both spellings put the same bytes and the same log line out.
+    /// The wire rendering, shared by [`IntoResponse`] (a handler returning the
+    /// error directly) and [`ResponseError`] (a handler `?`-ing it), so both
+    /// spellings put the same bytes out. A refused credential's line is filed
+    /// here, since no edge files a `401`; an outage's chain is filed by
+    /// whoever holds the error last.
     fn render(&self) -> Response {
         let body = self.client_message();
-        // An infrastructure failure is a 503 logged at `error`, never a 401 challenge.
+        // An infrastructure failure is a 503, never a 401 challenge.
         if let Self::Unavailable { .. } = self {
-            tracing::error!(
-                target: crate::TARGET,
-                error = %nest_rs_core::error_message(self),
-                "authentication unavailable",
-            );
             let mut response = Response::builder().status(StatusCode::SERVICE_UNAVAILABLE);
             if let Some(secs) = self.retry_after_secs() {
                 response = response.header(header::RETRY_AFTER, HeaderValue::from(secs));
@@ -370,14 +369,24 @@ impl AuthError {
     }
 }
 
+/// A ready response, which no edge reads an error from: an outage's chain is
+/// filed here, at `warn`, as the edge files every `503`.
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
+        if let Self::Unavailable { .. } = self {
+            tracing::warn!(
+                target: crate::TARGET,
+                error = %nest_rs_core::error_message(&self),
+                "authentication unavailable",
+            );
+        }
         self.render()
     }
 }
 
 /// `?`-propagation from a handler: a service returns the framework type and it
-/// flows to the transport boundary without a `map_err` at every call site.
+/// flows to the transport boundary without a `map_err` at every call site,
+/// where the edge files an outage's chain once the answer is final.
 impl ResponseError for AuthError {
     fn status(&self) -> StatusCode {
         match self {
@@ -491,7 +500,8 @@ mod tests {
             "delay-seconds, rounded up",
         );
 
-        // The body withholds the detail, so the log is its one place.
+        // The body withholds the detail and no edge holds the error any more,
+        // so this line is its one place: at `warn`, as every `503`.
         let filed: Vec<_> = logs
             .find("nest_rs::authn", "authentication unavailable")
             .into_iter()
@@ -506,16 +516,26 @@ mod tests {
             filed,
             [
                 (
-                    "error".to_owned(),
+                    "warn".to_owned(),
                     "authentication unavailable: store unreachable".to_owned()
                 ),
                 (
-                    "error".to_owned(),
+                    "warn".to_owned(),
                     "authentication unavailable: provider answered 503: upstream overloaded"
                         .to_owned()
                 ),
             ],
         );
+    }
+
+    /// Rendered for the edge, which files the `503` once the answer is
+    /// final, the outage files nothing of its own.
+    #[test]
+    fn an_outage_rendered_for_the_edge_files_nothing_of_its_own() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let resp = AuthError::unavailable("store unreachable", None).as_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(logs.events().is_empty(), "{:#?}", logs.events());
     }
 
     /// RFC 9110 §10.2.3 reads `0` as "retry now": a provider's zero wait is

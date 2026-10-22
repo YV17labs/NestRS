@@ -64,13 +64,17 @@ types with their HTTP mapping already wired:
 | `DbErr`, through `?` into `ServiceError` | `nest_rs::seaorm` | `409` for a unique violation, `404` for a row a write found gone, `503` for a statement cancelled at its bound, else `500` (`code: INTERNAL`, no `detail`) |
 | `ServiceError::Validation(ValidationErrors)` | `nest_rs::seaorm` | `422` |
 | `AuthError::*` | `nest_rs::authn` | `401` + `WWW-Authenticate: Bearer` |
-| `AuthError::Unavailable` | `nest_rs::authn` | `503`, a `Retry-After` when the failing party gave one, logged at `error` — an outage is not a credential signal |
+| `AuthError::Unavailable` | `nest_rs::authn` | `503`, a `Retry-After` when the failing party gave one — an outage is not a credential signal |
 | `CredentialError` | `nest_rs::authn` | `401` (opaque `"invalid credentials"`) |
-| `TokenError::*` | `nest_rs::oauth::server` | RFC 6749 wire codes (`400` / `401`, the `401` with the `Basic` challenge of a client refused over HTTP Basic); `server_error` at `500`, or `503` for a dependency that did not answer, its cause logged at `error` (`warn` behind the `503`) |
+| `TokenError::*` | `nest_rs::oauth::server` | RFC 6749 wire codes (`400` / `401`, the `401` with the `Basic` challenge of a client refused over HTTP Basic); `server_error` at `500`, or `503` for a dependency that did not answer |
 
 A service returns the framework type directly; `?` flows it to the
-boundary; the impl decides status and body. Every row above implements
-`nest_rs::http::ResponseError`, which is what makes the `?` legal — a
+boundary; the impl decides status and body. What a `5xx` among them keeps
+from the client — the database's error, the store that did not answer — is
+filed by the edge, never by the type as it renders: once the answer is
+final, at `error`, at `warn` behind a `503`, on `nest_rs::http`. Every row
+above implements `nest_rs::http::ResponseError`, which is what makes the `?`
+legal — a
 handler returning `Result<Json<T>>` propagates any of them with no
 `map_err`. No per-feature `error.rs` for these — the framework owns them
 once, every feature reuses them.
@@ -120,8 +124,8 @@ not `ToProblem`: a route answers a `Problem` only when the error is one or
 carries one in its chain. What no seam answers — no `ResponseError`, no
 `ToProblem` where the edge reads it, no framework type in its chain — is
 answered opaquely on every edge, and its whole chain is filed once at
-`error`, as is the chain behind a `5xx` problem: a failed handler is never
-logged nowhere.
+`error`, as is the chain behind a `5xx` problem or a `5xx` a `ResponseError`
+answers: a failed handler is never logged nowhere.
 
 ## Exception filters
 
@@ -181,10 +185,12 @@ handler answers the opaque `500` from that status — `code: INTERNAL`, no
 A filter reads the request it answers as a guard does, through
 `HttpView::of(cx)?.request()` — its method, its headers, its extensions — so it
 can answer in the media type the client accepts; only the body is gone once
-the handler read it. What the client is finally sent decides what is filed: a
-failure a filter answers with a `4xx` files nothing, and one it answers with a
-`5xx`, its own reply or a `Problem`, files the chain the client is not told
-once, at `error`, at `warn` behind a `503`.
+the handler read it. What the client is finally sent decides what is filed,
+whatever the failure's type: a failure a filter answers with a `4xx` files
+nothing, and one it answers with a `5xx`, its own reply or a `Problem`, files
+the chain the client is not told once, at `error`, at `warn` behind a `503`.
+Drop the filter above, and `DomainError`'s default `500` files
+`domain failure: boom` the same way.
 
 Bind it like any other layer: for the whole app with
 `App::builder().use_exception_filters_global([exception_filter::<DomainErrorFilter>()])`,

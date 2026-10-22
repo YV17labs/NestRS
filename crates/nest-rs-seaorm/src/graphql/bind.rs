@@ -29,7 +29,8 @@ pub fn parse_v7(id: &str) -> Result<Uuid> {
     Ok(parsed)
 }
 
-/// Logged here: GraphQL's error path has no `ResponseError` that would log it.
+/// Logged here: the bare problem it answers carries no chain for the edge to
+/// file.
 fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
     tracing::error!(
         target: crate::target::ORM,

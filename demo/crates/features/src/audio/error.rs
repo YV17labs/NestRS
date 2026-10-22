@@ -1,5 +1,4 @@
-use nest_rs::core::error_message;
-use nest_rs::http::{IntoResponse, ProblemDetails, Response, ResponseError, StatusCode};
+use nest_rs::http::{ResponseError, StatusCode};
 use nest_rs::queue::QueueError;
 use nest_rs::storage::StorageError;
 
@@ -14,11 +13,6 @@ pub enum AudioError {
 impl ResponseError for AudioError {
     fn status(&self) -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
-    }
-
-    fn as_response(&self) -> Response {
-        tracing::error!(target: crate::audio::TARGET, error = %error_message(self), "audio operation failed");
-        ProblemDetails::internal().into_response()
     }
 }
 

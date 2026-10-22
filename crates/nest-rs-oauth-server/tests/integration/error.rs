@@ -7,7 +7,7 @@
 use nest_rs_core::module;
 use nest_rs_http::challenge::NoBearerChallenge;
 use nest_rs_http::{HttpModule, StatusCode, controller, routes};
-use nest_rs_oauth_server::{TARGET, TokenEndpointAuthMethod, TokenError};
+use nest_rs_oauth_server::{TokenEndpointAuthMethod, TokenError};
 use nest_rs_testing::{LogCapture, TestApp};
 
 #[controller(path = "/")]
@@ -72,11 +72,7 @@ async fn a_refused_grant_reaches_the_client_as_the_rfc6749_json_error() {
     response
         .assert_json(serde_json::json!({ "error": "unsupported_grant_type" }))
         .await;
-    assert!(
-        logs.events().iter().all(|event| event.target != TARGET),
-        "a client's refusal files nothing: {:#?}",
-        logs.events(),
-    );
+    assert_eq!(said(&logs), [], "a client's refusal files nothing");
 }
 
 /// The one `401`: a client refused over HTTP Basic, challenged with the
@@ -133,9 +129,23 @@ async fn a_client_refused_without_http_authentication_is_a_400_carrying_no_chall
     }
 }
 
+/// Every `warn` and `error` a request filed: its level, its target, its
+/// message and the chain it said.
+fn said(logs: &LogCapture) -> Vec<(String, String, String, Option<String>)> {
+    logs.events()
+        .into_iter()
+        .filter(|event| event.level == "warn" || event.level == "error")
+        .map(|event| {
+            let error = event.field("error");
+            (event.level, event.target, event.message, error)
+        })
+        .collect()
+}
+
 /// A dependency that did not answer while the grant was resolved: `503` (RFC 9110
 /// §15.6.4), the opaque code in the body and nothing of the cause, which the
-/// operator reads once, at `warn`.
+/// operator reads once, at `warn`, on the line the HTTP edge files for every
+/// `503`.
 #[tokio::test]
 async fn a_dependency_outage_is_a_503_naming_nothing_of_its_cause() {
     let app = TestApp::for_module::<TokenApp>()
@@ -149,15 +159,20 @@ async fn a_dependency_outage_is_a_503_naming_nothing_of_its_cause() {
         .assert_json(serde_json::json!({ "error": "server_error" }))
         .await;
 
-    let filed = logs.expect_one(TARGET, "token request unavailable");
-    assert_eq!(filed.level, "warn");
-    let said = filed.field("error").unwrap_or_default();
-    assert!(said.contains("identity store unreachable"), "{said}");
-    logs.expect_none(TARGET, "token request failed");
+    assert_eq!(
+        said(&logs),
+        [(
+            "warn".to_owned(),
+            nest_rs_http::target::HTTP.to_owned(),
+            "request unavailable".to_owned(),
+            Some("server_error: identity store unreachable".to_owned()),
+        )],
+    );
 }
 
 /// A failure of this server's own — a token it could not sign — stays a `500`
-/// answering the opaque code, its cause filed once at `error`.
+/// answering the opaque code, its cause filed once at `error`, by the HTTP
+/// edge.
 #[tokio::test]
 async fn a_signing_failure_is_a_500_whose_cause_reaches_the_operator_alone() {
     let app = TestApp::for_module::<TokenApp>()
@@ -171,8 +186,13 @@ async fn a_signing_failure_is_a_500_whose_cause_reaches_the_operator_alone() {
         .assert_json(serde_json::json!({ "error": "server_error" }))
         .await;
 
-    let filed = logs.expect_one(TARGET, "token request failed");
-    assert_eq!(filed.level, "error");
-    let said = filed.field("error").unwrap_or_default();
-    assert!(said.contains("signing key unusable"), "{said}");
+    assert_eq!(
+        said(&logs),
+        [(
+            "error".to_owned(),
+            nest_rs_http::target::HTTP.to_owned(),
+            "request failed".to_owned(),
+            Some("server_error: signing key unusable".to_owned()),
+        )],
+    );
 }

@@ -287,8 +287,10 @@ the identity provider could not be reached, or answered that it cannot
 answer now, so the credential was never evaluated. The caller did nothing
 wrong (RFC 9110 §15.6.4) — reporting it as a 401 would tell a caller with
 a perfectly good token to go get another one, and would let an outage
-read as a wave of authentication failures. It is logged at `error` and
-rendered as a `503` with a `Retry-After` when `retry_after` is known — an
+read as a wave of authentication failures. The guard meeting it logs it at
+`error`, a handler answering it with `?` has the HTTP edge file it at `warn`
+as every `503`, and either way it is rendered as a `503` with a
+`Retry-After` when `retry_after` is known — an
 identity provider's own, given in seconds and rounded up to one at least,
 since `0` would tell the caller to retry at once — and none invented when it
 is not. The guard answers a strategy that outlived `AUTHENTICATE_TIMEOUT`

@@ -17,7 +17,7 @@ request.
 | Concern | Target | Default level |
 |---|---|---|
 | Operation log — one line per unit of work, every edge | `nest_rs::operation` | `info` |
-| HTTP span | `nest_rs::http` | `info` |
+| HTTP span | `nest_rs::http` | `info`; the chain a `5xx` answer withholds — any error's, a framework error's included — at `error` (`warn` behind a `503`) |
 | MCP operations | `nest_rs::mcp` | `info` |
 | Route / endpoint mounting (boot) | `nest_rs::routes` | `info` |
 | ORM queries | `nest_rs::orm` | `trace` |
@@ -25,7 +25,7 @@ request.
 | Layer composition (per-route guard/pipe/… chains) | `nest_rs::layers` | `trace` for the per-route effective-chain dump; `debug` for the redundant multi-scope lint (HTTP deduped once, WS per gateway); `warn` for actionable posture smells (reversed authn/authz order, denials, **routes with no guard and no `#[public]` when no global pool is active**) |
 | Authn / Authz | `nest_rs::authn` / `nest_rs::authz` | `info` (denials `warn`) |
 | OAuth client | `nest_rs::oauth::client` | `info` (callback refusals `warn`) |
-| OAuth authorization server (token endpoint) | `nest_rs::oauth::server` | `error` for the cause a `server_error` withholds (`warn` behind a `503`) |
+| OAuth authorization server (token endpoint) | `nest_rs::oauth::server` | nothing of its own: the cause a `server_error` withholds is filed on `nest_rs::http` |
 | RFC 9728 discovery | `nest_rs::oauth::resource` | `info` (boot misconfiguration `warn`) |
 | WebSocket events | `nest_rs::ws` | `info` |
 | GraphQL execution and subscriptions | `nest_rs::graphql` | `info` |

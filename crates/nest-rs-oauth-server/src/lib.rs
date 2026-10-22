@@ -13,8 +13,9 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-/// This crate's span target — RFC 6749's token endpoint: the cause a
-/// `server_error` answer withholds.
+/// This crate's span target — RFC 6749's token endpoint. The cause a
+/// `server_error` answer withholds is the HTTP edge's line, on
+/// `nest_rs::http`, filed once the answer is final.
 pub const TARGET: &str = "nest_rs::oauth::server";
 
 mod error;

@@ -85,41 +85,17 @@ impl TokenError {
             _ => StatusCode::BAD_REQUEST,
         }
     }
-
-    /// The operator's line for the cause an opaque `server_error` withholds:
-    /// its whole chain, at `error`, or at `warn` behind a `503`.
-    fn file(&self) {
-        match self {
-            TokenError::Sign(_) => tracing::error!(
-                target: crate::TARGET,
-                error = %nest_rs_core::error_message(self),
-                "token request failed",
-            ),
-            TokenError::Server(_) => tracing::warn!(
-                target: crate::TARGET,
-                error = %nest_rs_core::error_message(self),
-                "token request unavailable",
-            ),
-            TokenError::InvalidRequest
-            | TokenError::UnsupportedGrant
-            | TokenError::InvalidGrant
-            | TokenError::UnauthorizedClient
-            | TokenError::InvalidScope
-            | TokenError::InvalidClient(_) => {}
-        }
-    }
 }
 
 /// RFC 6749 §5.2's JSON body, with §5.1's `no-store` and `no-cache`, which
-/// bind the whole token endpoint; `?` on one in a handler answers it, and files
-/// the cause a `server_error` withholds.
+/// bind the whole token endpoint; `?` on one in a handler answers it, and the
+/// edge files the cause a `server_error` withholds.
 impl ResponseError for TokenError {
     fn status(&self) -> StatusCode {
         TokenError::status(self)
     }
 
     fn as_response(&self) -> Response {
-        self.file();
         let body = serde_json::json!({ "error": self.to_string() });
         let status = TokenError::status(self);
         let mut response = Response::builder()

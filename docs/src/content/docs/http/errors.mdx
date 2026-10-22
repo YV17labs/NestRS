@@ -57,6 +57,14 @@ the body. Override `fn as_response(&self) -> Response` on the impl when
 the body needs a custom shape (e.g. an error envelope with a `code`
 field).
 
+Either rendering keeps a `5xx`'s cause for the operator, and neither logs it
+itself. The edge files the error's whole chain once the answer is final,
+on `nest_rs::http`: at `error`, at `warn` behind a `503`. It goes by the
+status the client was finally sent, so an [exception
+filter](/fundamentals/exception-filters/) that answers the failure with a
+`4xx` files nothing. A `4xx` your error answers is the client's own, and
+files nothing either.
+
 A feature owns one error type — usually the one it already returns from
 its service. The framework's plumbing errors carry their own HTTP mapping:
 `nest_rs::seaorm::ServiceError` and the OAuth `nest_rs::oauth::server::TokenError`
@@ -202,7 +210,10 @@ so a driver or panic message never reaches the wire.
 An error nobody meant for the client — an `anyhow` chain, an
 `HttpError::new(e, StatusCode::INTERNAL_SERVER_ERROR)` — is never lost on the way: it answers the
 opaque `500`, and its whole chain is filed once at `error` on
-`nest_rs::http`. A `nest_rs::core::Problem` the chain carries answers itself
+`nest_rs::http`. So is the chain behind a framework error's `5xx`, the one
+line its failure gets: a `ServiceError`'s database error, a `TokenError`'s
+signing failure, and at `warn` an `AuthError`'s or a `TokenError`'s `503`. A
+`nest_rs::core::Problem` the chain carries answers itself
 instead — its status, its `detail` on a `4xx`, its `code` as an extension
 member and its `Retry-After` — the same contract GraphQL, WebSockets and MCP
 answer it by (`ProblemDetails::from_problem` builds the document).

@@ -86,6 +86,10 @@ impl ResponseError for BodyError {
 
 /// An error that knows its HTTP answer, so `?` on it answers its status.
 ///
+/// Rendering it files nothing: what a `5xx` answer keeps from the client of
+/// its chain is filed by the edge, once the answer is final, by the status it
+/// went out with.
+///
 /// ```
 /// use nest_rs_http::{HttpError, ResponseError, StatusCode};
 ///
@@ -396,7 +400,7 @@ impl HttpError {
     /// The response this error answers at the edge: as
     /// [`into_response`](Self::into_response) renders it, except that a
     /// [`Problem`] its cause carries answers its own document; the chain a `5xx`
-    /// answer withholds is filed once at `error`.
+    /// answer withholds is filed once at `error`, at `warn` behind a `503`.
     pub(crate) fn answer(self) -> Response {
         match self.0.cause {
             Cause::Response(_) | Cause::Wrapped { .. } => self.into_response(),
@@ -449,14 +453,25 @@ impl HttpError {
     }
 
     /// What a `status` answer keeps from the client of this error: the chain
-    /// it carries behind a `5xx`, unless that is a bare [`Problem`]. A status
-    /// alone, a ready response and an error that renders itself carry none.
+    /// it carries behind a `5xx` — a [`ResponseError`]'s too, whatever it
+    /// rendered — unless that is a bare [`Problem`], or a [`ProblemDetails`]
+    /// rendering itself, which answers all it holds. A status alone, a ready
+    /// response and another library's error carry none.
     pub(crate) fn withheld_behind(&self, status: StatusCode) -> Option<Withheld> {
-        let chain = self.chain().filter(|chain| !chain.is::<Problem>())?;
+        let chain: &(dyn Error + 'static) = match &self.0.cause {
+            Cause::Typed { error, .. } if error.is::<ProblemDetails>() => return None,
+            Cause::Typed { error, .. } => &**error,
+            _ => self.chain()?,
+        };
+        if chain.is::<Problem>() {
+            return None;
+        }
         Withheld::behind(status.as_u16(), chain)
     }
 
-    /// The error chain this error renders from, when it is one the edge reads.
+    /// The error chain this error renders from, when it is one the edge reads:
+    /// a [`ResponseError`] renders itself, so its chain is never read for a
+    /// [`Problem`].
     fn chain(&self) -> Option<&(dyn Error + 'static)> {
         match &self.0.cause {
             Cause::Anyhow(error) => Some(error.as_ref()),
@@ -1511,5 +1526,35 @@ mod tests {
             "nothing of the chain reaches the wire: {body}"
         );
         assert!(!body.contains("order 42"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_problem_details_answered_opaquely_is_withheld_and_one_rendering_itself_is_not() {
+        let refused = || ProblemDetails::internal().with_detail("db-primary refused");
+        let status = StatusCode::INTERNAL_SERVER_ERROR;
+
+        for opaque in [
+            HttpError::from(anyhow::Error::from(refused())),
+            HttpError::new(refused(), status),
+        ] {
+            let body = problem_of(opaque.rendered_ref()).await;
+            assert_eq!(body.get("detail"), None, "{body}");
+            assert_eq!(
+                opaque.withheld_behind(status),
+                Some(Withheld::Failed(
+                    "500: Internal Server Error — db-primary refused".to_owned()
+                )),
+                "what the answer withheld is filed",
+            );
+        }
+
+        let typed = HttpError::from(refused());
+        let body = problem_of(typed.rendered_ref()).await;
+        assert_eq!(body["detail"], "db-primary refused", "{body}");
+        assert_eq!(
+            typed.withheld_behind(status),
+            None,
+            "it answered all it held"
+        );
     }
 }

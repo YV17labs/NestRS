@@ -602,6 +602,29 @@ impl FiledController {
     async fn unfiltered(&self) -> nest_rs_http::Result<&'static str> {
         Err(anyhow::anyhow!("db down").into())
     }
+
+    #[get("/typed/as-a-4xx")]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn typed_as_a_4xx(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("db down".into()))
+    }
+
+    #[get("/typed/as-a-503")]
+    #[use_exception_filters(AsUnavailable)]
+    async fn typed_as_a_503(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("db down".into()))
+    }
+
+    #[get("/typed/as-its-own-500")]
+    #[use_exception_filters(AsItsOwn500)]
+    async fn typed_as_its_own_500(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("db down".into()))
+    }
+
+    #[get("/typed/unfiltered")]
+    async fn typed_unfiltered(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("db down".into()))
+    }
 }
 
 #[module(providers = [DomainErrorFilter, AsUnavailable, AsItsOwn500, FiledController])]
@@ -689,4 +712,46 @@ async fn a_failure_answered_with_a_5xx_files_its_chain_once_by_the_status_sent()
         )],
         "no filter: the edge's opaque 500, the chain once",
     );
+}
+
+/// A handler's own `ResponseError` answering a `5xx` is filed as any other
+/// failure: once, by the status the client was finally sent, whoever answered
+/// it — nothing when a filter answered a `4xx`.
+#[tokio::test]
+async fn a_typed_failure_is_filed_once_by_the_status_sent_whoever_answered_it() {
+    let app = TestApp::for_module::<FiledModule>().await.expect("boots");
+    let line = |level: &str, message: &str| {
+        vec![(
+            level.to_owned(),
+            message.to_owned(),
+            Some("domain failure: db down".to_owned()),
+        )]
+    };
+
+    for (path, status, expected) in [
+        (
+            "/filed/typed/as-a-4xx",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            vec![],
+        ),
+        (
+            "/filed/typed/as-a-503",
+            StatusCode::SERVICE_UNAVAILABLE,
+            line("warn", "request unavailable"),
+        ),
+        (
+            "/filed/typed/as-its-own-500",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            line("error", "request failed"),
+        ),
+        (
+            "/filed/typed/unfiltered",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            line("error", "request failed"),
+        ),
+    ] {
+        let logs = LogCapture::install();
+        app.http().get(path).send().await.assert_status(status);
+        assert_eq!(filed(&logs), expected, "{path}");
+    }
 }

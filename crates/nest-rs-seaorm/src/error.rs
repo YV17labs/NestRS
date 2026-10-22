@@ -652,10 +652,9 @@ mod http {
         /// Render the failure as an RFC 9457 `application/problem+json`: the
         /// problem it says, with its code, its wait and a validation failure's
         /// `errors` member, or an opaque one's `500` under `INTERNAL`, as a
-        /// `#[crud]` operation answers it; the one place an opaque variant's
-        /// cause is logged.
+        /// `#[crud]` operation answers it. The cause an opaque variant
+        /// withholds is the edge's to file.
         fn as_response(&self) -> Response {
-            log_opaque(self);
             let Some(problem) = self.to_problem() else {
                 return ResponseError::as_response(&Problem::new(500, code::INTERNAL));
             };
@@ -665,34 +664,6 @@ mod http {
                     .into_response(),
                 None => ResponseError::as_response(&problem),
             }
-        }
-    }
-
-    /// Emit the chain behind an opaque 5xx — a statement cancelled at its
-    /// bound at `warn`, the server unable to serve it in time; a 4xx stays
-    /// silent.
-    fn log_opaque(err: &ServiceError) {
-        let kind = match err {
-            ServiceError::Db(_) => "db",
-            ServiceError::Masking { .. } => "masking",
-            ServiceError::Internal { .. } => "internal",
-            _ => return,
-        };
-        let said = nest_rs_core::error_message(err);
-        if err.is_unavailable() {
-            tracing::warn!(
-                target: crate::target::ORM,
-                kind,
-                error = %said,
-                "service error surfaced as 503",
-            );
-        } else {
-            tracing::error!(
-                target: crate::target::ORM,
-                kind,
-                error = %said,
-                "service error surfaced as 500",
-            );
         }
     }
 
@@ -722,33 +693,23 @@ mod http {
             assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
         }
 
+        /// Rendered for the HTTP edge, which files what a `5xx` withholds
+        /// once the answer is final, no variant files anything of its own.
         #[test]
-        fn a_500_emits_the_cause_it_refuses_to_ship() {
+        fn a_variant_rendered_for_the_edge_files_nothing_of_its_own() {
             let logs = nest_rs_testing::LogCapture::install();
-            let _ = ServiceError::Db(sea_orm::DbErr::Custom(
-                "relation \"posts\" does not exist".into(),
-            ))
-            .as_response();
-
-            let event = logs.expect_one(crate::target::ORM, "service error surfaced as 500");
-            assert_eq!(event.level, "error");
-            assert_eq!(event.field("kind").as_deref(), Some("db"));
-            assert!(
-                event.field("error").is_some_and(|d| d.contains("posts")),
-                "the cause the body withholds is the whole point, got {:?}",
-                event.fields,
-            );
-        }
-
-        #[test]
-        fn a_500_files_the_database_error_without_the_value_it_quoted() {
-            let logs = nest_rs_testing::LogCapture::install();
-            let _ = ServiceError::Db(crate::error::tests::bad_uuid()).as_response();
-
-            let event = logs.expect_one(crate::target::ORM, "service error surfaced as 500");
-            let said = event.field("error").unwrap_or_default();
-            assert!(said.contains("22P02"), "the SQLSTATE stays: {said}");
-            assert!(!said.contains("secret-123"), "the input goes: {said}");
+            let failure =
+                serde_json::from_str::<u64>(r#""secret-value""#).expect_err("a string is no u64");
+            for error in [
+                ServiceError::Db(crate::error::tests::bad_uuid()),
+                ServiceError::Db(crate::error::tests::cancelled_statement()),
+                crate::error::masking(&failure),
+                ServiceError::internal("could not sign the export"),
+                ServiceError::not_found("no such widget"),
+            ] {
+                let _ = error.as_response();
+            }
+            assert!(logs.events().is_empty(), "{:#?}", logs.events());
         }
 
         #[test]
@@ -806,36 +767,6 @@ mod http {
             let said = event.field("error").unwrap_or_default();
             assert!(said.contains("22P02"), "{said}");
             assert!(!said.contains("secret-123"), "{said}");
-        }
-
-        #[test]
-        fn a_masking_500_files_the_decode_failure_without_the_row_value() {
-            let logs = nest_rs_testing::LogCapture::install();
-            let failure = serde_json::from_str::<std::collections::HashMap<String, u64>>(
-                r#"{"n":"secret-value"}"#,
-            )
-            .expect_err("a string is no u64");
-            let _ = crate::error::masking(&failure).as_response();
-
-            let event = logs.expect_one(crate::target::ORM, "service error surfaced as 500");
-            assert_eq!(event.field("kind").as_deref(), Some("masking"));
-            for (name, value) in &event.fields {
-                assert!(!value.contains("secret-value"), "{name} = {value}");
-            }
-            let said = event.field("error").unwrap_or_default();
-            assert!(said.contains("expected u64"), "the failure stays: {said}");
-        }
-
-        #[test]
-        fn a_business_4xx_emits_nothing() {
-            let logs = nest_rs_testing::LogCapture::install();
-            let _ = ServiceError::not_found("no such widget").as_response();
-            assert!(
-                logs.find(crate::target::ORM, "service error surfaced as 500")
-                    .is_empty(),
-                "a 404 is not an incident: {:#?}",
-                logs.events(),
-            );
         }
 
         #[test]
@@ -918,8 +849,7 @@ mod http {
         }
 
         #[tokio::test]
-        async fn an_internal_500_answers_its_code_and_files_its_detail_and_cause() {
-            let logs = nest_rs_testing::LogCapture::install();
+        async fn an_internal_500_answers_its_code_and_withholds_its_detail_and_cause() {
             let refused = std::io::Error::other("the key store refused the connection");
             let (status, _, body) = body_json(ServiceError::internal_because(
                 "could not sign the export",
@@ -930,21 +860,13 @@ mod http {
             assert_eq!(body["code"], code::INTERNAL.as_str(), "{body}");
             assert!(body.get("detail").is_none(), "{body}");
             assert!(!body.to_string().contains("key store"), "{body}");
-
-            let event = logs.expect_one(crate::target::ORM, "service error surfaced as 500");
-            assert_eq!(event.field("kind").as_deref(), Some("internal"));
-            assert_eq!(
-                event.field("error").as_deref(),
-                Some(
-                    "internal error: could not sign the export: the key store refused the connection"
-                ),
-            );
         }
 
         /// A cancelled statement answers the class every edge names it by and,
-        /// like the edge's own deadline, the bound that ran out as its wait.
+        /// like the edge's own deadline, the bound that ran out as its wait;
+        /// `#[crud]`, whose problem keeps no chain, says it at `warn`.
         #[tokio::test]
-        async fn a_statement_cancelled_at_its_bound_renders_a_503_said_at_warn() {
+        async fn a_statement_cancelled_at_its_bound_renders_a_503() {
             use crate::error::tests::{
                 STATEMENT_BOUND, cancelled_statement, on_a_pool_bounding_statements,
             };
@@ -970,15 +892,19 @@ mod http {
                 );
                 assert!(body.get("detail").is_none(), "a 5xx says no detail: {body}");
             }
-            let line = logs.expect_one(crate::target::ORM, "service error surfaced as 503");
-            assert_eq!(line.level, "warn");
-            assert!(
-                line.field("error")
-                    .is_some_and(|said| said.contains("57014")),
-                "{line:?}"
-            );
             let crud = logs.expect_one(crate::target::ORM, "crud operation unavailable");
             assert_eq!(crud.level, "warn");
+            assert!(
+                crud.field("error")
+                    .is_some_and(|said| said.contains("57014")),
+                "{crud:?}"
+            );
+            let filed = logs
+                .events()
+                .into_iter()
+                .filter(|event| event.level == "warn" || event.level == "error")
+                .count();
+            assert_eq!(filed, 1, "the one line is #[crud]'s: {:#?}", logs.events());
         }
 
         /// A business variant answers its code beside its sentence, as a

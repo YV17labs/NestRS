@@ -218,6 +218,33 @@ impl FailureController {
         Err(LedgerDown)
     }
 
+    /// The same, over a decode failure quoting what the request sent.
+    #[post("/typed-decode")]
+    async fn typed_decode(&self, body: RawBody) -> std::result::Result<String, LedgerUnreadable> {
+        let amount: u64 = serde_json::from_slice(&body)?;
+        Ok(amount.to_string())
+    }
+
+    /// An error of the handler's own whose status is a `503`.
+    #[get("/typed-busy")]
+    async fn typed_busy(&self) -> std::result::Result<String, LedgerBusy> {
+        Err(LedgerBusy(std::io::Error::other(
+            "the ledger at 10.0.0.1 timed out",
+        )))
+    }
+
+    /// An error of the handler's own whose status is a `4xx`.
+    #[get("/typed-refusal")]
+    async fn typed_refusal(&self) -> std::result::Result<String, Overdrawn> {
+        Err(Overdrawn)
+    }
+
+    /// The problem document itself returned as the error.
+    #[get("/document")]
+    async fn document(&self) -> std::result::Result<String, ProblemDetails> {
+        Err(ProblemDetails::internal())
+    }
+
     /// The class's own problem, as `#[crud]` answers an opaque failure.
     #[get("/problem")]
     async fn problem(&self) -> Result<String> {
@@ -242,6 +269,39 @@ struct LedgerDown;
 impl ResponseError for LedgerDown {
     fn status(&self) -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+/// A `500` of the handler's own over a decode failure.
+#[derive(Debug, thiserror::Error)]
+#[error("the ledger entry does not decode")]
+struct LedgerUnreadable(#[from] serde_json::Error);
+
+impl ResponseError for LedgerUnreadable {
+    fn status(&self) -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+/// A `503` of the handler's own, over what it could not reach.
+#[derive(Debug, thiserror::Error)]
+#[error("the ledger is busy")]
+struct LedgerBusy(#[source] std::io::Error);
+
+impl ResponseError for LedgerBusy {
+    fn status(&self) -> StatusCode {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
+/// A refusal of the handler's own.
+#[derive(Debug, thiserror::Error)]
+#[error("the account is overdrawn")]
+struct Overdrawn;
+
+impl ResponseError for Overdrawn {
+    fn status(&self) -> StatusCode {
+        StatusCode::CONFLICT
     }
 }
 
@@ -538,6 +598,95 @@ async fn an_http_error_withholding_its_chain_answers_opaquely_and_files_it() {
             .is_some_and(|e| e.contains("10.0.0.1")),
         "{failed:#?}"
     );
+}
+
+/// Each chain the edge filed for a failed request: its level, its message
+/// and the chain it said.
+fn filed(logs: &nest_rs_testing::LogCapture) -> Vec<(String, String, Option<String>)> {
+    logs.events()
+        .into_iter()
+        .filter(|event| event.target == nest_rs_http::target::HTTP)
+        .filter(|event| event.message == "request failed" || event.message == "request unavailable")
+        .map(|event| {
+            let error = event.field("error");
+            (event.level, event.message, error)
+        })
+        .collect()
+}
+
+/// A handler's own error answering a `5xx` through `ResponseError`'s default
+/// files its whole chain once, at `error` — a `503`'s at `warn` — on every
+/// path an `Err` is rendered by, a decode failure in it said without its
+/// value; a typed `4xx` and the problem document returned as the error
+/// withhold nothing and file nothing.
+#[tokio::test]
+async fn a_typed_server_error_files_its_chain_once_by_the_status_sent() {
+    for client in clients::<FailureModule>().await {
+        let logs = nest_rs_testing::LogCapture::install();
+        client
+            .get("/failure/typed")
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            filed(&logs),
+            [(
+                "error".to_owned(),
+                "request failed".to_owned(),
+                Some("the ledger at 10.0.0.1 holds secret 42".to_owned()),
+            )],
+        );
+
+        let logs = nest_rs_testing::LogCapture::install();
+        client
+            .post("/failure/typed-decode")
+            .body(format!(r#""{SECRET}""#))
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            filed(&logs),
+            [(
+                "error".to_owned(),
+                "request failed".to_owned(),
+                Some(
+                    "the ledger entry does not decode: invalid type: a string, expected u64 at line 1 column 24"
+                        .to_owned()
+                ),
+            )],
+        );
+        assert!(
+            quoting(&logs, SECRET).is_empty(),
+            "{:#?}",
+            quoting(&logs, SECRET)
+        );
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let busy = client.get("/failure/typed-busy").send().await;
+        busy.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(problem_json(busy).await["code"], "UNAVAILABLE");
+        assert_eq!(
+            filed(&logs),
+            [(
+                "warn".to_owned(),
+                "request unavailable".to_owned(),
+                Some("the ledger is busy: the ledger at 10.0.0.1 timed out".to_owned()),
+            )],
+        );
+
+        let logs = nest_rs_testing::LogCapture::install();
+        client
+            .get("/failure/typed-refusal")
+            .send()
+            .await
+            .assert_status(StatusCode::CONFLICT);
+        client
+            .get("/failure/document")
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(filed(&logs), [], "nothing withheld, nothing filed");
+    }
 }
 
 /// A bare status the handler chose withholds nothing, so nothing is filed.

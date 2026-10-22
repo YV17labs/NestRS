@@ -254,9 +254,7 @@ impl Stream for InScope {
     fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Response>> {
         let this = self.get_mut();
         let unit = this.unit.get_or_insert_with(|| {
-            let correlation = nest_rs_core::__private::current_correlation()
-                .unwrap_or_else(|| nest_rs_core::Correlation::minted(None));
-            nested_continuation(this.scope.take(), correlation)
+            nested_continuation(this.scope.take(), nest_rs_core::Correlation::inherited())
         });
         unit.enter(|| this.stream.poll_next_unpin(cx))
     }

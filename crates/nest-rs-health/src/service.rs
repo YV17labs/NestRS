@@ -86,8 +86,8 @@ impl From<&IndicatorEntry> for Indicator {
 pub(crate) const INDICATORS: &str = "indicator";
 
 /// Every indicator `container`'s app runs: the ones `#[indicators]` submitted
-/// on a provider it `reachable`, then the entries its modules attached — gated
-/// by construction, since only an imported module registers.
+/// on a provider `reachable` holds, then the entries its modules attached —
+/// gated by construction, since only an imported module registers.
 pub(crate) fn wired(container: &Container, reachable: &ReachableProviders) -> Vec<Indicator> {
     inventory::iter::<HealthIndicator>()
         .filter(|entry| reachable.reaches((entry.provider_type_id)()))
@@ -103,7 +103,7 @@ pub(crate) fn wired(container: &Container, reachable: &ReachableProviders) -> Ve
 
 impl HealthService {
     /// Hold `container` and the `indicators` its probes run, once, naming
-    /// those linked on a provider it does not `reachable`; a second install
+    /// those linked on a provider `reachable` does not hold; a second install
     /// keeps the first.
     pub(crate) fn install(
         &self,

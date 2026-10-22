@@ -203,9 +203,10 @@ thread_local! {
 }
 
 fn is_member_active(reg: &GraphqlResolverRegistration) -> bool {
-    REACHABLE.with(|cell| match &*cell.borrow() {
-        Some(set) => set.reaches((reg.resolver_type_id)()),
-        None => false,
+    REACHABLE.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|set| set.reaches((reg.resolver_type_id)()))
     })
 }
 
